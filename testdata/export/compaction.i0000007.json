@@ -248,7 +248,8 @@
     "agentsession": {
       "cwd": "/home/u/proj",
       "format": "agentsession/0.1",
-      "leaf": "i0000007"
+      "leaf": "i0000007",
+      "main": true
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

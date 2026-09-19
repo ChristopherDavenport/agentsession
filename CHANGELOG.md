@@ -26,6 +26,11 @@ versions may break the API.
   and crash recovery. The `storetest` package is the shared suite.
 - Helpers for `env`, `outcome`, `link` and `label` entries, including
   file hashing and reading the git revision without a git binary.
+- `RecordResponse` writes one model call (output items and the response
+  entry with the request hash) and `ConfigFromRequest` builds the full
+  initial config from a request. `Session.Compact` and
+  `Session.SummarizeBranch` build compaction and branch summary entries
+  with the checkpoint filled in.
 - `sqlite`: a SQLite store as a nested module over `modernc.org/sqlite`,
   passing the same suite.
 - `atif`: Go types for ATIF v1.8 with unknown-member passthrough and a
@@ -33,4 +38,6 @@ versions may break the API.
 - `export`: trajectories per leaf with preference-pair marking, `ToATIF`
   with lossless extras, subsession embedding, redactors for secrets,
   home paths and environment snapshots, and `WriteATIF` which spills
-  inline media beside the documents.
+  inline media beside the documents. A session's current path is its
+  main trajectory, written as `<session-id>.json`, which is where an
+  unresolved subsession reference points.

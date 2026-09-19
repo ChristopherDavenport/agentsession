@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // ErrNoEntry is returned when an entry ID is not in the session.
@@ -262,4 +264,52 @@ func (s *Session) Name() string {
 		}
 	}
 	return name
+}
+
+// Compact builds the compaction entry for the current leaf: FirstKept
+// names the earliest entry on the path that stays in context, summary
+// is the item that replaces everything before it, and the settings
+// checkpoint is taken from the context at the leaf. The entry is not
+// appended; set TokensBefore or Usage if known, then append it through
+// the store.
+func (s *Session) Compact(firstKept string, summary openresponses.Item) (*CompactionEntry, error) {
+	if summary == nil {
+		return nil, errors.New("agentsession: compaction needs a summary item")
+	}
+	leaf := s.Leaf()
+	if leaf == "" {
+		return nil, errors.New("agentsession: no leaf to compact")
+	}
+	ctx, err := s.ContextAt(leaf)
+	if err != nil {
+		return nil, err
+	}
+	onPath := false
+	for _, e := range s.Path(leaf) {
+		if e.Base().ID == firstKept {
+			onPath = true
+			break
+		}
+	}
+	if !onPath {
+		return nil, fmt.Errorf("%w: first_kept %s is not on the path to %s", ErrNoEntry, firstKept, leaf)
+	}
+	return &CompactionEntry{FirstKept: firstKept, Summary: summary, Config: ctx.Settings}, nil
+}
+
+// SummarizeBranch builds the branch summary that carries context from
+// the abandoned leaf from to the current leaf, where the new branch
+// continues. Move the leaf with Branch first, then append the result
+// through the store; its parent is set on append.
+func (s *Session) SummarizeBranch(from string, summary openresponses.Item) (*BranchSummaryEntry, error) {
+	if summary == nil {
+		return nil, errors.New("agentsession: branch summary needs a summary item")
+	}
+	if _, ok := s.Entry(from); !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNoEntry, from)
+	}
+	if s.Leaf() == "" {
+		return nil, errors.New("agentsession: no leaf to continue from")
+	}
+	return &BranchSummaryEntry{From: from, Summary: summary}, nil
 }

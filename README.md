@@ -51,27 +51,26 @@ sess, err := store.Create(ctx, agentsession.Header{
 id := sess.ID()
 
 // The first entry on a root is a config with the full settings.
-store.Append(ctx, id, &agentsession.ConfigEntry{
-    Model: "gpt-5", Instructions: ptr("Be brief."), ToolsAdded: tools,
+cfg, err := agentsession.ConfigFromRequest(openresponses.Request{
+    Model: "gpt-5", Instructions: "Be brief.", Tools: tools,
 })
+store.Append(ctx, id, cfg)
 store.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("What is 2+2?")))
 
 // Build the request from the tree, send it, record what came back.
 c, err := sess.Context()
 req, err := c.Request()                 // store: false, no previous_response_id
-hash, err := agentsession.RequestHash(req)
+start := time.Now()
 resp, err := client.Create(ctx, req)
-for _, item := range resp.Output {
-    store.Append(ctx, id, &agentsession.ItemEntry{Item: item, ResponseID: resp.ID})
-}
-store.Append(ctx, id, &agentsession.ResponseEntry{
-    ResponseID: resp.ID, Model: resp.Model, Status: resp.Status,
-    Usage: resp.Usage, RequestHash: hash,
-})
+_, err = agentsession.RecordResponse(ctx, store, id, req, resp, time.Since(start))
 ```
 
-Every append becomes the leaf. `sess.Branch(entryID)` moves the leaf so
-the next append forks in place; `sess.ResetLeaf()` starts a new root.
+`RecordResponse` appends the output items and the response entry with
+the hash of the request it was given. Every append becomes the leaf.
+`sess.Branch(entryID)` moves the leaf so the next append forks in
+place; `sess.ResetLeaf()` starts a new root. `sess.Compact(firstKept,
+summary)` and `sess.SummarizeBranch(from, summary)` build the entries
+that fold context down or carry it across a branch switch.
 `sess.Verify(responseEntryID)` rebuilds the request and checks the
 hash.
 
@@ -115,10 +114,12 @@ docs := func(yield func(*atif.Trajectory) bool) {
 err := export.WriteATIF("out/", docs)
 ```
 
-Each document is one root-to-leaf path with compaction applied. A
-branch that was continued lists the leaves it was preferred over in
-`extra.preferred_over`; an abandoned one names the fork in
-`extra.abandoned_at`. `export.Items(doc)` reads the raw items back out.
+Each document is one root-to-leaf path with compaction applied. The
+session's current path is written as `<session-id>.json`, the others
+as `<session-id>_<leaf>.json`. A branch that was continued lists the
+leaves it was preferred over in `extra.preferred_over`; an abandoned
+one names the fork in `extra.abandoned_at`. `export.Items(doc)` reads
+the raw items back out.
 
 ## Packages
 

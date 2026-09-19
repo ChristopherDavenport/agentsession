@@ -374,6 +374,8 @@ RFC. The differences a reader of this plan should know about:
   response entry) and `extra.agentsession.entry_id`; a `link` with
   `rel: subsession` embeds the child's continued path under
   `subagent_trajectories` when a resolver is supplied and otherwise
-  becomes a `trajectory_path` reference. The continued branch at a
-  fork is the one whose subtree holds the most recently appended
-  entry.
+  becomes a `trajectory_path` reference to `<session-id>.json`, the
+  name `WriteATIF` gives the child's main trajectory. The continued
+  branch at a fork is the one whose subtree holds the most recently
+  appended entry; the path ending at the last appended entry is the
+  session's main trajectory.

@@ -4,4 +4,4 @@ testdata/atif/rfc-example.json and testdata/atif/harbor-summarization.json
 are the example trajectory from the Agent Trajectory Interchange Format
 RFC and a golden trajectory from the Harbor project
 (https://github.com/harbor-framework/harbor), used under the Apache
-License, Version 2.0. See LICENSE.harbor for the license text.
+License, Version 2.0. See licenses/LICENSE.harbor for the license text.

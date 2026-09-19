@@ -272,10 +272,10 @@ func TestPreferencePairs(t *testing.T) {
 		t.Fatalf("trajectories = %v", got)
 	}
 	abandoned, continued := got["r0000002"], got["n0000001"]
-	if abandoned.AbandonedAt != "r0000001" || len(abandoned.PreferredOver) != 0 {
+	if abandoned.AbandonedAt != "r0000001" || len(abandoned.PreferredOver) != 0 || abandoned.Main {
 		t.Errorf("abandoned = %+v", abandoned)
 	}
-	if continued.AbandonedAt != "" || !reflect.DeepEqual(continued.PreferredOver, []string{"r0000002"}) {
+	if continued.AbandonedAt != "" || !reflect.DeepEqual(continued.PreferredOver, []string{"r0000002"}) || !continued.Main {
 		t.Errorf("continued = %+v", continued)
 	}
 	if continued.Name != "Branching demo" || continued.Labels["r0000001"] != "fork" {
@@ -427,13 +427,50 @@ func TestSubsessions(t *testing.T) {
 	if call.Observation.Results[0].Content.String() != "sub done" {
 		t.Errorf("observation content = %q", call.Observation.Results[0].Content.String())
 	}
-	// Without a resolver the reference is a file path.
+	// Without a resolver the reference is a file path, and writing the
+	// parent and the child with WriteATIF makes that path exist.
 	doc, err = ToATIF(tr, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(doc.SubagentTrajectories) != 0 || doc.Steps[1].Observation.Results[0].SubagentTrajectoryRef[0].TrajectoryPath != "child.json" {
+	ref := doc.Steps[1].Observation.Results[0].SubagentTrajectoryRef[0]
+	if len(doc.SubagentTrajectories) != 0 || ref.TrajectoryPath != "child.json" {
 		t.Errorf("unresolved doc = %+v", doc.Steps[1].Observation.Results[0])
+	}
+	dir := t.TempDir()
+	var childDocs []*atif.Trajectory
+	for ct, err := range Trajectories(child) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		cd, err := ToATIF(ct, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		childDocs = append(childDocs, cd)
+	}
+	if err := WriteATIF(dir, func(yield func(*atif.Trajectory) bool) {
+		if !yield(doc) {
+			return
+		}
+		for _, cd := range childDocs {
+			if !yield(cd) {
+				return
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ref.TrajectoryPath))
+	if err != nil {
+		t.Fatalf("referenced child document: %v", err)
+	}
+	found, err := atif.Parse(data)
+	if err != nil || found.SessionID != "child" || !isMain(found) {
+		t.Errorf("referenced document = %+v, %v", found, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "parent.json")); err != nil {
+		t.Errorf("parent main document: %v", err)
 	}
 }
 
@@ -617,8 +654,8 @@ func TestWriteATIF(t *testing.T) {
 		t.Fatalf("WriteATIF: %v", err)
 	}
 	name := DocumentName(docs[0])
-	if !strings.HasPrefix(name, "media-sess_") || !strings.HasSuffix(name, ".json") {
-		t.Errorf("document name = %s", name)
+	if name != "media-sess.json" {
+		t.Errorf("main document name = %s", name)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
@@ -670,6 +707,10 @@ func TestWriteATIF(t *testing.T) {
 	}
 	if DocumentName(&atif.Trajectory{}) != "trajectory.json" || DocumentName(&atif.Trajectory{TrajectoryID: "a b"}) != "a-b.json" {
 		t.Error("DocumentName")
+	}
+	side := &atif.Trajectory{SessionID: "s", TrajectoryID: "leaf"}
+	if DocumentName(side) != "s_leaf.json" || MainDocumentName("s/x") != "s-x.json" {
+		t.Errorf("DocumentName(side) = %s", DocumentName(side))
 	}
 	if extensionFor("image/svg+xml") != ".svg-xml" || extensionFor("weird") != ".bin" || extensionFor("audio/mpeg") != ".mp3" {
 		t.Error("extensionFor")

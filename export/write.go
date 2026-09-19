@@ -14,9 +14,12 @@ import (
 	"github.com/ChristopherDavenport/agentsession/atif"
 )
 
-// WriteATIF writes one JSON file per document under dir, named
-// "<session_id>_<trajectory_id>.json" (or "<trajectory_id>.json" when
-// the document has no session ID). Media carried inline as data URLs
+// WriteATIF writes one JSON file per document under dir. A session's
+// main trajectory (see [Trajectory.Main]) is named "<session_id>.json",
+// which is what an unresolved subsession reference points at; every
+// other document is "<session_id>_<trajectory_id>.json", or
+// "<trajectory_id>.json" without a session ID. Media carried inline as
+// data URLs
 // is written beside the documents under images/ and audio/, named by
 // content hash, and the parts are rewritten to point at those files.
 // Documents are validated before they are written.
@@ -63,6 +66,9 @@ func WriteATIF(dir string, docs iter.Seq[*atif.Trajectory]) error {
 
 // DocumentName returns the file name WriteATIF uses for a document.
 func DocumentName(doc *atif.Trajectory) string {
+	if doc.SessionID != "" && isMain(doc) {
+		return MainDocumentName(doc.SessionID)
+	}
 	id := safeName(doc.TrajectoryID)
 	if id == "" {
 		id = "trajectory"
@@ -71,6 +77,24 @@ func DocumentName(doc *atif.Trajectory) string {
 		return safeName(doc.SessionID) + "_" + id + ".json"
 	}
 	return id + ".json"
+}
+
+// MainDocumentName returns the file name WriteATIF uses for a session's
+// main trajectory, and the path an unresolved subsession reference
+// carries.
+func MainDocumentName(sessionID string) string {
+	return safeName(sessionID) + ".json"
+}
+
+// isMain reports whether the exporter marked the document as its
+// session's main trajectory.
+func isMain(doc *atif.Trajectory) bool {
+	as, ok := doc.Extra[ExtraAgentSession].(map[string]any)
+	if !ok {
+		return false
+	}
+	main, _ := as["main"].(bool)
+	return main
 }
 
 func safeName(s string) string {

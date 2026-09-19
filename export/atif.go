@@ -22,8 +22,10 @@ type Options struct {
 	// configured. When nil, cost_usd is left absent.
 	Cost func(model string, usage openresponses.Usage) (usd float64, ok bool)
 	// Subsessions resolves a link entry's session ID to the session so
-	// it can be embedded as a subagent trajectory. A nil resolver, or
-	// one returning nil, leaves a file reference "<session-id>.json".
+	// its main trajectory can be embedded as a subagent trajectory. A
+	// nil resolver, or one returning nil, leaves a file reference to
+	// [MainDocumentName] of the child, which is where [WriteATIF] puts
+	// the child's main trajectory.
 	Subsessions func(sessionID string) (*agentsession.Session, error)
 	// Redactors run over the finished document in order.
 	Redactors []Redactor
@@ -548,6 +550,9 @@ func (b *builder) finish() {
 	if len(b.t.Labels) > 0 {
 		as["labels"] = b.t.Labels
 	}
+	if b.t.Main {
+		as["main"] = true
+	}
 	root[ExtraAgentSession] = as
 	if len(b.t.PreferredOver) > 0 {
 		root[ExtraPreferredOver] = b.t.PreferredOver
@@ -593,7 +598,7 @@ func (b *builder) subsessions() {
 		if embedded != nil {
 			ref.TrajectoryID = embedded.TrajectoryID
 		} else {
-			ref.TrajectoryPath = l.Session + ".json"
+			ref.TrajectoryPath = MainDocumentName(l.Session)
 		}
 		if !b.attachRef(l.CallID, ref) {
 			rec["subagent_trajectory_ref"] = ref
@@ -620,8 +625,8 @@ func (b *builder) embed(sessionID string) *atif.Trajectory {
 		if err != nil {
 			continue
 		}
-		t := t
-		if t.AbandonedAt == "" {
+		if t.Main {
+			t := t
 			chosen = &t
 		}
 	}

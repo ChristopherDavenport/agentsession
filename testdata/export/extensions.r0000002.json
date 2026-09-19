@@ -194,7 +194,8 @@
     "agentsession": {
       "cwd": "/home/u/proj",
       "format": "agentsession/0.1",
-      "leaf": "r0000002"
+      "leaf": "r0000002",
+      "main": true
     },
     "environment": {
       "cwd": "/home/u/proj",

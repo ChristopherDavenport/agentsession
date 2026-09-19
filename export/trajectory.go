@@ -31,6 +31,12 @@ type Trajectory struct {
 	// AbandonedAt names the fork entry at which this path left the
 	// preferred route, or "" when it is a preferred path throughout.
 	AbandonedAt string
+	// Main is true for exactly one trajectory of a non-empty session:
+	// the path ending at the most recently appended entry, which is the
+	// session's current path. WriteATIF names its document after the
+	// session alone, and a subsession reference that cannot be embedded
+	// points at that file.
+	Main bool
 }
 
 // Trajectories yields one trajectory per leaf of the session, in file
@@ -39,13 +45,18 @@ type Trajectory struct {
 // continued branch; the others are abandoned. A leaf reached through
 // an abandoned child has AbandonedAt set to the first such fork; a leaf
 // on the continued side of a fork lists the abandoned subtrees' leaves
-// in PreferredOver.
+// in PreferredOver. The trajectory ending at the last appended entry is
+// marked Main.
 func Trajectories(s *agentsession.Session) iter.Seq2[Trajectory, error] {
 	return func(yield func(Trajectory, error) bool) {
 		header := s.Header()
 		name := s.Name()
 		labels := s.Labels()
 		entries := s.Entries()
+		mainLeaf := ""
+		if len(entries) > 0 {
+			mainLeaf = entries[len(entries)-1].Base().ID
+		}
 		order := make(map[string]int, len(entries))
 		for i, e := range entries {
 			order[e.Base().ID] = i
@@ -80,7 +91,7 @@ func Trajectories(s *agentsession.Session) iter.Seq2[Trajectory, error] {
 				}
 				continue
 			}
-			t := Trajectory{Header: header, LeafID: leaf, Context: ctx, Name: name, Labels: labels}
+			t := Trajectory{Header: header, LeafID: leaf, Context: ctx, Name: name, Labels: labels, Main: leaf == mainLeaf}
 			for _, e := range s.Path(leaf) {
 				b := e.Base()
 				children := s.Children(b.ID)

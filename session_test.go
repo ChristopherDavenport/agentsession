@@ -225,3 +225,98 @@ func TestHeaderValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactAndSummarizeBranch(t *testing.T) {
+	s := loadFixture(t, "compaction")
+	// Before any compaction the checkpoint is the plain config replay.
+	if err := s.Branch("i0000005"); err != nil {
+		t.Fatal(err)
+	}
+	comp, err := s.Compact("i0000003", openresponses.SystemText("summary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comp.FirstKept != "i0000003" || comp.Config.Model != "gpt-5-mini" || comp.Config.Instructions != "Be brief." || comp.Summary.ItemType() != "message" {
+		t.Errorf("compaction = %+v", comp)
+	}
+	if _, ok := comp.Config.Extra["temperature"]; ok {
+		t.Error("checkpoint kept a deleted extra")
+	}
+	comp.TokensBefore = 42
+	id, err := s.Append(comp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.ContextAt(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := itemTexts(c.Items); !reflect.DeepEqual(got, []string{"summary", "second", "two", "third"}) {
+		t.Errorf("context after compaction = %q", got)
+	}
+	// A second compaction after the first starts from the checkpoint
+	// and the replay after it.
+	s.Branch(s.Leaf())
+	if _, err := s.Append(&ConfigEntry{Model: "gpt-5-nano"}); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.Compact(id, openresponses.SystemText("again"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Config.Model != "gpt-5-nano" || again.Config.Instructions != "Be brief." {
+		t.Errorf("second checkpoint = %+v", again.Config)
+	}
+	// Errors.
+	if _, err := s.Compact("zzzz", openresponses.SystemText("x")); !errors.Is(err, ErrNoEntry) {
+		t.Errorf("unknown first_kept = %v", err)
+	}
+	if _, err := s.Compact("i0000003", nil); err == nil {
+		t.Error("nil summary accepted")
+	}
+	empty := New(Header{})
+	if _, err := empty.Compact("x", openresponses.SystemText("x")); err == nil {
+		t.Error("compaction of an empty session accepted")
+	}
+
+	// Branch summary: leave r0000003 for r0000001 in the branch fixture.
+	b := loadFixture(t, "branch")
+	if _, err := b.SummarizeBranch("nope", openresponses.SystemText("x")); !errors.Is(err, ErrNoEntry) {
+		t.Errorf("unknown from = %v", err)
+	}
+	if _, err := b.SummarizeBranch("r0000003", nil); err == nil {
+		t.Error("nil summary accepted")
+	}
+	// An entry that exists but is on another branch is off the path.
+	if err := b.Branch("r0000002"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Compact("i0000005", openresponses.SystemText("x")); !errors.Is(err, ErrNoEntry) {
+		t.Errorf("first_kept on another branch = %v", err)
+	}
+	if err := b.Branch("r0000001"); err != nil {
+		t.Fatal(err)
+	}
+	bs, err := b.SummarizeBranch("r0000003", openresponses.SystemText("tried B"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bid, err := b.Append(bs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bs.Parent != "r0000001" || bs.From != "r0000003" {
+		t.Errorf("branch summary = %+v", bs.EntryBase)
+	}
+	c, err = b.ContextAt(bid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := itemTexts(c.Items); !reflect.DeepEqual(got, []string{"Q", "A1", "tried B"}) {
+		t.Errorf("context after branch summary = %q", got)
+	}
+	empty.ResetLeaf()
+	if _, err := New(Header{}).SummarizeBranch("x", openresponses.SystemText("x")); !errors.Is(err, ErrNoEntry) {
+		t.Errorf("empty session = %v", err)
+	}
+}

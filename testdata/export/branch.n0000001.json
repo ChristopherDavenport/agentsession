@@ -211,6 +211,7 @@
         "r0000001": "fork"
       },
       "leaf": "n0000001",
+      "main": true,
       "name": "Branching demo"
     },
     "info": [
