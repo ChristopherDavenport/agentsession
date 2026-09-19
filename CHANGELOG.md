@@ -5,6 +5,11 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- `make check` now includes `tidy-check`, which fails when `go mod tidy`
+  would change any module's `go.mod` or `go.sum`; CI uses the same target.
+
 ## v0.0.1 - 2026-09-19
 
 - Initial implementation of the Agent Session Format (`agentsession/0.1`)

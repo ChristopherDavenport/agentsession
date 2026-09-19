@@ -23,11 +23,13 @@ the change can be discussed before you spend time on it.
 Go 1.25 or later is required. The full local check is:
 
 ```sh
-make check        # gofmt, vet, deps, staticcheck, govulncheck, race tests
+make check        # gofmt, tidy, vet, deps, staticcheck, govulncheck, race tests
 ```
 
-The individual targets are `fmt`, `vet`, `deps`, `lint`, `vuln`, `test`
-and `tidy`. The repository has two modules: the library at the root and
+The individual targets are `fmt`, `tidy-check`, `vet`, `deps`, `lint`,
+`vuln`, `test` and `tidy`.
+
+The repository has two modules: the library at the root and
 `sqlite`, nested so its driver stays out of the library's dependency
 graph. The Makefile targets cover both; a bare `go test ./...` at the
 root does not. `deps` fails if the root module imports anything beyond

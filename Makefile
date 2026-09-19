@@ -5,7 +5,7 @@ GOVULNCHECK ?= $(GO) run golang.org/x/vuln/cmd/govulncheck@latest
 # dependencies out of it.
 SUBMODULES = sqlite
 
-.PHONY: build deps test vet fmt tidy lint vuln check clean
+.PHONY: build deps test vet fmt tidy tidy-check lint vuln check clean
 
 build:
 	$(GO) build ./...
@@ -29,6 +29,13 @@ tidy:
 	$(GO) mod tidy
 	@for m in $(SUBMODULES); do (cd $$m && $(GO) mod tidy) || exit 1; done
 
+# Fails when go mod tidy would change any go.mod or go.sum, without
+# writing, so a stray dependency shows up in make check and not only in
+# CI's diff.
+tidy-check:
+	$(GO) mod tidy -diff
+	@for m in $(SUBMODULES); do (cd $$m && $(GO) mod tidy -diff) || exit 1; done
+
 fmt:
 	gofmt -l . && test -z "$$(gofmt -l .)"
 
@@ -41,7 +48,7 @@ vuln:
 	@for m in $(SUBMODULES); do (cd $$m && $(GOVULNCHECK) ./...) || exit 1; done
 
 # Everything CI runs.
-check: fmt vet deps lint vuln test
+check: fmt tidy-check vet deps lint vuln test
 
 clean:
 	rm -rf .cache

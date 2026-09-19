@@ -48,9 +48,7 @@ jobs:
       - name: Check formatting
         run: make fmt
       - name: Check go.mod and go.sum are tidy in every module
-        run: |
-          make tidy
-          git diff --exit-code
+        run: make tidy-check
       - name: staticcheck
         run: make lint
       - name: govulncheck
