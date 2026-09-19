@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.1 - 2026-09-19
 
 - Initial implementation of the Agent Session Format (`agentsession/0.1`)
   over Open Responses items: the header and every core entry type, with
