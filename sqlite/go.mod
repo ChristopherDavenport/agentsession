@@ -3,7 +3,7 @@ module github.com/ChristopherDavenport/agentsession/sqlite
 go 1.25.0
 
 require (
-	github.com/ChristopherDavenport/agentsession v0.0.0
+	github.com/ChristopherDavenport/agentsession v0.0.1
 	github.com/ChristopherDavenport/openresponses v0.0.9
 	modernc.org/sqlite v1.59.0
 )
@@ -19,5 +19,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
-
-replace github.com/ChristopherDavenport/agentsession => ../

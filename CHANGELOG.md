@@ -7,6 +7,10 @@ versions may break the API.
 
 ## Unreleased
 
+- The `sqlite` module is tagged as `sqlite/v0.0.1`. Its `go.mod`
+  requires `agentsession v0.0.1` instead of a local `replace`, so
+  `go get` works, and a committed `go.work` keeps local development
+  building against the checked-out root.
 - `make check` now includes `tidy-check`, which fails when `go mod tidy`
   would change any module's `go.mod` or `go.sum`; CI uses the same target.
 

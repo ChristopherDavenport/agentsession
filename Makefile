@@ -1,20 +1,28 @@
 GO ?= go
+# -mod=mod, whether from the environment or the go env file, is
+# incompatible with workspace mode; force the default and keep every
+# other flag the caller set.
+export GOFLAGS := -mod=readonly $(filter-out -mod=%,$(GOFLAGS))
 STATICCHECK ?= $(GO) run honnef.co/go/tools/cmd/staticcheck@latest
 GOVULNCHECK ?= $(GO) run golang.org/x/vuln/cmd/govulncheck@latest
-# Nested modules that are tested alongside the library but keep their own
-# dependencies out of it.
+# Nested modules with their own go.mod, so their dependencies stay out of
+# the root module. go.work puts them in one workspace so they build
+# against the checked-out root instead of the version their go.mod
+# requires; ./... from the root still covers only the root module, so
+# every target loops over them.
 SUBMODULES = sqlite
 
 .PHONY: build deps test vet fmt tidy tidy-check lint vuln check clean
 
 build:
 	$(GO) build ./...
+	@for m in $(SUBMODULES); do (cd $$m && $(GO) build ./...) || exit 1; done
 
 # The root module is the session vocabulary and must build from
 # openresponses and the standard library alone. Anything that needs
 # another dependency is a nested module.
 deps:
-	@deps=$$($(GO) list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./... | grep -v '^github.com/ChristopherDavenport/agentsession' | grep -v '^github.com/ChristopherDavenport/openresponses' || true); \
+	@deps=$$(GOWORK=off $(GO) list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./... | grep -v '^github.com/ChristopherDavenport/agentsession' | grep -v '^github.com/ChristopherDavenport/openresponses' || true); \
 	  test -z "$$deps" || { echo "root module depends on: $$deps"; exit 1; }
 
 test:

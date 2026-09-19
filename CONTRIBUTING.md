@@ -67,3 +67,11 @@ git push origin v0.1.0
 The release workflow publishes the GitHub release, and the Go module
 proxy picks the version up from the tag. Before v1.0.0 the API may
 change between minor versions; the changelog records every break.
+
+The `sqlite` module is tagged with its directory as the prefix,
+`sqlite/v0.1.0`, and its `go.mod` requires a released root version, not
+a `replace`. A release that touches the root goes in order: tag the
+root, bump the root requirement in `sqlite`, tidy, then tag `sqlite`.
+The committed `go.work` keeps `sqlite` building against the checked-out
+root in development; `GOFLAGS=-mod=mod` is incompatible with workspaces,
+and the Makefile forces `-mod=readonly`.
