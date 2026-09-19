@@ -19,3 +19,7 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
+
+// The require names the released root a consumer fetches; the replace
+// builds against the tree.
+replace github.com/ChristopherDavenport/agentsession => ../
