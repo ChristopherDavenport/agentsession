@@ -1,0 +1,11 @@
+{"type":"session","format":"agentsession/0.1","id":"01995b2a-0000-7000-8000-000000000004","created_at":"2026-09-17T15:00:00Z","payload":"openresponses/2026-04-24","harness":{"name":"fixture","version":"1"},"cwd":"/home/u/proj","media":"inline","acme:workspace":"ws-1"}
+{"type":"config","id":"c0000001","parent":null,"ts":"2026-09-17T15:00:00Z","model":"gpt-5","acme_note":"kept on a known entry"}
+{"type":"item","id":"i0000001","parent":"c0000001","ts":"2026-09-17T15:00:01Z","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}
+{"type":"agentturn:note","id":"n0000001","parent":"i0000001","ts":"2026-09-17T15:00:02Z","text":"<b>&</b> stays literal","nested":{"z":1,"a":[1,2,{"y":true}]},"order":"is preserved"}
+{"type":"item","id":"i0000002","parent":"n0000001","ts":"2026-09-17T15:00:03Z","item":{"type":"agentturn:note","id":"nt_1","status":"completed","text":"<hi> & bye","z":1,"a":2},"visible":false}
+{"type":"custom","id":"u0000001","parent":"i0000002","ts":"2026-09-17T15:00:04Z","ns":"acme","data":{"k":"v","n":[1,2,3]}}
+{"type":"link","id":"k0000001","parent":"u0000001","ts":"2026-09-17T15:00:05Z","rel":"subsession","session":"01995b2a-0000-7000-8000-0000000000aa","call_id":"call_9"}
+{"type":"env","id":"e0000001","parent":"k0000001","ts":"2026-09-17T15:00:06Z","cwd":"/home/u/proj","vcs":{"system":"git","revision":"abc123","dirty":true},"files":{"read":{"go.mod":"sha256:aaaa"},"written":{"main.go":"sha256:bbbb"}},"tools":{"go":"1.25.0"}}
+{"type":"item","id":"i0000003","parent":"e0000001","ts":"2026-09-17T15:00:07Z","item":{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hi","annotations":[]}]},"response":"resp_1"}
+{"type":"response","id":"r0000001","parent":"i0000003","ts":"2026-09-17T15:00:07Z","response_id":"resp_1","model":"gpt-5","status":"completed","usage":{"input_tokens":9,"output_tokens":1,"total_tokens":10,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}},"request_hash":"sha256:54c271723c0ccf37d2672f2d64a1e622a2dfb19bd8b155548e548efb2f5b3276"}
+{"type":"response","id":"r0000002","parent":"r0000001","ts":"2026-09-17T15:00:08Z","response_id":"resp_2","status":"failed","error":{"type":"server_error","code":"upstream","message":"boom","param":null}}

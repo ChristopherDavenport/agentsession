@@ -1,0 +1,143 @@
+{
+  "n0000001": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Be brief."
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Q"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "A1",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "system",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "An earlier attempt asked follow-up A and got A2."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "follow-up B"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_3",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "B2",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "c0000001",
+      "i0000001",
+      "i0000002",
+      "r0000001",
+      "b0000001",
+      "i0000005",
+      "i0000006",
+      "r0000003",
+      "l0000001",
+      "l0000002",
+      "l0000003",
+      "n0000001"
+    ]
+  },
+  "r0000002": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Be brief."
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Q"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "A1",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "follow-up A"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_2",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "A2",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "c0000001",
+      "i0000001",
+      "i0000002",
+      "r0000001",
+      "i0000003",
+      "i0000004",
+      "r0000002"
+    ]
+  }
+}

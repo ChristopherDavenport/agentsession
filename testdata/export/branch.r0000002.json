@@ -1,0 +1,196 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000003",
+  "trajectory_id": "r0000002",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-09-17T14:00:01Z",
+      "source": "user",
+      "message": "Q",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000001"
+        },
+        "config_entries": [
+          "c0000001"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Q"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-09-17T14:00:02Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "A1",
+      "metrics": {
+        "prompt_tokens": 5,
+        "completion_tokens": 1,
+        "cached_tokens": 0
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000001"
+        },
+        "item_entry_ids": [
+          "i0000002"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "A1",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "r0000001",
+            "model": "gpt-5",
+            "request_hash": "sha256:9f0149c6c0ce4aa4fd97adce307f14ba053f53715eb788de498b653cb4451f90",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-09-17T14:00:02Z",
+            "usage": {
+              "input_tokens": 5,
+              "output_tokens": 1,
+              "total_tokens": 6,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-09-17T14:00:03Z",
+      "source": "user",
+      "message": "follow-up A",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000003"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "follow-up A"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-09-17T14:00:04Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "A2",
+      "metrics": {
+        "prompt_tokens": 8,
+        "completion_tokens": 1,
+        "cached_tokens": 5
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000002"
+        },
+        "item_entry_ids": [
+          "i0000004"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_2",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "A2",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "r0000002",
+            "model": "gpt-5",
+            "request_hash": "sha256:47f85b3d7bf6cb65067421e05de48045a2759824b1ccd6f4e6dd2e1ca7eb6042",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-09-17T14:00:04Z",
+            "usage": {
+              "input_tokens": 8,
+              "output_tokens": 1,
+              "total_tokens": 9,
+              "input_tokens_details": {
+                "cached_tokens": 5
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 13,
+    "total_completion_tokens": 2,
+    "total_cached_tokens": 5,
+    "total_steps": 4
+  },
+  "extra": {
+    "abandoned_at": "r0000001",
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.1",
+      "labels": {
+        "r0000001": "fork"
+      },
+      "leaf": "r0000002",
+      "name": "Branching demo"
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

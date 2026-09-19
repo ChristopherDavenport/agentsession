@@ -1,0 +1,52 @@
+{
+  "r0000002": {
+    "settings": {
+      "model": "gpt-5"
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "hello"
+          }
+        ]
+      },
+      {
+        "type": "agentturn:note",
+        "id": "nt_1",
+        "status": "completed",
+        "text": "\u003chi\u003e \u0026 bye",
+        "z": 1,
+        "a": 2
+      },
+      {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "hi",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "c0000001",
+      "i0000001",
+      "n0000001",
+      "i0000002",
+      "u0000001",
+      "k0000001",
+      "e0000001",
+      "i0000003",
+      "r0000001",
+      "r0000002"
+    ]
+  }
+}

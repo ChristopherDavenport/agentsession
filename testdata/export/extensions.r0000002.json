@@ -1,0 +1,238 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000004",
+  "trajectory_id": "r0000002",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-09-17T15:00:01Z",
+      "source": "user",
+      "message": "hello",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000001"
+        },
+        "config_entries": [
+          "c0000001"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "hello"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-09-17T15:00:03Z",
+      "source": "system",
+      "message": "\u003chi\u003e \u0026 bye",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000002"
+        },
+        "extensions": [
+          {
+            "type": "agentturn:note",
+            "id": "n0000001",
+            "parent": "i0000001",
+            "ts": "2026-09-17T15:00:02Z",
+            "text": "<b>&</b> stays literal",
+            "nested": {
+              "z": 1,
+              "a": [
+                1,
+                2,
+                {
+                  "y": true
+                }
+              ]
+            },
+            "order": "is preserved"
+          }
+        ],
+        "item_type": "agentturn:note",
+        "openresponses": {
+          "item": {
+            "type": "agentturn:note",
+            "id": "nt_1",
+            "status": "completed",
+            "text": "\u003chi\u003e \u0026 bye",
+            "z": 1,
+            "a": 2
+          }
+        },
+        "visible": false
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-09-17T15:00:07Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "hi",
+      "metrics": {
+        "prompt_tokens": 9,
+        "completion_tokens": 1,
+        "cached_tokens": 0
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000001"
+        },
+        "custom": [
+          {
+            "data": {
+              "k": "v",
+              "n": [
+                1,
+                2,
+                3
+              ]
+            },
+            "entry_id": "u0000001",
+            "ns": "acme"
+          }
+        ],
+        "item_entry_ids": [
+          "i0000003"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "hi",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "r0000001",
+            "model": "gpt-5",
+            "request_hash": "sha256:54c271723c0ccf37d2672f2d64a1e622a2dfb19bd8b155548e548efb2f5b3276",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-09-17T15:00:07Z",
+            "usage": {
+              "input_tokens": 9,
+              "output_tokens": 1,
+              "total_tokens": 10,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-09-17T15:00:08Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000002"
+        },
+        "error": {
+          "type": "server_error",
+          "code": "upstream",
+          "message": "boom",
+          "param": null
+        },
+        "openresponses": {
+          "items": [],
+          "response": {
+            "entry_id": "r0000002",
+            "error": {
+              "type": "server_error",
+              "code": "upstream",
+              "message": "boom",
+              "param": null
+            },
+            "response_id": "resp_2",
+            "status": "failed",
+            "ts": "2026-09-17T15:00:08Z"
+          }
+        },
+        "status": "failed"
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 9,
+    "total_completion_tokens": 1,
+    "total_cached_tokens": 0,
+    "total_steps": 4
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.1",
+      "leaf": "r0000002"
+    },
+    "environment": {
+      "cwd": "/home/u/proj",
+      "entry_id": "e0000001",
+      "files": {
+        "read": {
+          "go.mod": "sha256:aaaa"
+        },
+        "written": {
+          "main.go": "sha256:bbbb"
+        }
+      },
+      "tools": {
+        "go": "1.25.0"
+      },
+      "vcs": {
+        "system": "git",
+        "revision": "abc123",
+        "dirty": true
+      }
+    },
+    "links": [
+      {
+        "call_id": "call_9",
+        "entry_id": "k0000001",
+        "rel": "subsession",
+        "session": "01995b2a-0000-7000-8000-0000000000aa",
+        "subagent_trajectory_ref": {
+          "session_id": "01995b2a-0000-7000-8000-0000000000aa",
+          "trajectory_path": "01995b2a-0000-7000-8000-0000000000aa.json",
+          "extra": {
+            "entry_id": "k0000001"
+          }
+        }
+      }
+    ],
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

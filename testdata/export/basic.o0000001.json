@@ -1,0 +1,259 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000001",
+  "trajectory_id": "o0000001",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5",
+    "tool_definitions": [
+      {
+        "function": {
+          "description": "Look something up",
+          "name": "lookup",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "q": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "q"
+            ]
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-09-17T12:00:01Z",
+      "source": "user",
+      "message": "What is 2+2?",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000001"
+        },
+        "config_entries": [
+          "c0000001"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "What is 2+2?"
+              }
+            ]
+          }
+        },
+        "tool_changes": {
+          "added": [
+            "lookup"
+          ]
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-09-17T12:00:02.5Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "reasoning_effort": "low",
+      "message": "",
+      "reasoning_content": "Arithmetic, but the tool is there.",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_1",
+          "function_name": "lookup",
+          "arguments": {
+            "q": "2+2"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_1",
+            "content": "4",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "output": "4"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 40,
+        "completion_tokens": 12,
+        "cached_tokens": 0,
+        "extra": {
+          "reasoning_tokens": 5
+        }
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000001"
+        },
+        "item_entry_ids": [
+          "i0000002",
+          "i0000003"
+        ],
+        "latency_ms": 500,
+        "openresponses": {
+          "items": [
+            {
+              "type": "reasoning",
+              "id": "rs_1",
+              "summary": [
+                {
+                  "type": "summary_text",
+                  "text": "Arithmetic, but the tool is there."
+                }
+              ]
+            },
+            {
+              "type": "function_call",
+              "id": "fc_1",
+              "status": "completed",
+              "call_id": "call_1",
+              "name": "lookup",
+              "arguments": "{\"q\":\"2+2\"}"
+            }
+          ],
+          "response": {
+            "entry_id": "r0000001",
+            "latency_ms": 500,
+            "model": "gpt-5",
+            "request_hash": "sha256:e62ea2aa2e8159c4f9c5f045de715e5ab7c2c5f2c3f10ab8af031944194a1e2c",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-09-17T12:00:02.5Z",
+            "usage": {
+              "input_tokens": 40,
+              "output_tokens": 12,
+              "total_tokens": 52,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 5
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-09-17T12:00:04Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "reasoning_effort": "low",
+      "message": "2+2 is 4.",
+      "metrics": {
+        "prompt_tokens": 60,
+        "completion_tokens": 8,
+        "cached_tokens": 40
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000002"
+        },
+        "item_entry_ids": [
+          "i0000005"
+        ],
+        "latency_ms": 300,
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "2+2 is 4.",
+                  "annotations": []
+                }
+              ],
+              "phase": "final_answer"
+            }
+          ],
+          "response": {
+            "entry_id": "r0000002",
+            "latency_ms": 300,
+            "model": "gpt-5",
+            "request_hash": "sha256:00c0227db7d8043eb3dfc141045f339e3869b8ff3c09fbcd70627f1e8f6d9fb5",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-09-17T12:00:04Z",
+            "usage": {
+              "input_tokens": 60,
+              "output_tokens": 8,
+              "total_tokens": 68,
+              "input_tokens_details": {
+                "cached_tokens": 40
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            }
+          }
+        },
+        "outcome": [
+          {
+            "entry_id": "o0000001",
+            "kind": "feedback",
+            "label": "thumbs_up",
+            "score": 1,
+            "target": "r0000002"
+          }
+        ],
+        "phases": [
+          "final_answer"
+        ]
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 100,
+    "total_completion_tokens": 20,
+    "total_cached_tokens": 40,
+    "total_steps": 3,
+    "extra": {
+      "outcome": [
+        {
+          "entry_id": "o0000001",
+          "kind": "feedback",
+          "label": "thumbs_up",
+          "score": 1,
+          "target": "r0000002"
+        }
+      ]
+    }
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.1",
+      "leaf": "o0000001"
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

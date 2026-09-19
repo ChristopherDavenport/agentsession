@@ -1,0 +1,87 @@
+{
+  "i0000007": {
+    "settings": {
+      "model": "gpt-5-nano"
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "system",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Summary: the user said first and the assistant said one."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "second"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_2",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "two",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "third"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_3",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "three",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "fourth"
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "k0000001",
+      "i0000003",
+      "i0000004",
+      "r0000002",
+      "c0000002",
+      "i0000005",
+      "i0000006",
+      "r0000003",
+      "c0000003",
+      "i0000007"
+    ]
+  }
+}
