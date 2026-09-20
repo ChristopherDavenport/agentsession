@@ -126,7 +126,7 @@ the raw items back out.
 | package | purpose |
 |---|---|
 | `agentsession` | header, entries, tree, context algorithm, request hash, `Store` interface, in-memory store |
-| `jsonl` | the file store: one JSONL file per session with a sync policy and crash recovery |
+| `jsonl` | the file store: one JSONL file per session with a sync policy, crash recovery and a per-session lock against a second writing process |
 | `sqlite` | a SQLite store, as a nested module so its driver stays out of the library |
 | `atif` | Go types for ATIF v1.8 with unknown-member passthrough and validation |
 | `export` | trajectories, ATIF conversion, redactors, writer |

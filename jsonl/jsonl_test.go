@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -300,3 +302,153 @@ func TestOpenRootFailure(t *testing.T) {
 		t.Error("Open under a file succeeded")
 	}
 }
+
+func TestLockAcrossStores(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	first, err := jsonl.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	sess, err := first.Create(ctx, agentsession.Header{CWD: "/p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID()
+	path, _ := first.Path(id)
+	if _, err := os.Stat(path + ".lock"); err != nil {
+		t.Fatalf("lock file after Create: %v", err)
+	}
+
+	second, err := jsonl.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if _, err := second.Open(ctx, id); !errors.Is(err, jsonl.ErrSessionLocked) {
+		t.Fatalf("second Open = %v, want ErrSessionLocked", err)
+	}
+	if _, err := second.Append(ctx, id, &agentsession.InfoEntry{Name: "x"}); !errors.Is(err, jsonl.ErrSessionLocked) {
+		t.Fatalf("second Append = %v, want ErrSessionLocked", err)
+	}
+	if err := second.Delete(ctx, id); !errors.Is(err, jsonl.ErrSessionLocked) {
+		t.Fatalf("second Delete = %v, want ErrSessionLocked", err)
+	}
+	holder, err := second.LockHolder(id)
+	if err != nil || holder == nil || holder.PID != os.Getpid() {
+		t.Fatalf("LockHolder = %+v, %v", holder, err)
+	}
+	// The holder itself is unaffected.
+	if _, err := first.Append(ctx, id, &agentsession.InfoEntry{Name: "x"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Release hands the session over; the first store is then the one
+	// shut out.
+	if err := first.Release(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock file after Release: %v", err)
+	}
+	if _, err := second.Open(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Open(ctx, id); !errors.Is(err, jsonl.ErrSessionLocked) {
+		t.Fatalf("first Open after handover = %v, want ErrSessionLocked", err)
+	}
+
+	// Close drops every lock; Delete of a released session takes and
+	// drops one.
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Delete(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock file after Delete: %v", err)
+	}
+	if holder, err := first.LockHolder(id); !errors.Is(err, agentsession.ErrNoSession) || holder != nil {
+		t.Fatalf("LockHolder after Delete = %+v, %v", holder, err)
+	}
+}
+
+func TestStaleLock(t *testing.T) {
+	ctx := context.Background()
+	st, err := jsonl.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	sess, err := st.Create(ctx, agentsession.Header{CWD: "/p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID()
+	if err := st.Release(id); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := st.Path(id)
+	host, _ := os.Hostname()
+
+	tests := []struct {
+		name string
+		lock string
+		want error // nil means Open succeeds
+	}{
+		{"dead process on this host", `{"pid":` + deadPID(t) + `,"host":` + quote(host) + `,"since":"2026-01-01T00:00:00Z"}` + "\n", nil},
+		{"live process on this host", `{"pid":` + itoa(os.Getpid()) + `,"host":` + quote(host) + `,"since":"2026-01-01T00:00:00Z"}` + "\n", jsonl.ErrSessionLocked},
+		{"another host", `{"pid":1,"host":"elsewhere","since":"2026-01-01T00:00:00Z"}` + "\n", jsonl.ErrSessionLocked},
+		{"unreadable", "not json", jsonl.ErrSessionLocked},
+		{"empty", "", jsonl.ErrSessionLocked},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.WriteFile(path+".lock", []byte(tt.lock), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := st.Open(ctx, id)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Open = %v, want %v", err, tt.want)
+			}
+			if err == nil {
+				holder, err := st.LockHolder(id)
+				if err != nil || holder == nil || holder.PID != os.Getpid() {
+					t.Fatalf("lock not taken over: %+v, %v", holder, err)
+				}
+				if err := st.Release(id); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if !strings.Contains(err.Error(), ".lock") {
+				t.Errorf("error does not name the lock file: %v", err)
+			}
+			if err := st.BreakLock(id); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.Open(ctx, id); err != nil {
+				t.Fatalf("Open after BreakLock: %v", err)
+			}
+			if err := st.Release(id); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// deadPID returns the ID of a process that has exited.
+func deadPID(t *testing.T) string {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Skipf("cannot run a child process: %v", err)
+	}
+	return itoa(cmd.ProcessState.Pid())
+}
+
+func itoa(i int) string { return strconv.Itoa(i) }
+
+func quote(s string) string { return strconv.Quote(s) }

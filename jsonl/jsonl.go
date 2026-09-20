@@ -50,7 +50,13 @@ func WithSync(p SyncPolicy) Option {
 }
 
 // Store is a file-backed [agentsession.Store]. It is safe for
-// concurrent use; one process should own a root at a time.
+// concurrent use within one process. Across processes each open
+// session is guarded by an advisory lock file beside it,
+// <file>.lock, so a second process that opens the same session gets
+// ErrSessionLocked instead of interleaving lines with the first. The
+// lock is released by Release, Delete and Close; a lock left by a
+// process on this host that no longer runs is taken over on the next
+// open, and BreakLock clears one from any other holder.
 type Store struct {
 	root   string
 	policy SyncPolicy
@@ -148,8 +154,12 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("jsonl: create project directory: %w", err)
 	}
+	if err := acquireLock(path); err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_APPEND, 0o600)
 	if err != nil {
+		releaseLock(path)
 		if errors.Is(err, os.ErrExist) {
 			return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 		}
@@ -158,10 +168,12 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	if err := writeLine(f, h); err != nil {
 		f.Close()
 		os.Remove(path)
+		releaseLock(path)
 		return nil, fmt.Errorf("jsonl: write header: %w", err)
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
+		releaseLock(path)
 		return nil, fmt.Errorf("jsonl: sync header: %w", err)
 	}
 	s.open[h.ID] = &handle{session: sess, file: f, path: path}
@@ -169,9 +181,11 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 }
 
 // Open implements agentsession.Store. A session already open in this
-// store is returned as is; otherwise its file is read. A final line
-// left incomplete by a crash is reported through Session.Truncated and
-// removed from the file so later appends continue a valid file.
+// store is returned as is; otherwise its lock is taken and its file is
+// read. A final line left incomplete by a crash is reported through
+// Session.Truncated and removed from the file so later appends
+// continue a valid file. Open returns ErrSessionLocked when another
+// process holds the session.
 func (s *Store) Open(ctx context.Context, id string) (*agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -193,6 +207,21 @@ func (s *Store) openLocked(id string) (*handle, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := acquireLock(path); err != nil {
+		return nil, err
+	}
+	h, err := loadHandle(path, id)
+	if err != nil {
+		releaseLock(path)
+		return nil, err
+	}
+	s.open[id] = h
+	return h, nil
+}
+
+// loadHandle reads a session file and opens it for append. The caller
+// holds the session's lock.
+func loadHandle(path, id string) (*handle, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("jsonl: read %s: %w", path, err)
@@ -218,9 +247,7 @@ func (s *Store) openLocked(id string) (*handle, error) {
 			return nil, fmt.Errorf("jsonl: drop truncated line of %s: %w", path, err)
 		}
 	}
-	h := &handle{session: sess, file: f, path: path}
-	s.open[id] = h
-	return h, nil
+	return &handle{session: sess, file: f, path: path}, nil
 }
 
 // Append implements agentsession.Store: the entry joins the in-memory
@@ -365,18 +392,23 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		if path, err = s.find(id); err != nil {
 			return err
 		}
+		if err := acquireLock(path); err != nil {
+			return err
+		}
 	}
 	if err := os.Remove(path); err != nil {
+		releaseLock(path)
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
 		}
 		return fmt.Errorf("jsonl: remove %s: %w", path, err)
 	}
-	return nil
+	return releaseLock(path)
 }
 
-// Release closes an open session's file without deleting it. The
-// session can be opened again later.
+// Release syncs and closes an open session's file and drops its lock
+// without deleting it. The session can be opened again later, by this
+// or another process.
 func (s *Store) Release(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -385,11 +417,20 @@ func (s *Store) Release(id string) error {
 		return nil
 	}
 	delete(s.open, id)
-	if err := h.file.Sync(); err != nil {
-		h.file.Close()
-		return err
+	return h.close()
+}
+
+// close syncs and closes the file, then drops the lock. The first
+// error is returned; the lock is dropped regardless.
+func (h *handle) close() error {
+	err := h.file.Sync()
+	if cerr := h.file.Close(); err == nil {
+		err = cerr
 	}
-	return h.file.Close()
+	if lerr := releaseLock(h.path); err == nil {
+		err = lerr
+	}
+	return err
 }
 
 // Close syncs and closes every open session file.
@@ -398,10 +439,7 @@ func (s *Store) Close() error {
 	defer s.mu.Unlock()
 	var first error
 	for id, h := range s.open {
-		if err := h.file.Sync(); err != nil && first == nil {
-			first = err
-		}
-		if err := h.file.Close(); err != nil && first == nil {
+		if err := h.close(); err != nil && first == nil {
 			first = err
 		}
 		delete(s.open, id)

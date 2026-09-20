@@ -13,6 +13,13 @@ versions may break the API.
 - `Session` stamps the header's `created_at` and each appended entry's
   `ts` in UTC, so a file written across a timezone change carries one
   offset. Timestamps the caller supplies are kept as given (#9).
+- `jsonl`: each open session is guarded by an advisory lock file,
+  `<file>.lock`, recording the holder's PID and host. A second process
+  that opens, appends to or deletes the session gets
+  `jsonl.ErrSessionLocked` instead of interleaving lines. `Release`,
+  `Delete` and `Close` drop the lock; a lock left by a process on the
+  same host that no longer runs is taken over; `LockHolder` reports the
+  holder and `BreakLock` clears a lock from any other holder (#6).
 
 ## v0.0.2 - 2026-09-19
 
