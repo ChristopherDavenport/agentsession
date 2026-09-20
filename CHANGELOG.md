@@ -42,6 +42,11 @@ versions may break the API.
   `PreferScore` (highest-scored outcome), with `PreferLatest`, the
   previous rule, as the fallback. `Options.Preferences` applies them to
   embedded subsessions; the `export` command takes `-prefer` (#11).
+- `Read` and `UnmarshalEntry` split each line into its members once
+  and decode the envelope, the unknown-member check and item bodies
+  from the split, instead of parsing the line up to four times.
+  `BenchmarkRead` measures it: sessions of 100 KB tool outputs read
+  about twice as fast, sessions of short lines about half again (#10).
 
 ## v0.0.2 - 2026-09-19
 

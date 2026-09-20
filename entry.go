@@ -311,8 +311,16 @@ func (e *UnknownEntry) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON records the envelope and the raw bytes.
 func (e *UnknownEntry) UnmarshalJSON(data []byte) error {
-	var env envelope
-	if err := json.Unmarshal(data, &env); err != nil {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	return e.decodeMembers(data, all)
+}
+
+func (e *UnknownEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
+	env, err := envelopeFrom(all)
+	if err != nil {
 		return err
 	}
 	e.Type = env.Type
@@ -357,8 +365,15 @@ func MarshalEntry(e Entry) ([]byte, error) {
 // UnmarshalEntry decodes one line, dispatching on its type. Types this
 // package does not define decode to [*UnknownEntry].
 func UnmarshalEntry(data []byte) (Entry, error) {
-	var env envelope
-	if err := json.Unmarshal(data, &env); err != nil {
+	// The line is split into its members once; the envelope, the
+	// unknown-member check and, for item entries, the body all read
+	// from the split, so a large line is not parsed again for each.
+	all, err := splitMembers(data)
+	if err != nil {
+		return nil, err
+	}
+	env, err := envelopeFrom(all)
+	if err != nil {
 		return nil, err
 	}
 	if env.Type == "" {
@@ -370,7 +385,7 @@ func UnmarshalEntry(data []byte) (Entry, error) {
 	if env.TS.IsZero() {
 		return nil, fmt.Errorf("agentsession: entry %s has no ts", env.ID)
 	}
-	var e Entry
+	var e memberDecoder
 	switch env.Type {
 	case TypeItem:
 		e = &ItemEntry{}
@@ -397,10 +412,48 @@ func UnmarshalEntry(data []byte) (Entry, error) {
 	default:
 		e = &UnknownEntry{}
 	}
-	if err := json.Unmarshal(data, e); err != nil {
+	if err := e.decodeMembers(data, all); err != nil {
 		return nil, fmt.Errorf("agentsession: entry %s (%s): %w", env.ID, env.Type, err)
 	}
 	return e, nil
+}
+
+// memberDecoder is implemented by every entry type: decode from the
+// line and its split members. UnmarshalJSON on each type splits the
+// line itself and calls this, so both paths decode identically.
+type memberDecoder interface {
+	Entry
+	decodeMembers(data []byte, all map[string]json.RawMessage) error
+}
+
+// splitMembers parses one line into its top-level members.
+func splitMembers(data []byte) (map[string]json.RawMessage, error) {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return nil, err
+	}
+	if all == nil {
+		return nil, errors.New("agentsession: entry is not an object")
+	}
+	return all, nil
+}
+
+// envelopeFrom reads the common members out of a split line.
+func envelopeFrom(all map[string]json.RawMessage) (envelope, error) {
+	env := envelope{Type: jsonx.PeekString(all["type"]), ID: jsonx.PeekString(all["id"])}
+	if raw, ok := all["parent"]; ok && !isNull(raw) {
+		var parent string
+		if err := json.Unmarshal(raw, &parent); err != nil {
+			return env, fmt.Errorf("parent: %w", err)
+		}
+		env.Parent = &parent
+	}
+	if raw, ok := all["ts"]; ok && !isNull(raw) {
+		if err := json.Unmarshal(raw, &env.TS); err != nil {
+			return env, fmt.Errorf("ts: %w", err)
+		}
+	}
+	return env, nil
 }
 
 // marshalEntry joins the envelope, the type-specific body and the
@@ -423,16 +476,18 @@ func marshalEntry(typ string, base *EntryBase, body any) ([]byte, error) {
 
 // unmarshalEntry fills base from the envelope in data, decodes the body
 // into v and records members outside known as unknown.
-func unmarshalEntry(data []byte, base *EntryBase, v any, known map[string]bool) error {
-	var env envelope
-	if err := json.Unmarshal(data, &env); err != nil {
-		return err
-	}
+func unmarshalEntry(data []byte, all map[string]json.RawMessage, base *EntryBase, v any, known map[string]bool) error {
 	if err := json.Unmarshal(data, v); err != nil {
 		return err
 	}
-	var all map[string]json.RawMessage
-	if err := json.Unmarshal(data, &all); err != nil {
+	return fillBase(all, base, known)
+}
+
+// fillBase sets the envelope and the unknown members from a split
+// line.
+func fillBase(all map[string]json.RawMessage, base *EntryBase, known map[string]bool) error {
+	env, err := envelopeFrom(all)
+	if err != nil {
 		return err
 	}
 	base.ID = env.ID
@@ -471,24 +526,44 @@ func (e *ItemEntry) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON decodes the entry, dispatching the item through the
 // openresponses item registry.
 func (e *ItemEntry) UnmarshalJSON(data []byte) error {
-	var aux struct {
-		Item       json.RawMessage `json:"item"`
-		ResponseID string          `json:"response"`
-		Visible    *bool           `json:"visible"`
-	}
-	if err := unmarshalEntry(data, &e.EntryBase, &aux, itemKeys); err != nil {
+	all, err := splitMembers(data)
+	if err != nil {
 		return err
 	}
-	if len(aux.Item) == 0 || string(aux.Item) == "null" {
+	return e.decodeMembers(data, all)
+}
+
+// decodeMembers reads the item entry from the split alone: item lines
+// carry the bulk of a session, and the item is decoded by the
+// openresponses registry from its raw member without another pass
+// over the line.
+func (e *ItemEntry) decodeMembers(_ []byte, all map[string]json.RawMessage) error {
+	if err := fillBase(all, &e.EntryBase, itemKeys); err != nil {
+		return err
+	}
+	raw := all["item"]
+	if len(raw) == 0 || isNull(raw) {
 		return errors.New("item is required")
 	}
-	item, err := openresponses.UnmarshalItem(aux.Item)
+	item, err := openresponses.UnmarshalItem(raw)
 	if err != nil {
 		return err
 	}
 	e.Item = item
-	e.ResponseID = aux.ResponseID
-	e.Visible = aux.Visible
+	e.ResponseID = ""
+	if raw, ok := all["response"]; ok && !isNull(raw) {
+		if err := json.Unmarshal(raw, &e.ResponseID); err != nil {
+			return fmt.Errorf("response: %w", err)
+		}
+	}
+	e.Visible = nil
+	if raw, ok := all["visible"]; ok && !isNull(raw) {
+		var visible bool
+		if err := json.Unmarshal(raw, &visible); err != nil {
+			return fmt.Errorf("visible: %w", err)
+		}
+		e.Visible = &visible
+	}
 	return nil
 }
 
@@ -500,8 +575,16 @@ func (e *ResponseEntry) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the entry.
 func (e *ResponseEntry) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	return e.decodeMembers(data, all)
+}
+
+func (e *ResponseEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain ResponseEntry
-	return unmarshalEntry(data, &e.EntryBase, (*plain)(e), responseKeys)
+	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), responseKeys)
 }
 
 // MarshalJSON emits the entry as one JSON object.
@@ -512,8 +595,16 @@ func (e *ConfigEntry) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the entry.
 func (e *ConfigEntry) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	return e.decodeMembers(data, all)
+}
+
+func (e *ConfigEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain ConfigEntry
-	return unmarshalEntry(data, &e.EntryBase, (*plain)(e), configKeys)
+	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), configKeys)
 }
 
 // MarshalJSON emits the entry as one JSON object.
@@ -527,6 +618,14 @@ func (e *CompactionEntry) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the entry.
 func (e *CompactionEntry) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	return e.decodeMembers(data, all)
+}
+
+func (e *CompactionEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	var aux struct {
 		FirstKept    string               `json:"first_kept"`
 		Summary      json.RawMessage      `json:"summary"`
@@ -534,7 +633,7 @@ func (e *CompactionEntry) UnmarshalJSON(data []byte) error {
 		TokensBefore int                  `json:"tokens_before"`
 		Usage        *openresponses.Usage `json:"usage"`
 	}
-	if err := unmarshalEntry(data, &e.EntryBase, &aux, compactionKeys); err != nil {
+	if err := unmarshalEntry(data, all, &e.EntryBase, &aux, compactionKeys); err != nil {
 		return err
 	}
 	if len(aux.Summary) == 0 || string(aux.Summary) == "null" {
@@ -563,12 +662,20 @@ func (e *BranchSummaryEntry) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the entry.
 func (e *BranchSummaryEntry) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	return e.decodeMembers(data, all)
+}
+
+func (e *BranchSummaryEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	var aux struct {
 		From    string               `json:"from"`
 		Summary json.RawMessage      `json:"summary"`
 		Usage   *openresponses.Usage `json:"usage"`
 	}
-	if err := unmarshalEntry(data, &e.EntryBase, &aux, branchSummaryKeys); err != nil {
+	if err := unmarshalEntry(data, all, &e.EntryBase, &aux, branchSummaryKeys); err != nil {
 		return err
 	}
 	if len(aux.Summary) == 0 || string(aux.Summary) == "null" {
@@ -592,8 +699,16 @@ func (e *LabelEntry) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the entry.
 func (e *LabelEntry) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	return e.decodeMembers(data, all)
+}
+
+func (e *LabelEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain LabelEntry
-	return unmarshalEntry(data, &e.EntryBase, (*plain)(e), labelKeys)
+	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), labelKeys)
 }
 
 // MarshalJSON emits the entry as one JSON object.
@@ -604,8 +719,16 @@ func (e *InfoEntry) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the entry.
 func (e *InfoEntry) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	return e.decodeMembers(data, all)
+}
+
+func (e *InfoEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain InfoEntry
-	return unmarshalEntry(data, &e.EntryBase, (*plain)(e), infoKeys)
+	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), infoKeys)
 }
 
 // MarshalJSON emits the entry as one JSON object.
@@ -616,8 +739,16 @@ func (e *EnvEntry) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the entry.
 func (e *EnvEntry) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	return e.decodeMembers(data, all)
+}
+
+func (e *EnvEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain EnvEntry
-	return unmarshalEntry(data, &e.EntryBase, (*plain)(e), envKeys)
+	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), envKeys)
 }
 
 // MarshalJSON emits the entry as one JSON object.
@@ -628,8 +759,16 @@ func (e *OutcomeEntry) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the entry.
 func (e *OutcomeEntry) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	return e.decodeMembers(data, all)
+}
+
+func (e *OutcomeEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain OutcomeEntry
-	return unmarshalEntry(data, &e.EntryBase, (*plain)(e), outcomeKeys)
+	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), outcomeKeys)
 }
 
 // MarshalJSON emits the entry as one JSON object.
@@ -640,8 +779,16 @@ func (e *LinkEntry) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the entry.
 func (e *LinkEntry) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	return e.decodeMembers(data, all)
+}
+
+func (e *LinkEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain LinkEntry
-	return unmarshalEntry(data, &e.EntryBase, (*plain)(e), linkKeys)
+	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), linkKeys)
 }
 
 // MarshalJSON emits the entry as one JSON object.
@@ -652,8 +799,16 @@ func (e *CustomEntry) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON decodes the entry.
 func (e *CustomEntry) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	return e.decodeMembers(data, all)
+}
+
+func (e *CustomEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain CustomEntry
-	return unmarshalEntry(data, &e.EntryBase, (*plain)(e), customKeys)
+	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), customKeys)
 }
 
 var (
