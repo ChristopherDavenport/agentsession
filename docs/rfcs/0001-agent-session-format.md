@@ -182,11 +182,12 @@ conversation branches, the run ends; or if it annotates that record in
 a way every harness needs: a bookmark, a name, the environment, a
 judgement of the result, a link to another session, state kept beside
 the conversation. An event that belongs to one harness's features,
-however useful, is an extension (`ns:type`) or a `custom` entry. The same test admits a member of a core entry: it
-names an event of that loop, or a shape a reader can recompute from the
-path. A harness's own detail goes in a `ref`, in `details`, in a member
-this document does not define, or in a `custom` entry. That rule is
-what keeps the envelope harness-neutral as the format grows.
+however useful, is an extension (`ns:type`) or a `custom` entry. The
+same test admits a member of a core entry: it names an event of that
+loop, or a shape a reader can recompute from the path. A harness's own
+detail goes in a `ref`, in `details`, in a member this document does
+not define, or in a `custom` entry. That rule is what keeps the
+envelope harness-neutral as the format grows.
 
 ### `item`
 
@@ -382,9 +383,10 @@ A call's fate was decided outside the tool.
   A call may carry several decisions on the path, in order. An answered
   `hold` is followed by a `dispatch` or a `reject` on the same call and
   stays as written; a call still held is what makes a run end
-  `input_required`. There is no separate verdict for an answer. A writer SHOULD write `proceed` only when it
-  answers an earlier `hold` or carries `args`; otherwise the `dispatch`
-  is the record that the call proceeded.
+  `input_required`. There is no separate verdict for an answer. A
+  writer SHOULD write `proceed` only when it answers an earlier `hold`
+  or carries `args`; otherwise the `dispatch` is the record that the
+  call proceeded.
 - `call_id`, `target` and `verdict` are required. `reason` is required
   when `verdict` is `reject`, since it is what the model saw as the
   output and what tells a rejected call from a tool failure; otherwise
