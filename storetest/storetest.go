@@ -170,6 +170,12 @@ func testList(t *testing.T, opts Options) {
 			t.Fatal(err)
 		}
 	}
+	// Names come from info entries; the last one that set a name wins.
+	for _, name := range []string{"first name", "", "Two"} {
+		if _, err := st.Append(ctx, "two", &agentsession.InfoEntry{Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	collect := func(f agentsession.ListFilter) []string {
 		var ids []string
 		for sum, err := range st.List(ctx, f) {
@@ -177,6 +183,12 @@ func testList(t *testing.T, opts Options) {
 				t.Fatalf("List: %v", err)
 			}
 			ids = append(ids, sum.Header.ID)
+			if f.WithNames {
+				want := map[string]string{"two": "Two"}[sum.Header.ID]
+				if sum.Name != want {
+					t.Errorf("List name of %s = %q, want %q", sum.Header.ID, sum.Name, want)
+				}
+			}
 		}
 		return ids
 	}
@@ -191,6 +203,8 @@ func testList(t *testing.T, opts Options) {
 		{"after", agentsession.ListFilter{After: base}, []string{"three", "two"}},
 		{"before", agentsession.ListFilter{Before: base.Add(2 * time.Hour)}, []string{"two", "one"}},
 		{"limit", agentsession.ListFilter{Limit: 2}, []string{"three", "two"}},
+		{"with names", agentsession.ListFilter{WithNames: true}, []string{"three", "two", "one"}},
+		{"with names filtered", agentsession.ListFilter{WithNames: true, CWD: "/b"}, []string{"two"}},
 		{"none", agentsession.ListFilter{CWD: "/z"}, nil},
 	}
 	for _, tt := range tests {

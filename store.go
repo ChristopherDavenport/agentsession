@@ -46,6 +46,10 @@ type ListFilter struct {
 	After, Before time.Time
 	// Limit caps the number of results; zero means no cap.
 	Limit int
+	// WithNames asks for Summary.Name. A store that keeps names
+	// indexed fills it regardless; a file store must scan each
+	// session's entries to find it, so it does so only when asked.
+	WithNames bool
 }
 
 // Matches reports whether a header passes the filter.
@@ -68,6 +72,10 @@ func (f ListFilter) Matches(h Header) bool {
 // Summary describes a stored session without loading it.
 type Summary struct {
 	Header Header
+	// Name is the session's display name, from the last info entry
+	// that set one, when the store provides it: see
+	// ListFilter.WithNames.
+	Name string
 	// Path is where the session lives, for file-backed stores.
 	Path string
 	// Size is the stored size in bytes, when known.
@@ -127,7 +135,7 @@ func (m *MemoryStore) List(_ context.Context, f ListFilter) iter.Seq2[Summary, e
 	for _, s := range m.sessions {
 		h := s.Header()
 		if f.Matches(h) {
-			out = append(out, Summary{Header: h})
+			out = append(out, Summary{Header: h, Name: s.Name()})
 		}
 	}
 	m.mu.RUnlock()

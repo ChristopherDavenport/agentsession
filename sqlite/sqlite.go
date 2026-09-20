@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 	updated_at     TEXT NOT NULL,
 	cwd            TEXT NOT NULL DEFAULT '',
 	parent_session TEXT NOT NULL DEFAULT '',
+	name           TEXT NOT NULL DEFAULT '',
 	header         TEXT NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS sessions_created_at ON sessions(created_at);
@@ -83,7 +85,91 @@ func Open(path string) (*Store, error) {
 		r.Close()
 		return nil, fmt.Errorf("sqlite: apply schema: %w", err)
 	}
+	if err := migrate(w); err != nil {
+		w.Close()
+		r.Close()
+		return nil, err
+	}
 	return &Store{w: w, r: r, open: map[string]*agentsession.Session{}}, nil
+}
+
+// migrate brings a database created by an earlier release up to the
+// current schema. CREATE TABLE IF NOT EXISTS leaves an existing table
+// alone, so columns added later are added here and filled from the
+// stored entries.
+func migrate(w *sql.DB) error {
+	cols, err := columns(w, "sessions")
+	if err != nil {
+		return err
+	}
+	if cols["name"] {
+		return nil
+	}
+	tx, err := w.Begin()
+	if err != nil {
+		return fmt.Errorf("sqlite: migrate: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("sqlite: migrate: add name: %w", err)
+	}
+	rows, err := tx.Query(`SELECT session_id, line FROM entries WHERE type = ? ORDER BY session_id, seq`, agentsession.TypeInfo)
+	if err != nil {
+		return fmt.Errorf("sqlite: migrate: read info entries: %w", err)
+	}
+	names := map[string]string{}
+	for rows.Next() {
+		var id, line string
+		if err := rows.Scan(&id, &line); err != nil {
+			rows.Close()
+			return fmt.Errorf("sqlite: migrate: %w", err)
+		}
+		if name := infoName(line); name != "" {
+			names[id] = name
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("sqlite: migrate: %w", err)
+	}
+	for id, name := range names {
+		if _, err := tx.Exec(`UPDATE sessions SET name = ? WHERE id = ?`, name, id); err != nil {
+			return fmt.Errorf("sqlite: migrate: set name: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: migrate: %w", err)
+	}
+	return nil
+}
+
+// columns returns the column names of a table.
+func columns(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: columns of %s: %w", table, err)
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("sqlite: columns of %s: %w", table, err)
+		}
+		out[name] = true
+	}
+	return out, rows.Err()
+}
+
+// infoName returns the name an info entry line sets, or "".
+func infoName(line string) string {
+	var probe struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal([]byte(line), &probe) != nil {
+		return ""
+	}
+	return probe.Name
 }
 
 // Close runs PRAGMA optimize and closes both pools.
@@ -214,6 +300,9 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at = ? WHERE id = ?`, stamp(time.Now()), sessionID)
 	}
+	if info, ok := e.(*agentsession.InfoEntry); ok && info.Name != "" && err == nil {
+		_, err = tx.ExecContext(ctx, `UPDATE sessions SET name = ? WHERE id = ?`, info.Name, sessionID)
+	}
 	if err == nil {
 		err = tx.Commit()
 	}
@@ -247,7 +336,7 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 			where = append(where, "created_at < ?")
 			args = append(args, stamp(f.Before))
 		}
-		q := `SELECT s.header, s.updated_at,
+		q := `SELECT s.header, s.updated_at, s.name,
 			length(s.header) + COALESCE((SELECT SUM(length(e.line) + 1) FROM entries e WHERE e.session_id = s.id), 0) + 1
 			FROM sessions s`
 		if len(where) > 0 {
@@ -265,9 +354,9 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var header, updated string
+			var header, updated, name string
 			var size int64
-			if err := rows.Scan(&header, &updated, &size); err != nil {
+			if err := rows.Scan(&header, &updated, &name, &size); err != nil {
 				yield(agentsession.Summary{}, fmt.Errorf("sqlite: list: %w", err))
 				return
 			}
@@ -284,7 +373,7 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 				continue
 			}
 			mod, _ := time.Parse(time.RFC3339Nano, updated)
-			if !yield(agentsession.Summary{Header: h, Size: size, Modified: mod}, nil) {
+			if !yield(agentsession.Summary{Header: h, Name: name, Size: size, Modified: mod}, nil) {
 				return
 			}
 		}

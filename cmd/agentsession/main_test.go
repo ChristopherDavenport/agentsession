@@ -75,7 +75,7 @@ func TestRun(t *testing.T) {
 			stdout:  []string{filepath.Join(out, "01995b2a-0000-7000-8000-000000000003.json"), "_r0000002.json"},
 			written: []string{filepath.Join(out, "01995b2a-0000-7000-8000-000000000003.json"), filepath.Join(out, "01995b2a-0000-7000-8000-000000000003_r0000002.json")},
 		},
-		{name: "list", args: []string{"list", filepath.Join(tmp, "root")}, stdout: []string{"CREATED", "01995b2a-0000-7000-8000-000000000003", "01995b2a-0000-7000-8000-000000000001", "/home/u/proj"}},
+		{name: "list", args: []string{"list", filepath.Join(tmp, "root")}, stdout: []string{"CREATED", "01995b2a-0000-7000-8000-000000000003  Branching demo", "01995b2a-0000-7000-8000-000000000001", "/home/u/proj"}},
 		{name: "list limit", args: []string{"list", filepath.Join(tmp, "root"), "-limit", "1"}, stdout: []string{"01995b2a-0000-7000-8000-000000000003"}, absent: []string{"01995b2a-0000-7000-8000-000000000001"}},
 		{name: "list cwd", args: []string{"list", "-cwd", "/elsewhere", filepath.Join(tmp, "root")}, absent: []string{"01995b2a"}},
 		{name: "list missing root", args: []string{"list", filepath.Join(tmp, "nope")}, code: 1, stderr: []string{"no such file"}},

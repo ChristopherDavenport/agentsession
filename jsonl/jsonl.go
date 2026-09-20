@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -321,7 +322,7 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 		var out []agentsession.Summary
 		var errs []error
 		for _, path := range matches {
-			sum, err := summarize(path)
+			sum, err := summarize(path, f.WithNames)
 			if err != nil {
 				errs = append(errs, err)
 				continue
@@ -349,14 +350,16 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 	}
 }
 
-// summarize reads a session file's header and stat.
-func summarize(path string) (agentsession.Summary, error) {
+// summarize reads a session file's header and stat, and scans the
+// rest of the file for the name when asked.
+func summarize(path string, withName bool) (agentsession.Summary, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return agentsession.Summary{}, fmt.Errorf("jsonl: %s: %w", path, err)
 	}
 	defer file.Close()
-	line, err := bufio.NewReader(file).ReadBytes('\n')
+	br := bufio.NewReader(file)
+	line, err := br.ReadBytes('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return agentsession.Summary{}, fmt.Errorf("jsonl: %s: %w", path, err)
 	}
@@ -371,7 +374,38 @@ func summarize(path string) (agentsession.Summary, error) {
 	if err != nil {
 		return agentsession.Summary{}, fmt.Errorf("jsonl: %s: %w", path, err)
 	}
-	return agentsession.Summary{Header: h, Path: path, Size: info.Size(), Modified: info.ModTime()}, nil
+	sum := agentsession.Summary{Header: h, Path: path, Size: info.Size(), Modified: info.ModTime()}
+	if withName {
+		if sum.Name, err = scanName(br); err != nil {
+			return agentsession.Summary{}, fmt.Errorf("jsonl: %s: %w", path, err)
+		}
+	}
+	return sum, nil
+}
+
+// scanName reads the entry lines after the header and returns the
+// name from the last info entry that set one. Lines that do not decode
+// are skipped: a listing is not the place to report them.
+func scanName(br *bufio.Reader) (string, error) {
+	name := ""
+	for {
+		line, err := br.ReadBytes('\n')
+		if len(line) > 0 && bytes.Contains(line, []byte(`"info"`)) {
+			var probe struct {
+				Type string `json:"type"`
+				Name string `json:"name"`
+			}
+			if json.Unmarshal(line, &probe) == nil && probe.Type == agentsession.TypeInfo && probe.Name != "" {
+				name = probe.Name
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return name, nil
+			}
+			return "", err
+		}
+	}
 }
 
 // Delete implements agentsession.Store: the file is removed and the

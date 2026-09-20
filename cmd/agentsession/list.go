@@ -38,16 +38,16 @@ func list(args []string, stdout, stderr io.Writer) error {
 	defer st.Close()
 
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "CREATED\tID\tSIZE\tCWD\tPATH")
+	fmt.Fprintln(tw, "CREATED\tID\tNAME\tSIZE\tCWD\tPATH")
 	var problems []error
-	f := agentsession.ListFilter{CWD: *cwd, ParentSession: *parent, Limit: *limit}
+	f := agentsession.ListFilter{CWD: *cwd, ParentSession: *parent, Limit: *limit, WithNames: true}
 	for sum, err := range st.List(context.Background(), f) {
 		if err != nil {
 			problems = append(problems, err)
 			continue
 		}
 		h := sum.Header
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\t%s\n", h.CreatedAt.UTC().Format(time.RFC3339), h.ID, sum.Size, orDash(h.CWD), sum.Path)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\n", h.CreatedAt.UTC().Format(time.RFC3339), h.ID, orDash(sum.Name), sum.Size, orDash(h.CWD), sum.Path)
 	}
 	tw.Flush()
 	for _, err := range problems {

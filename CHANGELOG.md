@@ -28,6 +28,12 @@ versions may break the API.
   `-redact-home` and `-redact-env` redaction; `list` prints a jsonl
   store's sessions. Standard library only, so the root module's
   dependency rule holds (#7).
+- `Summary.Name` carries the session's display name, and
+  `ListFilter.WithNames` asks for it. The in-memory store always fills
+  it; `sqlite` keeps a `name` column current on info appends and
+  migrates a database from v0.0.2 on open; `jsonl` scans each file's
+  entries only when asked, so the header-only listing stays the cheap
+  default. The `list` command shows it (#4).
 
 ## v0.0.2 - 2026-09-19
 
