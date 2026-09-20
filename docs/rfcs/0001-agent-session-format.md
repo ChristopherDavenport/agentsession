@@ -15,11 +15,11 @@ append-only, tree-structured JSONL file.
 The file holds two kinds of entry. **Context entries** are what the
 model was sent and what it returned: items, responses, configuration and
 compaction. Replaying them along a path rebuilds a request byte for
-byte. **Record entries** are what happened around the conversation: why
-a run started and how it ended, that a tool call was dispatched, who
-decided a call's fate and how, the environment the tools ran in, where
-the conversation branched, links to other sessions, and judgements of
-the result. They never enter the model's context.
+byte. **Record entries** are what happened around the conversation: how
+a run started and how it ended, that a tool call was dispatched, what
+was decided about a call, the environment the tools ran in, where the
+conversation branched, links to other sessions, and judgements of the
+result. They never enter the model's context.
 
 The envelope is harness-neutral. The payload of a context entry is an
 Open Responses item, so the record is the wire format itself.
