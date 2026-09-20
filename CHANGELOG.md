@@ -20,6 +20,14 @@ versions may break the API.
   `Delete` and `Close` drop the lock; a lock left by a process on the
   same host that no longer runs is taken over; `LockHolder` reports the
   holder and `BreakLock` clears a lock from any other holder (#6).
+- `cmd/agentsession`: a command over session files. `show` prints the
+  entries in file order with forks, leaves and labels marked, then the
+  context at the leaf or at `-leaf`; `verify` rebuilds every request
+  and checks its hash, exiting 1 on a mismatch or a truncated final
+  line; `export` writes ATIF documents for every leaf with `-secret`,
+  `-redact-home` and `-redact-env` redaction; `list` prints a jsonl
+  store's sessions. Standard library only, so the root module's
+  dependency rule holds (#7).
 
 ## v0.0.2 - 2026-09-19
 

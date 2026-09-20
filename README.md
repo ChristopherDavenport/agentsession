@@ -121,6 +121,25 @@ leaves it was preferred over in `extra.preferred_over`; an abandoned
 one names the fork in `extra.abandoned_at`. `export.Items(doc)` reads
 the raw items back out.
 
+## Inspecting from a shell
+
+`cmd/agentsession` reads session files without taking their lock, so
+it is safe to run beside a harness that is writing.
+
+```
+go install github.com/ChristopherDavenport/agentsession/cmd/agentsession@latest
+
+agentsession show session.jsonl            # entries in file order, then the context at the leaf
+agentsession show session.jsonl -leaf ID   # the context at another entry
+agentsession verify session.jsonl          # rebuild every request and check its hash
+agentsession export session.jsonl -out dir -secret "$OPENAI_API_KEY" -redact-home
+agentsession list ~/.agent/sessions        # a jsonl store's sessions, newest first
+```
+
+`verify` exits 1 on a mismatch or a truncated final line. `export`
+writes one ATIF document per leaf and embeds a linked subsession when
+its file is beside the exported one or in the same store.
+
 ## Packages
 
 | package | purpose |
@@ -131,6 +150,7 @@ the raw items back out.
 | `atif` | Go types for ATIF v1.8 with unknown-member passthrough and validation |
 | `export` | trajectories, ATIF conversion, redactors, writer |
 | `storetest` | the conformance suite every store runs |
+| `cmd/agentsession` | the command: show, verify, export and list session files |
 
 ## Interoperating
 
