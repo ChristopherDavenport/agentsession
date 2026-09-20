@@ -5,6 +5,21 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- RFC 0001 is revised to draft 0.2. The summary now defines a session
+  as two kinds of entry, context and record, and the core types section
+  states the test for admitting a core type. Three record entries are
+  added: `run` (trigger and end reason), `dispatch` (a call handed to
+  its tool) and `decision` (a call's fate, who decided it and any
+  rewritten arguments). `outcome` gains `pass`, an `eval` kind, an
+  unbounded `score` and a `target` that is an entry ID by rule; `env`
+  gains `workspace`; the header gains `spawned_by` and derived
+  subsession IDs; `link` is written at dispatch; entry order, not
+  `ts`, is the ordering. Instructions as parts and a durable leaf are
+  held as open questions. Specification only; the library follows in a
+  later release (#15, #16, #17, #21, #24, #27, #28).
+
 ## v0.0.4 - 2026-09-19
 
 - `Context.ItemEntries` is aligned with `Context.Items`: the entry that

@@ -1,20 +1,30 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.1
+Status: draft 0.2
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
 
 ## Summary
 
-An append-only, tree-structured JSONL format for recording one agent
-session: what the model was sent, what it returned, what tools did, how
-the configuration changed, where the conversation branched, and what
-happened afterwards. The envelope is harness-neutral. The payload of a
-conversation entry is an Open Responses item, so the record is the wire
-format itself.
+A session is the record of one conversation between a harness and a
+model, kept so that every request the model received can be rebuilt and
+every action taken on the model's behalf can be accounted for. It is an
+append-only, tree-structured JSONL file.
 
-This is a storage and resume format. ATIF covers evaluation
+The file holds two kinds of entry. **Context entries** are what the
+model was sent and what it returned: items, responses, configuration and
+compaction. Replaying them along a path rebuilds a request byte for
+byte. **Record entries** are what happened around the conversation: why
+a run started and how it ended, that a tool call was dispatched, who
+decided a call's fate and how, the environment the tools ran in, where
+the conversation branched, links to other sessions, and judgements of
+the result. They never enter the model's context.
+
+The envelope is harness-neutral. The payload of a context entry is an
+Open Responses item, so the record is the wire format itself.
+
+This is a storage, resume and audit format. ATIF covers evaluation
 trajectories and OpenTelemetry covers observability; this format defines
 a projection to each.
 
@@ -42,6 +52,9 @@ session worth training on.
 
 - **Lossless.** A conforming file contains enough to rebuild every
   request the model received, byte for byte where the payload allows.
+- **Accountable.** Every run, every tool call the harness dispatched and
+  every decision made about a call is in the file, with who made it, so
+  a reader can say what happened to a call whose output never arrived.
 - **Append-only.** A writer only ever appends lines. A crashed session
   is a valid prefix.
 - **Tree-shaped.** Branching is a child of an earlier entry, in place.
@@ -69,6 +82,12 @@ RFC 2119.
 - **Leaf**: the entry the next append will name as its parent.
 - **Item**: an Open Responses item as defined by the Open Responses
   specification at the version named in the header.
+- **Run**: one dispatch of the harness's loop, from an input to the
+  point the harness stops calling the model. A session holds many runs.
+- **Call**: one `function_call` item and everything that happens to it:
+  a decision about it, its dispatch, its output.
+- **In context**: contributing to the request the context algorithm
+  builds. A context entry is in context; a record entry is not.
 
 ## File
 
@@ -79,25 +98,28 @@ RFC 2119.
 - Media referenced by items MAY be stored inline as data URLs or beside
   the file under a directory named after the session ID. A header field
   says which.
+- Entry order and `parent` links are the ordering. `ts` is informational
+  and a reader MUST NOT order entries by it; clocks step backwards.
 
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.1","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.2","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
- "cwd":"/path","parent_session":"…","media":"inline"}
+ "cwd":"/path","parent_session":"…","spawned_by":"call_…","media":"inline"}
 ```
 
 | field | req | meaning |
 |---|---|---|
 | `type` | MUST | the string `session` |
 | `format` | MUST | `agentsession/<major>.<minor>` |
-| `id` | MUST | globally unique; UUIDv7 RECOMMENDED |
+| `id` | MUST | globally unique; UUIDv7 RECOMMENDED. For a subsession, a UUIDv5 over `<parent session id>/<call_id>` is RECOMMENDED, so a reader can compute the child's ID from the parent's `link` or `function_call` alone |
 | `created_at` | MUST | RFC 3339 |
 | `payload` | MUST | payload profile; `openresponses/<spec-date>` is the only profile this RFC defines |
 | `harness` | SHOULD | name and version of the writer |
-| `cwd` | MAY | working directory at creation |
+| `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
 | `parent_session` | MAY | session ID this was forked or spawned from |
+| `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar` |
 
 Unknown header fields MUST be preserved by any tool that rewrites the
@@ -121,6 +143,20 @@ are permitted. An entry MUST NOT be modified after it is written;
 corrections are new entries.
 
 ## Core entry types
+
+Context entries: `item`, `response`, `config`, `compaction`,
+`branch_summary`. Record entries: `run`, `dispatch`, `decision`,
+`label`, `info`, `env`, `outcome`, `link`, `custom`. A record entry
+contributes nothing to context; the context algorithm below is the
+normative statement.
+
+A type is core only if the event it records belongs to the loop every
+harness runs: an input arrives, the model is called, a call is decided
+and dispatched, its output returns, the context is compacted, the
+conversation branches, the run ends. An event that belongs to one
+harness's features, however useful, is an extension (`ns:type`) or a
+`custom` entry. That rule is what keeps the envelope harness-neutral as
+the format grows.
 
 ### `item`
 
@@ -218,6 +254,67 @@ Context carried across a branch switch.
 `parent` is where the new branch continues; `from` is the leaf that was
 left. `summary` is an item that enters context.
 
+### `run`
+
+Why a run started and how it ended. Two entries per run, paired by
+`run_id`, both written by the harness that runs the loop.
+
+```json
+{"type":"run","id":"…","parent":"…","ts":"…","run_id":"…","phase":"start",
+ "trigger":{"kind":"human|schedule|channel|agent|resume","ref":"…"}}
+{"type":"run","id":"…","parent":"…","ts":"…","run_id":"…","phase":"end",
+ "reason":"done|stopped|input_required|aborted|error","pending":["call_…"]}
+```
+
+- `trigger.kind` is closed: `human` typed it, `schedule` fired it,
+  `channel` delivered it, `agent` was another agent's call, `resume`
+  continued a paused run. `ref` names the trigger in the harness's own
+  terms (a cron name, a channel message ID) and is opaque to readers.
+- `reason` is closed and matches the loop's run-end vocabulary. `pending`
+  lists the call IDs left without an output, so a resume knows what it
+  is answering without scanning the path.
+- Items and responses of the run follow its `start` entry on the path.
+  A run with no `end` entry was cut off; that is the crash signal.
+
+### `dispatch`
+
+A call was handed to its tool.
+
+```json
+{"type":"dispatch","id":"…","parent":"…","ts":"…",
+ "call_id":"call_…","target":"entry-id"}
+```
+
+`target` is the `item` entry holding the `function_call`. A call with a
+`dispatch` and no `function_call_output` on the path was in flight when
+the record stopped, and its side effect may have happened. A call with
+neither was never started. A writer SHOULD write the dispatch before the
+tool runs, and MUST NOT write it for a call that was blocked.
+
+### `decision`
+
+A call's fate was decided outside the tool.
+
+```json
+{"type":"decision","id":"…","parent":"…","ts":"…",
+ "call_id":"call_…","target":"entry-id",
+ "verdict":"allow|block|defer|approve|refuse","by":"hook|user|host",
+ "reason":"…","args":{…}}
+```
+
+- `verdict` is closed. `allow`, `block` and `defer` are a hook's
+  answers before the call runs; `approve` and `refuse` answer an earlier
+  `defer`. A call may carry several decisions on the path, in order.
+- `by` says who decided. `reason` is the text the decider gave, which
+  for `block` and `refuse` is also what the model saw as the output.
+- `args`, when present, are the arguments the tool ran with when a
+  decision rewrote them. The `function_call` item stays as the model
+  produced it, so the request hash still verifies; the change is
+  recorded beside the call, never inside it.
+
+A `decision` is a lifecycle fact and carries no score. A judgement of
+how something went is an `outcome`.
+
 ### `label`, `info`
 
 ```json
@@ -229,24 +326,43 @@ Not in context. A `label` with `label: null` clears.
 
 ### `env`
 
-A snapshot of the environment for replay.
+A snapshot of the environment for replay: where the tools ran and what
+they saw.
 
 ```json
 {"type":"env","id":"…","parent":"…","ts":"…",
  "cwd":"…","vcs":{"system":"git","revision":"…","dirty":true},
  "files":{"read":{"path":"sha256:…"},"written":{"path":"sha256:…"}},
- "tools":{"name":"version"}}
+ "tools":{"name":"version"},
+ "workspace":{"kind":"local|container|remote","root":"…","image":"…",
+              "digest":"…","platform":"…","host":"…","instance":"…"}}
 ```
+
+`workspace` says which file system `cwd` is a path in. A local run MAY
+omit it. A container SHOULD carry `digest` rather than a tag alone,
+because a tag moves. An `env` entry applies from its position on the
+path until the next one.
 
 ### `outcome`
 
-A signal about how the session, or a range of it, went.
+A judgement of how the session, or a range of it, went.
 
 ```json
 {"type":"outcome","id":"…","parent":"…","ts":"…",
- "kind":"feedback|test|task|tool_error|custom","target":"entry-id",
- "score":1.0,"label":"…","details":{…}}
+ "kind":"feedback|test|task|tool_error|eval|custom","target":"entry-id",
+ "score":1.0,"pass":true,"label":"…","details":{…}}
 ```
+
+- `target` MUST name an entry in this session, usually the last entry of
+  the range judged. A reader that selects branches by outcome resolves
+  `target` as an entry on a path; a task or test name belongs in
+  `details`.
+- `score` is any finite number. Its scale is the judge's, named by
+  `label`; a normalised score belongs beside the raw one in `details`,
+  not in place of it. `pass` is the judge's verdict when it has one.
+- `kind: "eval"` is a score produced by an evaluation run over the
+  session, as opposed to `feedback` from a person or `test` from a
+  verifier.
 
 ### `link`
 
@@ -257,7 +373,10 @@ A reference to another session, for subagents and forks.
  "rel":"subsession|fork_of|continued_in","session":"…","call_id":"…"}
 ```
 
-`call_id` ties a subsession to the function call that spawned it.
+`call_id` ties a subsession to the function call that spawned it. A
+`subsession` link SHOULD be written when the call is dispatched, before
+the child's header exists, so a link whose session cannot be found means
+the child never started rather than a child that was never linked.
 
 ### `custom`
 
@@ -287,8 +406,9 @@ list as follows.
    compaction, then the items of entries after it.
    If none: the item list is the items of all entries on the path.
 4. An entry contributes an item if it is `item`, or `branch_summary`,
-   or a `compaction` selected in step 3. Every other core type and every
-   unknown extension contributes nothing.
+   or a `compaction` selected in step 3. Every record entry (`run`,
+   `dispatch`, `decision`, `label`, `info`, `env`, `outcome`, `link`,
+   `custom`) and every unknown extension contributes nothing.
 5. The canonical request is settings plus the item list, encoded as the
    payload profile's request with `store: false` and no
    `previous_response_id`. Its hash is `request_hash`.
@@ -316,7 +436,9 @@ MAY verify it by rebuilding the request from the path and comparing.
   last entry written for that model call.
 - A user item or function call output SHOULD be written before the
   request that includes it is sent.
-- Writers SHOULD fsync at least on each `response` entry.
+- Writers SHOULD fsync at least on each `response` entry and on each
+  `function_call_output` item, since the output is the record that a
+  side effect happened.
 
 ## Projections
 
@@ -329,7 +451,10 @@ profile: user and system items to steps, one `response` with its items
 to one agent step with `tool_calls`, `reasoning_content` and `metrics`,
 function call outputs to observations by `source_call_id`, compaction
 and branch summaries as copied-context system steps, `link` entries to
-`subagent_trajectories`. Raw items travel in step `extra` so the
+`subagent_trajectories`. `run`, `dispatch` and `decision` entries have
+no step of their own: the run's end reason and the decisions on a call
+travel in the `extra` of the step they belong to, and a fold's usage in
+its system step's `extra`. Raw items travel in step `extra` so the
 projection is lossless.
 
 ### OpenTelemetry
@@ -373,11 +498,39 @@ proposal so the format arrives with three existing corpora behind it.
 
 This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
-versioning, and adds the entries that none of them record: environment,
-outcome and cross-session links.
+versioning, and adds the entries that none of them record: runs,
+dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.1
+
+All additive; a 0.1 reader preserves every new entry and rebuilds the
+same context.
+
+- The Summary names the two kinds of entry, and the core types section
+  states the test for admitting a core type.
+- New record entries `run`, `dispatch` and `decision`, which make the
+  Accountable goal true.
+- `outcome`: `target` is an entry ID by rule, `pass` added, `score`
+  unbounded, `eval` kind.
+- `env`: `workspace` member; `cwd` precedence over the header.
+- Header: `spawned_by`; derived subsession IDs; `link` written at
+  dispatch.
+- File: entry order is the ordering, not `ts`.
+- Writing discipline: fsync on function call outputs.
+
+Considered and held: instructions as parts in `config`, which would add
+a second spelling of settings and change step 2 for a storage cost that
+belongs to the store; and a durable leaf marker, which a library can
+carry as a reserved `label` without a format change. Both are open
+questions below.
 
 ## Open questions
 
+- Whether `config` should carry `instructions_parts` so a delta names
+  only the part that changed. Held: it changes step 2 and adds a second
+  spelling of the same settings; try deduplication in the store first.
+- Whether the current leaf needs a durable marker. Held: a reserved
+  `label` a library honours on open covers it without a format change.
 - Whether to allow a second payload profile at 0.x, or hold the line at
   Open Responses and rely on converters.
 - Sidecar media layout and naming.
