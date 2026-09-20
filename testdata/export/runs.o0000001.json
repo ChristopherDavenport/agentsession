@@ -1,0 +1,371 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000005",
+  "trajectory_id": "o0000001",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5",
+    "tool_definitions": [
+      {
+        "function": {
+          "description": "Run a shell command",
+          "name": "bash",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "cmd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cmd"
+            ]
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-09-20T12:00:04Z",
+      "source": "user",
+      "message": "Clean the build directory, list the files, and fetch the changelog.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000001"
+        },
+        "config_entries": [
+          "c0000001"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Clean the build directory, list the files, and fetch the changelog."
+              }
+            ]
+          }
+        },
+        "run": {
+          "end_entry_id": "u0000002",
+          "pending": [
+            "call_1"
+          ],
+          "reason": "input_required",
+          "run_id": "run-1",
+          "source": "input",
+          "start_entry_id": "u0000001",
+          "trigger": "cron:nightly-clean"
+        },
+        "tool_changes": {
+          "added": [
+            "bash"
+          ]
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-09-20T12:00:08Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_1",
+          "function_name": "bash",
+          "arguments": {
+            "cmd": "rm -rf build"
+          }
+        },
+        {
+          "tool_call_id": "call_2",
+          "function_name": "bash",
+          "arguments": {
+            "cmd": "ls"
+          }
+        },
+        {
+          "tool_call_id": "call_3",
+          "function_name": "bash",
+          "arguments": {
+            "cmd": "curl https://example.com/CHANGELOG"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_2",
+            "content": "a.txt\nb.txt",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_2",
+                  "output": "a.txt\nb.txt"
+                }
+              }
+            }
+          },
+          {
+            "source_call_id": "call_3",
+            "content": "network access is disabled",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_3",
+                  "output": "network access is disabled"
+                }
+              }
+            }
+          },
+          {
+            "source_call_id": "call_1",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "output": ""
+                }
+              }
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 50,
+        "completion_tokens": 20,
+        "cached_tokens": 0
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000001"
+        },
+        "calls": {
+          "call_1": {
+            "decisions": [
+              {
+                "by": "policy",
+                "entry_id": "d0000001",
+                "reason": "destructive; needs approval",
+                "verdict": "hold"
+              }
+            ],
+            "dispatch": {
+              "entry_id": "p0000002"
+            }
+          },
+          "call_2": {
+            "decisions": [
+              {
+                "args": {
+                  "cmd": "ls -la"
+                },
+                "by": "policy",
+                "entry_id": "d0000002",
+                "verdict": "proceed"
+              }
+            ],
+            "dispatch": {
+              "entry_id": "p0000001"
+            }
+          },
+          "call_3": {
+            "decisions": [
+              {
+                "by": "policy",
+                "entry_id": "d0000003",
+                "reason": "network access is disabled",
+                "verdict": "reject"
+              }
+            ]
+          }
+        },
+        "item_entry_ids": [
+          "r0000001-1",
+          "r0000001-2",
+          "r0000001-3"
+        ],
+        "latency_ms": 400,
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_1",
+              "status": "completed",
+              "call_id": "call_1",
+              "name": "bash",
+              "arguments": "{\"cmd\":\"rm -rf build\"}"
+            },
+            {
+              "type": "function_call",
+              "id": "fc_2",
+              "status": "completed",
+              "call_id": "call_2",
+              "name": "bash",
+              "arguments": "{\"cmd\":\"ls\"}"
+            },
+            {
+              "type": "function_call",
+              "id": "fc_3",
+              "status": "completed",
+              "call_id": "call_3",
+              "name": "bash",
+              "arguments": "{\"cmd\":\"curl https://example.com/CHANGELOG\"}"
+            }
+          ],
+          "response": {
+            "entry_id": "r0000001",
+            "latency_ms": 400,
+            "model": "gpt-5",
+            "request_hash": "sha256:c29b02972c1deadb0d3172449376af5a075e28647e57a2a49afc40e59ea246d8",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-09-20T12:00:08Z",
+            "usage": {
+              "input_tokens": 50,
+              "output_tokens": 20,
+              "total_tokens": 70,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-09-20T12:00:20Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Build removed. Files: a.txt, b.txt. The changelog fetch was not allowed.",
+      "metrics": {
+        "prompt_tokens": 50,
+        "completion_tokens": 20,
+        "cached_tokens": 0
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000002"
+        },
+        "item_entry_ids": [
+          "r0000002-1"
+        ],
+        "latency_ms": 400,
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Build removed. Files: a.txt, b.txt. The changelog fetch was not allowed.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "r0000002",
+            "latency_ms": 400,
+            "model": "gpt-5",
+            "request_hash": "sha256:61f0bbc2cdc4e70173f6246263c8ffc1ee91cfb81b102cbcabeb8ec865c2dc18",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-09-20T12:00:20Z",
+            "usage": {
+              "input_tokens": 50,
+              "output_tokens": 20,
+              "total_tokens": 70,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            }
+          }
+        },
+        "outcome": [
+          {
+            "entry_id": "o0000001",
+            "kind": "eval",
+            "label": "judge-v1",
+            "pass": true,
+            "score": 0.9,
+            "target": "r0000002"
+          }
+        ],
+        "run": {
+          "end_entry_id": "u0000004",
+          "pending": [],
+          "reason": "done",
+          "run_id": "run-2",
+          "source": "resume",
+          "start_entry_id": "u0000003",
+          "trigger": "approval:chris"
+        }
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 100,
+    "total_completion_tokens": 40,
+    "total_cached_tokens": 0,
+    "total_steps": 3,
+    "extra": {
+      "outcome": [
+        {
+          "entry_id": "o0000001",
+          "kind": "eval",
+          "label": "judge-v1",
+          "pass": true,
+          "score": 0.9,
+          "target": "r0000002"
+        }
+      ]
+    }
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.2",
+      "leaf": "o0000001",
+      "main": true,
+      "records": [
+        "run",
+        "dispatch",
+        "decision"
+      ]
+    },
+    "environment": {
+      "cwd": "/home/u/proj",
+      "entry_id": "e0000001",
+      "workspace": {
+        "kind": "container",
+        "ref": "sha256:9f2c1e4b7a0d3c5e8f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70"
+      }
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // SyncPolicy says when the store fsyncs a session file.
@@ -33,9 +34,12 @@ type SyncPolicy int
 const (
 	// SyncEveryAppend fsyncs after every line. It is the default.
 	SyncEveryAppend SyncPolicy = iota
-	// SyncOnResponse fsyncs after a response entry, which the format
-	// recommends as the minimum, and after a compaction or a branch
-	// summary, which are as expensive to lose.
+	// SyncOnResponse fsyncs after a response entry and a function call
+	// output, which the format recommends as the minimum, after a
+	// compaction or a branch summary, which are as expensive to lose,
+	// and after any record entry whose type the header names in
+	// records, which the format requires to be durable before the side
+	// effect it precedes.
 	SyncOnResponse
 	// SyncNever leaves syncing to the operating system and to explicit
 	// calls to Store.Sync.
@@ -270,7 +274,7 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	if err := writeLine(h.file, e); err != nil {
 		return "", fmt.Errorf("jsonl: write entry %s: %w", id, err)
 	}
-	if s.shouldSync(e) {
+	if s.shouldSync(h.session.Header(), e) {
 		if err := h.file.Sync(); err != nil {
 			return "", fmt.Errorf("jsonl: sync entry %s: %w", id, err)
 		}
@@ -278,15 +282,19 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	return id, nil
 }
 
-func (s *Store) shouldSync(e agentsession.Entry) bool {
+func (s *Store) shouldSync(hdr agentsession.Header, e agentsession.Entry) bool {
 	switch s.policy {
 	case SyncEveryAppend:
 		return true
 	case SyncOnResponse:
-		switch e.(type) {
+		switch v := e.(type) {
 		case *agentsession.ResponseEntry, *agentsession.CompactionEntry, *agentsession.BranchSummaryEntry:
 			return true
+		case *agentsession.ItemEntry:
+			_, ok := v.Item.(*openresponses.FunctionCallOutput)
+			return ok
 		}
+		return hdr.HasRecord(e.EntryType())
 	}
 	return false
 }

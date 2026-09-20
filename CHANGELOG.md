@@ -30,6 +30,30 @@ versions may break the API.
   parts, a durable leaf and a source on queued input are held as open
   questions. Specification only; the library follows in a later release
   (#15, #16, #17, #21, #24, #27, #28).
+- The library implements draft 0.2 and writes `agentsession/0.2`; 0.1
+  files read unchanged. New entry types `RunEntry`, `DispatchEntry` and
+  `DecisionEntry` with their constants and constructors;
+  `OutcomeEntry.Pass` and `OutcomeEval`; `EnvEntry.Workspace` and
+  `SetWorkspace`; `Header.Records`, `Header.SpawnedBy`,
+  `Header.HasRecord` and `AllRecords`; `SubsessionID`, the UUIDv5
+  derivation the RFC recommends. `Calls`, `Session.Calls` and
+  `Session.PendingCalls` collect each function call with its decisions,
+  dispatch and output, and `Call.State` reads the header's records to
+  say whether a missing dispatch means never started or unknown. `Runs`,
+  `Session.Runs`, `Session.OpenRun` and `Session.EndRun` partition a
+  path into run segments and build the end entry with its pending list;
+  `ComputeReason` is the RFC's cascade and `Run.Verify` checks a written
+  reason against it. `Session.VerifyRecords` checks run ends, forbids a
+  dispatch after a reject and, when the header promises dispatches,
+  requires one on every call that ran; `Session.Append` refuses a
+  dispatch for a rejected call with `ErrCallRejected`. The jsonl store's
+  `SyncOnResponse` now also syncs function call outputs and any record
+  entry the header names, as the format requires. The ATIF export
+  carries a run's source, trigger, reason, cause and pending calls under
+  `run` on the first step of its segment and a call's decisions and
+  dispatch under `calls` on the agent step that produced it.
+  `agentsession verify` runs the record checks on every leaf, and `show`
+  renders the new entries and header members.
 
 ## v0.0.4 - 2026-09-19
 

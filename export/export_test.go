@@ -84,7 +84,7 @@ func encode(t *testing.T, v any) []byte {
 // and the raw items it carries must rebuild the path's item list byte
 // for byte.
 func TestATIFGolden(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			n := 0
@@ -198,7 +198,7 @@ func TestBasicMapping(t *testing.T) {
 		t.Error("outcome missing from final metrics")
 	}
 	as := doc.Extra[ExtraAgentSession].(map[string]any)
-	if as["cwd"] != "/home/u/proj" || as["leaf"] != "o0000001" || as["format"] != agentsession.Format {
+	if as["cwd"] != "/home/u/proj" || as["leaf"] != "o0000001" || as["format"] != s.Header().Format {
 		t.Errorf("root agentsession extra = %v", as)
 	}
 	// Without a price source there is no cost.

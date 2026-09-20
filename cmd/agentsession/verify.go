@@ -46,6 +46,12 @@ func verify(args []string, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "%d verified, %d without hash, %d failed\n", checked, unhashed, failed)
 	problem := failed > 0
+	for _, leaf := range s.Leaves() {
+		if err := s.VerifyRecords(leaf); err != nil {
+			problem = true
+			fmt.Fprintf(stdout, "records to %s  ERROR %v\n", leaf, err)
+		}
+	}
 	if t := s.Truncated(); t != nil {
 		problem = true
 		fmt.Fprintf(stdout, "truncated: line %d was cut short: %v\n", t.Line, t.Err)

@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"crypto/rand"
+	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -22,17 +23,7 @@ func uuidv7(now time.Time) string {
 	rand.Read(b[6:]) // never fails since Go 1.24
 	b[6] = 0x70 | b[6]&0x0f
 	b[8] = 0x80 | b[8]&0x3f
-	var out [36]byte
-	hex.Encode(out[:8], b[:4])
-	out[8] = '-'
-	hex.Encode(out[9:13], b[4:6])
-	out[13] = '-'
-	hex.Encode(out[14:18], b[6:8])
-	out[18] = '-'
-	hex.Encode(out[19:23], b[8:10])
-	out[23] = '-'
-	hex.Encode(out[24:], b[10:])
-	return string(out[:])
+	return formatUUID(b)
 }
 
 // NewEntryID returns a short random entry ID: eight hexadecimal
@@ -60,4 +51,36 @@ func newUniqueEntryID(taken func(string) bool) string {
 		panic(fmt.Sprintf("agentsession: entry ID %s already taken", id))
 	}
 	return id
+}
+
+// SubsessionID derives the session ID the format recommends for a
+// subsession: a UUIDv5 under the nil namespace over
+// "<parent session id>/<call_id>", so a reader can compute the child's
+// ID from the parent's link or function call alone, before or after
+// the child exists. A second child for the same call appends a new
+// root to the existing child session rather than minting a second ID.
+func SubsessionID(parentSessionID, callID string) string {
+	h := sha1.New()
+	var ns [16]byte // the nil namespace
+	h.Write(ns[:])
+	h.Write([]byte(parentSessionID + "/" + callID))
+	var b [16]byte
+	copy(b[:], h.Sum(nil))
+	b[6] = 0x50 | b[6]&0x0f
+	b[8] = 0x80 | b[8]&0x3f
+	return formatUUID(b)
+}
+
+func formatUUID(b [16]byte) string {
+	var out [36]byte
+	hex.Encode(out[:8], b[:4])
+	out[8] = '-'
+	hex.Encode(out[9:13], b[4:6])
+	out[13] = '-'
+	hex.Encode(out[14:18], b[6:8])
+	out[18] = '-'
+	hex.Encode(out[19:23], b[8:10])
+	out[23] = '-'
+	hex.Encode(out[24:], b[10:])
+	return string(out[:])
 }

@@ -181,6 +181,14 @@ func (s *Session) Append(e Entry) (string, error) {
 	if b.Timestamp.IsZero() {
 		b.Timestamp = s.now()
 	}
+	if d, ok := e.(*DispatchEntry); ok {
+		// The format forbids a dispatch for a call a decision rejected.
+		for _, c := range Calls(s.path(b.Parent)) {
+			if c.ID() == d.CallID && c.Rejected() {
+				return "", fmt.Errorf("%w: %s", ErrCallRejected, d.CallID)
+			}
+		}
+	}
 	if u, ok := e.(*UnknownEntry); ok {
 		// The raw line is what gets written; keep it in step with the
 		// envelope that was just filled in.
@@ -217,6 +225,8 @@ func validateEntry(e Entry) error {
 		if len(v.Raw) == 0 {
 			return errors.New("agentsession: unknown entry has no raw bytes")
 		}
+	case *RunEntry, *DispatchEntry, *DecisionEntry:
+		return validateLifecycle(e)
 	}
 	return nil
 }

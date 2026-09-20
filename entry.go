@@ -40,13 +40,15 @@ const (
 	OutcomeTest      = "test"
 	OutcomeTask      = "task"
 	OutcomeToolError = "tool_error"
+	OutcomeEval      = "eval"
 	OutcomeCustom    = "custom"
 )
 
 // Entry is one line of a session after the header. Concrete types are
 // [ItemEntry], [ResponseEntry], [ConfigEntry], [CompactionEntry],
-// [BranchSummaryEntry], [LabelEntry], [InfoEntry], [EnvEntry],
-// [OutcomeEntry], [LinkEntry], [CustomEntry] and [UnknownEntry]. Decoded
+// [BranchSummaryEntry], [RunEntry], [DispatchEntry], [DecisionEntry],
+// [LabelEntry], [InfoEntry], [EnvEntry], [OutcomeEntry], [LinkEntry],
+// [CustomEntry] and [UnknownEntry]. Decoded
 // values are always pointers, so switch on *ItemEntry and so on. An
 // entry must not be modified once it has been appended to a session;
 // corrections are new entries.
@@ -226,13 +228,19 @@ type InfoEntry struct {
 // EntryType returns "info".
 func (*InfoEntry) EntryType() string { return TypeInfo }
 
-// EnvEntry is a snapshot of the environment for replay.
+// EnvEntry is a snapshot of the environment for replay: where the
+// tools ran and what they saw. It applies from its position on the
+// path until the next one, and its CWD takes precedence over the
+// header's.
 type EnvEntry struct {
 	EntryBase `json:"-"`
 	CWD       string            `json:"cwd,omitempty"`
 	VCS       *VCS              `json:"vcs,omitempty"`
 	Files     *FileHashes       `json:"files,omitempty"`
 	Tools     map[string]string `json:"tools,omitempty"`
+	// Workspace says which file system CWD is a path in. A local run
+	// may leave it nil.
+	Workspace *Workspace `json:"workspace,omitempty"`
 }
 
 // EntryType returns "env".
@@ -252,13 +260,17 @@ type FileHashes struct {
 	Written map[string]string `json:"written,omitempty"`
 }
 
-// OutcomeEntry is a signal about how the session, or a range of it,
-// went.
+// OutcomeEntry is a judgement of how the session, or a range of it,
+// went. Target names an entry in this session, usually the last entry
+// of the range judged; a task or test name belongs in Details. Score
+// is any finite number on the judge's own scale, named by Label; Pass
+// is the judge's verdict when it has one.
 type OutcomeEntry struct {
 	EntryBase `json:"-"`
 	Kind      string          `json:"kind"`
 	Target    string          `json:"target,omitempty"`
 	Score     *float64        `json:"score,omitempty"`
+	Pass      *bool           `json:"pass,omitempty"`
 	Label     string          `json:"label,omitempty"`
 	Details   json.RawMessage `json:"details,omitempty"`
 }
@@ -397,6 +409,12 @@ func UnmarshalEntry(data []byte) (Entry, error) {
 		e = &CompactionEntry{}
 	case TypeBranchSummary:
 		e = &BranchSummaryEntry{}
+	case TypeRun:
+		e = &RunEntry{}
+	case TypeDispatch:
+		e = &DispatchEntry{}
+	case TypeDecision:
+		e = &DecisionEntry{}
 	case TypeLabel:
 		e = &LabelEntry{}
 	case TypeInfo:

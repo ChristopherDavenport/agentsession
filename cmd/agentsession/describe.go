@@ -103,6 +103,9 @@ func describeEntry(e agentsession.Entry) string {
 		if len(v.Tools) > 0 {
 			parts = append(parts, fmt.Sprintf("%d tool(s)", len(v.Tools)))
 		}
+		if v.Workspace != nil {
+			parts = append(parts, strings.TrimSpace(v.Workspace.Kind+" "+shorten(v.Workspace.Ref, 20)))
+		}
 		return strings.Join(parts, ", ")
 	case *agentsession.OutcomeEntry:
 		parts := []string{v.Kind}
@@ -111,6 +114,13 @@ func describeEntry(e agentsession.Entry) string {
 		}
 		if v.Score != nil {
 			parts = append(parts, fmt.Sprintf("score %g", *v.Score))
+		}
+		if v.Pass != nil {
+			if *v.Pass {
+				parts = append(parts, "pass")
+			} else {
+				parts = append(parts, "fail")
+			}
 		}
 		if v.Label != "" {
 			parts = append(parts, v.Label)
@@ -122,6 +132,34 @@ func describeEntry(e agentsession.Entry) string {
 			s += " via " + v.CallID
 		}
 		return s
+	case *agentsession.RunEntry:
+		parts := []string{v.Phase, v.RunID}
+		if v.IsStart() {
+			parts = append(parts, v.Source)
+		} else {
+			parts = append(parts, v.Reason)
+			if len(v.Pending) > 0 {
+				parts = append(parts, fmt.Sprintf("pending %s", strings.Join(v.Pending, ",")))
+			}
+		}
+		if v.Ref != "" {
+			parts = append(parts, "ref "+describeText(v.Ref))
+		}
+		return strings.Join(parts, " ")
+	case *agentsession.DispatchEntry:
+		return v.CallID + " to tool"
+	case *agentsession.DecisionEntry:
+		parts := []string{v.Verdict, v.CallID}
+		if v.By != "" {
+			parts = append(parts, "by "+v.By)
+		}
+		if v.Reason != "" {
+			parts = append(parts, describeText(v.Reason))
+		}
+		if len(v.Args) > 0 {
+			parts = append(parts, "args rewritten")
+		}
+		return strings.Join(parts, " ")
 	default:
 		return "(unknown entry type)"
 	}

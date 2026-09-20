@@ -97,7 +97,7 @@ func TestLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	if len(lines) != 2 || !strings.HasPrefix(lines[0], `{"type":"session","format":"agentsession/0.1","id":"sess-1"`) || !strings.HasPrefix(lines[1], `{"type":"item","id":"`) {
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], `{"type":"session","format":"`+agentsession.Format+`","id":"sess-1"`) || !strings.HasPrefix(lines[1], `{"type":"item","id":"`) {
 		t.Errorf("file:\n%s", data)
 	}
 	// The file is a session Read understands.

@@ -59,6 +59,12 @@ func printHeader(w io.Writer, s *agentsession.Session) {
 	if h.ParentSession != "" {
 		fmt.Fprintf(tw, "parent\t%s\n", h.ParentSession)
 	}
+	if h.SpawnedBy != "" {
+		fmt.Fprintf(tw, "spawned by\t%s\n", h.SpawnedBy)
+	}
+	if len(h.Records) > 0 {
+		fmt.Fprintf(tw, "records\t%s\n", strings.Join(h.Records, ", "))
+	}
 	if h.Media != "" {
 		fmt.Fprintf(tw, "media\t%s\n", h.Media)
 	}
