@@ -5,6 +5,11 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- The RFC now specifies the `config` checkpoint a `compaction` carries:
+  the `Settings` shape with `tools` as the full list in force and
+  `extra` as the merged passthrough map after null deletions (#13).
 ## v0.0.2 - 2026-09-19
 
 - One version per repository. The `sqlite` module's `go.mod` requires

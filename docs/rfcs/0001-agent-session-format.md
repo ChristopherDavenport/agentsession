@@ -188,7 +188,23 @@ Replaces earlier context with a summary.
   compaction stores the returned `compaction` item verbatim; a local
   summary is a `message` item.
 - `config` is a full checkpoint so a reader need not replay config
-  entries from before the compaction.
+  entries from before the compaction. Its shape is the settings the
+  context algorithm produces, not a `config` delta:
+
+  ```json
+  {"model":"…","instructions":"…","reasoning":{…},"text":{…},
+   "tools":[…],"extra":{…}}
+  ```
+
+  `tools` is the full list of tool definitions in force at the
+  compaction, in the order the context algorithm would send them, not
+  a delta; there are no `tools_added`, `tools_removed` or `replace`
+  members. `extra` is the merged map of passthrough request members
+  after every earlier delta has been applied and null deletions have
+  removed their keys, so it never contains a null value. Members whose
+  value is empty MAY be omitted. A writer built elsewhere MUST produce
+  this shape so the same path rebuilds the same request and its
+  `request_hash` verifies.
 
 ### `branch_summary`
 
