@@ -5,6 +5,32 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- RFC 0001 is revised to draft 0.2. The summary now defines a session as
+  two kinds of entry, context and record, and the core types section
+  states the test for admitting a core type. Three record entries are
+  added: `run` (source and end reason), `dispatch` (a call handed to its
+  tool) and `decision` (a call's fate, any rewritten arguments and,
+  optionally, who decided it). Run end reasons and decision verdicts are
+  defined as shapes of the path a reader can recompute, so they belong
+  to the format rather than to one harness, and the reasons form a
+  first-match cascade with `error` and `interrupted` as the two values a
+  writer adds; how an input arrived and who decided a call are a
+  harness's own detail. The header gains `records`, the record types
+  whose absence a reader may take as the event not having happened, so a
+  converter over a log with no tool-start record does not assert that a
+  call never ran; such entries are durable before the side effect they
+  precede. Members of a core entry the RFC does not define are
+  preserved. `outcome` gains `pass`, an `eval` kind, an unbounded
+  `score` and a `target` that is an entry ID by rule; `env` gains
+  `workspace`, a kind and one reference; the header also gains
+  `spawned_by` and derived subsession IDs; `link` is written at
+  dispatch; entry order, not `ts`, is the ordering. Instructions as
+  parts, a durable leaf and a source on queued input are held as open
+  questions. Specification only; the library follows in a later release
+  (#15, #16, #17, #21, #24, #27, #28).
+
 ## v0.0.4 - 2026-09-19
 
 - `Context.ItemEntries` is aligned with `Context.Items`: the entry that
