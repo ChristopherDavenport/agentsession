@@ -9,8 +9,8 @@ Open Responses community as a companion specification.
 
 A session is the record of one conversation between a harness and a
 model, kept so that every request the model received can be rebuilt and
-every action taken on the model's behalf can be accounted for. It is an
-append-only, tree-structured JSONL file.
+every call the model made can be followed to its output or to the point
+the record stopped. It is an append-only, tree-structured JSONL file.
 
 The file holds two kinds of entry. **Context entries** are what the
 model was sent and what it returned: items, responses, configuration and
@@ -24,7 +24,7 @@ result. They never enter the model's context.
 The envelope is harness-neutral. The payload of a context entry is an
 Open Responses item, so the record is the wire format itself.
 
-This is a storage, resume and audit format. ATIF covers evaluation
+This is a storage and resume format. ATIF covers evaluation
 trajectories and OpenTelemetry covers observability; this format defines
 a projection to each.
 
@@ -54,7 +54,8 @@ session worth training on.
   request the model received, byte for byte where the payload allows.
 - **Resumable.** For every call without an output, a reader can tell
   from the path whether it was never started, was in flight when the
-  record stopped, or is waiting on an answer.
+  record stopped, or is waiting on an answer, in any file whose header
+  says the writer records dispatches.
 - **Append-only.** A writer only ever appends lines. A crashed session
   is a valid prefix.
 - **Tree-shaped.** Branching is a child of an earlier entry, in place.
@@ -82,12 +83,14 @@ RFC 2119.
 - **Leaf**: the entry the next append will name as its parent.
 - **Item**: an Open Responses item as defined by the Open Responses
   specification at the version named in the header.
-- **Run**: one dispatch of the harness's loop, from an input to the
-  point the harness stops calling the model. A session holds many runs.
+- **Run**: one pass of the harness's loop, from an input to the point
+  the harness stops calling the model. A session holds many runs.
 - **Call**: one `function_call` item and everything that happens to it:
   a decision about it, its dispatch, its output.
 - **In context**: contributing to the request the context algorithm
   builds. A context entry is in context; a record entry is not.
+- **`ref`**: wherever it appears, a string in the harness's own terms
+  that names the thing beside it. Readers treat it as opaque.
 
 ## File
 
@@ -106,6 +109,7 @@ RFC 2119.
 ```json
 {"type":"session","format":"agentsession/0.2","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
+ "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","spawned_by":"call_…","media":"inline"}
 ```
 
@@ -117,6 +121,7 @@ RFC 2119.
 | `created_at` | MUST | RFC 3339 |
 | `payload` | MUST | payload profile; `openresponses/<spec-date>` is the only profile this RFC defines |
 | `harness` | SHOULD | name and version of the writer |
+| `records` | SHOULD | the record entry types this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
 | `parent_session` | MAY | session ID this was forked or spawned from |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
@@ -142,6 +147,17 @@ A parent MUST appear earlier in the file than any child. Multiple roots
 are permitted. An entry MUST NOT be modified after it is written;
 corrections are new entries.
 
+A member of a core entry that this document does not define MUST be
+preserved by any tool that rewrites the file and MUST be ignored by a
+reader that does not know it. That is where a harness keeps detail
+richer than a core member allows.
+
+A record entry named in the header's `records` is written whenever its
+event occurs, so a reader MAY take its absence on a path as the event
+not having happened. For a type the header does not name, absence means
+the file does not say. A converter from a native format that carries no
+such record leaves the type out of `records`.
+
 ## Core entry types
 
 Context entries: `item`, `response`, `config`, `compaction`,
@@ -155,8 +171,11 @@ harness runs: an input arrives, the model is called, a call is decided
 and dispatched, its output returns, the context is compacted, the
 conversation branches, the run ends. An event that belongs to one
 harness's features, however useful, is an extension (`ns:type`) or a
-`custom` entry. That rule is what keeps the envelope harness-neutral as
-the format grows.
+`custom` entry. The same test admits a member of a core entry: it
+names an event of that loop, or a shape a reader can recompute from the
+path. A harness's own detail goes in a `ref`, in `details`, in a member
+this document does not define, or in a `custom` entry. That rule is
+what keeps the envelope harness-neutral as the format grows.
 
 ### `item`
 
@@ -267,35 +286,40 @@ Why a run started and how it ended. Two entries per run, paired by
  "pending":["call_…"]}
 ```
 
+- `run_id` and `phase` are required on both entries. `source` is
+  required on `start`; `reason` and `pending` are required on `end`.
+  `ref` is optional on both.
 - `source` is closed to two path shapes: `input`, a new input started
-  the run, and `resume`, the run began by answering calls the previous
-  run's `end` entry left pending. `ref` is the harness's opaque name for
+  the run, and `resume`, the run began by answering calls that were on
+  the path with no output when it started, whether the previous run
+  ended by leaving them pending or was cut off. `ref` on `start` names
   what triggered the input (a cron name, a channel message ID). How an
   input arrived, whether a schedule, a channel or another agent, is a
   harness feature and goes in `ref` or a `custom` entry.
 - `reason` is closed. Each value is a shape of the run's segment, the
   entries on the path from the `start` entry to the `end` entry, where
   a pending call is a `function_call` on the segment with no
-  `function_call_output` on it:
-  - `done`: the last `response` on the segment has no `function_call`
-    in its output and no error.
-  - `stopped`: the last `response` has calls, every call has an output,
-    there is no error, and no `response` follows. `ref` names the cause
-    in the harness's own terms (a turn budget, a tool that asked to
-    stop) and is opaque to readers.
-  - `input_required`: at least one call is pending, and every pending
-    call has a `hold` decision and no `dispatch`.
-  - `aborted`: at least one pending call has a `dispatch`, or the last
-    `response` is incomplete without an error.
-  - `error`: the last `response` on the segment carries an error, or
-    the harness failed before it could write one, which `ref` names.
+  `function_call_output` on it. The values are tested in this order
+  and the first that matches is the reason:
+  1. `error`: the last `response` on the segment carries an error, or
+     the harness failed before it could write one, which `ref` names.
+  2. `input_required`: at least one call is pending, and every pending
+     call has a `hold` decision and no `dispatch`.
+  3. `aborted`: any other segment with a pending call, or whose last
+     `response` is incomplete, or that has no `response`.
+  4. `done`: the last `response` has no `function_call` in its output.
+  5. `stopped`: the last `response` has calls, every call has an
+     output, and the harness chose not to call the model again. `ref`
+     names the cause (a turn budget, a tool that asked to stop).
 
-  A reader MAY recompute `reason` from the segment. The segment is
-  authoritative when the two disagree.
+  Every segment matches exactly one value. A reader MAY recompute
+  `reason` from the segment, and the segment is authoritative when the
+  two disagree.
 - `pending` lists the pending calls' IDs so a resume can read them
   without walking the segment. The segment is authoritative here too.
 - Items and responses of the run follow its `start` entry on the path.
-  A run with no `end` entry was cut off; that is the crash signal.
+  When the header names `run` in `records`, a run with no `end` entry
+  was cut off; that is the crash signal.
 
 ### `dispatch`
 
@@ -306,14 +330,17 @@ A call was handed to its tool.
  "call_id":"call_…","target":"entry-id"}
 ```
 
-`target` is the `item` entry holding the `function_call`. A call with a
-`dispatch` and no `function_call_output` on the path was in flight when
-the record stopped, and its side effect may have happened. A call with
-neither was never started. A writer SHOULD write the dispatch before the
-tool runs, and MUST NOT write it for a call that was rejected. A
-`dispatch` with no `decision` before it on the path is the shape of a
-call that proceeded without anyone deciding, so a writer that records
-no decisions still produces a valid file.
+`call_id` and `target` are required; `target` is the `item` entry
+holding the `function_call`. A call with a `dispatch` and no
+`function_call_output` on the path was in flight when the record
+stopped, and its side effect may have happened. When the header names
+`dispatch` in `records`, a call with neither was never started;
+otherwise the file does not say whether it ran. A writer that names
+`dispatch` MUST write it, durably, before the tool runs, and no writer
+may write it for a call that was rejected. When the header names
+`decision`, a `dispatch` with no `decision` before it on the path is
+the shape of a call that proceeded without anyone deciding, so a writer
+that records no decisions still produces a valid file.
 
 ### `decision`
 
@@ -331,19 +358,21 @@ A call's fate was decided outside the tool.
   - `proceed`: a `dispatch` for the call follows.
   - `reject`: no `dispatch` ever follows, and a `function_call_output`
     for the call follows whose content is `reason`.
-  - `hold`: neither follows from this decision; a later `decision` on
-    the same call answers it with `proceed` or `reject`.
+  - `hold`: no `dispatch` follows from this decision. The call waits.
 
-  A call may carry several decisions on the path, in order. The path
-  already shows whether a `proceed` or `reject` answered a `hold`, so
-  there is no separate verdict for an answer. A writer SHOULD write
-  `proceed` only when it answers an earlier `hold` or carries `args`;
-  otherwise the `dispatch` is the record that the call proceeded.
-- `call_id`, `target` and `verdict` are required. `by` and `reason` are
-  optional. `by` is closed: `human` is a person, `policy` is a rule the
-  harness evaluated without waiting, `agent` is another model. `reason`
-  is the text the decider gave, which for `reject` is also what the
-  model saw as the output.
+  A call may carry several decisions on the path, in order. A `hold`
+  that is answered is followed by a `dispatch` or by a `reject` on the
+  same call; one that is not answered is what makes a run end
+  `input_required`. The path shows which, so there is no separate
+  verdict for an answer. A writer SHOULD write `proceed` only when it
+  answers an earlier `hold` or carries `args`; otherwise the `dispatch`
+  is the record that the call proceeded.
+- `call_id`, `target` and `verdict` are required. `reason` is required
+  when `verdict` is `reject`, since it is what the model saw as the
+  output and what tells a rejected call from a tool failure; otherwise
+  `reason`, `by` and `args` are optional. `by` is closed: `human` is a
+  person, `policy` is a rule the harness evaluated without waiting,
+  `agent` is another model.
 - `args`, when present, are the arguments the tool ran with when a
   decision rewrote them. The `function_call` item stays as the model
   produced it, so the request hash still verifies; the change is
@@ -378,9 +407,10 @@ they saw.
 closed, and `ref` is one string the harness can resolve to that file
 system (an image digest, a host, an instance ID). A local run MAY omit
 it. A container's `ref` SHOULD be a digest rather than a tag, because a
-tag moves. Anything richer is an unknown member, which the envelope
-already preserves. An `env` entry applies from its position on the path
-until the next one.
+tag moves. Anything richer, such as a host beside a digest, goes in
+members this document does not define, which the envelope section says
+a rewriter preserves. An `env` entry applies from its position on the
+path until the next one.
 
 ### `outcome`
 
@@ -480,6 +510,11 @@ MAY verify it by rebuilding the request from the path and comparing.
 - Writers SHOULD fsync at least on each `response` entry and on each
   `function_call_output` item, since the output is the record that a
   side effect happened.
+- A writer that names a type in the header's `records` MUST have each
+  such entry durable before the side effect it precedes: a `dispatch`
+  is written and synced before the tool runs, and a `run` end before
+  the harness reports the run as ended. Without that, the absence a
+  reader relies on could be a lost line.
 
 ## Projections
 
@@ -493,8 +528,9 @@ to one agent step with `tool_calls`, `reasoning_content` and `metrics`,
 function call outputs to observations by `source_call_id`, compaction
 and branch summaries as copied-context system steps, `link` entries to
 `subagent_trajectories`. `run`, `dispatch` and `decision` entries have
-no step of their own. A run's `source`, `ref` and end `reason` travel under
-`run` in the `extra` of the step holding the run's first input; a
+no step of their own. A run's `source`, `ref` and end `reason` travel
+under `run` in the `extra` of the first step its segment produces, or
+in the trajectory's top-level `extra` when it produces none; a
 call's decisions and dispatch travel under `calls`, keyed by call ID,
 in the `extra` of the agent step that produced the call; a fold's usage
 travels under `usage` in its system step's `extra`. Raw items travel in
@@ -525,10 +561,11 @@ The reference implementation is the Go `agentsession` library. The
 conformance suite is a directory of fixture files with expected context
 output for every leaf, expected `request_hash` values, the recomputed
 `reason` for every `run` end, and negative cases for a broken parent
-link, a truncated last line, an unknown type and a `dispatch` that
-follows a `reject`. Converters for pi, Claude Code and Codex are part of
-the initial proposal so the format arrives with three existing corpora
-behind it.
+link, a truncated last line, an unknown type, a `dispatch` that
+follows a `reject`, and a header naming `dispatch` beside a call that
+has an output and no `dispatch`. Converters for pi, Claude Code and
+Codex are part of the initial proposal so the format arrives with three
+existing corpora behind it.
 
 ## Prior art
 
@@ -552,21 +589,27 @@ All additive; a 0.1 reader preserves every new entry and rebuilds the
 same context.
 
 - The Summary names the two kinds of entry, and the core types section
-  states the test for admitting a core type.
+  states the test for admitting a core type and a core member.
 - New record entries `run`, `dispatch` and `decision`, which make the
   Resumable goal true. A run's `source`, its end `reason` and a
   decision's `verdict` are defined as shapes of the path a reader can
-  recompute, not as one harness's vocabulary; how an input arrived and
-  who decided a call are optional or belong in `ref` and `custom`.
+  recompute, not as one harness's vocabulary; the reasons form a
+  first-match cascade so every segment has exactly one. How an input
+  arrived and who decided a call are optional or belong in `ref` and
+  `custom`.
 - `outcome`: `target` is an entry ID by rule, `pass` added, `score`
   unbounded, `eval` kind.
 - `env`: `workspace` member, a `kind` and one `ref`; `cwd` precedence
   over the header.
-- Header: `spawned_by`; derived subsession IDs, with a retried call
-  appending a root to the existing child session; `link` written at
-  dispatch.
+- Header: `records`, the record types whose absence a reader may read
+  as the event not having happened; `spawned_by`; derived subsession
+  IDs, with a retried call appending a root to the existing child
+  session; `link` written at dispatch.
+- Entry envelope: members of a core entry this document does not
+  define are preserved.
 - File: entry order is the ordering, not `ts`.
-- Writing discipline: fsync on function call outputs.
+- Writing discipline: fsync on function call outputs; entries named in
+  `records` are durable before the side effect they precede.
 
 Considered and held: instructions as parts in `config`, which would add
 a second spelling of settings and change step 2 for a storage cost that
