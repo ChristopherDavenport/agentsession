@@ -12,12 +12,14 @@ versions may break the API.
   states the test for admitting a core type. Three record entries are
   added: `run` (trigger and end reason), `dispatch` (a call handed to
   its tool) and `decision` (a call's fate, who decided it and any
-  rewritten arguments). `outcome` gains `pass`, an `eval` kind, an
+  rewritten arguments). Run end reasons and decision verdicts are
+  defined as shapes of the path a reader can recompute, so they belong
+  to the format rather than to one harness. `outcome` gains `pass`, an `eval` kind, an
   unbounded `score` and a `target` that is an entry ID by rule; `env`
   gains `workspace`; the header gains `spawned_by` and derived
   subsession IDs; `link` is written at dispatch; entry order, not
-  `ts`, is the ordering. Instructions as parts and a durable leaf are
-  held as open questions. Specification only; the library follows in a
+  `ts`, is the ordering. Instructions as parts, a durable leaf and a
+  source on queued input are held as open questions. Specification only; the library follows in a
   later release (#15, #16, #17, #21, #24, #27, #28).
 
 ## v0.0.4 - 2026-09-19

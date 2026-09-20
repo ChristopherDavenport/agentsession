@@ -113,7 +113,7 @@ RFC 2119.
 |---|---|---|
 | `type` | MUST | the string `session` |
 | `format` | MUST | `agentsession/<major>.<minor>` |
-| `id` | MUST | globally unique; UUIDv7 RECOMMENDED. For a subsession, a UUIDv5 over `<parent session id>/<call_id>` is RECOMMENDED, so a reader can compute the child's ID from the parent's `link` or `function_call` alone |
+| `id` | MUST | globally unique; UUIDv7 RECOMMENDED. For a subsession, a UUIDv5 over `<parent session id>/<call_id>` is RECOMMENDED, so a reader can compute the child's ID from the parent's `link` or `function_call` alone. A second child for the same call appends a new root to the existing child session rather than minting a second ID |
 | `created_at` | MUST | RFC 3339 |
 | `payload` | MUST | payload profile; `openresponses/<spec-date>` is the only profile this RFC defines |
 | `harness` | SHOULD | name and version of the writer |
@@ -263,16 +263,35 @@ Why a run started and how it ended. Two entries per run, paired by
 {"type":"run","id":"…","parent":"…","ts":"…","run_id":"…","phase":"start",
  "trigger":{"kind":"human|schedule|channel|agent|resume","ref":"…"}}
 {"type":"run","id":"…","parent":"…","ts":"…","run_id":"…","phase":"end",
- "reason":"done|stopped|input_required|aborted|error","pending":["call_…"]}
+ "reason":"done|stopped|input_required|aborted|error","ref":"…",
+ "pending":["call_…"]}
 ```
 
 - `trigger.kind` is closed: `human` typed it, `schedule` fired it,
   `channel` delivered it, `agent` was another agent's call, `resume`
   continued a paused run. `ref` names the trigger in the harness's own
   terms (a cron name, a channel message ID) and is opaque to readers.
-- `reason` is closed and matches the loop's run-end vocabulary. `pending`
-  lists the call IDs left without an output, so a resume knows what it
-  is answering without scanning the path.
+- `reason` is closed. Each value is a shape of the run's segment, the
+  entries on the path from the `start` entry to the `end` entry, where
+  a pending call is a `function_call` on the segment with no
+  `function_call_output` on it:
+  - `done`: the last `response` on the segment has no `function_call`
+    in its output and no error.
+  - `stopped`: the last `response` has calls, every call has an output,
+    there is no error, and no `response` follows. `ref` names the cause
+    in the harness's own terms (a turn budget, a tool that asked to
+    stop) and is opaque to readers.
+  - `input_required`: at least one call is pending, and every pending
+    call has a `hold` decision and no `dispatch`.
+  - `aborted`: at least one pending call has a `dispatch`, or the last
+    `response` is incomplete without an error.
+  - `error`: the last `response` on the segment carries an error, or
+    the harness failed before it could write one, which `ref` names.
+
+  A reader MAY recompute `reason` from the segment. The segment is
+  authoritative when the two disagree.
+- `pending` lists the pending calls' IDs so a resume can read them
+  without walking the segment. The segment is authoritative here too.
 - Items and responses of the run follow its `start` entry on the path.
   A run with no `end` entry was cut off; that is the crash signal.
 
@@ -289,7 +308,10 @@ A call was handed to its tool.
 `dispatch` and no `function_call_output` on the path was in flight when
 the record stopped, and its side effect may have happened. A call with
 neither was never started. A writer SHOULD write the dispatch before the
-tool runs, and MUST NOT write it for a call that was blocked.
+tool runs, and MUST NOT write it for a call that was rejected. A
+`dispatch` with no `decision` before it on the path is the shape of a
+call that proceeded without anyone deciding, so a writer that records
+no decisions still produces a valid file.
 
 ### `decision`
 
@@ -298,15 +320,25 @@ A call's fate was decided outside the tool.
 ```json
 {"type":"decision","id":"…","parent":"…","ts":"…",
  "call_id":"call_…","target":"entry-id",
- "verdict":"allow|block|defer|approve|refuse","by":"hook|user|host",
+ "verdict":"proceed|reject|hold","by":"human|policy|agent",
  "reason":"…","args":{…}}
 ```
 
-- `verdict` is closed. `allow`, `block` and `defer` are a hook's
-  answers before the call runs; `approve` and `refuse` answer an earlier
-  `defer`. A call may carry several decisions on the path, in order.
-- `by` says who decided. `reason` is the text the decider gave, which
-  for `block` and `refuse` is also what the model saw as the output.
+- `verdict` is closed. Each value is defined by what follows the
+  decision on the path:
+  - `proceed`: a `dispatch` for the call follows.
+  - `reject`: no `dispatch` ever follows, and a `function_call_output`
+    for the call follows whose content is `reason`.
+  - `hold`: neither follows from this decision; a later `decision` on
+    the same call answers it with `proceed` or `reject`.
+
+  A call may carry several decisions on the path, in order. The path
+  already shows whether a `proceed` or `reject` answered a `hold`, so
+  there is no separate verdict for an answer.
+- `by` is closed: `human` is a person, `policy` is a rule the harness
+  evaluated without waiting, `agent` is another model. `reason` is the
+  text the decider gave, which for `reject` is also what the model saw
+  as the output.
 - `args`, when present, are the arguments the tool ran with when a
   decision rewrote them. The `function_call` item stays as the model
   produced it, so the request hash still verifies; the change is
@@ -430,6 +462,8 @@ separately agree without sharing code.
 A writer that records `request_hash` MUST compute it this way. A reader
 MAY verify it by rebuilding the request from the path and comparing.
 
+## Writing discipline
+
 - Output items MUST be written only when complete. Partial streaming
   state MUST NOT be written as an `item`.
 - A `response` entry MUST follow the items it envelopes and MUST be the
@@ -452,10 +486,12 @@ to one agent step with `tool_calls`, `reasoning_content` and `metrics`,
 function call outputs to observations by `source_call_id`, compaction
 and branch summaries as copied-context system steps, `link` entries to
 `subagent_trajectories`. `run`, `dispatch` and `decision` entries have
-no step of their own: the run's end reason and the decisions on a call
-travel in the `extra` of the step they belong to, and a fold's usage in
-its system step's `extra`. Raw items travel in step `extra` so the
-projection is lossless.
+no step of their own. A run's `trigger` and end `reason` travel under
+`run` in the `extra` of the step holding the run's first input; a
+call's decisions and dispatch travel under `calls`, keyed by call ID,
+in the `extra` of the agent step that produced the call; a fold's usage
+travels under `usage` in its system step's `extra`. Raw items travel in
+step `extra` so the projection is lossless.
 
 ### OpenTelemetry
 
@@ -480,10 +516,12 @@ documents which native entries it maps and which it drops.
 
 The reference implementation is the Go `agentsession` library. The
 conformance suite is a directory of fixture files with expected context
-output for every leaf, expected `request_hash` values, and negative
-cases for a broken parent link, a truncated last line and an unknown
-type. Converters for pi, Claude Code and Codex are part of the initial
-proposal so the format arrives with three existing corpora behind it.
+output for every leaf, expected `request_hash` values, the recomputed
+`reason` for every `run` end, and negative cases for a broken parent
+link, a truncated last line, an unknown type and a `dispatch` that
+follows a `reject`. Converters for pi, Claude Code and Codex are part of
+the initial proposal so the format arrives with three existing corpora
+behind it.
 
 ## Prior art
 
@@ -509,11 +547,15 @@ same context.
 - The Summary names the two kinds of entry, and the core types section
   states the test for admitting a core type.
 - New record entries `run`, `dispatch` and `decision`, which make the
-  Accountable goal true.
+  Accountable goal true. Run end reasons and decision verdicts are
+  defined as shapes of the path a reader can recompute, not as one
+  harness's vocabulary, and deciders are actors (`human`, `policy`,
+  `agent`), not a harness's components.
 - `outcome`: `target` is an entry ID by rule, `pass` added, `score`
   unbounded, `eval` kind.
 - `env`: `workspace` member; `cwd` precedence over the header.
-- Header: `spawned_by`; derived subsession IDs; `link` written at
+- Header: `spawned_by`; derived subsession IDs, with a retried call
+  appending a root to the existing child session; `link` written at
   dispatch.
 - File: entry order is the ordering, not `ts`.
 - Writing discipline: fsync on function call outputs.
@@ -521,8 +563,9 @@ same context.
 Considered and held: instructions as parts in `config`, which would add
 a second spelling of settings and change step 2 for a storage cost that
 belongs to the store; and a durable leaf marker, which a library can
-carry as a reserved `label` without a format change. Both are open
-questions below.
+carry as a reserved `label` without a format change; and a `source`
+on the item envelope for an input that joins a run already in flight,
+which the `run` entry cannot name. All three are open questions below.
 
 ## Open questions
 
@@ -531,6 +574,11 @@ questions below.
   spelling of the same settings; try deduplication in the store first.
 - Whether the current leaf needs a durable marker. Held: a reserved
   `label` a library honours on open covers it without a format change.
+- Whether the `item` envelope needs a `source`, in the shape of
+  `trigger`, for an input queued into a run already in flight. Held:
+  `run` names the trigger of the input that started the run and nothing
+  else; a harness that steers a running agent records the source in a
+  `custom` entry until the case is better understood.
 - Whether to allow a second payload profile at 0.x, or hold the line at
   Open Responses and rely on converters.
 - Sidecar media layout and naming.
