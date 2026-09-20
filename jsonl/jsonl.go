@@ -54,6 +54,18 @@ func WithSync(p SyncPolicy) Option {
 	return func(s *Store) { s.policy = p }
 }
 
+// WithStaleLockReport sets a function the store calls when Create or
+// Open takes over the lock of a process on this host that no longer
+// runs, with the dead holder's details. A session file left by a
+// crash is a valid prefix and cannot say by itself whether the last
+// writer exited cleanly; the stale lock is the only durable sign that
+// it did not, and the takeover would otherwise consume it silently. A
+// host wires its crash recovery to this. The takeover itself is not
+// changed and the function must not block on the store.
+func WithStaleLockReport(report func(LockInfo)) Option {
+	return func(s *Store) { s.staleReport = report }
+}
+
 // Store is a file-backed [agentsession.Store]. It is safe for
 // concurrent use within one process. Across processes each open
 // session is guarded by an advisory lock file beside it,
@@ -63,8 +75,9 @@ func WithSync(p SyncPolicy) Option {
 // process on this host that no longer runs is taken over on the next
 // open, and BreakLock clears one from any other holder.
 type Store struct {
-	root   string
-	policy SyncPolicy
+	root        string
+	policy      SyncPolicy
+	staleReport func(LockInfo)
 
 	mu   sync.Mutex
 	open map[string]*handle
@@ -159,7 +172,7 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("jsonl: create project directory: %w", err)
 	}
-	if err := acquireLock(path); err != nil {
+	if err := acquireLock(path, s.staleReport); err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_APPEND, 0o600)
@@ -212,7 +225,7 @@ func (s *Store) openLocked(id string) (*handle, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := acquireLock(path); err != nil {
+	if err := acquireLock(path, s.staleReport); err != nil {
 		return nil, err
 	}
 	h, err := loadHandle(path, id)
@@ -434,7 +447,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		if path, err = s.find(id); err != nil {
 			return err
 		}
-		if err := acquireLock(path); err != nil {
+		if err := acquireLock(path, s.staleReport); err != nil {
 			return err
 		}
 	}

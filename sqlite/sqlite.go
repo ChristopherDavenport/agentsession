@@ -48,12 +48,27 @@ CREATE TABLE IF NOT EXISTS entries (
 ) STRICT;
 `
 
+// ErrConcurrentWriter is returned by Append when another process
+// appended to the session since this store loaded it. The store has no
+// cross-process lock, so the conflict is found at the write: the
+// entries table's (session_id, seq) key refuses the line. The session
+// then stays refused in this store until Release reloads it, so a
+// recorder that continued from a transcript the other writer never
+// saw fails loudly rather than re-parenting its entries under a leaf
+// its agent never received.
+var ErrConcurrentWriter = errors.New("sqlite: another process appended to the session")
+
 // Store is a SQLite-backed [agentsession.Store]. It is safe for
-// concurrent use within one process; several processes may share the
-// file, since every write is one immediate transaction, but a session
-// open in two processes at once will diverge.
+// concurrent use within one process. Several processes may share the
+// file, since every write is one immediate transaction, but there is
+// no cross-process session lock: a session open in two processes at
+// once is detected at the first conflicting append, which returns
+// ErrConcurrentWriter and refuses the session until Release.
 type Store struct {
 	w, r *sql.DB
+	// refused holds the sessions whose last append hit a concurrent
+	// writer, so later appends fail until the caller reloads.
+	refused map[string]error
 
 	mu   sync.Mutex
 	open map[string]*agentsession.Session
@@ -90,7 +105,7 @@ func Open(path string) (*Store, error) {
 		r.Close()
 		return nil, err
 	}
-	return &Store{w: w, r: r, open: map[string]*agentsession.Session{}}, nil
+	return &Store{w: w, r: r, open: map[string]*agentsession.Session{}, refused: map[string]error{}}, nil
 }
 
 // migrate brings a database created by an earlier release up to the
@@ -181,6 +196,7 @@ func (s *Store) Close() error {
 	}
 	s.mu.Lock()
 	s.open = map[string]*agentsession.Session{}
+	s.refused = map[string]error{}
 	s.mu.Unlock()
 	return err
 }
@@ -221,6 +237,9 @@ func (s *Store) Open(ctx context.Context, id string) (*agentsession.Session, err
 }
 
 func (s *Store) openLocked(ctx context.Context, id string) (*agentsession.Session, error) {
+	if err, ok := s.refused[id]; ok {
+		return nil, err
+	}
 	if sess, ok := s.open[id]; ok {
 		return sess, nil
 	}
@@ -308,9 +327,21 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	}
 	if err != nil {
 		delete(s.open, sessionID)
+		if isSeqConflict(err) {
+			s.refused[sessionID] = fmt.Errorf("%w: entry %s at seq %d", ErrConcurrentWriter, id, sess.Len())
+			return "", s.refused[sessionID]
+		}
 		return "", fmt.Errorf("sqlite: insert entry %s: %w", id, err)
 	}
 	return id, nil
+}
+
+// isSeqConflict reports whether an insert failed on the entries
+// table's (session_id, seq) key, which is what another writer's
+// append looks like.
+func isSeqConflict(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "UNIQUE constraint failed") && strings.Contains(msg, "entries.seq")
 }
 
 // List implements agentsession.Store.
@@ -408,6 +439,7 @@ func (s *Store) Release(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.open, id)
+	delete(s.refused, id)
 }
 
 // stamp renders a time for lexicographic ordering in the database.

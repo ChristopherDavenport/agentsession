@@ -55,6 +55,43 @@ versions may break the API.
   `agentsession verify` runs the record checks on every leaf, and `show`
   renders the new entries and header members.
 
+- The ATIF export passes every entry's unknown members through to the
+  document, as the store already did on a round trip; a config entry's
+  ride under `config_extensions` (#29).
+- `jsonl.WithStaleLockReport` tells a host when Create or Open takes
+  over the lock of a process on this host that no longer runs, the only
+  durable sign of a crash between two appends (#26).
+- The leaf is durable: appending `Session.MarkLeaf`, a label entry
+  carrying `LeafLabel`, keeps the leaf at its target and `Read` restores
+  it from the last such label, so a branch survives a restart. A null
+  label on the target clears it (#24).
+- The sqlite store returns `ErrConcurrentWriter` when another process
+  appended since it loaded a session, and refuses the session until
+  `Release`, instead of reloading and re-parenting under a leaf the
+  agent never saw (#18, the floor; a cross-process lock can follow).
+- The ATIF export counts a compaction's or branch summary's usage under
+  the step's `usage`, prices it under `cost_usd` when a price source is
+  given, and adds both to the totals; a compacting agent no longer
+  under-reports (#20).
+- `atif.Validate` enforces Harbor's closed sets: four image media types,
+  eight audio types with aliases normalised as Harbor normalises them
+  (`atif.NormalizeAudioMediaType`), nine schema versions
+  (`atif.SchemaVersions`), and the timestamp forms Harbor accepts, naive
+  times and bare dates included. `atif.Parse` stays lenient on the
+  schema version. The exporter emits one of the four image types or
+  degrades the part to a text placeholder (#23).
+- `export.NoPassthrough` strips the raw items from a document for a
+  judge or a publication; `Items` then reports `ErrNoRawItems` (#22,
+  first half).
+- New nested module `otel`, the RFC's OpenTelemetry projection:
+  `otel.Export` replays a session as spans with the entries' own
+  timestamps, and `otel.Wrap` decorates a store so a live harness emits
+  the same spans as it appends, resumes included. Session, run,
+  inference and tool spans carry `session.id` and the entry ID; a tool
+  span links the inference that produced it, an inference span links the
+  previous turn's, and the first span after a branch links the branched-
+  from entry when its span is known.
+
 ## v0.0.4 - 2026-09-19
 
 - `Context.ItemEntries` is aligned with `Context.Items`: the entry that

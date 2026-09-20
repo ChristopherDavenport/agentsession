@@ -20,6 +20,12 @@
         "config_entries": [
           "c0000001"
         ],
+        "config_extensions": [
+          {
+            "acme_note": "kept on a known entry",
+            "entry_id": "c0000001"
+          }
+        ],
         "openresponses": {
           "item": {
             "type": "message",

@@ -25,9 +25,10 @@ type LockInfo struct {
 func lockPath(sessionPath string) string { return sessionPath + ".lock" }
 
 // acquireLock takes the advisory lock for a session file. A lock left
-// by a process on this host that no longer runs is taken over; any
-// other holder produces ErrSessionLocked.
-func acquireLock(sessionPath string) error {
+// by a process on this host that no longer runs is taken over, and
+// report, when not nil, is told whose it was; any other holder
+// produces ErrSessionLocked.
+func acquireLock(sessionPath string, report func(LockInfo)) error {
 	path := lockPath(sessionPath)
 	for attempt := 0; attempt < 2; attempt++ {
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -57,6 +58,9 @@ func acquireLock(sessionPath string) error {
 		if holder.stale() {
 			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("jsonl: remove stale lock %s: %w", path, err)
+			}
+			if report != nil {
+				report(holder)
 			}
 			continue
 		}

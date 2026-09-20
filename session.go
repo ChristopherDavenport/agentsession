@@ -200,7 +200,49 @@ func (s *Session) Append(e Entry) (string, error) {
 	}
 	s.add(e)
 	s.leaf = b.ID
+	if l, ok := e.(*LabelEntry); ok && l.Label != nil && *l.Label == LeafLabel {
+		// The marker names the durable leaf; it is not the leaf itself,
+		// so a live session and a reopened one hang the next entry from
+		// the same place.
+		if _, ok := s.byID[l.Target]; ok {
+			s.leaf = l.Target
+		}
+	}
 	return b.ID, nil
+}
+
+// MarkLeaf builds the label entry that makes the current leaf durable,
+// so a reopened session resumes from it rather than from the last
+// line. Append it through the store after Branch; the leaf stays where
+// it is. It returns an error when there is no leaf.
+func (s *Session) MarkLeaf() (*LabelEntry, error) {
+	leaf := s.Leaf()
+	if leaf == "" {
+		return nil, errors.New("agentsession: no leaf to mark")
+	}
+	return NewLabelEntry(leaf, LeafLabel), nil
+}
+
+// durableLeaf returns the entry the last leaf label names, or "" when
+// none is in force: a later leaf label replaces an earlier one, and a
+// null label on the marked entry clears it.
+func (s *Session) durableLeaf() string {
+	marked := ""
+	for _, e := range s.entries {
+		l, ok := e.(*LabelEntry)
+		if !ok {
+			continue
+		}
+		switch {
+		case l.Label != nil && *l.Label == LeafLabel:
+			if _, ok := s.byID[l.Target]; ok {
+				marked = l.Target
+			}
+		case l.Label == nil && l.Target == marked:
+			marked = ""
+		}
+	}
+	return marked
 }
 
 // validateEntry rejects an entry that could not be written: the checks

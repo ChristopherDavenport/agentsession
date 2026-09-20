@@ -33,6 +33,8 @@ func (t *TruncatedLine) Unwrap() error { return t.Err }
 // Read decodes a session from its JSONL form. A final line that does not
 // parse is tolerated and reported through [Session.Truncated]; any
 // other malformed line, a missing parent or a repeated ID is an error.
+// The leaf is the last entry in the file unless a [LeafLabel] is in
+// force, in which case it is the entry that label names.
 func Read(r io.Reader) (*Session, error) {
 	br := bufio.NewReader(r)
 	var (
@@ -93,6 +95,9 @@ func Read(r io.Reader) (*Session, error) {
 	}
 	if len(s.entries) > 0 {
 		s.leaf = s.entries[len(s.entries)-1].Base().ID
+	}
+	if marked := s.durableLeaf(); marked != "" {
+		s.leaf = marked
 	}
 	return s, nil
 }
