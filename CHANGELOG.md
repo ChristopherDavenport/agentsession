@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.3 - 2026-09-19
 
 - The RFC now specifies the `config` checkpoint a `compaction` carries:
   the `Settings` shape with `tools` as the full list in force and
