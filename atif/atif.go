@@ -20,6 +20,84 @@ import (
 // SchemaVersion is the version this package writes.
 const SchemaVersion = "ATIF-v1.8"
 
+// SchemaVersions are the versions Harbor's models accept, which is a
+// closed list. Validate enforces it, since a document Harbor rejects
+// fails a later job before it starts; reading a document never does,
+// so a newer minor release still loads here.
+var SchemaVersions = []string{
+	"ATIF-v1.0", "ATIF-v1.1", "ATIF-v1.2", "ATIF-v1.3", "ATIF-v1.4",
+	"ATIF-v1.5", "ATIF-v1.6", "ATIF-v1.7", "ATIF-v1.8",
+}
+
+// ImageMediaTypes are the image media types Harbor's models accept.
+var ImageMediaTypes = []string{"image/jpeg", "image/png", "image/gif", "image/webp"}
+
+// AudioMediaTypes are the audio media types Harbor's models accept,
+// after alias normalisation; see [NormalizeAudioMediaType].
+var AudioMediaTypes = []string{
+	"audio/wav", "audio/mpeg", "audio/mp4", "audio/aac",
+	"audio/ogg", "audio/flac", "audio/webm", "audio/aiff",
+}
+
+// audioAliases are the spellings Harbor normalises on the way in, so
+// a producer copying a provider's media type verbatim still validates.
+var audioAliases = map[string]string{
+	"audio/mp3":      "audio/mpeg",
+	"audio/mpga":     "audio/mpeg",
+	"audio/x-mpeg":   "audio/mpeg",
+	"audio/x-wav":    "audio/wav",
+	"audio/wave":     "audio/wav",
+	"audio/vnd.wave": "audio/wav",
+	"audio/x-m4a":    "audio/mp4",
+	"audio/m4a":      "audio/mp4",
+	"audio/x-aac":    "audio/aac",
+	"audio/x-flac":   "audio/flac",
+	"audio/x-aiff":   "audio/aiff",
+}
+
+// NormalizeAudioMediaType maps an audio media type to the spelling
+// Harbor's models list, as Harbor itself does before validating:
+// trimmed, lower-cased and with aliases such as audio/mp3 resolved to
+// audio/mpeg. A type with no alias is returned as is.
+func NormalizeAudioMediaType(mediaType string) string {
+	norm := strings.ToLower(strings.TrimSpace(mediaType))
+	if canon, ok := audioAliases[norm]; ok {
+		return canon
+	}
+	return norm
+}
+
+// timestampLayouts are the forms Harbor's validator accepts: it calls
+// datetime.fromisoformat after mapping a trailing Z to +00:00, which
+// takes a naive time and a bare date as well as an offset time.
+var timestampLayouts = []string{
+	time.RFC3339Nano,
+	"2006-01-02T15:04:05.999999999",
+	"2006-01-02T15:04:05",
+	"2006-01-02 15:04:05.999999999",
+	"2006-01-02 15:04:05",
+	"2006-01-02",
+}
+
+// ValidTimestamp reports whether s is a timestamp Harbor accepts.
+func ValidTimestamp(s string) bool {
+	for _, layout := range timestampLayouts {
+		if _, err := time.Parse(layout, s); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 // Step sources.
 const (
 	SourceSystem = "system"
@@ -416,11 +494,17 @@ func (m *FinalMetrics) UnmarshalJSON(data []byte) error {
 // meant for Harbor should carry none, and [Trajectory.HasUnknown]
 // reports whether one does.
 func (t *Trajectory) Validate() error {
-	return t.validate("")
+	return t.validate("", true)
 }
 
-func (t *Trajectory) validate(prefix string) error {
-	if !strings.HasPrefix(t.SchemaVersion, "ATIF-v1.") {
+// validate checks the document. With known set, the schema version
+// must be one Harbor lists; without it any ATIF-v1 minor passes, which
+// is what a reader wants so a newer release still loads.
+func (t *Trajectory) validate(prefix string, known bool) error {
+	switch {
+	case known && !contains(SchemaVersions, t.SchemaVersion):
+		return fmt.Errorf("%sschema_version %q is not one Harbor accepts (%s to %s)", prefix, t.SchemaVersion, SchemaVersions[0], SchemaVersions[len(SchemaVersions)-1])
+	case !strings.HasPrefix(t.SchemaVersion, "ATIF-v1."):
 		return fmt.Errorf("%sschema_version %q is not an ATIF-v1 version", prefix, t.SchemaVersion)
 	}
 	if t.Agent.Name == "" {
@@ -453,7 +537,7 @@ func (t *Trajectory) validate(prefix string) error {
 			return fmt.Errorf("%strajectory_id %q is not unique", p, sub.TrajectoryID)
 		}
 		seen[sub.TrajectoryID] = true
-		if err := sub.validate(p); err != nil {
+		if err := sub.validate(p, known); err != nil {
 			return err
 		}
 	}
@@ -469,10 +553,8 @@ func (s *Step) validate(prefix string, want int) error {
 	default:
 		return fmt.Errorf("%ssource %q must be system, user or agent", prefix, s.Source)
 	}
-	if s.Timestamp != "" {
-		if _, err := time.Parse(time.RFC3339Nano, s.Timestamp); err != nil {
-			return fmt.Errorf("%stimestamp %q is not ISO 8601: %w", prefix, s.Timestamp, err)
-		}
+	if s.Timestamp != "" && !ValidTimestamp(s.Timestamp) {
+		return fmt.Errorf("%stimestamp %q is not ISO 8601", prefix, s.Timestamp)
 	}
 	if s.Source != SourceAgent {
 		switch {
@@ -549,11 +631,11 @@ func (c Content) validate(prefix string) error {
 			if p.Source.MediaType == "" || p.Source.Path == "" {
 				return fmt.Errorf("%s: source needs media_type and path", pp)
 			}
-			if p.Type == PartImage && !strings.HasPrefix(p.Source.MediaType, "image/") {
-				return fmt.Errorf("%s: image part with media_type %q", pp, p.Source.MediaType)
+			if p.Type == PartImage && !contains(ImageMediaTypes, p.Source.MediaType) {
+				return fmt.Errorf("%s: image part with media_type %q, want one of %v", pp, p.Source.MediaType, ImageMediaTypes)
 			}
-			if p.Type == PartAudio && !strings.HasPrefix(p.Source.MediaType, "audio/") {
-				return fmt.Errorf("%s: audio part with media_type %q", pp, p.Source.MediaType)
+			if p.Type == PartAudio && !contains(AudioMediaTypes, NormalizeAudioMediaType(p.Source.MediaType)) {
+				return fmt.Errorf("%s: audio part with media_type %q, want one of %v", pp, p.Source.MediaType, AudioMediaTypes)
 			}
 			if p.Text != "" {
 				return fmt.Errorf("%s: text is not allowed on a %s part", pp, p.Type)
@@ -653,7 +735,7 @@ func Parse(data []byte) (*Trajectory, error) {
 	if err := json.Unmarshal(data, &t); err != nil {
 		return nil, fmt.Errorf("atif: decode: %w", err)
 	}
-	if err := t.Validate(); err != nil {
+	if err := t.validate("", false); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return &t, nil
