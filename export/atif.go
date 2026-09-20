@@ -204,6 +204,7 @@ func (b *builder) entry(e agentsession.Entry) error {
 		if v.TokensBefore > 0 {
 			step.Extra["tokens_before"] = v.TokensBefore
 		}
+		b.foldUsage(step.Extra, v.Config.Model, v.Usage)
 		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.BranchSummaryEntry:
@@ -217,6 +218,7 @@ func (b *builder) entry(e agentsession.Entry) error {
 				ExtraOpenResponses: map[string]any{"item": rawItem(v.Summary)},
 			},
 		}
+		b.foldUsage(step.Extra, b.settings.Model, v.Usage)
 		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.LabelEntry:
@@ -542,6 +544,29 @@ func (b *builder) rootExtra() map[string]any {
 		b.doc.Extra = map[string]any{}
 	}
 	return b.doc.Extra
+}
+
+// foldUsage records what a fold cost. ATIF allows metrics on agent
+// steps only, and a compaction or branch summary is a system step, so
+// the usage rides under "usage" in the step's extra, priced under
+// "cost_usd" when a price source is configured, and both are added to
+// the document's totals. Without this a compacting agent reports a
+// fraction of what it spent.
+func (b *builder) foldUsage(extra map[string]any, model string, u *openresponses.Usage) {
+	if u == nil {
+		return
+	}
+	extra["usage"] = u
+	if b.opts.Cost != nil {
+		if usd, ok := b.opts.Cost(model, *u); ok {
+			extra["cost_usd"] = usd
+			b.cost += usd
+			b.hasCost = true
+		}
+	}
+	b.prompt += u.InputTokens
+	b.completion += u.OutputTokens
+	b.cached += u.InputTokensDetails.CachedTokens
 }
 
 // runEntry records a run start under ExtraRun on the next step, and a
@@ -896,12 +921,19 @@ func contentParts(parts openresponses.Contents) atif.Content {
 		case *openresponses.Refusal:
 			out = append(out, atif.ContentPart{Type: atif.PartText, Text: "[refusal] " + v.Refusal})
 		case *openresponses.InputImage:
-			textOnly = false
-			src := &atif.MediaSource{MediaType: imageMediaType(v.ImageURL), Path: v.ImageURL}
-			if v.ImageURL == "" && v.FileID != "" {
-				src.Path = v.FileID
+			ref := v.ImageURL
+			if ref == "" {
+				ref = v.FileID
 			}
-			out = append(out, atif.ContentPart{Type: atif.PartImage, Source: src})
+			mt := imageMediaType(v.ImageURL)
+			if mt == "" {
+				// A type Harbor's models refuse: keep the reference as
+				// text, as file and video parts already are.
+				out = append(out, atif.ContentPart{Type: atif.PartText, Text: "[image: " + describeRef(ref) + "]"})
+				continue
+			}
+			textOnly = false
+			out = append(out, atif.ContentPart{Type: atif.PartImage, Source: &atif.MediaSource{MediaType: mt, Path: ref}})
 		case *openresponses.InputFile:
 			name := v.Filename
 			if name == "" {
@@ -928,28 +960,53 @@ func contentParts(parts openresponses.Contents) atif.Content {
 	return atif.Content{Parts: out}
 }
 
-// imageMediaType guesses the ATIF media type of an image URL from a
-// data URL prefix or a file extension, defaulting to PNG.
+// imageMediaType returns the ATIF media type of an image URL when it
+// is one of the four Harbor's models accept, read from a data URL
+// prefix or a file extension, with a bare extensionless URL taken as
+// PNG. It returns "" for a type Harbor refuses, such as SVG or HEIC,
+// so the caller can degrade the part rather than emit a document that
+// fails to load later.
 func imageMediaType(url string) string {
 	lower := strings.ToLower(url)
-	switch {
-	case strings.HasPrefix(lower, "data:"):
+	if strings.HasPrefix(lower, "data:") {
 		mt, _, _ := strings.Cut(strings.TrimPrefix(lower, "data:"), ";")
 		mt, _, _ = strings.Cut(mt, ",")
 		if mt == "image/jpg" {
 			mt = "image/jpeg"
 		}
-		if strings.HasPrefix(mt, "image/") {
-			return mt
+		for _, known := range atif.ImageMediaTypes {
+			if mt == known {
+				return mt
+			}
 		}
-	case strings.HasSuffix(lower, ".jpg"), strings.HasSuffix(lower, ".jpeg"):
+		return ""
+	}
+	path := lower
+	if i := strings.IndexAny(path, "?#"); i >= 0 {
+		path = path[:i]
+	}
+	switch ext := path[strings.LastIndex(path, ".")+1:]; {
+	case !strings.Contains(path[strings.LastIndex(path, "/")+1:], "."):
+		return "image/png" // no extension to go on
+	case ext == "jpg", ext == "jpeg":
 		return "image/jpeg"
-	case strings.HasSuffix(lower, ".gif"):
+	case ext == "png":
+		return "image/png"
+	case ext == "gif":
 		return "image/gif"
-	case strings.HasSuffix(lower, ".webp"):
+	case ext == "webp":
 		return "image/webp"
 	}
-	return "image/png"
+	return ""
+}
+
+// describeRef shortens a data URL for a text placeholder.
+func describeRef(ref string) string {
+	if strings.HasPrefix(strings.ToLower(ref), "data:") {
+		mt, _, _ := strings.Cut(strings.TrimPrefix(ref, "data:"), ";")
+		return "data URL " + mt
+	}
+	return ref
 }
 
 // parseArguments decodes a function call's arguments into an object.
