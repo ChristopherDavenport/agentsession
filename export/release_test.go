@@ -148,3 +148,71 @@ func exportOne(t *testing.T, s *agentsession.Session, opts Options) *atif.Trajec
 	t.Fatal("no main trajectory")
 	return nil
 }
+
+// TestItemsFrom rebuilds the basic fixture's conversation from a lean
+// document and compares it, type by type and by the fields the
+// declared ATIF members carry, with the lossless rebuild.
+func TestItemsFrom(t *testing.T) {
+	s := loadFixture(t, "basic")
+	full := exportOne(t, s, Options{})
+	lean := exportOne(t, s, Options{Redactors: []Redactor{NoPassthrough()}})
+	want, err := Items(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ItemsFrom(lean)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ItemsFrom gave %d items, Items gave %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].ItemType() != want[i].ItemType() {
+			t.Errorf("item %d: %s, want %s", i, got[i].ItemType(), want[i].ItemType())
+			continue
+		}
+		switch w := want[i].(type) {
+		case *openresponses.FunctionCall:
+			g := got[i].(*openresponses.FunctionCall)
+			if g.CallID != w.CallID || g.Name != w.Name || g.Arguments != w.Arguments {
+				t.Errorf("call %d: %+v, want %+v", i, g, w)
+			}
+		case *openresponses.FunctionCallOutput:
+			g := got[i].(*openresponses.FunctionCallOutput)
+			if g.CallID != w.CallID || g.Output.String() != w.Output.String() {
+				t.Errorf("output %d: %+v, want %+v", i, g, w)
+			}
+		case *openresponses.Message:
+			g := got[i].(*openresponses.Message)
+			if g.Role != w.Role || g.Content.Text() != w.Content.Text() {
+				t.Errorf("message %d: %s %q, want %s %q", i, g.Role, g.Content.Text(), w.Role, w.Content.Text())
+			}
+		case *openresponses.ReasoningItem:
+			g := got[i].(*openresponses.ReasoningItem)
+			if g.Summary.Text() != w.Summary.Text() {
+				t.Errorf("reasoning %d: %q, want %q", i, g.Summary.Text(), w.Summary.Text())
+			}
+		}
+	}
+	// A document from another producer, with an image and a non-object
+	// argument, loads too.
+	other := &atif.Trajectory{SchemaVersion: atif.SchemaVersion, Agent: atif.Agent{Name: "x", Version: "1"}, Steps: []atif.Step{
+		{StepID: 1, Source: atif.SourceUser, Message: atif.Content{Parts: []atif.ContentPart{{Type: atif.PartText, Text: "look"}, {Type: atif.PartImage, Source: &atif.MediaSource{MediaType: "image/png", Path: "shot.png"}}}}},
+		{StepID: 2, Source: atif.SourceAgent, Message: atif.Text(""), ToolCalls: []atif.ToolCall{{ToolCallID: "c", FunctionName: "f", Arguments: map[string]any{"_arguments": "raw"}}},
+			Observation: &atif.Observation{Results: []atif.ObservationResult{{SourceCallID: "c", Content: atif.Text("r")}}}},
+	}}
+	items, err := ItemsFrom(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("items = %d", len(items))
+	}
+	if m := items[0].(*openresponses.Message); len(m.Content) != 2 || m.Content[1].(*openresponses.InputImage).ImageURL != "shot.png" {
+		t.Errorf("user message = %+v", m)
+	}
+	if fc := items[1].(*openresponses.FunctionCall); fc.Arguments != "raw" {
+		t.Errorf("arguments = %q", fc.Arguments)
+	}
+}
