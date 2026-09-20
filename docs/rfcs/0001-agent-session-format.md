@@ -13,13 +13,13 @@ every call the model made can be followed to its output or to the point
 the record stopped. It is an append-only, tree-structured JSONL file.
 
 The file holds two kinds of entry. **Context entries** are what the
-model was sent and what it returned: items, responses, configuration and
-compaction. Replaying them along a path rebuilds a request byte for
-byte. **Record entries** are what happened around the conversation: how
-a run started and how it ended, that a tool call was dispatched, what
-was decided about a call, the environment the tools ran in, where the
-conversation branched, links to other sessions, and judgements of the
-result. They never enter the model's context.
+model was sent and what it returned: items, responses, configuration,
+compaction and the summary carried across a branch. Replaying them
+along a path rebuilds a request byte for byte. **Record entries** are
+what happened around the conversation: how a run started and how it
+ended, that a tool call was dispatched, what was decided about a call,
+the environment the tools ran in, links to other sessions, and
+judgements of the result. They never enter the model's context.
 
 The envelope is harness-neutral. The payload of a context entry is an
 Open Responses item, so the record is the wire format itself.
@@ -124,7 +124,7 @@ RFC 2119.
 | `created_at` | MUST | RFC 3339 |
 | `payload` | MUST | payload profile; `openresponses/<spec-date>` is the only profile this RFC defines |
 | `harness` | SHOULD | name and version of the writer |
-| `records` | SHOULD | the record entry types this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
+| `records` | SHOULD | the record entry types, core or namespaced, this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
 | `parent_session` | MAY | session ID this was forked or spawned from |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
@@ -176,9 +176,9 @@ contributes nothing to context; the context algorithm below is the
 normative statement.
 
 A type is core only if the event it records belongs to the loop every
-harness runs: an input arrives, the model is called, a call is decided
-and dispatched, its output returns, the context is compacted, the
-conversation branches, the run ends; or if it annotates that record in
+harness runs: an input arrives, the settings change, the model is
+called, a call is decided and dispatched, its output returns, the
+context is compacted, the conversation branches, the run ends; or if it annotates that record in
 a way every harness needs: a bookmark, a name, the environment, a
 judgement of the result, a link to another session, state kept beside
 the conversation. An event that belongs to one harness's features,
@@ -219,9 +219,10 @@ The envelope of one model call, written after its output items.
  "request_hash":"sha256:…","latency_ms":1234}
 ```
 
-- `status` is required, since the run cascade reads it. `error` and
-  `incomplete` are read as null when absent. Every other member is
-  optional.
+- Every member but the envelope's is optional. `error` and
+  `incomplete` are read as null when absent; the run cascade reads
+  those two and never `status`, so a converter over a log without a
+  status need not invent one.
 - `usage`, `incomplete` and `error` use the payload profile's shapes.
 - `request_hash` SHOULD be the hash of the canonical request built by
   the context algorithm below, so a reader can check that the stored
@@ -318,35 +319,35 @@ Why a run started and how it ended. Two entries per run, paired by
 - `reason` is closed. Each value is a shape of the run's segment, the
   entries on the path from the `start` entry to the `end` entry, where
   a pending call is a `function_call` on the segment with no
-  `function_call_output` on it. The values are tested in this order
-  and the first that matches is the reason:
-  1. `error`: the last `response` on the segment carries an error, or
-     the harness failed before it could write one, which `ref` names.
+  `function_call_output` on it. Four values are computable from the
+  segment, tested in this order with the first match winning:
+  1. `error`: the last `response` on the segment carries a non-null
+     `error`.
   2. `input_required`: at least one pending call is held, as `decision`
      defines it, and no pending call has a `dispatch`.
   3. `aborted`: any other segment with a pending call, or whose last
-     `response` is incomplete, or that has no `response`.
-  4. `interrupted`: a person or the host told the harness to stop
-     between turns. The segment alone would read `done` or `stopped`,
-     so this is the one value a writer adds rather than a reader
-     computes.
-  5. `done`: the last `response` has no `function_call` in its output.
-  6. `stopped`: the last `response` has calls, every call has an
+     `response` has a non-null `incomplete`, or that has no `response`.
+  4. `done`: the last `response` has no `function_call` in its output.
+  5. `stopped`: the last `response` has calls, every call has an
      output, and the harness chose not to call the model again. `ref`
      names the cause (a turn budget, a tool that asked to stop).
 
-  Every segment matches exactly one computable value. A reader MAY
-  recompute `reason` from the segment, and the segment is authoritative
-  when the two disagree, with two exceptions that record what the
-  segment cannot: a written `error` stands over a segment with no
-  `response`, and a written `interrupted` stands over a segment that
-  would otherwise read `done` or `stopped`.
+  Two values record what the segment cannot show and are written, not
+  computed: `error` when the harness failed at any point, which `ref`
+  names, and `interrupted` when a person or the host told the harness
+  to stop. A written `error` or `interrupted` stands over any segment.
+  Every segment matches exactly one computable value; a reader MAY
+  recompute it, and when the written value is computable and the two
+  disagree the segment is authoritative.
 - `pending` lists the pending calls' IDs so a resume can read them
   without walking the segment. The segment is authoritative here too.
 - Items and responses of the run follow its `start` entry on the path.
-  When the header names `run` in `records` and no writer holds the
-  file open, a run with no `end` entry was cut off; that is the crash
-  signal.
+  Runs do not nest: an input that arrives while a run is open joins
+  that run. A branch closes the open run without an `end` entry, since
+  the new leaf is not on its segment; the next append on the new
+  branch begins a run. When the header names `run` in `records`, no
+  writer holds the file open and the leaf is on the run's segment, a
+  run with no `end` entry was cut off; that is the crash signal.
 
 ### `dispatch`
 
@@ -365,10 +366,12 @@ stopped, and its side effect may have happened. When the header names
 otherwise the file does not say whether it ran. A writer that names
 `dispatch` MUST write it, durably, before the tool runs, and no writer
 may write it for a call that was rejected. A `dispatch` with no
-`decision` before it on the path is, when the header names `decision`,
-the shape of a call that proceeded without anyone deciding; when it
-does not, the file does not say whether anyone decided. Either way a
-writer that records no decisions produces a valid file.
+`decision` before it on the path means no decision was recorded for
+the call, which under the rule in `decision` is the shape of a routine
+approval as much as of no decider at all; a writer that records no
+decisions produces a valid file. A call cancelled after its `dispatch`
+carries no decision: its `function_call_output`, or the absence of
+one, is the record.
 
 ### `decision`
 
@@ -390,7 +393,7 @@ A call's fate was decided outside the tool.
     `reason`.
   - `hold`: this decision neither let the call go nor ended it. The
     call waits. A call is held while its latest decision is a `hold`
-    with no `dispatch` and no `reject` after it on the segment.
+    with no `dispatch` and no `reject` after it on the path.
 
   A call may carry several decisions on the path, in order. An answered
   `hold` is followed by a `dispatch` or a `reject` on the same call and
@@ -476,9 +479,10 @@ A reference to another session, for subagents and forks.
 ```
 
 `call_id` ties a subsession to the function call that spawned it. A
-`subsession` link SHOULD be written when the call is dispatched, before
-the child's header exists, so a link whose session cannot be found means
-the child never started rather than a child that was never linked.
+`subsession` link SHOULD be written when the call is dispatched,
+before the `dispatch` entry and before the child's header exists, so a
+link whose session cannot be found means the child never started
+rather than a child that was never linked.
 
 ### `custom`
 
@@ -630,14 +634,14 @@ reader preserves every new entry and rebuilds the same context.
   Resumable goal true. A run's `source`, its end `reason` and a
   decision's `verdict` are defined as shapes of the path a reader can
   recompute, not as one harness's vocabulary; the reasons form a
-  first-match cascade so every segment has exactly one, with
-  `interrupted` for a stop between turns that the segment alone cannot
-  show. How an input
+  first-match cascade so every segment has exactly one computable
+  value, with `error` for a harness failure and `interrupted` for a
+  stop a person or the host asked for as the two a writer adds. How an
+  input
   arrived and who decided a call are optional or belong in `ref` and
   `custom`.
 - `outcome`: `target` is an entry ID by rule, `pass` added, `score`
   unbounded, `eval` kind.
-- `response`: `status` is required.
 - `env`: `workspace` member, a `kind` and one `ref`; `cwd` precedence
   over the header.
 - Header: `records`, the record types whose absence a reader may read
