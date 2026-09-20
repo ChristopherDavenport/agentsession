@@ -18,6 +18,11 @@ branched, and what happened afterwards.
 - **Replayable.** Every model call can be rebuilt from the path to its
   entry: settings, items, compaction. A recorded `request_hash` (RFC
   8785 canonical JSON, SHA-256) lets a reader check its work.
+- **Resumable.** Run, dispatch and decision entries record what
+  happened around the conversation. For every call without an output,
+  the path says whether it was never started, was in flight when the
+  record stopped, or is waiting on an answer, in any file whose header
+  promises those entries are written.
 - **Append-only and crash-tolerant.** A session file is always a valid
   prefix of the run; a line cut short by a crash is reported and
   skipped.
@@ -77,6 +82,28 @@ instead of mapping the index to an entry ID itself. `Context.ItemEntries`
 is the mapping, aligned with `Context.Items`.
 `sess.Verify(responseEntryID)` rebuilds the request and checks the
 hash.
+
+A harness that runs the loop records the lifecycle around it. The
+header's `Records` lists the record entry types the writer promises
+to write whenever their event occurs, so a reader may take their
+absence as the event not having happened; a converter over a native
+log that has no such record leaves it empty.
+
+```go
+sess, err := store.Create(ctx, agentsession.Header{Records: agentsession.AllRecords})
+store.Append(ctx, id, agentsession.NewRunStart("run-1", agentsession.SourceInput, "cron:nightly"))
+// ... the request, the response with its function calls ...
+store.Append(ctx, id, agentsession.NewDecision("call_1", callEntryID, agentsession.VerdictHold, agentsession.ByPolicy).
+    WithReason("destructive; needs approval"))
+store.Append(ctx, id, agentsession.NewDispatch("call_2", otherCallEntryID)) // synced before the tool runs
+end, err := sess.EndRun(agentsession.ReasonInputRequired, "")           // pending computed from the path
+store.Append(ctx, id, end)
+```
+
+On resume, `sess.PendingCalls(leaf)` lists the calls without an
+output and `Call.State(header)` says what the path knows about each.
+A run's end reason is a shape of its segment: `ComputeReason`
+recomputes it and `Run.Verify` checks a written one against it.
 
 ## Reading one
 
@@ -142,7 +169,9 @@ agentsession export session.jsonl -out dir -secret "$OPENAI_API_KEY" -redact-hom
 agentsession list ~/.agent/sessions        # a jsonl store's sessions, newest first
 ```
 
-`verify` exits 1 on a mismatch or a truncated final line. `export`
+`verify` exits 1 on a mismatch, a truncated final line, a run end that
+disagrees with its segment, a dispatch after a reject, or a call that
+ran without the dispatch the header promised. `export`
 writes one ATIF document per leaf and embeds a linked subsession when
 its file is beside the exported one or in the same store.
 
@@ -160,9 +189,11 @@ its file is beside the exported one or in the same store.
 
 ## Interoperating
 
-Two things a writer built elsewhere must agree on are written in the
-RFC rather than shared as code: the request hash and the `link` entry
-for subsessions. `testdata/hash/vectors.json` holds request documents
+Three things a writer built elsewhere must agree on are written in
+the RFC rather than shared as code: the request hash, the `link` entry
+for subsessions, and the subsession ID, a UUIDv5 under the nil
+namespace over `<parent session id>/<call_id>` that `SubsessionID`
+derives. `testdata/hash/vectors.json` holds request documents
 and their hashes so another implementation can test itself against the
 same inputs. The Python one-liner
 `json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`

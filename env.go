@@ -98,6 +98,15 @@ func (e *EnvEntry) AddWritten(path, hash string) {
 	e.Files.Written[path] = hash
 }
 
+// SetWorkspace records which file system CWD is a path in: kind is
+// [WorkspaceLocal], [WorkspaceContainer] or [WorkspaceRemote], and ref
+// is what the harness resolves to it (an image digest, a host, an
+// instance ID). A container on a remote host is a container, with the
+// host in an unknown member.
+func (e *EnvEntry) SetWorkspace(kind, ref string) {
+	e.Workspace = &Workspace{Kind: kind, Ref: ref}
+}
+
 // AddTool records the version of a tool available to the session.
 func (e *EnvEntry) AddTool(name, version string) {
 	if e.Tools == nil {
@@ -201,6 +210,13 @@ func NewOutcomeEntry(kind, target string) *OutcomeEntry {
 // WithScore sets the score and returns the entry, for chaining.
 func (e *OutcomeEntry) WithScore(score float64) *OutcomeEntry {
 	e.Score = &score
+	return e
+}
+
+// WithPass sets the judge's verdict and returns the entry, for
+// chaining.
+func (e *OutcomeEntry) WithPass(pass bool) *OutcomeEntry {
+	e.Pass = &pass
 	return e
 }
 

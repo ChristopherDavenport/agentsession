@@ -13,7 +13,7 @@ import (
 )
 
 // Format is the session format version this package writes.
-const Format = "agentsession/0.1"
+const Format = "agentsession/0.2"
 
 // FormatMajor is the major version of the format this package reads.
 // Any minor version of it is accepted; files are migrated in memory.
@@ -37,18 +37,42 @@ var ErrUnsupportedFormat = errors.New("agentsession: unsupported format")
 // tree. Unknown fields decode into Extra and are written back, as the
 // format requires of any tool that rewrites a file.
 type Header struct {
-	Format        string    `json:"format"`
-	ID            string    `json:"id"`
-	CreatedAt     time.Time `json:"created_at"`
-	Payload       string    `json:"payload"`
-	Harness       *Harness  `json:"harness,omitempty"`
-	CWD           string    `json:"cwd,omitempty"`
-	ParentSession string    `json:"parent_session,omitempty"`
-	Media         string    `json:"media,omitempty"`
+	Format    string    `json:"format"`
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	Payload   string    `json:"payload"`
+	Harness   *Harness  `json:"harness,omitempty"`
+	// Records lists the record entry types this writer writes whenever
+	// their event occurs, so a reader may take their absence on a path
+	// as the event not having happened. Empty means no such promise,
+	// which is what a converter over a native log without them sets.
+	Records       []string `json:"records,omitempty"`
+	CWD           string   `json:"cwd,omitempty"`
+	ParentSession string   `json:"parent_session,omitempty"`
+	// SpawnedBy is, for a subsession, the call_id of the parent's
+	// function call that spawned it.
+	SpawnedBy string `json:"spawned_by,omitempty"`
+	Media     string `json:"media,omitempty"`
 
 	// Extra holds header fields this package does not define.
 	Extra map[string]json.RawMessage `json:"-"`
 }
+
+// HasRecord reports whether the header promises that entries of type
+// typ are written whenever their event occurs, so their absence means
+// the event did not happen.
+func (h Header) HasRecord(typ string) bool {
+	for _, t := range h.Records {
+		if t == typ {
+			return true
+		}
+	}
+	return false
+}
+
+// AllRecords are the three record entry types a harness that runs the
+// loop itself can promise: run, dispatch and decision.
+var AllRecords = []string{TypeRun, TypeDispatch, TypeDecision}
 
 // Harness names the writer of a session.
 type Harness struct {

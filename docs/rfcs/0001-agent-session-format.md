@@ -120,7 +120,7 @@ RFC 2119.
 |---|---|---|
 | `type` | MUST | the string `session` |
 | `format` | MUST | `agentsession/<major>.<minor>` |
-| `id` | MUST | globally unique; UUIDv7 RECOMMENDED. For a subsession, a UUIDv5 over `<parent session id>/<call_id>` is RECOMMENDED, so a reader can compute the child's ID from the parent's `link` or `function_call` alone. A second child for the same call appends a new root to the existing child session rather than minting a second ID |
+| `id` | MUST | globally unique; UUIDv7 RECOMMENDED. For a subsession, a UUIDv5 under the nil namespace over `<parent session id>/<call_id>` is RECOMMENDED, so a reader can compute the child's ID from the parent's `link` or `function_call` alone. A second child for the same call appends a new root to the existing child session rather than minting a second ID |
 | `created_at` | MUST | RFC 3339 |
 | `payload` | MUST | payload profile; `openresponses/<spec-date>` is the only profile this RFC defines |
 | `harness` | SHOULD | name and version of the writer |

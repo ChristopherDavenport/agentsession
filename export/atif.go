@@ -47,6 +47,13 @@ const (
 	ExtraAbandonedAt   = "abandoned_at"
 	ExtraBranchFrom    = "branch_from"
 	ExtraContextMgmt   = "context_management"
+	// ExtraRun carries a run's source, trigger, end reason, cause and
+	// pending calls in the extra of the first step its segment
+	// produces, or in the root extra when it produces none.
+	ExtraRun = "run"
+	// ExtraCalls carries, keyed by call ID in the extra of the agent
+	// step that produced the call, the call's decisions and dispatch.
+	ExtraCalls = "calls"
 )
 
 // ToATIF converts one trajectory into an ATIF document. Every step
@@ -98,6 +105,7 @@ type builder struct {
 	copied       bool           // inside the kept window after a compaction
 	compactionID string
 	sawEnv       bool
+	currentRun   map[string]any // the open run's record, shared with the step or root that holds it
 
 	prompt, completion, cached int
 	cost                       float64
@@ -144,7 +152,8 @@ func (b *builder) setAgentDefaults() {
 		case *agentsession.ConfigEntry:
 			b.settings = b.settings.Apply(v)
 			continue
-		case *agentsession.CompactionEntry, *agentsession.EnvEntry, *agentsession.InfoEntry, *agentsession.LabelEntry, *agentsession.CustomEntry:
+		case *agentsession.CompactionEntry, *agentsession.EnvEntry, *agentsession.InfoEntry, *agentsession.LabelEntry, *agentsession.CustomEntry,
+			*agentsession.RunEntry, *agentsession.DispatchEntry, *agentsession.DecisionEntry:
 			continue
 		}
 		break
@@ -234,6 +243,25 @@ func (b *builder) entry(e agentsession.Entry) error {
 		b.outcome(v)
 	case *agentsession.LinkEntry:
 		b.links = append(b.links, v)
+	case *agentsession.RunEntry:
+		b.runEntry(v)
+	case *agentsession.DispatchEntry:
+		rec := map[string]any{"entry_id": v.ID}
+		b.callExtra(v.CallID)["dispatch"] = rec
+	case *agentsession.DecisionEntry:
+		rec := map[string]any{"entry_id": v.ID, "verdict": v.Verdict}
+		if v.By != "" {
+			rec["by"] = v.By
+		}
+		if v.Reason != "" {
+			rec["reason"] = v.Reason
+		}
+		if len(v.Args) > 0 {
+			rec["args"] = json.RawMessage(v.Args)
+		}
+		call := b.callExtra(v.CallID)
+		list, _ := call["decisions"].([]any)
+		call["decisions"] = append(list, rec)
 	case *agentsession.UnknownEntry:
 		b.addPendingList("extensions", json.RawMessage(v.Raw))
 	default:
@@ -507,6 +535,63 @@ func (b *builder) rootExtra() map[string]any {
 	return b.doc.Extra
 }
 
+// runEntry records a run start under ExtraRun on the next step, and a
+// run end on the record its start opened. The record is a map shared
+// with the step or root that holds it, so the end's members land
+// where the start's did.
+func (b *builder) runEntry(r *agentsession.RunEntry) {
+	if r.IsStart() {
+		rec := map[string]any{"run_id": r.RunID, "source": r.Source, "start_entry_id": r.ID}
+		if r.Ref != "" {
+			rec["trigger"] = r.Ref
+		}
+		b.currentRun = rec
+		b.addPending(ExtraRun, rec)
+		return
+	}
+	rec := b.currentRun
+	if rec == nil || rec["run_id"] != r.RunID {
+		// An end without its start on this path: record it on its own.
+		rec = map[string]any{"run_id": r.RunID}
+		b.addPending(ExtraRun, rec)
+	}
+	rec["reason"] = r.Reason
+	rec["end_entry_id"] = r.ID
+	if r.Ref != "" {
+		rec["cause"] = r.Ref
+	}
+	pending := make([]any, 0, len(r.Pending))
+	for _, id := range r.Pending {
+		pending = append(pending, id)
+	}
+	rec["pending"] = pending
+	b.currentRun = nil
+}
+
+// callExtra returns the record for a call under ExtraCalls in the
+// extra of the agent step that produced it, creating it on first use.
+// A call whose step is not on this path gets a record in the root
+// extra instead.
+func (b *builder) callExtra(callID string) map[string]any {
+	var extra map[string]any
+	if idx, ok := b.callStep[callID]; ok {
+		extra = b.doc.Steps[idx].Extra
+	} else {
+		extra = b.rootExtra()
+	}
+	calls, _ := extra[ExtraCalls].(map[string]any)
+	if calls == nil {
+		calls = map[string]any{}
+		extra[ExtraCalls] = calls
+	}
+	rec, _ := calls[callID].(map[string]any)
+	if rec == nil {
+		rec = map[string]any{}
+		calls[callID] = rec
+	}
+	return rec
+}
+
 func (b *builder) outcome(o *agentsession.OutcomeEntry) {
 	rec := map[string]any{"kind": o.Kind, "entry_id": o.ID}
 	if o.Target != "" {
@@ -514,6 +599,9 @@ func (b *builder) outcome(o *agentsession.OutcomeEntry) {
 	}
 	if o.Score != nil {
 		rec["score"] = *o.Score
+	}
+	if o.Pass != nil {
+		rec["pass"] = *o.Pass
 	}
 	if o.Label != "" {
 		rec["label"] = o.Label
@@ -547,6 +635,12 @@ func (b *builder) finish() {
 	}
 	if b.t.Header.ParentSession != "" {
 		as["parent_session"] = b.t.Header.ParentSession
+	}
+	if b.t.Header.SpawnedBy != "" {
+		as["spawned_by"] = b.t.Header.SpawnedBy
+	}
+	if len(b.t.Header.Records) > 0 {
+		as["records"] = b.t.Header.Records
 	}
 	if b.t.Name != "" {
 		as["name"] = b.t.Name
@@ -935,6 +1029,9 @@ func envExtra(e *agentsession.EnvEntry) map[string]any {
 	}
 	if len(e.Tools) > 0 {
 		env["tools"] = e.Tools
+	}
+	if e.Workspace != nil {
+		env["workspace"] = e.Workspace
 	}
 	return env
 }
