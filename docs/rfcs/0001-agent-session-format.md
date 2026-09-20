@@ -52,9 +52,9 @@ session worth training on.
 
 - **Lossless.** A conforming file contains enough to rebuild every
   request the model received, byte for byte where the payload allows.
-- **Accountable.** Every run, every tool call the harness dispatched and
-  every decision made about a call is in the file, with who made it, so
-  a reader can say what happened to a call whose output never arrived.
+- **Resumable.** For every call without an output, a reader can tell
+  from the path whether it was never started, was in flight when the
+  record stopped, or is waiting on an answer.
 - **Append-only.** A writer only ever appends lines. A crashed session
   is a valid prefix.
 - **Tree-shaped.** Branching is a child of an earlier entry, in place.
@@ -261,16 +261,18 @@ Why a run started and how it ended. Two entries per run, paired by
 
 ```json
 {"type":"run","id":"…","parent":"…","ts":"…","run_id":"…","phase":"start",
- "trigger":{"kind":"human|schedule|channel|agent|resume","ref":"…"}}
+ "source":"input|resume","ref":"…"}
 {"type":"run","id":"…","parent":"…","ts":"…","run_id":"…","phase":"end",
  "reason":"done|stopped|input_required|aborted|error","ref":"…",
  "pending":["call_…"]}
 ```
 
-- `trigger.kind` is closed: `human` typed it, `schedule` fired it,
-  `channel` delivered it, `agent` was another agent's call, `resume`
-  continued a paused run. `ref` names the trigger in the harness's own
-  terms (a cron name, a channel message ID) and is opaque to readers.
+- `source` is closed to two path shapes: `input`, a new input started
+  the run, and `resume`, the run began by answering calls the previous
+  run's `end` entry left pending. `ref` is the harness's opaque name for
+  what triggered the input (a cron name, a channel message ID). How an
+  input arrived, whether a schedule, a channel or another agent, is a
+  harness feature and goes in `ref` or a `custom` entry.
 - `reason` is closed. Each value is a shape of the run's segment, the
   entries on the path from the `start` entry to the `end` entry, where
   a pending call is a `function_call` on the segment with no
@@ -334,11 +336,14 @@ A call's fate was decided outside the tool.
 
   A call may carry several decisions on the path, in order. The path
   already shows whether a `proceed` or `reject` answered a `hold`, so
-  there is no separate verdict for an answer.
-- `by` is closed: `human` is a person, `policy` is a rule the harness
-  evaluated without waiting, `agent` is another model. `reason` is the
-  text the decider gave, which for `reject` is also what the model saw
-  as the output.
+  there is no separate verdict for an answer. A writer SHOULD write
+  `proceed` only when it answers an earlier `hold` or carries `args`;
+  otherwise the `dispatch` is the record that the call proceeded.
+- `call_id`, `target` and `verdict` are required. `by` and `reason` are
+  optional. `by` is closed: `human` is a person, `policy` is a rule the
+  harness evaluated without waiting, `agent` is another model. `reason`
+  is the text the decider gave, which for `reject` is also what the
+  model saw as the output.
 - `args`, when present, are the arguments the tool ran with when a
   decision rewrote them. The `function_call` item stays as the model
   produced it, so the request hash still verifies; the change is
@@ -366,14 +371,16 @@ they saw.
  "cwd":"…","vcs":{"system":"git","revision":"…","dirty":true},
  "files":{"read":{"path":"sha256:…"},"written":{"path":"sha256:…"}},
  "tools":{"name":"version"},
- "workspace":{"kind":"local|container|remote","root":"…","image":"…",
-              "digest":"…","platform":"…","host":"…","instance":"…"}}
+ "workspace":{"kind":"local|container|remote","ref":"…"}}
 ```
 
-`workspace` says which file system `cwd` is a path in. A local run MAY
-omit it. A container SHOULD carry `digest` rather than a tag alone,
-because a tag moves. An `env` entry applies from its position on the
-path until the next one.
+`workspace` says which file system `cwd` is a path in: `kind` is
+closed, and `ref` is one string the harness can resolve to that file
+system (an image digest, a host, an instance ID). A local run MAY omit
+it. A container's `ref` SHOULD be a digest rather than a tag, because a
+tag moves. Anything richer is an unknown member, which the envelope
+already preserves. An `env` entry applies from its position on the path
+until the next one.
 
 ### `outcome`
 
@@ -486,7 +493,7 @@ to one agent step with `tool_calls`, `reasoning_content` and `metrics`,
 function call outputs to observations by `source_call_id`, compaction
 and branch summaries as copied-context system steps, `link` entries to
 `subagent_trajectories`. `run`, `dispatch` and `decision` entries have
-no step of their own. A run's `trigger` and end `reason` travel under
+no step of their own. A run's `source`, `ref` and end `reason` travel under
 `run` in the `extra` of the step holding the run's first input; a
 call's decisions and dispatch travel under `calls`, keyed by call ID,
 in the `extra` of the agent step that produced the call; a fold's usage
@@ -547,13 +554,14 @@ same context.
 - The Summary names the two kinds of entry, and the core types section
   states the test for admitting a core type.
 - New record entries `run`, `dispatch` and `decision`, which make the
-  Accountable goal true. Run end reasons and decision verdicts are
-  defined as shapes of the path a reader can recompute, not as one
-  harness's vocabulary, and deciders are actors (`human`, `policy`,
-  `agent`), not a harness's components.
+  Resumable goal true. A run's `source`, its end `reason` and a
+  decision's `verdict` are defined as shapes of the path a reader can
+  recompute, not as one harness's vocabulary; how an input arrived and
+  who decided a call are optional or belong in `ref` and `custom`.
 - `outcome`: `target` is an entry ID by rule, `pass` added, `score`
   unbounded, `eval` kind.
-- `env`: `workspace` member; `cwd` precedence over the header.
+- `env`: `workspace` member, a `kind` and one `ref`; `cwd` precedence
+  over the header.
 - Header: `spawned_by`; derived subsession IDs, with a retried call
   appending a root to the existing child session; `link` written at
   dispatch.
@@ -574,11 +582,11 @@ which the `run` entry cannot name. All three are open questions below.
   spelling of the same settings; try deduplication in the store first.
 - Whether the current leaf needs a durable marker. Held: a reserved
   `label` a library honours on open covers it without a format change.
-- Whether the `item` envelope needs a `source`, in the shape of
-  `trigger`, for an input queued into a run already in flight. Held:
-  `run` names the trigger of the input that started the run and nothing
-  else; a harness that steers a running agent records the source in a
-  `custom` entry until the case is better understood.
+- Whether the `item` envelope needs a member naming how an input
+  queued into a run already in flight arrived. Held: `run` says only
+  whether a run began from an input or a resume; how an input arrived
+  is a harness feature, so a harness that steers a running agent records
+  it in a `custom` entry until the case is better understood.
 - Whether to allow a second payload profile at 0.x, or hold the line at
   Open Responses and rely on converters.
 - Sidecar media layout and naming.
