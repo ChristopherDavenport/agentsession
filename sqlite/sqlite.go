@@ -9,18 +9,22 @@ package sqlite
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
 	"net/url"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/internal/procs"
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
 )
 
@@ -32,6 +36,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 	cwd            TEXT NOT NULL DEFAULT '',
 	parent_session TEXT NOT NULL DEFAULT '',
 	name           TEXT NOT NULL DEFAULT '',
+	superseded_by  TEXT NOT NULL DEFAULT '',
 	header         TEXT NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS sessions_created_at ON sessions(created_at);
@@ -46,7 +51,40 @@ CREATE TABLE IF NOT EXISTS entries (
 	UNIQUE (session_id, seq),
 	UNIQUE (session_id, id)
 ) STRICT;
+CREATE TABLE IF NOT EXISTS holders (
+	session_id TEXT    PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+	pid        INTEGER NOT NULL,
+	host       TEXT    NOT NULL,
+	token      TEXT    NOT NULL,
+	since      TEXT    NOT NULL,
+	heartbeat  TEXT    NOT NULL
+) STRICT;
 `
+
+// ErrSessionLocked is returned by Create, Open and Append when another
+// process holds the session. The message names the holder; BreakLock
+// removes a lock the caller has decided is dead.
+var ErrSessionLocked = errors.New("sqlite: session is open in another process")
+
+// LockInfo describes the holder of a session.
+type LockInfo struct {
+	PID   int
+	Host  string
+	Since time.Time
+	// Heartbeat is when the holder last appended.
+	Heartbeat time.Time
+}
+
+// Option configures a Store.
+type Option func(*Store)
+
+// WithStaleLockReport sets a function the store calls when Create or
+// Open takes over the hold of a process on this host that no longer
+// runs, with the dead holder's details, as the jsonl store's option
+// of the same name does. The takeover itself is not changed.
+func WithStaleLockReport(report func(LockInfo)) Option {
+	return func(s *Store) { s.staleReport = report }
+}
 
 // ErrConcurrentWriter is returned by Append when another process
 // appended to the session since this store loaded it. The store has no
@@ -60,13 +98,24 @@ var ErrConcurrentWriter = errors.New("sqlite: another process appended to the se
 
 // Store is a SQLite-backed [agentsession.Store]. It is safe for
 // concurrent use within one process. Several processes may share the
-// file, since every write is one immediate transaction, but there is
-// no cross-process session lock: a session open in two processes at
-// once is detected at the first conflicting append, which returns
-// ErrConcurrentWriter and refuses the session until Release.
+// file: every write is one immediate transaction, and each open
+// session is held by one process at a time through the holders
+// table, so a second process that opens the same session gets
+// ErrSessionLocked instead of interleaving entries with the first.
+// The hold is released by Release, Delete and Close; a hold left by a
+// process on this host that no longer runs is taken over on the next
+// open, and BreakLock clears one from any other holder. Every append
+// refreshes the holder's heartbeat and fails with ErrSessionLocked if
+// the hold was taken from under it.
 type Store struct {
-	w, r *sql.DB
-	// refused holds the sessions whose last append hit a concurrent
+	w, r        *sql.DB
+	staleReport func(LockInfo)
+	pid         int
+	host        string
+	// token identifies this Store among holders, since two stores in
+	// one process share a pid.
+	token string
+	// refused holds the sessions whose last append found another
 	// writer, so later appends fail until the caller reloads.
 	refused map[string]error
 
@@ -78,7 +127,7 @@ type Store struct {
 // Every connection runs in WAL mode with foreign keys on and a busy
 // timeout, and writes go through a single-connection pool so writers
 // queue instead of failing.
-func Open(path string) (*Store, error) {
+func Open(path string, opts ...Option) (*Store, error) {
 	pragmas := url.Values{}
 	for _, p := range []string{"journal_mode(WAL)", "synchronous(NORMAL)", "foreign_keys(ON)", "busy_timeout(5000)"} {
 		pragmas.Add("_pragma", p)
@@ -105,7 +154,12 @@ func Open(path string) (*Store, error) {
 		r.Close()
 		return nil, err
 	}
-	return &Store{w: w, r: r, open: map[string]*agentsession.Session{}, refused: map[string]error{}}, nil
+	host, _ := os.Hostname()
+	s := &Store{w: w, r: r, open: map[string]*agentsession.Session{}, refused: map[string]error{}, pid: os.Getpid(), host: host, token: newToken()}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
 }
 
 // migrate brings a database created by an earlier release up to the
@@ -117,7 +171,7 @@ func migrate(w *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	if cols["name"] {
+	if cols["name"] && cols["superseded_by"] {
 		return nil
 	}
 	tx, err := w.Begin()
@@ -125,8 +179,42 @@ func migrate(w *sql.DB) error {
 		return fmt.Errorf("sqlite: migrate: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''`); err != nil {
-		return fmt.Errorf("sqlite: migrate: add name: %w", err)
+	if !cols["name"] {
+		if _, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("sqlite: migrate: add name: %w", err)
+		}
+	}
+	if !cols["superseded_by"] {
+		if _, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN superseded_by TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("sqlite: migrate: add superseded_by: %w", err)
+		}
+		links, err := tx.Query(`SELECT session_id, line FROM entries WHERE type = ? ORDER BY session_id, seq`, agentsession.TypeLink)
+		if err != nil {
+			return fmt.Errorf("sqlite: migrate: read link entries: %w", err)
+		}
+		next := map[string]string{}
+		for links.Next() {
+			var id, line string
+			if err := links.Scan(&id, &line); err != nil {
+				links.Close()
+				return fmt.Errorf("sqlite: migrate: %w", err)
+			}
+			if s := continuedIn(line); s != "" {
+				next[id] = s
+			}
+		}
+		links.Close()
+		if err := links.Err(); err != nil {
+			return fmt.Errorf("sqlite: migrate: %w", err)
+		}
+		for id, s := range next {
+			if _, err := tx.Exec(`UPDATE sessions SET superseded_by = ? WHERE id = ?`, s, id); err != nil {
+				return fmt.Errorf("sqlite: migrate: set superseded_by: %w", err)
+			}
+		}
+	}
+	if cols["name"] {
+		return tx.Commit()
 	}
 	rows, err := tx.Query(`SELECT session_id, line FROM entries WHERE type = ? ORDER BY session_id, seq`, agentsession.TypeInfo)
 	if err != nil {
@@ -156,6 +244,18 @@ func migrate(w *sql.DB) error {
 		return fmt.Errorf("sqlite: migrate: %w", err)
 	}
 	return nil
+}
+
+// continuedIn returns the successor a stored link line names, or "".
+func continuedIn(line string) string {
+	var probe struct {
+		Rel     string `json:"rel"`
+		Session string `json:"session"`
+	}
+	if json.Unmarshal([]byte(line), &probe) != nil || probe.Rel != agentsession.RelContinuedIn {
+		return ""
+	}
+	return probe.Session
 }
 
 // columns returns the column names of a table.
@@ -189,6 +289,11 @@ func infoName(line string) string {
 
 // Close runs PRAGMA optimize and closes both pools.
 func (s *Store) Close() error {
+	s.mu.Lock()
+	for id := range s.open {
+		s.releaseLocked(id)
+	}
+	s.mu.Unlock()
 	_, _ = s.w.Exec("PRAGMA optimize")
 	err := s.w.Close()
 	if rerr := s.r.Close(); err == nil {
@@ -215,7 +320,12 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
 	now := stamp(time.Now())
-	_, err = s.w.ExecContext(ctx,
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: begin: %w", err)
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO sessions (id, created_at, updated_at, cwd, parent_session, header) VALUES (?, ?, ?, ?, ?, ?)`,
 		h.ID, stamp(h.CreatedAt), now, h.CWD, h.ParentSession, string(line))
 	if err != nil {
@@ -223,6 +333,12 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 			return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 		}
 		return nil, fmt.Errorf("sqlite: insert session: %w", err)
+	}
+	if err := s.claim(ctx, tx, h.ID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("sqlite: create session: %w", err)
 	}
 	s.open[h.ID] = sess
 	return sess, nil
@@ -250,6 +366,17 @@ func (s *Store) openLocked(ctx context.Context, id string) (*agentsession.Sessio
 	}
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: load session: %w", err)
+	}
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: begin: %w", err)
+	}
+	if err := s.claim(ctx, tx, id); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("sqlite: hold session: %w", err)
 	}
 	// Rebuild the JSONL form and let the library validate the tree.
 	var buf bytes.Buffer
@@ -313,14 +440,29 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 		return "", fmt.Errorf("sqlite: begin: %w", err)
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO entries (session_id, seq, id, parent, type, line) VALUES (?, ?, ?, ?, ?, ?)`,
-		sessionID, sess.Len(), id, parent, e.EntryType(), string(line))
+	res, err := tx.ExecContext(ctx, `UPDATE holders SET heartbeat = ? WHERE session_id = ? AND token = ?`,
+		stamp(time.Now()), sessionID, s.token)
+	if err == nil {
+		if n, _ := res.RowsAffected(); n == 0 {
+			delete(s.open, sessionID)
+			holder, _ := s.holder(ctx, sessionID)
+			s.refused[sessionID] = fmt.Errorf("%w: hold on %s lost to %s", ErrSessionLocked, sessionID, describeHolder(holder))
+			return "", s.refused[sessionID]
+		}
+	}
+	if err == nil {
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO entries (session_id, seq, id, parent, type, line) VALUES (?, ?, ?, ?, ?, ?)`,
+			sessionID, sess.Len(), id, parent, e.EntryType(), string(line))
+	}
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at = ? WHERE id = ?`, stamp(time.Now()), sessionID)
 	}
 	if info, ok := e.(*agentsession.InfoEntry); ok && info.Name != "" && err == nil {
 		_, err = tx.ExecContext(ctx, `UPDATE sessions SET name = ? WHERE id = ?`, info.Name, sessionID)
+	}
+	if l, ok := e.(*agentsession.LinkEntry); ok && l.Rel == agentsession.RelContinuedIn && l.Session != "" && err == nil {
+		_, err = tx.ExecContext(ctx, `UPDATE sessions SET superseded_by = ? WHERE id = ?`, l.Session, sessionID)
 	}
 	if err == nil {
 		err = tx.Commit()
@@ -367,7 +509,10 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 			where = append(where, "created_at < ?")
 			args = append(args, stamp(f.Before))
 		}
-		q := `SELECT s.header, s.updated_at, s.name,
+		if f.Current {
+			where = append(where, "superseded_by = ''")
+		}
+		q := `SELECT s.header, s.updated_at, s.name, s.superseded_by,
 			length(s.header) + COALESCE((SELECT SUM(length(e.line) + 1) FROM entries e WHERE e.session_id = s.id), 0) + 1
 			FROM sessions s`
 		if len(where) > 0 {
@@ -385,9 +530,9 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var header, updated, name string
+			var header, updated, name, supersededBy string
 			var size int64
-			if err := rows.Scan(&header, &updated, &name, &size); err != nil {
+			if err := rows.Scan(&header, &updated, &name, &supersededBy, &size); err != nil {
 				yield(agentsession.Summary{}, fmt.Errorf("sqlite: list: %w", err))
 				return
 			}
@@ -404,7 +549,7 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 				continue
 			}
 			mod, _ := time.Parse(time.RFC3339Nano, updated)
-			if !yield(agentsession.Summary{Header: h, Name: name, Size: size, Modified: mod}, nil) {
+			if !yield(agentsession.Summary{Header: h, Name: name, SupersededBy: supersededBy, Size: size, Modified: mod}, nil) {
 				return
 			}
 		}
@@ -438,8 +583,95 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 func (s *Store) Release(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.releaseLocked(id)
+}
+
+func (s *Store) releaseLocked(id string) {
+	if _, ok := s.open[id]; ok {
+		_, _ = s.w.Exec(`DELETE FROM holders WHERE session_id = ? AND token = ?`, id, s.token)
+	}
 	delete(s.open, id)
 	delete(s.refused, id)
+}
+
+// LockHolder reports who holds a session, or nil when it is free. A
+// session this store holds is reported as held by this process.
+func (s *Store) LockHolder(ctx context.Context, id string) (*LockInfo, error) {
+	return s.holder(ctx, id)
+}
+
+// BreakLock removes a session's hold whoever has it. Use it when Open
+// reports ErrSessionLocked and the caller has confirmed the holder is
+// gone, for example a process on another host that crashed. Breaking
+// the hold of a live writer makes that writer's next append fail with
+// ErrSessionLocked rather than interleave with the new holder's.
+func (s *Store) BreakLock(ctx context.Context, id string) error {
+	if _, err := s.w.ExecContext(ctx, `DELETE FROM holders WHERE session_id = ?`, id); err != nil {
+		return fmt.Errorf("sqlite: break lock: %w", err)
+	}
+	return nil
+}
+
+// holder reads the holders row for a session.
+func (s *Store) holder(ctx context.Context, id string) (*LockInfo, error) {
+	var info LockInfo
+	var since, beat string
+	err := s.r.QueryRowContext(ctx, `SELECT pid, host, since, heartbeat FROM holders WHERE session_id = ?`, id).Scan(&info.PID, &info.Host, &since, &beat)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: read holder: %w", err)
+	}
+	info.Since, _ = time.Parse(time.RFC3339Nano, since)
+	info.Heartbeat, _ = time.Parse(time.RFC3339Nano, beat)
+	return &info, nil
+}
+
+// claim takes the hold on a session inside tx: a holder on this host
+// whose process no longer runs is taken over and reported; any other
+// holder produces ErrSessionLocked.
+func (s *Store) claim(ctx context.Context, tx *sql.Tx, id string) error {
+	var cur LockInfo
+	var token, since, beat string
+	err := tx.QueryRowContext(ctx, `SELECT pid, host, token, since, heartbeat FROM holders WHERE session_id = ?`, id).Scan(&cur.PID, &cur.Host, &token, &since, &beat)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return fmt.Errorf("sqlite: read holder: %w", err)
+	case token == s.token:
+		return nil // ours already, from an earlier open in this store
+	case cur.Host == s.host && !procs.Alive(cur.PID):
+		cur.Since, _ = time.Parse(time.RFC3339Nano, since)
+		cur.Heartbeat, _ = time.Parse(time.RFC3339Nano, beat)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM holders WHERE session_id = ?`, id); err != nil {
+			return fmt.Errorf("sqlite: remove stale holder: %w", err)
+		}
+		if s.staleReport != nil {
+			s.staleReport(cur)
+		}
+	default:
+		return fmt.Errorf("%w: %s held by %s", ErrSessionLocked, id, describeHolder(&cur))
+	}
+	now := stamp(time.Now())
+	if _, err := tx.ExecContext(ctx, `INSERT INTO holders (session_id, pid, host, token, since, heartbeat) VALUES (?, ?, ?, ?, ?, ?)`, id, s.pid, s.host, s.token, now, now); err != nil {
+		return fmt.Errorf("sqlite: hold session: %w", err)
+	}
+	return nil
+}
+
+// newToken returns a random identity for one Store.
+func newToken() string {
+	var b [8]byte
+	rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+func describeHolder(l *LockInfo) string {
+	if l == nil {
+		return "no holder"
+	}
+	return fmt.Sprintf("pid %d on %s since %s", l.PID, l.Host, l.Since.Format(time.RFC3339))
 }
 
 // stamp renders a time for lexicographic ordering in the database.

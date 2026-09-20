@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/ChristopherDavenport/agentsession/internal/procs"
 )
 
 // ErrSessionLocked is returned by Create, Open and Append when another
@@ -102,7 +104,7 @@ func (l LockInfo) stale() bool {
 	if l.Host != host || l.PID <= 0 {
 		return false
 	}
-	return !processAlive(l.PID)
+	return !procs.Alive(l.PID)
 }
 
 // LockHolder reports who holds a session's lock, or nil when it is

@@ -1,6 +1,6 @@
 //go:build unix
 
-package jsonl
+package procs
 
 import (
 	"errors"
@@ -8,11 +8,11 @@ import (
 	"syscall"
 )
 
-// processAlive reports whether a process with the given ID exists.
+// Alive reports whether a process with the given ID exists.
 // Signal 0 performs the permission and existence checks without
 // delivering anything; EPERM means the process exists but belongs to
 // another user.
-func processAlive(pid int) bool {
+func Alive(pid int) bool {
 	p, err := os.FindProcess(pid)
 	if err != nil {
 		return false
