@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/atif"
@@ -16,8 +17,9 @@ func exportCmd(args []string, stdout, stderr io.Writer) error {
 	out := fs.String("out", "", "directory to write the ATIF documents into (required)")
 	redactHome := fs.Bool("redact-home", false, "replace the home directory in paths and text")
 	redactEnv := fs.Bool("redact-env", false, "drop environment snapshots from the documents")
-	var secrets stringList
+	var secrets, prefer stringList
 	fs.Var(&secrets, "secret", "a value to redact wherever it appears; repeatable")
+	fs.Var(&prefer, "prefer", "rule for the continued branch at a fork: latest, leaf, score or label=NAME; repeatable, first opinion wins")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -34,7 +36,12 @@ func exportCmd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	opts := export.Options{Subsessions: siblingResolver(path)}
+	prefs, err := preferences(prefer)
+	if err != nil {
+		fs.Usage()
+		return err
+	}
+	opts := export.Options{Subsessions: siblingResolver(path), Preferences: prefs}
 	if len(secrets) > 0 {
 		opts.Redactors = append(opts.Redactors, export.Secrets(secrets...))
 	}
@@ -50,7 +57,7 @@ func exportCmd(args []string, stdout, stderr io.Writer) error {
 	}
 
 	var docs []*atif.Trajectory
-	for tr, err := range export.Trajectories(s) {
+	for tr, err := range export.Trajectories(s, prefs...) {
 		if err != nil {
 			return err
 		}
@@ -73,6 +80,26 @@ func exportCmd(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout, filepath.Join(*out, export.DocumentName(d)))
 	}
 	return nil
+}
+
+// preferences parses -prefer values.
+func preferences(names []string) ([]export.Preference, error) {
+	var prefs []export.Preference
+	for _, n := range names {
+		switch {
+		case n == "latest":
+			prefs = append(prefs, export.PreferLatest)
+		case n == "leaf":
+			prefs = append(prefs, export.PreferCurrentLeaf)
+		case n == "score":
+			prefs = append(prefs, export.PreferScore)
+		case strings.HasPrefix(n, "label=") && len(n) > len("label="):
+			prefs = append(prefs, export.PreferLabel(strings.TrimPrefix(n, "label=")))
+		default:
+			return nil, fmt.Errorf("%w: -prefer %q: want latest, leaf, score or label=NAME", errUsage, n)
+		}
+	}
+	return prefs, nil
 }
 
 // siblingResolver finds a subsession's file near the exported one: in

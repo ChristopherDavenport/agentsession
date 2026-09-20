@@ -69,6 +69,11 @@ func TestRun(t *testing.T) {
 		{name: "verify", args: []string{"verify", filepath.Join(fixtures, "branch.jsonl")}, stdout: []string{"r0000001  ok", "3 verified, 0 without hash, 0 failed"}},
 		{name: "verify mismatch", args: []string{"verify", tampered}, code: 1, stdout: []string{"MISMATCH", "2 failed"}},
 		{name: "verify truncated", args: []string{"verify", filepath.Join(fixtures, "truncated.jsonl")}, code: 1, stdout: []string{"truncated: line 4"}},
+		{name: "export bad prefer", args: []string{"export", filepath.Join(fixtures, "branch.jsonl"), "-out", out, "-prefer", "best"}, code: 2, stderr: []string{`-prefer "best"`}},
+		{
+			name: "export prefer label", args: []string{"export", filepath.Join(fixtures, "branch.jsonl"), "-out", filepath.Join(tmp, "out2"), "-prefer", "label=fork", "-prefer", "leaf", "-prefer", "score", "-prefer", "latest"},
+			written: []string{filepath.Join(tmp, "out2", "01995b2a-0000-7000-8000-000000000003.json")},
+		},
 		{name: "export without out", args: []string{"export", filepath.Join(fixtures, "branch.jsonl")}, code: 2, stderr: []string{"-out is required"}},
 		{
 			name: "export", args: []string{"export", filepath.Join(fixtures, "branch.jsonl"), "-out", out, "-secret", "A1", "-redact-home", "-redact-env"},

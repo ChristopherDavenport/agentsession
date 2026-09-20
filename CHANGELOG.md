@@ -37,6 +37,11 @@ versions may break the API.
 - `ConfigEntry.SetExtra` and `ClearExtra` write a passthrough request
   member, or the null that removes it on replay, without touching raw
   JSON; `Settings.ExtraValue` decodes one back (#8).
+- `export.Trajectories` takes `Preference` functions that decide which
+  child of a fork was continued: `PreferCurrentLeaf`, `PreferLabel`,
+  `PreferScore` (highest-scored outcome), with `PreferLatest`, the
+  previous rule, as the fallback. `Options.Preferences` applies them to
+  embedded subsessions; the `export` command takes `-prefer` (#11).
 
 ## v0.0.2 - 2026-09-19
 

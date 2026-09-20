@@ -760,3 +760,125 @@ func mustAppend(t *testing.T, s *agentsession.Session, e agentsession.Entry) {
 		t.Fatal(err)
 	}
 }
+
+func TestPreferences(t *testing.T) {
+	// The branch fixture forks at r0000001: i0000003 leads to leaf
+	// r0000002 and b0000001 to leaf n0000001, the last appended.
+	const fork, sideA, sideB = "r0000001", "i0000003", "b0000001"
+	children := []string{sideA, sideB}
+	tests := []struct {
+		name    string
+		prepare func(t *testing.T, s *agentsession.Session)
+		prefs   []Preference
+		want    string // the continued child
+		opinion string // what the first preference alone answers
+	}{
+		{name: "default", want: sideB},
+		{name: "latest", prefs: []Preference{PreferLatest}, want: sideB, opinion: sideB},
+		{name: "no opinion falls back", prefs: []Preference{func(*agentsession.Session, string, []string) string { return "" }}, want: sideB},
+		{name: "unknown child falls back", prefs: []Preference{func(*agentsession.Session, string, []string) string { return "zz" }}, want: sideB, opinion: "zz"},
+		{name: "current leaf", prefs: []Preference{PreferCurrentLeaf}, want: sideB, opinion: sideB},
+		{
+			name:    "current leaf after switching back",
+			prepare: func(t *testing.T, s *agentsession.Session) { mustDo(t, s.Branch("r0000002")) },
+			prefs:   []Preference{PreferCurrentLeaf},
+			want:    sideA, opinion: sideA,
+		},
+		{name: "label absent", prefs: []Preference{PreferLabel("best")}, want: sideB},
+		{
+			name: "label",
+			prepare: func(t *testing.T, s *agentsession.Session) {
+				_, err := s.Append(agentsession.NewLabelEntry("i0000004", "best"))
+				mustDo(t, err)
+			},
+			prefs: []Preference{PreferLabel("best")},
+			want:  sideA, opinion: sideA,
+		},
+		{
+			name: "label on both sides",
+			prepare: func(t *testing.T, s *agentsession.Session) {
+				_, err := s.Append(agentsession.NewLabelEntry("i0000004", "best"))
+				mustDo(t, err)
+				_, err = s.Append(agentsession.NewLabelEntry("i0000006", "best"))
+				mustDo(t, err)
+			},
+			prefs: []Preference{PreferLabel("best")},
+			want:  sideB,
+		},
+		{name: "score absent", prefs: []Preference{PreferScore}, want: sideB},
+		{
+			name: "score",
+			prepare: func(t *testing.T, s *agentsession.Session) {
+				_, err := s.Append(agentsession.NewOutcomeEntry("test", "r0000002").WithScore(1))
+				mustDo(t, err)
+				_, err = s.Append(agentsession.NewOutcomeEntry("test", "r0000003").WithScore(0.5))
+				mustDo(t, err)
+			},
+			prefs: []Preference{PreferScore},
+			want:  sideA, opinion: sideA,
+		},
+		{
+			name: "score tie",
+			prepare: func(t *testing.T, s *agentsession.Session) {
+				_, err := s.Append(agentsession.NewOutcomeEntry("test", "r0000002").WithScore(1))
+				mustDo(t, err)
+				_, err = s.Append(agentsession.NewOutcomeEntry("test", "").WithScore(1)) // its own position, side B
+				mustDo(t, err)
+			},
+			prefs: []Preference{PreferScore},
+			want:  sideB,
+		},
+		{
+			name: "first opinion wins",
+			prepare: func(t *testing.T, s *agentsession.Session) {
+				_, err := s.Append(agentsession.NewLabelEntry("i0000004", "best"))
+				mustDo(t, err)
+			},
+			prefs: []Preference{PreferScore, PreferLabel("best"), PreferLatest},
+			want:  sideA,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := loadFixture(t, "branch")
+			if tt.prepare != nil {
+				tt.prepare(t, s)
+			}
+			if len(tt.prefs) > 0 {
+				if got := tt.prefs[0](s, fork, children); got != tt.opinion {
+					t.Errorf("preference answered %q, want %q", got, tt.opinion)
+				}
+			}
+			got := map[string]Trajectory{}
+			for tr, err := range Trajectories(s, tt.prefs...) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				got[tr.LeafID] = tr
+			}
+			// The leaf under the continued child has no AbandonedAt and
+			// lists the other side; the other leaf names the fork.
+			for leaf, tr := range got {
+				under := childHolding(s, children, leaf)
+				if under == tt.want {
+					if tr.AbandonedAt != "" || len(tr.PreferredOver) == 0 {
+						t.Errorf("continued leaf %s = %+v", leaf, tr)
+					}
+				} else if tr.AbandonedAt != fork || len(tr.PreferredOver) != 0 {
+					t.Errorf("abandoned leaf %s = %+v", leaf, tr)
+				}
+			}
+			// Main follows the file, not the preference.
+			if last := s.Entries()[s.Len()-1].Base().ID; !got[last].Main {
+				t.Errorf("main trajectory is not at the last appended entry %s", last)
+			}
+		})
+	}
+}
+
+func mustDo(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}

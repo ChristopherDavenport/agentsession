@@ -276,6 +276,14 @@ and the abandoned one with `extra.abandoned_at` naming the divergence
 step. ATIF has no first-class field for this, so the convention lives in
 `extra` and is documented alongside the exporter for upstream proposal.
 
+Which child was continued is a judgement. The default rule takes the
+child whose subtree holds the most recently appended entry, which is
+right when a user abandons a branch and moves on. `Trajectories` takes
+`Preference` functions for the other cases: the branch holding the
+session's current leaf, the branch holding an entry with a given label,
+or the branch with the highest-scored `outcome`. The first preference
+with an opinion decides; the default rule is the fallback.
+
 ### Redaction and publishing
 
 Redaction runs at export, never at write, over the ATIF document and

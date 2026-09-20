@@ -118,8 +118,10 @@ Each document is one root-to-leaf path with compaction applied. The
 session's current path is written as `<session-id>.json`, the others
 as `<session-id>_<leaf>.json`. A branch that was continued lists the
 leaves it was preferred over in `extra.preferred_over`; an abandoned
-one names the fork in `extra.abandoned_at`. `export.Items(doc)` reads
-the raw items back out.
+one names the fork in `extra.abandoned_at`. By default the continued
+branch is the one appended to last; pass `export.PreferCurrentLeaf`,
+`export.PreferLabel("kept")` or `export.PreferScore` to `Trajectories`
+to decide otherwise. `export.Items(doc)` reads the raw items back out.
 
 ## Inspecting from a shell
 

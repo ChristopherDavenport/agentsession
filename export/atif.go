@@ -27,6 +27,10 @@ type Options struct {
 	// [MainDocumentName] of the child, which is where [WriteATIF] puts
 	// the child's main trajectory.
 	Subsessions func(sessionID string) (*agentsession.Session, error)
+	// Preferences decide the continued branch at a fork of an embedded
+	// subsession; see [Trajectories]. The caller's own session is
+	// walked with the preferences it passed to Trajectories.
+	Preferences []Preference
 	// Redactors run over the finished document in order.
 	Redactors []Redactor
 	// Notes is copied to the document's notes member.
@@ -621,7 +625,7 @@ func (b *builder) embed(sessionID string) *atif.Trajectory {
 		return nil
 	}
 	var chosen *Trajectory
-	for t, err := range Trajectories(sub) {
+	for t, err := range Trajectories(sub, b.opts.Preferences...) {
 		if err != nil {
 			continue
 		}
