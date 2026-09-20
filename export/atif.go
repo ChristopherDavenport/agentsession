@@ -184,6 +184,9 @@ func (b *builder) entry(e agentsession.Entry) error {
 			b.addPending("tool_changes", change)
 		}
 		b.addPendingList("config_entries", e.Base().ID)
+		if len(v.Unknown) > 0 {
+			b.addPendingList("config_extensions", copyUnknown(map[string]any{"entry_id": v.ID}, v.Unknown))
+		}
 	case *agentsession.CompactionEntry:
 		b.flushGroup(nil)
 		text := itemText(v.Summary)
@@ -201,6 +204,7 @@ func (b *builder) entry(e agentsession.Entry) error {
 		if v.TokensBefore > 0 {
 			step.Extra["tokens_before"] = v.TokensBefore
 		}
+		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.BranchSummaryEntry:
 		b.flushGroup(nil)
@@ -213,24 +217,22 @@ func (b *builder) entry(e agentsession.Entry) error {
 				ExtraOpenResponses: map[string]any{"item": rawItem(v.Summary)},
 			},
 		}
+		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.LabelEntry:
 		label := any(nil)
 		if v.Label != nil {
 			label = *v.Label
 		}
-		b.addPendingList("labels", map[string]any{"target": v.Target, "label": label, "entry_id": v.ID})
+		b.addPendingList("labels", copyUnknown(map[string]any{"target": v.Target, "label": label, "entry_id": v.ID}, v.Unknown))
 	case *agentsession.InfoEntry:
 		info := map[string]any{"entry_id": v.ID}
 		if v.Name != "" {
 			info["name"] = v.Name
 		}
-		for k, raw := range v.Unknown {
-			info[k] = json.RawMessage(raw)
-		}
-		b.addPendingList("info", info)
+		b.addPendingList("info", copyUnknown(info, v.Unknown))
 	case *agentsession.CustomEntry:
-		b.addPendingList("custom", map[string]any{"ns": v.NS, "data": json.RawMessage(v.Data), "entry_id": v.ID})
+		b.addPendingList("custom", copyUnknown(map[string]any{"ns": v.NS, "data": json.RawMessage(v.Data), "entry_id": v.ID}, v.Unknown))
 	case *agentsession.EnvEntry:
 		env := envExtra(v)
 		if !b.sawEnv {
@@ -246,7 +248,7 @@ func (b *builder) entry(e agentsession.Entry) error {
 	case *agentsession.RunEntry:
 		b.runEntry(v)
 	case *agentsession.DispatchEntry:
-		rec := map[string]any{"entry_id": v.ID}
+		rec := copyUnknown(map[string]any{"entry_id": v.ID}, v.Unknown)
 		b.callExtra(v.CallID)["dispatch"] = rec
 	case *agentsession.DecisionEntry:
 		rec := map[string]any{"entry_id": v.ID, "verdict": v.Verdict}
@@ -259,6 +261,7 @@ func (b *builder) entry(e agentsession.Entry) error {
 		if len(v.Args) > 0 {
 			rec["args"] = json.RawMessage(v.Args)
 		}
+		copyUnknown(rec, v.Unknown)
 		call := b.callExtra(v.CallID)
 		list, _ := call["decisions"].([]any)
 		call["decisions"] = append(list, rec)
@@ -349,7 +352,7 @@ func (b *builder) itemExtra(e *agentsession.ItemEntry) map[string]any {
 	if !e.IsVisible() {
 		extra["visible"] = false
 	}
-	return extra
+	return copyUnknown(extra, e.Unknown)
 }
 
 // flushGroup emits the agent step for the open group, with the response
@@ -429,6 +432,9 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 	if len(ids) > 0 {
 		step.Extra["item_entry_ids"] = ids
 	}
+	for _, e := range g.entries {
+		copyUnknown(step.Extra, e.Unknown)
+	}
 	var anchor agentsession.Entry
 	if len(g.entries) > 0 {
 		anchor = g.entries[0]
@@ -475,6 +481,9 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 		}
 	} else if g.responseID != "" {
 		step.Extra["response_id"] = g.responseID
+	}
+	if resp != nil {
+		copyUnknown(step.Extra, resp.Unknown)
 	}
 	if anchor == nil {
 		return
@@ -545,6 +554,7 @@ func (b *builder) runEntry(r *agentsession.RunEntry) {
 		if r.Ref != "" {
 			rec["trigger"] = r.Ref
 		}
+		copyUnknown(rec, r.Unknown)
 		b.currentRun = rec
 		b.addPending(ExtraRun, rec)
 		return
@@ -565,6 +575,7 @@ func (b *builder) runEntry(r *agentsession.RunEntry) {
 		pending = append(pending, id)
 	}
 	rec["pending"] = pending
+	copyUnknown(rec, r.Unknown)
 	b.currentRun = nil
 }
 
@@ -609,6 +620,7 @@ func (b *builder) outcome(o *agentsession.OutcomeEntry) {
 	if len(o.Details) > 0 {
 		rec["details"] = json.RawMessage(o.Details)
 	}
+	copyUnknown(rec, o.Unknown)
 	if b.doc.FinalMetrics == nil {
 		b.doc.FinalMetrics = &atif.FinalMetrics{}
 	}
@@ -687,6 +699,7 @@ func (b *builder) subsessions() {
 		if l.CallID != "" {
 			rec["call_id"] = l.CallID
 		}
+		copyUnknown(rec, l.Unknown)
 		if l.Rel != agentsession.RelSubsession {
 			others = append(others, rec)
 			continue
@@ -1033,7 +1046,18 @@ func envExtra(e *agentsession.EnvEntry) map[string]any {
 	if e.Workspace != nil {
 		env["workspace"] = e.Workspace
 	}
-	return env
+	return copyUnknown(env, e.Unknown)
+}
+
+// copyUnknown passes an entry's undefined members through to the
+// record built from its defined ones, as the format's forward
+// compatibility requires of a consumer. Members are copied under their
+// own names, never promoted or renamed. It returns rec.
+func copyUnknown(rec map[string]any, unknown map[string]json.RawMessage) map[string]any {
+	for k, raw := range unknown {
+		rec[k] = json.RawMessage(raw)
+	}
+	return rec
 }
 
 func sortStrings(s []string) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -880,5 +881,61 @@ func mustDo(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestExportKeepsUnknownMembers pushes one undefined member through
+// every entry type and expects each to reach the document, since the
+// format's forward compatibility is worthless to a consumer that reads
+// the export rather than the file.
+func TestExportKeepsUnknownMembers(t *testing.T) {
+	s := agentsession.New(agentsession.Header{ID: "unk", Records: agentsession.AllRecords})
+	fc := &openresponses.FunctionCall{ID: "fc_1", CallID: "call_1", Name: "t", Arguments: "{}"}
+	entries := []agentsession.Entry{
+		&agentsession.ConfigEntry{Model: "m"},
+		&agentsession.InfoEntry{Name: "n"},
+		agentsession.NewEnvEntry("/w"),
+		agentsession.NewRunStart("r", agentsession.SourceInput, ""),
+		agentsession.NewItemEntry(openresponses.UserText("hi")),
+		&agentsession.ItemEntry{EntryBase: agentsession.EntryBase{ID: "fc-entry"}, Item: fc, ResponseID: "resp"},
+		&agentsession.ResponseEntry{ResponseID: "resp", Status: "completed"},
+		agentsession.NewDecision("call_1", "fc-entry", agentsession.VerdictProceed, agentsession.ByPolicy),
+		agentsession.NewDispatch("call_1", "fc-entry"),
+		agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("call_1", "ok")),
+		agentsession.NewRunEnd("r", agentsession.ReasonStopped, "", nil),
+		agentsession.NewLabelEntry("", "bookmark"),
+		&agentsession.CustomEntry{NS: "acme", Data: json.RawMessage(`1`)},
+		agentsession.NewOutcomeEntry(agentsession.OutcomeTest, ""),
+		agentsession.NewLinkEntry(agentsession.RelForkOf, "other"),
+	}
+	var want []string
+	for i, e := range entries {
+		key := fmt.Sprintf("acme:probe_%s_%d", e.EntryType(), i)
+		val := fmt.Sprintf(`"v%d"`, i)
+		e.Base().Unknown = map[string]json.RawMessage{key: json.RawMessage(val)}
+		if _, err := s.Append(e); err != nil {
+			t.Fatalf("%s: %v", e.EntryType(), err)
+		}
+		want = append(want, fmt.Sprintf(`%q:%s`, key, val))
+	}
+	var doc *atif.Trajectory
+	for tr, err := range Trajectories(s) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, err := ToATIF(tr, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc = d
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range want {
+		if !strings.Contains(string(out), w) {
+			t.Errorf("document lacks %s", w)
+		}
 	}
 }
