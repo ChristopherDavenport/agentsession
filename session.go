@@ -32,8 +32,11 @@ type Session struct {
 
 // New creates an empty session. Header fields left empty are filled:
 // a UUIDv7 ID, the current time, this package's format and payload.
+// Times the session assigns are in UTC so a file carries one offset
+// however the writer's clock is configured; times the caller supplies
+// are kept as given.
 func New(h Header) *Session {
-	s := &Session{now: time.Now}
+	s := &Session{now: utcNow}
 	h.fill(s.now())
 	s.header = h
 	s.byID = map[string]Entry{}
@@ -313,3 +316,7 @@ func (s *Session) SummarizeBranch(from string, summary openresponses.Item) (*Bra
 	}
 	return &BranchSummaryEntry{From: from, Summary: summary}, nil
 }
+
+// utcNow is the session clock: the current time in UTC with the
+// monotonic reading dropped, so what is stamped is what reaches disk.
+func utcNow() time.Time { return time.Now().UTC().Round(0) }

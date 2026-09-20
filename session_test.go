@@ -29,6 +29,33 @@ func TestNewFillsHeader(t *testing.T) {
 	}
 }
 
+func TestAssignedTimesAreUTC(t *testing.T) {
+	local := time.FixedZone("test", 5*3600)
+	orig := time.Local
+	time.Local = local
+	defer func() { time.Local = orig }()
+
+	s := New(Header{})
+	if _, off := s.Header().CreatedAt.Zone(); off != 0 {
+		t.Errorf("created_at offset = %d, want UTC", off)
+	}
+	id, err := s.Append(&InfoEntry{Name: "n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, off := mustEntry(t, s, id).Base().Timestamp.Zone(); off != 0 {
+		t.Errorf("entry ts offset = %d, want UTC", off)
+	}
+	given := time.Date(2026, 1, 2, 3, 4, 5, 0, local)
+	id, err = s.Append(&InfoEntry{Name: "n", EntryBase: EntryBase{Timestamp: given}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustEntry(t, s, id).Base().Timestamp; !got.Equal(given) || got.Location() != local {
+		t.Errorf("caller's timestamp changed: %v", got)
+	}
+}
+
 func TestAppend(t *testing.T) {
 	s := New(Header{})
 	clock := fixedTime
@@ -319,4 +346,13 @@ func TestCompactAndSummarizeBranch(t *testing.T) {
 	if _, err := New(Header{}).SummarizeBranch("x", openresponses.SystemText("x")); !errors.Is(err, ErrNoEntry) {
 		t.Errorf("empty session = %v", err)
 	}
+}
+
+func mustEntry(t *testing.T, s *Session, id string) Entry {
+	t.Helper()
+	e, ok := s.Entry(id)
+	if !ok {
+		t.Fatalf("entry %s missing", id)
+	}
+	return e
 }

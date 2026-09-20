@@ -10,6 +10,10 @@ versions may break the API.
 - The RFC now specifies the `config` checkpoint a `compaction` carries:
   the `Settings` shape with `tools` as the full list in force and
   `extra` as the merged passthrough map after null deletions (#13).
+- `Session` stamps the header's `created_at` and each appended entry's
+  `ts` in UTC, so a file written across a timezone change carries one
+  offset. Timestamps the caller supplies are kept as given (#9).
+
 ## v0.0.2 - 2026-09-19
 
 - One version per repository. The `sqlite` module's `go.mod` requires
