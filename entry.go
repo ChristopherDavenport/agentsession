@@ -145,6 +145,30 @@ type ConfigEntry struct {
 	Replace bool                       `json:"replace,omitempty"`
 }
 
+// SetExtra records a passthrough request member on the delta: v is
+// marshalled and stored under key, replacing any earlier value.
+func (c *ConfigEntry) SetExtra(key string, v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("agentsession: config extra %q: %w", key, err)
+	}
+	if c.Extra == nil {
+		c.Extra = make(map[string]json.RawMessage)
+	}
+	c.Extra[key] = data
+	return nil
+}
+
+// ClearExtra records the removal of a passthrough member: the delta
+// carries a null for key, which deletes it from the settings on
+// replay.
+func (c *ConfigEntry) ClearExtra(key string) {
+	if c.Extra == nil {
+		c.Extra = make(map[string]json.RawMessage)
+	}
+	c.Extra[key] = json.RawMessage("null")
+}
+
 // EntryType returns "config".
 func (*ConfigEntry) EntryType() string { return TypeConfig }
 

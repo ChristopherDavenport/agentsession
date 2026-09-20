@@ -23,6 +23,19 @@ type Settings struct {
 	Extra map[string]json.RawMessage `json:"extra,omitempty"`
 }
 
+// ExtraValue decodes the passthrough member key into v. It reports
+// false, and leaves v alone, when the settings carry no such member.
+func (s Settings) ExtraValue(key string, v any) (bool, error) {
+	raw, ok := s.Extra[key]
+	if !ok {
+		return false, nil
+	}
+	if err := json.Unmarshal(raw, v); err != nil {
+		return true, fmt.Errorf("agentsession: settings extra %q: %w", key, err)
+	}
+	return true, nil
+}
+
 // Apply returns the settings after the delta c. The receiver is not
 // modified.
 func (s Settings) Apply(c *ConfigEntry) Settings {

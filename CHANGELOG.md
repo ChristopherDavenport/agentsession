@@ -34,6 +34,9 @@ versions may break the API.
   migrates a database from v0.0.2 on open; `jsonl` scans each file's
   entries only when asked, so the header-only listing stays the cheap
   default. The `list` command shows it (#4).
+- `ConfigEntry.SetExtra` and `ClearExtra` write a passthrough request
+  member, or the null that removes it on replay, without touching raw
+  JSON; `Settings.ExtraValue` decodes one back (#8).
 
 ## v0.0.2 - 2026-09-19
 

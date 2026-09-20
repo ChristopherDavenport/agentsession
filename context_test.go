@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ChristopherDavenport/openresponses"
@@ -305,4 +306,56 @@ func itemTexts(items openresponses.Items) []string {
 		}
 	}
 	return out
+}
+
+func TestExtraHelpers(t *testing.T) {
+	c := &ConfigEntry{}
+	if err := c.SetExtra("temperature", 0.2); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetExtra("acme:region", "eu"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetExtra("bad", func() {}); err == nil {
+		t.Error("SetExtra accepted an unmarshalable value")
+	}
+	if got := string(c.Extra["temperature"]); got != "0.2" {
+		t.Errorf("temperature raw = %s", got)
+	}
+	st := Settings{}.Apply(c)
+
+	var temp float64
+	if ok, err := st.ExtraValue("temperature", &temp); !ok || err != nil || temp != 0.2 {
+		t.Errorf("ExtraValue temperature = %v, %v, %v", temp, ok, err)
+	}
+	var region string
+	if ok, err := st.ExtraValue("acme:region", &region); !ok || err != nil || region != "eu" {
+		t.Errorf("ExtraValue region = %q, %v, %v", region, ok, err)
+	}
+	if ok, err := st.ExtraValue("missing", &region); ok || err != nil || region != "eu" {
+		t.Errorf("ExtraValue missing = %v, %v, region %q", ok, err, region)
+	}
+	var wrong int
+	if ok, err := st.ExtraValue("acme:region", &wrong); !ok || err == nil {
+		t.Errorf("ExtraValue into the wrong type = %v, %v", ok, err)
+	}
+
+	// ClearExtra writes the null that deletes the key on replay, and
+	// survives a round trip through JSON.
+	d := &ConfigEntry{}
+	d.ClearExtra("temperature")
+	line, err := MarshalEntry(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(line), `"extra":{"temperature":null}`) {
+		t.Errorf("cleared delta = %s", line)
+	}
+	after := st.Apply(d)
+	if _, ok := after.Extra["temperature"]; ok {
+		t.Error("ClearExtra did not remove the key on replay")
+	}
+	if ok, _ := after.ExtraValue("acme:region", &region); !ok {
+		t.Error("ClearExtra removed a different key")
+	}
 }
