@@ -34,6 +34,37 @@ func Redact(doc *atif.Trajectory, redactors ...Redactor) error {
 // Replacement is what redacted text becomes.
 const Replacement = "[REDACTED]"
 
+// NoPassthrough removes the raw Open Responses items and response
+// bodies the exporter carries under every step's and observation
+// result's extra.openresponses, which roughly halve a document and say
+// nothing the declared fields do not. Use it for a judge's input or a
+// published document; keep the full document in the archive, because
+// the passthrough is what makes [Items] lossless, and without it Items
+// returns [ErrNoRawItems]. The root extra's payload profile name stays.
+func NoPassthrough() Redactor {
+	return RedactorFunc(func(t *atif.Trajectory) error {
+		stripPassthrough(t)
+		return nil
+	})
+}
+
+func stripPassthrough(t *atif.Trajectory) {
+	for i := range t.Steps {
+		step := &t.Steps[i]
+		delete(step.Extra, ExtraOpenResponses)
+		if step.Observation != nil {
+			for j := range step.Observation.Results {
+				delete(step.Observation.Results[j].Extra, ExtraOpenResponses)
+			}
+		}
+	}
+	for _, sub := range t.SubagentTrajectories {
+		if sub != nil {
+			stripPassthrough(sub)
+		}
+	}
+}
+
 // Secrets replaces every occurrence of the given values, in every
 // string of the document, with [Replacement]. Empty values are
 // ignored. Longer values are replaced first so a value that contains
