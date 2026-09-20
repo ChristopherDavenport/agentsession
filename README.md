@@ -70,7 +70,11 @@ the hash of the request it was given. Every append becomes the leaf.
 `sess.Branch(entryID)` moves the leaf so the next append forks in
 place; `sess.ResetLeaf()` starts a new root. `sess.Compact(firstKept,
 summary)` and `sess.SummarizeBranch(from, summary)` build the entries
-that fold context down or carry it across a branch switch.
+that fold context down or carry it across a branch switch; a caller
+that split the request input at an index, or kept its last n items,
+uses `sess.CompactFrom(i, summary)` or `sess.CompactKeeping(n, summary)`
+instead of mapping the index to an entry ID itself. `Context.ItemEntries`
+is the mapping, aligned with `Context.Items`.
 `sess.Verify(responseEntryID)` rebuilds the request and checks the
 hash.
 

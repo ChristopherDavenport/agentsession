@@ -14,9 +14,10 @@ import (
 // contextGolden is the golden form of a context: the settings, the item
 // list as it would be sent, and the IDs of the selected entries.
 type contextGolden struct {
-	Settings Settings            `json:"settings"`
-	Items    openresponses.Items `json:"items"`
-	Entries  []string            `json:"entries"`
+	Settings    Settings            `json:"settings"`
+	Items       openresponses.Items `json:"items"`
+	Entries     []string            `json:"entries"`
+	ItemEntries []string            `json:"item_entries"`
 }
 
 // TestContextGolden runs the context algorithm at every leaf of every
@@ -35,6 +36,12 @@ func TestContextGolden(t *testing.T) {
 				g := contextGolden{Settings: ctx.Settings, Items: ctx.Items}
 				for _, e := range ctx.Entries {
 					g.Entries = append(g.Entries, e.Base().ID)
+				}
+				if len(ctx.ItemEntries) != len(ctx.Items) {
+					t.Fatalf("ContextAt(%s): %d item entries for %d items", leaf, len(ctx.ItemEntries), len(ctx.Items))
+				}
+				for _, e := range ctx.ItemEntries {
+					g.ItemEntries = append(g.ItemEntries, e.Base().ID)
 				}
 				got[leaf] = g
 			}
@@ -60,6 +67,21 @@ func TestContextShape(t *testing.T) {
 	}
 	if ctx.Entries[0].Base().ID != "k0000001" || ctx.Entries[1].Base().ID != "i0000003" {
 		t.Errorf("entries start %s %s", ctx.Entries[0].Base().ID, ctx.Entries[1].Base().ID)
+	}
+	// ItemEntries skips the config and response entries that Entries
+	// carries, so it lines up with Items.
+	var itemIDs []string
+	for _, e := range ctx.ItemEntries {
+		itemIDs = append(itemIDs, e.Base().ID)
+	}
+	wantIDs := []string{"k0000001", "i0000003", "i0000004", "i0000005", "i0000006", "i0000007"}
+	if !reflect.DeepEqual(itemIDs, wantIDs) {
+		t.Errorf("item entries = %q, want %q", itemIDs, wantIDs)
+	}
+	for i, e := range ctx.ItemEntries {
+		if contextItem(e) != ctx.Items[i] && e != ctx.Entries[0] {
+			t.Errorf("item %d did not come from entry %s", i, e.Base().ID)
+		}
 	}
 
 	// Before the compaction, nothing is summarised and the checkpoint

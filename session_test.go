@@ -356,3 +356,82 @@ func mustEntry(t *testing.T, s *Session, id string) Entry {
 	}
 	return e
 }
+
+// TestCompactByIndex covers CompactFrom and CompactKeeping: the index
+// counts context items, so the config and response entries between
+// them on the path do not shift it, and the earlier compaction's
+// summary at index 0 cannot be kept.
+func TestCompactByIndex(t *testing.T) {
+	s := loadFixture(t, "compaction")
+	// Items at the leaf: summary(k0000001) second(i0000003) two(i0000004)
+	// third(i0000005) three(i0000006) fourth(i0000007).
+	tests := []struct {
+		name      string
+		build     func(openresponses.Item) (*CompactionEntry, error)
+		firstKept string // "" means an error is expected
+	}{
+		{"from 1", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(1, it) }, "i0000003"},
+		{"from 3 skips config", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(3, it) }, "i0000005"},
+		{"from last", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(5, it) }, "i0000007"},
+		{"keeping 1", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactKeeping(1, it) }, "i0000007"},
+		{"keeping 2", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactKeeping(2, it) }, "i0000006"},
+		{"keeping all but summary", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactKeeping(5, it) }, "i0000003"},
+		{"from 0 is the old summary", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(0, it) }, ""},
+		{"keeping the old summary", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactKeeping(6, it) }, ""},
+		{"from negative", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(-1, it) }, ""},
+		{"from past the end", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(6, it) }, ""},
+		{"keeping nothing", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactKeeping(0, it) }, ""},
+		{"keeping too many", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactKeeping(7, it) }, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			comp, err := tt.build(openresponses.SystemText("folded"))
+			if tt.firstKept == "" {
+				if err == nil {
+					t.Fatalf("got first_kept %s, want an error", comp.FirstKept)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if comp.FirstKept != tt.firstKept {
+				t.Errorf("first_kept = %s, want %s", comp.FirstKept, tt.firstKept)
+			}
+			if comp.Config.Model != "gpt-5-nano" || comp.Summary == nil {
+				t.Errorf("compaction = %+v", comp)
+			}
+			if _, err := tt.build(nil); err == nil {
+				t.Error("nil summary accepted")
+			}
+		})
+	}
+
+	// Appending the derived entry yields the tail the caller kept.
+	comp, err := s.CompactKeeping(3, openresponses.SystemText("folded"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.Append(comp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.ContextAt(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := itemTexts(c.Items); !reflect.DeepEqual(got, []string{"folded", "third", "three", "fourth"}) {
+		t.Errorf("context after compaction = %q", got)
+	}
+	if c.ItemEntries[0] != Entry(comp) || c.ItemEntries[1].Base().ID != "i0000005" {
+		t.Errorf("item entries after compaction = %s %s", c.ItemEntries[0].Base().ID, c.ItemEntries[1].Base().ID)
+	}
+
+	empty := New(Header{})
+	if _, err := empty.CompactFrom(0, openresponses.SystemText("x")); err == nil {
+		t.Error("CompactFrom on an empty session accepted")
+	}
+	if _, err := empty.CompactKeeping(1, openresponses.SystemText("x")); err == nil {
+		t.Error("CompactKeeping on an empty session accepted")
+	}
+}

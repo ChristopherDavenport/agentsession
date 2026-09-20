@@ -168,6 +168,11 @@ type Context struct {
 	// entries from FirstKept up to it, then everything after. Entries
 	// that contribute no item are included so a renderer can show them.
 	Entries []Entry
+	// ItemEntries is aligned with Items: ItemEntries[i] is the entry
+	// that contributed Items[i], so an index into the request input
+	// maps back to the entry that produced it. After a compaction
+	// ItemEntries[0] is the compaction entry, whose summary is Items[0].
+	ItemEntries []Entry
 }
 
 // Request returns the canonical request for the context.
@@ -203,10 +208,12 @@ func BuildContext(path []Entry) (Context, error) {
 		settings = comp.Config
 		ctx.Entries = append(ctx.Entries, comp)
 		ctx.Items = append(ctx.Items, comp.Summary)
+		ctx.ItemEntries = append(ctx.ItemEntries, comp)
 		for _, e := range path[kept:compIdx] {
 			ctx.Entries = append(ctx.Entries, e)
 			if item := contextItem(e); item != nil {
 				ctx.Items = append(ctx.Items, item)
+				ctx.ItemEntries = append(ctx.ItemEntries, e)
 			}
 		}
 		start = compIdx + 1
@@ -220,6 +227,7 @@ func BuildContext(path []Entry) (Context, error) {
 		ctx.Entries = append(ctx.Entries, e)
 		if item := contextItem(e); item != nil {
 			ctx.Items = append(ctx.Items, item)
+			ctx.ItemEntries = append(ctx.ItemEntries, e)
 		}
 	}
 	ctx.Settings = settings

@@ -5,6 +5,17 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- `Context.ItemEntries` is aligned with `Context.Items`: the entry that
+  contributed each item, so an index into the request input maps back
+  to an entry without counting item entries by hand.
+  `Session.CompactFrom(first, summary)` and
+  `Session.CompactKeeping(kept, summary)` build a compaction from an
+  item index or a kept count; both refuse to keep an earlier
+  compaction's summary, which the context algorithm drops once a later
+  compaction is on the path (#14).
+
 ## v0.0.3 - 2026-09-19
 
 - The RFC now specifies the `config` checkpoint a `compaction` carries:

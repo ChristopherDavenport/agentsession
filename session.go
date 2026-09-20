@@ -274,16 +274,10 @@ func (s *Session) Name() string {
 // is the item that replaces everything before it, and the settings
 // checkpoint is taken from the context at the leaf. The entry is not
 // appended; set TokensBefore or Usage if known, then append it through
-// the store.
+// the store. A caller that knows an item index rather than an entry ID
+// uses [Session.CompactFrom] or [Session.CompactKeeping].
 func (s *Session) Compact(firstKept string, summary openresponses.Item) (*CompactionEntry, error) {
-	if summary == nil {
-		return nil, errors.New("agentsession: compaction needs a summary item")
-	}
-	leaf := s.Leaf()
-	if leaf == "" {
-		return nil, errors.New("agentsession: no leaf to compact")
-	}
-	ctx, err := s.ContextAt(leaf)
+	leaf, ctx, err := s.compactionContext(summary)
 	if err != nil {
 		return nil, err
 	}
@@ -298,6 +292,67 @@ func (s *Session) Compact(firstKept string, summary openresponses.Item) (*Compac
 		return nil, fmt.Errorf("%w: first_kept %s is not on the path to %s", ErrNoEntry, firstKept, leaf)
 	}
 	return &CompactionEntry{FirstKept: firstKept, Summary: summary, Config: ctx.Settings}, nil
+}
+
+// CompactFrom is [Session.Compact] for a caller that split the request
+// input at an index: FirstKept is the entry that contributed item
+// first of the context at the leaf, and the items before it are what
+// summary replaces. The index counts the items the context algorithm
+// produces, [Context.Items], so entries that contribute no item do not
+// shift it. The item at first cannot be an earlier compaction's
+// summary: the format keeps entries, and a compaction's summary is
+// kept only while it is the last compaction on the path.
+func (s *Session) CompactFrom(first int, summary openresponses.Item) (*CompactionEntry, error) {
+	_, ctx, err := s.compactionContext(summary)
+	if err != nil {
+		return nil, err
+	}
+	if first < 0 || first >= len(ctx.Items) {
+		return nil, fmt.Errorf("agentsession: first kept item %d is outside a context of %d items", first, len(ctx.Items))
+	}
+	return compactionFrom(ctx, first, summary)
+}
+
+// CompactKeeping is [Session.Compact] for a caller that knows how many
+// items of the request input it kept: the last kept items of the
+// context at the leaf stay, and summary replaces the rest. kept must be
+// at least 1, because FirstKept names an entry, and at most the number
+// of items in the context.
+func (s *Session) CompactKeeping(kept int, summary openresponses.Item) (*CompactionEntry, error) {
+	_, ctx, err := s.compactionContext(summary)
+	if err != nil {
+		return nil, err
+	}
+	if kept < 1 || kept > len(ctx.Items) {
+		return nil, fmt.Errorf("agentsession: cannot keep %d items of a context of %d", kept, len(ctx.Items))
+	}
+	return compactionFrom(ctx, len(ctx.Items)-kept, summary)
+}
+
+// compactionContext checks the summary and returns the leaf and the
+// context at it, the inputs every Compact variant shares.
+func (s *Session) compactionContext(summary openresponses.Item) (string, Context, error) {
+	if summary == nil {
+		return "", Context{}, errors.New("agentsession: compaction needs a summary item")
+	}
+	leaf := s.Leaf()
+	if leaf == "" {
+		return "", Context{}, errors.New("agentsession: no leaf to compact")
+	}
+	ctx, err := s.ContextAt(leaf)
+	if err != nil {
+		return "", Context{}, err
+	}
+	return leaf, ctx, nil
+}
+
+// compactionFrom builds the entry that keeps ctx.Items[first:].
+func compactionFrom(ctx Context, first int, summary openresponses.Item) (*CompactionEntry, error) {
+	e := ctx.ItemEntries[first]
+	if _, ok := e.(*CompactionEntry); ok {
+		return nil, fmt.Errorf("agentsession: item %d is the summary of compaction %s, which a later compaction replaces rather than keeps", first, e.Base().ID)
+	}
+	return &CompactionEntry{FirstKept: e.Base().ID, Summary: summary, Config: ctx.Settings}, nil
 }
 
 // SummarizeBranch builds the branch summary that carries context from
