@@ -178,16 +178,16 @@ normative statement.
 A type is core only if the event it records belongs to the loop every
 harness runs: an input arrives, the settings change, the model is
 called, a call is decided and dispatched, its output returns, the
-context is compacted, the conversation branches, the run ends; or if it annotates that record in
-a way every harness needs: a bookmark, a name, the environment, a
-judgement of the result, a link to another session, state kept beside
-the conversation. An event that belongs to one harness's features,
-however useful, is an extension (`ns:type`) or a `custom` entry. The
-same test admits a member of a core entry: it names an event of that
-loop, or a shape a reader can recompute from the path. A harness's own
-detail goes in a `ref`, in `details`, in a member this document does
-not define, or in a `custom` entry. That rule is what keeps the
-envelope harness-neutral as the format grows.
+context is compacted, the conversation branches, the run ends; or if it
+annotates that record in a way every harness needs: a bookmark, a name,
+the environment, a judgement of the result, a link to another session,
+state kept beside the conversation. An event that belongs to one
+harness's features, however useful, is an extension (`ns:type`) or a
+`custom` entry. The same test admits a member of a core entry: it names
+an event of that loop, or a shape a reader can recompute from the path.
+A harness's own detail goes in a `ref`, in `details`, in a member this
+document does not define, or in a `custom` entry. That rule is what
+keeps the envelope harness-neutral as the format grows.
 
 ### `item`
 
