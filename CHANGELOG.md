@@ -92,6 +92,24 @@ versions may break the API.
   previous turn's, and the first span after a branch links the branched-
   from entry when its span is known.
 
+- `Continue` rolls a session over into a successor in the format's
+  order: a new session with `parent_session`, a full config from the old
+  leaf's settings, the summary, the display name, and a `continued_in`
+  link on the old session. `Session.SupersededBy`,
+  `Summary.SupersededBy` and `ListFilter.Current` let a listing show the
+  successor rather than the session it retired, in every store;
+  `agentsession list -current` does the same (#19).
+- The sqlite store holds each open session in a `holders` table, so a
+  second process gets `ErrSessionLocked` naming the holder instead of
+  interleaving entries. A hold left by a dead process on this host is
+  taken over and reported through `sqlite.WithStaleLockReport`;
+  `LockHolder` and `BreakLock` mirror the jsonl store's; an append after
+  a broken hold fails with `ErrSessionLocked` and refuses the session
+  until `Release` (#18). `sqlite.Open` takes options.
+- `export.ItemsFrom` rebuilds a conversation from a document's declared
+  fields alone, so a document from any producer loads; its doc comment
+  lists what is lost (#22).
+
 ## v0.0.4 - 2026-09-19
 
 - `Context.ItemEntries` is aligned with `Context.Items`: the entry that

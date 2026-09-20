@@ -83,7 +83,10 @@ uses `sess.CompactFrom(i, summary)` or `sess.CompactKeeping(n, summary)`
 instead of mapping the index to an entry ID itself. `Context.ItemEntries`
 is the mapping, aligned with `Context.Items`.
 `sess.Verify(responseEntryID)` rebuilds the request and checks the
-hash.
+hash. `agentsession.Continue(ctx, store, id, summary)` rolls a session
+that has outgrown its file into a successor that starts from the old
+leaf's settings, and marks the old one superseded so a `Current`
+listing shows only the successor.
 
 A harness that runs the loop records the lifecycle around it. The
 header's `Records` lists the record entry types the writer promises
@@ -154,7 +157,10 @@ leaves it was preferred over in `extra.preferred_over`; an abandoned
 one names the fork in `extra.abandoned_at`. By default the continued
 branch is the one appended to last; pass `export.PreferCurrentLeaf`,
 `export.PreferLabel("kept")` or `export.PreferScore` to `Trajectories`
-to decide otherwise. `export.Items(doc)` reads the raw items back out.
+to decide otherwise. `export.Items(doc)` reads the raw items back out, and
+`export.ItemsFrom(doc)` rebuilds them, lossily, from the declared
+fields of a document any producer wrote. `export.NoPassthrough()`
+strips the raw items for a document a judge will read.
 
 ## Inspecting from a shell
 
@@ -169,6 +175,7 @@ agentsession show session.jsonl -leaf ID   # the context at another entry
 agentsession verify session.jsonl          # rebuild every request and check its hash
 agentsession export session.jsonl -out dir -secret "$OPENAI_API_KEY" -redact-home
 agentsession list ~/.agent/sessions        # a jsonl store's sessions, newest first
+agentsession list ~/.agent/sessions -current   # leave out sessions continued in a successor
 ```
 
 `verify` exits 1 on a mismatch, a truncated final line, a run end that
@@ -203,7 +210,7 @@ _, err := otel.Export(ctx, tracer, sess, sess.Leaf()) // a stored session, after
 |---|---|
 | `agentsession` | header, entries, tree, context algorithm, request hash, `Store` interface, in-memory store |
 | `jsonl` | the file store: one JSONL file per session with a sync policy, crash recovery and a per-session lock against a second writing process, reporting a dead holder's lock when it takes one over |
-| `sqlite` | a SQLite store, as a nested module so its driver stays out of the library |
+| `sqlite` | a SQLite store, as a nested module so its driver stays out of the library, holding each open session against a second process |
 | `otel` | the OpenTelemetry projection, as a nested module: replay a session as spans, or wrap a store so a live run emits them |
 | `atif` | Go types for ATIF v1.8 with unknown-member passthrough and validation |
 | `export` | trajectories, ATIF conversion, redactors, writer |
