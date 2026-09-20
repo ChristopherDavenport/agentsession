@@ -219,6 +219,9 @@ The envelope of one model call, written after its output items.
  "request_hash":"sha256:…","latency_ms":1234}
 ```
 
+- `status` is required, since the run cascade reads it. `error` and
+  `incomplete` are read as null when absent. Every other member is
+  optional.
 - `usage`, `incomplete` and `error` use the payload profile's shapes.
 - `request_hash` SHOULD be the hash of the canonical request built by
   the context algorithm below, so a reader can check that the stored
@@ -294,20 +297,24 @@ Why a run started and how it ended. Two entries per run, paired by
 {"type":"run","id":"…","parent":"…","ts":"…","run_id":"…","phase":"start",
  "source":"input|resume","ref":"…"}
 {"type":"run","id":"…","parent":"…","ts":"…","run_id":"…","phase":"end",
- "reason":"done|stopped|input_required|aborted|error","ref":"…",
+ "reason":"done|stopped|interrupted|input_required|aborted|error",
+ "ref":"…",
  "pending":["call_…"]}
 ```
 
 - `run_id` and `phase` are required on both entries. `source` is
   required on `start`; `reason` and `pending` are required on `end`.
   `ref` is optional on both.
-- `source` is closed to two path shapes: `input`, a new input started
-  the run, and `resume`, the run began by answering calls that were on
-  the path with no output when it started, whether the previous run
-  ended by leaving them pending or was cut off. `ref` on `start` names
-  what triggered the input (a cron name, a channel message ID). How an
-  input arrived, whether a schedule, a channel or another agent, is a
-  harness feature and goes in `ref` or a `custom` entry.
+- `source` is closed to two path shapes. `resume`: at least one call
+  that was on the path with no output when the run began has its
+  output at the start of the segment, whether the previous run ended by
+  leaving it pending or was cut off. `input`: otherwise, including a
+  run that answers nothing and adds nothing, such as a retry after an
+  error, which `ref` names. A run that both answers a pending call and
+  adds a message is `resume`. `ref` on `start` names what triggered
+  the input (a cron name, a channel message ID). How an input arrived,
+  whether a schedule, a channel or another agent, is a harness feature
+  and goes in `ref` or a `custom` entry.
 - `reason` is closed. Each value is a shape of the run's segment, the
   entries on the path from the `start` entry to the `end` entry, where
   a pending call is a `function_call` on the segment with no
@@ -315,20 +322,25 @@ Why a run started and how it ended. Two entries per run, paired by
   and the first that matches is the reason:
   1. `error`: the last `response` on the segment carries an error, or
      the harness failed before it could write one, which `ref` names.
-  2. `input_required`: at least one call is pending, and every pending
-     call is held, as `decision` defines it.
+  2. `input_required`: at least one pending call is held, as `decision`
+     defines it, and no pending call has a `dispatch`.
   3. `aborted`: any other segment with a pending call, or whose last
      `response` is incomplete, or that has no `response`.
-  4. `done`: the last `response` has no `function_call` in its output.
-  5. `stopped`: the last `response` has calls, every call has an
+  4. `interrupted`: a person or the host told the harness to stop
+     between turns. The segment alone would read `done` or `stopped`,
+     so this is the one value a writer adds rather than a reader
+     computes.
+  5. `done`: the last `response` has no `function_call` in its output.
+  6. `stopped`: the last `response` has calls, every call has an
      output, and the harness chose not to call the model again. `ref`
      names the cause (a turn budget, a tool that asked to stop).
 
-  Every segment matches exactly one value. A reader MAY recompute
-  `reason` from the segment, and the segment is authoritative when the
-  two disagree, except that a written `error` stands over a segment
-  with no `response`, since the failure is what the file could not
-  record.
+  Every segment matches exactly one computable value. A reader MAY
+  recompute `reason` from the segment, and the segment is authoritative
+  when the two disagree, with two exceptions that record what the
+  segment cannot: a written `error` stands over a segment with no
+  `response`, and a written `interrupted` stands over a segment that
+  would otherwise read `done` or `stopped`.
 - `pending` lists the pending calls' IDs so a resume can read them
   without walking the segment. The segment is authoritative here too.
 - Items and responses of the run follow its `start` entry on the path.
@@ -427,9 +439,10 @@ they saw.
 closed, and `ref` is one string the harness can resolve to that file
 system (an image digest, a host, an instance ID). A local run MAY omit
 it. A container's `ref` SHOULD be a digest rather than a tag, because a
-tag moves. Anything richer, such as a host beside a digest, goes in
-members this document does not define, which the envelope section says
-a rewriter preserves. An `env` entry applies from its position on the
+tag moves. A container on a remote host is `container`, with the
+digest as `ref` and the host in a member this document does not
+define. Anything richer goes in such members too, which the envelope
+section says a rewriter preserves. An `env` entry applies from its position on the
 path until the next one.
 
 ### `outcome`
@@ -617,11 +630,14 @@ reader preserves every new entry and rebuilds the same context.
   Resumable goal true. A run's `source`, its end `reason` and a
   decision's `verdict` are defined as shapes of the path a reader can
   recompute, not as one harness's vocabulary; the reasons form a
-  first-match cascade so every segment has exactly one. How an input
+  first-match cascade so every segment has exactly one, with
+  `interrupted` for a stop between turns that the segment alone cannot
+  show. How an input
   arrived and who decided a call are optional or belong in `ref` and
   `custom`.
 - `outcome`: `target` is an entry ID by rule, `pass` added, `score`
   unbounded, `eval` kind.
+- `response`: `status` is required.
 - `env`: `workspace` member, a `kind` and one `ref`; `cwd` precedence
   over the header.
 - Header: `records`, the record types whose absence a reader may read

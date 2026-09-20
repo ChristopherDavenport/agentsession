@@ -15,15 +15,16 @@ versions may break the API.
   optionally, who decided it). Run end reasons and decision verdicts are
   defined as shapes of the path a reader can recompute, so they belong
   to the format rather than to one harness, and the reasons form a
-  first-match cascade; how an input arrived and who decided a call are a
-  harness's own detail. The header gains `records`, the record types
-  whose absence a reader may take as the event not having happened, so a
-  converter over a log with no tool-start record does not assert that a
-  call never ran; such entries are durable before the side effect they
-  precede. Members of a core entry the RFC does not define are
-  preserved. `outcome` gains `pass`, an `eval` kind, an unbounded
-  `score` and a `target` that is an entry ID by rule; `env` gains
-  `workspace`, a kind and one reference; the header also gains
+  first-match cascade with `interrupted` for a stop between turns; a
+  `response` states `status` as required; how an input arrived and who
+  decided a call are a harness's own detail. The header gains `records`,
+  the record types whose absence a reader may take as the event not
+  having happened, so a converter over a log with no tool-start record
+  does not assert that a call never ran; such entries are durable before
+  the side effect they precede. Members of a core entry the RFC does not
+  define are preserved. `outcome` gains `pass`, an `eval` kind, an
+  unbounded `score` and a `target` that is an entry ID by rule; `env`
+  gains `workspace`, a kind and one reference; the header also gains
   `spawned_by` and derived subsession IDs; `link` is written at
   dispatch; entry order, not `ts`, is the ordering. Instructions as
   parts, a durable leaf and a source on queued input are held as open
