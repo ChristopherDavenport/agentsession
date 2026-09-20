@@ -13,10 +13,11 @@ import (
 )
 
 func list(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("list", "<root> [-cwd path] [-parent id] [-limit n]", stderr)
+	fs := newFlags("list", "<root> [-cwd path] [-parent id] [-limit n] [-current]", stderr)
 	cwd := fs.String("cwd", "", "only sessions with this working directory")
 	parent := fs.String("parent", "", "only sessions forked or spawned from this session")
 	limit := fs.Int("limit", 0, "at most this many sessions; 0 means all")
+	current := fs.Bool("current", false, "leave out sessions that were continued in a successor")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -38,16 +39,16 @@ func list(args []string, stdout, stderr io.Writer) error {
 	defer st.Close()
 
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "CREATED\tID\tNAME\tSIZE\tCWD\tPATH")
+	fmt.Fprintln(tw, "CREATED\tID\tNAME\tSIZE\tCWD\tCONTINUED IN\tPATH")
 	var problems []error
-	f := agentsession.ListFilter{CWD: *cwd, ParentSession: *parent, Limit: *limit, WithNames: true}
+	f := agentsession.ListFilter{CWD: *cwd, ParentSession: *parent, Limit: *limit, WithNames: true, Current: *current}
 	for sum, err := range st.List(context.Background(), f) {
 		if err != nil {
 			problems = append(problems, err)
 			continue
 		}
 		h := sum.Header
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\n", h.CreatedAt.UTC().Format(time.RFC3339), h.ID, orDash(sum.Name), sum.Size, orDash(h.CWD), sum.Path)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n", h.CreatedAt.UTC().Format(time.RFC3339), h.ID, orDash(sum.Name), sum.Size, orDash(h.CWD), orDash(sum.SupersededBy), sum.Path)
 	}
 	tw.Flush()
 	for _, err := range problems {

@@ -343,12 +343,12 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 		var out []agentsession.Summary
 		var errs []error
 		for _, path := range matches {
-			sum, err := summarize(path, f.WithNames)
+			sum, err := summarize(path, f.WithNames || f.Current)
 			if err != nil {
 				errs = append(errs, err)
 				continue
 			}
-			if f.Matches(sum.Header) {
+			if f.Keep(sum) {
 				out = append(out, sum)
 			}
 		}
@@ -397,20 +397,30 @@ func summarize(path string, withName bool) (agentsession.Summary, error) {
 	}
 	sum := agentsession.Summary{Header: h, Path: path, Size: info.Size(), Modified: info.ModTime()}
 	if withName {
-		if sum.Name, err = scanName(br); err != nil {
+		if sum.Name, sum.SupersededBy, err = scanMeta(br); err != nil {
 			return agentsession.Summary{}, fmt.Errorf("jsonl: %s: %w", path, err)
 		}
 	}
 	return sum, nil
 }
 
-// scanName reads the entry lines after the header and returns the
-// name from the last info entry that set one. Lines that do not decode
-// are skipped: a listing is not the place to report them.
-func scanName(br *bufio.Reader) (string, error) {
-	name := ""
+// scanMeta reads the entry lines after the header and returns the
+// name from the last info entry that set one and the successor from
+// the last continued_in link. Lines that do not decode are skipped: a
+// listing is not the place to report them.
+func scanMeta(br *bufio.Reader) (name, supersededBy string, err error) {
 	for {
 		line, err := br.ReadBytes('\n')
+		if len(line) > 0 && bytes.Contains(line, []byte(`"link"`)) {
+			var probe struct {
+				Type    string `json:"type"`
+				Rel     string `json:"rel"`
+				Session string `json:"session"`
+			}
+			if json.Unmarshal(line, &probe) == nil && probe.Type == agentsession.TypeLink && probe.Rel == agentsession.RelContinuedIn && probe.Session != "" {
+				supersededBy = probe.Session
+			}
+		}
 		if len(line) > 0 && bytes.Contains(line, []byte(`"info"`)) {
 			var probe struct {
 				Type string `json:"type"`
@@ -422,9 +432,9 @@ func scanName(br *bufio.Reader) (string, error) {
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return name, nil
+				return name, supersededBy, nil
 			}
-			return "", err
+			return "", "", err
 		}
 	}
 }

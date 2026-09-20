@@ -32,6 +32,7 @@ func Run(t *testing.T, opts Options) {
 	t.Run("CreateAndOpen", func(t *testing.T) { testCreateAndOpen(t, opts) })
 	t.Run("Append", func(t *testing.T) { testAppend(t, opts) })
 	t.Run("List", func(t *testing.T) { testList(t, opts) })
+	t.Run("Continue", func(t *testing.T) { testContinue(t, opts) })
 	t.Run("Delete", func(t *testing.T) { testDelete(t, opts) })
 	if opts.Reopen != nil {
 		t.Run("Persistence", func(t *testing.T) { testPersistence(t, opts) })
@@ -342,4 +343,68 @@ func sameHeader(a, b agentsession.Header) bool {
 		a.CWD == b.CWD && a.ParentSession == b.ParentSession && a.Media == b.Media &&
 		a.CreatedAt.Equal(b.CreatedAt) && reflect.DeepEqual(a.Harness, b.Harness) &&
 		reflect.DeepEqual(a.Extra, b.Extra)
+}
+
+// testContinue rolls a session over and checks that the successor
+// starts from the old settings, the old session is marked superseded,
+// and a Current listing shows only the successor.
+func testContinue(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	if _, err := st.Create(ctx, agentsession.Header{ID: "old", CWD: "/p"}); err != nil {
+		t.Fatal(err)
+	}
+	instr := "Be brief."
+	for _, e := range []agentsession.Entry{
+		&agentsession.ConfigEntry{Model: "gpt-5", Instructions: &instr},
+		&agentsession.InfoEntry{Name: "main"},
+		agentsession.NewItemEntry(openresponses.UserText("hello")),
+	} {
+		if _, err := st.Append(ctx, "old", e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next, err := agentsession.Continue(ctx, st, "old", openresponses.DeveloperText("Earlier: the user said hello."))
+	if err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+	nh := next.Header()
+	if nh.ParentSession != "old" || nh.CWD != "/p" || next.Name() != "main" {
+		t.Errorf("successor header = %+v name %q", nh, next.Name())
+	}
+	cx, err := next.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cx.Settings.Model != "gpt-5" || cx.Settings.Instructions != "Be brief." || len(cx.Items) != 1 {
+		t.Errorf("successor context = %+v, %d items", cx.Settings, len(cx.Items))
+	}
+	if _, ok := next.Entries()[0].(*agentsession.ConfigEntry); !ok {
+		t.Error("successor's first entry is not a config")
+	}
+	old, err := st.Open(ctx, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.SupersededBy() != next.ID() {
+		t.Errorf("old.SupersededBy = %q, want %s", old.SupersededBy(), next.ID())
+	}
+	ids := func(f agentsession.ListFilter) map[string]agentsession.Summary {
+		out := map[string]agentsession.Summary{}
+		for sum, err := range st.List(ctx, f) {
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			out[sum.Header.ID] = sum
+		}
+		return out
+	}
+	all := ids(agentsession.ListFilter{WithNames: true})
+	if len(all) != 2 || all["old"].SupersededBy != next.ID() || all[next.ID()].SupersededBy != "" {
+		t.Errorf("listing = %+v", all)
+	}
+	current := ids(agentsession.ListFilter{Current: true})
+	if len(current) != 1 || current[next.ID()].Header.ID == "" {
+		t.Errorf("current listing = %+v, want only %s", current, next.ID())
+	}
 }

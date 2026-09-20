@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 	cwd            TEXT NOT NULL DEFAULT '',
 	parent_session TEXT NOT NULL DEFAULT '',
 	name           TEXT NOT NULL DEFAULT '',
+	superseded_by  TEXT NOT NULL DEFAULT '',
 	header         TEXT NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS sessions_created_at ON sessions(created_at);
@@ -117,7 +118,7 @@ func migrate(w *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	if cols["name"] {
+	if cols["name"] && cols["superseded_by"] {
 		return nil
 	}
 	tx, err := w.Begin()
@@ -125,8 +126,42 @@ func migrate(w *sql.DB) error {
 		return fmt.Errorf("sqlite: migrate: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''`); err != nil {
-		return fmt.Errorf("sqlite: migrate: add name: %w", err)
+	if !cols["name"] {
+		if _, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("sqlite: migrate: add name: %w", err)
+		}
+	}
+	if !cols["superseded_by"] {
+		if _, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN superseded_by TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("sqlite: migrate: add superseded_by: %w", err)
+		}
+		links, err := tx.Query(`SELECT session_id, line FROM entries WHERE type = ? ORDER BY session_id, seq`, agentsession.TypeLink)
+		if err != nil {
+			return fmt.Errorf("sqlite: migrate: read link entries: %w", err)
+		}
+		next := map[string]string{}
+		for links.Next() {
+			var id, line string
+			if err := links.Scan(&id, &line); err != nil {
+				links.Close()
+				return fmt.Errorf("sqlite: migrate: %w", err)
+			}
+			if s := continuedIn(line); s != "" {
+				next[id] = s
+			}
+		}
+		links.Close()
+		if err := links.Err(); err != nil {
+			return fmt.Errorf("sqlite: migrate: %w", err)
+		}
+		for id, s := range next {
+			if _, err := tx.Exec(`UPDATE sessions SET superseded_by = ? WHERE id = ?`, s, id); err != nil {
+				return fmt.Errorf("sqlite: migrate: set superseded_by: %w", err)
+			}
+		}
+	}
+	if cols["name"] {
+		return tx.Commit()
 	}
 	rows, err := tx.Query(`SELECT session_id, line FROM entries WHERE type = ? ORDER BY session_id, seq`, agentsession.TypeInfo)
 	if err != nil {
@@ -156,6 +191,18 @@ func migrate(w *sql.DB) error {
 		return fmt.Errorf("sqlite: migrate: %w", err)
 	}
 	return nil
+}
+
+// continuedIn returns the successor a stored link line names, or "".
+func continuedIn(line string) string {
+	var probe struct {
+		Rel     string `json:"rel"`
+		Session string `json:"session"`
+	}
+	if json.Unmarshal([]byte(line), &probe) != nil || probe.Rel != agentsession.RelContinuedIn {
+		return ""
+	}
+	return probe.Session
 }
 
 // columns returns the column names of a table.
@@ -322,6 +369,9 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	if info, ok := e.(*agentsession.InfoEntry); ok && info.Name != "" && err == nil {
 		_, err = tx.ExecContext(ctx, `UPDATE sessions SET name = ? WHERE id = ?`, info.Name, sessionID)
 	}
+	if l, ok := e.(*agentsession.LinkEntry); ok && l.Rel == agentsession.RelContinuedIn && l.Session != "" && err == nil {
+		_, err = tx.ExecContext(ctx, `UPDATE sessions SET superseded_by = ? WHERE id = ?`, l.Session, sessionID)
+	}
 	if err == nil {
 		err = tx.Commit()
 	}
@@ -367,7 +417,10 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 			where = append(where, "created_at < ?")
 			args = append(args, stamp(f.Before))
 		}
-		q := `SELECT s.header, s.updated_at, s.name,
+		if f.Current {
+			where = append(where, "superseded_by = ''")
+		}
+		q := `SELECT s.header, s.updated_at, s.name, s.superseded_by,
 			length(s.header) + COALESCE((SELECT SUM(length(e.line) + 1) FROM entries e WHERE e.session_id = s.id), 0) + 1
 			FROM sessions s`
 		if len(where) > 0 {
@@ -385,9 +438,9 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var header, updated, name string
+			var header, updated, name, supersededBy string
 			var size int64
-			if err := rows.Scan(&header, &updated, &name, &size); err != nil {
+			if err := rows.Scan(&header, &updated, &name, &supersededBy, &size); err != nil {
 				yield(agentsession.Summary{}, fmt.Errorf("sqlite: list: %w", err))
 				return
 			}
@@ -404,7 +457,7 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 				continue
 			}
 			mod, _ := time.Parse(time.RFC3339Nano, updated)
-			if !yield(agentsession.Summary{Header: h, Name: name, Size: size, Modified: mod}, nil) {
+			if !yield(agentsession.Summary{Header: h, Name: name, SupersededBy: supersededBy, Size: size, Modified: mod}, nil) {
 				return
 			}
 		}

@@ -50,6 +50,23 @@ type ListFilter struct {
 	// indexed fills it regardless; a file store must scan each
 	// session's entries to find it, so it does so only when asked.
 	WithNames bool
+	// Current excludes sessions a continued_in link has retired, so a
+	// listing shows the successor and not the session it replaced.
+	// A file store scans each session's entries to know, as for
+	// WithNames.
+	Current bool
+}
+
+// Keep reports whether a summary passes the filter: the header checks
+// of Matches, and Current against Summary.SupersededBy.
+func (f ListFilter) Keep(sum Summary) bool {
+	if !f.Matches(sum.Header) {
+		return false
+	}
+	if f.Current && sum.SupersededBy != "" {
+		return false
+	}
+	return true
 }
 
 // Matches reports whether a header passes the filter.
@@ -76,6 +93,11 @@ type Summary struct {
 	// that set one, when the store provides it: see
 	// ListFilter.WithNames.
 	Name string
+	// SupersededBy names the successor the session was continued in,
+	// from its last continued_in link, when the store provides it: a
+	// store that indexes links fills it always, a file store when
+	// ListFilter.WithNames or Current asks it to scan.
+	SupersededBy string
 	// Path is where the session lives, for file-backed stores.
 	Path string
 	// Size is the stored size in bytes, when known.
@@ -133,9 +155,9 @@ func (m *MemoryStore) List(_ context.Context, f ListFilter) iter.Seq2[Summary, e
 	m.mu.RLock()
 	var out []Summary
 	for _, s := range m.sessions {
-		h := s.Header()
-		if f.Matches(h) {
-			out = append(out, Summary{Header: h, Name: s.Name()})
+		sum := Summary{Header: s.Header(), Name: s.Name(), SupersededBy: s.SupersededBy()}
+		if f.Keep(sum) {
+			out = append(out, sum)
 		}
 	}
 	m.mu.RUnlock()
