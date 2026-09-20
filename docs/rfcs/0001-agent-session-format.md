@@ -442,8 +442,8 @@ it. A container's `ref` SHOULD be a digest rather than a tag, because a
 tag moves. A container on a remote host is `container`, with the
 digest as `ref` and the host in a member this document does not
 define. Anything richer goes in such members too, which the envelope
-section says a rewriter preserves. An `env` entry applies from its position on the
-path until the next one.
+section says a rewriter preserves. An `env` entry applies from its
+position on the path until the next one.
 
 ### `outcome`
 
