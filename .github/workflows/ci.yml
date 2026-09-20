@@ -25,6 +25,7 @@ jobs:
           cache-dependency-path: |
             go.sum
             sqlite/go.sum
+            otel/go.sum
       - name: Build
         run: make build
       - name: Root module depends on openresponses and the standard library only
@@ -45,6 +46,7 @@ jobs:
           cache-dependency-path: |
             go.sum
             sqlite/go.sum
+            otel/go.sum
       - name: Check formatting
         run: make fmt
       - name: Check go.mod and go.sum are tidy in every module

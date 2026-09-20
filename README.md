@@ -73,7 +73,9 @@ _, err = agentsession.RecordResponse(ctx, store, id, req, resp, time.Since(start
 `RecordResponse` appends the output items and the response entry with
 the hash of the request it was given. Every append becomes the leaf.
 `sess.Branch(entryID)` moves the leaf so the next append forks in
-place; `sess.ResetLeaf()` starts a new root. `sess.Compact(firstKept,
+place, and appending `sess.MarkLeaf()` makes that choice durable, so a
+reopened session resumes from it rather than from the last line;
+`sess.ResetLeaf()` starts a new root. `sess.Compact(firstKept,
 summary)` and `sess.SummarizeBranch(from, summary)` build the entries
 that fold context down or carry it across a branch switch; a caller
 that split the request input at an index, or kept its last n items,
@@ -175,13 +177,34 @@ ran without the dispatch the header promised. `export`
 writes one ATIF document per leaf and embeds a linked subsession when
 its file is beside the exported one or in the same store.
 
+## Tracing
+
+The `otel` module is the RFC's OpenTelemetry projection. `otel.Export`
+replays a session's path into any tracer with the entries' own
+timestamps: a session span, a span per run carrying its source and end
+reason, a `chat <model>` span per model call that links the previous
+turn's, and an `execute_tool <name>` span per call that links the
+inference that produced it and carries each decision as an event and
+the call's state when the record stopped. `otel.Wrap` decorates a
+store so a live harness emits the same spans as it appends, and a
+session reopened in a new process picks up the calls the last one
+left pending.
+
+```go
+store := otel.Wrap(jsonlStore, otel.Tracer("my-agent"))
+// ... record as usual; call store.Close(sessionID) when done ...
+
+_, err := otel.Export(ctx, tracer, sess, sess.Leaf()) // a stored session, after the fact
+```
+
 ## Packages
 
 | package | purpose |
 |---|---|
 | `agentsession` | header, entries, tree, context algorithm, request hash, `Store` interface, in-memory store |
-| `jsonl` | the file store: one JSONL file per session with a sync policy, crash recovery and a per-session lock against a second writing process |
+| `jsonl` | the file store: one JSONL file per session with a sync policy, crash recovery and a per-session lock against a second writing process, reporting a dead holder's lock when it takes one over |
 | `sqlite` | a SQLite store, as a nested module so its driver stays out of the library |
+| `otel` | the OpenTelemetry projection, as a nested module: replay a session as spans, or wrap a store so a live run emits them |
 | `atif` | Go types for ATIF v1.8 with unknown-member passthrough and validation |
 | `export` | trajectories, ATIF conversion, redactors, writer |
 | `storetest` | the conformance suite every store runs |

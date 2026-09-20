@@ -6,7 +6,7 @@ GOVULNCHECK ?= $(GO) run golang.org/x/vuln/cmd/govulncheck@latest
 # builds against the tree, and every module shares one version: see
 # release. ./... from the root covers only the root module, so every
 # target loops over them.
-SUBMODULES = sqlite
+SUBMODULES = sqlite otel
 
 .PHONY: build deps test vet fmt tidy tidy-check lint vuln check release clean
 
