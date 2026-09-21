@@ -181,7 +181,8 @@ func TestReadOnlyStore(t *testing.T) {
 			_, err := reader.Append(ctx, "held", &agentsession.InfoEntry{Name: "no"})
 			return err
 		}(),
-		"Delete": reader.Delete(ctx, "held"),
+		"Delete":    reader.Delete(ctx, "held"),
+		"BreakLock": reader.BreakLock(ctx, "held"),
 	}
 	for name, err := range writes {
 		if !errors.Is(err, agentsession.ErrReadOnly) {

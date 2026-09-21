@@ -49,7 +49,8 @@ versions may break the API.
   session is running. A read-only jsonl open reports a cut-short final
   line and leaves it in the file, since trimming it is a write. The
   CLI's `list` opens its store read-only; its other commands already
-  read the file directly (#44).
+  read the file directly. `BreakLock` is refused too: a store that
+  takes no lock has no business dropping another process's (#44).
 - The sqlite store parses a holder's `since` and `heartbeat` before it
   decides what to do with the row, so the refusal an operator sees
   names when the holder took the session and when it last appended

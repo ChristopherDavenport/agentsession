@@ -135,7 +135,12 @@ func (s *Store) LockHolder(id string) (*LockInfo, error) {
 // Open reports ErrSessionLocked and the caller has confirmed the holder
 // is gone, for example a process on another host that crashed. Breaking
 // the lock of a live writer lets two processes append to one file.
+// A store opened with [WithReadOnly] refuses: it takes no lock, so it
+// has no business dropping another process's.
 func (s *Store) BreakLock(id string) error {
+	if s.readOnly {
+		return agentsession.ErrReadOnly
+	}
 	path, err := s.Path(id)
 	if err != nil {
 		return err

@@ -636,7 +636,12 @@ func (s *Store) LockHolder(ctx context.Context, id string) (*LockInfo, error) {
 // gone, for example a process on another host that crashed. Breaking
 // the hold of a live writer makes that writer's next append fail with
 // ErrSessionLocked rather than interleave with the new holder's.
+// A store opened with [WithReadOnly] refuses: it takes no hold, so it
+// has no business dropping another process's.
 func (s *Store) BreakLock(ctx context.Context, id string) error {
+	if s.readOnly {
+		return agentsession.ErrReadOnly
+	}
 	if _, err := s.w.ExecContext(ctx, `DELETE FROM holders WHERE session_id = ?`, id); err != nil {
 		return fmt.Errorf("sqlite: break lock: %w", err)
 	}
