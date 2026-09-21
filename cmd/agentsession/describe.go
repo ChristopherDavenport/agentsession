@@ -13,8 +13,9 @@ import (
 // textWidth bounds the free text shown for an entry or item.
 const textWidth = 72
 
-// describeEntry renders one entry on one line.
-func describeEntry(e agentsession.Entry) string {
+// describeEntry renders one entry on one line. With full set, the
+// entries that carry opaque data print it instead of its size.
+func describeEntry(e agentsession.Entry, full bool) string {
 	switch v := e.(type) {
 	case *agentsession.ItemEntry:
 		s := describeItem(v.Item)
@@ -182,9 +183,29 @@ func describeEntry(e agentsession.Entry) string {
 			s += " ref " + describeText(v.Ref)
 		}
 		return s
+	case *agentsession.CustomEntry:
+		// The namespace is the whole point of a custom entry: it is what
+		// says which application wrote it and what its data means.
+		return v.NS + " " + describeData(v.Data, full)
+	case *agentsession.UnknownEntry:
+		// An extension type, which a reader preserves without
+		// understanding. The type is in the type column.
+		return "extension " + describeData(v.Raw, full)
 	default:
 		return "(unknown entry type)"
 	}
+}
+
+// describeData renders an opaque payload: its size, or the data
+// itself when the caller asked for it.
+func describeData(data []byte, full bool) string {
+	if len(data) == 0 {
+		return "(no data)"
+	}
+	if full {
+		return collapse(string(data))
+	}
+	return fmt.Sprintf("(%d bytes)", len(data))
 }
 
 // describeParts renders a config entry's instruction parts: the ID of
@@ -276,6 +297,11 @@ func describeText(s string) string {
 		return `""`
 	}
 	return fmt.Sprintf("%q", shorten(s, textWidth))
+}
+
+// collapse puts a value on one line without bounding its length.
+func collapse(s string) string {
+	return strings.Join(strings.FieldsFunc(s, unicode.IsSpace), " ")
 }
 
 func shorten(s string, n int) string {

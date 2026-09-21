@@ -11,8 +11,9 @@ import (
 )
 
 func show(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("show", "<file> [-leaf id]", stderr)
+	fs := newFlags("show", "<file> [-leaf id] [-v]", stderr)
 	leaf := fs.String("leaf", "", "entry whose context to print; the current leaf by default")
+	full := fs.Bool("v", false, "print the data of custom and extension entries instead of its size")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -26,7 +27,7 @@ func show(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	printHeader(stdout, s)
-	printEntries(stdout, s)
+	printEntries(stdout, s, *full)
 	at := *leaf
 	if at == "" {
 		at = s.Leaf()
@@ -77,7 +78,7 @@ func printHeader(w io.Writer, s *agentsession.Session) {
 
 // printEntries lists every entry in file order. Forks and leaves are
 // marked, since they are what a reader looks for in a tree.
-func printEntries(w io.Writer, s *agentsession.Session) {
+func printEntries(w io.Writer, s *agentsession.Session, full bool) {
 	labels := s.Labels()
 	fmt.Fprintln(w)
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
@@ -93,7 +94,7 @@ func printEntries(w io.Writer, s *agentsession.Session) {
 		if l, ok := labels[b.ID]; ok {
 			marks = append(marks, "["+l+"]")
 		}
-		summary := describeEntry(e)
+		summary := describeEntry(e, full)
 		if len(marks) > 0 {
 			summary += "  " + strings.Join(marks, " ")
 		}

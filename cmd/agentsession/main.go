@@ -1,7 +1,7 @@
 // Command agentsession inspects, verifies, exports and lists Agent
 // Session Format files from a shell.
 //
-//	agentsession show <file> [-leaf id]
+//	agentsession show <file> [-leaf id] [-v]
 //	agentsession verify <file>
 //	agentsession export <file> -out dir [-redact-home] [-redact-env] [-secret VALUE]...
 //	agentsession list <root> [-cwd path] [-parent id] [-limit n]
@@ -26,7 +26,7 @@ import (
 const usage = `usage: agentsession <command> [flags] <arguments>
 
 commands:
-  show    <file> [-leaf id]        print the entries and the context at a leaf
+  show    <file> [-leaf id] [-v]   print the entries and the context at a leaf
   verify  <file>                   check every recorded request hash
   export  <file> -out dir          write ATIF documents for every leaf
   list    <root>                   list the sessions of a jsonl store

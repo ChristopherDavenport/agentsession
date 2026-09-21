@@ -117,6 +117,12 @@ versions may break the API.
   score targets. `Trajectory` gains `Path`, the root-first path before
   compaction, which the totals are taken over (#39).
 
+- `agentsession show` renders a custom entry as its namespace and the
+  size of its data, and an extension entry as its type and size, in
+  place of the "(unknown entry type)" that four policy verdicts used
+  to print as four identical lines; `-v` prints the data itself. Every
+  core entry type now has a case, which a test holds it to (#35).
+
 ## v0.0.5 - 2026-09-20
 
 - RFC 0001 is revised to draft 0.2. The summary now defines a session as

@@ -235,6 +235,7 @@ go install github.com/ChristopherDavenport/agentsession/cmd/agentsession@latest
 
 agentsession show session.jsonl            # entries in file order, then the context at the leaf
 agentsession show session.jsonl -leaf ID   # the context at another entry
+agentsession show session.jsonl -v         # with the data of custom and extension entries
 agentsession verify session.jsonl          # rebuild every request and check its hash
 agentsession export session.jsonl -out dir -secret "$OPENAI_API_KEY" -redact-home
 agentsession list ~/.agent/sessions        # a jsonl store's sessions, newest first

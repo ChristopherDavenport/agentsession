@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 const fixtures = "../../testdata/sessions"
@@ -98,6 +101,21 @@ func TestRun(t *testing.T) {
 				`user: "and skip the smoke tests" from human`,
 			},
 		},
+		{
+			name: "show custom entries", args: []string{"show", filepath.Join(fixtures, "interleaved.jsonl")},
+			stdout: []string{"custom    agentpolicy (39 bytes)"},
+			absent: []string{"(unknown entry type)"},
+		},
+		{
+			name: "show custom entries in full", args: []string{"show", "-v", filepath.Join(fixtures, "interleaved.jsonl")},
+			stdout: []string{`agentpolicy {"verdict":"allow","rule":"bash(ls:*)"}`},
+			absent: []string{"(unknown entry type)"},
+		},
+		{
+			name: "show an extension entry", args: []string{"show", filepath.Join(fixtures, "extensions.jsonl")},
+			stdout: []string{"agentturn:note  extension ("},
+			absent: []string{"(unknown entry type)"},
+		},
 		{name: "export bad prefer", args: []string{"export", filepath.Join(fixtures, "branch.jsonl"), "-out", out, "-prefer", "best"}, code: 2, stderr: []string{`-prefer "best"`}},
 		{
 			name: "export prefer label", args: []string{"export", filepath.Join(fixtures, "branch.jsonl"), "-out", filepath.Join(tmp, "out2"), "-prefer", "label=fork", "-prefer", "leaf", "-prefer", "score", "-prefer", "latest"},
@@ -163,6 +181,79 @@ func TestDescribeText(t *testing.T) {
 	for _, tt := range tests {
 		if got := describeText(tt.in); got != tt.want {
 			t.Errorf("describeText(%q) = %s, want %s", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestDescribeEveryEntryType: every core entry type renders as
+// something a reader can act on. A custom entry is the one a policy
+// layer writes and the one show used to print as "(unknown entry
+// type)", four identical lines for four different verdicts.
+func TestDescribeEveryEntryType(t *testing.T) {
+	label := "checkpoint"
+	score := 0.5
+	tests := []struct {
+		entry agentsession.Entry
+		want  string
+		full  string // what -v adds, when it differs
+	}{
+		{entry: agentsession.NewItemEntry(openresponses.UserText("hi")), want: `user: "hi"`},
+		{entry: &agentsession.ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: "completed"}, want: "resp_1 gpt-5 completed"},
+		{entry: &agentsession.ConfigEntry{Model: "gpt-5"}, want: "model gpt-5"},
+		{entry: &agentsession.CompactionEntry{FirstKept: "i1", Summary: openresponses.UserText("so far")}, want: "first kept i1"},
+		{entry: &agentsession.BranchSummaryEntry{From: "i1", Summary: openresponses.UserText("before")}, want: "from i1"},
+		{entry: agentsession.NewRunStart("run-1", agentsession.SourceInput, "cron:x"), want: "start run-1 input"},
+		{entry: agentsession.NewRunEnd("run-1", agentsession.ReasonStopped, "max_turns", nil), want: "end run-1 stopped"},
+		{entry: agentsession.NewDispatch("call_1", "i2"), want: "call_1 to tool"},
+		{entry: agentsession.NewDecision("call_1", "i2", agentsession.VerdictHold, agentsession.ByPolicy), want: "hold call_1 by policy"},
+		{entry: agentsession.NewQueued(openresponses.UserText("steer"), agentsession.ModeSteer).WithTrigger("human", "slack:1", "gateway"), want: `steer user: "steer" from human slack:1 via gateway`},
+		{entry: agentsession.NewLabelEntry("i1", label), want: "i1 = checkpoint"},
+		{entry: &agentsession.InfoEntry{Name: "Refactor auth"}, want: `name "Refactor auth"`},
+		{entry: &agentsession.EnvEntry{CWD: "/p"}, want: "cwd /p"},
+		{entry: &agentsession.OutcomeEntry{Kind: agentsession.OutcomeEval, Target: "r1", Score: &score}, want: "eval on r1 score 0.5"},
+		{entry: agentsession.NewLinkEntry(agentsession.RelSubsession, "child"), want: "subsession child"},
+		{
+			entry: &agentsession.CustomEntry{NS: "agentpolicy", Data: []byte(`{"verdict":"deny","rule":"bash(curl:*)"}`)},
+			want:  "agentpolicy (40 bytes)",
+			full:  `agentpolicy {"verdict":"deny","rule":"bash(curl:*)"}`,
+		},
+		{
+			entry: &agentsession.UnknownEntry{Type: "acme:note", Raw: []byte(`{"type":"acme:note","text":"x"}`)},
+			want:  "extension (31 bytes)",
+			full:  `extension {"type":"acme:note","text":"x"}`,
+		},
+	}
+	seen := map[string]bool{}
+	for _, tt := range tests {
+		t.Run(tt.entry.EntryType()+" "+tt.want, func(t *testing.T) {
+			seen[tt.entry.EntryType()] = true
+			got := describeEntry(tt.entry, false)
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("describeEntry = %q, want %q", got, tt.want)
+			}
+			if got == "(unknown entry type)" {
+				t.Errorf("%s renders as an unknown type", tt.entry.EntryType())
+			}
+			want := tt.want
+			if tt.full != "" {
+				want = tt.full
+			}
+			if got := describeEntry(tt.entry, true); !strings.Contains(got, want) {
+				t.Errorf("describeEntry -v = %q, want %q", got, want)
+			}
+		})
+	}
+	// Every core type is in the table, so a type added to the format
+	// is a failing test here rather than a blank line in a listing.
+	for _, typ := range []string{
+		agentsession.TypeItem, agentsession.TypeResponse, agentsession.TypeConfig,
+		agentsession.TypeCompaction, agentsession.TypeBranchSummary, agentsession.TypeRun,
+		agentsession.TypeDispatch, agentsession.TypeDecision, agentsession.TypeQueued,
+		agentsession.TypeLabel, agentsession.TypeInfo, agentsession.TypeEnv,
+		agentsession.TypeOutcome, agentsession.TypeLink, agentsession.TypeCustom,
+	} {
+		if !seen[typ] {
+			t.Errorf("no case for the %s entry", typ)
 		}
 	}
 }
