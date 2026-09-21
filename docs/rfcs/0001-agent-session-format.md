@@ -705,15 +705,37 @@ profile: user and system items to steps, one `response` with its items
 to one agent step with `tool_calls`, `reasoning_content` and `metrics`,
 function call outputs to observations by `source_call_id`, compaction
 and branch summaries as copied-context system steps, `link` entries to
-`subagent_trajectories`. `run`, `dispatch` and `decision` entries have
-no step of their own. A run's `source`, its start `ref` as `trigger`,
-its end `reason` and its end `ref` as `cause` travel under `run` in the
-`extra` of the first step its segment produces, or
-in the trajectory's top-level `extra` when it produces none; a
+`subagent_trajectories`. `run`, `dispatch`, `decision` and `queued`
+entries have no step of their own. A run's `source`, its start `ref`
+as `trigger`, its end `reason` and its end `ref` as `cause` travel
+under `run` in the `extra` of the first step its segment produces, or
+in the trajectory's top-level `extra` when it produces none. `run` is
+a **list** in either place, in the runs' own order: a run that
+produces no step, which is what a refusal on resume is, would
+otherwise be replaced by the next run's record, and a reader needs a
+rule for which record is which when several land in one place. A
 call's decisions and dispatch travel under `calls`, keyed by call ID,
-in the `extra` of the agent step that produced the call; a fold's usage
+in the `extra` of the agent step that produced the call; a queued
+input travels as a list under `queued`, and the step of the item that
+drained one carries its trigger under `source`; a fold's usage
 travels under `usage` in its system step's `extra`. Raw items travel in
 step `extra` so the projection is lossless.
+
+A document's steps are the context the algorithm produces, so a run
+that compacted is described by its last summary and what followed it.
+Its `final_metrics` are not: they total every model call on the path,
+the ones a fold replaced included, and `total_steps` counts the
+document's steps plus the model calls it does not show. When the two
+differ the root `notes` says so, which is what ATIF requires of a
+`total_steps` that is not the number of steps. Without that rule a
+cost column reads the tail's cost as the run's, and an agent that
+folded eleven times outranks one that did not.
+
+One document per path is a projection of the whole session, so a
+trajectory may be built at any entry and not only at a leaf: anything
+appended after an export, a judge's `outcome` above all, moves the
+leaf, and the document a score names has to be reproducible from the
+entry it targets.
 
 ### OpenTelemetry
 

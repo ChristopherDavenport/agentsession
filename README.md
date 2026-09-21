@@ -201,6 +201,17 @@ docs := func(yield func(*atif.Trajectory) bool) {
 err := export.WriteATIF("out/", docs)
 ```
 
+`export.At(s, entryID)` builds the document of the path that ends at
+one entry, which is what a consumer holding a score needs once the
+outcomes a judge appended have moved the leaf; `Trajectories` is that
+over each leaf. A document's steps are the context after compaction
+and its `final_metrics` are the whole path, so a run that folded
+reports what it spent, with `total_steps` and a line in `notes`
+saying what the steps leave out. `export.Options.ModelName` overrides
+the model name the document reports, for a consumer that derives a
+provider from it, without changing the name the request was sent
+with.
+
 Each document is one root-to-leaf path with compaction applied. The
 session's current path is written as `<session-id>.json`, the others
 as `<session-id>_<leaf>.json`. A branch that was continued lists the

@@ -32,15 +32,17 @@
             ]
           }
         },
-        "run": {
-          "end_entry_id": "u0000002",
-          "pending": [],
-          "reason": "done",
-          "run_id": "run-1",
-          "source": "input",
-          "start_entry_id": "u0000001",
-          "trigger": "slack:1758412800.0001"
-        },
+        "run": [
+          {
+            "end_entry_id": "u0000002",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-1",
+            "source": "input",
+            "start_entry_id": "u0000001",
+            "trigger": "slack:1758412800.0001"
+          }
+        ],
         "source": {
           "kind": "human",
           "ref": "slack:1758412800.0001",

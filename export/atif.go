@@ -18,6 +18,15 @@ type Options struct {
 	// default to the session header's harness, then to "agentsession".
 	AgentName    string
 	AgentVersion string
+	// ModelName overrides the model name the document reports, in
+	// agent.model_name and on every agent step, without touching the
+	// model the request was sent with. It exists because a consumer
+	// may want a name the provider would refuse: Harbor derives a
+	// provider by splitting model_name on the first slash, and a
+	// self-hosted model called "qwen3.5:9b" has none, while sending
+	// "ollama/qwen3.5:9b" is a 404. The session still records what was
+	// sent; this is what is reported.
+	ModelName string
 	// Cost returns the price of one model call when a price source is
 	// configured. When nil, cost_usd is left absent.
 	Cost func(model string, usage openresponses.Usage) (usd float64, ok bool)
@@ -47,9 +56,13 @@ const (
 	ExtraAbandonedAt   = "abandoned_at"
 	ExtraBranchFrom    = "branch_from"
 	ExtraContextMgmt   = "context_management"
-	// ExtraRun carries a run's source, trigger, end reason, cause and
-	// pending calls in the extra of the first step its segment
-	// produces, or in the root extra when it produces none.
+	// ExtraRun carries, as a list, the runs whose records belong to a
+	// step: a run's source, trigger, end reason, cause and pending
+	// calls go in the extra of the first step its segment produces, or
+	// in the root extra when it produces none. It is a list because a
+	// run that produces no step, which is what a refusal on resume is,
+	// would otherwise be overwritten by the next run's record, and
+	// because a reader needs an order where several land in one place.
 	ExtraRun = "run"
 	// ExtraCalls carries, keyed by call ID in the extra of the agent
 	// step that produced the call, the call's decisions and dispatch.
@@ -163,7 +176,7 @@ func (b *builder) setAgentDefaults() {
 		}
 		break
 	}
-	b.doc.Agent.ModelName = b.settings.Model
+	b.doc.Agent.ModelName = b.modelName(b.settings.Model)
 	b.doc.Agent.ToolDefinitions = toolDefinitions(b.settings.Tools)
 	// The replay above is repeated by entry(); reset so the second pass
 	// applies deltas from the same baseline.
@@ -397,8 +410,17 @@ func (b *builder) flushGroup(resp *agentsession.ResponseEntry) {
 	b.flushGroupItems(g, resp)
 }
 
+// modelName is the name the document reports for a model, which
+// Options.ModelName overrides.
+func (b *builder) modelName(model string) string {
+	if b.opts.ModelName != "" {
+		return b.opts.ModelName
+	}
+	return model
+}
+
 func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntry) {
-	step := atif.Step{Source: atif.SourceAgent, ModelName: b.settings.Model, LLMCallCount: atif.Ptr(1)}
+	step := atif.Step{Source: atif.SourceAgent, ModelName: b.modelName(b.settings.Model), LLMCallCount: atif.Ptr(1)}
 	if b.settings.Reasoning.Effort != "" {
 		step.ReasoningEffort = string(b.settings.Reasoning.Effort)
 	}
@@ -465,8 +487,10 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 	if resp != nil {
 		anchor = resp
 		or["response"] = responseBody(resp)
+		wire := b.settings.Model
 		if resp.Model != "" {
-			step.ModelName = resp.Model
+			wire = resp.Model
+			step.ModelName = b.modelName(resp.Model)
 		}
 		step.Timestamp = resp.Timestamp.UTC().Format(time.RFC3339Nano)
 		if resp.Usage != nil {
@@ -480,7 +504,9 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 				step.Metrics.Extra = map[string]any{"reasoning_tokens": u.OutputTokensDetails.ReasoningTokens}
 			}
 			if b.opts.Cost != nil {
-				if usd, ok := b.opts.Cost(step.ModelName, *u); ok {
+				// Priced by the model the request was sent with, not by
+				// the name Options.ModelName reports it under.
+				if usd, ok := b.opts.Cost(wire, *u); ok {
 					step.Metrics.CostUSD = atif.Ptr(usd)
 					b.cost += usd
 					b.hasCost = true
@@ -602,14 +628,14 @@ func (b *builder) runEntry(r *agentsession.RunEntry) {
 		}
 		copyUnknown(rec, r.Unknown)
 		b.currentRun = rec
-		b.addPending(ExtraRun, rec)
+		b.addPendingList(ExtraRun, rec)
 		return
 	}
 	rec := b.currentRun
 	if rec == nil || rec["run_id"] != r.RunID {
 		// An end without its start on this path: record it on its own.
 		rec = map[string]any{"run_id": r.RunID}
-		b.addPending(ExtraRun, rec)
+		b.addPendingList(ExtraRun, rec)
 	}
 	rec["reason"] = r.Reason
 	rec["end_entry_id"] = r.ID
@@ -725,14 +751,85 @@ func (b *builder) finish() {
 	if b.doc.FinalMetrics == nil {
 		b.doc.FinalMetrics = &atif.FinalMetrics{}
 	}
+	hidden := b.pathTotals()
 	fm := b.doc.FinalMetrics
 	fm.TotalPromptTokens = atif.Ptr(b.prompt)
 	fm.TotalCompletionTokens = atif.Ptr(b.completion)
 	fm.TotalCachedTokens = atif.Ptr(b.cached)
-	fm.TotalSteps = atif.Ptr(len(b.doc.Steps))
+	fm.TotalSteps = atif.Ptr(len(b.doc.Steps) + hidden)
 	if b.hasCost {
 		fm.TotalCostUSD = atif.Ptr(b.cost)
 	}
+	if hidden > 0 {
+		note := fmt.Sprintf("The steps are the context after compaction and leave out %d model call(s) that were folded away; total_steps counts them and final_metrics totals the whole path.", hidden)
+		if b.doc.Notes != "" {
+			note = b.doc.Notes + "\n" + note
+		}
+		b.doc.Notes = note
+	}
+}
+
+// pathTotals replaces the totals accumulated from the steps with the
+// totals of the whole path, and returns the number of model calls the
+// path holds that the document does not show. A document's steps are
+// the context after compaction, so a run that folded is described by
+// its last summary and what followed; its cost is not, or a
+// leaderboard reads the tail's cost as the run's. It does nothing for
+// a Trajectory built without a Path, whose context is all there is.
+func (b *builder) pathTotals() int {
+	if len(b.t.Path) == 0 {
+		return 0
+	}
+	inContext := make(map[string]bool, len(b.t.Context.Entries))
+	for _, e := range b.t.Context.Entries {
+		inContext[e.Base().ID] = true
+	}
+	b.prompt, b.completion, b.cached, b.cost, b.hasCost = 0, 0, 0, 0, false
+	hidden, model := 0, ""
+	for _, e := range b.t.Path {
+		var u *openresponses.Usage
+		priced := ""
+		switch v := e.(type) {
+		case *agentsession.ConfigEntry:
+			// The model in force, for a fold or a response that does
+			// not name its own.
+			if v.Replace {
+				model = ""
+			}
+			if v.Model != "" {
+				model = v.Model
+			}
+			continue
+		case *agentsession.ResponseEntry:
+			u, priced = v.Usage, model
+			if v.Model != "" {
+				priced = v.Model
+			}
+		case *agentsession.CompactionEntry:
+			model = v.Config.Model
+			u, priced = v.Usage, v.Config.Model
+		case *agentsession.BranchSummaryEntry:
+			u, priced = v.Usage, model
+		default:
+			continue
+		}
+		if !inContext[e.Base().ID] {
+			hidden++
+		}
+		if u == nil {
+			continue
+		}
+		b.prompt += u.InputTokens
+		b.completion += u.OutputTokens
+		b.cached += u.InputTokensDetails.CachedTokens
+		if b.opts.Cost != nil {
+			if usd, ok := b.opts.Cost(priced, *u); ok {
+				b.cost += usd
+				b.hasCost = true
+			}
+		}
+	}
+	return hidden
 }
 
 // subsessions resolves link entries: a subsession is embedded and

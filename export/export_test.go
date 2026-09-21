@@ -85,7 +85,7 @@ func encode(t *testing.T, v any) []byte {
 // and the raw items it carries must rebuild the path's item list byte
 // for byte.
 func TestATIFGolden(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			n := 0
@@ -936,6 +936,260 @@ func TestExportKeepsUnknownMembers(t *testing.T) {
 	for _, w := range want {
 		if !strings.Contains(string(out), w) {
 			t.Errorf("document lacks %s", w)
+		}
+	}
+}
+
+// docRuns reads every run record out of a document in document order:
+// each step's extra, then the root's, which is where a run that
+// produced no step of its own ends up.
+func docRuns(t *testing.T, doc *atif.Trajectory) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	add := func(v any) {
+		list, ok := v.([]any)
+		if !ok {
+			t.Fatalf("extra.%s is %T, want a list", ExtraRun, v)
+		}
+		for _, r := range list {
+			m, ok := r.(map[string]any)
+			if !ok {
+				t.Fatalf("a run record is %T", r)
+			}
+			out = append(out, m)
+		}
+	}
+	var decoded atif.Trajectory
+	if err := json.Unmarshal(encode(t, doc), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range decoded.Steps {
+		if v, ok := s.Extra[ExtraRun]; ok {
+			add(v)
+		}
+	}
+	if v, ok := decoded.Extra[ExtraRun]; ok {
+		add(v)
+	}
+	return out
+}
+
+// TestRunRecordsAreAList: a run that produces no step, which is what a
+// refusal on resume is, used to lose its record to the next run's.
+func TestRunRecordsAreAList(t *testing.T) {
+	s := loadFixture(t, "resume")
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ToATIF(tr, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := s.Runs(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := docRuns(t, doc)
+	if len(records) != len(runs) {
+		t.Fatalf("the document carries %d run record(s) for %d run(s)", len(records), len(runs))
+	}
+	for i, r := range runs {
+		if records[i]["run_id"] != r.RunID() {
+			t.Errorf("record %d is run %v, want %s", i, records[i]["run_id"], r.RunID())
+		}
+		if r.End != nil && records[i]["reason"] != r.End.Reason {
+			t.Errorf("run %s reads as %v, want %s", r.RunID(), records[i]["reason"], r.End.Reason)
+		}
+	}
+	// The refusing run produced no step of its own, and its cause is
+	// in the document.
+	if !bytes.Contains(encode(t, doc), []byte("refused")) {
+		t.Error("the refusing run's cause is nowhere in the document")
+	}
+}
+
+// TestTotalsCoverThePath: a compacted run's steps are the context
+// after compaction, and its totals must still be the run's.
+func TestTotalsCoverThePath(t *testing.T) {
+	tests := []struct {
+		name    string
+		fixture string
+		folded  bool
+	}{
+		{"a run that folded", "compaction", true},
+		{"a run that did not", "basic", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := loadFixture(t, tt.fixture)
+			tr, err := At(s, s.Leaf())
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, err := ToATIF(tr, Options{Cost: func(string, openresponses.Usage) (float64, bool) { return 0.5, true }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// What the path spent, which is what the run cost.
+			prompt, completion, priced := 0, 0, 0
+			for _, e := range tr.Path {
+				var u *openresponses.Usage
+				switch v := e.(type) {
+				case *agentsession.ResponseEntry:
+					u = v.Usage
+				case *agentsession.CompactionEntry:
+					u = v.Usage
+				default:
+					continue
+				}
+				if u == nil {
+					continue
+				}
+				priced++
+				prompt += u.InputTokens
+				completion += u.OutputTokens
+			}
+			fm := doc.FinalMetrics
+			if fm == nil || fm.TotalPromptTokens == nil || *fm.TotalPromptTokens != prompt {
+				t.Errorf("total_prompt_tokens = %v, want %d", fm.TotalPromptTokens, prompt)
+			}
+			if *fm.TotalCompletionTokens != completion {
+				t.Errorf("total_completion_tokens = %d, want %d", *fm.TotalCompletionTokens, completion)
+			}
+			if fm.TotalCostUSD == nil || *fm.TotalCostUSD != 0.5*float64(priced) {
+				t.Errorf("total_cost_usd = %v, want %g for %d priced calls", fm.TotalCostUSD, 0.5*float64(priced), priced)
+			}
+			switch {
+			case tt.folded:
+				if *fm.TotalSteps <= len(doc.Steps) {
+					t.Errorf("total_steps = %d for %d steps; the folded calls are not counted", *fm.TotalSteps, len(doc.Steps))
+				}
+				if !strings.Contains(doc.Notes, "after compaction") {
+					t.Errorf("notes do not say the steps are the context: %q", doc.Notes)
+				}
+			default:
+				if *fm.TotalSteps != len(doc.Steps) {
+					t.Errorf("total_steps = %d for %d steps", *fm.TotalSteps, len(doc.Steps))
+				}
+				if doc.Notes != "" {
+					t.Errorf("notes = %q for a run that folded nothing", doc.Notes)
+				}
+			}
+			if err := doc.Validate(); err != nil {
+				t.Errorf("invalid document: %v", err)
+			}
+		})
+	}
+}
+
+// TestOptionsModelName: the document reports the name Harbor needs
+// while the session keeps the name the provider answered to.
+func TestOptionsModelName(t *testing.T) {
+	s := loadFixture(t, "basic")
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var priced []string
+	doc, err := ToATIF(tr, Options{
+		ModelName: "ollama/qwen3.5:9b",
+		Cost: func(model string, _ openresponses.Usage) (float64, bool) {
+			priced = append(priced, model)
+			return 1, true
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Agent.ModelName != "ollama/qwen3.5:9b" {
+		t.Errorf("agent.model_name = %q", doc.Agent.ModelName)
+	}
+	agents := 0
+	for _, step := range doc.Steps {
+		if step.Source != atif.SourceAgent {
+			continue
+		}
+		agents++
+		if step.ModelName != "ollama/qwen3.5:9b" {
+			t.Errorf("step %d model_name = %q", step.StepID, step.ModelName)
+		}
+	}
+	if agents == 0 {
+		t.Fatal("no agent steps")
+	}
+	// The price table is asked about the model that was sent.
+	for _, model := range priced {
+		if model != "gpt-5" {
+			t.Errorf("priced under %q, want the model the request carried", model)
+		}
+	}
+	// And without the option nothing moves.
+	plain, err := ToATIF(tr, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Agent.ModelName != "gpt-5" {
+		t.Errorf("agent.model_name without the option = %q", plain.Agent.ModelName)
+	}
+}
+
+// TestAtEntry: a judged trajectory's document can be built again once
+// the outcomes a judge appended have moved the leaf.
+func TestAtEntry(t *testing.T) {
+	s := loadFixture(t, "runs")
+	target := s.Leaf()
+	before, err := At(s, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := ToATIF(before, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The runner appends a score per judge, which moves the leaf.
+	for _, label := range []string{"judge-a", "judge-b"} {
+		score := 1.0
+		if _, err := s.Append(&agentsession.OutcomeEntry{Kind: agentsession.OutcomeEval, Target: target, Score: &score, Label: label}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for tr, err := range Trajectories(s) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tr.LeafID == target {
+			t.Fatalf("the judged path is still a leaf; the test proves nothing")
+		}
+	}
+	after, err := At(s, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := ToATIF(after, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.TrajectoryID != target {
+		t.Errorf("trajectory_id = %q, want %q", again.TrajectoryID, target)
+	}
+	assertSameJSON(t, encode(t, first.Steps), encode(t, again.Steps))
+	assertSameJSON(t, encode(t, first.FinalMetrics), encode(t, again.FinalMetrics))
+
+	if _, err := At(s, "nope"); !errors.Is(err, agentsession.ErrNoEntry) {
+		t.Errorf("At an unknown entry = %v", err)
+	}
+	// Trajectories is At over the leaves.
+	for tr, err := range Trajectories(s) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		one, err := At(s, tr.LeafID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if one.Main != tr.Main || one.AbandonedAt != tr.AbandonedAt || len(one.Context.Items) != len(tr.Context.Items) {
+			t.Errorf("At(%s) differs from the trajectory of that leaf", tr.LeafID)
 		}
 	}
 }

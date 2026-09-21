@@ -91,6 +91,32 @@ versions may break the API.
   `queued`. `ItemEntry.Source` also stands alone, for any item a
   person or another system sent (#42).
 
+- The ATIF export tells what a run cost from what a document shows.
+  `final_metrics` now totals every model call on the path, including
+  the ones a compaction folded out of the document, `total_steps`
+  counts the steps the document holds plus the calls it does not
+  show, and a line in `notes` says so, which is what ATIF asks of a
+  `total_steps` that is not the number of steps. A run that folded
+  seven times reported the cost of the three calls that survived
+  (#36).
+- **Breaking.** `extra.run` in an exported document is a list, on a
+  step and at the root. A run that produces no step, which is what a
+  refusal on resume is, had its record replaced by the next run's and
+  vanished from the document; a list keeps every record and gives a
+  reader an order where several land in one place (#37).
+- `export.Options.ModelName` overrides the model name the document
+  reports, in `agent.model_name` and on every agent step, without
+  touching the model the request was sent with, for a consumer that
+  derives a provider by splitting the name on a slash. Costs are still
+  priced by the model that was sent (#38).
+- `export.At(s, entryID)` builds the trajectory of the path that ends
+  at any entry, not only at a leaf, with the same `PreferredOver`,
+  `AbandonedAt` and `Main` treatment; `Trajectories` is it over each
+  leaf. A judge that appends an outcome moves the leaf, and the
+  document a score names can now be built again from the entry the
+  score targets. `Trajectory` gains `Path`, the root-first path before
+  compaction, which the totals are taken over (#39).
+
 ## v0.0.5 - 2026-09-20
 
 - RFC 0001 is revised to draft 0.2. The summary now defines a session as

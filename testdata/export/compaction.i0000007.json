@@ -238,11 +238,12 @@
       }
     }
   ],
+  "notes": "The steps are the context after compaction and leave out 1 model call(s) that were folded away; total_steps counts them and final_metrics totals the whole path.",
   "final_metrics": {
-    "total_prompt_tokens": 35,
-    "total_completion_tokens": 2,
+    "total_prompt_tokens": 45,
+    "total_completion_tokens": 3,
     "total_cached_tokens": 10,
-    "total_steps": 6
+    "total_steps": 7
   },
   "extra": {
     "agentsession": {
