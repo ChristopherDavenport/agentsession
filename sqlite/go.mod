@@ -8,7 +8,7 @@ go 1.25.0
 // consumer does and fail while the version named here is too old.
 require (
 	github.com/ChristopherDavenport/agentsession v0.0.5
-	github.com/ChristopherDavenport/openresponses v0.0.9
+	github.com/ChristopherDavenport/openresponses v0.0.10
 	modernc.org/sqlite v1.59.0
 )
 
