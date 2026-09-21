@@ -30,7 +30,7 @@ func verify(args []string, stdout, stderr io.Writer) error {
 		}
 		id := r.ID
 		switch err := s.Verify(id); {
-		case err == nil && r.RequestHash == "":
+		case errors.Is(err, agentsession.ErrNoHash):
 			unhashed++
 			fmt.Fprintf(stdout, "%s  no hash recorded\n", id)
 		case err == nil:

@@ -1,0 +1,104 @@
+{
+  "r0000003": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Be brief."
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "system",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Summary: the user said first and the assistant said one."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "developer",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "House rule: never use Box::leak."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "developer",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "House rule: always run the linter."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "second"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_2",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "two",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "third"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_3",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "three",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "k0000001",
+      "i0000004",
+      "i0000005",
+      "r0000002",
+      "i0000006",
+      "i0000007",
+      "r0000003"
+    ],
+    "item_entries": [
+      "k0000001",
+      "k0000001",
+      "k0000001",
+      "i0000004",
+      "i0000005",
+      "i0000006",
+      "i0000007"
+    ]
+  }
+}

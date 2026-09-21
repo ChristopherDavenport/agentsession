@@ -236,6 +236,18 @@ func (b *builder) entry(e agentsession.Entry) error {
 	case *agentsession.CompactionEntry:
 		b.flushGroup(nil)
 		text := itemText(v.Summary)
+		// The pinned items are context the fold kept, and the entries
+		// they were copied from are before first_kept and so not in
+		// the document. They travel raw beside the summary, which is
+		// what keeps the projection lossless.
+		payload := map[string]any{"item": rawItem(v.Summary)}
+		if len(v.Pinned) > 0 {
+			pinned := make([]json.RawMessage, 0, len(v.Pinned))
+			for _, item := range v.Pinned {
+				pinned = append(pinned, rawItem(item))
+			}
+			payload["pinned"] = pinned
+		}
 		step := atif.Step{
 			Source:          atif.SourceSystem,
 			Message:         atif.Text(text),
@@ -243,7 +255,7 @@ func (b *builder) entry(e agentsession.Entry) error {
 			IsCopiedContext: atif.Ptr(true),
 			Extra: map[string]any{
 				ExtraContextMgmt:   map[string]any{"type": "compaction", "boundary": "replace"},
-				ExtraOpenResponses: map[string]any{"item": rawItem(v.Summary)},
+				ExtraOpenResponses: payload,
 				"first_kept":       v.FirstKept,
 			},
 		}
@@ -1284,6 +1296,18 @@ func Items(doc *atif.Trajectory) (openresponses.Items, error) {
 		var raws []any
 		if item, ok := or["item"]; ok {
 			raws = append(raws, item)
+		}
+		// A fold's pinned items follow its summary, which is the order
+		// the context algorithm places them in.
+		if list, ok := or["pinned"]; ok {
+			switch l := list.(type) {
+			case []any:
+				raws = append(raws, l...)
+			case []json.RawMessage:
+				for _, r := range l {
+					raws = append(raws, r)
+				}
+			}
 		}
 		if list, ok := or["items"]; ok {
 			switch l := list.(type) {

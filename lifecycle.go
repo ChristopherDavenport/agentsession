@@ -306,19 +306,33 @@ var (
 	queuedKeys   = jsonx.Keys[QueuedEntry]()
 )
 
-// MarshalJSON emits the entry as one JSON object. A start entry omits
-// pending; an end entry always carries it.
+// MarshalJSON emits the entry as one JSON object. Which members are
+// written depends on the phase: a start carries source, an end carries
+// reason and always carries pending, even when empty, since a run that
+// ended owing nothing is a fact a reader relies on.
+//
+// The other phase's members are written when they are set rather than
+// dropped. Nothing this library builds sets them, and validateLifecycle
+// asks only for the phase's own, so a well-formed entry is written
+// exactly as it was before. A file from elsewhere that carries one is
+// the case that matters: the envelope rule is that a reader preserves
+// what it does not itself need, and rewriting such a file to drop a
+// member it declared breaks that promise silently. Rejecting the shape
+// on the way in would be the alternative, and a larger decision than
+// an encoder.
 func (e *RunEntry) MarshalJSON() ([]byte, error) {
 	if err := validateLifecycle(e); err != nil {
 		return nil, err
 	}
 	if e.Phase == RunStart {
 		aux := struct {
-			RunID  string `json:"run_id"`
-			Phase  string `json:"phase"`
-			Source string `json:"source"`
-			Ref    string `json:"ref,omitempty"`
-		}{e.RunID, e.Phase, e.Source, e.Ref}
+			RunID   string   `json:"run_id"`
+			Phase   string   `json:"phase"`
+			Source  string   `json:"source"`
+			Reason  string   `json:"reason,omitempty"`
+			Ref     string   `json:"ref,omitempty"`
+			Pending []string `json:"pending,omitempty"`
+		}{e.RunID, e.Phase, e.Source, e.Reason, e.Ref, e.Pending}
 		return marshalEntry(TypeRun, &e.EntryBase, aux)
 	}
 	pending := e.Pending
@@ -328,10 +342,11 @@ func (e *RunEntry) MarshalJSON() ([]byte, error) {
 	aux := struct {
 		RunID   string   `json:"run_id"`
 		Phase   string   `json:"phase"`
+		Source  string   `json:"source,omitempty"`
 		Reason  string   `json:"reason"`
 		Ref     string   `json:"ref,omitempty"`
 		Pending []string `json:"pending"`
-	}{e.RunID, e.Phase, e.Reason, e.Ref, pending}
+	}{e.RunID, e.Phase, e.Source, e.Reason, e.Ref, pending}
 	return marshalEntry(TypeRun, &e.EntryBase, aux)
 }
 

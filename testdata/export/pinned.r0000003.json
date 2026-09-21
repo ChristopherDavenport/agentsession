@@ -1,0 +1,252 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000007",
+  "trajectory_id": "r0000003",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-09-21T10:00:07Z",
+      "source": "system",
+      "message": "Summary: the user said first and the assistant said one.",
+      "observation": {
+        "results": [
+          {
+            "content": "Summary: the user said first and the assistant said one."
+          }
+        ]
+      },
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "k0000001"
+        },
+        "context_management": {
+          "boundary": "replace",
+          "type": "compaction"
+        },
+        "first_kept": "i0000004",
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "system",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Summary: the user said first and the assistant said one."
+              }
+            ]
+          },
+          "pinned": [
+            {
+              "type": "message",
+              "role": "developer",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "House rule: never use Box::leak."
+                }
+              ]
+            },
+            {
+              "type": "message",
+              "role": "developer",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "House rule: always run the linter."
+                }
+              ]
+            }
+          ]
+        },
+        "tokens_before": 5000
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-09-21T10:00:04Z",
+      "source": "user",
+      "message": "second",
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000004"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "second"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-09-21T10:00:05Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "two",
+      "metrics": {
+        "prompt_tokens": 20,
+        "completion_tokens": 1,
+        "cached_tokens": 10
+      },
+      "is_copied_context": true,
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000002"
+        },
+        "item_entry_ids": [
+          "i0000005"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_2",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "two",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "r0000002",
+            "model": "gpt-5",
+            "request_hash": "sha256:d74cad5ceea8520e5b66b18ea4d192d2744e0394d5feaf40677ffecd8d8761f0",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-09-21T10:00:05Z",
+            "usage": {
+              "input_tokens": 20,
+              "output_tokens": 1,
+              "total_tokens": 21,
+              "input_tokens_details": {
+                "cached_tokens": 10
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-09-21T10:00:06Z",
+      "source": "user",
+      "message": "third",
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000006"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "third"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 5,
+      "timestamp": "2026-09-21T10:00:08Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "three",
+      "metrics": {
+        "prompt_tokens": 15,
+        "completion_tokens": 1,
+        "cached_tokens": 0
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000003"
+        },
+        "item_entry_ids": [
+          "i0000007"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_3",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "three",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "r0000003",
+            "model": "gpt-5",
+            "request_hash": "sha256:a74e3ca98ec37bae6be9a69128c983656c95b5d7467ec87478ce07730b5801a0",
+            "response_id": "resp_3",
+            "status": "completed",
+            "ts": "2026-09-21T10:00:08Z",
+            "usage": {
+              "input_tokens": 15,
+              "output_tokens": 1,
+              "total_tokens": 16,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "notes": "The steps are the context after compaction and leave out 1 model call(s) that were folded away; total_steps counts them and final_metrics totals the whole path.",
+  "final_metrics": {
+    "total_prompt_tokens": 45,
+    "total_completion_tokens": 3,
+    "total_cached_tokens": 10,
+    "total_steps": 6
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.3",
+      "leaf": "r0000003",
+      "main": true
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

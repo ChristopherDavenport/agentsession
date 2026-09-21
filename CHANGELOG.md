@@ -13,14 +13,81 @@ versions may break the API.
   found, since two implementations rebuild it: walking back from the
   response entry, an entry that is not an item is skipped, an item
   whose `response` names the response is output, and the walk stops at
-  the first item naming another response or none. The output items of
-  one response need not be contiguous (#40).
+  the first item naming another response or none. A reader identifies
+  a response's output items by `response` and never by position; a
+  writer SHOULD still keep them contiguous, so the envelope reads in
+  the order it happened, and the RFC now says why rather than merely
+  permitting both spellings. An entry another layer raises while a
+  model call is in flight — a guard's verdict, a dispatch, a run
+  boundary — is not an entry "for that model call", which the writing
+  discipline previously left ambiguous (#40).
 - `Session.RequestContext` follows that rule, so a custom or record
   entry written between two output items of one response no longer
   truncates the rebuilt request. A composed product that records a
   guard's verdict where the guard runs passes `verify` again; only the
   response's own item entries are removed from the path, and every
   other entry stays where it was (#40).
+
+- New export `OutputEntries(path []Entry, resp *ResponseEntry)
+  []*ItemEntry`, the rule for finding a response's own output items,
+  over a path the caller already holds. `Session.RequestContext` calls
+  it rather than keeping its own copy of the walk. The rule is
+  implemented twice in the workspace — here, which excludes those
+  entries from the rebuilt request, and in `agenteval`'s replay, which
+  serves their items — with a comment rather than a compiler keeping
+  the two in step. Exporting the selection is what lets the second
+  reader drop its copy: it returns entries rather than items, because
+  a reader that excludes them needs entry identity and items carry
+  none, and it returns them in path order, not the backward order the
+  walk runs in. The entries are the session's own, so a caller that
+  serves their items to something that records must clone them. The
+  RFC now states the two things a second implementation had to infer:
+  a `response` with no `response_id` has no output items, and the
+  order is normative.
+
+- `CompactionEntry` gains `Pinned`, written as the optional `pinned`
+  member: the items a fold kept verbatim from before `first_kept`.
+  `BuildContext` places them immediately after `summary` and before
+  the kept window, which is where the request that was sent had them,
+  so a harness that holds an item out of a fold can record a
+  `request_hash` it stands behind instead of recording none. Because
+  `Context` carries them too, such a pin survives `Continue`,
+  `Resume` and `Rebase` rather than being dropped at the fold. The
+  ATIF projection carries them beside the fold's summary, since the
+  entries they were copied from are before `first_kept` and so are not
+  in the document. Additive: no file in existence carries the member,
+  each pinned item is also an `item` entry on the path, and a reader
+  that ignores it rebuilds a request short of those items rather than
+  one that invents them. The RFC states the three rules a writer will
+  otherwise get wrong: only an item carried by an `item` entry may be
+  pinned, so a summary cannot be; the pins' order among themselves is
+  the order the request carried them in; and only the last compaction
+  on a path contributes items, so a later fold must restate a pin that
+  is to survive it.
+
+- **Fixed.** A `run` entry no longer drops the other phase's members
+  when it is written back. The encoder writes one member list for a
+  start and another for an end, and a file from elsewhere carrying
+  `source` on an end, or `reason` or `pending` on a start, lost it
+  silently: the member is declared on `RunEntry`, so the envelope rule
+  did not preserve it in `Unknown` either. Those members are now
+  written when set. Nothing this library builds sets them, so a
+  well-formed entry is written exactly as before, byte for byte.
+
+- **Breaking.** `Session.Verify` returns the new `ErrNoHash` for a
+  response that recorded no request hash, where it returned nil. The
+  two cases it could not tell apart — the rebuilt request hashed to
+  the recorded value, and there was no recorded value to check — are
+  now distinct, so a caller gating a build on `err == nil` is told
+  when nothing was verified rather than passing. A caller that accepts
+  unverified requests opts in with `errors.Is(err,
+  agentsession.ErrNoHash)`. The recorder legitimately writes an empty
+  hash whenever a layer edits the request outside the transcript — a
+  transform that injects, a `BeforeModelCall` hook, a compaction whose
+  folds were never reported — so a session in that state could pass a
+  gate with nothing checked and nothing said. The CLI's `verify`
+  output and exit code are unchanged: it already read `RequestHash`
+  itself to draw the distinction the library would not provide.
 
 - **Breaking.** `ComputeReason` takes the run's path as well as its
   segment, and reads the last response's own output items on the path
