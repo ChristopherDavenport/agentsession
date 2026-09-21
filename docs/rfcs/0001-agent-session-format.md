@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.2
+Status: draft 0.3
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -110,7 +110,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.2","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.3","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","spawned_by":"call_…","media":"inline"}
@@ -519,6 +519,25 @@ list as follows.
    payload profile's request with `store: false` and no
    `previous_response_id`. Its hash is `request_hash`.
 
+### Request context of a response
+
+A reader that checks a `request_hash`, or replays a model call, needs
+the context of the request that produced a `response` entry: the path
+to that entry with the response's own output items removed.
+
+The output items are found by walking back from the `response` entry.
+An entry that is not an `item` is skipped. An `item` whose `response`
+names this response is one of its output items. The walk stops at the
+first `item` whose `response` names another response or nothing. Only
+those item entries are removed; every other entry on the path stays,
+and the context algorithm above runs over the result.
+
+The output items of one response need not be contiguous. A harness may
+append an entry between two of them, which is what a guard that runs
+inside a response does, and a reader MUST NOT take such an entry as the
+end of the output. Entries that are not in context change neither the
+rebuilt request nor its hash wherever they fall.
+
 ### Request hash
 
 `request_hash` is defined here so that a writer and a reader built
@@ -620,6 +639,18 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.2
+
+Additive but for one tightened rule: the request context of a
+response skips entries that are not items rather than stopping at
+them, so a file whose output items are interleaved with record
+entries now rebuilds the request that was sent. A 0.2 reader
+rebuilds the same context for every other file.
+
+- Context building states how the request context of a response is
+  found, and that the output items of one response need not be
+  contiguous.
 
 ## Changes since 0.1
 

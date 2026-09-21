@@ -5,6 +5,23 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- RFC 0001 is revised to draft 0.3 and the library writes
+  `agentsession/0.3`; 0.2 and 0.1 files read unchanged. Context
+  building now states how the request context of one response is
+  found, since two implementations rebuild it: walking back from the
+  response entry, an entry that is not an item is skipped, an item
+  whose `response` names the response is output, and the walk stops at
+  the first item naming another response or none. The output items of
+  one response need not be contiguous (#40).
+- `Session.RequestContext` follows that rule, so a custom or record
+  entry written between two output items of one response no longer
+  truncates the rebuilt request. A composed product that records a
+  guard's verdict where the guard runs passes `verify` again; only the
+  response's own item entries are removed from the path, and every
+  other entry stays where it was (#40).
+
 ## v0.0.5 - 2026-09-20
 
 - RFC 0001 is revised to draft 0.2. The summary now defines a session as

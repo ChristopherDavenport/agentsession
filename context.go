@@ -269,8 +269,16 @@ func (s *Session) ContextAt(id string) (Context, error) {
 
 // RequestContext rebuilds the context of the request that produced the
 // response entry id: the path to the entry with the response's own
-// output items removed. Output items are the item entries directly
-// before the response entry whose ResponseID matches.
+// output items removed.
+//
+// The output items are found by walking back from the response entry:
+// an entry that is not an item entry is skipped, an item entry whose
+// ResponseID matches the response is an output item, and the walk
+// stops at the first item entry whose ResponseID differs. Only the
+// matching item entries are removed; everything else on the path
+// stays, so an entry another layer wrote between two output items of
+// one response, which contributes nothing to context, leaves the
+// rebuilt request and its hash alone.
 func (s *Session) RequestContext(id string) (Context, error) {
 	e, ok := s.Entry(id)
 	if !ok {
@@ -281,15 +289,25 @@ func (s *Session) RequestContext(id string) (Context, error) {
 		return Context{}, fmt.Errorf("agentsession: entry %s is a %s, not a response", id, e.EntryType())
 	}
 	path := s.Path(id)
-	end := len(path) - 1 // drop the response entry itself
-	for end > 0 {
-		item, ok := path[end-1].(*ItemEntry)
-		if !ok || item.ResponseID == "" || item.ResponseID != resp.ResponseID {
+	path = path[:len(path)-1] // drop the response entry itself
+	output := make([]bool, len(path))
+	for i := len(path) - 1; i >= 0; i-- {
+		item, ok := path[i].(*ItemEntry)
+		if !ok {
+			continue
+		}
+		if item.ResponseID == "" || item.ResponseID != resp.ResponseID {
 			break
 		}
-		end--
+		output[i] = true
 	}
-	return BuildContext(path[:end])
+	request := make([]Entry, 0, len(path))
+	for i, e := range path {
+		if !output[i] {
+			request = append(request, e)
+		}
+	}
+	return BuildContext(request)
 }
 
 // ErrHashMismatch is returned by [Session.Verify] when the rebuilt

@@ -24,7 +24,7 @@ type contextGolden struct {
 // positive fixture and compares against testdata/context. Reviewing
 // those files is reviewing the algorithm.
 func TestContextGolden(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			got := map[string]contextGolden{}
@@ -149,7 +149,7 @@ func TestBranchContext(t *testing.T) {
 // TestVerifyFixtureHashes rebuilds the request for every response entry
 // in the fixtures and checks it against the recorded request_hash.
 func TestVerifyFixtureHashes(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			for _, e := range s.Entries() {
@@ -222,6 +222,66 @@ func TestRequestContext(t *testing.T) {
 	if err := s.Verify(none.ID); err != nil {
 		t.Errorf("Verify without hash = %v", err)
 	}
+}
+
+// TestRequestContextInterleaved is the composed product's shape: a
+// layer writes a custom entry between two output items of one
+// response, which is where an output guard's verdict lands. The
+// entries of that response are still its output, wherever the other
+// layer wrote, so every request still rebuilds.
+func TestRequestContextInterleaved(t *testing.T) {
+	s := loadFixture(t, "interleaved")
+	tests := []struct {
+		name, response string
+		items          []string
+	}{
+		{"first request keeps the user item alone", "r0000001", []string{"List the files."}},
+		{"second request keeps the first turn", "r0000002", []string{
+			"List the files.", "reasoning:A shell call will do.", "call:bash", "output:a.txt\nb.txt"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, err := s.RequestContext(tt.response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := itemTexts(ctx.Items); !reflect.DeepEqual(got, tt.items) {
+				t.Fatalf("request items = %q, want %q", got, tt.items)
+			}
+			for _, e := range ctx.Entries {
+				if item, ok := e.(*ItemEntry); ok && item.ResponseID == responseIDOf(t, s, tt.response) {
+					t.Errorf("entry %s is output of the response it is a request for", e.Base().ID)
+				}
+			}
+			if err := s.Verify(tt.response); err != nil {
+				t.Errorf("Verify: %v", err)
+			}
+		})
+	}
+	// The custom entries stay on the path: they carry no item, so they
+	// change neither the request nor its hash.
+	ctx, err := s.RequestContext("r0000002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	custom := 0
+	for _, e := range ctx.Entries {
+		if _, ok := e.(*CustomEntry); ok {
+			custom++
+		}
+	}
+	if custom != 2 {
+		t.Errorf("request context holds %d custom entries, want both the ones on the path", custom)
+	}
+}
+
+func responseIDOf(t *testing.T, s *Session, entryID string) string {
+	t.Helper()
+	e, ok := s.Entry(entryID)
+	if !ok {
+		t.Fatalf("no entry %s", entryID)
+	}
+	return e.(*ResponseEntry).ResponseID
 }
 
 func TestSettingsApply(t *testing.T) {
