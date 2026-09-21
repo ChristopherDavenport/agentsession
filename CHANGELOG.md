@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.6 - 2026-09-21
 
 - RFC 0001 is revised to draft 0.3 and the library writes
   `agentsession/0.3`; 0.2 and 0.1 files read unchanged. Context
