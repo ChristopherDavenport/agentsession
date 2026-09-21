@@ -367,6 +367,110 @@ func TestPinnedOmitted(t *testing.T) {
 	}
 }
 
+// TestOutputEntries pins the contract a second implementation of the
+// rule has to match. The rule is written twice in the workspace —
+// here and in agenteval's replay, which serves the items rather than
+// excluding them — so what this asserts is what keeps the two from
+// drifting: order, membership, and what is left out.
+func TestOutputEntries(t *testing.T) {
+	s := loadFixture(t, "interleaved")
+	path := s.Path("r0000002")
+	resp := path[len(path)-1].(*ResponseEntry)
+
+	// Path order, not the backward order the walk runs in. Serving
+	// these reversed changes every later request of a replayed run,
+	// and the divergence names two hashes and no field.
+	got := OutputEntries(path, resp)
+	var ids []string
+	for _, e := range got {
+		ids = append(ids, e.ID)
+	}
+	if want := []string{"i0000005", "i0000006"}; !reflect.DeepEqual(ids, want) {
+		t.Errorf("output entries = %v, want %v", ids, want)
+	}
+
+	// The custom entry between the two output items is skipped and not
+	// returned: it is on the path for its own reasons and stays there.
+	for _, e := range got {
+		if e.ID == "u0000002" {
+			t.Error("a skipped non-item entry was returned as output")
+		}
+	}
+
+	// Passing the path with the response entry still on the end gives
+	// the same answer, since an entry that is not an item is skipped.
+	if trimmed := OutputEntries(path[:len(path)-1], resp); !reflect.DeepEqual(trimmed, got) {
+		t.Error("trimming the response entry off the path changed the answer")
+	}
+
+	// The entries are the session's own, so a caller that serves their
+	// items knows it has to clone.
+	if e, _ := s.Entry("i0000006"); got[len(got)-1] != e {
+		t.Error("OutputEntries returned a copy, not the session's own entry")
+	}
+
+	// A response with no ResponseID has no output items, and neither
+	// does one whose items are all somebody else's.
+	if out := OutputEntries(path, &ResponseEntry{}); out != nil {
+		t.Errorf("a response with no ResponseID has %d output entries", len(out))
+	}
+	if out := OutputEntries(path, &ResponseEntry{ResponseID: "resp_absent"}); out != nil {
+		t.Errorf("an unmatched response has %d output entries", len(out))
+	}
+	if out := OutputEntries(nil, resp); out != nil {
+		t.Errorf("an empty path has %d output entries", len(out))
+	}
+
+	// The walk stops at the first item entry belonging to something
+	// else rather than running to the root: the first response's items
+	// are not the second's.
+	first := s.Path("r0000001")
+	out := OutputEntries(first, first[len(first)-1].(*ResponseEntry))
+	ids = nil
+	for _, e := range out {
+		ids = append(ids, e.ID)
+	}
+	if want := []string{"i0000002", "i0000003"}; !reflect.DeepEqual(ids, want) {
+		t.Errorf("first response output = %v, want %v", ids, want)
+	}
+}
+
+// TestOutputEntriesStopsRatherThanSkips is the case that separates the
+// rule from the looser one that selects every item entry naming the
+// response, wherever it sits. They differ only when an item entry that
+// is not part of the response lands between two that are, which is an
+// input item written mid-response — something the writing discipline
+// says SHOULD NOT happen. The walk stops there, so such a file fails
+// loudly on its hash instead of quietly rebuilding a request that
+// includes an input the model never saw.
+func TestOutputEntriesStopsRatherThanSkips(t *testing.T) {
+	item := func(id, responseID, text string) *ItemEntry {
+		return &ItemEntry{
+			EntryBase:  EntryBase{ID: id},
+			Item:       openresponses.UserMessage(&openresponses.InputText{Text: text}),
+			ResponseID: responseID,
+		}
+	}
+	resp := &ResponseEntry{EntryBase: EntryBase{ID: "r1"}, ResponseID: "resp_1"}
+	path := []Entry{
+		item("i1", "", "the request"),
+		item("i2", "resp_1", "first output"),
+		// An input item written while the response was in flight.
+		item("i3", "", "steered in mid-response"),
+		item("i4", "resp_1", "second output"),
+		resp,
+	}
+	var ids []string
+	for _, e := range OutputEntries(path, resp) {
+		ids = append(ids, e.ID)
+	}
+	// i2 names the response but is behind the stop, so it is not
+	// output. Returning it would be the looser rule.
+	if want := []string{"i4"}; !reflect.DeepEqual(ids, want) {
+		t.Errorf("output entries = %v, want %v: the walk must stop at i3, not skip it", ids, want)
+	}
+}
+
 func responseIDOf(t *testing.T, s *Session, entryID string) string {
 	t.Helper()
 	e, ok := s.Entry(entryID)

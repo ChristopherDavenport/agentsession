@@ -28,6 +28,23 @@ versions may break the API.
   response's own item entries are removed from the path, and every
   other entry stays where it was (#40).
 
+- New export `OutputEntries(path []Entry, resp *ResponseEntry)
+  []*ItemEntry`, the rule for finding a response's own output items,
+  over a path the caller already holds. `Session.RequestContext` calls
+  it rather than keeping its own copy of the walk. The rule is
+  implemented twice in the workspace — here, which excludes those
+  entries from the rebuilt request, and in `agenteval`'s replay, which
+  serves their items — with a comment rather than a compiler keeping
+  the two in step. Exporting the selection is what lets the second
+  reader drop its copy: it returns entries rather than items, because
+  a reader that excludes them needs entry identity and items carry
+  none, and it returns them in path order, not the backward order the
+  walk runs in. The entries are the session's own, so a caller that
+  serves their items to something that records must clone them. The
+  RFC now states the two things a second implementation had to infer:
+  a `response` with no `response_id` has no output items, and the
+  order is normative.
+
 - `CompactionEntry` gains `Pinned`, written as the optional `pinned`
   member: the items a fold kept verbatim from before `first_kept`.
   `BuildContext` places them immediately after `summary` and before

@@ -90,6 +90,12 @@ on the compaction's `Pinned`, and the context algorithm places those
 items immediately after the summary, which is where the request that
 was sent had them.
 
+`agentsession.OutputEntries(path, resp)` is the rule for finding a
+response's own output items, over a path the caller already holds. It
+is what `RequestContext` removes; a reader that instead serves those
+items — replaying a recorded call, say — calls the same function, so
+the two cannot drift into rebuilding different requests from one file.
+
 A harness that composes its instructions from several layers records
 them as parts, so a change to one layer costs that layer and not the
 whole prompt:

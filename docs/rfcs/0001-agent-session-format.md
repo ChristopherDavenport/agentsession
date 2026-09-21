@@ -679,6 +679,14 @@ first `item` whose `response` names another response or nothing. Only
 those item entries are removed; every other entry on the path stays,
 and the context algorithm above runs over the result.
 
+A `response` that carries no `response_id`, which the entry permits,
+has no output items: there is nothing for an `item` to name. The
+output items are in path order, which is the order the model produced
+them in, so a reader that walks backward MUST restore that order
+before it serves them — a request rebuilt from them reversed is a
+different request, and the hash reports it as a divergence with no
+field to point at.
+
 A writer SHOULD write a response's output items contiguously, so that
 the envelope reads in the order it happened and a reader scanning the
 file by eye sees one response as one block.

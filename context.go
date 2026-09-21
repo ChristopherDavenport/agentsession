@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/openresponses"
@@ -431,18 +432,56 @@ func (s *Session) ContextAt(id string) (Context, error) {
 	return BuildContext(path)
 }
 
+// OutputEntries returns the item entries on path that hold the output
+// of resp, in path order. It is the format's rule for finding a
+// response's own output items, stated in RFC 0001 under "Request
+// context of a response", and it is the one implementation: a reader
+// that needs those items, and one that needs to exclude them, must
+// agree or the same file rebuilds two different requests.
+//
+// Walking back from the end of path: an entry that is not an item
+// entry is skipped, an item entry whose Response names resp is one of
+// its output items, and the walk stops at the first item entry that
+// names another response or none. A response with no ResponseID has
+// no output items.
+//
+// path is resp's path with resp itself at the end, or that path
+// without it; either gives the same answer, since an entry that is
+// not an item entry is skipped. Only the matching item entries are
+// returned, never the entries skipped between them: those are on the
+// path for their own reasons and stay there.
+//
+// The returned entries are the session's own, not copies. A caller
+// that serves their items to something that records must clone them;
+// a caller that only reads the path need not.
+func OutputEntries(path []Entry, resp *ResponseEntry) []*ItemEntry {
+	if resp == nil || resp.ResponseID == "" {
+		return nil
+	}
+	var output []*ItemEntry
+	for i := len(path) - 1; i >= 0; i-- {
+		item, ok := path[i].(*ItemEntry)
+		if !ok {
+			continue
+		}
+		if item.ResponseID == "" || item.ResponseID != resp.ResponseID {
+			break
+		}
+		output = append(output, item)
+	}
+	// The walk runs backward; the result is in path order, which is
+	// the order the model produced the items in.
+	slices.Reverse(output)
+	return output
+}
+
 // RequestContext rebuilds the context of the request that produced the
 // response entry id: the path to the entry with the response's own
-// output items removed.
-//
-// The output items are found by walking back from the response entry:
-// an entry that is not an item entry is skipped, an item entry whose
-// ResponseID matches the response is an output item, and the walk
-// stops at the first item entry whose ResponseID differs. Only the
-// matching item entries are removed; everything else on the path
-// stays, so an entry another layer wrote between two output items of
-// one response, which contributes nothing to context, leaves the
-// rebuilt request and its hash alone.
+// output items removed, as [OutputEntries] finds them. Only those item
+// entries are removed; everything else on the path stays, so an entry
+// another layer wrote between two output items of one response, which
+// contributes nothing to context, leaves the rebuilt request and its
+// hash alone.
 func (s *Session) RequestContext(id string) (Context, error) {
 	e, ok := s.Entry(id)
 	if !ok {
@@ -454,22 +493,22 @@ func (s *Session) RequestContext(id string) (Context, error) {
 	}
 	path := s.Path(id)
 	path = path[:len(path)-1] // drop the response entry itself
-	output := make([]bool, len(path))
-	for i := len(path) - 1; i >= 0; i-- {
-		item, ok := path[i].(*ItemEntry)
-		if !ok {
-			continue
-		}
-		if item.ResponseID == "" || item.ResponseID != resp.ResponseID {
-			break
-		}
-		output[i] = true
+	output := OutputEntries(path, resp)
+	if len(output) == 0 {
+		return BuildContext(path)
+	}
+	drop := make(map[*ItemEntry]struct{}, len(output))
+	for _, item := range output {
+		drop[item] = struct{}{}
 	}
 	request := make([]Entry, 0, len(path))
-	for i, e := range path {
-		if !output[i] {
-			request = append(request, e)
+	for _, e := range path {
+		if item, ok := e.(*ItemEntry); ok {
+			if _, skip := drop[item]; skip {
+				continue
+			}
 		}
+		request = append(request, e)
 	}
 	return BuildContext(request)
 }
