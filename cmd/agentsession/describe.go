@@ -21,6 +21,9 @@ func describeEntry(e agentsession.Entry) string {
 		if v.ResponseID != "" {
 			s += " (" + v.ResponseID + ")"
 		}
+		if v.Source != nil {
+			s += " from " + describeTrigger(v.Source)
+		}
 		if v.Visible != nil && !*v.Visible {
 			s = "hidden " + s
 		}
@@ -170,6 +173,15 @@ func describeEntry(e agentsession.Entry) string {
 			parts = append(parts, "args rewritten")
 		}
 		return strings.Join(parts, " ")
+	case *agentsession.QueuedEntry:
+		s := v.Mode + " " + describeItem(v.Item)
+		if v.Trigger != nil {
+			s += " from " + describeTrigger(v.Trigger)
+		}
+		if v.Ref != "" {
+			s += " ref " + describeText(v.Ref)
+		}
+		return s
 	default:
 		return "(unknown entry type)"
 	}
@@ -189,6 +201,18 @@ func describeParts(parts []agentsession.InstructionPart) string {
 		}
 	}
 	return "[" + strings.Join(out, " ") + "]"
+}
+
+// describeTrigger renders what brought an input in.
+func describeTrigger(t *agentsession.Trigger) string {
+	s := t.Kind
+	if t.Ref != "" {
+		s = strings.TrimSpace(s + " " + shorten(t.Ref, 24))
+	}
+	if t.Source != "" {
+		s += " via " + t.Source
+	}
+	return s
 }
 
 // describeItem renders one Open Responses item on one line.

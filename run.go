@@ -175,6 +175,49 @@ func (s *Session) PendingCalls(leaf string) ([]*Call, error) {
 	return out, nil
 }
 
+// Queued returns the queued entries on a root-first path that are
+// still waiting: no item entry on the path names them in QueuedFrom,
+// and no run end follows them. They are the inputs a harness accepted
+// and has not yet appended to the conversation, the durable inbox a
+// resume drains. A run end after a queued entry closes it, since the
+// run it was queued into has ended: a harness that still wants the
+// input queues it again.
+func Queued(path []Entry) []*QueuedEntry {
+	var open []*QueuedEntry
+	drained := map[string]bool{}
+	for _, e := range path {
+		switch v := e.(type) {
+		case *QueuedEntry:
+			open = append(open, v)
+		case *ItemEntry:
+			if v.QueuedFrom != "" {
+				drained[v.QueuedFrom] = true
+			}
+		case *RunEntry:
+			if v.IsEnd() {
+				open = nil
+			}
+		}
+	}
+	var out []*QueuedEntry
+	for _, q := range open {
+		if !drained[q.ID] {
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+// PendingQueued returns the inputs queued on the path to leaf that
+// have not been appended; see [Queued].
+func (s *Session) PendingQueued(leaf string) ([]*QueuedEntry, error) {
+	path := s.Path(leaf)
+	if path == nil {
+		return nil, fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
+	}
+	return Queued(path), nil
+}
+
 // Run is one run's segment of a path: the entries from its start entry
 // to its end entry, or to the end of the path when the run was cut off
 // or closed by a branch.

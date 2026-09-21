@@ -54,6 +54,11 @@ const (
 	// ExtraCalls carries, keyed by call ID in the extra of the agent
 	// step that produced the call, the call's decisions and dispatch.
 	ExtraCalls = "calls"
+	// ExtraQueued carries, as a list, the inputs a harness accepted
+	// before it could append them: the item, the mode and the trigger
+	// of each. A queued input that was appended is a step of its own
+	// carrying the same trigger under "source".
+	ExtraQueued = "queued"
 )
 
 // ToATIF converts one trajectory into an ATIF document. Every step
@@ -267,6 +272,16 @@ func (b *builder) entry(e agentsession.Entry) error {
 		call := b.callExtra(v.CallID)
 		list, _ := call["decisions"].([]any)
 		call["decisions"] = append(list, rec)
+	case *agentsession.QueuedEntry:
+		rec := map[string]any{"entry_id": v.ID, "mode": v.Mode, "item": rawItem(v.Item)}
+		if v.Trigger != nil {
+			rec["trigger"] = v.Trigger
+		}
+		if v.Ref != "" {
+			rec["ref"] = v.Ref
+		}
+		copyUnknown(rec, v.Unknown)
+		b.addPendingList(ExtraQueued, rec)
 	case *agentsession.UnknownEntry:
 		b.addPendingList("extensions", json.RawMessage(v.Raw))
 	default:
@@ -353,6 +368,12 @@ func (b *builder) itemExtra(e *agentsession.ItemEntry) map[string]any {
 	}
 	if !e.IsVisible() {
 		extra["visible"] = false
+	}
+	if e.Source != nil {
+		extra["source"] = e.Source
+	}
+	if e.QueuedFrom != "" {
+		extra["queued_from"] = e.QueuedFrom
 	}
 	return copyUnknown(extra, e.Unknown)
 }

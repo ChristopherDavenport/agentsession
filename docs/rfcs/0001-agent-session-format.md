@@ -171,7 +171,7 @@ such record leaves the type out of `records`.
 
 Context entries: `item`, `response`, `config`, `compaction`,
 `branch_summary`. Record entries: `run`, `dispatch`, `decision`,
-`label`, `info`, `env`, `outcome`, `link`, `custom`. A record entry
+`queued`, `label`, `info`, `env`, `outcome`, `link`, `custom`. A record entry
 contributes nothing to context; the context algorithm below is the
 normative statement.
 
@@ -207,6 +207,9 @@ One conversation item in the payload profile.
   item was model output.
 - `visible` MAY be `false` to mark an item that is part of the model
   context but that a renderer SHOULD hide.
+- `source` MAY carry the trigger of an item a person or another system
+  sent, in the shape `queued` defines, and `queued_from` MAY name the
+  `queued` entry the item was accepted as.
 
 ### `response`
 
@@ -486,6 +489,50 @@ A call's fate was decided outside the tool.
 A `decision` is a lifecycle fact and carries no score. A judgement of
 how something went is an `outcome`.
 
+### `queued`
+
+An input the harness accepted before it could append it: a steer typed
+while the model is running, or a follow-up that waits for the run to
+end.
+
+```json
+{"type":"queued","id":"…","parent":"…","ts":"…",
+ "item":{…item…},"mode":"steer|followup",
+ "trigger":{"kind":"human","ref":"slack:1758412800.0002","source":"gateway"},
+ "ref":"inbox-1"}
+```
+
+- `item` and `mode` are required. `mode` is `steer` for an input that
+  joins the run in flight and `followup` for one that waits for it to
+  end.
+- The entry is a record entry: its `item` is not in context and
+  reaches no request. The input enters the conversation when it is
+  appended as an `item` entry, which carries `queued_from` naming this
+  entry.
+- `trigger` says how the input arrived: `kind` is the sort of thing it
+  came from, `ref` names the thing itself, `source` names the layer
+  that took it. All three are in the harness's own terms and a reader
+  treats them as opaque. This is where the trigger of an input that
+  joins a run already in flight lives, since the `run` entry's `ref`
+  names what started the run and not what arrived during it: two
+  people steering one run are two triggers.
+- `ref` names the queued input in the harness's own terms, for a
+  caller holding a handle to it.
+- A `queued` entry with no `item` entry naming it in `queued_from`,
+  and no `run` end after it on the path, is an input the harness still
+  owes the conversation: a durable inbox a resume drains. A `run` end
+  after it closes it, since the run it was queued into has ended; a
+  harness that still wants the input queues it again. A writer that
+  names `queued` in the header's `records` writes one for every input
+  it accepts before appending it, so a reader may take the absence of
+  one as nothing having been queued.
+
+The `item` entry that drains a queued input carries two optional
+members: `source`, the trigger the queued entry held, and
+`queued_from`, the ID of that entry. `source` on an `item` is not
+restricted to a drained input: any item a person or another system
+sent rather than the model or the loop may carry it.
+
 ### `label`, `info`
 
 ```json
@@ -586,8 +633,10 @@ list as follows.
    If none: the item list is the items of all entries on the path.
 4. An entry contributes an item if it is `item`, or `branch_summary`,
    or a `compaction` selected in step 3. Every record entry (`run`,
-   `dispatch`, `decision`, `label`, `info`, `env`, `outcome`, `link`,
-   `custom`) and every unknown extension contributes nothing.
+   `dispatch`, `decision`, `queued`, `label`, `info`, `env`,
+   `outcome`, `link`, `custom`) and every unknown extension
+   contributes nothing. A `queued` entry holds an item and is not in
+   context: the input enters when it is appended as an `item`.
 5. The canonical request is settings plus the item list, encoded as the
    payload profile's request with `store: false` and no
    `previous_response_id`. Its hash is `request_hash`.
@@ -724,6 +773,11 @@ rebuilds the same context for every other file.
 - Context building states how the request context of a response is
   found, and that the output items of one response need not be
   contiguous.
+- New record entry `queued`, the input a harness accepted before it
+  could append it, with the trigger that brought it in; the `item`
+  entry that drains one carries `source` and `queued_from`. A queued
+  entry with neither an item that names it nor a run end after it is
+  an inbox a resume drains. `records` may name `queued`.
 - `config` gains `instructions_parts`, the composition of the
   instructions as an ordered list of named parts, with a delta
   carrying the text of the parts that changed and a hash for the
@@ -777,17 +831,13 @@ a second spelling of settings and change step 2 for a storage cost that
 belongs to the store, and which 0.3 adopts; and a durable leaf marker, which a library can
 carry as a reserved `label` without a format change; and a `source`
 on the item envelope for an input that joins a run already in flight,
-which the `run` entry cannot name. All three are open questions below.
+which the `run` entry cannot name and which 0.3 adopts beside the
+`queued` entry. All three were open questions; two are now answered.
 
 ## Open questions
 
 - Whether the current leaf needs a durable marker. Held: a reserved
   `label` a library honours on open covers it without a format change.
-- Whether the `item` envelope needs a member naming how an input
-  queued into a run already in flight arrived. Held: `run` says only
-  whether a run began from an input or a resume; how an input arrived
-  is a harness feature, so a harness that steers a running agent records
-  it in a `custom` entry until the case is better understood.
 - Whether to allow a second payload profile at 0.x, or hold the line at
   Open Responses and rely on converters.
 - Sidecar media layout and naming.

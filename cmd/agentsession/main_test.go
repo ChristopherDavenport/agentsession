@@ -89,6 +89,15 @@ func TestRun(t *testing.T) {
 			name: "verify instructions parts", args: []string{"verify", filepath.Join(fixtures, "instructions.jsonl")},
 			stdout: []string{"2 verified, 0 without hash, 0 failed"},
 		},
+		{
+			name: "show queued", args: []string{"show", "../../testdata/sessions/queued.jsonl"},
+			stdout: []string{
+				"records  run, dispatch, decision, queued",
+				`steer user: "and skip the smoke tests" from human slack:1758412800.0002 via gateway ref "inbox-1"`,
+				`followup user: "then tag the release"`,
+				`user: "and skip the smoke tests" from human`,
+			},
+		},
 		{name: "export bad prefer", args: []string{"export", filepath.Join(fixtures, "branch.jsonl"), "-out", out, "-prefer", "best"}, code: 2, stderr: []string{`-prefer "best"`}},
 		{
 			name: "export prefer label", args: []string{"export", filepath.Join(fixtures, "branch.jsonl"), "-out", filepath.Join(tmp, "out2"), "-prefer", "label=fork", "-prefer", "leaf", "-prefer", "score", "-prefer", "latest"},

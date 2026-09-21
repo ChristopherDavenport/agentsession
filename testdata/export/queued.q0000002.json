@@ -1,0 +1,207 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000008",
+  "trajectory_id": "q0000002",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-09-21T11:00:02Z",
+      "source": "user",
+      "message": "Deploy the service.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000001"
+        },
+        "config_entries": [
+          "c0000001"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Deploy the service."
+              }
+            ]
+          }
+        },
+        "run": {
+          "end_entry_id": "u0000002",
+          "pending": [],
+          "reason": "done",
+          "run_id": "run-1",
+          "source": "input",
+          "start_entry_id": "u0000001",
+          "trigger": "slack:1758412800.0001"
+        },
+        "source": {
+          "kind": "human",
+          "ref": "slack:1758412800.0001",
+          "source": "gateway"
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-09-21T11:00:04Z",
+      "source": "user",
+      "message": "and skip the smoke tests",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000002"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "and skip the smoke tests"
+              }
+            ]
+          }
+        },
+        "queued": [
+          {
+            "entry_id": "q0000001",
+            "item": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "and skip the smoke tests"
+                }
+              ]
+            },
+            "mode": "steer",
+            "ref": "inbox-1",
+            "trigger": {
+              "kind": "human",
+              "ref": "slack:1758412800.0002",
+              "source": "gateway"
+            }
+          }
+        ],
+        "queued_from": "q0000001",
+        "source": {
+          "kind": "human",
+          "ref": "slack:1758412800.0002",
+          "source": "gateway"
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-09-21T11:00:06Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Deployed, smoke tests skipped.",
+      "metrics": {
+        "prompt_tokens": 30,
+        "completion_tokens": 9,
+        "cached_tokens": 0
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000001"
+        },
+        "item_entry_ids": [
+          "i0000003"
+        ],
+        "latency_ms": 400,
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Deployed, smoke tests skipped.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "r0000001",
+            "latency_ms": 400,
+            "model": "gpt-5",
+            "request_hash": "sha256:ed67b95114b302124c84c7ae0881b9a9d91c0dbcc283c81349229be98eaa3b78",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-09-21T11:00:06Z",
+            "usage": {
+              "input_tokens": 30,
+              "output_tokens": 9,
+              "total_tokens": 39,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 30,
+    "total_completion_tokens": 9,
+    "total_cached_tokens": 0,
+    "total_steps": 3
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.3",
+      "leaf": "q0000002",
+      "main": true,
+      "records": [
+        "run",
+        "dispatch",
+        "decision",
+        "queued"
+      ]
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    },
+    "queued": [
+      {
+        "entry_id": "q0000002",
+        "item": {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "then tag the release"
+            }
+          ]
+        },
+        "mode": "followup",
+        "ref": "inbox-2",
+        "trigger": {
+          "kind": "human",
+          "ref": "slack:1758412800.0003",
+          "source": "gateway"
+        }
+      }
+    ]
+  }
+}

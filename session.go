@@ -269,7 +269,7 @@ func validateEntry(e Entry) error {
 		if len(v.Raw) == 0 {
 			return errors.New("agentsession: unknown entry has no raw bytes")
 		}
-	case *RunEntry, *DispatchEntry, *DecisionEntry:
+	case *RunEntry, *DispatchEntry, *DecisionEntry, *QueuedEntry:
 		return validateLifecycle(e)
 	}
 	return nil

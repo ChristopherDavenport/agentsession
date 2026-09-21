@@ -77,6 +77,20 @@ versions may break the API.
   study's 33,440 byte one, become the part that changed plus an id and
   a hash for each part that did not (#27).
 
+- New record entry `queued`: the input a harness accepted before it
+  could append it, a steer that joins the run in flight or a follow-up
+  that waits for it, with the `trigger` that brought it in. The
+  context algorithm ignores it, and the item entry that drains it
+  carries `source`, the same trigger, and `queued_from` naming the
+  queued entry, so two people steering one run are told apart and the
+  record says why an item is there. `QueuedEntry`, `NewQueued`,
+  `WithTrigger` and `Drain` write it; `Session.PendingQueued` and
+  `Queued` list the inputs a harness still owes the conversation,
+  which is the durable inbox a gateway that answers 202 drains on
+  resume, and a run end closes one. The header's `records` may promise
+  `queued`. `ItemEntry.Source` also stands alone, for any item a
+  person or another system sent (#42).
+
 ## v0.0.5 - 2026-09-20
 
 - RFC 0001 is revised to draft 0.2. The summary now defines a session as

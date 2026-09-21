@@ -71,7 +71,11 @@ func (h Header) HasRecord(typ string) bool {
 }
 
 // AllRecords are the three record entry types a harness that runs the
-// loop itself can promise: run, dispatch and decision.
+// loop itself can promise: run, dispatch and decision. A harness that
+// also accepts inputs while a run is in flight adds [TypeQueued],
+// which promises that every such input is recorded as a queued entry
+// before it is acted on, so a reader may take the absence of one as
+// nothing having been queued.
 var AllRecords = []string{TypeRun, TypeDispatch, TypeDecision}
 
 // Harness names the writer of a session.

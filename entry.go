@@ -47,7 +47,8 @@ const (
 // Entry is one line of a session after the header. Concrete types are
 // [ItemEntry], [ResponseEntry], [ConfigEntry], [CompactionEntry],
 // [BranchSummaryEntry], [RunEntry], [DispatchEntry], [DecisionEntry],
-// [LabelEntry], [InfoEntry], [EnvEntry], [OutcomeEntry], [LinkEntry],
+// [QueuedEntry], [LabelEntry], [InfoEntry], [EnvEntry],
+// [OutcomeEntry], [LinkEntry],
 // [CustomEntry] and [UnknownEntry]. Decoded
 // values are always pointers, so switch on *ItemEntry and so on. An
 // entry must not be modified once it has been appended to a session;
@@ -98,6 +99,14 @@ type ItemEntry struct {
 	// Visible is false for an item that is in context but that a
 	// renderer should hide. Nil means visible.
 	Visible *bool `json:"visible,omitempty"`
+	// Source says how the input arrived, for an item a person or
+	// another system sent rather than the model or the loop. It is the
+	// trigger a [QueuedEntry] carried, so two people steering one run
+	// are told apart.
+	Source *Trigger `json:"source,omitempty"`
+	// QueuedFrom names the [QueuedEntry] this item was accepted as,
+	// for an input that waited before it could be appended.
+	QueuedFrom string `json:"queued_from,omitempty"`
 }
 
 // EntryType returns "item".
@@ -474,6 +483,8 @@ func UnmarshalEntry(data []byte) (Entry, error) {
 		e = &DispatchEntry{}
 	case TypeDecision:
 		e = &DecisionEntry{}
+	case TypeQueued:
+		e = &QueuedEntry{}
 	case TypeLabel:
 		e = &LabelEntry{}
 	case TypeInfo:
@@ -640,6 +651,20 @@ func (e *ItemEntry) decodeMembers(_ []byte, all map[string]json.RawMessage) erro
 			return fmt.Errorf("visible: %w", err)
 		}
 		e.Visible = &visible
+	}
+	e.Source = nil
+	if raw, ok := all["source"]; ok && !isNull(raw) {
+		var source Trigger
+		if err := json.Unmarshal(raw, &source); err != nil {
+			return fmt.Errorf("source: %w", err)
+		}
+		e.Source = &source
+	}
+	e.QueuedFrom = ""
+	if raw, ok := all["queued_from"]; ok && !isNull(raw) {
+		if err := json.Unmarshal(raw, &e.QueuedFrom); err != nil {
+			return fmt.Errorf("queued_from: %w", err)
+		}
 	}
 	return nil
 }

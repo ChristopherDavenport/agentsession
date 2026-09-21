@@ -129,6 +129,21 @@ end, err := sess.EndRun(agentsession.ReasonInputRequired, "")           // pendi
 store.Append(ctx, id, end)
 ```
 
+An input a harness accepts while a run is in flight, a steer or a
+follow-up, is recorded before it is acted on:
+
+```go
+q := agentsession.NewQueued(item, agentsession.ModeSteer).
+    WithTrigger("human", "slack:1758412800.0002", "gateway")
+store.Append(ctx, id, q)                 // the gateway can answer 202
+// ... when the loop can take it ...
+store.Append(ctx, id, q.Drain())         // the item, its source and queued_from
+```
+
+`sess.PendingQueued(leaf)` lists the inputs that have neither been
+appended nor been closed by the end of the run they were queued into,
+which is the inbox a restarted harness drains.
+
 On resume, `sess.PendingCalls(leaf)` lists the calls without an
 output and `Call.State(header)` says what the path knows about each.
 A run's end reason is a shape of its segment and of the path the
