@@ -113,6 +113,15 @@ written one against it. A run that answers a held call and ends
 without calling the model again, which is what a refusal and a
 terminating resume are, reads as `stopped`.
 
+Both file stores guard a session against a second writing process and
+report `agentsession.ErrSessionLocked`, the one sentinel for that
+condition, so a host written against the `Store` interface tells a
+session another process holds from a store that is broken without
+knowing which store it was given. `jsonl.WithReadOnly` and
+`sqlite.WithReadOnly` open a store that takes no lock and refuses
+every write with `agentsession.ErrReadOnly`, which is how a session
+is read while an agent is writing it.
+
 ## Reading one
 
 ```go
@@ -167,8 +176,9 @@ strips the raw items for a document a judge will read.
 
 ## Inspecting from a shell
 
-`cmd/agentsession` reads session files without taking their lock, so
-it is safe to run beside a harness that is writing.
+`cmd/agentsession` reads session files without taking their lock, and
+`list` opens the store with `jsonl.WithReadOnly`, so every command is
+safe to run beside a harness that is writing.
 
 ```
 go install github.com/ChristopherDavenport/agentsession/cmd/agentsession@latest
@@ -212,8 +222,8 @@ _, err := otel.Export(ctx, tracer, sess, sess.Leaf()) // a stored session, after
 | package | purpose |
 |---|---|
 | `agentsession` | header, entries, tree, context algorithm, request hash, `Store` interface, in-memory store |
-| `jsonl` | the file store: one JSONL file per session with a sync policy, crash recovery and a per-session lock against a second writing process, reporting a dead holder's lock when it takes one over |
-| `sqlite` | a SQLite store, as a nested module so its driver stays out of the library, holding each open session against a second process |
+| `jsonl` | the file store: one JSONL file per session with a sync policy, crash recovery and a per-session lock against a second writing process, reporting a dead holder's lock when it takes one over, or read-only and taking no lock |
+| `sqlite` | a SQLite store, as a nested module so its driver stays out of the library, holding each open session against a second process, or read-only and taking no hold |
 | `otel` | the OpenTelemetry projection, as a nested module: replay a session as spans, or wrap a store so a live run emits them |
 | `atif` | Go types for ATIF v1.8 with unknown-member passthrough and validation |
 | `export` | trajectories, ATIF conversion, redactors, writer |

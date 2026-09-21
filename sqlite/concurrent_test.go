@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,5 +138,116 @@ func TestStaleHold(t *testing.T) {
 	holder, _ := b.LockHolder(ctx, "s")
 	if holder == nil || holder.PID != os.Getpid() {
 		t.Errorf("holder after takeover = %+v", holder)
+	}
+}
+
+// TestReadOnlyStore: a read-only store reads a session another store
+// holds, takes no hold of its own and refuses every write. It is what
+// an operator verifying a session while the daemon runs gets.
+func TestReadOnlyStore(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	writer, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.Create(ctx, agentsession.Header{ID: "held"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Append(ctx, "held", &agentsession.InfoEntry{Name: "live"}); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := sqlite.Open(path, sqlite.WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	sess, err := reader.Open(ctx, "held")
+	if err != nil {
+		t.Fatalf("read-only Open of a held session = %v", err)
+	}
+	if sess.Name() != "live" {
+		t.Errorf("name = %q, want the one the holder wrote", sess.Name())
+	}
+	holder, err := reader.LockHolder(ctx, "held")
+	if err != nil || holder == nil || holder.PID != os.Getpid() {
+		t.Errorf("the hold moved: %+v, %v", holder, err)
+	}
+	writes := map[string]error{
+		"Create": func() error { _, err := reader.Create(ctx, agentsession.Header{ID: "new"}); return err }(),
+		"Append": func() error {
+			_, err := reader.Append(ctx, "held", &agentsession.InfoEntry{Name: "no"})
+			return err
+		}(),
+		"Delete": reader.Delete(ctx, "held"),
+	}
+	for name, err := range writes {
+		if !errors.Is(err, agentsession.ErrReadOnly) {
+			t.Errorf("read-only %s = %v, want ErrReadOnly", name, err)
+		}
+	}
+	// The holder keeps appending, and a reopened read-only session
+	// sees it.
+	if _, err := writer.Append(ctx, "held", &agentsession.InfoEntry{Name: "still writing"}); err != nil {
+		t.Errorf("the holder's append after a read-only open: %v", err)
+	}
+	reader.Release("held")
+	again, err := reader.Open(ctx, "held")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Name() != "still writing" {
+		t.Errorf("name after reopen = %q", again.Name())
+	}
+	// Releasing a read-only session left the holder's row alone.
+	if holder, err := writer.LockHolder(ctx, "held"); err != nil || holder == nil {
+		t.Errorf("hold after a read-only Release = %+v, %v", holder, err)
+	}
+}
+
+// TestHolderTimestamps: the message a refused caller sees carries the
+// times the holder has held the session since and last appended, not
+// the zero time.
+func TestHolderTimestamps(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	a, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if _, err := a.Create(ctx, agentsession.Header{ID: "shared"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Append(ctx, "shared", &agentsession.InfoEntry{Name: "n"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = b.Open(ctx, "shared")
+	if !errors.Is(err, agentsession.ErrSessionLocked) {
+		t.Fatalf("Open of a held session = %v", err)
+	}
+	if strings.Contains(err.Error(), "0001-01-01") {
+		t.Errorf("the refusal reports a zero timestamp: %v", err)
+	}
+	year := time.Now().UTC().Format("2006")
+	if !strings.Contains(err.Error(), "since "+year) {
+		t.Errorf("the refusal does not say since when: %v", err)
+	}
+	holder, err := b.LockHolder(ctx, "shared")
+	if err != nil || holder == nil {
+		t.Fatalf("LockHolder = %+v, %v", holder, err)
+	}
+	if holder.Since.IsZero() || holder.Heartbeat.IsZero() {
+		t.Errorf("LockInfo = %+v, want both times", holder)
+	}
+	if holder.Heartbeat.Before(holder.Since) {
+		t.Errorf("heartbeat %s is before since %s", holder.Heartbeat, holder.Since)
 	}
 }

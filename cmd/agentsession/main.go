@@ -6,10 +6,11 @@
 //	agentsession export <file> -out dir [-redact-home] [-redact-env] [-secret VALUE]...
 //	agentsession list <root> [-cwd path] [-parent id] [-limit n]
 //
-// show and verify read a file directly and never take its lock, so
-// they are safe to run while a harness is writing it. export reads
-// the same way. list opens a jsonl store root and prints its
-// sessions, newest first.
+// Every command opens what it reads read-only. show, verify and
+// export read a file directly and never take its lock; list opens a
+// jsonl store root read-only and prints its sessions, newest first.
+// All four are safe to run beside a harness that is writing, which is
+// when an operator most wants them.
 package main
 
 import (

@@ -7,13 +7,18 @@ import (
 	"os"
 	"time"
 
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/internal/procs"
 )
 
 // ErrSessionLocked is returned by Create, Open and Append when another
 // process holds the session. The error's message names the holder;
 // BreakLock removes a lock the caller has decided is stale.
-var ErrSessionLocked = errors.New("jsonl: session is open in another process")
+//
+// It is [agentsession.ErrSessionLocked], so a host that reads the
+// store through the interface matches the same sentinel whichever
+// store it was given.
+var ErrSessionLocked = agentsession.ErrSessionLocked
 
 // LockInfo describes the holder of a session lock.
 type LockInfo struct {

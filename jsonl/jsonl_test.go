@@ -452,3 +452,153 @@ func deadPID(t *testing.T) string {
 func itoa(i int) string { return strconv.Itoa(i) }
 
 func quote(s string) string { return strconv.Quote(s) }
+
+// TestReadOnlyStore: a read-only store reads a session another store
+// holds, takes no lock of its own and refuses every write. It is what
+// an operator asking about a live session gets.
+func TestReadOnlyStore(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	writer, err := jsonl.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	sess, err := writer.Create(ctx, agentsession.Header{CWD: "/p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID()
+	if _, err := writer.Append(ctx, id, &agentsession.InfoEntry{Name: "live"}); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := jsonl.Open(root, jsonl.WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	got, err := reader.Open(ctx, id)
+	if err != nil {
+		t.Fatalf("read-only Open of a held session = %v", err)
+	}
+	if got.Name() != "live" {
+		t.Errorf("name = %q, want the one the holder wrote", got.Name())
+	}
+	if holder, err := reader.LockHolder(id); err != nil || holder == nil || holder.PID != os.Getpid() {
+		t.Errorf("the write lock moved: %+v, %v", holder, err)
+	}
+	// Every write is refused, and the holder is unaffected.
+	writes := map[string]error{
+		"Create": func() error { _, err := reader.Create(ctx, agentsession.Header{}); return err }(),
+		"Append": func() error {
+			_, err := reader.Append(ctx, id, &agentsession.InfoEntry{Name: "no"})
+			return err
+		}(),
+		"Sync":   reader.Sync(ctx, id),
+		"Delete": reader.Delete(ctx, id),
+	}
+	for name, err := range writes {
+		if !errors.Is(err, agentsession.ErrReadOnly) {
+			t.Errorf("read-only %s = %v, want ErrReadOnly", name, err)
+		}
+	}
+	if _, err := writer.Append(ctx, id, &agentsession.InfoEntry{Name: "still writing"}); err != nil {
+		t.Errorf("the holder's append after a read-only open: %v", err)
+	}
+	// Reopening reads what the holder has written since.
+	if err := reader.Release(id); err != nil {
+		t.Fatal(err)
+	}
+	again, err := reader.Open(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Name() != "still writing" {
+		t.Errorf("name after reopen = %q", again.Name())
+	}
+}
+
+// TestReadOnlyLeavesATruncatedLine: trimming a cut-short line is a
+// write, so a read-only open reports it and leaves the file alone.
+func TestReadOnlyLeavesATruncatedLine(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, err := jsonl.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := st.Create(ctx, agentsession.Header{CWD: "/p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID()
+	path, _ := st.Path(id)
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"type":"info","id":"a","parent":null,`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := jsonl.Open(root, jsonl.WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	got, err := reader.Open(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Truncated() == nil {
+		t.Error("the cut-short line was not reported")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("the file changed under a read-only open:\n%s\n%s", before, after)
+	}
+}
+
+// TestLockedSentinelIsShared: the store's sentinel is the root
+// module's, so a host can tell a held session from a broken store
+// without knowing which store it was handed.
+func TestLockedSentinelIsShared(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	first, err := jsonl.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	sess, err := first.Create(ctx, agentsession.Header{CWD: "/p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := jsonl.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	_, err = second.Open(ctx, sess.ID())
+	if !errors.Is(err, agentsession.ErrSessionLocked) {
+		t.Errorf("Open of a held session = %v, want agentsession.ErrSessionLocked", err)
+	}
+	if !errors.Is(err, jsonl.ErrSessionLocked) {
+		t.Errorf("Open of a held session = %v, want jsonl.ErrSessionLocked", err)
+	}
+	if errors.Is(agentsession.ErrNoSession, agentsession.ErrSessionLocked) {
+		t.Error("ErrNoSession matches ErrSessionLocked")
+	}
+}

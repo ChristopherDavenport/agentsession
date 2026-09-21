@@ -35,6 +35,27 @@ versions may break the API.
   one value. One consequence is deliberate: a call an earlier run left
   without an output keeps a later run from reading as `stopped` (#34).
 
+- One `agentsession.ErrSessionLocked` in the root module for a session
+  another process holds. `jsonl.ErrSessionLocked` and
+  `sqlite.ErrSessionLocked` are that error, so a host written against
+  the `Store` interface tells "another process has this session" from
+  "the store is broken" without being told by its caller what its own
+  store's errors mean. Matching either name still works; the message
+  no longer carries the store's prefix (#41).
+- `jsonl.WithReadOnly` and `sqlite.WithReadOnly` open a store that
+  takes no lock or hold on the sessions it opens and refuses `Create`,
+  `Append`, `Delete` and `Sync` with `agentsession.ErrReadOnly`, so
+  `verify`, `show` and `export` work while the agent that owns the
+  session is running. A read-only jsonl open reports a cut-short final
+  line and leaves it in the file, since trimming it is a write. The
+  CLI's `list` opens its store read-only; its other commands already
+  read the file directly (#44).
+- The sqlite store parses a holder's `since` and `heartbeat` before it
+  decides what to do with the row, so the refusal an operator sees
+  names when the holder took the session and when it last appended
+  rather than year one, which read like a broken lock and invited
+  breaking a live one (#43).
+
 ## v0.0.5 - 2026-09-20
 
 - RFC 0001 is revised to draft 0.2. The summary now defines a session as
