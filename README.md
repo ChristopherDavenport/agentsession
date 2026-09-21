@@ -107,8 +107,11 @@ store.Append(ctx, id, end)
 
 On resume, `sess.PendingCalls(leaf)` lists the calls without an
 output and `Call.State(header)` says what the path knows about each.
-A run's end reason is a shape of its segment: `ComputeReason`
-recomputes it and `Run.Verify` checks a written one against it.
+A run's end reason is a shape of its segment and of the path the
+segment ends: `ComputeReason` recomputes it and `Run.Verify` checks a
+written one against it. A run that answers a held call and ends
+without calling the model again, which is what a refusal and a
+terminating resume are, reads as `stopped`.
 
 ## Reading one
 

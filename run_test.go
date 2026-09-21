@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -9,37 +10,47 @@ import (
 )
 
 // seg builds a run segment from a compact script so the cascade can
-// be tested shape by shape. Tokens: "start", "end:<reason>", "user",
-// "resp[:err|:incomplete]" (a response whose output is the calls named
-// in the previous "calls:a,b" token), "calls:a,b", "hold:a",
-// "proceed:a", "reject:a", "dispatch:a", "out:a".
+// be tested shape by shape. Tokens: "start[:resume]", "end:<reason>",
+// "user", "resp[:err|:incomplete]" (a response whose output is the
+// calls named in the previous "calls:a,b" token), "calls:a,b",
+// "hold:a", "proceed:a", "reject:a", "dispatch:a", "out:a". Each
+// "start" opens a new run and each response gets its own ID, so a
+// script can hold several runs.
 func seg(t *testing.T, script string) []Entry {
 	t.Helper()
 	s := New(Header{Records: AllRecords})
 	var pendingCalls []string
-	n := 0
+	n, runs, responses := 0, 0, 0
+	runID := func() string { return fmt.Sprintf("run-%d", runs) }
+	respID := func() string { return fmt.Sprintf("resp-%d", responses) }
 	for _, tok := range strings.Fields(script) {
 		n++
 		kind, arg, _ := strings.Cut(tok, ":")
 		var e Entry
 		switch kind {
 		case "start":
-			e = NewRunStart("run", SourceInput, "")
+			runs++
+			source := SourceInput
+			if arg != "" {
+				source = arg
+			}
+			e = NewRunStart(runID(), source, "")
 		case "end":
-			e = NewRunEnd("run", arg, "", nil)
+			e = NewRunEnd(runID(), arg, "", nil)
 		case "user":
 			e = NewItemEntry(openresponses.UserText("hi"))
 		case "calls":
 			pendingCalls = strings.Split(arg, ",")
 			for _, c := range pendingCalls {
 				fc := &openresponses.FunctionCall{ID: "fc_" + c, CallID: c, Name: "tool", Arguments: "{}"}
-				if _, err := s.Append(&ItemEntry{Item: fc, ResponseID: "resp"}); err != nil {
+				if _, err := s.Append(&ItemEntry{Item: fc, ResponseID: respID()}); err != nil {
 					t.Fatal(err)
 				}
 			}
 			continue
 		case "resp":
-			r := &ResponseEntry{ResponseID: "resp", Status: "completed"}
+			r := &ResponseEntry{ResponseID: respID(), Status: "completed"}
+			responses++
 			switch arg {
 			case "err":
 				r.Error = &openresponses.ErrorPayload{Code: "server_error", Message: "boom"}
@@ -87,8 +98,54 @@ func TestComputeReason(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ComputeReason(seg(t, tt.script)); got != tt.want {
+			p := seg(t, tt.script)
+			if got := ComputeReason(p, p); got != tt.want {
 				t.Errorf("ComputeReason = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestComputeReasonLastRun is the cascade over the last run of a path
+// that holds several, which is where the stopped step has to look
+// back: a run that answers a call an earlier run's model call made and
+// ends without calling the model again holds no response of its own.
+// The four shapes the agenteval study measured are the first four
+// rows; a Harbor-side reader filtering on the reason saw two of them
+// as aborted.
+func TestComputeReasonLastRun(t *testing.T) {
+	tests := []struct {
+		name, script, want string
+	}{
+		{"step limit", "start user calls:a,b resp dispatch:a out:a dispatch:b out:b", ReasonStopped},
+		{"guard stop", "start user calls:a resp dispatch:a out:a", ReasonStopped},
+		{"refusal on resume", "start user calls:a resp hold:a end:input_required start:resume reject:a out:a", ReasonStopped},
+		{"terminating resume", "start user calls:a resp hold:a end:input_required start:resume proceed:a dispatch:a out:a", ReasonStopped},
+
+		{"resume that answers one of two calls", "start user calls:a,b resp hold:a hold:b end:input_required start:resume proceed:a dispatch:a out:a", ReasonAborted},
+		{"resume that leaves the call in flight", "start user calls:a resp hold:a end:input_required start:resume proceed:a dispatch:a", ReasonAborted},
+		{"resume that answers nothing", "start user calls:a resp hold:a end:input_required start:resume user", ReasonAborted},
+		{"resume that calls the model again", "start user calls:a resp hold:a end:input_required start:resume proceed:a dispatch:a out:a resp", ReasonDone},
+		{"a call an earlier run left pending", "start user calls:a resp dispatch:a end:aborted start:resume user calls:b resp dispatch:b out:b", ReasonAborted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := seg(t, tt.script)
+			runs := Runs(path)
+			if len(runs) == 0 {
+				t.Fatal("no runs")
+			}
+			last := runs[len(runs)-1]
+			if got := ComputeReason(last.Path, last.Segment); got != tt.want {
+				t.Errorf("ComputeReason = %s, want %s", got, tt.want)
+			}
+			// A written reason that matches the shape verifies; the
+			// value the recorder used to write for these does not.
+			last.End = NewRunEnd(last.RunID(), tt.want, "", last.Pending())
+			last.Segment = append(last.Segment, last.End)
+			last.Path = append(last.Path[:len(last.Path):len(last.Path)], last.End)
+			if err := last.Verify(); err != nil {
+				t.Errorf("Verify a %s run: %v", tt.want, err)
 			}
 		})
 	}
@@ -265,7 +322,7 @@ func TestVerifyRecords(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if _, err := s.Append(NewRunEnd("run", ReasonInputRequired, "", []string{"b"})); err != nil {
+		if _, err := s.Append(NewRunEnd("run-1", ReasonInputRequired, "", []string{"b"})); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrReasonMismatch) {

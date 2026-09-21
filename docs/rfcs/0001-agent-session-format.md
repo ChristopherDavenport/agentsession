@@ -319,25 +319,40 @@ Why a run started and how it ended. Two entries per run, paired by
 - `reason` is closed. Each value is a shape of the run's segment, the
   entries on the path from the `start` entry to the `end` entry, where
   a pending call is a `function_call` on the segment with no
-  `function_call_output` on it. Four values are computable from the
-  segment, tested in this order with the first match winning:
+  `function_call_output` on it. Five values are computable, tested in
+  this order with the first match winning:
   1. `error`: the last `response` on the segment carries a non-null
      `error`.
   2. `input_required`: at least one pending call is held, as `decision`
      defines it, and no pending call has a `dispatch`.
   3. `aborted`: any other segment with a pending call, or whose last
-     `response` has a non-null `incomplete`, or that has no `response`.
-  4. `done`: the last `response` has no `function_call` in its output.
-  5. `stopped`: the last `response` has calls, every call has an
-     output, and the harness chose not to call the model again. `ref`
-     names the cause (a turn budget, a tool that asked to stop).
+     `response` has a non-null `incomplete`.
+  4. `done`: the segment has a `response` and its last one has no
+     `function_call` in its output.
+  5. `stopped`: the last response on the path before the segment's end
+     has calls, every call on the path has an output, the segment
+     holds at least one output or decision, and no response follows.
+     The harness chose not to call the model again; `ref` names the
+     cause (a turn budget, a tool that asked to stop).
+  6. `aborted`: anything left, which is a run that neither called the
+     model nor finished a call.
+
+  The `stopped` step reads the path and not the segment alone. A run
+  that answers a call and ends without calling the model again holds
+  no `response` of its own: a resume whose approved call asks the
+  harness to terminate, and a refusal that ends the turn, are both
+  that shape, and the `response` that made the calls is on the path
+  before the segment. One consequence is deliberate: a call an earlier
+  run left without an output keeps every later run on that path from
+  reading as `stopped`, because the path still holds an unanswered
+  call, and `aborted` is the value that says so.
 
   Two values record what the segment cannot show and are written, not
   computed: `error` when the harness failed at any point, which `ref`
   names, and `interrupted` when a person or the host told the harness
   to stop. A written `error` or `interrupted` stands over any segment.
-  Every segment matches exactly one computable value; a reader MAY
-  recompute it, and when the written value is computable and the two
+  Every segment matches exactly one computable value on its path; a
+  reader MAY recompute it, and when the written value is computable and the two
   disagree the segment is authoritative.
 - `pending` lists the pending calls' IDs so a resume can read them
   without walking the segment. The segment is authoritative here too.
@@ -651,6 +666,11 @@ rebuilds the same context for every other file.
 - Context building states how the request context of a response is
   found, and that the output items of one response need not be
   contiguous.
+- The `stopped` step of the run end cascade reads the path before the
+  segment, so a run that answers a call and ends without calling the
+  model again is `stopped` rather than `aborted`. The cascade's
+  `aborted` step no longer catches a segment with no `response`;
+  a sixth step does, so every segment still matches exactly one value.
 
 ## Changes since 0.1
 

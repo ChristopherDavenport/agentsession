@@ -22,6 +22,19 @@ versions may break the API.
   response's own item entries are removed from the path, and every
   other entry stays where it was (#40).
 
+- **Breaking.** `ComputeReason` takes the run's path as well as its
+  segment, `Run` carries the `Path` the segment ends, and the
+  `stopped` step of the cascade reads it: a run that answers a call an
+  earlier run's model call made and ends without calling the model
+  again is `stopped`, not `aborted`. A refusal and a resume whose
+  approved call terminates are both that shape, and a recorder that
+  wrote what happened failed `Run.Verify` before. Passing the segment
+  for both arguments, or a `Run` built by hand, reads as it did. The
+  cascade's `aborted` step no longer catches a segment with no
+  response; a sixth step does, so every segment still matches exactly
+  one value. One consequence is deliberate: a call an earlier run left
+  without an output keeps a later run from reading as `stopped` (#34).
+
 ## v0.0.5 - 2026-09-20
 
 - RFC 0001 is revised to draft 0.2. The summary now defines a session as

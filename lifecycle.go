@@ -30,9 +30,10 @@ const (
 )
 
 // Reasons a run ended, on its end entry. The first five are computable
-// from the run's segment by [ComputeReason]; ReasonError and
-// ReasonInterrupted are the two a writer adds where the segment cannot
-// show them, and a written one stands over any segment.
+// from the run's segment and the path it ends by [ComputeReason];
+// ReasonError and ReasonInterrupted are the two a writer adds where
+// the segment cannot show them, and a written one stands over any
+// segment.
 const (
 	ReasonDone          = "done"
 	ReasonStopped       = "stopped"
