@@ -117,6 +117,7 @@ release:
 # TRAILER, when set, is appended to the commit message.
 release-root:
 	@test -n "$(VERSION)" || { echo "usage: make release-root VERSION=vX.Y.Z"; exit 1; }
+	@test "$(origin SUBMODULES)" = file || { echo "do not override SUBMODULES here: a command-line override propagates into the tidy and check below, so the root would be tagged having checked a subset."; exit 1; }
 	@grep -q '^## Unreleased$$' CHANGELOG.md || { echo "CHANGELOG.md has no Unreleased section"; exit 1; }
 	@test -z "$$(git status --porcelain)" || { echo "working tree is not clean"; exit 1; }
 	sed -i 's/^## Unreleased$$/## $(VERSION) - '"$$(date +%F)"'/' CHANGELOG.md
