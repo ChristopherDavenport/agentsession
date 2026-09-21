@@ -236,8 +236,15 @@ func (e *QueuedEntry) WithTrigger(kind, ref, source string) *QueuedEntry {
 // conversation: the item, the trigger as its source and QueuedFrom
 // naming this entry, so the record says why the item is there. The
 // entry must already have an ID, which it has once it is appended.
+// The trigger is copied, so the two entries do not share one once
+// both are appended and neither may be modified.
 func (e *QueuedEntry) Drain() *ItemEntry {
-	return &ItemEntry{Item: e.Item, Source: e.Trigger, QueuedFrom: e.ID}
+	out := &ItemEntry{Item: e.Item, QueuedFrom: e.ID}
+	if e.Trigger != nil {
+		trigger := *e.Trigger
+		out.Source = &trigger
+	}
+	return out
 }
 
 // Workspace says which file system an env entry's cwd is a path in.

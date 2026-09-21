@@ -98,8 +98,11 @@ func TestQueuedDrain(t *testing.T) {
 	if _, err := s.Append(item); err != nil {
 		t.Fatal(err)
 	}
-	if item.QueuedFrom != q.ID || item.Source != q.Trigger {
+	if item.QueuedFrom != q.ID || item.Source == nil || *item.Source != *q.Trigger {
 		t.Errorf("drained item = %+v", item)
+	}
+	if item.Source == q.Trigger {
+		t.Error("the drained item shares the queued entry's trigger")
 	}
 	if pending, _ := s.PendingQueued(s.Leaf()); len(pending) != 0 {
 		t.Errorf("%d inputs still owed after draining", len(pending))
