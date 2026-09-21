@@ -2,6 +2,10 @@ module github.com/ChristopherDavenport/agentsession/otel
 
 go 1.25.0
 
+// The root requirement names the released version a consumer fetches.
+// The workspace builds this module against the tree instead; there is
+// deliberately no replace, so release-check can build it the way a
+// consumer does and fail while the version named here is too old.
 require (
 	github.com/ChristopherDavenport/agentsession v0.0.5
 	github.com/ChristopherDavenport/openresponses v0.0.9
@@ -19,7 +23,3 @@ require (
 	go.opentelemetry.io/otel/metric v1.46.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )
-
-// The require names the released root a consumer fetches; the replace
-// builds against the tree.
-replace github.com/ChristopherDavenport/agentsession => ../
