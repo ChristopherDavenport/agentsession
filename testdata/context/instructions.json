@@ -1,0 +1,107 @@
+{
+  "r0000002": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "You are the billing assistant. Be brief.\n\n# Repository conventions\n\nRun make check before every commit.\n\n\u003cmemory\u003e\nThe rounding bug is in charge.go, fixed on 2026-09-21.\n\u003c/memory\u003e",
+      "instructions_parts": [
+        {
+          "id": "product",
+          "text": "You are the billing assistant. Be brief.",
+          "source": "product"
+        },
+        {
+          "id": "agentsmd",
+          "text": "# Repository conventions\n\nRun make check before every commit.",
+          "source": "agentsmd"
+        },
+        {
+          "id": "agentmemory",
+          "text": "\u003cmemory\u003e\nThe rounding bug is in charge.go, fixed on 2026-09-21.\n\u003c/memory\u003e",
+          "source": "agentmemory"
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "name": "bash",
+          "description": "Run a shell command",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "cmd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cmd"
+            ]
+          }
+        }
+      ]
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Fix the rounding bug."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Fixed it in charge.go.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Thanks."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_2",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Noted.",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "c0000001",
+      "i0000001",
+      "i0000002",
+      "r0000001",
+      "c0000002",
+      "i0000003",
+      "i0000004",
+      "r0000002"
+    ],
+    "item_entries": [
+      "i0000001",
+      "i0000002",
+      "i0000003",
+      "i0000004"
+    ]
+  }
+}

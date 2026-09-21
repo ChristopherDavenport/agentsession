@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.2
+Status: draft 0.3
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -110,7 +110,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.2","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.3","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","spawned_by":"call_…","media":"inline"}
@@ -171,7 +171,7 @@ such record leaves the type out of `records`.
 
 Context entries: `item`, `response`, `config`, `compaction`,
 `branch_summary`. Record entries: `run`, `dispatch`, `decision`,
-`label`, `info`, `env`, `outcome`, `link`, `custom`. A record entry
+`queued`, `label`, `info`, `env`, `outcome`, `link`, `custom`. A record entry
 contributes nothing to context; the context algorithm below is the
 normative statement.
 
@@ -207,6 +207,9 @@ One conversation item in the payload profile.
   item was model output.
 - `visible` MAY be `false` to mark an item that is part of the model
   context but that a renderer SHOULD hide.
+- `source` MAY carry the trigger of an item a person or another system
+  sent, in the shape `queued` defines, and `queued_from` MAY name the
+  `queued` entry the item was accepted as.
 
 ### `response`
 
@@ -236,6 +239,9 @@ A delta to request settings. The first entry on any root SHOULD be a
 ```json
 {"type":"config","id":"…","parent":"…","ts":"…",
  "model":"…","instructions":"…","reasoning":{…},"text":{…},
+ "instructions_parts":[{"id":"agentsmd","text":"…","source":"agentsmd"},
+                       {"id":"memory","hash":"sha256:…"}],
+ "instructions_omitted":[{"id":"service/AGENTS.md","reason":"budget","size":4096,"source":"agentsmd"}],
  "tools_added":[…],"tools_removed":["name"],"extra":{…},"replace":false}
 ```
 
@@ -243,14 +249,77 @@ Fields absent from a delta are unchanged. `replace: true` discards all
 earlier config on the path before applying this one. Tool definitions
 use the payload profile's tool shape.
 
+#### Instructions as parts
+
+The instructions a harness sends are composed: a product prompt, the
+instruction files that apply at the working directory, a catalogue of
+skills, a block of memory. Each changes for its own reasons, and with
+one string every change to any of them rewrites all of them into the
+path.
+
+`instructions_parts` is that composition: an ordered list of parts,
+each with an `id`, its `text`, and optionally a `source` naming the
+layer that produced it. `id` is a stable string the harness chooses,
+the same across the session, so a later entry can name a part without
+repeating it; `product`, `agentsmd`, `agentskill` and `agentmemory`
+are the obvious ones. `source` is in the harness's own terms and
+readers treat it as opaque.
+
+- `instructions` remains valid, and a writer that composes nothing
+  writes it alone. When both are present, `instructions` MUST equal
+  the parts' texts joined, in order, with one blank line, the two
+  characters `\n\n`. That join rule is the whole agreement between a
+  writer and a reader: settings carry the joined string, the request
+  carries it, and the `request_hash` covers it.
+- A writer MAY write the parts alone and leave `instructions` out; a
+  reader then derives the string by the same join. A file whose config
+  entries carry parts alone does not rebuild its instructions in a
+  reader that does not know `instructions_parts`, which is the cost of
+  this member and the reason it arrives in a new minor version.
+- A delta carries the **whole ordered list** of ids. A part whose text
+  changed, or that is new, carries its `text`. A part whose text is
+  unchanged carries `hash` and no `text`: the SHA-256 of its text in
+  the format's notation, `sha256:` and lowercase hexadecimal, and its
+  text is the one the path already has for that id. A part the list
+  leaves out is removed. Order is therefore explicit in every delta,
+  and an unchanged part costs one id and one hash.
+- A part named by `hash` alone also keeps the `source` it had on the
+  path, since the hash form has no way to say that a part has none
+  now. A writer that clears or changes a part's `source` writes the
+  part's `text` with it.
+- A part that carries neither `text` nor a `hash` this path can
+  resolve has no text a reader can rebuild. When the same entry
+  carries `instructions`, that string stands: it is the only record of
+  what the model was sent, and a reader takes it over the join of
+  parts it cannot resolve. Without it the instructions cannot be
+  rebuilt and the `request_hash` will not verify, which is how such a
+  file is found.
+- A writer MUST NOT write a delta with `replace: true` whose parts are
+  named by `hash` alone without `instructions` beside them: the
+  replace discards the parts the hashes would have resolved against,
+  so nothing on the path can rebuild them.
+- `replace: true` discards the parts with the rest of the settings,
+  so a `hash` in the same entry resolves against nothing; a delta that
+  sets `instructions` as a string and no parts replaces the
+  composition, and the parts no longer describe what is in force.
+
+`instructions_omitted` records the parts the writer considered and
+left out, each with its `id`, a `reason` in the writer's own terms,
+the `size` in bytes it would have added, and optionally a `source`.
+It is not settings: nothing in it reaches the request, it does not
+replay, and it applies to the entry that carries it. It is where a
+walk that dropped an instruction file for a budget, or a memory the
+render left out, is recorded, so a session says what the model was not
+given as well as what it was.
+
 ### `compaction`
 
 Replaces earlier context with a summary.
 
 ```json
 {"type":"compaction","id":"…","parent":"…","ts":"…",
- "first_kept":"entry-id","summary":{…item…},"config":{…full config…},
- "tokens_before":50000,"usage":{…}}
+ "first_kept":"entry-id","summary":{…item…},"pinned":[{…item…}],
+ "config":{…full config…},"tokens_before":50000,"usage":{…}}
 ```
 
 - `first_kept` MUST name an entry on the path. Entries before it are
@@ -258,18 +327,45 @@ Replaces earlier context with a summary.
 - `summary` is an item. Under the Open Responses profile a server-side
   compaction stores the returned `compaction` item verbatim; a local
   summary is a `message` item.
+- `pinned`, when present, is an ordered list of items the writer kept
+  verbatim from before `first_kept`. A reader MUST place them
+  immediately after `summary` and before the entries from
+  `first_kept`, in the order written; their order among themselves is
+  the order the request carried them in, so a reader that reorders
+  them rebuilds a different request.
+- Only an item carried by an `item` entry may be pinned, and a writer
+  MUST make each pinned item reachable as such an entry on the path
+  before `first_kept`. `pinned` is a copy of context that was already
+  recorded, never a new input, so a reader that ignores the member
+  loses context but never invents it. A `summary` or a
+  `branch_summary` is in context but is not an `item` entry, so it
+  cannot be pinned; a writer that wants an earlier fold's summary to
+  survive this one restates it as this entry's `summary`.
+- A reader MUST NOT reject a file whose pinned item it cannot find on
+  the path. It cannot tell a writer that sent the item and failed to
+  record the copy from one that pinned an item it never sent: in the
+  first case the rebuilt request is the one that was sent and
+  verifies, and in the second the rebuild differs and `request_hash`
+  reports it. Rejecting up front would refuse a valid record in order
+  to catch an invalid one the hash already catches.
+- Only the last `compaction` on a path contributes items, so a later
+  compaction that does not restate a pin drops it. A writer that wants
+  a pin to survive a second fold MUST repeat it in that fold's
+  `pinned`.
 - `config` is a full checkpoint so a reader need not replay config
   entries from before the compaction. Its shape is the settings the
   context algorithm produces, not a `config` delta:
 
   ```json
-  {"model":"…","instructions":"…","reasoning":{…},"text":{…},
-   "tools":[…],"extra":{…}}
+  {"model":"…","instructions":"…","instructions_parts":[…],
+   "reasoning":{…},"text":{…},"tools":[…],"extra":{…}}
   ```
 
-  `tools` is the full list of tool definitions in force at the
-  compaction, in the order the context algorithm would send them, not
-  a delta; there are no `tools_added`, `tools_removed` or `replace`
+  `instructions_parts`, when the checkpoint carries it, is the full
+  list of parts in force, each with its text, not a delta, and
+  `instructions` is their join. `tools` is the full list of tool
+  definitions in force at the compaction, in the order the context
+  algorithm would send them, not a delta; there are no `tools_added`, `tools_removed` or `replace`
   members. `extra` is the merged map of passthrough request members
   after every earlier delta has been applied and null deletions have
   removed their keys, so it never contains a null value. Members whose
@@ -319,25 +415,40 @@ Why a run started and how it ended. Two entries per run, paired by
 - `reason` is closed. Each value is a shape of the run's segment, the
   entries on the path from the `start` entry to the `end` entry, where
   a pending call is a `function_call` on the segment with no
-  `function_call_output` on it. Four values are computable from the
-  segment, tested in this order with the first match winning:
+  `function_call_output` on it. Five values are computable, tested in
+  this order with the first match winning:
   1. `error`: the last `response` on the segment carries a non-null
      `error`.
   2. `input_required`: at least one pending call is held, as `decision`
      defines it, and no pending call has a `dispatch`.
   3. `aborted`: any other segment with a pending call, or whose last
-     `response` has a non-null `incomplete`, or that has no `response`.
-  4. `done`: the last `response` has no `function_call` in its output.
-  5. `stopped`: the last `response` has calls, every call has an
-     output, and the harness chose not to call the model again. `ref`
-     names the cause (a turn budget, a tool that asked to stop).
+     `response` has a non-null `incomplete`.
+  4. `done`: the segment has a `response` and its last one has no
+     `function_call` in its output.
+  5. `stopped`: the last response on the path before the segment's end
+     has calls, every call on the path has an output, the segment
+     holds at least one output or decision, and no response follows.
+     The harness chose not to call the model again; `ref` names the
+     cause (a turn budget, a tool that asked to stop).
+  6. `aborted`: anything left, which is a run that neither called the
+     model nor finished a call.
+
+  The `stopped` step reads the path and not the segment alone. A run
+  that answers a call and ends without calling the model again holds
+  no `response` of its own: a resume whose approved call asks the
+  harness to terminate, and a refusal that ends the turn, are both
+  that shape, and the `response` that made the calls is on the path
+  before the segment. One consequence is deliberate: a call an earlier
+  run left without an output keeps every later run on that path from
+  reading as `stopped`, because the path still holds an unanswered
+  call, and `aborted` is the value that says so.
 
   Two values record what the segment cannot show and are written, not
   computed: `error` when the harness failed at any point, which `ref`
   names, and `interrupted` when a person or the host told the harness
   to stop. A written `error` or `interrupted` stands over any segment.
-  Every segment matches exactly one computable value; a reader MAY
-  recompute it, and when the written value is computable and the two
+  Every segment matches exactly one computable value on its path; a
+  reader MAY recompute it, and when the written value is computable and the two
   disagree the segment is authoritative.
 - `pending` lists the pending calls' IDs so a resume can read them
   without walking the segment. The segment is authoritative here too.
@@ -415,6 +526,50 @@ A call's fate was decided outside the tool.
 
 A `decision` is a lifecycle fact and carries no score. A judgement of
 how something went is an `outcome`.
+
+### `queued`
+
+An input the harness accepted before it could append it: a steer typed
+while the model is running, or a follow-up that waits for the run to
+end.
+
+```json
+{"type":"queued","id":"…","parent":"…","ts":"…",
+ "item":{…item…},"mode":"steer|followup",
+ "trigger":{"kind":"human","ref":"slack:1758412800.0002","source":"gateway"},
+ "ref":"inbox-1"}
+```
+
+- `item` and `mode` are required. `mode` is `steer` for an input that
+  joins the run in flight and `followup` for one that waits for it to
+  end.
+- The entry is a record entry: its `item` is not in context and
+  reaches no request. The input enters the conversation when it is
+  appended as an `item` entry, which carries `queued_from` naming this
+  entry.
+- `trigger` says how the input arrived: `kind` is the sort of thing it
+  came from, `ref` names the thing itself, `source` names the layer
+  that took it. All three are in the harness's own terms and a reader
+  treats them as opaque. This is where the trigger of an input that
+  joins a run already in flight lives, since the `run` entry's `ref`
+  names what started the run and not what arrived during it: two
+  people steering one run are two triggers.
+- `ref` names the queued input in the harness's own terms, for a
+  caller holding a handle to it.
+- A `queued` entry with no `item` entry naming it in `queued_from`,
+  and no `run` end after it on the path, is an input the harness still
+  owes the conversation: a durable inbox a resume drains. A `run` end
+  after it closes it, since the run it was queued into has ended; a
+  harness that still wants the input queues it again. A writer that
+  names `queued` in the header's `records` writes one for every input
+  it accepts before appending it, so a reader may take the absence of
+  one as nothing having been queued.
+
+The `item` entry that drains a queued input carries two optional
+members: `source`, the trigger the queued entry held, and
+`queued_from`, the ID of that entry. `source` on an `item` is not
+restricted to a drained input: any item a person or another system
+sent rather than the model or the loop may carry it.
 
 ### `label`, `info`
 
@@ -504,20 +659,68 @@ list as follows.
 
 1. Walk `parent` links from the leaf to a root; reverse to root-first.
 2. Replay `config` entries along the path in order to produce settings,
-   honouring `replace`.
+   honouring `replace`. A `config` that carries `instructions_parts`
+   resolves them against the parts in force, as that member defines,
+   and the settings' instructions are the resolved parts joined with
+   one blank line.
 3. Find the last `compaction` on the path, if any. If found:
    settings start from its `config` checkpoint and then replay any
-   `config` after it; the item list starts with its `summary`, then the
-   items of entries from `first_kept` up to but excluding the
-   compaction, then the items of entries after it.
+   `config` after it; the item list starts with its `summary`, then its
+   `pinned` items in order, then the items of entries from `first_kept`
+   up to but excluding the compaction, then the items of entries after
+   it.
    If none: the item list is the items of all entries on the path.
 4. An entry contributes an item if it is `item`, or `branch_summary`,
-   or a `compaction` selected in step 3. Every record entry (`run`,
-   `dispatch`, `decision`, `label`, `info`, `env`, `outcome`, `link`,
-   `custom`) and every unknown extension contributes nothing.
+   or a `compaction` selected in step 3, which contributes its
+   `summary` and each of its `pinned` items. Every record entry (`run`,
+   `dispatch`, `decision`, `queued`, `label`, `info`, `env`,
+   `outcome`, `link`, `custom`) and every unknown extension
+   contributes nothing. A `queued` entry holds an item and is not in
+   context: the input enters when it is appended as an `item`.
 5. The canonical request is settings plus the item list, encoded as the
    payload profile's request with `store: false` and no
    `previous_response_id`. Its hash is `request_hash`.
+
+### Request context of a response
+
+A reader that checks a `request_hash`, or replays a model call, needs
+the context of the request that produced a `response` entry: the path
+to that entry with the response's own output items removed.
+
+The output items are found by walking back from the `response` entry.
+An entry that is not an `item` is skipped. An `item` whose `response`
+names this response is one of its output items. The walk stops at the
+first `item` whose `response` names another response or nothing. Only
+those item entries are removed; every other entry on the path stays,
+and the context algorithm above runs over the result.
+
+A `response` that carries no `response_id`, which the entry permits,
+has no output items: there is nothing for an `item` to name. A reader
+MUST present a response's output items in path order, which is the
+order the model produced them in. The rule above is most easily
+implemented by walking backward, and such a reader has to restore the
+order before it serves them: a request rebuilt from them reversed is a
+different request, and the hash reports it as a divergence with no
+field to point at.
+
+A writer SHOULD write a response's output items contiguously, so that
+the envelope reads in the order it happened and a reader scanning the
+file by eye sees one response as one block.
+
+A reader MUST NOT rely on that. Output items are identified by
+`response`, never by position: a reader MUST skip an entry that is not
+an `item` rather than take it as the end of the output. An entry that
+contributes nothing to context changes neither the rebuilt request nor
+its hash wherever it falls, so a file that interleaves is valid and
+verifies, and a reader that fails such a file is reporting a
+divergence that did not happen.
+
+Writers do interleave, and the reason is timing, not carelessness: a
+guard that runs inside a response records its verdict when it runs,
+and holding the entry until the response closes would move the verdict
+away from the item it judged. A writer that can keep the block intact
+without losing that ordering should; one that cannot is still writing
+a valid file.
 
 ### Request hash
 
@@ -541,7 +744,10 @@ MAY verify it by rebuilding the request from the path and comparing.
 - Output items MUST be written only when complete. Partial streaming
   state MUST NOT be written as an `item`.
 - A `response` entry MUST follow the items it envelopes and MUST be the
-  last entry written for that model call.
+  last entry written for that model call. An entry another layer raises
+  while a model call is in flight — a guard's verdict, a dispatch, a
+  run boundary — is not an entry "for that model call" and the rule
+  above does not forbid it.
 - A user item or function call output SHOULD be written before the
   request that includes it is sent.
 - Writers SHOULD fsync at least on each `response` entry and on each
@@ -564,15 +770,40 @@ profile: user and system items to steps, one `response` with its items
 to one agent step with `tool_calls`, `reasoning_content` and `metrics`,
 function call outputs to observations by `source_call_id`, compaction
 and branch summaries as copied-context system steps, `link` entries to
-`subagent_trajectories`. `run`, `dispatch` and `decision` entries have
-no step of their own. A run's `source`, its start `ref` as `trigger`,
-its end `reason` and its end `ref` as `cause` travel under `run` in the
-`extra` of the first step its segment produces, or
-in the trajectory's top-level `extra` when it produces none; a
+`subagent_trajectories`. `run`, `dispatch`, `decision` and `queued`
+entries have no step of their own. A run's `source`, its start `ref`
+as `trigger`, its end `reason` and its end `ref` as `cause` travel
+under `run` in the `extra` of the first step its segment produces, or
+in the trajectory's top-level `extra` when it produces none. `run` is
+a **list** in either place, in the runs' own order: a run that
+produces no step, which is what a refusal on resume is, would
+otherwise be replaced by the next run's record, and a reader needs a
+rule for which record is which when several land in one place. A
 call's decisions and dispatch travel under `calls`, keyed by call ID,
-in the `extra` of the agent step that produced the call; a fold's usage
-travels under `usage` in its system step's `extra`. Raw items travel in
-step `extra` so the projection is lossless.
+in the `extra` of the agent step that produced the call; a queued
+input travels as a list under `queued`, and the step of the item that
+drained one carries its trigger under `source`; a fold's usage
+travels under `usage` in its system step's `extra`, and a fold's
+`pinned` items travel beside its `summary` in the same step, since the
+entries they were copied from are before `first_kept` and so are not
+in the document. Raw items travel in step `extra` so the projection is
+lossless.
+
+A document's steps are the context the algorithm produces, so a run
+that compacted is described by its last summary and what followed it.
+Its `final_metrics` are not: they total every model call on the path,
+the ones a fold replaced included, and `total_steps` counts the
+document's steps plus the model calls it does not show. When the two
+differ the root `notes` says so, which is what ATIF requires of a
+`total_steps` that is not the number of steps. Without that rule a
+cost column reads the tail's cost as the run's, and an agent that
+folded eleven times outranks one that did not.
+
+One document per path is a projection of the whole session, so a
+trajectory may be built at any entry and not only at a leaf: anything
+appended after an export, a judge's `outcome` above all, moves the
+leaf, and the document a score names has to be reproducible from the
+entry it targets.
 
 ### OpenTelemetry
 
@@ -621,6 +852,57 @@ item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
 
+## Changes since 0.2
+
+Additive but for one tightened rule and two members a 0.2 reader
+cannot resolve. The request context of a response skips entries that
+are not items rather than stopping at them, so a file whose output
+items are interleaved with record entries now rebuilds the request
+that was sent. `instructions_parts` and `pinned` are where a 0.2
+reader loses something: it rebuilds the same instructions for a file
+that writes the string and none at all for one that writes parts
+alone, and it rebuilds a compaction's context without the pinned
+items. Neither loss invents anything — a short request fails
+`request_hash` loudly rather than passing as a request that was never
+sent — and there is no installed base for `pinned`, since no file in
+existence carries it. Every other addition is a new entry type or an
+optional member, which a 0.2 reader preserves and ignores.
+
+- Context building states how the request context of a response is
+  found, and that a reader identifies a response's output items by
+  `response` rather than by position; a writer still SHOULD keep them
+  contiguous.
+- `compaction` gains `pinned`, an ordered list of items the writer
+  kept verbatim from before `first_kept`, which a reader places
+  immediately after `summary`. It is how a harness that holds one item
+  out of a fold records what it held, so the rebuilt request is the
+  one that was sent and its `request_hash` verifies. Each pinned item
+  is also an `item` entry on the path, so a 0.2 reader that ignores
+  the member rebuilds a request short of those items rather than one
+  that invents them.
+- The `stopped` step of the run end cascade reads the path before the
+  segment, so a run that answers a call and ends without calling the
+  model again is `stopped` rather than `aborted`. The cascade's
+  `aborted` step no longer catches a segment with no `response`;
+  a sixth step does, so every segment still matches exactly one value.
+- `config` gains `instructions_parts`, the composition of the
+  instructions as an ordered list of named parts, with a delta
+  carrying the text of the parts that changed and a hash for the
+  parts that did not, and `instructions_omitted`, the parts the
+  writer considered and left out. `instructions` remains valid and is
+  the parts' texts joined with one blank line. The compaction
+  checkpoint carries the parts in force.
+- New record entry `queued`, the input a harness accepted before it
+  could append it, with the trigger that brought it in; the `item`
+  entry that drains one carries `source` and `queued_from`. A queued
+  entry with neither an item that names it nor a run end after it is
+  an inbox a resume drains. `records` may name `queued`.
+- The ATIF projection: `extra.run` is a list, so a run that produces
+  no step keeps its record; `final_metrics` totals the whole path and
+  `total_steps` counts the model calls a fold left out of the steps,
+  with a line in `notes`; a document may be built at any entry, not
+  only at a leaf.
+
 ## Changes since 0.1
 
 Additive but for two tightened rules: a reader MUST NOT order entries
@@ -656,23 +938,16 @@ reader preserves every new entry and rebuilds the same context.
 
 Considered and held: instructions as parts in `config`, which would add
 a second spelling of settings and change step 2 for a storage cost that
-belongs to the store; and a durable leaf marker, which a library can
+belongs to the store, and which 0.3 adopts; and a durable leaf marker, which a library can
 carry as a reserved `label` without a format change; and a `source`
 on the item envelope for an input that joins a run already in flight,
-which the `run` entry cannot name. All three are open questions below.
+which the `run` entry cannot name and which 0.3 adopts beside the
+`queued` entry. All three were open questions; two are now answered.
 
 ## Open questions
 
-- Whether `config` should carry `instructions_parts` so a delta names
-  only the part that changed. Held: it changes step 2 and adds a second
-  spelling of the same settings; try deduplication in the store first.
 - Whether the current leaf needs a durable marker. Held: a reserved
   `label` a library honours on open covers it without a format change.
-- Whether the `item` envelope needs a member naming how an input
-  queued into a run already in flight arrived. Held: `run` says only
-  whether a run began from an input or a resume; how an input arrived
-  is a harness feature, so a harness that steers a running agent records
-  it in a `custom` entry until the case is better understood.
 - Whether to allow a second payload profile at 0.x, or hold the line at
   Open Responses and rely on converters.
 - Sidecar media layout and naming.

@@ -17,11 +17,30 @@ var ErrNoSession = errors.New("agentsession: no such session")
 // the store.
 var ErrSessionExists = errors.New("agentsession: session already exists")
 
+// ErrSessionLocked is returned by a store whose session is held by
+// another process. It is the one sentinel for that condition: each
+// store wraps it, so a host written against the Store interface can
+// tell "another process has this session", which means leave the
+// conversation alone, from a store that is broken, which means the
+// daemon is unhealthy, without knowing which store it was given.
+var ErrSessionLocked = errors.New("agentsession: session is open in another process")
+
+// ErrReadOnly is returned by a store opened read-only when a caller
+// tries to write: such a store takes no hold on the sessions it
+// opens, so it must not append to them either. Reading a session
+// while a harness writes it is what it is for.
+var ErrReadOnly = errors.New("agentsession: store is read-only")
+
 // Store persists sessions. Append is the only write to a session's
 // content; the entry is added to the in-memory tree of the open session
 // and made durable according to the store's policy. Sessions returned
 // by Create and Open are shared with the store, so leaf moves through
 // Session.Branch and Session.ResetLeaf are seen by later appends.
+//
+// A store that guards a session against a second writing process
+// reports [ErrSessionLocked] from the calls that need the hold, and a
+// store opened read-only reports [ErrReadOnly] from the calls that
+// write.
 type Store interface {
 	// Create starts a new session from h, filling empty header fields.
 	Create(ctx context.Context, h Header) (*Session, error)

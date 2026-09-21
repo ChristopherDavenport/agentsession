@@ -18,6 +18,15 @@ type Options struct {
 	// default to the session header's harness, then to "agentsession".
 	AgentName    string
 	AgentVersion string
+	// ModelName overrides the model name the document reports, in
+	// agent.model_name and on every agent step, without touching the
+	// model the request was sent with. It exists because a consumer
+	// may want a name the provider would refuse: Harbor derives a
+	// provider by splitting model_name on the first slash, and a
+	// self-hosted model called "qwen3.5:9b" has none, while sending
+	// "ollama/qwen3.5:9b" is a 404. The session still records what was
+	// sent; this is what is reported.
+	ModelName string
 	// Cost returns the price of one model call when a price source is
 	// configured. When nil, cost_usd is left absent.
 	Cost func(model string, usage openresponses.Usage) (usd float64, ok bool)
@@ -47,13 +56,22 @@ const (
 	ExtraAbandonedAt   = "abandoned_at"
 	ExtraBranchFrom    = "branch_from"
 	ExtraContextMgmt   = "context_management"
-	// ExtraRun carries a run's source, trigger, end reason, cause and
-	// pending calls in the extra of the first step its segment
-	// produces, or in the root extra when it produces none.
+	// ExtraRun carries, as a list, the runs whose records belong to a
+	// step: a run's source, trigger, end reason, cause and pending
+	// calls go in the extra of the first step its segment produces, or
+	// in the root extra when it produces none. It is a list because a
+	// run that produces no step, which is what a refusal on resume is,
+	// would otherwise be overwritten by the next run's record, and
+	// because a reader needs an order where several land in one place.
 	ExtraRun = "run"
 	// ExtraCalls carries, keyed by call ID in the extra of the agent
 	// step that produced the call, the call's decisions and dispatch.
 	ExtraCalls = "calls"
+	// ExtraQueued carries, as a list, the inputs a harness accepted
+	// before it could append them: the item, the mode and the trigger
+	// of each. A queued input that was appended is a step of its own
+	// carrying the same trigger under "source".
+	ExtraQueued = "queued"
 )
 
 // ToATIF converts one trajectory into an ATIF document. Every step
@@ -110,7 +128,35 @@ type builder struct {
 	prompt, completion, cached int
 	cost                       float64
 	hasCost                    bool
-	links                      []*agentsession.LinkEntry
+	// priced remembers what Options.Cost answered for an entry, so a
+	// price source with a cost of its own, or a count, is asked once
+	// per model call and not once for the step and again for the
+	// totals.
+	priced map[string]price
+	links  []*agentsession.LinkEntry
+}
+
+// price is one answer from Options.Cost.
+type price struct {
+	usd float64
+	ok  bool
+}
+
+// costOf asks the price source about an entry, or returns what it
+// answered the first time.
+func (b *builder) costOf(entryID, model string, u openresponses.Usage) (float64, bool) {
+	if b.opts.Cost == nil {
+		return 0, false
+	}
+	if p, asked := b.priced[entryID]; asked {
+		return p.usd, p.ok
+	}
+	usd, ok := b.opts.Cost(model, u)
+	if b.priced == nil {
+		b.priced = map[string]price{}
+	}
+	b.priced[entryID] = price{usd, ok}
+	return usd, ok
 }
 
 // agentGroup accumulates model output items until their response
@@ -158,7 +204,7 @@ func (b *builder) setAgentDefaults() {
 		}
 		break
 	}
-	b.doc.Agent.ModelName = b.settings.Model
+	b.doc.Agent.ModelName = b.modelName(b.settings.Model)
 	b.doc.Agent.ToolDefinitions = toolDefinitions(b.settings.Tools)
 	// The replay above is repeated by entry(); reset so the second pass
 	// applies deltas from the same baseline.
@@ -190,6 +236,18 @@ func (b *builder) entry(e agentsession.Entry) error {
 	case *agentsession.CompactionEntry:
 		b.flushGroup(nil)
 		text := itemText(v.Summary)
+		// The pinned items are context the fold kept, and the entries
+		// they were copied from are before first_kept and so not in
+		// the document. They travel raw beside the summary, which is
+		// what keeps the projection lossless.
+		payload := map[string]any{"item": rawItem(v.Summary)}
+		if len(v.Pinned) > 0 {
+			pinned := make([]json.RawMessage, 0, len(v.Pinned))
+			for _, item := range v.Pinned {
+				pinned = append(pinned, rawItem(item))
+			}
+			payload["pinned"] = pinned
+		}
 		step := atif.Step{
 			Source:          atif.SourceSystem,
 			Message:         atif.Text(text),
@@ -197,14 +255,14 @@ func (b *builder) entry(e agentsession.Entry) error {
 			IsCopiedContext: atif.Ptr(true),
 			Extra: map[string]any{
 				ExtraContextMgmt:   map[string]any{"type": "compaction", "boundary": "replace"},
-				ExtraOpenResponses: map[string]any{"item": rawItem(v.Summary)},
+				ExtraOpenResponses: payload,
 				"first_kept":       v.FirstKept,
 			},
 		}
 		if v.TokensBefore > 0 {
 			step.Extra["tokens_before"] = v.TokensBefore
 		}
-		b.foldUsage(step.Extra, v.Config.Model, v.Usage)
+		b.foldUsage(v.ID, step.Extra, v.Config.Model, v.Usage)
 		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.BranchSummaryEntry:
@@ -218,7 +276,7 @@ func (b *builder) entry(e agentsession.Entry) error {
 				ExtraOpenResponses: map[string]any{"item": rawItem(v.Summary)},
 			},
 		}
-		b.foldUsage(step.Extra, b.settings.Model, v.Usage)
+		b.foldUsage(v.ID, step.Extra, b.settings.Model, v.Usage)
 		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.LabelEntry:
@@ -267,6 +325,16 @@ func (b *builder) entry(e agentsession.Entry) error {
 		call := b.callExtra(v.CallID)
 		list, _ := call["decisions"].([]any)
 		call["decisions"] = append(list, rec)
+	case *agentsession.QueuedEntry:
+		rec := map[string]any{"entry_id": v.ID, "mode": v.Mode, "item": rawItem(v.Item)}
+		if v.Trigger != nil {
+			rec["trigger"] = v.Trigger
+		}
+		if v.Ref != "" {
+			rec["ref"] = v.Ref
+		}
+		copyUnknown(rec, v.Unknown)
+		b.addPendingList(ExtraQueued, rec)
 	case *agentsession.UnknownEntry:
 		b.addPendingList("extensions", json.RawMessage(v.Raw))
 	default:
@@ -354,6 +422,12 @@ func (b *builder) itemExtra(e *agentsession.ItemEntry) map[string]any {
 	if !e.IsVisible() {
 		extra["visible"] = false
 	}
+	if e.Source != nil {
+		extra["source"] = e.Source
+	}
+	if e.QueuedFrom != "" {
+		extra["queued_from"] = e.QueuedFrom
+	}
 	return copyUnknown(extra, e.Unknown)
 }
 
@@ -376,8 +450,17 @@ func (b *builder) flushGroup(resp *agentsession.ResponseEntry) {
 	b.flushGroupItems(g, resp)
 }
 
+// modelName is the name the document reports for a model, which
+// Options.ModelName overrides.
+func (b *builder) modelName(model string) string {
+	if b.opts.ModelName != "" {
+		return b.opts.ModelName
+	}
+	return model
+}
+
 func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntry) {
-	step := atif.Step{Source: atif.SourceAgent, ModelName: b.settings.Model, LLMCallCount: atif.Ptr(1)}
+	step := atif.Step{Source: atif.SourceAgent, ModelName: b.modelName(b.settings.Model), LLMCallCount: atif.Ptr(1)}
 	if b.settings.Reasoning.Effort != "" {
 		step.ReasoningEffort = string(b.settings.Reasoning.Effort)
 	}
@@ -444,8 +527,10 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 	if resp != nil {
 		anchor = resp
 		or["response"] = responseBody(resp)
+		wire := b.settings.Model
 		if resp.Model != "" {
-			step.ModelName = resp.Model
+			wire = resp.Model
+			step.ModelName = b.modelName(resp.Model)
 		}
 		step.Timestamp = resp.Timestamp.UTC().Format(time.RFC3339Nano)
 		if resp.Usage != nil {
@@ -458,12 +543,12 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 			if u.OutputTokensDetails.ReasoningTokens > 0 {
 				step.Metrics.Extra = map[string]any{"reasoning_tokens": u.OutputTokensDetails.ReasoningTokens}
 			}
-			if b.opts.Cost != nil {
-				if usd, ok := b.opts.Cost(step.ModelName, *u); ok {
-					step.Metrics.CostUSD = atif.Ptr(usd)
-					b.cost += usd
-					b.hasCost = true
-				}
+			// Priced by the model the request was sent with, not by the
+			// name Options.ModelName reports it under.
+			if usd, ok := b.costOf(resp.ID, wire, *u); ok {
+				step.Metrics.CostUSD = atif.Ptr(usd)
+				b.cost += usd
+				b.hasCost = true
 			}
 			b.prompt += u.InputTokens
 			b.completion += u.OutputTokens
@@ -552,17 +637,15 @@ func (b *builder) rootExtra() map[string]any {
 // "cost_usd" when a price source is configured, and both are added to
 // the document's totals. Without this a compacting agent reports a
 // fraction of what it spent.
-func (b *builder) foldUsage(extra map[string]any, model string, u *openresponses.Usage) {
+func (b *builder) foldUsage(entryID string, extra map[string]any, model string, u *openresponses.Usage) {
 	if u == nil {
 		return
 	}
 	extra["usage"] = u
-	if b.opts.Cost != nil {
-		if usd, ok := b.opts.Cost(model, *u); ok {
-			extra["cost_usd"] = usd
-			b.cost += usd
-			b.hasCost = true
-		}
+	if usd, ok := b.costOf(entryID, model, *u); ok {
+		extra["cost_usd"] = usd
+		b.cost += usd
+		b.hasCost = true
 	}
 	b.prompt += u.InputTokens
 	b.completion += u.OutputTokens
@@ -581,14 +664,14 @@ func (b *builder) runEntry(r *agentsession.RunEntry) {
 		}
 		copyUnknown(rec, r.Unknown)
 		b.currentRun = rec
-		b.addPending(ExtraRun, rec)
+		b.addPendingList(ExtraRun, rec)
 		return
 	}
 	rec := b.currentRun
 	if rec == nil || rec["run_id"] != r.RunID {
 		// An end without its start on this path: record it on its own.
 		rec = map[string]any{"run_id": r.RunID}
-		b.addPending(ExtraRun, rec)
+		b.addPendingList(ExtraRun, rec)
 	}
 	rec["reason"] = r.Reason
 	rec["end_entry_id"] = r.ID
@@ -704,14 +787,83 @@ func (b *builder) finish() {
 	if b.doc.FinalMetrics == nil {
 		b.doc.FinalMetrics = &atif.FinalMetrics{}
 	}
+	hidden := b.pathTotals()
 	fm := b.doc.FinalMetrics
 	fm.TotalPromptTokens = atif.Ptr(b.prompt)
 	fm.TotalCompletionTokens = atif.Ptr(b.completion)
 	fm.TotalCachedTokens = atif.Ptr(b.cached)
-	fm.TotalSteps = atif.Ptr(len(b.doc.Steps))
+	fm.TotalSteps = atif.Ptr(len(b.doc.Steps) + hidden)
 	if b.hasCost {
 		fm.TotalCostUSD = atif.Ptr(b.cost)
 	}
+	if hidden > 0 {
+		note := fmt.Sprintf("The steps are the context after compaction and leave out %d model call(s) that were folded away; total_steps counts them and final_metrics totals the whole path.", hidden)
+		if b.doc.Notes != "" {
+			note = b.doc.Notes + "\n" + note
+		}
+		b.doc.Notes = note
+	}
+}
+
+// pathTotals replaces the totals accumulated from the steps with the
+// totals of the whole path, and returns the number of model calls the
+// path holds that the document does not show. A document's steps are
+// the context after compaction, so a run that folded is described by
+// its last summary and what followed; its cost is not, or a
+// leaderboard reads the tail's cost as the run's. It does nothing for
+// a Trajectory built without a Path, whose context is all there is.
+func (b *builder) pathTotals() int {
+	if len(b.t.Path) == 0 {
+		return 0
+	}
+	inContext := make(map[string]bool, len(b.t.Context.Entries))
+	for _, e := range b.t.Context.Entries {
+		inContext[e.Base().ID] = true
+	}
+	b.prompt, b.completion, b.cached, b.cost, b.hasCost = 0, 0, 0, 0, false
+	hidden, model := 0, ""
+	for _, e := range b.t.Path {
+		var u *openresponses.Usage
+		priced := ""
+		switch v := e.(type) {
+		case *agentsession.ConfigEntry:
+			// The model in force, for a fold or a response that does
+			// not name its own.
+			if v.Replace {
+				model = ""
+			}
+			if v.Model != "" {
+				model = v.Model
+			}
+			continue
+		case *agentsession.ResponseEntry:
+			u, priced = v.Usage, model
+			if v.Model != "" {
+				priced = v.Model
+			}
+		case *agentsession.CompactionEntry:
+			model = v.Config.Model
+			u, priced = v.Usage, v.Config.Model
+		case *agentsession.BranchSummaryEntry:
+			u, priced = v.Usage, model
+		default:
+			continue
+		}
+		if !inContext[e.Base().ID] {
+			hidden++
+		}
+		if u == nil {
+			continue
+		}
+		b.prompt += u.InputTokens
+		b.completion += u.OutputTokens
+		b.cached += u.InputTokensDetails.CachedTokens
+		if usd, ok := b.costOf(e.Base().ID, priced, *u); ok {
+			b.cost += usd
+			b.hasCost = true
+		}
+	}
+	return hidden
 }
 
 // subsessions resolves link entries: a subsession is embedded and
@@ -1144,6 +1296,18 @@ func Items(doc *atif.Trajectory) (openresponses.Items, error) {
 		var raws []any
 		if item, ok := or["item"]; ok {
 			raws = append(raws, item)
+		}
+		// A fold's pinned items follow its summary, which is the order
+		// the context algorithm places them in.
+		if list, ok := or["pinned"]; ok {
+			switch l := list.(type) {
+			case []any:
+				raws = append(raws, l...)
+			case []json.RawMessage:
+				for _, r := range l {
+					raws = append(raws, r)
+				}
+			}
 		}
 		if list, ok := or["items"]; ok {
 			switch l := list.(type) {

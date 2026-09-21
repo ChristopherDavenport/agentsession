@@ -1,0 +1,269 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000006",
+  "trajectory_id": "r0000002",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5",
+    "tool_definitions": [
+      {
+        "function": {
+          "description": "Run a shell command",
+          "name": "bash",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "cmd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cmd"
+            ]
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-09-21T09:00:01Z",
+      "source": "user",
+      "message": "List the files.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000001"
+        },
+        "config_entries": [
+          "c0000001"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "List the files."
+              }
+            ]
+          }
+        },
+        "tool_changes": {
+          "added": [
+            "bash"
+          ]
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-09-21T09:00:03Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "reasoning_content": "A shell call will do.",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_1",
+          "function_name": "bash",
+          "arguments": {
+            "cmd": "ls"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_1",
+            "content": "a.txt\nb.txt",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "output": "a.txt\nb.txt"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 30,
+        "completion_tokens": 10,
+        "cached_tokens": 0,
+        "extra": {
+          "reasoning_tokens": 4
+        }
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000001"
+        },
+        "custom": [
+          {
+            "data": {
+              "verdict": "allow",
+              "rule": "bash(ls:*)"
+            },
+            "entry_id": "u0000001",
+            "ns": "agentpolicy"
+          }
+        ],
+        "item_entry_ids": [
+          "i0000002",
+          "i0000003"
+        ],
+        "latency_ms": 400,
+        "openresponses": {
+          "items": [
+            {
+              "type": "reasoning",
+              "id": "rs_1",
+              "summary": [
+                {
+                  "type": "summary_text",
+                  "text": "A shell call will do."
+                }
+              ]
+            },
+            {
+              "type": "function_call",
+              "id": "fc_1",
+              "status": "completed",
+              "call_id": "call_1",
+              "name": "bash",
+              "arguments": "{\"cmd\":\"ls\"}"
+            }
+          ],
+          "response": {
+            "entry_id": "r0000001",
+            "latency_ms": 400,
+            "model": "gpt-5",
+            "request_hash": "sha256:72f0b24299889225bfec2ac3738da4ef3ba63b1b0307b97226b934d834bbac2e",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-09-21T09:00:03Z",
+            "usage": {
+              "input_tokens": 30,
+              "output_tokens": 10,
+              "total_tokens": 40,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 4
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-09-21T09:00:06Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "a.txt and b.txt.",
+      "reasoning_content": "Two files; answer.",
+      "metrics": {
+        "prompt_tokens": 50,
+        "completion_tokens": 9,
+        "cached_tokens": 30,
+        "extra": {
+          "reasoning_tokens": 3
+        }
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000002"
+        },
+        "custom": [
+          {
+            "data": {
+              "verdict": "allow",
+              "rule": "reply"
+            },
+            "entry_id": "u0000002",
+            "ns": "agentpolicy"
+          }
+        ],
+        "item_entry_ids": [
+          "i0000005",
+          "i0000006"
+        ],
+        "latency_ms": 300,
+        "openresponses": {
+          "items": [
+            {
+              "type": "reasoning",
+              "id": "rs_2",
+              "summary": [
+                {
+                  "type": "summary_text",
+                  "text": "Two files; answer."
+                }
+              ]
+            },
+            {
+              "type": "message",
+              "id": "msg_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "a.txt and b.txt.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "r0000002",
+            "latency_ms": 300,
+            "model": "gpt-5",
+            "request_hash": "sha256:aab624649334df1c2adc2ea1ebab2217fc07f2379abaa3a8f404f524fcf75096",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-09-21T09:00:06Z",
+            "usage": {
+              "input_tokens": 50,
+              "output_tokens": 9,
+              "total_tokens": 59,
+              "input_tokens_details": {
+                "cached_tokens": 30
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 3
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 80,
+    "total_completion_tokens": 19,
+    "total_cached_tokens": 30,
+    "total_steps": 3
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.3",
+      "leaf": "r0000002",
+      "main": true
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

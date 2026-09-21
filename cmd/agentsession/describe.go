@@ -13,13 +13,17 @@ import (
 // textWidth bounds the free text shown for an entry or item.
 const textWidth = 72
 
-// describeEntry renders one entry on one line.
-func describeEntry(e agentsession.Entry) string {
+// describeEntry renders one entry on one line. With full set, the
+// entries that carry opaque data print it instead of its size.
+func describeEntry(e agentsession.Entry, full bool) string {
 	switch v := e.(type) {
 	case *agentsession.ItemEntry:
 		s := describeItem(v.Item)
 		if v.ResponseID != "" {
 			s += " (" + v.ResponseID + ")"
+		}
+		if v.Source != nil {
+			s += " from " + describeTrigger(v.Source)
 		}
 		if v.Visible != nil && !*v.Visible {
 			s = "hidden " + s
@@ -48,6 +52,16 @@ func describeEntry(e agentsession.Entry) string {
 		if v.Instructions != nil {
 			parts = append(parts, "instructions "+describeText(*v.Instructions))
 		}
+		if len(v.InstructionsParts) > 0 {
+			parts = append(parts, "instructions "+describeParts(v.InstructionsParts))
+		}
+		if n := len(v.InstructionsOmitted); n > 0 {
+			ids := make([]string, 0, n)
+			for _, o := range v.InstructionsOmitted {
+				ids = append(ids, o.ID+" ("+o.Reason+")")
+			}
+			parts = append(parts, fmt.Sprintf("omitted %s", strings.Join(ids, ", ")))
+		}
 		if v.Reasoning != nil {
 			parts = append(parts, "reasoning")
 		}
@@ -69,6 +83,9 @@ func describeEntry(e agentsession.Entry) string {
 		return strings.Join(parts, ", ")
 	case *agentsession.CompactionEntry:
 		s := "first kept " + v.FirstKept + "; " + describeItem(v.Summary)
+		if n := len(v.Pinned); n > 0 {
+			s += fmt.Sprintf("; %d pinned", n)
+		}
 		if v.TokensBefore > 0 {
 			s += fmt.Sprintf(" (%d tokens before)", v.TokensBefore)
 		}
@@ -160,9 +177,66 @@ func describeEntry(e agentsession.Entry) string {
 			parts = append(parts, "args rewritten")
 		}
 		return strings.Join(parts, " ")
+	case *agentsession.QueuedEntry:
+		s := v.Mode + " " + describeItem(v.Item)
+		if v.Trigger != nil {
+			s += " from " + describeTrigger(v.Trigger)
+		}
+		if v.Ref != "" {
+			s += " ref " + describeText(v.Ref)
+		}
+		return s
+	case *agentsession.CustomEntry:
+		// The namespace is the whole point of a custom entry: it is what
+		// says which application wrote it and what its data means.
+		return v.NS + " " + describeData(v.Data, full)
+	case *agentsession.UnknownEntry:
+		// An extension type, which a reader preserves without
+		// understanding. The type is in the type column.
+		return "extension " + describeData(v.Raw, full)
 	default:
 		return "(unknown entry type)"
 	}
+}
+
+// describeData renders an opaque payload: its size, or the data
+// itself when the caller asked for it.
+func describeData(data []byte, full bool) string {
+	if len(data) == 0 {
+		return "(no data)"
+	}
+	if full {
+		return collapse(string(data))
+	}
+	return fmt.Sprintf("(%d bytes)", len(data))
+}
+
+// describeParts renders a config entry's instruction parts: the ID of
+// every part in order, with the size of the ones that carry their
+// text and "=" for the ones a delta names by hash alone.
+func describeParts(parts []agentsession.InstructionPart) string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		switch {
+		case p.Text == "" && p.Hash != "":
+			out = append(out, p.ID+"=")
+		default:
+			out = append(out, fmt.Sprintf("%s(%dB)", p.ID, len(p.Text)))
+		}
+	}
+	return "[" + strings.Join(out, " ") + "]"
+}
+
+// describeTrigger renders what brought an input in.
+func describeTrigger(t *agentsession.Trigger) string {
+	s := t.Kind
+	if t.Ref != "" {
+		s = strings.TrimSpace(s + " " + shorten(t.Ref, 24))
+	}
+	if t.Source != "" {
+		s += " via " + t.Source
+	}
+	return s
 }
 
 // describeItem renders one Open Responses item on one line.
@@ -226,6 +300,11 @@ func describeText(s string) string {
 		return `""`
 	}
 	return fmt.Sprintf("%q", shorten(s, textWidth))
+}
+
+// collapse puts a value on one line without bounding its length.
+func collapse(s string) string {
+	return strings.Join(strings.FieldsFunc(s, unicode.IsSpace), " ")
 }
 
 func shorten(s string, n int) string {

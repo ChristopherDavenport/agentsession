@@ -47,7 +47,8 @@ const (
 // Entry is one line of a session after the header. Concrete types are
 // [ItemEntry], [ResponseEntry], [ConfigEntry], [CompactionEntry],
 // [BranchSummaryEntry], [RunEntry], [DispatchEntry], [DecisionEntry],
-// [LabelEntry], [InfoEntry], [EnvEntry], [OutcomeEntry], [LinkEntry],
+// [QueuedEntry], [LabelEntry], [InfoEntry], [EnvEntry],
+// [OutcomeEntry], [LinkEntry],
 // [CustomEntry] and [UnknownEntry]. Decoded
 // values are always pointers, so switch on *ItemEntry and so on. An
 // entry must not be modified once it has been appended to a session;
@@ -98,6 +99,14 @@ type ItemEntry struct {
 	// Visible is false for an item that is in context but that a
 	// renderer should hide. Nil means visible.
 	Visible *bool `json:"visible,omitempty"`
+	// Source says how the input arrived, for an item a person or
+	// another system sent rather than the model or the loop. It is the
+	// trigger a [QueuedEntry] carried, so two people steering one run
+	// are told apart.
+	Source *Trigger `json:"source,omitempty"`
+	// QueuedFrom names the [QueuedEntry] this item was accepted as,
+	// for an input that waited before it could be appended.
+	QueuedFrom string `json:"queued_from,omitempty"`
 }
 
 // EntryType returns "item".
@@ -138,13 +147,62 @@ type ConfigEntry struct {
 	Instructions *string                        `json:"instructions,omitempty"`
 	Reasoning    *openresponses.ReasoningConfig `json:"reasoning,omitempty"`
 	Text         *openresponses.TextConfig      `json:"text,omitempty"`
-	ToolsAdded   openresponses.Tools            `json:"tools_added,omitempty"`
-	ToolsRemoved []string                       `json:"tools_removed,omitempty"`
+	// InstructionsParts names the parts the instructions are composed
+	// of, in the order they are joined. A delta carries the whole
+	// ordered list: a part whose text changed carries its text, a part
+	// whose text is unchanged carries its Hash alone, and a part left
+	// out of the list is removed. Set it through
+	// [Settings.InstructionsDelta] rather than by hand, which computes
+	// exactly that from the parts in force. When Instructions is set
+	// beside it the two must agree, since Instructions is the parts
+	// joined with "\n\n".
+	InstructionsParts []InstructionPart `json:"instructions_parts,omitempty"`
+	// InstructionsOmitted records the parts the writer considered and
+	// left out, so a session says what the model was not given as well
+	// as what it was. It is not settings: nothing in it reaches the
+	// request, and it applies to this entry alone.
+	InstructionsOmitted []OmittedPart       `json:"instructions_omitted,omitempty"`
+	ToolsAdded          openresponses.Tools `json:"tools_added,omitempty"`
+	ToolsRemoved        []string            `json:"tools_removed,omitempty"`
 	// Extra carries request members beyond the named ones, such as
 	// temperature or provider passthrough keys. A null value removes
 	// the key from the settings.
 	Extra   map[string]json.RawMessage `json:"extra,omitempty"`
 	Replace bool                       `json:"replace,omitempty"`
+}
+
+// InstructionPart is one named part of the instructions. A harness
+// that composes the instructions from several layers, a product
+// prompt, an AGENTS.md chain, a skill catalogue, a memory block,
+// gives each layer a part, so a change to one is recorded as a change
+// to one and a reader can say which layer an instruction came from.
+type InstructionPart struct {
+	// ID is the part's stable name, chosen by the harness: the same
+	// string across the session, so a delta can name a part it does
+	// not repeat.
+	ID string `json:"id"`
+	// Text is the part's text. On a delta it is absent for a part
+	// whose text is unchanged, which carries Hash instead.
+	Text string `json:"text,omitempty"`
+	// Source names the layer that produced the part, in the harness's
+	// own terms.
+	Source string `json:"source,omitempty"`
+	// Hash is the hash of the text a delta does not repeat, in the
+	// format's notation: [HashPrefix] and the SHA-256 of the text.
+	// [HashText] computes it. It is set on a delta's unchanged part
+	// and empty on a part that carries its text.
+	Hash string `json:"hash,omitempty"`
+}
+
+// OmittedPart is a part the writer considered for the instructions
+// and left out: a file the budget did not reach, a memory entry that
+// did not fit, a skill out of scope. Reason is the writer's own word
+// for why, Size the bytes the part would have added.
+type OmittedPart struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason,omitempty"`
+	Size   int    `json:"size,omitempty"`
+	Source string `json:"source,omitempty"`
 }
 
 // SetExtra records a passthrough request member on the delta: v is
@@ -175,7 +233,7 @@ func (c *ConfigEntry) ClearExtra(key string) {
 func (*ConfigEntry) EntryType() string { return TypeConfig }
 
 // CompactionEntry replaces the context before FirstKept with a summary.
-// It is in context through its summary.
+// It is in context through its summary and its pinned items.
 type CompactionEntry struct {
 	EntryBase `json:"-"`
 	// FirstKept names the earliest entry on the path that stays in
@@ -184,6 +242,10 @@ type CompactionEntry struct {
 	// Summary is an item: the server's compaction item verbatim, or a
 	// message for a local summary.
 	Summary openresponses.Item `json:"summary"`
+	// Pinned are items kept verbatim from before FirstKept. They are in
+	// context immediately after Summary and before the entries from
+	// FirstKept.
+	Pinned openresponses.Items `json:"pinned,omitempty"`
 	// Config is a full settings checkpoint so a reader need not replay
 	// config entries from before the compaction.
 	Config       Settings             `json:"config"`
@@ -425,6 +487,8 @@ func UnmarshalEntry(data []byte) (Entry, error) {
 		e = &DispatchEntry{}
 	case TypeDecision:
 		e = &DecisionEntry{}
+	case TypeQueued:
+		e = &QueuedEntry{}
 	case TypeLabel:
 		e = &LabelEntry{}
 	case TypeInfo:
@@ -592,6 +656,20 @@ func (e *ItemEntry) decodeMembers(_ []byte, all map[string]json.RawMessage) erro
 		}
 		e.Visible = &visible
 	}
+	e.Source = nil
+	if raw, ok := all["source"]; ok && !isNull(raw) {
+		var source Trigger
+		if err := json.Unmarshal(raw, &source); err != nil {
+			return fmt.Errorf("source: %w", err)
+		}
+		e.Source = &source
+	}
+	e.QueuedFrom = ""
+	if raw, ok := all["queued_from"]; ok && !isNull(raw) {
+		if err := json.Unmarshal(raw, &e.QueuedFrom); err != nil {
+			return fmt.Errorf("queued_from: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -653,10 +731,20 @@ func (e *CompactionEntry) UnmarshalJSON(data []byte) error {
 	return e.decodeMembers(data, all)
 }
 
+// decodeMembers decodes into aux and then assigns, because Summary is
+// an interface that needs the item registry.
+//
+// The aux struct must list every member CompactionEntry declares. A
+// member added to the struct and not to aux is dropped in silence: it
+// is in compactionKeys, so the envelope rule treats it as known and
+// does not preserve it in Unknown either, and the only symptom is a
+// round trip that loses it. TestCompactionMembersSurviveARoundTrip
+// guards this.
 func (e *CompactionEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	var aux struct {
 		FirstKept    string               `json:"first_kept"`
 		Summary      json.RawMessage      `json:"summary"`
+		Pinned       openresponses.Items  `json:"pinned"`
 		Config       Settings             `json:"config"`
 		TokensBefore int                  `json:"tokens_before"`
 		Usage        *openresponses.Usage `json:"usage"`
@@ -673,6 +761,7 @@ func (e *CompactionEntry) decodeMembers(data []byte, all map[string]json.RawMess
 	}
 	e.FirstKept = aux.FirstKept
 	e.Summary = summary
+	e.Pinned = aux.Pinned
 	e.Config = aux.Config
 	e.TokensBefore = aux.TokensBefore
 	e.Usage = aux.Usage

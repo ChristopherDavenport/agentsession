@@ -83,7 +83,42 @@ uses `sess.CompactFrom(i, summary)` or `sess.CompactKeeping(n, summary)`
 instead of mapping the index to an entry ID itself. `Context.ItemEntries`
 is the mapping, aligned with `Context.Items`.
 `sess.Verify(responseEntryID)` rebuilds the request and checks the
-hash. `agentsession.Continue(ctx, store, id, summary)` rolls a session
+hash; it returns `ErrNoHash` when the response recorded none, so nil
+means the request was checked and not that there was nothing to check.
+A fold that keeps an item verbatim from before `first_kept` records it
+on the compaction's `Pinned`, and the context algorithm places those
+items immediately after the summary, which is where the request that
+was sent had them.
+
+`agentsession.OutputEntries(path, resp)` is the rule for finding a
+response's own output items, over a path the caller already holds. It
+is what `RequestContext` removes; a reader that instead serves those
+items — replaying a recorded call, say — calls the same function, so
+the two cannot drift into rebuilding different requests from one file.
+
+A harness that composes its instructions from several layers records
+them as parts, so a change to one layer costs that layer and not the
+whole prompt:
+
+```go
+parts := []agentsession.InstructionPart{
+    {ID: "product", Source: "product", Text: productPrompt},
+    {ID: "agentsmd", Source: "agentsmd", Text: agentsmd.Render(res.Files)},
+    {ID: "agentmemory", Source: "agentmemory", Text: block},
+}
+cfg, err := agentsession.ConfigFromRequestParts(req, parts...) // the first entry on a root
+// ... later, when a layer re-renders ...
+if delta := c.Settings.InstructionsDelta(parts); delta != nil {
+    delta.InstructionsOmitted = omitted   // what was considered and left out
+    store.Append(ctx, id, delta)
+}
+```
+
+`InstructionsDelta` writes the whole ordered list of IDs with the text
+of the parts that moved and a hash for the parts that did not, and
+returns nil when nothing moved. `Settings.Instructions` is always the
+parts joined with a blank line, so a reader that does not care about
+the composition sees the string it always saw. `agentsession.Continue(ctx, store, id, summary)` rolls a session
 that has outgrown its file into a successor that starts from the old
 leaf's settings, and marks the old one superseded so a `Current`
 listing shows only the successor.
@@ -105,10 +140,37 @@ end, err := sess.EndRun(agentsession.ReasonInputRequired, "")           // pendi
 store.Append(ctx, id, end)
 ```
 
+An input a harness accepts while a run is in flight, a steer or a
+follow-up, is recorded before it is acted on:
+
+```go
+q := agentsession.NewQueued(item, agentsession.ModeSteer).
+    WithTrigger("human", "slack:1758412800.0002", "gateway")
+store.Append(ctx, id, q)                 // the gateway can answer 202
+// ... when the loop can take it ...
+store.Append(ctx, id, q.Drain())         // the item, its source and queued_from
+```
+
+`sess.PendingQueued(leaf)` lists the inputs that have neither been
+appended nor been closed by the end of the run they were queued into,
+which is the inbox a restarted harness drains.
+
 On resume, `sess.PendingCalls(leaf)` lists the calls without an
 output and `Call.State(header)` says what the path knows about each.
-A run's end reason is a shape of its segment: `ComputeReason`
-recomputes it and `Run.Verify` checks a written one against it.
+A run's end reason is a shape of its segment and of the path the
+segment ends: `ComputeReason` recomputes it and `Run.Verify` checks a
+written one against it. A run that answers a held call and ends
+without calling the model again, which is what a refusal and a
+terminating resume are, reads as `stopped`.
+
+Both file stores guard a session against a second writing process and
+report `agentsession.ErrSessionLocked`, the one sentinel for that
+condition, so a host written against the `Store` interface tells a
+session another process holds from a store that is broken without
+knowing which store it was given. `jsonl.WithReadOnly` and
+`sqlite.WithReadOnly` open a store that takes no lock and refuses
+every write with `agentsession.ErrReadOnly`, which is how a session
+is read while an agent is writing it.
 
 ## Reading one
 
@@ -150,6 +212,17 @@ docs := func(yield func(*atif.Trajectory) bool) {
 err := export.WriteATIF("out/", docs)
 ```
 
+`export.At(s, entryID)` builds the document of the path that ends at
+one entry, which is what a consumer holding a score needs once the
+outcomes a judge appended have moved the leaf; `Trajectories` is that
+over each leaf. A document's steps are the context after compaction
+and its `final_metrics` are the whole path, so a run that folded
+reports what it spent, with `total_steps` and a line in `notes`
+saying what the steps leave out. `export.Options.ModelName` overrides
+the model name the document reports, for a consumer that derives a
+provider from it, without changing the name the request was sent
+with.
+
 Each document is one root-to-leaf path with compaction applied. The
 session's current path is written as `<session-id>.json`, the others
 as `<session-id>_<leaf>.json`. A branch that was continued lists the
@@ -164,14 +237,16 @@ strips the raw items for a document a judge will read.
 
 ## Inspecting from a shell
 
-`cmd/agentsession` reads session files without taking their lock, so
-it is safe to run beside a harness that is writing.
+`cmd/agentsession` reads session files without taking their lock, and
+`list` opens the store with `jsonl.WithReadOnly`, so every command is
+safe to run beside a harness that is writing.
 
 ```
 go install github.com/ChristopherDavenport/agentsession/cmd/agentsession@latest
 
 agentsession show session.jsonl            # entries in file order, then the context at the leaf
 agentsession show session.jsonl -leaf ID   # the context at another entry
+agentsession show session.jsonl -v         # with the data of custom and extension entries
 agentsession verify session.jsonl          # rebuild every request and check its hash
 agentsession export session.jsonl -out dir -secret "$OPENAI_API_KEY" -redact-home
 agentsession list ~/.agent/sessions        # a jsonl store's sessions, newest first
@@ -209,8 +284,8 @@ _, err := otel.Export(ctx, tracer, sess, sess.Leaf()) // a stored session, after
 | package | purpose |
 |---|---|
 | `agentsession` | header, entries, tree, context algorithm, request hash, `Store` interface, in-memory store |
-| `jsonl` | the file store: one JSONL file per session with a sync policy, crash recovery and a per-session lock against a second writing process, reporting a dead holder's lock when it takes one over |
-| `sqlite` | a SQLite store, as a nested module so its driver stays out of the library, holding each open session against a second process |
+| `jsonl` | the file store: one JSONL file per session with a sync policy, crash recovery and a per-session lock against a second writing process, reporting a dead holder's lock when it takes one over, or read-only and taking no lock |
+| `sqlite` | a SQLite store, as a nested module so its driver stays out of the library, holding each open session against a second process, or read-only and taking no hold |
 | `otel` | the OpenTelemetry projection, as a nested module: replay a session as spans, or wrap a store so a live run emits them |
 | `atif` | Go types for ATIF v1.8 with unknown-member passthrough and validation |
 | `export` | trajectories, ATIF conversion, redactors, writer |

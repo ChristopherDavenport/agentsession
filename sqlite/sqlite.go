@@ -62,9 +62,14 @@ CREATE TABLE IF NOT EXISTS holders (
 `
 
 // ErrSessionLocked is returned by Create, Open and Append when another
-// process holds the session. The message names the holder; BreakLock
-// removes a lock the caller has decided is dead.
-var ErrSessionLocked = errors.New("sqlite: session is open in another process")
+// process holds the session. The message names the holder, with the
+// times it has held it since and last appended; BreakLock removes a
+// lock the caller has decided is dead.
+//
+// It is [agentsession.ErrSessionLocked], so a host that reads the
+// store through the interface matches the same sentinel whichever
+// store it was given.
+var ErrSessionLocked = agentsession.ErrSessionLocked
 
 // LockInfo describes the holder of a session.
 type LockInfo struct {
@@ -77,6 +82,24 @@ type LockInfo struct {
 
 // Option configures a Store.
 type Option func(*Store)
+
+// WithReadOnly opens the store for reading: Open takes no hold on a
+// session, so a session another process holds can be read while it is
+// held, and Create, Append, Delete and BreakLock return
+// [agentsession.ErrReadOnly]. Nothing in a session is written.
+//
+// Two things it is not. Opening the database still creates or
+// migrates its tables, which is what makes a file an earlier release
+// wrote readable, so a read-only store writes the database file once
+// at open and takes its write lock while it does; the option cannot
+// change that, since the schema is what the reader reads through.
+// And an open session is cached as it is in a writing store, so a
+// session read while another process appends to it shows what it held
+// when it was opened; call [Store.Release] and open it again to see
+// the rest.
+func WithReadOnly() Option {
+	return func(s *Store) { s.readOnly = true }
+}
 
 // WithStaleLockReport sets a function the store calls when Create or
 // Open takes over the hold of a process on this host that no longer
@@ -97,9 +120,11 @@ func WithStaleLockReport(report func(LockInfo)) Option {
 var ErrConcurrentWriter = errors.New("sqlite: another process appended to the session")
 
 // Store is a SQLite-backed [agentsession.Store]. It is safe for
-// concurrent use within one process. Several processes may share the
-// file: every write is one immediate transaction, and each open
-// session is held by one process at a time through the holders
+// concurrent use within one process. A store opened with
+// [WithReadOnly] takes no hold and refuses every write, so a session
+// another process is writing can still be read. Several processes may
+// share the file: every write is one immediate transaction, and each
+// open session is held by one process at a time through the holders
 // table, so a second process that opens the same session gets
 // ErrSessionLocked instead of interleaving entries with the first.
 // The hold is released by Release, Delete and Close; a hold left by a
@@ -110,6 +135,7 @@ var ErrConcurrentWriter = errors.New("sqlite: another process appended to the se
 type Store struct {
 	w, r        *sql.DB
 	staleReport func(LockInfo)
+	readOnly    bool
 	pid         int
 	host        string
 	// token identifies this Store among holders, since two stores in
@@ -294,7 +320,9 @@ func (s *Store) Close() error {
 		s.releaseLocked(id)
 	}
 	s.mu.Unlock()
-	_, _ = s.w.Exec("PRAGMA optimize")
+	if !s.readOnly {
+		_, _ = s.w.Exec("PRAGMA optimize")
+	}
 	err := s.w.Close()
 	if rerr := s.r.Close(); err == nil {
 		err = rerr
@@ -308,6 +336,9 @@ func (s *Store) Close() error {
 
 // Create implements agentsession.Store.
 func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsession.Session, error) {
+	if s.readOnly {
+		return nil, agentsession.ErrReadOnly
+	}
 	sess := agentsession.New(h)
 	h = sess.Header()
 	line, err := h.MarshalJSON()
@@ -367,16 +398,18 @@ func (s *Store) openLocked(ctx context.Context, id string) (*agentsession.Sessio
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: load session: %w", err)
 	}
-	tx, err := s.w.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("sqlite: begin: %w", err)
-	}
-	if err := s.claim(ctx, tx, id); err != nil {
-		tx.Rollback()
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("sqlite: hold session: %w", err)
+	if !s.readOnly {
+		tx, err := s.w.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("sqlite: begin: %w", err)
+		}
+		if err := s.claim(ctx, tx, id); err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("sqlite: hold session: %w", err)
+		}
 	}
 	// Rebuild the JSONL form and let the library validate the tree.
 	var buf bytes.Buffer
@@ -414,6 +447,9 @@ func (s *Store) openLocked(ctx context.Context, id string) (*agentsession.Sessio
 // insert fails the cached session is dropped so the next Open reloads
 // the database's view.
 func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Entry) (string, error) {
+	if s.readOnly {
+		return "", agentsession.ErrReadOnly
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, err := s.openLocked(ctx, sessionID)
@@ -561,6 +597,9 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 
 // Delete implements agentsession.Store. Entries go with the session.
 func (s *Store) Delete(ctx context.Context, id string) error {
+	if s.readOnly {
+		return agentsession.ErrReadOnly
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	res, err := s.w.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id)
@@ -579,7 +618,9 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 }
 
 // Release forgets an open session so the next Open reloads it from the
-// database.
+// database, and drops the hold when the store has one. On a read-only
+// store it is how a reader sees what another process has appended
+// since it opened the session.
 func (s *Store) Release(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -587,7 +628,7 @@ func (s *Store) Release(id string) {
 }
 
 func (s *Store) releaseLocked(id string) {
-	if _, ok := s.open[id]; ok {
+	if _, ok := s.open[id]; ok && !s.readOnly {
 		_, _ = s.w.Exec(`DELETE FROM holders WHERE session_id = ? AND token = ?`, id, s.token)
 	}
 	delete(s.open, id)
@@ -605,7 +646,12 @@ func (s *Store) LockHolder(ctx context.Context, id string) (*LockInfo, error) {
 // gone, for example a process on another host that crashed. Breaking
 // the hold of a live writer makes that writer's next append fail with
 // ErrSessionLocked rather than interleave with the new holder's.
+// A store opened with [WithReadOnly] refuses: it takes no hold, so it
+// has no business dropping another process's.
 func (s *Store) BreakLock(ctx context.Context, id string) error {
+	if s.readOnly {
+		return agentsession.ErrReadOnly
+	}
 	if _, err := s.w.ExecContext(ctx, `DELETE FROM holders WHERE session_id = ?`, id); err != nil {
 		return fmt.Errorf("sqlite: break lock: %w", err)
 	}
@@ -635,6 +681,11 @@ func (s *Store) claim(ctx context.Context, tx *sql.Tx, id string) error {
 	var cur LockInfo
 	var token, since, beat string
 	err := tx.QueryRowContext(ctx, `SELECT pid, host, token, since, heartbeat FROM holders WHERE session_id = ?`, id).Scan(&cur.PID, &cur.Host, &token, &since, &beat)
+	// Both times are read before the branches: the live-holder message
+	// is the one an operator sees, and a zero timestamp in it reads
+	// like a broken lock rather than a lock doing its job.
+	cur.Since, _ = time.Parse(time.RFC3339Nano, since)
+	cur.Heartbeat, _ = time.Parse(time.RFC3339Nano, beat)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -642,8 +693,6 @@ func (s *Store) claim(ctx context.Context, tx *sql.Tx, id string) error {
 	case token == s.token:
 		return nil // ours already, from an earlier open in this store
 	case cur.Host == s.host && !procs.Alive(cur.PID):
-		cur.Since, _ = time.Parse(time.RFC3339Nano, since)
-		cur.Heartbeat, _ = time.Parse(time.RFC3339Nano, beat)
 		if _, err := tx.ExecContext(ctx, `DELETE FROM holders WHERE session_id = ?`, id); err != nil {
 			return fmt.Errorf("sqlite: remove stale holder: %w", err)
 		}
@@ -671,7 +720,14 @@ func describeHolder(l *LockInfo) string {
 	if l == nil {
 		return "no holder"
 	}
-	return fmt.Sprintf("pid %d on %s since %s", l.PID, l.Host, l.Since.Format(time.RFC3339))
+	out := fmt.Sprintf("pid %d on %s", l.PID, l.Host)
+	if !l.Since.IsZero() {
+		out += " since " + l.Since.Format(time.RFC3339)
+	}
+	if !l.Heartbeat.IsZero() && !l.Heartbeat.Equal(l.Since) {
+		out += ", last append " + l.Heartbeat.Format(time.RFC3339)
+	}
+	return out
 }
 
 // stamp renders a time for lexicographic ordering in the database.

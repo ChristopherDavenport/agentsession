@@ -1,0 +1,105 @@
+{
+  "r0000002": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Be brief.",
+      "tools": [
+        {
+          "type": "function",
+          "name": "bash",
+          "description": "Run a shell command",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "cmd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cmd"
+            ]
+          }
+        }
+      ]
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "List the files."
+          }
+        ]
+      },
+      {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [
+          {
+            "type": "summary_text",
+            "text": "A shell call will do."
+          }
+        ]
+      },
+      {
+        "type": "function_call",
+        "id": "fc_1",
+        "status": "completed",
+        "call_id": "call_1",
+        "name": "bash",
+        "arguments": "{\"cmd\":\"ls\"}"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": "a.txt\nb.txt"
+      },
+      {
+        "type": "reasoning",
+        "id": "rs_2",
+        "summary": [
+          {
+            "type": "summary_text",
+            "text": "Two files; answer."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "a.txt and b.txt.",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "c0000001",
+      "i0000001",
+      "i0000002",
+      "u0000001",
+      "i0000003",
+      "r0000001",
+      "i0000004",
+      "i0000005",
+      "u0000002",
+      "i0000006",
+      "r0000002"
+    ],
+    "item_entries": [
+      "i0000001",
+      "i0000002",
+      "i0000003",
+      "i0000004",
+      "i0000005",
+      "i0000006"
+    ]
+  }
+}

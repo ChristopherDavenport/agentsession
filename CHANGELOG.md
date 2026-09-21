@@ -5,6 +5,211 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- RFC 0001 is revised to draft 0.3 and the library writes
+  `agentsession/0.3`; 0.2 and 0.1 files read unchanged. Context
+  building now states how the request context of one response is
+  found, since two implementations rebuild it: walking back from the
+  response entry, an entry that is not an item is skipped, an item
+  whose `response` names the response is output, and the walk stops at
+  the first item naming another response or none. A reader identifies
+  a response's output items by `response` and never by position; a
+  writer SHOULD still keep them contiguous, so the envelope reads in
+  the order it happened, and the RFC now says why rather than merely
+  permitting both spellings. An entry another layer raises while a
+  model call is in flight — a guard's verdict, a dispatch, a run
+  boundary — is not an entry "for that model call", which the writing
+  discipline previously left ambiguous (#40).
+- `Session.RequestContext` follows that rule, so a custom or record
+  entry written between two output items of one response no longer
+  truncates the rebuilt request. A composed product that records a
+  guard's verdict where the guard runs passes `verify` again; only the
+  response's own item entries are removed from the path, and every
+  other entry stays where it was (#40).
+
+- New export `OutputEntries(path []Entry, resp *ResponseEntry)
+  []*ItemEntry`, the rule for finding a response's own output items,
+  over a path the caller already holds. `Session.RequestContext` calls
+  it rather than keeping its own copy of the walk. The rule is
+  implemented twice in the workspace — here, which excludes those
+  entries from the rebuilt request, and in `agenteval`'s replay, which
+  serves their items — with a comment rather than a compiler keeping
+  the two in step. Exporting the selection is what lets the second
+  reader drop its copy: it returns entries rather than items, because
+  a reader that excludes them needs entry identity and items carry
+  none, and it returns them in path order, not the backward order the
+  walk runs in. The entries are the session's own, so a caller that
+  serves their items to something that records must clone them. The
+  RFC now states the two things a second implementation had to infer:
+  a `response` with no `response_id` has no output items, and the
+  order is normative.
+
+- `CompactionEntry` gains `Pinned`, written as the optional `pinned`
+  member: the items a fold kept verbatim from before `first_kept`.
+  `BuildContext` places them immediately after `summary` and before
+  the kept window, which is where the request that was sent had them,
+  so a harness that holds an item out of a fold can record a
+  `request_hash` it stands behind instead of recording none. Because
+  `Context` carries them too, such a pin survives `Continue`,
+  `Resume` and `Rebase` rather than being dropped at the fold. The
+  ATIF projection carries them beside the fold's summary, since the
+  entries they were copied from are before `first_kept` and so are not
+  in the document. Additive: no file in existence carries the member,
+  each pinned item is also an `item` entry on the path, and a reader
+  that ignores it rebuilds a request short of those items rather than
+  one that invents them. The RFC states the three rules a writer will
+  otherwise get wrong: only an item carried by an `item` entry may be
+  pinned, so a summary cannot be; the pins' order among themselves is
+  the order the request carried them in; and only the last compaction
+  on a path contributes items, so a later fold must restate a pin that
+  is to survive it.
+
+- **Fixed.** A `run` entry no longer drops the other phase's members
+  when it is written back. The encoder writes one member list for a
+  start and another for an end, and a file from elsewhere carrying
+  `source` on an end, or `reason` or `pending` on a start, lost it
+  silently: the member is declared on `RunEntry`, so the envelope rule
+  did not preserve it in `Unknown` either. Those members are now
+  written when set. Nothing this library builds sets them, so a
+  well-formed entry is written exactly as before, byte for byte.
+
+- **Breaking.** `Session.Verify` returns the new `ErrNoHash` for a
+  response that recorded no request hash, where it returned nil. The
+  two cases it could not tell apart — the rebuilt request hashed to
+  the recorded value, and there was no recorded value to check — are
+  now distinct, so a caller gating a build on `err == nil` is told
+  when nothing was verified rather than passing. A caller that accepts
+  unverified requests opts in with `errors.Is(err,
+  agentsession.ErrNoHash)`. The recorder legitimately writes an empty
+  hash whenever a layer edits the request outside the transcript — a
+  transform that injects, a `BeforeModelCall` hook, a compaction whose
+  folds were never reported — so a session in that state could pass a
+  gate with nothing checked and nothing said. The CLI's `verify`
+  output and exit code are unchanged: it already read `RequestHash`
+  itself to draw the distinction the library would not provide.
+
+- **Breaking.** `ComputeReason` takes the run's path as well as its
+  segment, and reads the last response's own output items on the path
+  to decide whether the model asked for a tool, so a run that starts
+  between a function call and its response is not read as `done` while
+  the call goes unanswered; `Run` carries the `Path` the segment ends, and the
+  `stopped` step of the cascade reads it: a run that answers a call an
+  earlier run's model call made and ends without calling the model
+  again is `stopped`, not `aborted`. A refusal and a resume whose
+  approved call terminates are both that shape, and a recorder that
+  wrote what happened failed `Run.Verify` before. Passing the segment
+  for both arguments, or a `Run` built by hand, reads as it did. The
+  cascade's `aborted` step no longer catches a segment with no
+  response; a sixth step does, so every segment still matches exactly
+  one value. One consequence is deliberate: a call an earlier run left
+  without an output keeps a later run from reading as `stopped` (#34).
+
+- One `agentsession.ErrSessionLocked` in the root module for a session
+  another process holds. `jsonl.ErrSessionLocked` and
+  `sqlite.ErrSessionLocked` are that error, so a host written against
+  the `Store` interface tells "another process has this session" from
+  "the store is broken" without being told by its caller what its own
+  store's errors mean. Matching either name still works; the message
+  no longer carries the store's prefix (#41).
+- `jsonl.WithReadOnly` and `sqlite.WithReadOnly` open a store that
+  takes no lock or hold on the sessions it opens and refuses `Create`,
+  `Append`, `Delete` and `Sync` with `agentsession.ErrReadOnly`, so
+  `verify`, `show` and `export` work while the agent that owns the
+  session is running. A read-only jsonl open reports a cut-short final
+  line and leaves it in the file, since trimming it is a write. The
+  CLI's `list` opens its store read-only; its other commands already
+  read the file directly. `BreakLock` is refused too: a store that
+  takes no lock has no business dropping another process's, and a
+  read-only jsonl store does not create its root directory either. Two
+  things it is not: a read-only sqlite store still creates or migrates
+  the database's tables when it opens the file, which is what makes a
+  database an earlier release wrote readable, and a session either
+  store has opened is cached, so `Release` and a second `Open` are how
+  a reader sees what has been appended since (#44).
+- The sqlite store parses a holder's `since` and `heartbeat` before it
+  decides what to do with the row, so the refusal an operator sees
+  names when the holder took the session and when it last appended
+  rather than year one, which read like a broken lock and invited
+  breaking a live one (#43).
+
+- The config entry records the instructions as parts, which is the
+  round's one format change. `instructions_parts` is an ordered list
+  of `{id, text, source}`, one per layer that writes the prompt: a
+  delta carries the whole ordered list with the text of the parts that
+  changed and `{id, hash}` for the parts that did not, and a part the
+  list leaves out is removed. `instructions` remains valid and, where
+  both are present, is the parts' texts joined with one blank line, a
+  rule the RFC states so a writer and a reader agree; `Settings`
+  derives it, so nothing downstream of the settings changes and the
+  request hash is untouched. `Settings.InstructionsDelta` builds the
+  delta from the parts in force and returns nil when nothing moved;
+  `ConfigFromRequestParts` builds the full config on a root.
+  `instructions_omitted` beside it records the parts a writer
+  considered and left out, with a reason and a size, which is where
+  `agentsmd.Result.Omitted` and a memory manifest go, and
+  `Context.InstructionsOmitted` reads the last of them on a path. A 13
+  byte edit to one of four parts now costs that part rather than the
+  whole prompt: the composed study's 2,787 byte delta, and the memory
+  study's 33,440 byte one, become the part that changed plus an id and
+  a hash for each part that did not. A part named by a hash keeps the
+  source it had, so a writer that clears or changes a part's source
+  writes its text with it; a `Settings` never shares its parts with
+  another or with the entry they came from; and where a part cannot be
+  resolved, an `instructions` string written beside it stands, which a
+  replacing delta must carry (#27).
+
+- New record entry `queued`: the input a harness accepted before it
+  could append it, a steer that joins the run in flight or a follow-up
+  that waits for it, with the `trigger` that brought it in. The
+  context algorithm ignores it, and the item entry that drains it
+  carries `source`, the same trigger, and `queued_from` naming the
+  queued entry, so two people steering one run are told apart and the
+  record says why an item is there. `QueuedEntry`, `NewQueued`,
+  `WithTrigger` and `Drain` write it; `Session.PendingQueued` and
+  `Queued` list the inputs a harness still owes the conversation,
+  which is the durable inbox a gateway that answers 202 drains on
+  resume, and a run end closes one. The header's `records` may promise
+  `queued`. `ItemEntry.Source` also stands alone, for any item a
+  person or another system sent (#42).
+
+- `export.Options.Cost` is asked once per model call rather than once
+  for the step and again for the totals, so a price source that counts
+  or charges for what it is asked is not double counted.
+- The ATIF export tells what a run cost from what a document shows.
+  `final_metrics` now totals every model call on the path, including
+  the ones a compaction folded out of the document, `total_steps`
+  counts the steps the document holds plus the calls it does not
+  show, and a line in `notes` says so, which is what ATIF asks of a
+  `total_steps` that is not the number of steps. A run that folded
+  seven times reported the cost of the three calls that survived
+  (#36).
+- **Breaking.** `extra.run` in an exported document is a list, on a
+  step and at the root. A run that produces no step, which is what a
+  refusal on resume is, had its record replaced by the next run's and
+  vanished from the document; a list keeps every record and gives a
+  reader an order where several land in one place (#37).
+- `export.Options.ModelName` overrides the model name the document
+  reports, in `agent.model_name` and on every agent step, without
+  touching the model the request was sent with, for a consumer that
+  derives a provider by splitting the name on a slash. Costs are still
+  priced by the model that was sent (#38).
+- `export.At(s, entryID)` builds the trajectory of the path that ends
+  at any entry, not only at a leaf, with the same `PreferredOver`,
+  `AbandonedAt` and `Main` treatment; the entry it ends at is not read
+  as a fork, since what was appended below it is not a branch this
+  path abandoned; `Trajectories` is it over each
+  leaf. A judge that appends an outcome moves the leaf, and the
+  document a score names can now be built again from the entry the
+  score targets. `Trajectory` gains `Path`, the root-first path before
+  compaction, which the totals are taken over (#39).
+
+- `agentsession show` renders a custom entry as its namespace and the
+  size of its data, and an extension entry as its type and size, in
+  place of the "(unknown entry type)" that four policy verdicts used
+  to print as four identical lines; `-v` prints the data itself. Every
+  core entry type now has a case, which a test holds it to (#35).
+
 ## v0.0.5 - 2026-09-20
 
 - RFC 0001 is revised to draft 0.2. The summary now defines a session as

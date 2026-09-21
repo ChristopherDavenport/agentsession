@@ -1,15 +1,16 @@
 // Command agentsession inspects, verifies, exports and lists Agent
 // Session Format files from a shell.
 //
-//	agentsession show <file> [-leaf id]
+//	agentsession show <file> [-leaf id] [-v]
 //	agentsession verify <file>
 //	agentsession export <file> -out dir [-redact-home] [-redact-env] [-secret VALUE]...
 //	agentsession list <root> [-cwd path] [-parent id] [-limit n]
 //
-// show and verify read a file directly and never take its lock, so
-// they are safe to run while a harness is writing it. export reads
-// the same way. list opens a jsonl store root and prints its
-// sessions, newest first.
+// Every command opens what it reads read-only. show, verify and
+// export read a file directly and never take its lock; list opens a
+// jsonl store root read-only and prints its sessions, newest first.
+// All four are safe to run beside a harness that is writing, which is
+// when an operator most wants them.
 package main
 
 import (
@@ -25,7 +26,7 @@ import (
 const usage = `usage: agentsession <command> [flags] <arguments>
 
 commands:
-  show    <file> [-leaf id]        print the entries and the context at a leaf
+  show    <file> [-leaf id] [-v]   print the entries and the context at a leaf
   verify  <file>                   check every recorded request hash
   export  <file> -out dir          write ATIF documents for every leaf
   list    <root>                   list the sessions of a jsonl store

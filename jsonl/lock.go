@@ -7,13 +7,18 @@ import (
 	"os"
 	"time"
 
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/internal/procs"
 )
 
 // ErrSessionLocked is returned by Create, Open and Append when another
 // process holds the session. The error's message names the holder;
 // BreakLock removes a lock the caller has decided is stale.
-var ErrSessionLocked = errors.New("jsonl: session is open in another process")
+//
+// It is [agentsession.ErrSessionLocked], so a host that reads the
+// store through the interface matches the same sentinel whichever
+// store it was given.
+var ErrSessionLocked = agentsession.ErrSessionLocked
 
 // LockInfo describes the holder of a session lock.
 type LockInfo struct {
@@ -130,7 +135,12 @@ func (s *Store) LockHolder(id string) (*LockInfo, error) {
 // Open reports ErrSessionLocked and the caller has confirmed the holder
 // is gone, for example a process on another host that crashed. Breaking
 // the lock of a live writer lets two processes append to one file.
+// A store opened with [WithReadOnly] refuses: it takes no lock, so it
+// has no business dropping another process's.
 func (s *Store) BreakLock(id string) error {
+	if s.readOnly {
+		return agentsession.ErrReadOnly
+	}
 	path, err := s.Path(id)
 	if err != nil {
 		return err

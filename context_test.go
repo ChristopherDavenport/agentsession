@@ -1,10 +1,12 @@
 package agentsession
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,7 +26,7 @@ type contextGolden struct {
 // positive fixture and compares against testdata/context. Reviewing
 // those files is reviewing the algorithm.
 func TestContextGolden(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			got := map[string]contextGolden{}
@@ -149,7 +151,7 @@ func TestBranchContext(t *testing.T) {
 // TestVerifyFixtureHashes rebuilds the request for every response entry
 // in the fixtures and checks it against the recorded request_hash.
 func TestVerifyFixtureHashes(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			for _, e := range s.Entries() {
@@ -215,13 +217,343 @@ func TestRequestContext(t *testing.T) {
 	if err := s.Verify(bad.ID); !errors.Is(err, ErrHashMismatch) {
 		t.Errorf("Verify = %v, want ErrHashMismatch", err)
 	}
+	// A response that recorded no hash is neither verified nor
+	// mismatched, and Verify says so rather than returning nil: a
+	// caller gating on err == nil is told that nothing was checked.
 	none := &ResponseEntry{ResponseID: "resp_10", Status: openresponses.ResponseStatusCompleted}
 	if _, err := s.Append(none); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Verify(none.ID); err != nil {
-		t.Errorf("Verify without hash = %v", err)
+	err = s.Verify(none.ID)
+	if !errors.Is(err, ErrNoHash) {
+		t.Errorf("Verify without hash = %v, want ErrNoHash", err)
 	}
+	if errors.Is(err, ErrHashMismatch) {
+		t.Error("ErrNoHash must not match ErrHashMismatch: nothing to check is not a wrong record")
+	}
+	if !strings.Contains(err.Error(), none.ID) {
+		t.Errorf("Verify without hash = %v, want the entry named", err)
+	}
+}
+
+// TestRequestContextInterleaved is the composed product's shape: a
+// layer writes a custom entry between two output items of one
+// response, which is where an output guard's verdict lands. The
+// entries of that response are still its output, wherever the other
+// layer wrote, so every request still rebuilds.
+func TestRequestContextInterleaved(t *testing.T) {
+	s := loadFixture(t, "interleaved")
+	tests := []struct {
+		name, response string
+		items          []string
+	}{
+		{"first request keeps the user item alone", "r0000001", []string{"List the files."}},
+		{"second request keeps the first turn", "r0000002", []string{
+			"List the files.", "reasoning:A shell call will do.", "call:bash", "output:a.txt\nb.txt"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, err := s.RequestContext(tt.response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := itemTexts(ctx.Items); !reflect.DeepEqual(got, tt.items) {
+				t.Fatalf("request items = %q, want %q", got, tt.items)
+			}
+			for _, e := range ctx.Entries {
+				if item, ok := e.(*ItemEntry); ok && item.ResponseID == responseIDOf(t, s, tt.response) {
+					t.Errorf("entry %s is output of the response it is a request for", e.Base().ID)
+				}
+			}
+			if err := s.Verify(tt.response); err != nil {
+				t.Errorf("Verify: %v", err)
+			}
+		})
+	}
+	// The custom entries stay on the path: they carry no item, so they
+	// change neither the request nor its hash.
+	ctx, err := s.RequestContext("r0000002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	custom := 0
+	for _, e := range ctx.Entries {
+		if _, ok := e.(*CustomEntry); ok {
+			custom++
+		}
+	}
+	if custom != 2 {
+		t.Errorf("request context holds %d custom entries, want both the ones on the path", custom)
+	}
+}
+
+// TestPinnedContext is the shape a harness that holds one item out of
+// a fold writes: the compaction carries the item it kept, and the
+// reader places it immediately after the summary. Without the member
+// the rebuilt request is short of the item the model was sent, which
+// is a hash mismatch the writer avoids only by recording no hash.
+func TestPinnedContext(t *testing.T) {
+	s := loadFixture(t, "pinned")
+	comp, ok := s.Entry("k0000001")
+	if !ok {
+		t.Fatal("no compaction entry")
+	}
+	k := comp.(*CompactionEntry)
+	// Two, and distinguishable: with one pinned item nothing here can
+	// tell an ordered reader from an unordered one, and the order is
+	// normative.
+	if len(k.Pinned) != 2 {
+		t.Fatalf("compaction carries %d pinned items, want 2", len(k.Pinned))
+	}
+	pins := []string{"House rule: never use Box::leak.", "House rule: always run the linter."}
+
+	// The pinned items sit between the summary and the kept window, in
+	// the order written, which is where the request that was sent had
+	// them.
+	ctx, err := s.RequestContext("r0000003")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append([]string{"Summary: the user said first and the assistant said one."}, pins...)
+	want = append(want, "second", "two", "third")
+	if got := itemTexts(ctx.Items); !reflect.DeepEqual(got, want) {
+		t.Errorf("request items = %q, want %q", got, want)
+	}
+	if err := s.Verify("r0000003"); err != nil {
+		t.Errorf("Verify: %v", err)
+	}
+
+	// Every item has the entry that contributed it, and the compaction
+	// contributes its summary and each of its pinned items alike.
+	if len(ctx.ItemEntries) != len(ctx.Items) {
+		t.Fatalf("%d item entries for %d items", len(ctx.ItemEntries), len(ctx.Items))
+	}
+	for i := 0; i <= len(pins); i++ {
+		if ctx.ItemEntries[i] != comp {
+			t.Errorf("item %d should name the compaction as its entry", i)
+		}
+	}
+
+	// Context() carries them too, in the same order, which is what
+	// makes a pin survive a resume: Continue and Rebase seed from
+	// Context, and a pin the transcript no longer holds cannot be
+	// matched again.
+	ctx, err = s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := itemTexts(ctx.Items)
+	first, second := slices.Index(got, pins[0]), slices.Index(got, pins[1])
+	if first < 0 || second < 0 {
+		t.Fatalf("Context() at the leaf = %q, want both pinned items", got)
+	}
+	if first > second {
+		t.Errorf("Context() has the pinned items reversed: %q", got)
+	}
+
+	// Each pinned item is a copy of context already recorded, never a
+	// new input: it is reachable as an item entry on the path before
+	// first_kept, so a reader that ignores the member loses context
+	// but never invents it.
+	for id, pin := range map[string]string{"i0000001": pins[0], "i0000008": pins[1]} {
+		e, ok := s.Entry(id)
+		if !ok {
+			t.Fatalf("no entry %s", id)
+		}
+		if got := itemTexts(openresponses.Items{e.(*ItemEntry).Item}); got[0] != pin {
+			t.Errorf("entry %s = %q, want %q", id, got, pin)
+		}
+	}
+}
+
+// TestPinnedOmitted keeps the member optional: a compaction with no
+// pinned items writes no `pinned` and rebuilds as it did before.
+func TestPinnedOmitted(t *testing.T) {
+	s := loadFixture(t, "compaction")
+	e, _ := s.Entry("k0000001")
+	if got := e.(*CompactionEntry).Pinned; got != nil {
+		t.Errorf("compaction fixture gained %d pinned items", len(got))
+	}
+	data, err := MarshalEntry(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "pinned") {
+		t.Errorf("an empty Pinned was written: %s", data)
+	}
+}
+
+// TestCompactionMembersSurviveARoundTrip guards the trap that hid the
+// pinned member during its own development. CompactionEntry decodes
+// through an aux struct that lists its members by hand, so a member
+// added to the struct and not to aux is dropped in silence: it counts
+// as known, so the envelope rule does not preserve it in Unknown
+// either, and the only symptom is a round trip that quietly loses it.
+// Every member set, written, read back, written again: the two must
+// agree.
+func TestCompactionMembersSurviveARoundTrip(t *testing.T) {
+	want := &CompactionEntry{
+		EntryBase: EntryBase{ID: "k1", Parent: "i1", Timestamp: fixedTime},
+		FirstKept: "i1",
+		Summary:   openresponses.UserMessage(&openresponses.InputText{Text: "the summary"}),
+		Pinned: openresponses.Items{
+			openresponses.UserMessage(&openresponses.InputText{Text: "the pin"}),
+		},
+		Config:       Settings{Model: "gpt-5", Instructions: "Be brief."},
+		TokensBefore: 5000,
+		Usage:        &openresponses.Usage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12},
+	}
+	data, err := MarshalEntry(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every member the struct declares reaches the wire. One missing
+	// here is the bug this test exists for.
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(data, &members); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"first_kept", "summary", "pinned", "config", "tokens_before", "usage"} {
+		if _, ok := members[key]; !ok {
+			t.Errorf("%s is not on the wire: %s", key, data)
+		}
+	}
+
+	got, err := UnmarshalEntry(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := MarshalEntry(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, again) {
+		t.Errorf("a member was dropped on decode\nwrote:     %s\nread back: %s", data, again)
+	}
+	k, ok := got.(*CompactionEntry)
+	if !ok {
+		t.Fatalf("decoded to %T", got)
+	}
+	if len(k.Pinned) != len(want.Pinned) || k.FirstKept != want.FirstKept ||
+		k.TokensBefore != want.TokensBefore || k.Usage == nil || k.Config.Model != want.Config.Model {
+		t.Errorf("decoded entry = %+v", k)
+	}
+	if got.Base().Unknown != nil {
+		t.Errorf("a declared member was parked in Unknown: %v", got.Base().Unknown)
+	}
+}
+
+// TestOutputEntries pins the contract a second implementation of the
+// rule has to match. The rule is written twice in the workspace —
+// here and in agenteval's replay, which serves the items rather than
+// excluding them — so what this asserts is what keeps the two from
+// drifting: order, membership, and what is left out.
+func TestOutputEntries(t *testing.T) {
+	s := loadFixture(t, "interleaved")
+	path := s.Path("r0000002")
+	resp := path[len(path)-1].(*ResponseEntry)
+
+	// Path order, not the backward order the walk runs in. Serving
+	// these reversed changes every later request of a replayed run,
+	// and the divergence names two hashes and no field.
+	got := OutputEntries(path, resp)
+	var ids []string
+	for _, e := range got {
+		ids = append(ids, e.ID)
+	}
+	if want := []string{"i0000005", "i0000006"}; !reflect.DeepEqual(ids, want) {
+		t.Errorf("output entries = %v, want %v", ids, want)
+	}
+
+	// The custom entry between the two output items is skipped and not
+	// returned: it is on the path for its own reasons and stays there.
+	for _, e := range got {
+		if e.ID == "u0000002" {
+			t.Error("a skipped non-item entry was returned as output")
+		}
+	}
+
+	// Passing the path with the response entry still on the end gives
+	// the same answer, since an entry that is not an item is skipped.
+	if trimmed := OutputEntries(path[:len(path)-1], resp); !reflect.DeepEqual(trimmed, got) {
+		t.Error("trimming the response entry off the path changed the answer")
+	}
+
+	// The entries are the session's own, so a caller that serves their
+	// items knows it has to clone.
+	if e, _ := s.Entry("i0000006"); got[len(got)-1] != e {
+		t.Error("OutputEntries returned a copy, not the session's own entry")
+	}
+
+	// A response with no ResponseID has no output items, and neither
+	// does one whose items are all somebody else's.
+	if out := OutputEntries(path, &ResponseEntry{}); out != nil {
+		t.Errorf("a response with no ResponseID has %d output entries", len(out))
+	}
+	if out := OutputEntries(path, &ResponseEntry{ResponseID: "resp_absent"}); out != nil {
+		t.Errorf("an unmatched response has %d output entries", len(out))
+	}
+	if out := OutputEntries(nil, resp); out != nil {
+		t.Errorf("an empty path has %d output entries", len(out))
+	}
+
+	// The walk stops at the first item entry belonging to something
+	// else rather than running to the root: the first response's items
+	// are not the second's.
+	first := s.Path("r0000001")
+	out := OutputEntries(first, first[len(first)-1].(*ResponseEntry))
+	ids = nil
+	for _, e := range out {
+		ids = append(ids, e.ID)
+	}
+	if want := []string{"i0000002", "i0000003"}; !reflect.DeepEqual(ids, want) {
+		t.Errorf("first response output = %v, want %v", ids, want)
+	}
+}
+
+// TestOutputEntriesStopsRatherThanSkips is the case that separates the
+// rule from the looser one that selects every item entry naming the
+// response, wherever it sits. They differ only when an item entry that
+// is not part of the response lands between two that are, which is an
+// input item written mid-response — something the writing discipline
+// says SHOULD NOT happen. The walk stops there, so such a file fails
+// loudly on its hash instead of quietly rebuilding a request that
+// includes an input the model never saw.
+func TestOutputEntriesStopsRatherThanSkips(t *testing.T) {
+	item := func(id, responseID, text string) *ItemEntry {
+		return &ItemEntry{
+			EntryBase:  EntryBase{ID: id},
+			Item:       openresponses.UserMessage(&openresponses.InputText{Text: text}),
+			ResponseID: responseID,
+		}
+	}
+	resp := &ResponseEntry{EntryBase: EntryBase{ID: "r1"}, ResponseID: "resp_1"}
+	path := []Entry{
+		item("i1", "", "the request"),
+		item("i2", "resp_1", "first output"),
+		// An input item written while the response was in flight.
+		item("i3", "", "steered in mid-response"),
+		item("i4", "resp_1", "second output"),
+		resp,
+	}
+	var ids []string
+	for _, e := range OutputEntries(path, resp) {
+		ids = append(ids, e.ID)
+	}
+	// i2 names the response but is behind the stop, so it is not
+	// output. Returning it would be the looser rule.
+	if want := []string{"i4"}; !reflect.DeepEqual(ids, want) {
+		t.Errorf("output entries = %v, want %v: the walk must stop at i3, not skip it", ids, want)
+	}
+}
+
+func responseIDOf(t *testing.T, s *Session, entryID string) string {
+	t.Helper()
+	e, ok := s.Entry(entryID)
+	if !ok {
+		t.Fatalf("no entry %s", entryID)
+	}
+	return e.(*ResponseEntry).ResponseID
 }
 
 func TestSettingsApply(t *testing.T) {

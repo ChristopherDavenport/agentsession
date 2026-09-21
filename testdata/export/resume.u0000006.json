@@ -1,0 +1,297 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000009",
+  "trajectory_id": "u0000006",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5",
+    "tool_definitions": [
+      {
+        "function": {
+          "description": "Run a shell command",
+          "name": "bash",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "cmd": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cmd"
+            ]
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-09-21T12:00:02Z",
+      "source": "user",
+      "message": "Delete the logs.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000001"
+        },
+        "config_entries": [
+          "c0000001"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Delete the logs."
+              }
+            ]
+          }
+        },
+        "run": [
+          {
+            "end_entry_id": "u0000002",
+            "pending": [
+              "call_1"
+            ],
+            "reason": "input_required",
+            "run_id": "run-1",
+            "source": "input",
+            "start_entry_id": "u0000001"
+          }
+        ],
+        "tool_changes": {
+          "added": [
+            "bash"
+          ]
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-09-21T12:00:04Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_1",
+          "function_name": "bash",
+          "arguments": {
+            "cmd": "rm -rf logs"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_1",
+            "content": "refused by the operator",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "output": "refused by the operator"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 30,
+        "completion_tokens": 12,
+        "cached_tokens": 0
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000001"
+        },
+        "calls": {
+          "call_1": {
+            "decisions": [
+              {
+                "by": "policy",
+                "entry_id": "d0000001",
+                "reason": "destructive; needs approval",
+                "verdict": "hold"
+              },
+              {
+                "by": "human",
+                "entry_id": "d0000002",
+                "reason": "refused by the operator",
+                "verdict": "reject"
+              }
+            ]
+          }
+        },
+        "item_entry_ids": [
+          "i0000002"
+        ],
+        "latency_ms": 400,
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_1",
+              "status": "completed",
+              "call_id": "call_1",
+              "name": "bash",
+              "arguments": "{\"cmd\":\"rm -rf logs\"}"
+            }
+          ],
+          "response": {
+            "entry_id": "r0000001",
+            "latency_ms": 400,
+            "model": "gpt-5",
+            "request_hash": "sha256:174a1eb1ae646a6e8c25c43c1311e9d562d5663b166c8baf1fe931212eca2601",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-09-21T12:00:04Z",
+            "usage": {
+              "input_tokens": 30,
+              "output_tokens": 12,
+              "total_tokens": 42,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-09-21T12:00:12Z",
+      "source": "user",
+      "message": "Fine, list them instead.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000004"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Fine, list them instead."
+              }
+            ]
+          }
+        },
+        "run": [
+          {
+            "cause": "refused",
+            "end_entry_id": "u0000004",
+            "pending": [],
+            "reason": "stopped",
+            "run_id": "run-2",
+            "source": "resume",
+            "start_entry_id": "u0000003",
+            "trigger": "operator"
+          },
+          {
+            "end_entry_id": "u0000006",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-3",
+            "source": "input",
+            "start_entry_id": "u0000005"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-09-21T12:00:14Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "logs/a.log, logs/b.log",
+      "metrics": {
+        "prompt_tokens": 60,
+        "completion_tokens": 10,
+        "cached_tokens": 30
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000002"
+        },
+        "item_entry_ids": [
+          "i0000005"
+        ],
+        "latency_ms": 300,
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "logs/a.log, logs/b.log",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "r0000002",
+            "latency_ms": 300,
+            "model": "gpt-5",
+            "request_hash": "sha256:141354363fa34e263dff6e6e36e6851a803accc3d16d2490ae4dee29b0334289",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-09-21T12:00:14Z",
+            "usage": {
+              "input_tokens": 60,
+              "output_tokens": 10,
+              "total_tokens": 70,
+              "input_tokens_details": {
+                "cached_tokens": 30
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 90,
+    "total_completion_tokens": 22,
+    "total_cached_tokens": 30,
+    "total_steps": 4
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.3",
+      "leaf": "u0000006",
+      "main": true,
+      "records": [
+        "run",
+        "dispatch",
+        "decision"
+      ]
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

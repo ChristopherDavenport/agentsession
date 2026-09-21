@@ -52,17 +52,19 @@
             ]
           }
         },
-        "run": {
-          "end_entry_id": "u0000002",
-          "pending": [
-            "call_1"
-          ],
-          "reason": "input_required",
-          "run_id": "run-1",
-          "source": "input",
-          "start_entry_id": "u0000001",
-          "trigger": "cron:nightly-clean"
-        },
+        "run": [
+          {
+            "end_entry_id": "u0000002",
+            "pending": [
+              "call_1"
+            ],
+            "reason": "input_required",
+            "run_id": "run-1",
+            "source": "input",
+            "start_entry_id": "u0000001",
+            "trigger": "cron:nightly-clean"
+          }
+        ],
         "tool_changes": {
           "added": [
             "bash"
@@ -314,15 +316,17 @@
             "target": "r0000002"
           }
         ],
-        "run": {
-          "end_entry_id": "u0000004",
-          "pending": [],
-          "reason": "done",
-          "run_id": "run-2",
-          "source": "resume",
-          "start_entry_id": "u0000003",
-          "trigger": "approval:chris"
-        }
+        "run": [
+          {
+            "end_entry_id": "u0000004",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-2",
+            "source": "resume",
+            "start_entry_id": "u0000003",
+            "trigger": "approval:chris"
+          }
+        ]
       }
     }
   ],

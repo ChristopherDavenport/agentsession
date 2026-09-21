@@ -263,12 +263,52 @@ func validateEntry(e Entry) error {
 		if v.Summary == nil {
 			return errors.New("agentsession: branch_summary entry has no summary")
 		}
+	case *ConfigEntry:
+		return validateConfig(v)
 	case *UnknownEntry:
 		if len(v.Raw) == 0 {
 			return errors.New("agentsession: unknown entry has no raw bytes")
 		}
-	case *RunEntry, *DispatchEntry, *DecisionEntry:
+	case *RunEntry, *DispatchEntry, *DecisionEntry, *QueuedEntry:
 		return validateLifecycle(e)
+	}
+	return nil
+}
+
+// validateConfig checks the instructions parts of a config delta: a
+// part is named, named once, and when every part carries its text the
+// instructions string beside them is their join, which is the rule a
+// reader replays. A delta decoded from a file is not checked, since a
+// reader preserves what it is given; this is what a writer is held
+// to.
+func validateConfig(c *ConfigEntry) error {
+	seen := make(map[string]bool, len(c.InstructionsParts))
+	full := true
+	for _, p := range c.InstructionsParts {
+		if p.ID == "" {
+			return errors.New("agentsession: an instructions part has no id")
+		}
+		if seen[p.ID] {
+			return fmt.Errorf("agentsession: instructions part %q is named twice", p.ID)
+		}
+		seen[p.ID] = true
+		if p.Text == "" && p.Hash != "" {
+			full = false
+		}
+	}
+	if full && len(c.InstructionsParts) > 0 && c.Instructions != nil && *c.Instructions != JoinInstructions(c.InstructionsParts) {
+		return errors.New("agentsession: instructions and instructions_parts disagree: the string is the parts joined with a blank line")
+	}
+	if !full && c.Replace && c.Instructions == nil {
+		// A replace discards the parts a hash would name, so nothing on
+		// the path resolves it and the entry would set instructions a
+		// reader cannot rebuild.
+		return errors.New("agentsession: a replacing config must carry the text of every instructions part, or the instructions string beside them")
+	}
+	for _, o := range c.InstructionsOmitted {
+		if o.ID == "" {
+			return errors.New("agentsession: an omitted instructions part has no id")
+		}
 	}
 	return nil
 }
@@ -325,9 +365,10 @@ func (s *Session) Name() string {
 // names the earliest entry on the path that stays in context, summary
 // is the item that replaces everything before it, and the settings
 // checkpoint is taken from the context at the leaf. The entry is not
-// appended; set TokensBefore or Usage if known, then append it through
-// the store. A caller that knows an item index rather than an entry ID
-// uses [Session.CompactFrom] or [Session.CompactKeeping].
+// appended; set TokensBefore, Usage or Pinned if they apply, then
+// append it through the store. A caller that knows an item index
+// rather than an entry ID uses [Session.CompactFrom] or
+// [Session.CompactKeeping].
 func (s *Session) Compact(firstKept string, summary openresponses.Item) (*CompactionEntry, error) {
 	leaf, ctx, err := s.compactionContext(summary)
 	if err != nil {
@@ -352,8 +393,9 @@ func (s *Session) Compact(firstKept string, summary openresponses.Item) (*Compac
 // summary replaces. The index counts the items the context algorithm
 // produces, [Context.Items], so entries that contribute no item do not
 // shift it. The item at first cannot be an earlier compaction's
-// summary: the format keeps entries, and a compaction's summary is
-// kept only while it is the last compaction on the path.
+// summary or one of its pinned items: the format keeps entries, and
+// what a compaction contributes is kept only while it is the last
+// compaction on the path.
 func (s *Session) CompactFrom(first int, summary openresponses.Item) (*CompactionEntry, error) {
 	_, ctx, err := s.compactionContext(summary)
 	if err != nil {
@@ -402,7 +444,14 @@ func (s *Session) compactionContext(summary openresponses.Item) (string, Context
 func compactionFrom(ctx Context, first int, summary openresponses.Item) (*CompactionEntry, error) {
 	e := ctx.ItemEntries[first]
 	if _, ok := e.(*CompactionEntry); ok {
-		return nil, fmt.Errorf("agentsession: item %d is the summary of compaction %s, which a later compaction replaces rather than keeps", first, e.Base().ID)
+		// A compaction contributes its summary and then each of its
+		// pinned items, so the index decides which one this is.
+		// Neither can be kept: a later compaction replaces both.
+		what := "the summary"
+		if first > 0 && ctx.ItemEntries[first-1] == e {
+			what = "a pinned item"
+		}
+		return nil, fmt.Errorf("agentsession: item %d is %s of compaction %s, which a later compaction replaces rather than keeps", first, what, e.Base().ID)
 	}
 	return &CompactionEntry{FirstKept: e.Base().ID, Summary: summary, Config: ctx.Settings}, nil
 }

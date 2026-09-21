@@ -32,7 +32,9 @@ func list(args []string, stdout, stderr io.Writer) error {
 	} else if !info.IsDir() {
 		return fmt.Errorf("%s is not a directory", root)
 	}
-	st, err := jsonl.Open(root)
+	// Read-only: a listing takes no session's lock, so it says what
+	// is there while an agent writes.
+	st, err := jsonl.Open(root, jsonl.WithReadOnly())
 	if err != nil {
 		return err
 	}

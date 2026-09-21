@@ -26,6 +26,13 @@ func RequestHash(req openresponses.Request) (string, error) {
 	return HashRequestJSON(data)
 }
 
+// HashText returns the hash of a string in the format's notation,
+// which is [HashBytes] over its UTF-8 bytes: [HashPrefix] and the
+// lowercase hexadecimal SHA-256. It is how a config delta names the
+// text of an instructions part it does not repeat, so a reader can
+// tell the part it already has from one that changed.
+func HashText(s string) string { return HashBytes([]byte(s)) }
+
 // HashRequestJSON computes the request hash of an already-encoded
 // request. Member order and whitespace in data do not matter.
 func HashRequestJSON(data []byte) (string, error) {

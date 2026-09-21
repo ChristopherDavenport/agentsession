@@ -5,6 +5,7 @@
 package export
 
 import (
+	"fmt"
 	"iter"
 	"slices"
 
@@ -21,6 +22,13 @@ type Trajectory struct {
 	// Context is the path after compaction: settings, items and the
 	// selected entries in order.
 	Context agentsession.Context
+	// Path is the root-first path the trajectory covers, before
+	// compaction, of which Context is what the model would be sent.
+	// The document's steps are built from Context; its totals are
+	// taken from Path, so a run that folded reports what it spent and
+	// not what survived the last fold. It is nil in a Trajectory built
+	// by hand, and then Context stands for the path.
+	Path []agentsession.Entry
 	// Name is the session's display name from its info entries.
 	Name string
 	// Labels are the current labels of the session, by target entry.
@@ -183,88 +191,135 @@ func subtree(s *agentsession.Session, root string) iter.Seq[string] {
 // lists the abandoned subtrees' leaves in PreferredOver. The
 // trajectory ending at the last appended entry is marked Main whatever
 // the preferences decide.
+//
+// It is [At] over each leaf, so a caller that has to rebuild the
+// document of a path that is no longer a leaf asks for it by entry.
 func Trajectories(s *agentsession.Session, prefs ...Preference) iter.Seq2[Trajectory, error] {
 	return func(yield func(Trajectory, error) bool) {
-		header := s.Header()
-		name := s.Name()
-		labels := s.Labels()
-		entries := s.Entries()
-		mainLeaf := ""
-		if len(entries) > 0 {
-			mainLeaf = entries[len(entries)-1].Base().ID
-		}
-		order := make(map[string]int, len(entries))
-		for i, e := range entries {
-			order[e.Base().ID] = i
-		}
-		// latest[id] is the highest file position in id's subtree.
-		latest := make(map[string]int, len(entries))
-		for i := len(entries) - 1; i >= 0; i-- {
-			b := entries[i].Base()
-			if _, ok := latest[b.ID]; !ok {
-				latest[b.ID] = i
-			}
-			if b.Parent != "" && latest[b.Parent] < latest[b.ID] {
-				latest[b.Parent] = latest[b.ID]
-			}
-		}
-		// leavesUnder[id] lists the leaves in id's subtree.
-		leavesUnder := make(map[string][]string, len(entries))
-		for i := len(entries) - 1; i >= 0; i-- {
-			b := entries[i].Base()
-			if len(s.Children(b.ID)) == 0 {
-				leavesUnder[b.ID] = append(leavesUnder[b.ID], b.ID)
-			}
-			if b.Parent != "" {
-				leavesUnder[b.Parent] = append(leavesUnder[b.Parent], leavesUnder[b.ID]...)
-			}
-		}
+		w := newTree(s)
 		for _, leaf := range s.Leaves() {
-			ctx, err := s.ContextAt(leaf)
-			if err != nil {
-				if !yield(Trajectory{Header: header, LeafID: leaf}, err) {
-					return
-				}
-				continue
-			}
-			t := Trajectory{Header: header, LeafID: leaf, Context: ctx, Name: name, Labels: labels, Main: leaf == mainLeaf}
-			for _, e := range s.Path(leaf) {
-				b := e.Base()
-				children := s.Children(b.ID)
-				if len(children) < 2 {
-					continue
-				}
-				preferred := ""
-				for _, p := range prefs {
-					if preferred = p(s, b.ID, children); slices.Contains(children, preferred) {
-						break
-					}
-					preferred = ""
-				}
-				if preferred == "" {
-					preferred = children[0]
-					for _, c := range children[1:] {
-						if latest[c] > latest[preferred] {
-							preferred = c
-						}
-					}
-				}
-				next := nextOnPath(s, leaf, b.ID)
-				if next == preferred {
-					for _, c := range children {
-						if c != preferred {
-							t.PreferredOver = append(t.PreferredOver, leavesUnder[c]...)
-						}
-					}
-				} else if t.AbandonedAt == "" {
-					t.AbandonedAt = b.ID
-				}
-			}
-			if !yield(t, nil) {
+			t, err := w.at(leaf, prefs)
+			if !yield(t, err) {
 				return
 			}
 		}
 	}
+}
+
+// At returns the trajectory whose path ends at entryID, with the same
+// PreferredOver, AbandonedAt and Main treatment [Trajectories]
+// applies and LeafID set to entryID. The entry need not be a leaf:
+// anything appended to a session after it was exported moves the
+// leaf, and this is how the document that was exported, the one a
+// judge read and a score names, is built again.
+func At(s *agentsession.Session, entryID string, prefs ...Preference) (Trajectory, error) {
+	if _, ok := s.Entry(entryID); !ok {
+		return Trajectory{}, fmt.Errorf("export: %w: %s", agentsession.ErrNoEntry, entryID)
+	}
+	return newTree(s).at(entryID, prefs)
+}
+
+// tree holds what every trajectory of one session shares: the header,
+// the name, the labels and the tree indexes the fork rules read.
+type tree struct {
+	s        *agentsession.Session
+	header   agentsession.Header
+	name     string
+	labels   map[string]string
+	mainLeaf string
+	// latest[id] is the highest file position in id's subtree.
+	latest map[string]int
+	// leavesUnder[id] lists the leaves in id's subtree.
+	leavesUnder map[string][]string
+}
+
+func newTree(s *agentsession.Session) *tree {
+	entries := s.Entries()
+	w := &tree{
+		s:           s,
+		header:      s.Header(),
+		name:        s.Name(),
+		labels:      s.Labels(),
+		latest:      make(map[string]int, len(entries)),
+		leavesUnder: make(map[string][]string, len(entries)),
+	}
+	if len(entries) > 0 {
+		w.mainLeaf = entries[len(entries)-1].Base().ID
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		b := entries[i].Base()
+		if _, ok := w.latest[b.ID]; !ok {
+			w.latest[b.ID] = i
+		}
+		if b.Parent != "" && w.latest[b.Parent] < w.latest[b.ID] {
+			w.latest[b.Parent] = w.latest[b.ID]
+		}
+		if len(s.Children(b.ID)) == 0 {
+			w.leavesUnder[b.ID] = append(w.leavesUnder[b.ID], b.ID)
+		}
+		if b.Parent != "" {
+			w.leavesUnder[b.Parent] = append(w.leavesUnder[b.Parent], w.leavesUnder[b.ID]...)
+		}
+	}
+	return w
+}
+
+func (w *tree) at(id string, prefs []Preference) (Trajectory, error) {
+	s := w.s
+	ctx, err := s.ContextAt(id)
+	if err != nil {
+		return Trajectory{Header: w.header, LeafID: id}, err
+	}
+	t := Trajectory{
+		Header:  w.header,
+		LeafID:  id,
+		Context: ctx,
+		Path:    s.Path(id),
+		Name:    w.name,
+		Labels:  w.labels,
+		Main:    id == w.mainLeaf,
+	}
+	for _, e := range t.Path {
+		b := e.Base()
+		if b.ID == id {
+			// The entry the trajectory ends at. Its children are what
+			// was appended after this document, not branches this path
+			// was preferred over or abandoned at: a leaf has none, and
+			// an entry a judge appended below does not make the path
+			// that ends here an abandoned one.
+			continue
+		}
+		children := s.Children(b.ID)
+		if len(children) < 2 {
+			continue
+		}
+		preferred := ""
+		for _, p := range prefs {
+			if preferred = p(s, b.ID, children); slices.Contains(children, preferred) {
+				break
+			}
+			preferred = ""
+		}
+		if preferred == "" {
+			preferred = children[0]
+			for _, c := range children[1:] {
+				if w.latest[c] > w.latest[preferred] {
+					preferred = c
+				}
+			}
+		}
+		next := nextOnPath(s, id, b.ID)
+		if next == preferred {
+			for _, c := range children {
+				if c != preferred {
+					t.PreferredOver = append(t.PreferredOver, w.leavesUnder[c]...)
+				}
+			}
+		} else if t.AbandonedAt == "" {
+			t.AbandonedAt = b.ID
+		}
+	}
+	return t, nil
 }
 
 // nextOnPath returns the child of parent that lies on the path to leaf.

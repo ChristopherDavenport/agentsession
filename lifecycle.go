@@ -6,13 +6,23 @@ import (
 	"fmt"
 
 	"github.com/ChristopherDavenport/agentsession/internal/jsonx"
+	"github.com/ChristopherDavenport/openresponses"
 )
 
-// Record entry types added in format 0.2. They are never in context.
+// Record entry types added in format 0.2, and queued in 0.3. They are
+// never in context.
 const (
 	TypeRun      = "run"
 	TypeDispatch = "dispatch"
 	TypeDecision = "decision"
+	TypeQueued   = "queued"
+)
+
+// Modes a [QueuedEntry] may carry: an input that joins the run in
+// flight, and one that waits for it to end.
+const (
+	ModeSteer    = "steer"
+	ModeFollowUp = "followup"
 )
 
 // Phases of a [RunEntry].
@@ -30,9 +40,10 @@ const (
 )
 
 // Reasons a run ended, on its end entry. The first five are computable
-// from the run's segment by [ComputeReason]; ReasonError and
-// ReasonInterrupted are the two a writer adds where the segment cannot
-// show them, and a written one stands over any segment.
+// from the run's segment and the path it ends by [ComputeReason];
+// ReasonError and ReasonInterrupted are the two a writer adds where
+// the segment cannot show them, and a written one stands over any
+// segment.
 const (
 	ReasonDone          = "done"
 	ReasonStopped       = "stopped"
@@ -168,6 +179,74 @@ func (e *DecisionEntry) WithArgs(args json.RawMessage) *DecisionEntry {
 	return e
 }
 
+// Trigger says how an input arrived, in the harness's own terms: Kind
+// is the sort of thing it came from (a person, a channel, a schedule,
+// another agent), Ref names the thing itself (a message ID, a cron
+// name) and Source names the layer that took it. A reader treats all
+// three as opaque; what the format fixes is where they are written,
+// so two people steering one run are two triggers and not one.
+type Trigger struct {
+	Kind   string `json:"kind,omitempty"`
+	Ref    string `json:"ref,omitempty"`
+	Source string `json:"source,omitempty"`
+}
+
+// QueuedEntry records an input a harness accepted before it could be
+// appended to the conversation: a steer typed while the model is
+// running, or a follow-up that waits for the run to end. It is a
+// record entry, so the context algorithm ignores it and the item it
+// holds reaches no request until it is appended as an [ItemEntry].
+//
+// A queued entry with no item entry naming it and no run end after it
+// on the path is an input the harness still owes the conversation;
+// [Session.PendingQueued] lists them, which is what a gateway that
+// answered 202 drains on resume. The entry is where the trigger of
+// that input lives, since the run entry names the trigger of the run
+// and an input that joins a run in flight has a different one.
+type QueuedEntry struct {
+	EntryBase `json:"-"`
+	// Item is the input as it will be appended.
+	Item openresponses.Item `json:"item"`
+	// Mode is ModeSteer or ModeFollowUp.
+	Mode string `json:"mode"`
+	// Trigger is what brought the input in.
+	Trigger *Trigger `json:"trigger,omitempty"`
+	// Ref names the queued input in the harness's own terms, for a
+	// caller that holds a handle to it.
+	Ref string `json:"ref,omitempty"`
+}
+
+// EntryType returns "queued".
+func (*QueuedEntry) EntryType() string { return TypeQueued }
+
+// NewQueued builds a queued entry for an input accepted in mode
+// [ModeSteer] or [ModeFollowUp].
+func NewQueued(item openresponses.Item, mode string) *QueuedEntry {
+	return &QueuedEntry{Item: item, Mode: mode}
+}
+
+// WithTrigger records what brought the input in and returns the
+// entry, for chaining.
+func (e *QueuedEntry) WithTrigger(kind, ref, source string) *QueuedEntry {
+	e.Trigger = &Trigger{Kind: kind, Ref: ref, Source: source}
+	return e
+}
+
+// Drain returns the item entry that appends this queued input to the
+// conversation: the item, the trigger as its source and QueuedFrom
+// naming this entry, so the record says why the item is there. The
+// entry must already have an ID, which it has once it is appended.
+// The trigger is copied, so the two entries do not share one once
+// both are appended and neither may be modified.
+func (e *QueuedEntry) Drain() *ItemEntry {
+	out := &ItemEntry{Item: e.Item, QueuedFrom: e.ID}
+	if e.Trigger != nil {
+		trigger := *e.Trigger
+		out.Source = &trigger
+	}
+	return out
+}
+
 // Workspace says which file system an env entry's cwd is a path in.
 // Ref is one string the harness can resolve to it: an image digest, a
 // host, an instance ID. A container's Ref should be a digest rather
@@ -209,6 +288,13 @@ func validateLifecycle(e Entry) error {
 		if v.Verdict == VerdictReject && v.Reason == "" {
 			return errors.New("agentsession: a reject decision needs a reason")
 		}
+	case *QueuedEntry:
+		if v.Item == nil {
+			return errors.New("agentsession: queued entry has no item")
+		}
+		if v.Mode == "" {
+			return errors.New("agentsession: queued entry has no mode")
+		}
 	}
 	return nil
 }
@@ -217,21 +303,36 @@ var (
 	runKeys      = jsonx.Keys[RunEntry]()
 	dispatchKeys = jsonx.Keys[DispatchEntry]()
 	decisionKeys = jsonx.Keys[DecisionEntry]()
+	queuedKeys   = jsonx.Keys[QueuedEntry]()
 )
 
-// MarshalJSON emits the entry as one JSON object. A start entry omits
-// pending; an end entry always carries it.
+// MarshalJSON emits the entry as one JSON object. Which members are
+// written depends on the phase: a start carries source, an end carries
+// reason and always carries pending, even when empty, since a run that
+// ended owing nothing is a fact a reader relies on.
+//
+// The other phase's members are written when they are set rather than
+// dropped. Nothing this library builds sets them, and validateLifecycle
+// asks only for the phase's own, so a well-formed entry is written
+// exactly as it was before. A file from elsewhere that carries one is
+// the case that matters: the envelope rule is that a reader preserves
+// what it does not itself need, and rewriting such a file to drop a
+// member it declared breaks that promise silently. Rejecting the shape
+// on the way in would be the alternative, and a larger decision than
+// an encoder.
 func (e *RunEntry) MarshalJSON() ([]byte, error) {
 	if err := validateLifecycle(e); err != nil {
 		return nil, err
 	}
 	if e.Phase == RunStart {
 		aux := struct {
-			RunID  string `json:"run_id"`
-			Phase  string `json:"phase"`
-			Source string `json:"source"`
-			Ref    string `json:"ref,omitempty"`
-		}{e.RunID, e.Phase, e.Source, e.Ref}
+			RunID   string   `json:"run_id"`
+			Phase   string   `json:"phase"`
+			Source  string   `json:"source"`
+			Reason  string   `json:"reason,omitempty"`
+			Ref     string   `json:"ref,omitempty"`
+			Pending []string `json:"pending,omitempty"`
+		}{e.RunID, e.Phase, e.Source, e.Reason, e.Ref, e.Pending}
 		return marshalEntry(TypeRun, &e.EntryBase, aux)
 	}
 	pending := e.Pending
@@ -241,10 +342,11 @@ func (e *RunEntry) MarshalJSON() ([]byte, error) {
 	aux := struct {
 		RunID   string   `json:"run_id"`
 		Phase   string   `json:"phase"`
+		Source  string   `json:"source,omitempty"`
 		Reason  string   `json:"reason"`
 		Ref     string   `json:"ref,omitempty"`
 		Pending []string `json:"pending"`
-	}{e.RunID, e.Phase, e.Reason, e.Ref, pending}
+	}{e.RunID, e.Phase, e.Source, e.Reason, e.Ref, pending}
 	return marshalEntry(TypeRun, &e.EntryBase, aux)
 }
 
@@ -317,8 +419,52 @@ func (e *DecisionEntry) decodeMembers(data []byte, all map[string]json.RawMessag
 	return validateLifecycle(e)
 }
 
+// MarshalJSON emits the entry as one JSON object.
+func (e *QueuedEntry) MarshalJSON() ([]byte, error) {
+	if err := validateLifecycle(e); err != nil {
+		return nil, err
+	}
+	type plain QueuedEntry
+	return marshalEntry(TypeQueued, &e.EntryBase, (*plain)(e))
+}
+
+// UnmarshalJSON decodes the entry, dispatching the item through the
+// openresponses item registry.
+func (e *QueuedEntry) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	return e.decodeMembers(data, all)
+}
+
+func (e *QueuedEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
+	var aux struct {
+		Item    json.RawMessage `json:"item"`
+		Mode    string          `json:"mode"`
+		Trigger *Trigger        `json:"trigger"`
+		Ref     string          `json:"ref"`
+	}
+	if err := unmarshalEntry(data, all, &e.EntryBase, &aux, queuedKeys); err != nil {
+		return err
+	}
+	if len(aux.Item) == 0 || isNull(aux.Item) {
+		return errors.New("item is required")
+	}
+	item, err := openresponses.UnmarshalItem(aux.Item)
+	if err != nil {
+		return err
+	}
+	e.Item = item
+	e.Mode = aux.Mode
+	e.Trigger = aux.Trigger
+	e.Ref = aux.Ref
+	return validateLifecycle(e)
+}
+
 var (
 	_ Entry = (*RunEntry)(nil)
 	_ Entry = (*DispatchEntry)(nil)
 	_ Entry = (*DecisionEntry)(nil)
+	_ Entry = (*QueuedEntry)(nil)
 )

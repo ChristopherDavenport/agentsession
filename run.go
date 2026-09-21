@@ -175,6 +175,49 @@ func (s *Session) PendingCalls(leaf string) ([]*Call, error) {
 	return out, nil
 }
 
+// Queued returns the queued entries on a root-first path that are
+// still waiting: no item entry on the path names them in QueuedFrom,
+// and no run end follows them. They are the inputs a harness accepted
+// and has not yet appended to the conversation, the durable inbox a
+// resume drains. A run end after a queued entry closes it, since the
+// run it was queued into has ended: a harness that still wants the
+// input queues it again.
+func Queued(path []Entry) []*QueuedEntry {
+	var open []*QueuedEntry
+	drained := map[string]bool{}
+	for _, e := range path {
+		switch v := e.(type) {
+		case *QueuedEntry:
+			open = append(open, v)
+		case *ItemEntry:
+			if v.QueuedFrom != "" {
+				drained[v.QueuedFrom] = true
+			}
+		case *RunEntry:
+			if v.IsEnd() {
+				open = nil
+			}
+		}
+	}
+	var out []*QueuedEntry
+	for _, q := range open {
+		if !drained[q.ID] {
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+// PendingQueued returns the inputs queued on the path to leaf that
+// have not been appended; see [Queued].
+func (s *Session) PendingQueued(leaf string) ([]*QueuedEntry, error) {
+	path := s.Path(leaf)
+	if path == nil {
+		return nil, fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
+	}
+	return Queued(path), nil
+}
+
 // Run is one run's segment of a path: the entries from its start entry
 // to its end entry, or to the end of the path when the run was cut off
 // or closed by a branch.
@@ -183,6 +226,13 @@ type Run struct {
 	// End is nil when no end entry for the run is on the segment.
 	End     *RunEntry
 	Segment []Entry
+	// Path is the root-first path up to the last entry of the segment,
+	// of which Segment is the tail. The end reason of a run that
+	// answers a call an earlier run's model call made is a shape of
+	// the path, not of the segment alone; see [ComputeReason]. It is
+	// nil in a Run built by hand, and then the segment stands for the
+	// path.
+	Path []Entry
 }
 
 // RunID returns the run's ID.
@@ -210,7 +260,7 @@ func (r *Run) Pending() []string {
 func Runs(path []Entry) []*Run {
 	var runs []*Run
 	var cur *Run
-	for _, e := range path {
+	for i, e := range path {
 		if r, ok := e.(*RunEntry); ok && r.IsStart() {
 			cur = &Run{Start: r}
 			runs = append(runs, cur)
@@ -224,6 +274,9 @@ func Runs(path []Entry) []*Run {
 			continue
 		}
 		cur.Segment = append(cur.Segment, e)
+		// Capped, so appending to one run's path cannot overwrite the
+		// entry the next run's path starts from.
+		cur.Path = path[: i+1 : i+1]
 		if r, ok := e.(*RunEntry); ok && r.IsEnd() && r.RunID == cur.Start.RunID {
 			cur.End = r
 		}
@@ -268,23 +321,30 @@ func (s *Session) EndRun(reason, ref string) (*RunEntry, error) {
 	return NewRunEnd(run.RunID(), reason, ref, run.Pending()), nil
 }
 
-// ComputeReason recomputes a run's end reason from its segment, as the
-// format defines it: the first of error, input_required, aborted, done
-// and stopped whose shape the segment matches. It never returns
+// ComputeReason recomputes a run's end reason from its segment and
+// the root-first path the segment ends, as the format defines it: the
+// first of error, input_required, aborted, done and stopped whose
+// shape they match, with aborted again as the value for anything left.
+// A nil path means the segment stands for the path. It never returns
 // ReasonInterrupted, and returns ReasonError only for a response that
 // carries an error; both are values a writer adds where the segment
 // cannot show them.
-func ComputeReason(segment []Entry) string {
-	var last *ResponseEntry
-	for _, e := range segment {
-		if r, ok := e.(*ResponseEntry); ok {
-			last = r
-		}
+//
+// The stopped step reads the path because a run that answers a call
+// and ends without calling the model again, which is what a resume
+// whose tool asks to terminate and a refusal both are, holds no
+// response of its own: the response that made the calls is on the
+// path before the segment.
+func ComputeReason(path, segment []Entry) string {
+	if path == nil {
+		path = segment
 	}
+	last := lastResponse(segment)
 	if last != nil && last.Error != nil {
 		return ReasonError
 	}
 	calls := Calls(segment)
+	onPath := Calls(path)
 	held, dispatched, pending := false, false, false
 	for _, c := range calls {
 		if !c.Pending() {
@@ -301,15 +361,81 @@ func ComputeReason(segment []Entry) string {
 	if held && !dispatched {
 		return ReasonInputRequired
 	}
-	if pending || last == nil || last.Incomplete != nil {
+	if pending || (last != nil && last.Incomplete != nil) {
 		return ReasonAborted
 	}
-	for _, c := range calls {
-		if c.Entry.ResponseID == last.ResponseID {
-			return ReasonStopped
+	// Whether the model asked for a tool is a property of the
+	// response's own output items, which the path holds wherever they
+	// were written: a run that starts between a function call and its
+	// response has them outside the segment.
+	if last != nil && !madeCalls(onPath, last) {
+		return ReasonDone
+	}
+	if stoppedOnPath(onPath, path, segment) {
+		return ReasonStopped
+	}
+	return ReasonAborted
+}
+
+// lastResponse returns the last response entry of a run of entries, or
+// nil.
+func lastResponse(entries []Entry) *ResponseEntry {
+	var last *ResponseEntry
+	for _, e := range entries {
+		if r, ok := e.(*ResponseEntry); ok {
+			last = r
 		}
 	}
-	return ReasonDone
+	return last
+}
+
+// madeCalls reports whether any of the calls is output of the response.
+func madeCalls(calls []*Call, resp *ResponseEntry) bool {
+	for _, c := range calls {
+		if c.Entry.ResponseID == resp.ResponseID {
+			return true
+		}
+	}
+	return false
+}
+
+// stoppedOnPath is the format's stopped shape: the last response on
+// the path before the segment's end has calls, every call on the path
+// has an output, and the segment holds at least one output or
+// decision, so the run finished what an earlier or its own model call
+// asked for and the harness chose not to call the model again. No
+// response follows, since the response is the last one on the path.
+func stoppedOnPath(calls []*Call, path, segment []Entry) bool {
+	last := lastResponse(path)
+	if last == nil {
+		return false
+	}
+	if !madeCalls(calls, last) {
+		return false
+	}
+	for _, c := range calls {
+		if c.Pending() {
+			return false
+		}
+	}
+	return answersACall(segment)
+}
+
+// answersACall reports whether a segment holds a function call output
+// or a decision, which is what a run that answered a call rather than
+// calling the model leaves behind.
+func answersACall(segment []Entry) bool {
+	for _, e := range segment {
+		switch v := e.(type) {
+		case *DecisionEntry:
+			return true
+		case *ItemEntry:
+			if _, ok := v.Item.(*openresponses.FunctionCallOutput); ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ErrReasonMismatch is returned by [Run.Verify] when a run's written
@@ -326,7 +452,7 @@ func (r *Run) Verify() error {
 		return nil
 	}
 	if r.End.Reason != ReasonError && r.End.Reason != ReasonInterrupted {
-		if got := ComputeReason(r.Segment); got != r.End.Reason {
+		if got := ComputeReason(r.Path, r.Segment); got != r.End.Reason {
 			return fmt.Errorf("%w: run %s wrote %s, segment reads %s", ErrReasonMismatch, r.RunID(), r.End.Reason, got)
 		}
 	}
