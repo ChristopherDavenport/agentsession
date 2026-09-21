@@ -24,9 +24,15 @@ jobs:
         if: contains(github.ref_name, '/')
         with:
           go-version-file: go.mod
-      - name: Build the nested modules outside the workspace
+      # Only the module this tag names: at the intermediate commits of a
+      # release the other nested modules still require the previous root,
+      # and checking them here would fail the run for a module that is
+      # perfectly good.
+      - name: Build the tagged nested module outside the workspace
         if: contains(github.ref_name, '/')
-        run: make release-check
+        env:
+          TAG: ${{ github.ref_name }}
+        run: make release-check RELEASE_SUBMODULES="${TAG%/v*}"
       - name: Create the release from the tag
         env:
           GH_TOKEN: ${{ github.token }}
