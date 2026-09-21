@@ -786,34 +786,41 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.2
 
-Additive but for one tightened rule: the request context of a
-response skips entries that are not items rather than stopping at
-them, so a file whose output items are interleaved with record
-entries now rebuilds the request that was sent. A 0.2 reader
-rebuilds the same context for every other file.
+Additive but for one tightened rule and one member a 0.2 reader
+cannot resolve. The request context of a response skips entries that
+are not items rather than stopping at them, so a file whose output
+items are interleaved with record entries now rebuilds the request
+that was sent. `instructions_parts` is where a 0.2 reader loses
+something: it rebuilds the same instructions for a file that writes
+the string and none at all for one that writes parts alone. Every
+other addition is a new entry type or an optional member, which a 0.2
+reader preserves and ignores.
 
 - Context building states how the request context of a response is
   found, and that the output items of one response need not be
   contiguous.
-- New record entry `queued`, the input a harness accepted before it
-  could append it, with the trigger that brought it in; the `item`
-  entry that drains one carries `source` and `queued_from`. A queued
-  entry with neither an item that names it nor a run end after it is
-  an inbox a resume drains. `records` may name `queued`.
+- The `stopped` step of the run end cascade reads the path before the
+  segment, so a run that answers a call and ends without calling the
+  model again is `stopped` rather than `aborted`. The cascade's
+  `aborted` step no longer catches a segment with no `response`;
+  a sixth step does, so every segment still matches exactly one value.
 - `config` gains `instructions_parts`, the composition of the
   instructions as an ordered list of named parts, with a delta
   carrying the text of the parts that changed and a hash for the
   parts that did not, and `instructions_omitted`, the parts the
   writer considered and left out. `instructions` remains valid and is
   the parts' texts joined with one blank line. The compaction
-  checkpoint carries the parts in force. A 0.2 reader rebuilds the
-  same instructions for a file that writes the string, and cannot
-  rebuild them for one that writes parts alone.
-- The `stopped` step of the run end cascade reads the path before the
-  segment, so a run that answers a call and ends without calling the
-  model again is `stopped` rather than `aborted`. The cascade's
-  `aborted` step no longer catches a segment with no `response`;
-  a sixth step does, so every segment still matches exactly one value.
+  checkpoint carries the parts in force.
+- New record entry `queued`, the input a harness accepted before it
+  could append it, with the trigger that brought it in; the `item`
+  entry that drains one carries `source` and `queued_from`. A queued
+  entry with neither an item that names it nor a run end after it is
+  an inbox a resume drains. `records` may name `queued`.
+- The ATIF projection: `extra.run` is a list, so a run that produces
+  no step keeps its record; `final_metrics` totals the whole path and
+  `total_steps` counts the model calls a fold left out of the steps,
+  with a line in `notes`; a document may be built at any entry, not
+  only at a leaf.
 
 ## Changes since 0.1
 

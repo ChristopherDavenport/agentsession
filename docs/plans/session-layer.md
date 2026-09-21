@@ -251,6 +251,7 @@ shape back reads it out of `extra`.
 | `branch_summary` | `source: "system"` step, `is_copied_context: true`, with `extra.branch_from` |
 | `custom_item` | step by its role, `extra.custom_type` |
 | `custom`, `label`, `session_info` | `extra` on the nearest following step, or `extra` on the root |
+| `run`, `dispatch`, `decision`, `queued` | no step of their own: a run's record under `extra.run`, a **list**, on the first step its segment produces or on the root; a call's decisions and dispatch under `extra.calls` on the agent step that made the call; a queued input under `extra.queued` |
 | `environment` | root `extra.environment` for the first, step `extra.environment` afterwards |
 | `outcome` | root `final_metrics.extra.outcome`, and `extra.outcome` on the step it attaches to |
 | subagent sessions | `subagent_trajectories[]` embedded, referenced from the tool observation through `subagent_trajectory_ref` |
@@ -329,9 +330,11 @@ live traces use.
 
 ## Open questions
 
-- Whether `config` should store full instructions each time or a
+- ~~Whether `config` should store full instructions each time or a
   reference to a content-addressed blob, given prompts are large and
-  change rarely.
+  change rarely.~~ Answered in RFC draft 0.3: `instructions_parts`
+  names each layer that writes the prompt, and a delta carries the
+  text of the part that changed and a hash for the rest.
 - ID scheme for entries: pi's 8-hex-char with UUID fallback versus
   UUIDv7 everywhere.
 - Whether images and file parts are stored inline or spilled to a
