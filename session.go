@@ -299,6 +299,12 @@ func validateConfig(c *ConfigEntry) error {
 	if full && len(c.InstructionsParts) > 0 && c.Instructions != nil && *c.Instructions != JoinInstructions(c.InstructionsParts) {
 		return errors.New("agentsession: instructions and instructions_parts disagree: the string is the parts joined with a blank line")
 	}
+	if !full && c.Replace && c.Instructions == nil {
+		// A replace discards the parts a hash would name, so nothing on
+		// the path resolves it and the entry would set instructions a
+		// reader cannot rebuild.
+		return errors.New("agentsession: a replacing config must carry the text of every instructions part, or the instructions string beside them")
+	}
 	for _, o := range c.InstructionsOmitted {
 		if o.ID == "" {
 			return errors.New("agentsession: an omitted instructions part has no id")

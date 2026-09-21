@@ -1193,3 +1193,94 @@ func TestAtEntry(t *testing.T) {
 		}
 	}
 }
+
+// TestAtAForkPoint: At is for an entry that is no longer a leaf, so
+// the entry it ends at has children, and those children are not
+// branches this path was abandoned at.
+func TestAtAForkPoint(t *testing.T) {
+	s := loadFixture(t, "basic")
+	fork := s.Leaf()
+	before, err := At(s, fork)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.AbandonedAt != "" || len(before.PreferredOver) != 0 {
+		t.Fatalf("a leaf reads as abandoned at %q, preferred over %v", before.AbandonedAt, before.PreferredOver)
+	}
+	// Two children below it, as a judge's two outcomes would be.
+	score := 1.0
+	for _, label := range []string{"judge-a", "judge-b"} {
+		e := &agentsession.OutcomeEntry{Kind: agentsession.OutcomeEval, Target: fork, Score: &score, Label: label}
+		e.Parent = fork
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(s.Children(fork)); n < 2 {
+		t.Fatalf("%d children under the fork; the test proves nothing", n)
+	}
+	after, err := At(s, fork)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.AbandonedAt != "" {
+		t.Errorf("At(%s) reads as abandoned at %s", fork, after.AbandonedAt)
+	}
+	if len(after.PreferredOver) != 0 {
+		t.Errorf("At(%s) is preferred over %v", fork, after.PreferredOver)
+	}
+	doc, err := ToATIF(after, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := doc.Extra[ExtraAbandonedAt]; ok {
+		t.Errorf("the document says the path was abandoned at its own end")
+	}
+	assertSameJSON(t, encode(t, mustDoc(t, before).Steps), encode(t, doc.Steps))
+}
+
+func mustDoc(t *testing.T, tr Trajectory) *atif.Trajectory {
+	t.Helper()
+	doc, err := ToATIF(tr, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+// TestCostAskedOncePerEntry: a price source may count or charge for
+// what it is asked, so the builder asks it once per model call.
+func TestCostAskedOncePerEntry(t *testing.T) {
+	for _, name := range []string{"basic", "compaction"} {
+		t.Run(name, func(t *testing.T) {
+			s := loadFixture(t, name)
+			tr, err := At(s, s.Leaf())
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			priced := 0
+			for _, e := range tr.Path {
+				switch v := e.(type) {
+				case *agentsession.ResponseEntry:
+					if v.Usage != nil {
+						priced++
+					}
+				case *agentsession.CompactionEntry:
+					if v.Usage != nil {
+						priced++
+					}
+				}
+			}
+			if _, err := ToATIF(tr, Options{Cost: func(string, openresponses.Usage) (float64, bool) {
+				calls++
+				return 1, true
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			if calls != priced {
+				t.Errorf("the price source was asked %d times for %d model calls", calls, priced)
+			}
+		})
+	}
+}

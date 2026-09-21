@@ -274,7 +274,9 @@ func Runs(path []Entry) []*Run {
 			continue
 		}
 		cur.Segment = append(cur.Segment, e)
-		cur.Path = path[:i+1]
+		// Capped, so appending to one run's path cannot overwrite the
+		// entry the next run's path starts from.
+		cur.Path = path[: i+1 : i+1]
 		if r, ok := e.(*RunEntry); ok && r.IsEnd() && r.RunID == cur.Start.RunID {
 			cur.End = r
 		}
@@ -342,6 +344,7 @@ func ComputeReason(path, segment []Entry) string {
 		return ReasonError
 	}
 	calls := Calls(segment)
+	onPath := Calls(path)
 	held, dispatched, pending := false, false, false
 	for _, c := range calls {
 		if !c.Pending() {
@@ -361,10 +364,14 @@ func ComputeReason(path, segment []Entry) string {
 	if pending || (last != nil && last.Incomplete != nil) {
 		return ReasonAborted
 	}
-	if last != nil && !madeCalls(calls, last) {
+	// Whether the model asked for a tool is a property of the
+	// response's own output items, which the path holds wherever they
+	// were written: a run that starts between a function call and its
+	// response has them outside the segment.
+	if last != nil && !madeCalls(onPath, last) {
 		return ReasonDone
 	}
-	if stoppedOnPath(path, segment) {
+	if stoppedOnPath(onPath, path, segment) {
 		return ReasonStopped
 	}
 	return ReasonAborted
@@ -398,12 +405,11 @@ func madeCalls(calls []*Call, resp *ResponseEntry) bool {
 // decision, so the run finished what an earlier or its own model call
 // asked for and the harness chose not to call the model again. No
 // response follows, since the response is the last one on the path.
-func stoppedOnPath(path, segment []Entry) bool {
+func stoppedOnPath(calls []*Call, path, segment []Entry) bool {
 	last := lastResponse(path)
 	if last == nil {
 		return false
 	}
-	calls := Calls(path)
 	if !madeCalls(calls, last) {
 		return false
 	}

@@ -85,10 +85,18 @@ type Option func(*Store)
 
 // WithReadOnly opens the store for reading: Open takes no hold on a
 // session, so a session another process holds can be read while it is
-// held, and Create, Append and Delete return
-// [agentsession.ErrReadOnly]. Opening the database still creates or
+// held, and Create, Append, Delete and BreakLock return
+// [agentsession.ErrReadOnly]. Nothing in a session is written.
+//
+// Two things it is not. Opening the database still creates or
 // migrates its tables, which is what makes a file an earlier release
-// wrote readable; nothing in a session is written.
+// wrote readable, so a read-only store writes the database file once
+// at open and takes its write lock while it does; the option cannot
+// change that, since the schema is what the reader reads through.
+// And an open session is cached as it is in a writing store, so a
+// session read while another process appends to it shows what it held
+// when it was opened; call [Store.Release] and open it again to see
+// the rest.
 func WithReadOnly() Option {
 	return func(s *Store) { s.readOnly = true }
 }
@@ -610,7 +618,9 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 }
 
 // Release forgets an open session so the next Open reloads it from the
-// database.
+// database, and drops the hold when the store has one. On a read-only
+// store it is how a reader sees what another process has appended
+// since it opened the session.
 func (s *Store) Release(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

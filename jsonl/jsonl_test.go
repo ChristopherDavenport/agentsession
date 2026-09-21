@@ -520,6 +520,36 @@ func TestReadOnlyStore(t *testing.T) {
 	}
 }
 
+// TestReadOnlyCreatesNoRoot: a read-only store writes nothing, its
+// own root directory included.
+func TestReadOnlyCreatesNoRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "not", "there")
+	st, err := jsonl.Open(root, jsonl.WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a read-only open created %s: %v", root, err)
+	}
+	// It reads as an empty store rather than failing.
+	for _, err := range st.List(context.Background(), agentsession.ListFilter{}) {
+		if err != nil {
+			t.Errorf("List over a missing root: %v", err)
+		}
+	}
+	if _, err := st.Open(context.Background(), "nope"); !errors.Is(err, agentsession.ErrNoSession) {
+		t.Errorf("Open over a missing root = %v", err)
+	}
+	// A writing store still creates it.
+	if _, err := jsonl.Open(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Errorf("a writing open did not create the root: %v", err)
+	}
+}
+
 // TestReadOnlyLeavesATruncatedLine: trimming a cut-short line is a
 // write, so a read-only open reports it and leaves the file alone.
 func TestReadOnlyLeavesATruncatedLine(t *testing.T) {

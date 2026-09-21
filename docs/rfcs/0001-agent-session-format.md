@@ -283,13 +283,25 @@ readers treat it as opaque.
   text is the one the path already has for that id. A part the list
   leaves out is removed. Order is therefore explicit in every delta,
   and an unchanged part costs one id and one hash.
+- A part named by `hash` alone also keeps the `source` it had on the
+  path, since the hash form has no way to say that a part has none
+  now. A writer that clears or changes a part's `source` writes the
+  part's `text` with it.
 - A part that carries neither `text` nor a `hash` this path can
-  resolve has no text a reader can rebuild; such a file's
-  `request_hash` will not verify, which is how it is found.
+  resolve has no text a reader can rebuild. When the same entry
+  carries `instructions`, that string stands: it is the only record of
+  what the model was sent, and a reader takes it over the join of
+  parts it cannot resolve. Without it the instructions cannot be
+  rebuilt and the `request_hash` will not verify, which is how such a
+  file is found.
+- A writer MUST NOT write a delta with `replace: true` whose parts are
+  named by `hash` alone without `instructions` beside them: the
+  replace discards the parts the hashes would have resolved against,
+  so nothing on the path can rebuild them.
 - `replace: true` discards the parts with the rest of the settings,
-  so a `hash` in the same entry resolves against nothing and its part
-  has no text; a delta that sets `instructions` as a string replaces
-  the composition, and the parts no longer describe what is in force.
+  so a `hash` in the same entry resolves against nothing; a delta that
+  sets `instructions` as a string and no parts replaces the
+  composition, and the parts no longer describe what is in force.
 
 `instructions_omitted` records the parts the writer considered and
 left out, each with its `id`, a `reason` in the writer's own terms,

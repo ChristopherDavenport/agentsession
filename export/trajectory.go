@@ -281,6 +281,14 @@ func (w *tree) at(id string, prefs []Preference) (Trajectory, error) {
 	}
 	for _, e := range t.Path {
 		b := e.Base()
+		if b.ID == id {
+			// The entry the trajectory ends at. Its children are what
+			// was appended after this document, not branches this path
+			// was preferred over or abandoned at: a leaf has none, and
+			// an entry a judge appended below does not make the path
+			// that ends here an abandoned one.
+			continue
+		}
 		children := s.Children(b.ID)
 		if len(children) < 2 {
 			continue

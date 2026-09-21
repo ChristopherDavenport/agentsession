@@ -23,7 +23,10 @@ versions may break the API.
   other entry stays where it was (#40).
 
 - **Breaking.** `ComputeReason` takes the run's path as well as its
-  segment, `Run` carries the `Path` the segment ends, and the
+  segment, and reads the last response's own output items on the path
+  to decide whether the model asked for a tool, so a run that starts
+  between a function call and its response is not read as `done` while
+  the call goes unanswered; `Run` carries the `Path` the segment ends, and the
   `stopped` step of the cascade reads it: a run that answers a call an
   earlier run's model call made and ends without calling the model
   again is `stopped`, not `aborted`. A refusal and a resume whose
@@ -50,7 +53,13 @@ versions may break the API.
   line and leaves it in the file, since trimming it is a write. The
   CLI's `list` opens its store read-only; its other commands already
   read the file directly. `BreakLock` is refused too: a store that
-  takes no lock has no business dropping another process's (#44).
+  takes no lock has no business dropping another process's, and a
+  read-only jsonl store does not create its root directory either. Two
+  things it is not: a read-only sqlite store still creates or migrates
+  the database's tables when it opens the file, which is what makes a
+  database an earlier release wrote readable, and a session either
+  store has opened is cached, so `Release` and a second `Open` are how
+  a reader sees what has been appended since (#44).
 - The sqlite store parses a holder's `since` and `heartbeat` before it
   decides what to do with the row, so the refusal an operator sees
   names when the holder took the session and when it last appended
@@ -76,7 +85,12 @@ versions may break the API.
   byte edit to one of four parts now costs that part rather than the
   whole prompt: the composed study's 2,787 byte delta, and the memory
   study's 33,440 byte one, become the part that changed plus an id and
-  a hash for each part that did not (#27).
+  a hash for each part that did not. A part named by a hash keeps the
+  source it had, so a writer that clears or changes a part's source
+  writes its text with it; a `Settings` never shares its parts with
+  another or with the entry they came from; and where a part cannot be
+  resolved, an `instructions` string written beside it stands, which a
+  replacing delta must carry (#27).
 
 - New record entry `queued`: the input a harness accepted before it
   could append it, a steer that joins the run in flight or a follow-up
@@ -92,6 +106,9 @@ versions may break the API.
   `queued`. `ItemEntry.Source` also stands alone, for any item a
   person or another system sent (#42).
 
+- `export.Options.Cost` is asked once per model call rather than once
+  for the step and again for the totals, so a price source that counts
+  or charges for what it is asked is not double counted.
 - The ATIF export tells what a run cost from what a document shows.
   `final_metrics` now totals every model call on the path, including
   the ones a compaction folded out of the document, `total_steps`
@@ -112,7 +129,9 @@ versions may break the API.
   priced by the model that was sent (#38).
 - `export.At(s, entryID)` builds the trajectory of the path that ends
   at any entry, not only at a leaf, with the same `PreferredOver`,
-  `AbandonedAt` and `Main` treatment; `Trajectories` is it over each
+  `AbandonedAt` and `Main` treatment; the entry it ends at is not read
+  as a fork, since what was appended below it is not a branch this
+  path abandoned; `Trajectories` is it over each
   leaf. A judge that appends an outcome moves the leaf, and the
   document a score names can now be built again from the entry the
   score targets. `Trajectory` gains `Path`, the root-first path before

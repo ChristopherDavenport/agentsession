@@ -56,11 +56,16 @@ func WithSync(p SyncPolicy) Option {
 
 // WithReadOnly opens the store for reading: Open takes no lock on a
 // session, so a session another process is writing can be read while
-// it writes, and Create, Append, Delete and Sync return
-// [agentsession.ErrReadOnly]. A file whose last line was cut short is
+// it writes, and Create, Append, Delete, Sync and BreakLock return
+// [agentsession.ErrReadOnly]. Nothing is written, the store's root
+// directory included, and a file whose last line was cut short is
 // reported through Session.Truncated and left alone, since trimming
 // it is a write. It is what show, verify and export want, and what a
 // host wants when an operator asks about a session the agent holds.
+//
+// An open session is cached as it is in a writing store, so a session
+// read while another process appends to it shows what it held when it
+// was opened; call [Store.Release] and open it again to see the rest.
 func WithReadOnly() Option {
 	return func(s *Store) { s.readOnly = true }
 }
@@ -104,13 +109,17 @@ type handle struct {
 }
 
 // Open returns a store over root, creating the directory if needed.
+// A read-only store creates nothing: a missing root is an empty
+// listing and a session that is not there.
 func Open(root string, opts ...Option) (*Store, error) {
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return nil, fmt.Errorf("jsonl: create root: %w", err)
-	}
 	s := &Store{root: root, open: map[string]*handle{}}
 	for _, opt := range opts {
 		opt(s)
+	}
+	if !s.readOnly {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			return nil, fmt.Errorf("jsonl: create root: %w", err)
+		}
 	}
 	return s, nil
 }
@@ -513,7 +522,9 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 
 // Release syncs and closes an open session's file and drops its lock
 // without deleting it. The session can be opened again later, by this
-// or another process.
+// or another process. On a read-only store there is no lock and
+// nothing to sync, and Release is how a reader drops a session it has
+// cached so the next Open reads what has been appended since.
 func (s *Store) Release(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

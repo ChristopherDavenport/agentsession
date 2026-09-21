@@ -190,6 +190,40 @@ func TestInstructionsDeltaShapes(t *testing.T) {
 	}
 	settings := Settings{}.Apply(full)
 
+	t.Run("a part whose source moved carries its text", func(t *testing.T) {
+		// A part named by its hash inherits the source it had, so the
+		// hash form cannot say that a part has no source now.
+		for _, next := range [][]InstructionPart{
+			edit(base, "agentsmd", base[1].Text), // unchanged text, source below
+			composed(),
+		} {
+			next[1].Source = ""
+			delta := settings.InstructionsDelta(next)
+			if delta == nil {
+				t.Fatal("no delta for a cleared source")
+			}
+			got := settings.Apply(delta)
+			if len(got.InstructionsParts) != len(next) {
+				t.Fatalf("%d parts in force", len(got.InstructionsParts))
+			}
+			for i, p := range got.InstructionsParts {
+				if p.ID != next[i].ID || p.Text != next[i].Text || p.Source != next[i].Source {
+					t.Errorf("part %d = %+v, want %+v", i, p, next[i])
+				}
+			}
+			if got.Instructions != JoinInstructions(next) {
+				t.Error("the instructions are not the parts joined")
+			}
+		}
+	})
+	t.Run("a new source alone still replays", func(t *testing.T) {
+		next := composed()
+		next[0].Source = "harness"
+		got := settings.Apply(settings.InstructionsDelta(next))
+		if got.InstructionsParts[0].Source != "harness" {
+			t.Errorf("source = %q", got.InstructionsParts[0].Source)
+		}
+	})
 	t.Run("an unchanged render writes nothing", func(t *testing.T) {
 		if delta := settings.InstructionsDelta(composed()); delta != nil {
 			t.Errorf("delta for an unchanged render = %+v", delta.InstructionsParts)
@@ -276,11 +310,12 @@ func TestInstructionsDeltaShapes(t *testing.T) {
 		}
 	})
 	t.Run("a replace resolves no hash against what it discarded", func(t *testing.T) {
-		got := settings.Apply(&ConfigEntry{
+		unresolved := &ConfigEntry{
 			Replace:           true,
 			Model:             "gpt-5-nano",
 			InstructionsParts: []InstructionPart{{ID: "product", Hash: HashText(base[0].Text)}},
-		})
+		}
+		got := settings.Apply(unresolved)
 		if len(got.InstructionsParts) != 1 {
 			t.Fatalf("%d parts after a replace", len(got.InstructionsParts))
 		}
@@ -289,6 +324,26 @@ func TestInstructionsDeltaShapes(t *testing.T) {
 		}
 		if got.InstructionsParts[0].Hash == "" {
 			t.Error("the unresolved part lost the hash that says its text is missing")
+		}
+		// A reader replays such an entry, since it may be in a file it
+		// did not write; a writer is refused it.
+		s := New(Header{})
+		if _, err := s.Append(unresolved); err == nil {
+			t.Error("Append took a replacing config whose part nothing can resolve")
+		}
+		// With the string beside them the entry stands, and the string
+		// is what the request was sent with.
+		whole := JoinInstructions(base)
+		withString := &ConfigEntry{
+			Replace:           true,
+			Instructions:      &whole,
+			InstructionsParts: []InstructionPart{{ID: "product", Hash: HashText(base[0].Text)}},
+		}
+		if _, err := s.Append(withString); err != nil {
+			t.Errorf("Append = %v", err)
+		}
+		if got := settings.Apply(withString); got.Instructions != whole {
+			t.Errorf("instructions = %d bytes, want the string the entry carried", len(got.Instructions))
 		}
 	})
 	t.Run("replace drops the parts", func(t *testing.T) {
@@ -417,6 +472,53 @@ func withEnvelope(e Entry) Entry {
 	b.Parent = "c0000001"
 	b.Timestamp = fixedTime
 	return e
+}
+
+// TestSettingsDoNotShareParts: Settings is a value, and two of them
+// must not share one array; a Settings taken from a compaction
+// checkpoint would otherwise alias an appended entry's slice, which
+// nothing may modify.
+func TestSettingsDoNotShareParts(t *testing.T) {
+	base := composed()
+	full, err := ConfigFromRequestParts(openresponses.Request{Instructions: JoinInstructions(base)}, base...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := Settings{}.Apply(full)
+	other := settings.Apply(&ConfigEntry{Model: "gpt-5-nano"})
+	other.InstructionsParts[0].Text = "mutated"
+	if settings.InstructionsParts[0].Text == "mutated" {
+		t.Error("two Settings share one parts array")
+	}
+	if full.InstructionsParts[0].Text == "mutated" {
+		t.Error("the settings alias the config entry's parts")
+	}
+
+	// The same through a compaction checkpoint, which is the entry a
+	// context is built from.
+	s := New(Header{})
+	if _, err := s.Append(full); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Append(NewItemEntry(openresponses.UserText("one")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	comp, err := s.Compact(first, openresponses.AssistantText("so far"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(comp); err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx.Settings.InstructionsParts[0].Text = "mutated"
+	if comp.Config.InstructionsParts[0].Text == "mutated" {
+		t.Error("the context aliases the compaction entry's parts")
+	}
 }
 
 // TestInstructionsPartsThroughCompaction: the compaction checkpoint

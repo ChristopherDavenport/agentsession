@@ -143,11 +143,54 @@ func TestComputeReasonLastRun(t *testing.T) {
 			// value the recorder used to write for these does not.
 			last.End = NewRunEnd(last.RunID(), tt.want, "", last.Pending())
 			last.Segment = append(last.Segment, last.End)
-			last.Path = append(last.Path[:len(last.Path):len(last.Path)], last.End)
+			last.Path = append(last.Path, last.End)
 			if err := last.Verify(); err != nil {
 				t.Errorf("Verify a %s run: %v", tt.want, err)
 			}
+			// Appending to one run's path leaves its siblings alone.
+			for i, r := range runs[:len(runs)-1] {
+				if got := r.Path[len(r.Path)-1]; got != r.Segment[len(r.Segment)-1] {
+					t.Errorf("run %d's path now ends at %s, not at the end of its segment", i, got.Base().ID)
+				}
+			}
 		})
+	}
+}
+
+// TestComputeReasonCallsOutsideTheSegment: whether the model asked
+// for a tool is a property of its response's output items, which a
+// writer may put outside the run they are answered in. A run that
+// starts between a function call and its response holds the response
+// and not the call, and the cascade must still see a call the path
+// never answered.
+func TestComputeReasonCallsOutsideTheSegment(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	for _, e := range []Entry{
+		&ConfigEntry{Model: "gpt-5"},
+		NewItemEntry(openresponses.UserText("hi")),
+		&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_a", CallID: "a", Name: "tool", Arguments: "{}"}, ResponseID: "resp-0"},
+		NewRunStart("run-1", SourceInput, ""),
+		&ResponseEntry{ResponseID: "resp-0", Status: "completed"},
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs, err := s.Runs(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := runs[len(runs)-1]
+	if got := ComputeReason(r.Path, r.Segment); got != ReasonAborted {
+		t.Errorf("ComputeReason = %s, want %s: call a is on the path with no output", got, ReasonAborted)
+	}
+	// And a run end that calls it done disagrees with the shape.
+	end := NewRunEnd(r.RunID(), ReasonDone, "", nil)
+	if _, err := s.Append(end); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrReasonMismatch) {
+		t.Errorf("VerifyRecords = %v, want ErrReasonMismatch", err)
 	}
 }
 

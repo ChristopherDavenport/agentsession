@@ -53,6 +53,7 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 	} else {
 		out.Tools = append(openresponses.Tools(nil), s.Tools...)
 		out.Extra = cloneRaw(s.Extra)
+		out.InstructionsParts = cloneParts(s.InstructionsParts)
 	}
 	if c.Model != "" {
 		out.Model = c.Model
@@ -69,6 +70,12 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 		}
 		out.InstructionsParts = applyInstructionParts(prev, c.InstructionsParts)
 		out.Instructions = JoinInstructions(out.InstructionsParts)
+		if c.Instructions != nil && unresolvedParts(out.InstructionsParts) {
+			// A part the path cannot resolve has no text to join, so
+			// the string the writer put beside the parts is the only
+			// record of what the model was sent.
+			out.Instructions = *c.Instructions
+		}
 	case c.Instructions != nil:
 		// One string replaces the composition: the parts no longer
 		// describe what is in force.
@@ -156,6 +163,18 @@ func applyInstructionParts(prev, delta []InstructionPart) []InstructionPart {
 	return out
 }
 
+// unresolvedParts reports whether any part still carries the hash it
+// was named by, which is what [applyInstructionParts] leaves behind
+// for a part whose text is not on the path.
+func unresolvedParts(parts []InstructionPart) bool {
+	for _, p := range parts {
+		if p.Hash != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // InstructionsDelta returns the config delta that takes the
 // instructions from these settings to parts: the whole ordered list
 // of IDs, with the text of every part that is new or whose text
@@ -182,12 +201,16 @@ func (s Settings) InstructionsDelta(parts []InstructionPart) *ConfigEntry {
 	out := make([]InstructionPart, 0, len(parts))
 	for i, p := range parts {
 		old, ok := byID[p.ID]
-		if !ok || old.Text != p.Text {
+		// A part named by its hash inherits the source it had, so a
+		// part whose source moved, cleared above all, carries its text
+		// even when the text did not change: the hash form cannot say
+		// "this part has no source now".
+		if !ok || old.Text != p.Text || old.Source != p.Source {
 			out = append(out, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source})
 			same = false
 			continue
 		}
-		if same && (s.InstructionsParts[i].ID != p.ID || s.InstructionsParts[i].Source != p.Source) {
+		if same && s.InstructionsParts[i].ID != p.ID {
 			same = false
 		}
 		out = append(out, InstructionPart{ID: p.ID, Source: p.Source, Hash: HashText(p.Text)})
@@ -252,6 +275,16 @@ func removeTool(tools openresponses.Tools, name string) openresponses.Tools {
 		}
 	}
 	return out
+}
+
+// cloneParts copies the parts so two Settings never share one array:
+// a Settings taken from a compaction checkpoint would otherwise alias
+// the entry's own slice, which is immutable once appended.
+func cloneParts(parts []InstructionPart) []InstructionPart {
+	if parts == nil {
+		return nil
+	}
+	return append([]InstructionPart(nil), parts...)
 }
 
 func cloneRaw(m map[string]json.RawMessage) map[string]json.RawMessage {
@@ -332,6 +365,7 @@ func BuildContext(path []Entry) (Context, error) {
 			return Context{}, fmt.Errorf("agentsession: compaction %s: first_kept %q is not on the path before it", comp.ID, comp.FirstKept)
 		}
 		settings = comp.Config
+		settings.InstructionsParts = cloneParts(comp.Config.InstructionsParts)
 		ctx.Entries = append(ctx.Entries, comp)
 		ctx.Items = append(ctx.Items, comp.Summary)
 		ctx.ItemEntries = append(ctx.ItemEntries, comp)

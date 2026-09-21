@@ -128,7 +128,35 @@ type builder struct {
 	prompt, completion, cached int
 	cost                       float64
 	hasCost                    bool
-	links                      []*agentsession.LinkEntry
+	// priced remembers what Options.Cost answered for an entry, so a
+	// price source with a cost of its own, or a count, is asked once
+	// per model call and not once for the step and again for the
+	// totals.
+	priced map[string]price
+	links  []*agentsession.LinkEntry
+}
+
+// price is one answer from Options.Cost.
+type price struct {
+	usd float64
+	ok  bool
+}
+
+// costOf asks the price source about an entry, or returns what it
+// answered the first time.
+func (b *builder) costOf(entryID, model string, u openresponses.Usage) (float64, bool) {
+	if b.opts.Cost == nil {
+		return 0, false
+	}
+	if p, asked := b.priced[entryID]; asked {
+		return p.usd, p.ok
+	}
+	usd, ok := b.opts.Cost(model, u)
+	if b.priced == nil {
+		b.priced = map[string]price{}
+	}
+	b.priced[entryID] = price{usd, ok}
+	return usd, ok
 }
 
 // agentGroup accumulates model output items until their response
@@ -222,7 +250,7 @@ func (b *builder) entry(e agentsession.Entry) error {
 		if v.TokensBefore > 0 {
 			step.Extra["tokens_before"] = v.TokensBefore
 		}
-		b.foldUsage(step.Extra, v.Config.Model, v.Usage)
+		b.foldUsage(v.ID, step.Extra, v.Config.Model, v.Usage)
 		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.BranchSummaryEntry:
@@ -236,7 +264,7 @@ func (b *builder) entry(e agentsession.Entry) error {
 				ExtraOpenResponses: map[string]any{"item": rawItem(v.Summary)},
 			},
 		}
-		b.foldUsage(step.Extra, b.settings.Model, v.Usage)
+		b.foldUsage(v.ID, step.Extra, b.settings.Model, v.Usage)
 		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.LabelEntry:
@@ -503,14 +531,12 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 			if u.OutputTokensDetails.ReasoningTokens > 0 {
 				step.Metrics.Extra = map[string]any{"reasoning_tokens": u.OutputTokensDetails.ReasoningTokens}
 			}
-			if b.opts.Cost != nil {
-				// Priced by the model the request was sent with, not by
-				// the name Options.ModelName reports it under.
-				if usd, ok := b.opts.Cost(wire, *u); ok {
-					step.Metrics.CostUSD = atif.Ptr(usd)
-					b.cost += usd
-					b.hasCost = true
-				}
+			// Priced by the model the request was sent with, not by the
+			// name Options.ModelName reports it under.
+			if usd, ok := b.costOf(resp.ID, wire, *u); ok {
+				step.Metrics.CostUSD = atif.Ptr(usd)
+				b.cost += usd
+				b.hasCost = true
 			}
 			b.prompt += u.InputTokens
 			b.completion += u.OutputTokens
@@ -599,17 +625,15 @@ func (b *builder) rootExtra() map[string]any {
 // "cost_usd" when a price source is configured, and both are added to
 // the document's totals. Without this a compacting agent reports a
 // fraction of what it spent.
-func (b *builder) foldUsage(extra map[string]any, model string, u *openresponses.Usage) {
+func (b *builder) foldUsage(entryID string, extra map[string]any, model string, u *openresponses.Usage) {
 	if u == nil {
 		return
 	}
 	extra["usage"] = u
-	if b.opts.Cost != nil {
-		if usd, ok := b.opts.Cost(model, *u); ok {
-			extra["cost_usd"] = usd
-			b.cost += usd
-			b.hasCost = true
-		}
+	if usd, ok := b.costOf(entryID, model, *u); ok {
+		extra["cost_usd"] = usd
+		b.cost += usd
+		b.hasCost = true
 	}
 	b.prompt += u.InputTokens
 	b.completion += u.OutputTokens
@@ -822,11 +846,9 @@ func (b *builder) pathTotals() int {
 		b.prompt += u.InputTokens
 		b.completion += u.OutputTokens
 		b.cached += u.InputTokensDetails.CachedTokens
-		if b.opts.Cost != nil {
-			if usd, ok := b.opts.Cost(priced, *u); ok {
-				b.cost += usd
-				b.hasCost = true
-			}
+		if usd, ok := b.costOf(e.Base().ID, priced, *u); ok {
+			b.cost += usd
+			b.hasCost = true
 		}
 	}
 	return hidden
