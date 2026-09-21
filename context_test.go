@@ -1,6 +1,7 @@
 package agentsession
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -364,6 +365,66 @@ func TestPinnedOmitted(t *testing.T) {
 	}
 	if strings.Contains(string(data), "pinned") {
 		t.Errorf("an empty Pinned was written: %s", data)
+	}
+}
+
+// TestCompactionMembersSurviveARoundTrip guards the trap that hid the
+// pinned member during its own development. CompactionEntry decodes
+// through an aux struct that lists its members by hand, so a member
+// added to the struct and not to aux is dropped in silence: it counts
+// as known, so the envelope rule does not preserve it in Unknown
+// either, and the only symptom is a round trip that quietly loses it.
+// Every member set, written, read back, written again: the two must
+// agree.
+func TestCompactionMembersSurviveARoundTrip(t *testing.T) {
+	want := &CompactionEntry{
+		EntryBase: EntryBase{ID: "k1", Parent: "i1", Timestamp: fixedTime},
+		FirstKept: "i1",
+		Summary:   openresponses.UserMessage(&openresponses.InputText{Text: "the summary"}),
+		Pinned: openresponses.Items{
+			openresponses.UserMessage(&openresponses.InputText{Text: "the pin"}),
+		},
+		Config:       Settings{Model: "gpt-5", Instructions: "Be brief."},
+		TokensBefore: 5000,
+		Usage:        &openresponses.Usage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12},
+	}
+	data, err := MarshalEntry(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every member the struct declares reaches the wire. One missing
+	// here is the bug this test exists for.
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(data, &members); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"first_kept", "summary", "pinned", "config", "tokens_before", "usage"} {
+		if _, ok := members[key]; !ok {
+			t.Errorf("%s is not on the wire: %s", key, data)
+		}
+	}
+
+	got, err := UnmarshalEntry(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := MarshalEntry(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, again) {
+		t.Errorf("a member was dropped on decode\nwrote:     %s\nread back: %s", data, again)
+	}
+	k, ok := got.(*CompactionEntry)
+	if !ok {
+		t.Fatalf("decoded to %T", got)
+	}
+	if len(k.Pinned) != len(want.Pinned) || k.FirstKept != want.FirstKept ||
+		k.TokensBefore != want.TokensBefore || k.Usage == nil || k.Config.Model != want.Config.Model {
+		t.Errorf("decoded entry = %+v", k)
+	}
+	if got.Base().Unknown != nil {
+		t.Errorf("a declared member was parked in Unknown: %v", got.Base().Unknown)
 	}
 }
 

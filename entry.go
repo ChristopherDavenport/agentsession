@@ -731,6 +731,15 @@ func (e *CompactionEntry) UnmarshalJSON(data []byte) error {
 	return e.decodeMembers(data, all)
 }
 
+// decodeMembers decodes into aux and then assigns, because Summary is
+// an interface that needs the item registry.
+//
+// The aux struct must list every member CompactionEntry declares. A
+// member added to the struct and not to aux is dropped in silence: it
+// is in compactionKeys, so the envelope rule treats it as known and
+// does not preserve it in Unknown either, and the only symptom is a
+// round trip that loses it. TestCompactionMembersSurviveARoundTrip
+// guards this.
 func (e *CompactionEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	var aux struct {
 		FirstKept    string               `json:"first_kept"`
