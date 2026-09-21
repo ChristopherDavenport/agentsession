@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -21,6 +22,14 @@ func TestRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(tampered, bytes.ReplaceAll(data, []byte(`"request_hash":"sha256:`), []byte(`"request_hash":"sha256:0`)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A session whose responses recorded no hash. Verify reports each
+	// with ErrNoHash; the CLI counts those apart from the verified and
+	// the failed alike, and does not fail the run over them.
+	unhashed := filepath.Join(tmp, "unhashed.jsonl")
+	stripped := regexp.MustCompile(`,"request_hash":"sha256:[0-9a-f]+"`).ReplaceAll(data, nil)
+	if err := os.WriteFile(unhashed, stripped, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	root := filepath.Join(tmp, "root", "proj")
@@ -71,6 +80,25 @@ func TestRun(t *testing.T) {
 		},
 		{name: "verify", args: []string{"verify", filepath.Join(fixtures, "branch.jsonl")}, stdout: []string{"r0000001  ok", "3 verified, 0 without hash, 0 failed"}},
 		{name: "verify mismatch", args: []string{"verify", tampered}, code: 1, stdout: []string{"MISMATCH", "2 failed"}},
+		{
+			name: "verify without a recorded hash", args: []string{"verify", unhashed},
+			stdout: []string{"r0000001  no hash recorded", "0 verified, 2 without hash, 0 failed"},
+			absent: []string{"ok", "MISMATCH", "ERROR"},
+		},
+		{
+			name: "verify pinned", args: []string{"verify", filepath.Join(fixtures, "pinned.jsonl")},
+			stdout: []string{"3 verified, 0 without hash, 0 failed"},
+		},
+		{
+			// The pinned item is in context right after the summary,
+			// which is where the request that was sent had it.
+			name: "show pinned", args: []string{"show", filepath.Join(fixtures, "pinned.jsonl")},
+			stdout: []string{
+				"first kept i0000004", "1 pinned",
+				`1  system: "Summary: the user said first`,
+				`2  developer: "House rule: never use Box::leak."`,
+			},
+		},
 		{name: "verify truncated", args: []string{"verify", filepath.Join(fixtures, "truncated.jsonl")}, code: 1, stdout: []string{"truncated: line 4"}},
 		{name: "verify runs", args: []string{"verify", filepath.Join(fixtures, "runs.jsonl")}, stdout: []string{"2 verified, 0 without hash, 0 failed"}, absent: []string{"records to"}},
 		{name: "verify bad records", args: []string{"verify", filepath.Join(fixtures, "bad-records.jsonl")}, code: 1, stdout: []string{"records to i0000003  ERROR", "call call_1 has an output and no dispatch"}},

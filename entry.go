@@ -233,7 +233,7 @@ func (c *ConfigEntry) ClearExtra(key string) {
 func (*ConfigEntry) EntryType() string { return TypeConfig }
 
 // CompactionEntry replaces the context before FirstKept with a summary.
-// It is in context through its summary.
+// It is in context through its summary and its pinned items.
 type CompactionEntry struct {
 	EntryBase `json:"-"`
 	// FirstKept names the earliest entry on the path that stays in
@@ -242,6 +242,10 @@ type CompactionEntry struct {
 	// Summary is an item: the server's compaction item verbatim, or a
 	// message for a local summary.
 	Summary openresponses.Item `json:"summary"`
+	// Pinned are items kept verbatim from before FirstKept. They are in
+	// context immediately after Summary and before the entries from
+	// FirstKept.
+	Pinned openresponses.Items `json:"pinned,omitempty"`
 	// Config is a full settings checkpoint so a reader need not replay
 	// config entries from before the compaction.
 	Config       Settings             `json:"config"`
@@ -731,6 +735,7 @@ func (e *CompactionEntry) decodeMembers(data []byte, all map[string]json.RawMess
 	var aux struct {
 		FirstKept    string               `json:"first_kept"`
 		Summary      json.RawMessage      `json:"summary"`
+		Pinned       openresponses.Items  `json:"pinned"`
 		Config       Settings             `json:"config"`
 		TokensBefore int                  `json:"tokens_before"`
 		Usage        *openresponses.Usage `json:"usage"`
@@ -747,6 +752,7 @@ func (e *CompactionEntry) decodeMembers(data []byte, all map[string]json.RawMess
 	}
 	e.FirstKept = aux.FirstKept
 	e.Summary = summary
+	e.Pinned = aux.Pinned
 	e.Config = aux.Config
 	e.TokensBefore = aux.TokensBefore
 	e.Usage = aux.Usage

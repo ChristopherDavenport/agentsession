@@ -369,6 +369,10 @@ func BuildContext(path []Entry) (Context, error) {
 		ctx.Entries = append(ctx.Entries, comp)
 		ctx.Items = append(ctx.Items, comp.Summary)
 		ctx.ItemEntries = append(ctx.ItemEntries, comp)
+		for _, item := range comp.Pinned {
+			ctx.Items = append(ctx.Items, item)
+			ctx.ItemEntries = append(ctx.ItemEntries, comp)
+		}
 		for _, e := range path[kept:compIdx] {
 			ctx.Entries = append(ctx.Entries, e)
 			if item := contextItem(e); item != nil {
@@ -474,9 +478,18 @@ func (s *Session) RequestContext(id string) (Context, error) {
 // request does not hash to the recorded value.
 var ErrHashMismatch = errors.New("agentsession: request hash mismatch")
 
+// ErrNoHash is returned by [Session.Verify] for a response entry that
+// recorded no request hash. The response is not verified and not
+// mismatched: there was nothing to check. A writer records no hash
+// when it cannot stand behind one, which is what a layer that edits
+// the request outside the transcript leaves behind, so a caller that
+// accepts unverified requests opts in with [errors.Is] rather than by
+// reading err == nil.
+var ErrNoHash = errors.New("agentsession: no request hash recorded")
+
 // Verify rebuilds the request for the response entry id and checks that
-// it hashes to the entry's RequestHash. A response without a recorded
-// hash verifies trivially.
+// it hashes to the entry's RequestHash. A response that recorded no
+// hash returns [ErrNoHash]: nil means the request was checked.
 func (s *Session) Verify(id string) error {
 	ctx, err := s.RequestContext(id)
 	if err != nil {
@@ -485,7 +498,7 @@ func (s *Session) Verify(id string) error {
 	e, _ := s.Entry(id)
 	resp := e.(*ResponseEntry)
 	if resp.RequestHash == "" {
-		return nil
+		return fmt.Errorf("%w: response %s", ErrNoHash, id)
 	}
 	req, err := ctx.Request()
 	if err != nil {

@@ -83,6 +83,9 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		return strings.Join(parts, ", ")
 	case *agentsession.CompactionEntry:
 		s := "first kept " + v.FirstKept + "; " + describeItem(v.Summary)
+		if n := len(v.Pinned); n > 0 {
+			s += fmt.Sprintf("; %d pinned", n)
+		}
 		if v.TokensBefore > 0 {
 			s += fmt.Sprintf(" (%d tokens before)", v.TokensBefore)
 		}

@@ -35,7 +35,8 @@
 // receive. [Settings.Request] turns that into the canonical
 // openresponses.Request, and [RequestHash] hashes it as the format
 // defines (RFC 8785 canonical JSON, SHA-256). [Session.Verify] checks a
-// stored response's hash against the rebuilt request.
+// stored response's hash against the rebuilt request, and reports
+// [ErrNoHash] rather than nil when the response recorded none.
 //
 // # Stores
 //

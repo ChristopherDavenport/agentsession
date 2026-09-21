@@ -83,7 +83,12 @@ uses `sess.CompactFrom(i, summary)` or `sess.CompactKeeping(n, summary)`
 instead of mapping the index to an entry ID itself. `Context.ItemEntries`
 is the mapping, aligned with `Context.Items`.
 `sess.Verify(responseEntryID)` rebuilds the request and checks the
-hash.
+hash; it returns `ErrNoHash` when the response recorded none, so nil
+means the request was checked and not that there was nothing to check.
+A fold that keeps an item verbatim from before `first_kept` records it
+on the compaction's `Pinned`, and the context algorithm places those
+items immediately after the summary, which is where the request that
+was sent had them.
 
 A harness that composes its instructions from several layers records
 them as parts, so a change to one layer costs that layer and not the

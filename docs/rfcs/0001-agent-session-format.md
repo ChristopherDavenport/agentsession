@@ -318,8 +318,8 @@ Replaces earlier context with a summary.
 
 ```json
 {"type":"compaction","id":"…","parent":"…","ts":"…",
- "first_kept":"entry-id","summary":{…item…},"config":{…full config…},
- "tokens_before":50000,"usage":{…}}
+ "first_kept":"entry-id","summary":{…item…},"pinned":[{…item…}],
+ "config":{…full config…},"tokens_before":50000,"usage":{…}}
 ```
 
 - `first_kept` MUST name an entry on the path. Entries before it are
@@ -327,6 +327,16 @@ Replaces earlier context with a summary.
 - `summary` is an item. Under the Open Responses profile a server-side
   compaction stores the returned `compaction` item verbatim; a local
   summary is a `message` item.
+- `pinned`, when present, is an ordered list of items the writer kept
+  verbatim from before `first_kept`. A reader MUST place them
+  immediately after `summary` and before the entries from
+  `first_kept`, in the order written. A writer MUST make each of them
+  reachable as an `item` entry on the path before `first_kept` as
+  well: `pinned` is a copy of context that was already recorded, never
+  a new input, so a reader that ignores the member loses context but
+  never invents it. A reader MUST NOT reject a file whose `pinned`
+  item it cannot find on the path; it rebuilds a request that differs
+  from the one that was sent, which the `request_hash` reports.
 - `config` is a full checkpoint so a reader need not replay config
   entries from before the compaction. Its shape is the settings the
   context algorithm produces, not a `config` delta:
@@ -640,12 +650,14 @@ list as follows.
    one blank line.
 3. Find the last `compaction` on the path, if any. If found:
    settings start from its `config` checkpoint and then replay any
-   `config` after it; the item list starts with its `summary`, then the
-   items of entries from `first_kept` up to but excluding the
-   compaction, then the items of entries after it.
+   `config` after it; the item list starts with its `summary`, then its
+   `pinned` items in order, then the items of entries from `first_kept`
+   up to but excluding the compaction, then the items of entries after
+   it.
    If none: the item list is the items of all entries on the path.
 4. An entry contributes an item if it is `item`, or `branch_summary`,
-   or a `compaction` selected in step 3. Every record entry (`run`,
+   or a `compaction` selected in step 3, which contributes its
+   `summary` and each of its `pinned` items. Every record entry (`run`,
    `dispatch`, `decision`, `queued`, `label`, `info`, `env`,
    `outcome`, `link`, `custom`) and every unknown extension
    contributes nothing. A `queued` entry holds an item and is not in
@@ -667,11 +679,24 @@ first `item` whose `response` names another response or nothing. Only
 those item entries are removed; every other entry on the path stays,
 and the context algorithm above runs over the result.
 
-The output items of one response need not be contiguous. A harness may
-append an entry between two of them, which is what a guard that runs
-inside a response does, and a reader MUST NOT take such an entry as the
-end of the output. Entries that are not in context change neither the
-rebuilt request nor its hash wherever they fall.
+A writer SHOULD write a response's output items contiguously, so that
+the envelope reads in the order it happened and a reader scanning the
+file by eye sees one response as one block.
+
+A reader MUST NOT rely on that. Output items are identified by
+`response`, never by position: a reader MUST skip an entry that is not
+an `item` rather than take it as the end of the output. An entry that
+contributes nothing to context changes neither the rebuilt request nor
+its hash wherever it falls, so a file that interleaves is valid and
+verifies, and a reader that fails such a file is reporting a
+divergence that did not happen.
+
+Writers do interleave, and the reason is timing, not carelessness: a
+guard that runs inside a response records its verdict when it runs,
+and holding the entry until the response closes would move the verdict
+away from the item it judged. A writer that can keep the block intact
+without losing that ordering should; one that cannot is still writing
+a valid file.
 
 ### Request hash
 
@@ -695,7 +720,10 @@ MAY verify it by rebuilding the request from the path and comparing.
 - Output items MUST be written only when complete. Partial streaming
   state MUST NOT be written as an `item`.
 - A `response` entry MUST follow the items it envelopes and MUST be the
-  last entry written for that model call.
+  last entry written for that model call. An entry another layer raises
+  while a model call is in flight — a guard's verdict, a dispatch, a
+  run boundary — is not an entry "for that model call" and the rule
+  above does not forbid it.
 - A user item or function call output SHOULD be written before the
   request that includes it is sent.
 - Writers SHOULD fsync at least on each `response` entry and on each
@@ -731,8 +759,11 @@ call's decisions and dispatch travel under `calls`, keyed by call ID,
 in the `extra` of the agent step that produced the call; a queued
 input travels as a list under `queued`, and the step of the item that
 drained one carries its trigger under `source`; a fold's usage
-travels under `usage` in its system step's `extra`. Raw items travel in
-step `extra` so the projection is lossless.
+travels under `usage` in its system step's `extra`, and a fold's
+`pinned` items travel beside its `summary` in the same step, since the
+entries they were copied from are before `first_kept` and so are not
+in the document. Raw items travel in step `extra` so the projection is
+lossless.
 
 A document's steps are the context the algorithm produces, so a run
 that compacted is described by its last summary and what followed it.
@@ -799,19 +830,32 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.2
 
-Additive but for one tightened rule and one member a 0.2 reader
+Additive but for one tightened rule and two members a 0.2 reader
 cannot resolve. The request context of a response skips entries that
 are not items rather than stopping at them, so a file whose output
 items are interleaved with record entries now rebuilds the request
-that was sent. `instructions_parts` is where a 0.2 reader loses
-something: it rebuilds the same instructions for a file that writes
-the string and none at all for one that writes parts alone. Every
-other addition is a new entry type or an optional member, which a 0.2
-reader preserves and ignores.
+that was sent. `instructions_parts` and `pinned` are where a 0.2
+reader loses something: it rebuilds the same instructions for a file
+that writes the string and none at all for one that writes parts
+alone, and it rebuilds a compaction's context without the pinned
+items. Neither loss invents anything — a short request fails
+`request_hash` loudly rather than passing as a request that was never
+sent — and there is no installed base for `pinned`, since no file in
+existence carries it. Every other addition is a new entry type or an
+optional member, which a 0.2 reader preserves and ignores.
 
 - Context building states how the request context of a response is
-  found, and that the output items of one response need not be
+  found, and that a reader identifies a response's output items by
+  `response` rather than by position; a writer still SHOULD keep them
   contiguous.
+- `compaction` gains `pinned`, an ordered list of items the writer
+  kept verbatim from before `first_kept`, which a reader places
+  immediately after `summary`. It is how a harness that holds one item
+  out of a fold records what it held, so the rebuilt request is the
+  one that was sent and its `request_hash` verifies. Each pinned item
+  is also an `item` entry on the path, so a 0.2 reader that ignores
+  the member rebuilds a request short of those items rather than one
+  that invents them.
 - The `stopped` step of the run end cascade reads the path before the
   segment, so a run that answers a call and ends without calling the
   model again is `stopped` rather than `aborted`. The cascade's

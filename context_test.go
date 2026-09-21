@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,7 +25,7 @@ type contextGolden struct {
 // positive fixture and compares against testdata/context. Reviewing
 // those files is reviewing the algorithm.
 func TestContextGolden(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			got := map[string]contextGolden{}
@@ -149,7 +150,7 @@ func TestBranchContext(t *testing.T) {
 // TestVerifyFixtureHashes rebuilds the request for every response entry
 // in the fixtures and checks it against the recorded request_hash.
 func TestVerifyFixtureHashes(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			for _, e := range s.Entries() {
@@ -215,12 +216,22 @@ func TestRequestContext(t *testing.T) {
 	if err := s.Verify(bad.ID); !errors.Is(err, ErrHashMismatch) {
 		t.Errorf("Verify = %v, want ErrHashMismatch", err)
 	}
+	// A response that recorded no hash is neither verified nor
+	// mismatched, and Verify says so rather than returning nil: a
+	// caller gating on err == nil is told that nothing was checked.
 	none := &ResponseEntry{ResponseID: "resp_10", Status: openresponses.ResponseStatusCompleted}
 	if _, err := s.Append(none); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Verify(none.ID); err != nil {
-		t.Errorf("Verify without hash = %v", err)
+	err = s.Verify(none.ID)
+	if !errors.Is(err, ErrNoHash) {
+		t.Errorf("Verify without hash = %v, want ErrNoHash", err)
+	}
+	if errors.Is(err, ErrHashMismatch) {
+		t.Error("ErrNoHash must not match ErrHashMismatch: nothing to check is not a wrong record")
+	}
+	if !strings.Contains(err.Error(), none.ID) {
+		t.Errorf("Verify without hash = %v, want the entry named", err)
 	}
 }
 
@@ -272,6 +283,87 @@ func TestRequestContextInterleaved(t *testing.T) {
 	}
 	if custom != 2 {
 		t.Errorf("request context holds %d custom entries, want both the ones on the path", custom)
+	}
+}
+
+// TestPinnedContext is the shape a harness that holds one item out of
+// a fold writes: the compaction carries the item it kept, and the
+// reader places it immediately after the summary. Without the member
+// the rebuilt request is short of the item the model was sent, which
+// is a hash mismatch the writer avoids only by recording no hash.
+func TestPinnedContext(t *testing.T) {
+	s := loadFixture(t, "pinned")
+	comp, ok := s.Entry("k0000001")
+	if !ok {
+		t.Fatal("no compaction entry")
+	}
+	k := comp.(*CompactionEntry)
+	if len(k.Pinned) != 1 {
+		t.Fatalf("compaction carries %d pinned items, want 1", len(k.Pinned))
+	}
+	pin := "House rule: never use Box::leak."
+
+	// The pinned item sits between the summary and the kept window,
+	// which is where the request that was sent had it.
+	ctx, err := s.RequestContext("r0000003")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Summary: the user said first and the assistant said one.", pin, "second", "two", "third"}
+	if got := itemTexts(ctx.Items); !reflect.DeepEqual(got, want) {
+		t.Errorf("request items = %q, want %q", got, want)
+	}
+	if err := s.Verify("r0000003"); err != nil {
+		t.Errorf("Verify: %v", err)
+	}
+
+	// Every item has the entry that contributed it, and the compaction
+	// contributes its summary and its pinned items alike.
+	if len(ctx.ItemEntries) != len(ctx.Items) {
+		t.Fatalf("%d item entries for %d items", len(ctx.ItemEntries), len(ctx.Items))
+	}
+	if ctx.ItemEntries[0] != comp || ctx.ItemEntries[1] != comp {
+		t.Error("the summary and the pinned item should both name the compaction as their entry")
+	}
+
+	// Context() carries it too, which is what makes a pin survive a
+	// resume: Continue and Rebase seed from Context, and a pin the
+	// transcript no longer holds cannot be matched again.
+	ctx, err = s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := itemTexts(ctx.Items); !slices.Contains(got, pin) {
+		t.Errorf("Context() at the leaf = %q, want the pinned item", got)
+	}
+
+	// The pinned item is a copy of context already recorded, never a
+	// new input: it is reachable as an entry on the path before
+	// first_kept, so a reader that ignores the member loses context
+	// but never invents it.
+	e, ok := s.Entry("i0000001")
+	if !ok {
+		t.Fatal("no entry i0000001")
+	}
+	if got := itemTexts(openresponses.Items{e.(*ItemEntry).Item}); got[0] != pin {
+		t.Errorf("entry i0000001 = %q, want the pinned item", got)
+	}
+}
+
+// TestPinnedOmitted keeps the member optional: a compaction with no
+// pinned items writes no `pinned` and rebuilds as it did before.
+func TestPinnedOmitted(t *testing.T) {
+	s := loadFixture(t, "compaction")
+	e, _ := s.Entry("k0000001")
+	if got := e.(*CompactionEntry).Pinned; got != nil {
+		t.Errorf("compaction fixture gained %d pinned items", len(got))
+	}
+	data, err := MarshalEntry(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "pinned") {
+		t.Errorf("an empty Pinned was written: %s", data)
 	}
 }
 
