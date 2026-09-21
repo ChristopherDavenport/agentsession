@@ -1,6 +1,7 @@
 package agentsession
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -416,4 +417,84 @@ func withEnvelope(e Entry) Entry {
 	b.Parent = "c0000001"
 	b.Timestamp = fixedTime
 	return e
+}
+
+// TestInstructionsPartsThroughCompaction: the compaction checkpoint
+// carries the parts in force, so a delta after the fold that names a
+// part by hash alone still resolves and the rebuilt request is the
+// one that was sent.
+func TestInstructionsPartsThroughCompaction(t *testing.T) {
+	base := composed()
+	s := New(Header{})
+	full, err := ConfigFromRequestParts(openresponses.Request{Model: "gpt-5", Instructions: JoinInstructions(base)}, base...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(full); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Append(NewItemEntry(openresponses.UserText("one")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewItemEntry(openresponses.AssistantText("two"))); err != nil {
+		t.Fatal(err)
+	}
+	comp, err := s.Compact(first, openresponses.AssistantText("so far: one and two"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(comp.Config.InstructionsParts); got != len(base) {
+		t.Fatalf("the checkpoint carries %d parts, want %d", got, len(base))
+	}
+	for i, p := range comp.Config.InstructionsParts {
+		if p.Text != base[i].Text || p.Hash != "" {
+			t.Errorf("checkpoint part %s carries %d bytes and hash %q", p.ID, len(p.Text), p.Hash)
+		}
+	}
+	if _, err := s.Append(comp); err != nil {
+		t.Fatal(err)
+	}
+	// A memory edit after the fold names the other three by hash.
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := edit(base, "agentmemory", strings.Repeat("m", 1022))
+	delta := ctx.Settings.InstructionsDelta(next)
+	if delta == nil {
+		t.Fatal("no delta after a compaction")
+	}
+	if _, err := s.Append(delta); err != nil {
+		t.Fatal(err)
+	}
+	ctx, err = s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Settings.Instructions != JoinInstructions(next) {
+		t.Errorf("the instructions after the fold are %d bytes, want %d",
+			len(ctx.Settings.Instructions), len(JoinInstructions(next)))
+	}
+	for _, p := range ctx.Settings.InstructionsParts {
+		if p.Text == "" {
+			t.Errorf("part %s lost its text across the fold", p.ID)
+		}
+	}
+	// And the checkpoint survives a trip through the file form.
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Read(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := back.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Settings.Instructions != ctx.Settings.Instructions {
+		t.Errorf("the instructions changed on a round trip")
+	}
 }
