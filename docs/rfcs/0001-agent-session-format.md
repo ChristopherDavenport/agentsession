@@ -287,8 +287,9 @@ readers treat it as opaque.
   resolve has no text a reader can rebuild; such a file's
   `request_hash` will not verify, which is how it is found.
 - `replace: true` discards the parts with the rest of the settings,
-  and a delta that sets `instructions` as a string replaces the
-  composition: the parts no longer describe what is in force.
+  so a `hash` in the same entry resolves against nothing and its part
+  has no text; a delta that sets `instructions` as a string replaces
+  the composition, and the parts no longer describe what is in force.
 
 `instructions_omitted` records the parts the writer considered and
 left out, each with its `id`, a `reason` in the writer's own terms,

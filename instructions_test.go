@@ -274,6 +274,22 @@ func TestInstructionsDeltaShapes(t *testing.T) {
 			t.Error("clearing nothing writes an entry")
 		}
 	})
+	t.Run("a replace resolves no hash against what it discarded", func(t *testing.T) {
+		got := settings.Apply(&ConfigEntry{
+			Replace:           true,
+			Model:             "gpt-5-nano",
+			InstructionsParts: []InstructionPart{{ID: "product", Hash: HashText(base[0].Text)}},
+		})
+		if len(got.InstructionsParts) != 1 {
+			t.Fatalf("%d parts after a replace", len(got.InstructionsParts))
+		}
+		if got.InstructionsParts[0].Text != "" || got.Instructions != "" {
+			t.Errorf("a replaced part kept %d bytes of discarded text", len(got.InstructionsParts[0].Text))
+		}
+		if got.InstructionsParts[0].Hash == "" {
+			t.Error("the unresolved part lost the hash that says its text is missing")
+		}
+	})
 	t.Run("replace drops the parts", func(t *testing.T) {
 		got := settings.Apply(&ConfigEntry{Replace: true, Model: "gpt-5-nano"})
 		if got.Instructions != "" || got.InstructionsParts != nil {

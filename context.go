@@ -61,8 +61,13 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 	case len(c.InstructionsParts) > 0:
 		// The delta carries the whole ordered list, so it decides both
 		// the order and which parts are in force; a part it leaves out
-		// is removed.
-		out.InstructionsParts = applyInstructionParts(s.InstructionsParts, c.InstructionsParts)
+		// is removed. A replace discards the parts in force with the
+		// rest, so nothing a hash names survives it.
+		prev := s.InstructionsParts
+		if c.Replace {
+			prev = nil
+		}
+		out.InstructionsParts = applyInstructionParts(prev, c.InstructionsParts)
 		out.Instructions = JoinInstructions(out.InstructionsParts)
 	case c.Instructions != nil:
 		// One string replaces the composition: the parts no longer
