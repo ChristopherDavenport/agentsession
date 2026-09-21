@@ -2,6 +2,10 @@ module github.com/ChristopherDavenport/agentsession/sqlite
 
 go 1.25.0
 
+// The root requirement names the released version a consumer fetches.
+// The workspace builds this module against the tree instead; there is
+// deliberately no replace, so release-check can build it the way a
+// consumer does and fail while the version named here is too old.
 require (
 	github.com/ChristopherDavenport/agentsession v0.0.5
 	github.com/ChristopherDavenport/openresponses v0.0.9
@@ -19,7 +23,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
-
-// The require names the released root a consumer fetches; the replace
-// builds against the tree.
-replace github.com/ChristopherDavenport/agentsession => ../

@@ -1,3 +1,5 @@
+github.com/ChristopherDavenport/agentsession v0.0.5 h1:d52KQysQ+JVfbu3BROw+KPEu/3tl/K7fCq3VeSvuBO8=
+github.com/ChristopherDavenport/agentsession v0.0.5/go.mod h1:w2r/2W6ic4PmJRkRw9vGQGTtqJi+ilmKPsO9sPqzITE=
 github.com/ChristopherDavenport/openresponses v0.0.9 h1:LazxB0pQg0IQcmHT8Or7MVwRf9ZwIHrsxRsSEw2rha4=
 github.com/ChristopherDavenport/openresponses v0.0.9/go.mod h1:oZT6GCySXw3+vL5LzrJrRI5qagBumqvwDZdp6Kr++a8=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=

@@ -30,6 +30,8 @@ jobs:
         run: make build
       - name: Root module depends on openresponses and the standard library only
         run: make deps
+      - name: No module replaces a first-party one
+        run: make no-replace
       - name: Vet (library and nested modules)
         run: make vet
       - name: Test (library and nested modules)
