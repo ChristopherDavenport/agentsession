@@ -31,6 +31,10 @@ func TestOutputEntriesFromOutside(t *testing.T) {
 			s := readSession(t, name)
 			for _, leaf := range s.Leaves() {
 				path := s.Path(leaf)
+				// The settings fold is here because it is what makes
+				// the serving reader's pass single, and the helper was
+				// shaped against that. It asserts nothing on its own:
+				// settings are not the thing being shared.
 				var settings agentsession.Settings
 				for i, e := range path {
 					switch v := e.(type) {

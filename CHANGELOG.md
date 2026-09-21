@@ -58,7 +58,21 @@ versions may break the API.
   in the document. Additive: no file in existence carries the member,
   each pinned item is also an `item` entry on the path, and a reader
   that ignores it rebuilds a request short of those items rather than
-  one that invents them.
+  one that invents them. The RFC states the three rules a writer will
+  otherwise get wrong: only an item carried by an `item` entry may be
+  pinned, so a summary cannot be; the pins' order among themselves is
+  the order the request carried them in; and only the last compaction
+  on a path contributes items, so a later fold must restate a pin that
+  is to survive it.
+
+- **Fixed.** A `run` entry no longer drops the other phase's members
+  when it is written back. The encoder writes one member list for a
+  start and another for an end, and a file from elsewhere carrying
+  `source` on an end, or `reason` or `pending` on a start, lost it
+  silently: the member is declared on `RunEntry`, so the envelope rule
+  did not preserve it in `Unknown` either. Those members are now
+  written when set. Nothing this library builds sets them, so a
+  well-formed entry is written exactly as before, byte for byte.
 
 - **Breaking.** `Session.Verify` returns the new `ErrNoHash` for a
   response that recorded no request hash, where it returned nil. The

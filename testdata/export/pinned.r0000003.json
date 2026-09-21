@@ -51,6 +51,16 @@
                   "text": "House rule: never use Box::leak."
                 }
               ]
+            },
+            {
+              "type": "message",
+              "role": "developer",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "House rule: always run the linter."
+                }
+              ]
             }
           ]
         },
@@ -120,7 +130,7 @@
           "response": {
             "entry_id": "r0000002",
             "model": "gpt-5",
-            "request_hash": "sha256:c10219dbe3449e96545242dd9e8ab44f6e5eb34ae2aa252a623054531318969c",
+            "request_hash": "sha256:d74cad5ceea8520e5b66b18ea4d192d2744e0394d5feaf40677ffecd8d8761f0",
             "response_id": "resp_2",
             "status": "completed",
             "ts": "2026-09-21T10:00:05Z",
@@ -201,7 +211,7 @@
           "response": {
             "entry_id": "r0000003",
             "model": "gpt-5",
-            "request_hash": "sha256:26eebefaa1a1c2ddaecd39ef82903ec58aae6f924b6e56160d47a81d250a0ffb",
+            "request_hash": "sha256:a74e3ca98ec37bae6be9a69128c983656c95b5d7467ec87478ce07730b5801a0",
             "response_id": "resp_3",
             "status": "completed",
             "ts": "2026-09-21T10:00:08Z",

@@ -299,18 +299,23 @@ func TestPinnedContext(t *testing.T) {
 		t.Fatal("no compaction entry")
 	}
 	k := comp.(*CompactionEntry)
-	if len(k.Pinned) != 1 {
-		t.Fatalf("compaction carries %d pinned items, want 1", len(k.Pinned))
+	// Two, and distinguishable: with one pinned item nothing here can
+	// tell an ordered reader from an unordered one, and the order is
+	// normative.
+	if len(k.Pinned) != 2 {
+		t.Fatalf("compaction carries %d pinned items, want 2", len(k.Pinned))
 	}
-	pin := "House rule: never use Box::leak."
+	pins := []string{"House rule: never use Box::leak.", "House rule: always run the linter."}
 
-	// The pinned item sits between the summary and the kept window,
-	// which is where the request that was sent had it.
+	// The pinned items sit between the summary and the kept window, in
+	// the order written, which is where the request that was sent had
+	// them.
 	ctx, err := s.RequestContext("r0000003")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"Summary: the user said first and the assistant said one.", pin, "second", "two", "third"}
+	want := append([]string{"Summary: the user said first and the assistant said one."}, pins...)
+	want = append(want, "second", "two", "third")
 	if got := itemTexts(ctx.Items); !reflect.DeepEqual(got, want) {
 		t.Errorf("request items = %q, want %q", got, want)
 	}
@@ -319,35 +324,45 @@ func TestPinnedContext(t *testing.T) {
 	}
 
 	// Every item has the entry that contributed it, and the compaction
-	// contributes its summary and its pinned items alike.
+	// contributes its summary and each of its pinned items alike.
 	if len(ctx.ItemEntries) != len(ctx.Items) {
 		t.Fatalf("%d item entries for %d items", len(ctx.ItemEntries), len(ctx.Items))
 	}
-	if ctx.ItemEntries[0] != comp || ctx.ItemEntries[1] != comp {
-		t.Error("the summary and the pinned item should both name the compaction as their entry")
+	for i := 0; i <= len(pins); i++ {
+		if ctx.ItemEntries[i] != comp {
+			t.Errorf("item %d should name the compaction as its entry", i)
+		}
 	}
 
-	// Context() carries it too, which is what makes a pin survive a
-	// resume: Continue and Rebase seed from Context, and a pin the
-	// transcript no longer holds cannot be matched again.
+	// Context() carries them too, in the same order, which is what
+	// makes a pin survive a resume: Continue and Rebase seed from
+	// Context, and a pin the transcript no longer holds cannot be
+	// matched again.
 	ctx, err = s.Context()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := itemTexts(ctx.Items); !slices.Contains(got, pin) {
-		t.Errorf("Context() at the leaf = %q, want the pinned item", got)
+	got := itemTexts(ctx.Items)
+	first, second := slices.Index(got, pins[0]), slices.Index(got, pins[1])
+	if first < 0 || second < 0 {
+		t.Fatalf("Context() at the leaf = %q, want both pinned items", got)
+	}
+	if first > second {
+		t.Errorf("Context() has the pinned items reversed: %q", got)
 	}
 
-	// The pinned item is a copy of context already recorded, never a
-	// new input: it is reachable as an entry on the path before
+	// Each pinned item is a copy of context already recorded, never a
+	// new input: it is reachable as an item entry on the path before
 	// first_kept, so a reader that ignores the member loses context
 	// but never invents it.
-	e, ok := s.Entry("i0000001")
-	if !ok {
-		t.Fatal("no entry i0000001")
-	}
-	if got := itemTexts(openresponses.Items{e.(*ItemEntry).Item}); got[0] != pin {
-		t.Errorf("entry i0000001 = %q, want the pinned item", got)
+	for id, pin := range map[string]string{"i0000001": pins[0], "i0000008": pins[1]} {
+		e, ok := s.Entry(id)
+		if !ok {
+			t.Fatalf("no entry %s", id)
+		}
+		if got := itemTexts(openresponses.Items{e.(*ItemEntry).Item}); got[0] != pin {
+			t.Errorf("entry %s = %q, want %q", id, got, pin)
+		}
 	}
 }
 

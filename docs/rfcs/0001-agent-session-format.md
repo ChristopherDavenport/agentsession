@@ -330,13 +330,28 @@ Replaces earlier context with a summary.
 - `pinned`, when present, is an ordered list of items the writer kept
   verbatim from before `first_kept`. A reader MUST place them
   immediately after `summary` and before the entries from
-  `first_kept`, in the order written. A writer MUST make each of them
-  reachable as an `item` entry on the path before `first_kept` as
-  well: `pinned` is a copy of context that was already recorded, never
-  a new input, so a reader that ignores the member loses context but
-  never invents it. A reader MUST NOT reject a file whose `pinned`
-  item it cannot find on the path; it rebuilds a request that differs
-  from the one that was sent, which the `request_hash` reports.
+  `first_kept`, in the order written; their order among themselves is
+  the order the request carried them in, so a reader that reorders
+  them rebuilds a different request.
+- Only an item carried by an `item` entry may be pinned, and a writer
+  MUST make each pinned item reachable as such an entry on the path
+  before `first_kept`. `pinned` is a copy of context that was already
+  recorded, never a new input, so a reader that ignores the member
+  loses context but never invents it. A `summary` or a
+  `branch_summary` is in context but is not an `item` entry, so it
+  cannot be pinned; a writer that wants an earlier fold's summary to
+  survive this one restates it as this entry's `summary`.
+- A reader MUST NOT reject a file whose pinned item it cannot find on
+  the path. It cannot tell a writer that sent the item and failed to
+  record the copy from one that pinned an item it never sent: in the
+  first case the rebuilt request is the one that was sent and
+  verifies, and in the second the rebuild differs and `request_hash`
+  reports it. Rejecting up front would refuse a valid record in order
+  to catch an invalid one the hash already catches.
+- Only the last `compaction` on a path contributes items, so a later
+  compaction that does not restate a pin drops it. A writer that wants
+  a pin to survive a second fold MUST repeat it in that fold's
+  `pinned`.
 - `config` is a full checkpoint so a reader need not replay config
   entries from before the compaction. Its shape is the settings the
   context algorithm produces, not a `config` delta:
@@ -680,10 +695,11 @@ those item entries are removed; every other entry on the path stays,
 and the context algorithm above runs over the result.
 
 A `response` that carries no `response_id`, which the entry permits,
-has no output items: there is nothing for an `item` to name. The
-output items are in path order, which is the order the model produced
-them in, so a reader that walks backward MUST restore that order
-before it serves them — a request rebuilt from them reversed is a
+has no output items: there is nothing for an `item` to name. A reader
+MUST present a response's output items in path order, which is the
+order the model produced them in. The rule above is most easily
+implemented by walking backward, and such a reader has to restore the
+order before it serves them: a request rebuilt from them reversed is a
 different request, and the hash reports it as a divergence with no
 field to point at.
 

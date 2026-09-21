@@ -94,9 +94,10 @@ func TestRun(t *testing.T) {
 			// which is where the request that was sent had it.
 			name: "show pinned", args: []string{"show", filepath.Join(fixtures, "pinned.jsonl")},
 			stdout: []string{
-				"first kept i0000004", "1 pinned",
+				"first kept i0000004", "2 pinned",
 				`1  system: "Summary: the user said first`,
 				`2  developer: "House rule: never use Box::leak."`,
+				`3  developer: "House rule: always run the linter."`,
 			},
 		},
 		{name: "verify truncated", args: []string{"verify", filepath.Join(fixtures, "truncated.jsonl")}, code: 1, stdout: []string{"truncated: line 4"}},

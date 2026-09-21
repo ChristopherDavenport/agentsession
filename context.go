@@ -316,8 +316,11 @@ type Context struct {
 	Entries []Entry
 	// ItemEntries is aligned with Items: ItemEntries[i] is the entry
 	// that contributed Items[i], so an index into the request input
-	// maps back to the entry that produced it. After a compaction
-	// ItemEntries[0] is the compaction entry, whose summary is Items[0].
+	// maps back to the entry that produced it. After a compaction the
+	// compaction entry fills one slot for its summary and one for each
+	// of its pinned items, so it repeats as many times as it
+	// contributed: Items[0] is its summary and the next len(Pinned)
+	// items are its pins.
 	ItemEntries []Entry
 }
 
@@ -447,7 +450,10 @@ func (s *Session) ContextAt(id string) (Context, error) {
 //
 // path is resp's path with resp itself at the end, or that path
 // without it; either gives the same answer, since an entry that is
-// not an item entry is skipped. Only the matching item entries are
+// not an item entry is skipped. It MUST NOT run past resp: a path
+// that continues beyond the response ends in the next call's items,
+// the walk stops on the first of them, and the result is an empty
+// slice rather than an error. Only the matching item entries are
 // returned, never the entries skipped between them: those are on the
 // path for their own reasons and stay there.
 //
