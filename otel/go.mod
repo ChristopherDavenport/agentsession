@@ -7,7 +7,7 @@ go 1.25.0
 // deliberately no replace, so release-check can build it the way a
 // consumer does and fail while the version named here is too old.
 require (
-	github.com/ChristopherDavenport/agentsession v0.0.5
+	github.com/ChristopherDavenport/agentsession v0.0.6
 	github.com/ChristopherDavenport/openresponses v0.0.10
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0
