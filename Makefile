@@ -115,12 +115,20 @@ release:
 # and push. The nested modules still require the previous root release
 # across this commit, which is correct until this tag exists.
 # TRAILER, when set, is appended to the commit message.
+#
+# The changelog is dated through a temp file rather than sed -i, which is
+# a GNU-ism: BSD sed reads the argument after -i as a backup suffix, so
+# the GNU spelling fails outright on macOS, where these releases are cut.
+# The temp file is removed if sed dies, so a failed run leaves nothing
+# untracked behind for the clean-tree gate to trip over next time.
 release-root:
 	@test -n "$(VERSION)" || { echo "usage: make release-root VERSION=vX.Y.Z"; exit 1; }
 	@test "$(origin SUBMODULES)" = file || { echo "do not override SUBMODULES here: a command-line override propagates into the tidy and check below, so the root would be tagged having checked a subset."; exit 1; }
 	@grep -q '^## Unreleased$$' CHANGELOG.md || { echo "CHANGELOG.md has no Unreleased section"; exit 1; }
 	@test -z "$$(git status --porcelain)" || { echo "working tree is not clean"; exit 1; }
-	sed -i 's/^## Unreleased$$/## $(VERSION) - '"$$(date +%F)"'/' CHANGELOG.md
+	sed 's/^## Unreleased$$/## $(VERSION) - '"$$(date +%F)"'/' CHANGELOG.md > CHANGELOG.md.tmp \
+	  && mv CHANGELOG.md.tmp CHANGELOG.md \
+	  || { rm -f CHANGELOG.md.tmp; exit 1; }
 	$(MAKE) tidy
 	$(MAKE) check
 	git add -A && git commit -q -m "Release $(VERSION)" $(if $(TRAILER),-m "$(TRAILER)")
