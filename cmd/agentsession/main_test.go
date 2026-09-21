@@ -75,6 +75,20 @@ func TestRun(t *testing.T) {
 			name: "show runs", args: []string{"show", filepath.Join(fixtures, "runs.jsonl")},
 			stdout: []string{"records  run, dispatch, decision", "start run-1 input ref", "hold call_1 by policy", "call_2 to tool", "reject call_3 by policy", "end run-1 input_required pending call_1", "end run-2 done", "eval on r0000002 score 0.9 pass", "container sha256:9f2c1e4b7a0d…"},
 		},
+		{
+			name: "show instructions parts", args: []string{"show", filepath.Join(fixtures, "instructions.jsonl")},
+			stdout: []string{
+				"instructions [product(40B) agentsmd(61B) agentmemory(52B)]",
+				"instructions [product= agentsmd= agentmemory(73B)]",
+				"omitted service/AGENTS.md (budget), memory/2026-08 (stale)",
+				"product 40B from product, agentsmd 61B from agentsmd",
+				"service/AGENTS.md 4096B (budget)",
+			},
+		},
+		{
+			name: "verify instructions parts", args: []string{"verify", filepath.Join(fixtures, "instructions.jsonl")},
+			stdout: []string{"2 verified, 0 without hash, 0 failed"},
+		},
 		{name: "export bad prefer", args: []string{"export", filepath.Join(fixtures, "branch.jsonl"), "-out", out, "-prefer", "best"}, code: 2, stderr: []string{`-prefer "best"`}},
 		{
 			name: "export prefer label", args: []string{"export", filepath.Join(fixtures, "branch.jsonl"), "-out", filepath.Join(tmp, "out2"), "-prefer", "label=fork", "-prefer", "leaf", "-prefer", "score", "-prefer", "latest"},

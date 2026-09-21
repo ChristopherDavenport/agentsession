@@ -138,13 +138,62 @@ type ConfigEntry struct {
 	Instructions *string                        `json:"instructions,omitempty"`
 	Reasoning    *openresponses.ReasoningConfig `json:"reasoning,omitempty"`
 	Text         *openresponses.TextConfig      `json:"text,omitempty"`
-	ToolsAdded   openresponses.Tools            `json:"tools_added,omitempty"`
-	ToolsRemoved []string                       `json:"tools_removed,omitempty"`
+	// InstructionsParts names the parts the instructions are composed
+	// of, in the order they are joined. A delta carries the whole
+	// ordered list: a part whose text changed carries its text, a part
+	// whose text is unchanged carries its Hash alone, and a part left
+	// out of the list is removed. Set it through
+	// [Settings.InstructionsDelta] rather than by hand, which computes
+	// exactly that from the parts in force. When Instructions is set
+	// beside it the two must agree, since Instructions is the parts
+	// joined with "\n\n".
+	InstructionsParts []InstructionPart `json:"instructions_parts,omitempty"`
+	// InstructionsOmitted records the parts the writer considered and
+	// left out, so a session says what the model was not given as well
+	// as what it was. It is not settings: nothing in it reaches the
+	// request, and it applies to this entry alone.
+	InstructionsOmitted []OmittedPart       `json:"instructions_omitted,omitempty"`
+	ToolsAdded          openresponses.Tools `json:"tools_added,omitempty"`
+	ToolsRemoved        []string            `json:"tools_removed,omitempty"`
 	// Extra carries request members beyond the named ones, such as
 	// temperature or provider passthrough keys. A null value removes
 	// the key from the settings.
 	Extra   map[string]json.RawMessage `json:"extra,omitempty"`
 	Replace bool                       `json:"replace,omitempty"`
+}
+
+// InstructionPart is one named part of the instructions. A harness
+// that composes the instructions from several layers, a product
+// prompt, an AGENTS.md chain, a skill catalogue, a memory block,
+// gives each layer a part, so a change to one is recorded as a change
+// to one and a reader can say which layer an instruction came from.
+type InstructionPart struct {
+	// ID is the part's stable name, chosen by the harness: the same
+	// string across the session, so a delta can name a part it does
+	// not repeat.
+	ID string `json:"id"`
+	// Text is the part's text. On a delta it is absent for a part
+	// whose text is unchanged, which carries Hash instead.
+	Text string `json:"text,omitempty"`
+	// Source names the layer that produced the part, in the harness's
+	// own terms.
+	Source string `json:"source,omitempty"`
+	// Hash is the hash of the text a delta does not repeat, in the
+	// format's notation: [HashPrefix] and the SHA-256 of the text.
+	// [HashText] computes it. It is set on a delta's unchanged part
+	// and empty on a part that carries its text.
+	Hash string `json:"hash,omitempty"`
+}
+
+// OmittedPart is a part the writer considered for the instructions
+// and left out: a file the budget did not reach, a memory entry that
+// did not fit, a skill out of scope. Reason is the writer's own word
+// for why, Size the bytes the part would have added.
+type OmittedPart struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason,omitempty"`
+	Size   int    `json:"size,omitempty"`
+	Source string `json:"source,omitempty"`
 }
 
 // SetExtra records a passthrough request member on the delta: v is

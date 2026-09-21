@@ -54,6 +54,32 @@ func RecordResponse(ctx context.Context, store Store, sessionID string, req open
 	return id, nil
 }
 
+// ConfigFromRequestParts is [ConfigFromRequest] for a caller that
+// composed the instructions from named parts: the entry carries the
+// parts instead of the joined string, so every delta after it names
+// the one part that moved rather than repeating the whole prompt.
+// The parts' texts joined with [PartSeparator] must equal the
+// request's instructions, since that is what the model received and
+// what the request hash covers.
+func ConfigFromRequestParts(req openresponses.Request, parts ...InstructionPart) (*ConfigEntry, error) {
+	cfg, err := ConfigFromRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) == 0 {
+		return cfg, nil
+	}
+	if joined := JoinInstructions(parts); joined != req.Instructions {
+		return nil, fmt.Errorf("agentsession: %d instructions parts join to %d bytes, the request carries %d", len(parts), len(joined), len(req.Instructions))
+	}
+	cfg.Instructions = nil
+	cfg.InstructionsParts = make([]InstructionPart, 0, len(parts))
+	for _, p := range parts {
+		cfg.InstructionsParts = append(cfg.InstructionsParts, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source})
+	}
+	return cfg, nil
+}
+
 // requestOnlyKeys are request members that describe one call rather
 // than the settings in force, so ConfigFromRequest leaves them out.
 var requestOnlyKeys = map[string]bool{

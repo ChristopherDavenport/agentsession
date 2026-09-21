@@ -48,6 +48,16 @@ func describeEntry(e agentsession.Entry) string {
 		if v.Instructions != nil {
 			parts = append(parts, "instructions "+describeText(*v.Instructions))
 		}
+		if len(v.InstructionsParts) > 0 {
+			parts = append(parts, "instructions "+describeParts(v.InstructionsParts))
+		}
+		if n := len(v.InstructionsOmitted); n > 0 {
+			ids := make([]string, 0, n)
+			for _, o := range v.InstructionsOmitted {
+				ids = append(ids, o.ID+" ("+o.Reason+")")
+			}
+			parts = append(parts, fmt.Sprintf("omitted %s", strings.Join(ids, ", ")))
+		}
 		if v.Reasoning != nil {
 			parts = append(parts, "reasoning")
 		}
@@ -163,6 +173,22 @@ func describeEntry(e agentsession.Entry) string {
 	default:
 		return "(unknown entry type)"
 	}
+}
+
+// describeParts renders a config entry's instruction parts: the ID of
+// every part in order, with the size of the ones that carry their
+// text and "=" for the ones a delta names by hash alone.
+func describeParts(parts []agentsession.InstructionPart) string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		switch {
+		case p.Text == "" && p.Hash != "":
+			out = append(out, p.ID+"=")
+		default:
+			out = append(out, fmt.Sprintf("%s(%dB)", p.ID, len(p.Text)))
+		}
+	}
+	return "[" + strings.Join(out, " ") + "]"
 }
 
 // describeItem renders one Open Responses item on one line.

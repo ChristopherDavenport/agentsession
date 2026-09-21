@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/ChristopherDavenport/openresponses"
 )
@@ -17,7 +18,14 @@ type Settings struct {
 	Instructions string                        `json:"instructions,omitempty"`
 	Reasoning    openresponses.ReasoningConfig `json:"reasoning,omitzero"`
 	Text         openresponses.TextConfig      `json:"text,omitzero"`
-	Tools        openresponses.Tools           `json:"tools,omitempty"`
+	// InstructionsParts are the parts the instructions are composed
+	// of, in order, when the path named them, each carrying its text.
+	// Instructions is always their texts joined with [PartSeparator],
+	// so a reader that does not care about the composition reads the
+	// string as before. It is empty for a path that set the
+	// instructions as one string.
+	InstructionsParts []InstructionPart   `json:"instructions_parts,omitempty"`
+	Tools             openresponses.Tools `json:"tools,omitempty"`
 	// Extra carries request members beyond the named ones, keyed by
 	// their wire name.
 	Extra map[string]json.RawMessage `json:"extra,omitempty"`
@@ -49,8 +57,18 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 	if c.Model != "" {
 		out.Model = c.Model
 	}
-	if c.Instructions != nil {
+	switch {
+	case len(c.InstructionsParts) > 0:
+		// The delta carries the whole ordered list, so it decides both
+		// the order and which parts are in force; a part it leaves out
+		// is removed.
+		out.InstructionsParts = applyInstructionParts(s.InstructionsParts, c.InstructionsParts)
+		out.Instructions = JoinInstructions(out.InstructionsParts)
+	case c.Instructions != nil:
+		// One string replaces the composition: the parts no longer
+		// describe what is in force.
 		out.Instructions = *c.Instructions
+		out.InstructionsParts = nil
 	}
 	if c.Reasoning != nil {
 		out.Reasoning = *c.Reasoning
@@ -84,6 +102,95 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 		out.Tools = nil
 	}
 	return out
+}
+
+// PartSeparator joins the instruction parts into the instructions
+// string. The rule is the format's, so a writer that records parts
+// and a reader that rebuilds the string produce the same bytes and
+// the request hash verifies.
+const PartSeparator = "\n\n"
+
+// JoinInstructions returns the instructions the parts compose: their
+// texts joined with [PartSeparator], in order.
+func JoinInstructions(parts []InstructionPart) string {
+	texts := make([]string, 0, len(parts))
+	for _, p := range parts {
+		texts = append(texts, p.Text)
+	}
+	return strings.Join(texts, PartSeparator)
+}
+
+// applyInstructionParts resolves a delta's ordered list against the
+// parts in force: a part carrying text sets it, a part carrying a
+// hash alone keeps the text the path has, and a part the list leaves
+// out is gone. A hash whose part is not on the path is kept as it
+// was written, so a reader can see that the text is missing rather
+// than read an empty part as empty text.
+func applyInstructionParts(prev, delta []InstructionPart) []InstructionPart {
+	byID := make(map[string]InstructionPart, len(prev))
+	for _, p := range prev {
+		byID[p.ID] = p
+	}
+	out := make([]InstructionPart, 0, len(delta))
+	for _, p := range delta {
+		next := InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source}
+		if p.Text == "" && p.Hash != "" {
+			old, ok := byID[p.ID]
+			switch {
+			case ok:
+				next.Text = old.Text
+				if next.Source == "" {
+					next.Source = old.Source
+				}
+			default:
+				next.Hash = p.Hash
+			}
+		}
+		out = append(out, next)
+	}
+	return out
+}
+
+// InstructionsDelta returns the config delta that takes the
+// instructions from these settings to parts: the whole ordered list
+// of IDs, with the text of every part that is new or whose text
+// changed and the hash alone of every part that is unchanged, so a
+// change to one layer costs that layer and not the whole prompt. A
+// part in force that parts leaves out is removed by its absence.
+//
+// It returns nil when parts are exactly the ones in force, so a
+// harness that re-renders its layers every turn writes nothing when
+// nothing moved.
+func (s Settings) InstructionsDelta(parts []InstructionPart) *ConfigEntry {
+	if len(parts) == 0 {
+		if len(s.InstructionsParts) == 0 && s.Instructions == "" {
+			return nil
+		}
+		empty := ""
+		return &ConfigEntry{Instructions: &empty}
+	}
+	byID := make(map[string]InstructionPart, len(s.InstructionsParts))
+	for _, p := range s.InstructionsParts {
+		byID[p.ID] = p
+	}
+	same := len(parts) == len(s.InstructionsParts)
+	out := make([]InstructionPart, 0, len(parts))
+	for i, p := range parts {
+		old, ok := byID[p.ID]
+		if !ok || old.Text != p.Text {
+			out = append(out, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source})
+			same = false
+			continue
+		}
+		if same && (s.InstructionsParts[i].ID != p.ID || s.InstructionsParts[i].Source != p.Source) {
+			same = false
+		}
+		out = append(out, InstructionPart{ID: p.ID, Source: p.Source, Hash: HashText(p.Text)})
+	}
+	if same {
+		return nil
+	}
+	return &ConfigEntry{InstructionsParts: out}
 }
 
 // Request builds the canonical request for these settings over items:
@@ -178,6 +285,20 @@ type Context struct {
 // Request returns the canonical request for the context.
 func (c Context) Request() (openresponses.Request, error) {
 	return c.Settings.Request(c.Items)
+}
+
+// InstructionsOmitted returns the parts the last config entry of the
+// context considered for the instructions and left out. It is not
+// settings, so it does not replay and a compaction checkpoint does
+// not carry it: it is the most recent record of what the model was
+// not given, from the entries the context holds.
+func (c Context) InstructionsOmitted() []OmittedPart {
+	for i := len(c.Entries) - 1; i >= 0; i-- {
+		if cfg, ok := c.Entries[i].(*ConfigEntry); ok && len(cfg.InstructionsOmitted) > 0 {
+			return cfg.InstructionsOmitted
+		}
+	}
+	return nil
 }
 
 // BuildContext runs the context algorithm over a root-first path. Only

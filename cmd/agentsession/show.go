@@ -112,6 +112,24 @@ func printContext(w io.Writer, s *agentsession.Session, at string) error {
 	st := ctx.Settings
 	fmt.Fprintf(tw, "  model\t%s\n", orDash(st.Model))
 	fmt.Fprintf(tw, "  instructions\t%s\n", describeText(st.Instructions))
+	if len(st.InstructionsParts) > 0 {
+		names := make([]string, 0, len(st.InstructionsParts))
+		for _, p := range st.InstructionsParts {
+			name := fmt.Sprintf("%s %dB", p.ID, len(p.Text))
+			if p.Source != "" {
+				name += " from " + p.Source
+			}
+			names = append(names, name)
+		}
+		fmt.Fprintf(tw, "  parts\t%s\n", strings.Join(names, ", "))
+	}
+	if omitted := ctx.InstructionsOmitted(); len(omitted) > 0 {
+		names := make([]string, 0, len(omitted))
+		for _, o := range omitted {
+			names = append(names, fmt.Sprintf("%s %dB (%s)", o.ID, o.Size, o.Reason))
+		}
+		fmt.Fprintf(tw, "  omitted\t%s\n", strings.Join(names, ", "))
+	}
 	if len(st.Tools) > 0 {
 		names := make([]string, 0, len(st.Tools))
 		for _, t := range st.Tools {

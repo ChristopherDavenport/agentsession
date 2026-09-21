@@ -263,12 +263,46 @@ func validateEntry(e Entry) error {
 		if v.Summary == nil {
 			return errors.New("agentsession: branch_summary entry has no summary")
 		}
+	case *ConfigEntry:
+		return validateConfig(v)
 	case *UnknownEntry:
 		if len(v.Raw) == 0 {
 			return errors.New("agentsession: unknown entry has no raw bytes")
 		}
 	case *RunEntry, *DispatchEntry, *DecisionEntry:
 		return validateLifecycle(e)
+	}
+	return nil
+}
+
+// validateConfig checks the instructions parts of a config delta: a
+// part is named, named once, and when every part carries its text the
+// instructions string beside them is their join, which is the rule a
+// reader replays. A delta decoded from a file is not checked, since a
+// reader preserves what it is given; this is what a writer is held
+// to.
+func validateConfig(c *ConfigEntry) error {
+	seen := make(map[string]bool, len(c.InstructionsParts))
+	full := true
+	for _, p := range c.InstructionsParts {
+		if p.ID == "" {
+			return errors.New("agentsession: an instructions part has no id")
+		}
+		if seen[p.ID] {
+			return fmt.Errorf("agentsession: instructions part %q is named twice", p.ID)
+		}
+		seen[p.ID] = true
+		if p.Text == "" && p.Hash != "" {
+			full = false
+		}
+	}
+	if full && len(c.InstructionsParts) > 0 && c.Instructions != nil && *c.Instructions != JoinInstructions(c.InstructionsParts) {
+		return errors.New("agentsession: instructions and instructions_parts disagree: the string is the parts joined with a blank line")
+	}
+	for _, o := range c.InstructionsOmitted {
+		if o.ID == "" {
+			return errors.New("agentsession: an omitted instructions part has no id")
+		}
 	}
 	return nil
 }

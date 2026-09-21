@@ -24,7 +24,7 @@ type contextGolden struct {
 // positive fixture and compares against testdata/context. Reviewing
 // those files is reviewing the algorithm.
 func TestContextGolden(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			got := map[string]contextGolden{}
@@ -149,7 +149,7 @@ func TestBranchContext(t *testing.T) {
 // TestVerifyFixtureHashes rebuilds the request for every response entry
 // in the fixtures and checks it against the recorded request_hash.
 func TestVerifyFixtureHashes(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			for _, e := range s.Entries() {

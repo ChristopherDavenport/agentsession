@@ -83,7 +83,31 @@ uses `sess.CompactFrom(i, summary)` or `sess.CompactKeeping(n, summary)`
 instead of mapping the index to an entry ID itself. `Context.ItemEntries`
 is the mapping, aligned with `Context.Items`.
 `sess.Verify(responseEntryID)` rebuilds the request and checks the
-hash. `agentsession.Continue(ctx, store, id, summary)` rolls a session
+hash.
+
+A harness that composes its instructions from several layers records
+them as parts, so a change to one layer costs that layer and not the
+whole prompt:
+
+```go
+parts := []agentsession.InstructionPart{
+    {ID: "product", Source: "product", Text: productPrompt},
+    {ID: "agentsmd", Source: "agentsmd", Text: agentsmd.Render(res.Files)},
+    {ID: "agentmemory", Source: "agentmemory", Text: block},
+}
+cfg, err := agentsession.ConfigFromRequestParts(req, parts...) // the first entry on a root
+// ... later, when a layer re-renders ...
+if delta := c.Settings.InstructionsDelta(parts); delta != nil {
+    delta.InstructionsOmitted = omitted   // what was considered and left out
+    store.Append(ctx, id, delta)
+}
+```
+
+`InstructionsDelta` writes the whole ordered list of IDs with the text
+of the parts that moved and a hash for the parts that did not, and
+returns nil when nothing moved. `Settings.Instructions` is always the
+parts joined with a blank line, so a reader that does not care about
+the composition sees the string it always saw. `agentsession.Continue(ctx, store, id, summary)` rolls a session
 that has outgrown its file into a successor that starts from the old
 leaf's settings, and marks the old one superseded so a `Current`
 listing shows only the successor.

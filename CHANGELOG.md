@@ -56,6 +56,27 @@ versions may break the API.
   rather than year one, which read like a broken lock and invited
   breaking a live one (#43).
 
+- The config entry records the instructions as parts, which is the
+  round's one format change. `instructions_parts` is an ordered list
+  of `{id, text, source}`, one per layer that writes the prompt: a
+  delta carries the whole ordered list with the text of the parts that
+  changed and `{id, hash}` for the parts that did not, and a part the
+  list leaves out is removed. `instructions` remains valid and, where
+  both are present, is the parts' texts joined with one blank line, a
+  rule the RFC states so a writer and a reader agree; `Settings`
+  derives it, so nothing downstream of the settings changes and the
+  request hash is untouched. `Settings.InstructionsDelta` builds the
+  delta from the parts in force and returns nil when nothing moved;
+  `ConfigFromRequestParts` builds the full config on a root.
+  `instructions_omitted` beside it records the parts a writer
+  considered and left out, with a reason and a size, which is where
+  `agentsmd.Result.Omitted` and a memory manifest go, and
+  `Context.InstructionsOmitted` reads the last of them on a path. A 13
+  byte edit to one of four parts now costs that part rather than the
+  whole prompt: the composed study's 2,787 byte delta, and the memory
+  study's 33,440 byte one, become the part that changed plus an id and
+  a hash for each part that did not (#27).
+
 ## v0.0.5 - 2026-09-20
 
 - RFC 0001 is revised to draft 0.2. The summary now defines a session as

@@ -236,12 +236,65 @@ A delta to request settings. The first entry on any root SHOULD be a
 ```json
 {"type":"config","id":"…","parent":"…","ts":"…",
  "model":"…","instructions":"…","reasoning":{…},"text":{…},
+ "instructions_parts":[{"id":"agentsmd","text":"…","source":"agentsmd"},
+                       {"id":"memory","hash":"sha256:…"}],
+ "instructions_omitted":[{"id":"service/AGENTS.md","reason":"budget","size":4096,"source":"agentsmd"}],
  "tools_added":[…],"tools_removed":["name"],"extra":{…},"replace":false}
 ```
 
 Fields absent from a delta are unchanged. `replace: true` discards all
 earlier config on the path before applying this one. Tool definitions
 use the payload profile's tool shape.
+
+#### Instructions as parts
+
+The instructions a harness sends are composed: a product prompt, the
+instruction files that apply at the working directory, a catalogue of
+skills, a block of memory. Each changes for its own reasons, and with
+one string every change to any of them rewrites all of them into the
+path.
+
+`instructions_parts` is that composition: an ordered list of parts,
+each with an `id`, its `text`, and optionally a `source` naming the
+layer that produced it. `id` is a stable string the harness chooses,
+the same across the session, so a later entry can name a part without
+repeating it; `product`, `agentsmd`, `agentskill` and `agentmemory`
+are the obvious ones. `source` is in the harness's own terms and
+readers treat it as opaque.
+
+- `instructions` remains valid, and a writer that composes nothing
+  writes it alone. When both are present, `instructions` MUST equal
+  the parts' texts joined, in order, with one blank line, the two
+  characters `\n\n`. That join rule is the whole agreement between a
+  writer and a reader: settings carry the joined string, the request
+  carries it, and the `request_hash` covers it.
+- A writer MAY write the parts alone and leave `instructions` out; a
+  reader then derives the string by the same join. A file whose config
+  entries carry parts alone does not rebuild its instructions in a
+  reader that does not know `instructions_parts`, which is the cost of
+  this member and the reason it arrives in a new minor version.
+- A delta carries the **whole ordered list** of ids. A part whose text
+  changed, or that is new, carries its `text`. A part whose text is
+  unchanged carries `hash` and no `text`: the SHA-256 of its text in
+  the format's notation, `sha256:` and lowercase hexadecimal, and its
+  text is the one the path already has for that id. A part the list
+  leaves out is removed. Order is therefore explicit in every delta,
+  and an unchanged part costs one id and one hash.
+- A part that carries neither `text` nor a `hash` this path can
+  resolve has no text a reader can rebuild; such a file's
+  `request_hash` will not verify, which is how it is found.
+- `replace: true` discards the parts with the rest of the settings,
+  and a delta that sets `instructions` as a string replaces the
+  composition: the parts no longer describe what is in force.
+
+`instructions_omitted` records the parts the writer considered and
+left out, each with its `id`, a `reason` in the writer's own terms,
+the `size` in bytes it would have added, and optionally a `source`.
+It is not settings: nothing in it reaches the request, it does not
+replay, and it applies to the entry that carries it. It is where a
+walk that dropped an instruction file for a budget, or a memory the
+render left out, is recorded, so a session says what the model was not
+given as well as what it was.
 
 ### `compaction`
 
@@ -263,13 +316,15 @@ Replaces earlier context with a summary.
   context algorithm produces, not a `config` delta:
 
   ```json
-  {"model":"…","instructions":"…","reasoning":{…},"text":{…},
-   "tools":[…],"extra":{…}}
+  {"model":"…","instructions":"…","instructions_parts":[…],
+   "reasoning":{…},"text":{…},"tools":[…],"extra":{…}}
   ```
 
-  `tools` is the full list of tool definitions in force at the
-  compaction, in the order the context algorithm would send them, not
-  a delta; there are no `tools_added`, `tools_removed` or `replace`
+  `instructions_parts`, when the checkpoint carries it, is the full
+  list of parts in force, each with its text, not a delta, and
+  `instructions` is their join. `tools` is the full list of tool
+  definitions in force at the compaction, in the order the context
+  algorithm would send them, not a delta; there are no `tools_added`, `tools_removed` or `replace`
   members. `extra` is the merged map of passthrough request members
   after every earlier delta has been applied and null deletions have
   removed their keys, so it never contains a null value. Members whose
@@ -519,7 +574,10 @@ list as follows.
 
 1. Walk `parent` links from the leaf to a root; reverse to root-first.
 2. Replay `config` entries along the path in order to produce settings,
-   honouring `replace`.
+   honouring `replace`. A `config` that carries `instructions_parts`
+   resolves them against the parts in force, as that member defines,
+   and the settings' instructions are the resolved parts joined with
+   one blank line.
 3. Find the last `compaction` on the path, if any. If found:
    settings start from its `config` checkpoint and then replay any
    `config` after it; the item list starts with its `summary`, then the
@@ -666,6 +724,15 @@ rebuilds the same context for every other file.
 - Context building states how the request context of a response is
   found, and that the output items of one response need not be
   contiguous.
+- `config` gains `instructions_parts`, the composition of the
+  instructions as an ordered list of named parts, with a delta
+  carrying the text of the parts that changed and a hash for the
+  parts that did not, and `instructions_omitted`, the parts the
+  writer considered and left out. `instructions` remains valid and is
+  the parts' texts joined with one blank line. The compaction
+  checkpoint carries the parts in force. A 0.2 reader rebuilds the
+  same instructions for a file that writes the string, and cannot
+  rebuild them for one that writes parts alone.
 - The `stopped` step of the run end cascade reads the path before the
   segment, so a run that answers a call and ends without calling the
   model again is `stopped` rather than `aborted`. The cascade's
@@ -707,16 +774,13 @@ reader preserves every new entry and rebuilds the same context.
 
 Considered and held: instructions as parts in `config`, which would add
 a second spelling of settings and change step 2 for a storage cost that
-belongs to the store; and a durable leaf marker, which a library can
+belongs to the store, and which 0.3 adopts; and a durable leaf marker, which a library can
 carry as a reserved `label` without a format change; and a `source`
 on the item envelope for an input that joins a run already in flight,
 which the `run` entry cannot name. All three are open questions below.
 
 ## Open questions
 
-- Whether `config` should carry `instructions_parts` so a delta names
-  only the part that changed. Held: it changes step 2 and adds a second
-  spelling of the same settings; try deduplication in the store first.
 - Whether the current leaf needs a durable marker. Held: a reserved
   `label` a library honours on open covers it without a format change.
 - Whether the `item` envelope needs a member naming how an input
