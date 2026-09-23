@@ -23,11 +23,11 @@ the change can be discussed before you spend time on it.
 Go 1.25 or later is required. The full local check is:
 
 ```sh
-make check        # gofmt, tidy, vet, deps, staticcheck, govulncheck, race tests
+make check        # gofmt, tidy, vet, deps, replaces, staticcheck, govulncheck, race tests
 ```
 
-The individual targets are `fmt`, `tidy-check`, `vet`, `deps`, `lint`,
-`vuln`, `test` and `tidy`.
+The individual targets are `fmt`, `tidy-check`, `vet`, `deps`, `replaces`,
+`lint`, `vuln`, `test` and `tidy`.
 
 The repository has three modules, joined by `go.work`: the library at
 the root, and `sqlite` and `otel`, nested so their drivers stay out of
@@ -40,25 +40,27 @@ run staticcheck and govulncheck through `go run`, which may download a
 newer Go toolchain the first time. Workspace mode rejects `-mod=mod`, so
 a `GOFLAGS=-mod=mod` in your environment has to go.
 
-A nested module's `go.mod` requires a released root version and carries
-no `replace`: the workspace is what builds it against the tree. That is
-deliberate. A `replace` is a property of the main module and consumers
-ignore it, so a nested module that carried one would build green here
-while shipping a `go.mod` that names a root version without the API it
-uses. `make release-check` builds each nested module with `GOWORK=off`,
-against the versions its own `go.mod` requires, which is what a consumer
-gets.
+Each nested module's `go.mod` requires the root — and any sibling it
+uses — at **exactly the version the whole repository is released at**,
+and carries a matching `replace` pointing at the tree. The two go
+together. Requiring the version being released means the release commit
+names a version the proxy cannot serve until its tag is pushed, and
+`go mod tidy` ignores `go.work`; the `replace` is what lets tidy, build
+and test resolve it locally. Consumers ignore a `replace` in a
+dependency and get the `require`, which names the commit the module was
+tagged from.
 
-`release-check` is not part of `check`, and it fails by design between a
-root API addition and the next root tag — a nested module that uses the
-new API cannot name a version that carries it until that version exists.
-That failure is the release ordering, not a bug; see below.
+`make replaces`, part of `check`, refuses a first-party require that
+lacks a replace — losing one would make the next release fail at `make
+tidy`, or silently pin that module to the previous release. This is the
+same shape OpenTelemetry-Go publishes.
 
-`make no-replace` is what keeps `release-check` honest, and it *is* part
-of `check` and of CI. Re-adding a `replace` makes every other gate green
-again after one `make tidy` — including `release-check`, on a module no
-consumer can build — so the absence of one is asserted on every run
-rather than only at release.
+The upshot for you: a consumer who takes only `agentsession/sqlite` at
+vX.Y.Z gets root vX.Y.Z, the exact commit it was built and tested
+against. The workspace build and the consumer build are the same code,
+so there is no `release-check` and no phased release — both existed to
+manage a nested module requiring a *previous* root, which no longer
+happens.
 
 Golden files live under `testdata/`. `go test ./... -update` rewrites
 the generated ones (`testdata/context`, `testdata/export`,
@@ -78,54 +80,37 @@ bytes.
 
 ## Releases
 
-Every module in the repository shares one version, but not one commit.
-A nested module's requirement cannot name a tag that does not exist
-yet, so the root is released first and the nested modules follow. With
-the changelog's *Unreleased* section written:
+`CLAUDE.md` holds the full procedure and the reasoning, including what to
+do when a tag goes out wrong. The essentials:
+
+Every published module is released at one version, from one commit, and
+requires its first-party siblings at exactly that version. With the
+changelog's *Unreleased* section written:
 
 ```sh
-make release-root VERSION=v0.1.0
+make release VERSION=v0.1.0
 ```
 
-dates the changelog, runs `make check`, commits, tags `v0.1.0` with the
-changelog section as the message, and pushes the branch and the tag.
-The nested modules still require the previous root release across this
-commit, which is correct: `v0.1.0` did not exist when it was written.
+points every nested module's first-party requires at `v0.1.0`, dates the
+changelog, runs `make tidy` and `make check`, reads the requires back to
+confirm tidy did not move them, commits, then guards and tags the root,
+guards and tags `sqlite/v0.1.0` and `otel/v0.1.0`, and pushes the branch
+and all three tags with `git push origin --atomic`.
 
-Once that tag is on the module proxy:
+`make release-guard TAG=<tag>` is what stands between a mistake and a
+permanent one. It refuses a dirty tree, a tag that already exists, a
+version that sorts below the current root release or does not move its
+module forward, a first-party require that does not name that version, a
+root tag that is not this commit, and a module that will not build with
+`GOWORK=off`. `make release` runs it for every tag it writes, and the
+root is guarded and tagged first because a nested module's guard needs
+the root tag to exist.
 
-```sh
-make release-submodules VERSION=v0.1.0
-```
-
-walks `SUBMODULES` in order and, for each, sets its requirement on the
-root and on any already-released sibling to the version, tidies, builds
-and tests it with `GOWORK=off` against exactly those versions, commits,
-tags `<dir>/v0.1.0` and pushes. One commit and one tag per module,
-because `go mod tidy` and the `GOWORK=off` build both resolve a sibling
-requirement from the proxy: a module has to be published before the
-module that requires it is bumped. A module is built the way a consumer
-builds it before its tag is written, and the release workflow runs
-`make release-check` again on the tag — scoped to that tag's module,
-since the others are still on the previous root at that commit.
-
-If a module fails partway, the tags already pushed stay valid and
-self-consistent; nothing has to be deleted. The failure will usually
-have left that module's `go.mod` and `go.sum` rewritten, so:
-
-```sh
-git checkout -- otel                      # the module that failed
-make release-submodules VERSION=v0.1.0 RELEASE_SUBMODULES=otel
-```
-
-Narrow `RELEASE_SUBMODULES`, never `SUBMODULES`: the first is the list to
-release, the second is the list of siblings to bump, and narrowing the
-second would tag a module still requiring an old sibling — which
-`release-check` cannot catch, because the old sibling satisfies it.
-`release-submodules` refuses a `SUBMODULES` override for that reason.
-These two nested modules do not require each other today; the target is
-the same one `agenttool` uses, where they do.
+Nothing is public until the push. If a guard refuses, `git reset --hard
+HEAD~1` and `git tag -d` whatever was written.
 
 The release workflow publishes a GitHub release per tag, and the Go
 module proxy picks the versions up. Before v1.0.0 the API may change
-between minor versions; the changelog records every break.
+between minor versions; the changelog records every break. A pushed
+version is permanent — the proxy and the checksum database keep it
+forever — so a bad one is superseded and `retract`ed, never deleted.

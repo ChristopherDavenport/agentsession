@@ -2,10 +2,13 @@ name: Release
 
 # Pushing an annotated tag vX.Y.Z, or <dir>/vX.Y.Z for a nested module,
 # publishes a GitHub release whose notes are the tag message. A
-# lightweight tag gets auto-generated notes instead. A nested module is
-# built the way a consumer builds it before its release is created, so a
-# module whose go.mod requires a root version that does not carry what it
-# uses never gets published.
+# lightweight tag gets auto-generated notes instead.
+#
+# A release pushes every tag in one atomic push and GitHub fires one run
+# per tag ref, so the runs are independent and may finish in any order.
+# Each nested module is built here as a consumer gets it — outside the
+# workspace, against the versions its published go.mod names, which are
+# this same commit's tags.
 
 on:
   push:
@@ -24,15 +27,11 @@ jobs:
         if: contains(github.ref_name, '/')
         with:
           go-version-file: go.mod
-      # Only the module this tag names: at the intermediate commits of a
-      # release the other nested modules still require the previous root,
-      # and checking them here would fail the run for a module that is
-      # perfectly good.
       - name: Build the tagged nested module outside the workspace
         if: contains(github.ref_name, '/')
         env:
           TAG: ${{ github.ref_name }}
-        run: make release-check RELEASE_SUBMODULES="${TAG%/v*}"
+        run: cd "${TAG%/v*}" && GOWORK=off go build ./... && GOWORK=off go test ./...
       - name: Create the release from the tag
         env:
           GH_TOKEN: ${{ github.token }}
