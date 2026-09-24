@@ -1,24 +1,21 @@
 GO ?= go
 STATICCHECK ?= $(GO) run honnef.co/go/tools/cmd/staticcheck@latest
 GOVULNCHECK ?= $(GO) run golang.org/x/vuln/cmd/govulncheck@latest
+# The module path of the root, which every first-party require and
+# replace below is written against. go list -m reports every module in
+# the workspace, so the root has to be asked for outside it.
+MODULE := $(shell GOWORK=off $(GO) list -m)
+
 # Nested modules with their own go.mod, so their dependencies stay out of
-# the root module. Each requires a released root version and carries no
-# replace; go.work builds them against the tree, and release-check builds
-# them the way a consumer does. Every module shares one version: see
-# release-root and release-submodules. ./... from the root covers only the
-# root module, so every target loops over them. Listed in dependency
-# order, because release-submodules tags them in this order.
+# the root module. Each requires the root, and any sibling it uses, at
+# exactly the version the whole repository is released at, and carries a
+# replace pointing at the tree — see replaces below, and CLAUDE.md for
+# why the two go together. ./... from the root covers only the root
+# module, so every target loops over them.
 SUBMODULES = sqlite otel
 
-# Which modules release-check and release-submodules act on. SUBMODULES
-# stays the full set: release-submodules needs it to find the siblings a
-# module requires, so narrowing that instead would quietly skip a sibling
-# bump. Override this one to release or check a single module, which is
-# what the release workflow does for the tag it fires on.
-RELEASE_SUBMODULES ?= $(SUBMODULES)
-
-.PHONY: build deps no-replace test vet fmt tidy tidy-check lint vuln check \
-	release-check release release-root release-submodules clean
+.PHONY: build deps replaces test vet fmt tidy tidy-check lint vuln check \
+	release-guard release release-commit clean
 
 build:
 	$(GO) build ./...
@@ -31,23 +28,20 @@ deps:
 	@deps=$$($(GO) list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./... | grep -v '^github.com/ChristopherDavenport/agentsession' | grep -v '^github.com/ChristopherDavenport/openresponses' || true); \
 	  test -z "$$deps" || { echo "root module depends on: $$deps"; exit 1; }
 
-# No module in the repository may replace a first-party one. A replace is
-# a property of the main module and consumers ignore it, so a nested
-# module carrying one builds green everywhere here — including under
-# release-check, which is the whole point of release-check — while
-# shipping a go.mod that names a version it was never built against.
-# go.work is how the tree is built against the tree. This runs in check
-# rather than only at release because re-adding a replace is exactly how
-# the hole opens, and one make tidy afterwards settles every other gate.
-# There is deliberately no opt-out: a module that genuinely needs one is
-# a change to this target, reviewable in the diff.
-no-replace:
-	@for m in . $(SUBMODULES); do \
-	  if grep -v '^[[:space:]]*//' $$m/go.mod | grep -q 'github.com/ChristopherDavenport/.*=>'; then \
-	    echo "$$m/go.mod replaces a first-party module; nested modules require published versions and go.work builds them against the tree (see CONTRIBUTING.md)"; \
-	    exit 1; \
-	  fi; \
-	done
+# Every first-party module a nested module requires must also be
+# replaced, at a path that exists. This is the inverse of the rule this
+# repository used to carry, and it is load-bearing rather than
+# cosmetic: go mod tidy ignores go.work, so a require naming the version
+# being released resolves from the proxy, where that version does not
+# exist until the tag is pushed. The replace is what lets a release name
+# its own version. Lose one and the next release fails at make tidy, or
+# worse, silently pins the module to the previous release.
+#
+# A replace is a property of the main module, so consumers ignore it and
+# get the require. That is safe here only because the require names the
+# commit the module is tagged from; release-guard is what proves it.
+replaces:
+	@scripts/check-replaces.sh $(SUBMODULES)
 
 test:
 	$(GO) test -race ./...
@@ -80,109 +74,84 @@ vuln:
 	@for m in $(SUBMODULES); do (cd $$m && $(GOVULNCHECK) ./...) || exit 1; done
 
 # Everything CI runs.
-check: fmt tidy-check vet deps no-replace lint vuln test
+check: fmt tidy-check vet deps replaces lint vuln test
 
-# Builds and tests each module in RELEASE_SUBMODULES outside the
-# workspace, against the root and sibling versions its own go.mod
-# requires, which is what a consumer gets. Run it before tagging a
-# module; it fails while a module depends on root changes that are not
-# tagged yet, and that failure is the signal to tag the root first. Not
-# part of check: between a root API addition and the next root tag it
-# fails by design. no-replace is what keeps this honest — a first-party
-# replace would make it pass on a module no consumer can build.
-release-check:
-	@test -n "$(RELEASE_SUBMODULES)" || { echo "RELEASE_SUBMODULES is empty; nothing would be checked"; exit 1; }
-	@for m in $(RELEASE_SUBMODULES); do (cd $$m && GOWORK=off $(GO) vet ./... && GOWORK=off $(GO) test ./...) || exit 1; done
+# Checks one tag is safe to push, before it is pushed. A pushed tag is
+# permanent — the proxy and the checksum database keep the version
+# forever — so this is the last point at which a mistake is free:
+#   make release-guard TAG=sqlite/v0.0.7
+release-guard:
+	@test -n "$(TAG)" || { echo "usage: make release-guard TAG=<tag>"; exit 1; }
+	@scripts/release-guard.sh "$(TAG)"
 
-# go list -m reports every module in the workspace, so the root has to be
-# asked for outside it.
-MODULE := $(shell GOWORK=off $(GO) list -m)
-NOTES := $(shell mktemp)
+# Every tag a release writes: the root and one per nested module, all at
+# the same version, all from the one commit below.
+RELEASE_TAGS = $(VERSION) $(patsubst %,%/$(VERSION),$(SUBMODULES))
 
-# Cut a release. Every module in the repository shares one version, but
-# not one commit: a nested module's requirement cannot name a tag that
-# does not exist yet, and release-check resolves that requirement from
-# the proxy rather than from the workspace. So the root is released and
-# tagged first, and each nested module follows once everything it
-# requires is published.
-release:
-	@echo "release is phased, because a require cannot name an unpublished tag:"; \
-	 echo "    make release-root VERSION=vX.Y.Z"; \
-	 echo "    make release-submodules VERSION=vX.Y.Z"; \
-	 exit 1
+# Cut a release:
+#
+#   make release VERSION=v0.1.0
+#
+# Every published module is released at one version, from one commit, and
+# requires its first-party siblings at exactly that version. So the first
+# thing this does is point every nested module at VERSION — a version
+# that does not exist yet. That resolves because each nested go.mod
+# replaces its first-party requirements with the tree (see replaces
+# above); tidy, build and test all see the code being tagged, which is
+# the code the version will contain.
+#
+# The consequence worth naming: a consumer who takes only
+# agentsession/sqlite at vX.Y.Z gets root vX.Y.Z, the exact commit that
+# module was built and tested against. There is no drift to gate against,
+# which is why there is no release-check here and no phased release.
+#
+# --atomic lands every ref in one transaction, so no window exists in
+# which one tag is visible without the others, and none in which a
+# published go.mod names a version the proxy cannot serve.
+#
+# Nothing is public until the push on the last line. If a guard refuses,
+# undo with git reset --hard HEAD~1 and git tag -d the tags written.
+# The root is guarded and tagged first, then each nested module, because
+# a nested module's guard proves the root tag of that version names this
+# commit — which it cannot do before that tag exists. Every tag is local
+# until the push on the last line.
+release: release-commit
+	@scripts/release-guard.sh "$(VERSION)"
+	@notes="$$(scripts/release-notes.sh $(VERSION))" || exit 1; \
+	 git tag -a $(VERSION) -m "$$notes"
+	@notes="$$(scripts/release-notes.sh $(VERSION))" || exit 1; \
+	 for m in $(SUBMODULES); do \
+	   scripts/release-guard.sh "$$m/$(VERSION)" || exit 1; \
+	   git tag -a $$m/$(VERSION) -m "$$notes" || exit 1; \
+	 done
+	git push origin --atomic HEAD $(RELEASE_TAGS)
 
-# Phase one: date the changelog, check everything, commit, tag the root
-# and push. The nested modules still require the previous root release
-# across this commit, which is correct until this tag exists.
-# TRAILER, when set, is appended to the commit message.
+# Bump every first-party requirement to VERSION, date the changelog,
+# check everything, commit. Nothing here is pushed, so a failure costs a
+# git reset and no more. TRAILER, when set, is appended to the commit
+# message.
+#
+# go mod tidy is free to move a requirement the go mod edit just set, so
+# what landed is read back and asserted before anything is committed.
 #
 # The changelog is dated through a temp file rather than sed -i, which is
 # a GNU-ism: BSD sed reads the argument after -i as a backup suffix, so
 # the GNU spelling fails outright on macOS, where these releases are cut.
 # The temp file is removed if sed dies, so a failed run leaves nothing
 # untracked behind for the clean-tree gate to trip over next time.
-release-root:
-	@test -n "$(VERSION)" || { echo "usage: make release-root VERSION=vX.Y.Z"; exit 1; }
-	@test "$(origin SUBMODULES)" = file || { echo "do not override SUBMODULES here: a command-line override propagates into the tidy and check below, so the root would be tagged having checked a subset."; exit 1; }
+release-commit:
+	@test -n "$(VERSION)" || { echo "usage: make release VERSION=vX.Y.Z"; exit 1; }
+	@test "$(origin SUBMODULES)" = file || { echo "do not override SUBMODULES here: a command-line override propagates into the bump, tidy and check below, so a module would be tagged having checked a subset."; exit 1; }
 	@grep -q '^## Unreleased$$' CHANGELOG.md || { echo "CHANGELOG.md has no Unreleased section"; exit 1; }
 	@test -z "$$(git status --porcelain)" || { echo "working tree is not clean"; exit 1; }
+	@scripts/versions.sh set $(VERSION) $(SUBMODULES)
 	sed 's/^## Unreleased$$/## $(VERSION) - '"$$(date +%F)"'/' CHANGELOG.md > CHANGELOG.md.tmp \
 	  && mv CHANGELOG.md.tmp CHANGELOG.md \
 	  || { rm -f CHANGELOG.md.tmp; exit 1; }
 	$(MAKE) tidy
 	$(MAKE) check
+	@scripts/versions.sh check $(VERSION) $(SUBMODULES)
 	git add -A && git commit -q -m "Release $(VERSION)" $(if $(TRAILER),-m "$(TRAILER)")
-	@awk -v v="$(VERSION)" '/^## /{p=($$2==v)} p' CHANGELOG.md | sed '1s/.*/$(VERSION)/' > $(NOTES)
-	git tag -a $(VERSION) -F $(NOTES)
-	@rm -f $(NOTES)
-	git push origin HEAD
-	git push origin $(VERSION)
-
-# Phase two, once release-root has pushed the root tag: point each module
-# in RELEASE_SUBMODULES at VERSION and release it, one at a time in that
-# order. One commit and one tag per module, because go mod tidy and
-# release-check both resolve a sibling requirement from the proxy, so a
-# module has to be tagged and pushed before the module that requires it
-# is bumped. Each module is built the way a consumer builds it before its
-# tag is written, which is the whole point of the phasing.
-#
-# The sibling loop reads SUBMODULES, not RELEASE_SUBMODULES: narrowing
-# the release list must not narrow the set of siblings to bump, or a
-# resumed run would tag a module still requiring an old sibling — which
-# release-check cannot catch, because the old sibling satisfies it.
-#
-# go mod tidy is free to move a requirement the go mod edit above just
-# set, so the resolved version is asserted before anything is tagged.
-release-submodules:
-	@test -n "$(VERSION)" || { echo "usage: make release-submodules VERSION=vX.Y.Z"; exit 1; }
-	@test "$(origin SUBMODULES)" = file || { echo "do not override SUBMODULES here: it is the list of siblings to bump, and narrowing it would tag a module still requiring an old sibling. Narrow RELEASE_SUBMODULES instead."; exit 1; }
-	@test -n "$(RELEASE_SUBMODULES)" || { echo "RELEASE_SUBMODULES is empty; nothing would be released"; exit 1; }
-	@test -z "$$(git status --porcelain)" || { echo "working tree is not clean; a resumed run needs git checkout -- <module> first"; exit 1; }
-	@git rev-parse -q --verify refs/tags/$(VERSION) >/dev/null || { echo "$(VERSION) is not tagged; run make release-root first"; exit 1; }
-	@awk -v v="$(VERSION)" '/^## /{p=($$2==v)} p' CHANGELOG.md | sed '1s/.*/$(VERSION)/' > $(NOTES)
-	@set -e; for m in $(RELEASE_SUBMODULES); do \
-	  ( set -e; cd $$m; \
-	    $(GO) mod edit -require=$(MODULE)@$(VERSION); \
-	    for s in $(SUBMODULES); do \
-	      if grep -q "^[[:space:]]*$(MODULE)/$$s " go.mod; then $(GO) mod edit -require=$(MODULE)/$$s@$(VERSION); fi; \
-	    done; \
-	    $(GO) mod tidy; \
-	    for d in $(MODULE) $(patsubst %,$(MODULE)/%,$(SUBMODULES)); do \
-	      if grep -q "^[[:space:]]*$$d " go.mod; then \
-	        got=$$(GOWORK=off $(GO) list -m -f '{{.Version}}' $$d); \
-	        test "$$got" = "$(VERSION)" || { echo "$$m resolves $$d at $$got, not $(VERSION)"; exit 1; }; \
-	      fi; \
-	    done; \
-	    $(GO) mod tidy -diff; \
-	    GOWORK=off $(GO) vet ./...; \
-	    GOWORK=off $(GO) test ./... ); \
-	  git add -A; \
-	  git commit -q -m "Release $$m/$(VERSION)" $(if $(TRAILER),-m "$(TRAILER)"); \
-	  git tag -a $$m/$(VERSION) -F $(NOTES); \
-	  git push origin HEAD; \
-	  git push origin $$m/$(VERSION); \
-	done
-	@rm -f $(NOTES)
 
 clean:
 	rm -rf .cache

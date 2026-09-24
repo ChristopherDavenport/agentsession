@@ -2,10 +2,13 @@ module github.com/ChristopherDavenport/agentsession/otel
 
 go 1.25.0
 
-// The root requirement names the released version a consumer fetches.
-// The workspace builds this module against the tree instead; there is
-// deliberately no replace, so release-check can build it the way a
-// consumer does and fail while the version named here is too old.
+// Every module in the repository is released at one version, from one
+// commit, and requires its first-party siblings at exactly that version.
+// The replace below is what makes that possible: go mod tidy ignores
+// go.work, so without it tidy would resolve the version being released
+// from the proxy, where it does not exist until the tag is pushed.
+// Consumers ignore a replace in a dependency, and get the require —
+// which names the commit this module was built against, by construction.
 require (
 	github.com/ChristopherDavenport/agentsession v0.0.6
 	github.com/ChristopherDavenport/openresponses v0.0.10
@@ -23,3 +26,5 @@ require (
 	go.opentelemetry.io/otel/metric v1.46.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )
+
+replace github.com/ChristopherDavenport/agentsession => ../
