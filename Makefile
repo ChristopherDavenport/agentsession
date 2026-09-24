@@ -141,6 +141,13 @@ release: release-commit
 # untracked behind for the clean-tree gate to trip over next time.
 release-commit:
 	@test -n "$(VERSION)" || { echo "usage: make release VERSION=vX.Y.Z"; exit 1; }
+	@test $(words $(RELEASE_TAGS)) -le 3 || { \
+	  echo "$(words $(RELEASE_TAGS)) tags would be pushed at once, and GitHub creates no events"; \
+	  echo "for a push of more than three tags — every tag would land and the release"; \
+	  echo "workflow would silently never run. Adding a fourth published module means"; \
+	  echo "choosing: push the tags one at a time and lose the atomic push (what agentturn"; \
+	  echo "does), or keep --atomic and create the GitHub releases from here with gh."; \
+	  exit 1; }
 	@test "$(origin SUBMODULES)" = file || { echo "do not override SUBMODULES here: a command-line override propagates into the bump, tidy and check below, so a module would be tagged having checked a subset."; exit 1; }
 	@grep -q '^## Unreleased$$' CHANGELOG.md || { echo "CHANGELOG.md has no Unreleased section"; exit 1; }
 	@test -z "$$(git status --porcelain)" || { echo "working tree is not clean"; exit 1; }
