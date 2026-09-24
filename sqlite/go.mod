@@ -11,7 +11,7 @@ go 1.25.0
 // which names the commit this module was built against, by construction.
 require (
 	github.com/ChristopherDavenport/agentsession v0.0.6
-	github.com/ChristopherDavenport/openresponses v0.0.10
+	github.com/ChristopherDavenport/openresponses v0.0.12
 	modernc.org/sqlite v1.59.0
 )
 

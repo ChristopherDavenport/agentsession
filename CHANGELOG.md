@@ -5,6 +5,18 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- `sqlite` and `otel` now require the root at exactly the version they
+  are released at, rather than at the previous release, and carry a
+  `replace` of the root pointing at the tree. Taking
+  `agentsession/sqlite` alone now resolves the root commit it was built
+  and tested against, instead of the one before it. Consumers ignore a
+  `replace` in a dependency, so only the `require` reaches them; the
+  published `go.sum` files no longer carry first-party entries. This is
+  the shape OpenTelemetry-Go publishes.
+- Requires `openresponses` v0.0.12, up from v0.0.10.
+
 ## v0.0.6 - 2026-09-21
 
 - RFC 0001 is revised to draft 0.3 and the library writes
