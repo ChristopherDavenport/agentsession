@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.7 - 2026-09-23
 
 - `sqlite` and `otel` now require the root at exactly the version they
   are released at, rather than at the previous release, and carry a
