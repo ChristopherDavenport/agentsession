@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.3
+Status: draft 0.4
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -10,7 +10,11 @@ Open Responses community as a companion specification.
 A session is the record of one conversation between a harness and a
 model, kept so that every request the model received can be rebuilt and
 every call the model made can be followed to its output or to the point
-the record stopped. It is an append-only, tree-structured JSONL file.
+the record stopped. It is an append-only JSONL file whose entries form
+a tree: every entry names one `parent`, and a context is built by
+walking it. An entry MAY additionally name predecessors it converges —
+the results of subagent sessions, a branch merged back — which record
+provenance and never enter a context.
 
 The file holds two kinds of entry. **Context entries** are what the
 model was sent and what it returned: items, responses, configuration,
@@ -58,7 +62,11 @@ session worth training on.
   says the writer records dispatches and decisions.
 - **Append-only.** A writer only ever appends lines. A crashed session
   is a valid prefix.
-- **Tree-shaped.** Branching is a child of an earlier entry, in place.
+- **Tree-shaped context, DAG-shaped provenance.** A context is built by
+  walking one `parent` per entry, so branching is a child of an earlier
+  entry, in place. Convergence — a subagent's result, a branch merged
+  back — is recorded beside that tree in `parents` and never widens the
+  walk.
 - **Forward compatible.** Readers preserve what they do not understand.
 - **Harness-neutral envelope, normative payload.** The envelope carries
   no harness vocabulary. Conversation payloads are Open Responses items.
@@ -79,8 +87,12 @@ RFC 2119.
 
 - **Session**: one file, one header, zero or more entries.
 - **Entry**: one JSON object on one line after the header.
-- **Path**: the sequence of entries from an entry to a root, reversed.
+- **Path**: the sequence of entries from an entry to a root, reversed,
+  following `parent` alone.
 - **Leaf**: the entry the next append will name as its parent.
+- **Convergence**: an entry naming predecessors in `parents` beyond its
+  `parent`, recording that their work was merged into this entry's
+  payload.
 - **Item**: an Open Responses item as defined by the Open Responses
   specification at the version named in the header.
 - **Run**: one pass of the harness's loop, from an input to the point
@@ -144,6 +156,7 @@ file.
 | `type` | MUST | entry type; core types below, or namespaced `ns:type` |
 | `id` | MUST | unique within the file; opaque string |
 | `parent` | MUST | ID of the parent entry, or `null` for a root |
+| `parents` | MAY | further predecessors this entry converges; provenance only, never walked when building a context |
 | `ts` | MUST | RFC 3339 with sub-second precision RECOMMENDED |
 
 A parent MUST appear earlier in the file than any child. Multiple roots
@@ -166,6 +179,39 @@ event occurs, so a reader MAY take its absence on a path as the event
 not having happened. For a type the header does not name, absence means
 the file does not say. A converter from a native format that carries no
 such record leaves the type out of `records`.
+
+### Convergence
+
+`parent` is the entry's line of descent: exactly one, in this file, and
+the only edge a context is built from. `parents` records that the entry
+also converges work from elsewhere — the result of a subagent session,
+a branch merged back, several workers joined at once.
+
+```json
+{"type":"item","id":"j1","parent":"9f8e","ts":"…",
+ "parents":[{"entry":"w7"},{"session":"01J…","entry":"c4"}]}
+```
+
+- Each reference MUST name an `entry`. `session` names the session that
+  entry is in and MAY be omitted when it is in this file, which is the
+  only case a reader can resolve without a store.
+- `parents` MUST NOT contain the value of `parent`, and MUST NOT name
+  the same entry twice.
+- A reference MUST name an entry that already existed when this entry
+  was written. With `parent`, that is what makes the structure acyclic:
+  every edge points at something older.
+- `parents` is **provenance**. It is not walked when building a context,
+  and an entry it names contributes nothing to any context by virtue of
+  being named. Whatever crossed the boundary is in this entry's own
+  payload, materialised. That is the rule the format already applies to
+  `branch_summary` and to a subagent's `function_call_output`; `parents`
+  only records where the material came from.
+- Order is not meaningful. A writer MUST sort the references, by
+  `session` then `entry`, with references that omit `session` sorting
+  before those that carry one, so that a file does not depend on the
+  order in which workers happened to finish.
+- A reader that does not understand `parents` builds exactly the same
+  context as one that does, losing only the provenance.
 
 ## Core entry types
 
@@ -639,6 +685,14 @@ before the `dispatch` entry and before the child's header exists, so a
 link whose session cannot be found means the child never started
 rather than a child that was never linked.
 
+A link names a session, not a point in one, and at the moment it is
+written there is no point to name. The other half of the round trip is
+`parents`: the entry carrying the child's `function_call_output`
+SHOULD name the child's leaf there, which is the first moment the
+parent knows it. Without that, a child that branched leaves no record
+of which of its leaves the parent actually took the answer from, and a
+projection has to guess.
+
 ### `custom`
 
 App state that is not in context: `{"type":"custom","ns":"…","data":…}`.
@@ -658,6 +712,7 @@ Given a leaf, a reader MUST produce the request settings and the item
 list as follows.
 
 1. Walk `parent` links from the leaf to a root; reverse to root-first.
+   `parents` is provenance and MUST NOT be walked.
 2. Replay `config` entries along the path in order to produce settings,
    honouring `replace`. A `config` that carries `instructions_parts`
    resolves them against the parts in force, as that member defines,
@@ -770,11 +825,15 @@ profile: user and system items to steps, one `response` with its items
 to one agent step with `tool_calls`, `reasoning_content` and `metrics`,
 function call outputs to observations by `source_call_id`, compaction
 and branch summaries as copied-context system steps, `link` entries to
-`subagent_trajectories`. `run`, `dispatch`, `decision` and `queued`
-entries have no step of their own. A run's `source`, its start `ref`
-as `trigger`, its end `reason` and its end `ref` as `cause` travel
-under `run` in the `extra` of the first step its segment produces, or
-in the trajectory's top-level `extra` when it produces none. `run` is
+`subagent_trajectories`. Where the output entry carries `parents`, the
+reference into the child session names the leaf the answer was taken
+from; where it does not, the projection chooses one, and the document
+then depends on that choice rather than on the record. `run`,
+`dispatch`, `decision` and `queued` entries have no step of their own.
+A run's `source`, its start `ref` as `trigger`, its end `reason` and
+its end `ref` as `cause` travel under `run` in the `extra` of the first
+step its segment produces, or in the trajectory's top-level `extra`
+when it produces none. `run` is
 a **list** in either place, in the runs' own order: a run that
 produces no step, which is what a refusal on resume is, would
 otherwise be replaced by the next run's record, and a reader needs a
@@ -819,6 +878,11 @@ optional fields. A major version changes the envelope, the header, or
 the context algorithm. Readers MUST accept any minor version of a major
 they support. Files are migrated in memory, never rewritten in place.
 
+Adding an optional member to the envelope is a minor change. Changing
+what an existing member means, or what the context algorithm does with
+any member, is major — which is the line an addition has to stay behind
+to arrive in a minor version at all.
+
 ## Conformance
 
 A conforming **writer** produces files that satisfy every MUST in this
@@ -851,6 +915,24 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.3
+
+Additive, with nothing tightened. `parents` on the entry envelope
+records convergence — a subagent's result, a branch merged back,
+several workers joined at once — as provenance.
+
+The context algorithm is untouched, deliberately. `parents` is never
+walked, so a 0.3 reader given a 0.4 file walks the same `parent` chain,
+replays the same entries and rebuilds the same request, byte for byte.
+It cannot report the provenance, but it does not drop it either: a
+member a reader does not know is preserved by any tool that rewrites
+the file, so `parents` survives a round trip through 0.3. That is what
+keeps this a minor version rather than a major one, and it is the
+constraint the member was designed against rather than a property it
+happened to have.
+
+A 0.3 file is a 0.4 file with no `parents` anywhere.
 
 ## Changes since 0.2
 
@@ -948,6 +1030,20 @@ which the `run` entry cannot name and which 0.3 adopts beside the
 
 - Whether the current leaf needs a durable marker. Held: a reserved
   `label` a library honours on open covers it without a format change.
+  What that library does with the marker is not specified here, and two
+  conforming readers can currently disagree about where a reopened
+  session resumes — which for a resume format is the last resume-
+  critical algorithm left unwritten.
+- Whether a core `exchange` type is worth defining for the common case
+  of one entry converging several subagent results, or whether
+  `parents` on an `item` already covers it. Held: `parents` covers it,
+  and a type earns its place only once a reader needs to treat the
+  convergence differently from the item that carries it.
+- What supplies the total order when entries do not share one file.
+  Within a file, file order is the ordering and `ts` MUST NOT be used
+  for it. A store that holds entries outside a single file needs a
+  replacement, and resolving a durable leaf marker depends on having
+  one.
 - Whether to allow a second payload profile at 0.x, or hold the line at
   Open Responses and rely on converters.
 - Sidecar media layout and naming.
