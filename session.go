@@ -377,6 +377,15 @@ func validateEntry(e Entry) error {
 		if v.Item == nil {
 			return errors.New("agentsession: item entry has no item")
 		}
+		if _, ok := v.Item.(*openresponses.ItemReference); ok {
+			// The format's ingress rule: an entry carries what the
+			// model saw, and a reference to the provider's store is
+			// not that. The same dependency is already refused on the
+			// request side, which is built with store: false and no
+			// previous_response_id. A file carrying one still reads —
+			// this is a rule for writers, and this is the writer.
+			return errors.New("agentsession: an item entry cannot hold an item_reference: it names an item in the provider's store rather than carrying what the model saw")
+		}
 	case *CompactionEntry:
 		if v.Summary == nil {
 			return errors.New("agentsession: compaction entry has no summary")

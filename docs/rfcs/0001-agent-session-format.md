@@ -19,7 +19,10 @@ provenance and never enter a context.
 The file holds two kinds of entry. **Context entries** are what the
 model was sent and what it returned: items, responses, configuration,
 compaction and the summary carried across a branch. Replaying them
-along a path rebuilds a request byte for byte. **Record entries** are
+along a path rebuilds a request byte for byte, without resolving
+anything outside the file: material that arrived from elsewhere is
+carried in the entry that received it, and the reference saying where
+it came from is provenance beside it. **Record entries** are
 what happened around the conversation: how a run started and how it
 ended, that a tool call was dispatched, what was decided about a call,
 the environment the tools ran in, links to other sessions, and
@@ -212,9 +215,9 @@ a branch merged back, several workers joined at once.
 - `parents` is **provenance**. It is not walked when building a context,
   and an entry it names contributes nothing to any context by virtue of
   being named. Whatever crossed the boundary is in this entry's own
-  payload, materialised. That is the rule the format already applies to
-  `branch_summary` and to a subagent's `function_call_output`; `parents`
-  only records where the material came from.
+  payload, materialised, as the ingress rule requires of every entry
+  that receives material from outside this session; `parents` only
+  records where that material came from.
 - Order is not meaningful. A writer MUST sort the references, by
   `session` then `entry`, with references that omit `session` sorting
   before those that carry one, so that a file does not depend on the
@@ -256,8 +259,10 @@ One conversation item in the payload profile.
 
 - `item` MUST be a valid item for the payload profile. Under the
   Open Responses profile that includes `message`, `function_call`,
-  `function_call_output`, `reasoning`, `compaction`, `item_reference`
-  and any slug-prefixed item the profile allows.
+  `function_call_output`, `reasoning`, `compaction` and any
+  slug-prefixed item the profile allows. It does not include
+  `item_reference`, which the profile permits and the ingress rule
+  excludes: a reader accepts one, a writer does not produce one.
 - `response` MAY name the response entry this item belongs to when the
   item was model output.
 - `visible` MAY be `false` to mark an item that is part of the model
@@ -715,6 +720,63 @@ extension entries and MUST NOT fail on them. Extension entries are not
 in context unless the extension says so, and a reader that does not know
 the extension MUST treat them as not in context.
 
+## Ingress
+
+Material reaches a session from places this file cannot see: a subagent
+that ran in a session of its own, a branch that was abandoned and
+summarised, an item another system produced, a tool whose output came
+off a machine that is now gone.
+
+An entry carrying such material MUST carry it **materialised** — the
+payload as the model was or will be sent it, in this entry. A reference
+saying where it came from is provenance, and provenance is never a
+substitute for the material. A reader that cannot resolve the reference,
+because the other session was never kept or the system no longer exists,
+MUST still rebuild the same context and the same `request_hash`.
+
+This is what every projecting edge in the format already does, and it is
+written here once rather than implied in four places:
+
+- `branch_summary` carries the summary item, not a pointer to the branch
+  it summarises.
+- `compaction` carries its `summary` and its `pinned` items, not a rule
+  for recomputing them.
+- A subagent's `function_call_output` carries the output; the `link`
+  naming the child session contributes nothing to any context.
+- `parents` records where converged work came from and is never walked.
+
+The cost is duplication: the same bytes sit in the child's file and in
+the parent's. That is the price of a file that answers "what was the
+model sent" without resolving anything, and it is the trade the format
+already makes for compaction. It is what the **Lossless** goal asks for,
+stated as a rule a writer can be held to.
+
+Two things sit outside the rule, because neither is material from
+elsewhere. Media referenced by an item MAY be a sidecar, as the file
+section says; a sidecar is part of the session rather than outside it.
+An `instructions_parts` entry named by `hash` alone resolves against
+the parts already on this path, which is the same file.
+
+One thing the payload profile permits, this format does not. An `item`
+entry MUST NOT carry an `item_reference`. It names an item in the
+provider's store instead of holding one, so the path records that an
+item was named and not what it said, and the session stops answering
+"what was the model sent" the moment the provider expires it.
+
+This is not a new position, it is an existing one applied where it was
+being dodged: the canonical request is already built with
+`store: false` and no `previous_response_id`, so the format has
+declined to lean on the provider's store. An item reference is the same
+dependency arriving through the payload rather than through the
+request. Worth stating rather than leaving implied, because the failure
+is silent — `request_hash` verifies, since the reference is what was
+sent, so the file checks out and is hollow.
+
+A reader MUST still accept one. The profile allows it, files carrying
+one exist, and such a file is incomplete rather than malformed; a
+reader that refused would lose the parts of it that are intact. This is
+a rule for writers, which is where the choice is made.
+
 ## Context building
 
 Given a leaf, a reader MUST produce the request settings and the item
@@ -803,6 +865,14 @@ separately agree without sharing code.
 A writer that records `request_hash` MUST compute it this way. A reader
 MAY verify it by rebuilding the request from the path and comparing.
 
+`request_hash` identifies a request; it is not a token-exact prefix. It
+hashes the canonical request JSON, which sits a layer above whatever a
+provider's chat template, tool-schema serialisation and tokenizer make
+of it. Two equal hashes say the same request was sent. They say the
+model saw the same leading tokens only if all three of those are
+deterministic, which this document cannot promise on a provider's
+behalf. Verify a record with it; do not predict a cache hit with it.
+
 ## Writing discipline
 
 - Output items MUST be written only when complete. Partial streaming
@@ -822,6 +892,15 @@ MAY verify it by rebuilding the request from the path and comparing.
   is written and synced before the tool runs, and a `run` end before
   the harness reports the run as ended. Without that, the absence a
   reader relies on could be a lost line.
+- Content the harness injects that varies from one run to the next — a
+  wall-clock timestamp, a session or request ID, a nondeterministic
+  ordering — SHOULD go in an `env` entry or a record entry rather than
+  into `instructions` or any other context entry. Put in the request,
+  it changes `request_hash` on every run and moves the leading tokens
+  under everything after it, so it costs the whole prefix a provider
+  had cached to say something about the run rather than to the model.
+  A value the model is genuinely meant to act on is not this: that one
+  is in the request on purpose, and pays its cost knowingly.
 
 ## Projections
 
@@ -942,6 +1021,31 @@ constraint the member was designed against rather than a property it
 happened to have.
 
 A 0.3 file is a 0.4 file with no `parents` anywhere.
+
+**Ingress** says that an entry carrying material from outside this
+session carries it materialised, and that a reference to its origin
+never stands in for it. Every projecting edge in 0.3 already worked
+that way — `branch_summary`, `compaction`, a subagent's
+`function_call_output` — so mostly this gives a property a name and a
+MUST instead of leaving it four coincidences.
+
+The **writing discipline** gains the matching rule for the other
+direction: per-run content the harness injects belongs in `env` or a
+record entry, not in the request, where it would rewrite `request_hash`
+every run and cost the prefix a provider had cached.
+
+One rule is tightened, as 0.3 tightened one before it. A writer MUST
+NOT put an `item_reference` in an `item` entry: it names an item in the
+provider's store rather than carrying it, which is the one way a file
+could satisfy every other rule here and still not say what the model
+was sent. The format had already declined that dependency through the
+request, with `store: false` and no `previous_response_id`; this closes
+the same door on the payload side. A reader still accepts one, so no
+file becomes unreadable — what changes is that a writer may no longer
+produce one, and the reference implementation now refuses to.
+
+The per-run rule is a SHOULD: a 0.3 file with a timestamp in its
+instructions is a valid 0.4 file, one whose prefix never hit.
 
 ## Changes since 0.2
 

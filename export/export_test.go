@@ -475,6 +475,24 @@ func TestSubsessions(t *testing.T) {
 	}
 }
 
+// readBackWith returns the session with line appended to its JSONL
+// form. It is how a test gets hold of an entry a conforming writer does
+// not produce and a reader must still accept, which is also how such an
+// entry arrives in life: in a file someone else wrote.
+func readBackWith(t *testing.T, s *agentsession.Session, line string) *agentsession.Session {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := agentsession.Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	buf.WriteString(line + "\n")
+	again, err := agentsession.Read(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return again
+}
+
 func TestOrphanOutputAndMultimodal(t *testing.T) {
 	ts := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 	s := agentsession.New(agentsession.Header{ID: "mm", CreatedAt: ts})
@@ -489,7 +507,13 @@ func TestOrphanOutputAndMultimodal(t *testing.T) {
 		Content: openresponses.Contents{&openresponses.Refusal{Refusal: "no"}}}})
 	mustAppend(t, s, &agentsession.ItemEntry{Item: &openresponses.FunctionCall{CallID: "call_y", Name: "f", Arguments: "not json"}})
 	mustAppend(t, s, agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("call_y", "")))
-	mustAppend(t, s, agentsession.NewItemEntry(&openresponses.ItemReference{ID: "msg_9"}))
+	// An item_reference cannot be appended: the ingress rule forbids a
+	// writer from naming an item in the provider's store instead of
+	// carrying it. A reader still accepts one, and the export must
+	// still project one, so it arrives the only way it now can —
+	// read back from a file some other writer produced.
+	s = readBackWith(t, s, `{"type":"item","id":"iref","parent":"`+s.Leaf()+
+		`","ts":"2026-09-17T12:00:00Z","item":{"type":"item_reference","id":"msg_9"}}`)
 	var tr Trajectory
 	for x, err := range Trajectories(s) {
 		if err != nil {

@@ -7,6 +7,25 @@ versions may break the API.
 
 ## Unreleased
 
+- **Breaking for writers.** `Append` now refuses an item entry holding
+  an `openresponses.ItemReference`. RFC 0001 gains the **ingress** rule
+  — an entry receiving material from outside the session carries it
+  materialised, and a reference to where it came from never stands in
+  for it — and an item reference is the one shape that could satisfy
+  every other rule and still not say what the model was sent. The
+  format had already declined that dependency on the request side,
+  which is built with `store: false` and no `previous_response_id`;
+  this closes the same door on the payload side. Reading is unchanged:
+  a file carrying one loads, projects and round-trips byte for byte,
+  because such a file is incomplete rather than malformed.
+- The RFC also gains the matching writing-discipline rule: per-run
+  content a harness injects — a timestamp, a session ID — belongs in
+  an `env` or record entry rather than in the request, where it
+  rewrites `request_hash` every run and costs the prefix a provider had
+  cached. `request_hash` itself is calibrated: it identifies a request
+  and is not a token-exact prefix, so equal hashes imply equal leading
+  tokens only where a provider's template, tool-schema serialisation
+  and tokenizer are deterministic.
 - The ATIF export no longer guesses which of a subagent's leaves
   answered a call. A `link` names the child session and is written when
   the call is dispatched, before the child has a point to name; the
