@@ -303,3 +303,44 @@ func TestUnsortedParentsRoundTrip(t *testing.T) {
 		t.Errorf("round trip reordered the file\nwant: %s\ngot:  %s", line, got)
 	}
 }
+
+// TestItemReferenceIsNotWritten covers the ingress rule's one tightened
+// case. A writer must not name an item in the provider's store instead
+// of carrying what the model saw — the same dependency the canonical
+// request already refuses with store: false and no
+// previous_response_id. A reader still accepts one, because such a file
+// is incomplete rather than malformed, and refusing it would lose the
+// parts that are intact.
+func TestItemReferenceIsNotWritten(t *testing.T) {
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000010"})
+	if _, err := s.Append(NewItemEntry(&openresponses.ItemReference{ID: "msg_9"})); err == nil {
+		t.Fatal("Append accepted an item_reference")
+	} else if !strings.Contains(err.Error(), "item_reference") {
+		t.Errorf("error %q does not name the member", err)
+	}
+	if s.Len() != 0 {
+		t.Errorf("the refused entry reached the tree: %d entries", s.Len())
+	}
+
+	// The same item inside a file reads, and round-trips byte for byte.
+	const line = `{"type":"item","id":"i1","parent":null,"ts":"2026-09-25T09:00:00Z","item":{"type":"item_reference","id":"msg_9"}}`
+	file := `{"type":"session","format":"agentsession/0.4","id":"01995b2a-0000-7000-8000-000000000011","created_at":"2026-09-25T09:00:00Z","payload":"openresponses/2026-04-24"}` + "\n" + line + "\n"
+	read, err := Read(strings.NewReader(file))
+	if err != nil {
+		t.Fatalf("Read refused a file carrying an item_reference: %v", err)
+	}
+	e, ok := read.Entry("i1")
+	if !ok {
+		t.Fatal("the item_reference entry is missing")
+	}
+	if _, ok := e.(*ItemEntry).Item.(*openresponses.ItemReference); !ok {
+		t.Errorf("item = %T, want *openresponses.ItemReference", e.(*ItemEntry).Item)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, read); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != file {
+		t.Errorf("round trip changed the file\nwant: %s\ngot:  %s", file, buf.String())
+	}
+}

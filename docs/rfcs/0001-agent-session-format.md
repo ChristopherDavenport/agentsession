@@ -259,8 +259,10 @@ One conversation item in the payload profile.
 
 - `item` MUST be a valid item for the payload profile. Under the
   Open Responses profile that includes `message`, `function_call`,
-  `function_call_output`, `reasoning`, `compaction`, `item_reference`
-  and any slug-prefixed item the profile allows.
+  `function_call_output`, `reasoning`, `compaction` and any
+  slug-prefixed item the profile allows. It does not include
+  `item_reference`, which the profile permits and the ingress rule
+  excludes: a reader accepts one, a writer does not produce one.
 - `response` MAY name the response entry this item belongs to when the
   item was model output.
 - `visible` MAY be `false` to mark an item that is part of the model
@@ -749,27 +751,31 @@ model sent" without resolving anything, and it is the trade the format
 already makes for compaction. It is what the **Lossless** goal asks for,
 stated as a rule a writer can be held to.
 
-Three things sit outside the rule, for different reasons.
+Two things sit outside the rule, because neither is material from
+elsewhere. Media referenced by an item MAY be a sidecar, as the file
+section says; a sidecar is part of the session rather than outside it.
+An `instructions_parts` entry named by `hash` alone resolves against
+the parts already on this path, which is the same file.
 
-Media referenced by an item MAY be a sidecar, as the file section says;
-a sidecar is part of the session rather than outside it. An
-`instructions_parts` entry named by `hash` alone resolves against the
-parts already on this path, which is the same file and not an ingress.
+One thing the payload profile permits, this format does not. An `item`
+entry MUST NOT carry an `item_reference`. It names an item in the
+provider's store instead of holding one, so the path records that an
+item was named and not what it said, and the session stops answering
+"what was the model sent" the moment the provider expires it.
 
-`item_reference` is the real exception. The payload profile permits it,
-so an item entry MAY hold one, and it names an item in the provider's
-store that this file does not carry. The rule above does not reach it:
-that is not material from another session, it is material the profile
-allows to stay where it is, and forbidding a member of the profile this
-format adopts is not this format's business.
+This is not a new position, it is an existing one applied where it was
+being dodged: the canonical request is already built with
+`store: false` and no `previous_response_id`, so the format has
+declined to lean on the provider's store. An item reference is the same
+dependency arriving through the payload rather than through the
+request. Worth stating rather than leaving implied, because the failure
+is silent — `request_hash` verifies, since the reference is what was
+sent, so the file checks out and is hollow.
 
-A writer choosing one should know what it gives up. The path records
-that the item was named, not what it said, so the session stops
-answering "what was the model sent" on its own, and nothing here
-recovers it once the provider expires the item. `request_hash` still
-verifies, because the reference is what was sent — which is the trap:
-the file checks out and is hollow. A writer that wants a self-contained
-session materialises the item instead.
+A reader MUST still accept one. The profile allows it, files carrying
+one exist, and such a file is incomplete rather than malformed; a
+reader that refused would lose the parts of it that are intact. This is
+a rule for writers, which is where the choice is made.
 
 ## Context building
 
@@ -1016,25 +1022,30 @@ happened to have.
 
 A 0.3 file is a 0.4 file with no `parents` anywhere.
 
-Two rules are written down that were already being followed. **Ingress**
-says that an entry carrying material from outside this session carries
-it materialised, and that a reference to its origin never stands in for
-it. Every projecting edge in 0.3 already worked that way —
-`branch_summary`, `compaction`, a subagent's `function_call_output` —
-so what changes is that the property has a name and a MUST instead of
-being four coincidences. The **writing discipline** gains the matching
-rule for the other direction: per-run content the harness injects
-belongs in `env` or a record entry, not in the request, where it would
-rewrite `request_hash` every run and cost the prefix a provider had
-cached.
+**Ingress** says that an entry carrying material from outside this
+session carries it materialised, and that a reference to its origin
+never stands in for it. Every projecting edge in 0.3 already worked
+that way — `branch_summary`, `compaction`, a subagent's
+`function_call_output` — so mostly this gives a property a name and a
+MUST instead of leaving it four coincidences.
 
-The ingress rule is scoped to material from another session, which is
-what leaves 0.3 files conforming. `item_reference` holds an item this
-file does not carry, and the payload profile allows it; rather than
-forbid a member of the profile it adopts, this version names the cost
-and leaves the choice with the writer. The second rule is a SHOULD, and
-a 0.3 file that put a timestamp in its instructions is still a valid
-0.4 file — one whose prefix never hit.
+The **writing discipline** gains the matching rule for the other
+direction: per-run content the harness injects belongs in `env` or a
+record entry, not in the request, where it would rewrite `request_hash`
+every run and cost the prefix a provider had cached.
+
+One rule is tightened, as 0.3 tightened one before it. A writer MUST
+NOT put an `item_reference` in an `item` entry: it names an item in the
+provider's store rather than carrying it, which is the one way a file
+could satisfy every other rule here and still not say what the model
+was sent. The format had already declined that dependency through the
+request, with `store: false` and no `previous_response_id`; this closes
+the same door on the payload side. A reader still accepts one, so no
+file becomes unreadable — what changes is that a writer may no longer
+produce one, and the reference implementation now refuses to.
+
+The per-run rule is a SHOULD: a 0.3 file with a timestamp in its
+instructions is a valid 0.4 file, one whose prefix never hit.
 
 ## Changes since 0.2
 
