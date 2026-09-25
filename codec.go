@@ -93,12 +93,7 @@ func Read(r io.Reader) (*Session, error) {
 	if s == nil {
 		return nil, errors.New("agentsession: empty input")
 	}
-	if len(s.entries) > 0 {
-		s.leaf = s.entries[len(s.entries)-1].Base().ID
-	}
-	if marked := s.durableLeaf(); marked != "" {
-		s.leaf = marked
-	}
+	s.leaf = s.resolveLeaf()
 	return s, nil
 }
 

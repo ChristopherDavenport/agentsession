@@ -36,6 +36,62 @@ func Run(t *testing.T, opts Options) {
 	t.Run("Delete", func(t *testing.T) { testDelete(t, opts) })
 	if opts.Reopen != nil {
 		t.Run("Persistence", func(t *testing.T) { testPersistence(t, opts) })
+		t.Run("DurableLeaf", func(t *testing.T) { testDurableLeaf(t, opts) })
+	}
+}
+
+// testDurableLeaf marks a branch, writes on it, and reopens the store.
+// The mark names the branch that is live, not a fixed entry, so the
+// reopened session resumes where the branch was written to. A store that
+// rewinds to the mark loses every entry appended after it from the
+// context and from every path-derived query.
+func testDurableLeaf(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	first, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("a")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("b"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Branch(first); err != nil {
+		t.Fatal(err)
+	}
+	mark, err := s.MarkLeaf()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, id, mark); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("c"))); err != nil {
+		t.Fatal(err)
+	}
+	last, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.AssistantText("d")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st2 := opts.Reopen(t, st)
+	again, err := st2.Open(ctx, id)
+	if err != nil {
+		t.Fatalf("Open after reopen: %v", err)
+	}
+	if again.Leaf() != last {
+		t.Errorf("leaf after reopen = %s, want %s (the mark is %s)", again.Leaf(), last, first)
+	}
+	c, err := again.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Items) != 3 {
+		t.Errorf("context after reopen = %d items, want 3", len(c.Items))
 	}
 }
 
