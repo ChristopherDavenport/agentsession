@@ -7,6 +7,22 @@ versions may break the API.
 
 ## Unreleased
 
+- The ATIF export no longer guesses which of a subagent's leaves
+  answered a call. A `link` names the child session and is written when
+  the call is dispatched, before the child has a point to name; the
+  output entry's `parents` names the leaf the answer was taken from,
+  which is the first moment the parent knows it. Where the record says,
+  the export follows it: the embedded subagent trajectory is that path,
+  `trajectory_id` names it, and `extra.child_leaf` records that the
+  document rests on the record. Where it does not, the projection picks
+  the child's main path as before, and the absence of `child_leaf` is
+  what says the document turned on that choice.
+- A record naming a leaf the export cannot resolve embeds nothing,
+  rather than putting a different path of the child in its place.
+  `trajectory_id` still names what the record said, so the reference is
+  precise even when the child is not loadable.
+- `Call.From` returns what a call's output entry converged, so a
+  consumer can read the same fact without walking `parents` by hand.
 - RFC 0001 draft 0.4 is implemented and the library writes
   `agentsession/0.4`; 0.3, 0.2 and 0.1 files read unchanged. An entry
   may now carry `parents`, further predecessors it converges: the leaf

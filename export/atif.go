@@ -79,7 +79,8 @@ const (
 // so [Items] can rebuild the item list; the mapping is documented in
 // docs/plans/session-layer.md.
 func ToATIF(t Trajectory, opts Options) (*atif.Trajectory, error) {
-	b := &builder{t: t, opts: opts, stepByEntry: map[string]int{}, callStep: map[string]int{}}
+	b := &builder{t: t, opts: opts, stepByEntry: map[string]int{}, callStep: map[string]int{},
+		callFrom: map[string][]agentsession.EntryRef{}}
 	b.doc = &atif.Trajectory{
 		SchemaVersion: atif.SchemaVersion,
 		SessionID:     t.Header.ID,
@@ -134,6 +135,11 @@ type builder struct {
 	// totals.
 	priced map[string]price
 	links  []*agentsession.LinkEntry
+	// callFrom is what each call's output entry converged, by call ID:
+	// for a call a subagent answered, the leaf of the child the answer
+	// came from. It is what lets a subsession reference name a point in
+	// the child rather than the projection choosing one.
+	callFrom map[string][]agentsession.EntryRef
 }
 
 // price is one answer from Options.Cost.
@@ -370,6 +376,11 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 		}
 		b.addStep(step, e)
 	case *openresponses.FunctionCallOutput:
+		if len(e.Parents) > 0 {
+			// Where the answer came from, which the subsession
+			// reference needs and which nothing else on the path says.
+			b.callFrom[v.CallID] = e.Parents
+		}
 		idx, ok := b.callStep[v.CallID]
 		if ok && b.doc.Steps[idx].Source == atif.SourceAgent {
 			step := &b.doc.Steps[idx]
@@ -882,10 +893,24 @@ func (b *builder) subsessions() {
 			continue
 		}
 		ref := atif.SubagentTrajectoryRef{SessionID: l.Session, Extra: map[string]any{"entry_id": l.ID}}
-		embedded := b.embed(l.Session)
-		if embedded != nil {
+		// The link names the session; the output entry names the point
+		// in it the answer was taken from. With the second, the
+		// document says which of a branched child's leaves was used;
+		// without it, the projection picks the child's main path and
+		// the document turns on that choice rather than on the record.
+		leaf := b.answeredFrom(l)
+		if leaf != "" {
+			ref.Extra["child_leaf"] = leaf
+			ref.TrajectoryID = trajectoryID(l.Session, leaf)
+		}
+		if embedded := b.embed(l.Session, leaf); embedded != nil {
 			ref.TrajectoryID = embedded.TrajectoryID
 		} else {
+			// Nothing was embedded, and when the record named a leaf
+			// no other trajectory is put in its place. trajectory_id
+			// still says which leaf the record named; the path is where
+			// the session's document would be, which is all a document
+			// that could not load the child can offer.
 			ref.TrajectoryPath = MainDocumentName(l.Session)
 		}
 		if !b.attachRef(l.CallID, ref) {
@@ -898,9 +923,37 @@ func (b *builder) subsessions() {
 	}
 }
 
-// embed converts the subsession's continued path and adds it to the
-// document, returning it, or nil when it cannot be resolved.
-func (b *builder) embed(sessionID string) *atif.Trajectory {
+// answeredFrom returns the entry in the link's session that the call's
+// output entry converged, or "" when it recorded none. An output may
+// converge several predecessors — a join over more than one child —
+// and it is the one naming this link's session that answered this
+// link's call.
+func (b *builder) answeredFrom(l *agentsession.LinkEntry) string {
+	if l.CallID == "" || l.Session == "" {
+		return ""
+	}
+	for _, r := range b.callFrom[l.CallID] {
+		if r.Session == l.Session {
+			return r.Entry
+		}
+	}
+	return ""
+}
+
+// trajectoryID is the ID a document built at leaf of sessionID carries,
+// which is the one [builder.embed] assigns.
+func trajectoryID(sessionID, leaf string) string { return sessionID + "/" + leaf }
+
+// embed converts a path of the subsession and adds it to the document,
+// returning it, or nil when it cannot be resolved.
+//
+// leaf is the entry the parent recorded the answer as coming from. Given
+// one, that path is embedded and no other: a record naming a leaf this
+// export cannot resolve leaves the reference unembedded rather than
+// quietly substituting a different path. Given "", the child's main
+// path is chosen, which is the projection choosing where the record did
+// not say.
+func (b *builder) embed(sessionID, leaf string) *atif.Trajectory {
 	if b.opts.Subsessions == nil {
 		return nil
 	}
@@ -913,7 +966,7 @@ func (b *builder) embed(sessionID string) *atif.Trajectory {
 		if err != nil {
 			continue
 		}
-		if t.Main {
+		if (leaf == "" && t.Main) || (leaf != "" && t.LeafID == leaf) {
 			t := t
 			chosen = &t
 		}
@@ -928,7 +981,7 @@ func (b *builder) embed(sessionID string) *atif.Trajectory {
 	if err != nil {
 		return nil
 	}
-	doc.TrajectoryID = sessionID + "/" + chosen.LeafID
+	doc.TrajectoryID = trajectoryID(sessionID, chosen.LeafID)
 	for _, existing := range b.doc.SubagentTrajectories {
 		if existing.TrajectoryID == doc.TrajectoryID {
 			return existing
