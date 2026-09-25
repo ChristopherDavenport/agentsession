@@ -212,9 +212,15 @@ func (s *Session) Append(e Entry) (string, error) {
 }
 
 // MarkLeaf builds the label entry that makes the current leaf durable,
-// so a reopened session resumes from it rather than from the last
-// line. Append it through the store after Branch; the leaf stays where
-// it is. It returns an error when there is no leaf.
+// so a reopened session resumes on this branch rather than on whichever
+// one the last line happens to be under. Append it through the store
+// after Branch; the leaf stays where it is, and appending past the mark
+// moves the resumed leaf with it. It returns an error when there is no
+// leaf.
+//
+// A mark records which branch is live, so a host that moves to another
+// branch marks again; nothing under an abandoned mark follows it, and
+// the abandoned mark is what a reopen honours.
 func (s *Session) MarkLeaf() (*LabelEntry, error) {
 	leaf := s.Leaf()
 	if leaf == "" {
@@ -223,12 +229,13 @@ func (s *Session) MarkLeaf() (*LabelEntry, error) {
 	return NewLabelEntry(leaf, LeafLabel), nil
 }
 
-// durableLeaf returns the entry the last leaf label names, or "" when
-// none is in force: a later leaf label replaces an earlier one, and a
-// null label on the marked entry clears it.
-func (s *Session) durableLeaf() string {
-	marked := ""
-	for _, e := range s.entries {
+// durableLeafAt returns the entry the last leaf label in force names
+// and the index of that label, or ("", -1) when none is in force: a
+// later leaf label replaces an earlier one, and a null label on the
+// marked entry clears it.
+func (s *Session) durableLeafAt() (string, int) {
+	marked, at := "", -1
+	for i, e := range s.entries {
 		l, ok := e.(*LabelEntry)
 		if !ok {
 			continue
@@ -236,13 +243,54 @@ func (s *Session) durableLeaf() string {
 		switch {
 		case l.Label != nil && *l.Label == LeafLabel:
 			if _, ok := s.byID[l.Target]; ok {
-				marked = l.Target
+				marked, at = l.Target, i
 			}
 		case l.Label == nil && l.Target == marked:
-			marked = ""
+			marked, at = "", -1
 		}
 	}
-	return marked
+	return marked, at
+}
+
+// resolveLeaf returns the entry the next append should hang from: the
+// newest entry in file order that descends from the durable leaf mark
+// and was appended after it, the mark itself when nothing follows it,
+// and the last line when no mark is in force.
+//
+// The mark says which branch is live, not which entry is its tip, so a
+// branch marked and then extended resolves to where it was extended to
+// rather than rewinding to the mark. That is the reading the export
+// package's PreferCurrentLeaf already takes of it.
+//
+// Two rules decide it, and the mark carries both coordinates: where it
+// points in the tree, and where it sits in the file. Entries under the
+// mark that predate it are work the mark was placed in spite of, not
+// work done on the branch since, so only entries after its line are
+// candidates. When the mark is on a branch that was later left without
+// re-marking, nothing under it follows it and the mark stands, which is
+// what a mark is for.
+func (s *Session) resolveLeaf() string {
+	if len(s.entries) == 0 {
+		return ""
+	}
+	marked, at := s.durableLeafAt()
+	if marked == "" {
+		return s.entries[len(s.entries)-1].Base().ID
+	}
+	// A parent always precedes its children in the file, so descent is a
+	// single forward pass and needs no walk back up any path.
+	under := map[string]bool{marked: true}
+	leaf := marked
+	for i, e := range s.entries {
+		b := e.Base()
+		if under[b.Parent] {
+			under[b.ID] = true
+			if i > at {
+				leaf = b.ID
+			}
+		}
+	}
+	return leaf
 }
 
 // validateEntry rejects an entry that could not be written: the checks

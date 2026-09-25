@@ -270,13 +270,15 @@ type BranchSummaryEntry struct {
 func (*BranchSummaryEntry) EntryType() string { return TypeBranchSummary }
 
 // LeafLabel is the reserved label that makes the leaf durable. A label
-// entry carrying it names the entry the next append should hang from:
-// [Session.Append] keeps the leaf at the label's target rather than
-// moving it to the label entry, and [Read] restores the leaf from the
-// last such label in the file rather than from the last line, so a
-// branch survives a restart. A null label on the same target clears
-// it. The format holds this as a library convention; see the RFC's
-// open questions.
+// entry carrying it names the branch the next append should continue,
+// not a fixed entry to pin the leaf at: [Session.Append] keeps the leaf
+// at the label's target rather than moving it to the label entry, and
+// [Read] resolves the leaf to the newest entry appended under that
+// target after the label, so a branch marked and then written on
+// resumes where it was written to rather than rewinding to the mark. A
+// mark nothing followed resolves to itself. A null label on the same
+// target clears it. The format holds this as a library convention; see
+// the RFC's open questions.
 const LeafLabel = "leaf"
 
 // LabelEntry bookmarks another entry. A nil Label clears an earlier

@@ -5,6 +5,36 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- A leaf label now names the branch that is live rather than the entry
+  the leaf is pinned at, so a session marked and then written on resumes
+  where it was written to instead of rewinding to the mark. `Read`
+  resolves the leaf to the newest entry in file order that descends from
+  the mark and was appended after it; a mark nothing followed resolves
+  to itself, and a file with no mark still resumes at its last line,
+  which is now the degenerate case of one rule rather than a second
+  rule. The mark carries both coordinates a log entry has — where it
+  points in the tree and where it sits in the file — and only the first
+  was being read (#55).
+- That defect was not confined to context. Every path-derived query
+  takes a leaf, so a reopen that rewound past the mark reported no
+  pending call and no open run for work that was in flight; a
+  `dispatch` is durable before the side effect it precedes, so a resume
+  could fail to answer a call that may already have run. `PendingCalls`,
+  `PendingQueued`, `Runs` and `OpenRun` all read correctly now.
+- The change is in the reader, so a file already written resolves
+  correctly without being rewritten, and `sqlite` inherits it by
+  rebuilding the JSONL form and calling the same `Read`. The store
+  conformance suite covers it, so every store is checked.
+- One behaviour a caller may have relied on is gone: a mark can no
+  longer pin the leaf at an entry its own branch has grown past.
+  Nothing in the library could produce such a mark — `MarkLeaf` builds
+  only from the current leaf — and the reserved label has always
+  documented itself as naming the entry the next append should hang
+  from. A durable pin would want its own label rather than an overload
+  of this one.
+
 ## v0.0.7 - 2026-09-23
 
 - `sqlite` and `otel` now require the root at exactly the version they
