@@ -98,9 +98,11 @@
             "content": "Option A: three blockers.",
             "subagent_trajectory_ref": [
               {
+                "trajectory_id": "01995b2a-0000-7000-8000-0000000000c1/a0000009",
                 "session_id": "01995b2a-0000-7000-8000-0000000000c1",
                 "trajectory_path": "01995b2a-0000-7000-8000-0000000000c1.json",
                 "extra": {
+                  "child_leaf": "a0000009",
                   "entry_id": "k0000001"
                 }
               }
@@ -120,9 +122,11 @@
             "content": "Option B: one blocker.",
             "subagent_trajectory_ref": [
               {
+                "trajectory_id": "01995b2a-0000-7000-8000-0000000000c2/b0000006",
                 "session_id": "01995b2a-0000-7000-8000-0000000000c2",
                 "trajectory_path": "01995b2a-0000-7000-8000-0000000000c2.json",
                 "extra": {
+                  "child_leaf": "b0000006",
                   "entry_id": "k0000002"
                 }
               }

@@ -1284,3 +1284,159 @@ func TestCostAskedOncePerEntry(t *testing.T) {
 		})
 	}
 }
+
+// TestSubagentLeafFromTheRecord covers the other half of the subagent
+// round trip. A link names the child session, and at the moment it is
+// written the child has no point to name; the output entry names the
+// leaf the answer was taken from, which is the first moment the parent
+// knows it. Where the record says, the document follows it. Where it
+// does not, the projection picks the child's main path, and the
+// document then turns on that choice.
+//
+// The child here branched and the parent took the answer from the
+// branch that is not main, so the two answers differ and the test can
+// tell which one produced the document.
+func TestSubagentLeafFromTheRecord(t *testing.T) {
+	ts := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	newChild := func() (*agentsession.Session, string, string) {
+		child := agentsession.New(agentsession.Header{ID: "child", CreatedAt: ts, ParentSession: "parent"})
+		mustAppend(t, child, &agentsession.ConfigEntry{Model: "gpt-5-mini"})
+		fork, err := child.Append(agentsession.NewItemEntry(openresponses.UserText("sub task")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustAppend(t, child, &agentsession.ItemEntry{Item: openresponses.AssistantText("took it"), ResponseID: "resp_a"})
+		mustAppend(t, child, &agentsession.ResponseEntry{ResponseID: "resp_a", Status: openresponses.ResponseStatusCompleted})
+		taken := child.Leaf()
+		// A second attempt, appended later, so it is the child's main
+		// path and the projection would choose it.
+		if err := child.Branch(fork); err != nil {
+			t.Fatal(err)
+		}
+		mustAppend(t, child, &agentsession.ItemEntry{Item: openresponses.AssistantText("left it"), ResponseID: "resp_b"})
+		mustAppend(t, child, &agentsession.ResponseEntry{ResponseID: "resp_b", Status: openresponses.ResponseStatusCompleted})
+		return child, taken, child.Leaf()
+	}
+	child, taken, main := newChild()
+	if taken == main {
+		t.Fatal("the child did not branch")
+	}
+	resolver := func(id string) (*agentsession.Session, error) {
+		if id == "child" {
+			return child, nil
+		}
+		return nil, nil
+	}
+
+	// from builds the parent, recording answeredFrom on the output
+	// entry when it is not empty, and returns the call's reference.
+	from := func(t *testing.T, answeredFrom string, opts Options) (atif.SubagentTrajectoryRef, *atif.Trajectory) {
+		t.Helper()
+		parent := agentsession.New(agentsession.Header{ID: "parent", CreatedAt: ts})
+		mustAppend(t, parent, &agentsession.ConfigEntry{Model: "gpt-5"})
+		mustAppend(t, parent, agentsession.NewItemEntry(openresponses.UserText("delegate")))
+		mustAppend(t, parent, &agentsession.ItemEntry{Item: &openresponses.FunctionCall{CallID: "call_1", Name: "spawn", Arguments: `{"task":"sub"}`}, ResponseID: "resp_p"})
+		mustAppend(t, parent, &agentsession.ResponseEntry{ResponseID: "resp_p", Status: openresponses.ResponseStatusCompleted})
+		mustAppend(t, parent, agentsession.NewSubsessionLink("child", "call_1"))
+		out := agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("call_1", "took it"))
+		if answeredFrom != "" {
+			out.Parents = []agentsession.EntryRef{{Session: "child", Entry: answeredFrom}}
+		}
+		mustAppend(t, parent, out)
+
+		var tr Trajectory
+		for x, err := range Trajectories(parent) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			tr = x
+		}
+		// The library's own view of the same fact, which is what the
+		// export reads.
+		calls := agentsession.Calls(parent.Path(parent.Leaf()))
+		if len(calls) != 1 {
+			t.Fatalf("calls = %d", len(calls))
+		}
+		if answeredFrom == "" {
+			if got := calls[0].From(); got != nil {
+				t.Errorf("Call.From() on an output with no record = %+v", got)
+			}
+		} else if got := calls[0].From(); len(got) != 1 || got[0].Entry != answeredFrom {
+			t.Errorf("Call.From() = %+v, want the recorded leaf %s", got, answeredFrom)
+		}
+
+		doc, err := ToATIF(tr, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := doc.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		refs := doc.Steps[1].Observation.Results[0].SubagentTrajectoryRef
+		if len(refs) != 1 {
+			t.Fatalf("refs = %+v", refs)
+		}
+		return refs[0], doc
+	}
+
+	t.Run("the record names the branch that answered", func(t *testing.T) {
+		ref, doc := from(t, taken, Options{Subsessions: resolver})
+		if ref.TrajectoryID != "child/"+taken {
+			t.Errorf("trajectory_id = %q, want the recorded leaf child/%s", ref.TrajectoryID, taken)
+		}
+		if ref.Extra["child_leaf"] != taken {
+			t.Errorf("child_leaf = %v, want %s", ref.Extra["child_leaf"], taken)
+		}
+		if len(doc.SubagentTrajectories) != 1 {
+			t.Fatalf("embedded %d trajectories", len(doc.SubagentTrajectories))
+		}
+		sub := doc.SubagentTrajectories[0]
+		if sub.TrajectoryID != "child/"+taken {
+			t.Errorf("embedded %s, want the branch the answer came from", sub.TrajectoryID)
+		}
+		// The branch that answered, not the one appended later.
+		last := sub.Steps[len(sub.Steps)-1]
+		if got := last.Message.String(); got != "took it" {
+			t.Errorf("embedded document ends %q, so the wrong branch was embedded", got)
+		}
+	})
+
+	t.Run("without a record the projection chooses main", func(t *testing.T) {
+		ref, doc := from(t, "", Options{Subsessions: resolver})
+		if ref.TrajectoryID != "child/"+main {
+			t.Errorf("trajectory_id = %q, want the main leaf child/%s", ref.TrajectoryID, main)
+		}
+		if _, ok := ref.Extra["child_leaf"]; ok {
+			// Absence is what says the document turns on a choice
+			// rather than on the record.
+			t.Errorf("child_leaf is set for an output that recorded none: %v", ref.Extra["child_leaf"])
+		}
+		sub := doc.SubagentTrajectories[0]
+		if last := sub.Steps[len(sub.Steps)-1]; last.Message.String() != "left it" {
+			t.Errorf("embedded document ends %q, want the main branch", last.Message.String())
+		}
+	})
+
+	t.Run("a record naming an unresolvable leaf embeds nothing", func(t *testing.T) {
+		ref, doc := from(t, "no-such-entry", Options{Subsessions: resolver})
+		if len(doc.SubagentTrajectories) != 0 {
+			t.Errorf("embedded %d trajectories, want none rather than a different branch in its place", len(doc.SubagentTrajectories))
+		}
+		if ref.TrajectoryID != "child/no-such-entry" {
+			t.Errorf("trajectory_id = %q, want what the record said", ref.TrajectoryID)
+		}
+		if ref.TrajectoryPath != "child.json" {
+			t.Errorf("trajectory_path = %q", ref.TrajectoryPath)
+		}
+	})
+
+	t.Run("the record survives a child that cannot be loaded at all", func(t *testing.T) {
+		ref, doc := from(t, taken, Options{})
+		if len(doc.SubagentTrajectories) != 0 {
+			t.Errorf("embedded %d trajectories without a resolver", len(doc.SubagentTrajectories))
+		}
+		if ref.TrajectoryID != "child/"+taken || ref.Extra["child_leaf"] != taken {
+			t.Errorf("ref = %+v, want the recorded leaf even with no resolver", ref)
+		}
+	})
+}

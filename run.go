@@ -49,6 +49,24 @@ func (c *Call) Rejected() bool {
 	return false
 }
 
+// From returns the predecessors the call's output converges: for a
+// call a subagent answered, the leaf of the child session the answer
+// was taken from, which the format says the output entry SHOULD name
+// and which is the first moment the parent knows it. It is nil for a
+// pending call, and for an output whose writer recorded no provenance.
+//
+// A [LinkEntry] names the child session and is written when the call
+// is dispatched, before the child has a point to name; this is the
+// other half of that round trip. Without it, a child that branched
+// leaves no record of which of its leaves answered, and a projection
+// has to choose.
+func (c *Call) From() []EntryRef {
+	if c.Output == nil {
+		return nil
+	}
+	return c.Output.Parents
+}
+
 // Args returns the arguments the tool ran with: those of the last
 // decision that rewrote them, else the call's own.
 func (c *Call) Args() string {
