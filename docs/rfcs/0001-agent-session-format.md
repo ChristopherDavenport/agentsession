@@ -116,8 +116,17 @@ RFC 2119.
 - Media referenced by items MAY be stored inline as data URLs or beside
   the file under a directory named after the session ID. A header field
   says which.
-- Entry order and `parent` links are the ordering. `ts` is informational
-  and a reader MUST NOT order entries by it; clocks step backwards.
+- Entry order and `parent` links are the ordering, and they order
+  different things: `parent` orders a path, since an ancestor precedes
+  every entry below it, and says nothing between two children of one
+  entry. Entry order is what separates siblings, so it is what decides
+  which of several branches below a point was written last.
+- `ts` is informational and a reader MUST NOT order entries by it;
+  clocks step backwards. This is a rule about the member an entry
+  carries, which its writer asserts. A sequence a store assigns as it
+  accepts entries — a line number, a row key, a commit timestamp the
+  store's clock is authoritative for — is a different thing and is what
+  entry order is in a file. A store MAY order by one.
 
 ## Header
 
@@ -1028,22 +1037,34 @@ which the `run` entry cannot name and which 0.3 adopts beside the
 
 ## Open questions
 
-- Whether the current leaf needs a durable marker. Held: a reserved
-  `label` a library honours on open covers it without a format change.
-  What that library does with the marker is not specified here, and two
-  conforming readers can currently disagree about where a reopened
-  session resumes — which for a resume format is the last resume-
-  critical algorithm left unwritten.
+- Whether the rule for honouring a durable leaf marker belongs here.
+  Held so far: a reserved `label` covers the marker without a format
+  change, and how a library reads it is its own business. The reference
+  implementation now resolves it to the newest entry in file order that
+  descends from the mark and was appended after it — the mark names the
+  branch that is live, not the entry the leaf is pinned at — because
+  reading it as a pin rewinds a branch that was marked and then written
+  on, and takes every path-derived query with it. Two conforming readers
+  can still disagree about where a session resumes, which for a resume
+  format is the last resume-critical algorithm left unwritten.
 - Whether a core `exchange` type is worth defining for the common case
   of one entry converging several subagent results, or whether
   `parents` on an `item` already covers it. Held: `parents` covers it,
   and a type earns its place only once a reader needs to treat the
   convergence differently from the item that carries it.
-- What supplies the total order when entries do not share one file.
-  Within a file, file order is the ordering and `ts` MUST NOT be used
-  for it. A store that holds entries outside a single file needs a
-  replacement, and resolving a durable leaf marker depends on having
-  one.
+- Who assigns a session's append sequence when two writers append at
+  once. Every store has such a sequence already — line order in a file,
+  `(session_id, seq)` in the SQLite store, which is also how that store
+  notices a second writer — so "file order is the ordering" generalises
+  to "a session has an append sequence its store assigns", and no store
+  is short of one while it takes writes in turn. The question is only
+  live for a store that accepts concurrent appends. Two writes naming
+  the same parent are a fork, which the format already represents and
+  needs no order to record; what needs one is deciding which branch a
+  later reader resumes on. Either the store supplies the order, or the
+  fork is left to a `label` to resolve and an unmarked session with
+  several leaves is reported as ambiguous rather than guessed at. The
+  second is the honest answer and costs a host an explicit mark.
 - Whether to allow a second payload profile at 0.x, or hold the line at
   Open Responses and rely on converters.
 - Sidecar media layout and naming.
