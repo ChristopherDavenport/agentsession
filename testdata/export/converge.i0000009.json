@@ -1,0 +1,342 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-00000000000c",
+  "trajectory_id": "i0000009",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5",
+    "tool_definitions": [
+      {
+        "function": {
+          "description": "Run a task in a subagent",
+          "name": "delegate",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "task"
+            ]
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-09-25T09:00:02Z",
+      "source": "user",
+      "message": "Survey both options and report.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000001"
+        },
+        "config_entries": [
+          "c0000001"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Survey both options and report."
+              }
+            ]
+          }
+        },
+        "run": [
+          {
+            "end_entry_id": "u0000002",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-1",
+            "source": "input",
+            "start_entry_id": "u0000001"
+          }
+        ],
+        "tool_changes": {
+          "added": [
+            "delegate"
+          ]
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-09-25T09:00:04Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_a",
+          "function_name": "delegate",
+          "arguments": {
+            "task": "option A"
+          }
+        },
+        {
+          "tool_call_id": "call_b",
+          "function_name": "delegate",
+          "arguments": {
+            "task": "option B"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_a",
+            "content": "Option A: three blockers.",
+            "subagent_trajectory_ref": [
+              {
+                "session_id": "01995b2a-0000-7000-8000-0000000000c1",
+                "trajectory_path": "01995b2a-0000-7000-8000-0000000000c1.json",
+                "extra": {
+                  "entry_id": "k0000001"
+                }
+              }
+            ],
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_a",
+                  "output": "Option A: three blockers."
+                }
+              }
+            }
+          },
+          {
+            "source_call_id": "call_b",
+            "content": "Option B: one blocker.",
+            "subagent_trajectory_ref": [
+              {
+                "session_id": "01995b2a-0000-7000-8000-0000000000c2",
+                "trajectory_path": "01995b2a-0000-7000-8000-0000000000c2.json",
+                "extra": {
+                  "entry_id": "k0000002"
+                }
+              }
+            ],
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_b",
+                  "output": "Option B: one blocker."
+                }
+              }
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 40,
+        "completion_tokens": 20,
+        "cached_tokens": 0
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000001"
+        },
+        "calls": {
+          "call_a": {
+            "dispatch": {
+              "entry_id": "p0000001"
+            }
+          },
+          "call_b": {
+            "dispatch": {
+              "entry_id": "p0000002"
+            }
+          }
+        },
+        "item_entry_ids": [
+          "i0000002",
+          "i0000003"
+        ],
+        "latency_ms": 500,
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_1",
+              "status": "completed",
+              "call_id": "call_a",
+              "name": "delegate",
+              "arguments": "{\"task\":\"option A\"}"
+            },
+            {
+              "type": "function_call",
+              "id": "fc_2",
+              "status": "completed",
+              "call_id": "call_b",
+              "name": "delegate",
+              "arguments": "{\"task\":\"option B\"}"
+            }
+          ],
+          "response": {
+            "entry_id": "r0000001",
+            "latency_ms": 500,
+            "model": "gpt-5",
+            "request_hash": "sha256:aaf6608beeb4a271342889f52f0603608a846922c89b7ac81e28c3c0c29ecb03",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-09-25T09:00:04Z",
+            "usage": {
+              "input_tokens": 40,
+              "output_tokens": 20,
+              "total_tokens": 60,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-09-25T09:00:23Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Option B has fewer blockers.",
+      "metrics": {
+        "prompt_tokens": 90,
+        "completion_tokens": 8,
+        "cached_tokens": 40
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "r0000002"
+        },
+        "item_entry_ids": [
+          "i0000006"
+        ],
+        "latency_ms": 300,
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Option B has fewer blockers.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "r0000002",
+            "latency_ms": 300,
+            "model": "gpt-5",
+            "request_hash": "sha256:c3bf7e3e01c3678f29becc7cc026bed7b71d5c45b6e63974ff77608b023a538e",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-09-25T09:00:23Z",
+            "usage": {
+              "input_tokens": 90,
+              "output_tokens": 8,
+              "total_tokens": 98,
+              "input_tokens_details": {
+                "cached_tokens": 40
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-09-25T09:00:30Z",
+      "source": "user",
+      "message": "Draft it as a memo.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000007"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Draft it as a memo."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 5,
+      "timestamp": "2026-09-25T09:00:40Z",
+      "source": "user",
+      "message": "Merge both drafts: a memo with the table under it.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "i0000009"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Merge both drafts: a memo with the table under it."
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 130,
+    "total_completion_tokens": 28,
+    "total_cached_tokens": 40,
+    "total_steps": 5
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.4",
+      "leaf": "i0000009",
+      "main": true,
+      "records": [
+        "run",
+        "dispatch",
+        "decision"
+      ]
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    },
+    "preferred_over": [
+      "i0000008"
+    ]
+  }
+}

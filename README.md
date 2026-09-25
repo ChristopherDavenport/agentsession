@@ -26,9 +26,12 @@ branched, and what happened afterwards.
 - **Append-only and crash-tolerant.** A session file is always a valid
   prefix of the run; a line cut short by a crash is reported and
   skipped.
-- **Tree-shaped.** Branching creates children of an earlier entry in
-  the same file. Abandoned branches stay, because they are preference
-  data.
+- **Tree-shaped context, DAG-shaped provenance.** Branching creates
+  children of an earlier entry in the same file, and a context is built
+  by walking one parent. Abandoned branches stay, because they are
+  preference data. Convergence — a subagent's result coming back, a
+  branch merged in — is recorded beside that tree in `parents`, which
+  says where work came from and never widens the walk.
 - **Exportable.** One ATIF v1.8 document per root-to-leaf path, with
   the raw items in the extras, redaction at export and media spilled
   beside the documents.

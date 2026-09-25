@@ -1,0 +1,238 @@
+{
+  "i0000008": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Be brief.",
+      "tools": [
+        {
+          "type": "function",
+          "name": "delegate",
+          "description": "Run a task in a subagent",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "task"
+            ]
+          }
+        }
+      ]
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Survey both options and report."
+          }
+        ]
+      },
+      {
+        "type": "function_call",
+        "id": "fc_1",
+        "status": "completed",
+        "call_id": "call_a",
+        "name": "delegate",
+        "arguments": "{\"task\":\"option A\"}"
+      },
+      {
+        "type": "function_call",
+        "id": "fc_2",
+        "status": "completed",
+        "call_id": "call_b",
+        "name": "delegate",
+        "arguments": "{\"task\":\"option B\"}"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_a",
+        "output": "Option A: three blockers."
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_b",
+        "output": "Option B: one blocker."
+      },
+      {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Option B has fewer blockers.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Draft it as a table."
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "c0000001",
+      "u0000001",
+      "i0000001",
+      "i0000002",
+      "i0000003",
+      "r0000001",
+      "k0000001",
+      "k0000002",
+      "p0000001",
+      "p0000002",
+      "i0000004",
+      "i0000005",
+      "i0000006",
+      "r0000002",
+      "u0000002",
+      "i0000008"
+    ],
+    "item_entries": [
+      "i0000001",
+      "i0000002",
+      "i0000003",
+      "i0000004",
+      "i0000005",
+      "i0000006",
+      "i0000008"
+    ]
+  },
+  "i0000009": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Be brief.",
+      "tools": [
+        {
+          "type": "function",
+          "name": "delegate",
+          "description": "Run a task in a subagent",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "task"
+            ]
+          }
+        }
+      ]
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Survey both options and report."
+          }
+        ]
+      },
+      {
+        "type": "function_call",
+        "id": "fc_1",
+        "status": "completed",
+        "call_id": "call_a",
+        "name": "delegate",
+        "arguments": "{\"task\":\"option A\"}"
+      },
+      {
+        "type": "function_call",
+        "id": "fc_2",
+        "status": "completed",
+        "call_id": "call_b",
+        "name": "delegate",
+        "arguments": "{\"task\":\"option B\"}"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_a",
+        "output": "Option A: three blockers."
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_b",
+        "output": "Option B: one blocker."
+      },
+      {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Option B has fewer blockers.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Draft it as a memo."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Merge both drafts: a memo with the table under it."
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "c0000001",
+      "u0000001",
+      "i0000001",
+      "i0000002",
+      "i0000003",
+      "r0000001",
+      "k0000001",
+      "k0000002",
+      "p0000001",
+      "p0000002",
+      "i0000004",
+      "i0000005",
+      "i0000006",
+      "r0000002",
+      "u0000002",
+      "i0000007",
+      "i0000009"
+    ],
+    "item_entries": [
+      "i0000001",
+      "i0000002",
+      "i0000003",
+      "i0000004",
+      "i0000005",
+      "i0000006",
+      "i0000007",
+      "i0000009"
+    ]
+  }
+}

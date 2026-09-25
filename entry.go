@@ -63,8 +63,18 @@ type EntryBase struct {
 	// ID is unique within the session. Session.Append assigns one when
 	// it is empty.
 	ID string
-	// Parent is the ID of the parent entry, or "" for a root.
+	// Parent is the ID of the parent entry, or "" for a root. It is the
+	// entry's line of descent: exactly one, in this session, and the
+	// only edge a context is built from.
 	Parent string
+	// Parents records further predecessors this entry converges: the
+	// result of a subagent session, a branch merged back, several
+	// workers joined at once. It is provenance. Nothing it names
+	// contributes to any context by virtue of being named — whatever
+	// crossed the boundary is in this entry's own payload, materialised
+	// — so [Session.Path] and every context the library builds follow
+	// Parent alone. Session.Append sorts it.
+	Parents []EntryRef
 	// Timestamp is when the entry was written.
 	Timestamp time.Time
 	// Unknown holds envelope members this package does not define,
@@ -76,15 +86,27 @@ type EntryBase struct {
 // Base returns the envelope.
 func (b *EntryBase) Base() *EntryBase { return b }
 
-// envelope is the wire form of the common members.
-type envelope struct {
-	Type   string    `json:"type"`
-	ID     string    `json:"id"`
-	Parent *string   `json:"parent"`
-	TS     time.Time `json:"ts"`
+// EntryRef names one entry, here or in another session. It is what
+// [EntryBase.Parents] holds.
+type EntryRef struct {
+	// Session names the session Entry is in. It is empty when the entry
+	// is in this session, which is the only case a reader can resolve
+	// without a store.
+	Session string `json:"session,omitempty"`
+	// Entry is the ID of the entry referred to.
+	Entry string `json:"entry"`
 }
 
-var envelopeKeys = []string{"type", "id", "parent", "ts"}
+// envelope is the wire form of the common members.
+type envelope struct {
+	Type    string     `json:"type"`
+	ID      string     `json:"id"`
+	Parent  *string    `json:"parent"`
+	Parents []EntryRef `json:"parents,omitempty"`
+	TS      time.Time  `json:"ts"`
+}
+
+var envelopeKeys = []string{"type", "id", "parent", "parents", "ts"}
 
 // ItemEntry is one conversation item in the payload profile. It is in
 // model context.
@@ -414,6 +436,7 @@ func (e *UnknownEntry) decodeMembers(data []byte, all map[string]json.RawMessage
 	if env.Parent != nil {
 		e.Parent = *env.Parent
 	}
+	e.Parents = env.Parents
 	e.Timestamp = env.TS
 	e.Raw = append(json.RawMessage(nil), data...)
 	return nil
@@ -542,6 +565,11 @@ func envelopeFrom(all map[string]json.RawMessage) (envelope, error) {
 		}
 		env.Parent = &parent
 	}
+	if raw, ok := all["parents"]; ok && !isNull(raw) {
+		if err := json.Unmarshal(raw, &env.Parents); err != nil {
+			return env, fmt.Errorf("parents: %w", err)
+		}
+	}
 	if raw, ok := all["ts"]; ok && !isNull(raw) {
 		if err := json.Unmarshal(raw, &env.TS); err != nil {
 			return env, fmt.Errorf("ts: %w", err)
@@ -553,7 +581,7 @@ func envelopeFrom(all map[string]json.RawMessage) (envelope, error) {
 // marshalEntry joins the envelope, the type-specific body and the
 // unknown members into one object.
 func marshalEntry(typ string, base *EntryBase, body any) ([]byte, error) {
-	env := envelope{Type: typ, ID: base.ID, TS: base.Timestamp}
+	env := envelope{Type: typ, ID: base.ID, Parents: base.Parents, TS: base.Timestamp}
 	if base.Parent != "" {
 		env.Parent = &base.Parent
 	}
@@ -589,6 +617,7 @@ func fillBase(all map[string]json.RawMessage, base *EntryBase, known map[string]
 	if env.Parent != nil {
 		base.Parent = *env.Parent
 	}
+	base.Parents = env.Parents
 	base.Timestamp = env.TS
 	base.Unknown = jsonx.ExtraKeys(all, known, envelopeKeys...)
 	return nil

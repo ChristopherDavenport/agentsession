@@ -87,6 +87,13 @@ func TestEntryEncoding(t *testing.T) {
 			want:  `{"type":"info","id":"n","parent":"a","ts":"2026-09-17T12:00:01.5Z","name":"Refactor auth"}`,
 		},
 		{
+			name: "item converging a local worker and a subagent leaf",
+			entry: &ItemEntry{EntryBase: EntryBase{ID: "j", Parent: "a", Timestamp: ts,
+				Parents: []EntryRef{{Entry: "w7"}, {Session: "01J", Entry: "c4"}}},
+				Item: openresponses.UserText("merged")},
+			want: `{"type":"item","id":"j","parent":"a","parents":[{"entry":"w7"},{"session":"01J","entry":"c4"}],"ts":"2026-09-17T12:00:01.5Z","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"merged"}]}}`,
+		},
+		{
 			name: "env",
 			entry: &EnvEntry{EntryBase: base("e", "a"), CWD: "/p", VCS: &VCS{System: "git", Revision: "abc", Dirty: true},
 				Files: &FileHashes{Read: map[string]string{"a": "sha256:1"}}, Tools: map[string]string{"go": "1.25"}},

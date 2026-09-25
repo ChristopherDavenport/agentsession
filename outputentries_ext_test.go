@@ -26,7 +26,7 @@ import (
 // would serve is exactly what RequestContext dropped. If this
 // compiles and passes, agenteval can delete its own walk.
 func TestOutputEntriesFromOutside(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge"} {
 		t.Run(name, func(t *testing.T) {
 			s := readSession(t, name)
 			for _, leaf := range s.Leaves() {

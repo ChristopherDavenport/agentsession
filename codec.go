@@ -32,7 +32,8 @@ func (t *TruncatedLine) Unwrap() error { return t.Err }
 
 // Read decodes a session from its JSONL form. A final line that does not
 // parse is tolerated and reported through [Session.Truncated]; any
-// other malformed line, a missing parent or a repeated ID is an error.
+// other malformed line, a missing parent, a convergence reference that
+// names no entry yet in this file, or a repeated ID is an error.
 // The leaf is the last entry in the file unless a [LeafLabel] is in
 // force, in which case it is the entry that label names.
 func Read(r io.Reader) (*Session, error) {
@@ -108,6 +109,9 @@ func (s *Session) link(e Entry) error {
 			return fmt.Errorf("entry %s: %w: parent %s", b.ID, ErrNoEntry, b.Parent)
 		}
 	}
+	if err := s.checkParents(b); err != nil {
+		return err
+	}
 	s.add(e)
 	return nil
 }
@@ -150,7 +154,7 @@ func rewriteEnvelope(u *UnknownEntry) ([]byte, error) {
 	if err := json.Unmarshal(u.Raw, &all); err != nil {
 		return nil, fmt.Errorf("agentsession: unknown entry raw: %w", err)
 	}
-	env := envelope{Type: u.Type, ID: u.ID, TS: u.Timestamp}
+	env := envelope{Type: u.Type, ID: u.ID, Parents: u.Parents, TS: u.Timestamp}
 	if env.Type == "" {
 		env.Type = jsonx.PeekString(all["type"])
 		u.Type = env.Type
