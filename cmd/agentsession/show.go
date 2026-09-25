@@ -94,6 +94,11 @@ func printEntries(w io.Writer, s *agentsession.Session, full bool) {
 		if l, ok := labels[b.ID]; ok {
 			marks = append(marks, "["+l+"]")
 		}
+		if n := len(b.Parents); n > 0 {
+			// Provenance, not a second parent: the PARENT column is still
+			// the whole of this entry's line of descent.
+			marks = append(marks, fmt.Sprintf("converges %d", n))
+		}
 		summary := describeEntry(e, full)
 		if len(marks) > 0 {
 			summary += "  " + strings.Join(marks, " ")

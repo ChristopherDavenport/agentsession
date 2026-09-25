@@ -37,6 +37,76 @@ func Run(t *testing.T, opts Options) {
 	if opts.Reopen != nil {
 		t.Run("Persistence", func(t *testing.T) { testPersistence(t, opts) })
 		t.Run("DurableLeaf", func(t *testing.T) { testDurableLeaf(t, opts) })
+		t.Run("Convergence", func(t *testing.T) { testConvergence(t, opts) })
+	}
+}
+
+// testConvergence appends an entry that converges a branch of this
+// session and the leaf of another, and reopens the store. The
+// references are provenance: they survive the round trip, they are
+// sorted however the caller supplied them, and they stay out of the
+// context and off the path — so a store that dropped them would lose
+// which leaf of a subagent answered, and one that walked them would
+// put an abandoned branch's work back into the prompt.
+func testConvergence(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	if _, err := st.Append(ctx, id, &agentsession.ConfigEntry{Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("kept")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	abandoned, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("abandoned")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	join := agentsession.NewItemEntry(openresponses.UserText("join"))
+	join.Parent = kept
+	join.Parents = []agentsession.EntryRef{
+		{Session: "01995b2a-0000-7000-8000-0000000000ff", Entry: "child-leaf"},
+		{Entry: abandoned},
+	}
+	joinID, err := st.Append(ctx, id, join)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := opts.Reopen(t, st).Open(ctx, id)
+	if err != nil {
+		t.Fatalf("Open after reopen: %v", err)
+	}
+	e, ok := again.Entry(joinID)
+	if !ok {
+		t.Fatalf("the join is gone after a reopen")
+	}
+	want := []agentsession.EntryRef{
+		{Entry: abandoned},
+		{Session: "01995b2a-0000-7000-8000-0000000000ff", Entry: "child-leaf"},
+	}
+	if got := e.Base().Parents; !reflect.DeepEqual(got, want) {
+		t.Errorf("parents after reopen = %+v, want %+v", got, want)
+	}
+	if p := e.Base().Parent; p != kept {
+		t.Errorf("parent after reopen = %s, want %s", p, kept)
+	}
+	c, err := again.ContextAt(joinID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Items) != 2 { // kept and the join; never the converged branch
+		t.Errorf("context at the join has %d items, want 2: %+v", len(c.Items), c.Items)
+	}
+	for _, pe := range again.Path(joinID) {
+		if pe.Base().ID == abandoned {
+			t.Error("the converged branch is on the path to the join")
+		}
 	}
 }
 

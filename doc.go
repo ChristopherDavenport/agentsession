@@ -9,7 +9,10 @@
 // A session file is a header line followed by entries, one JSON object
 // per line. Entries form a tree through their id and parent members,
 // so a branch is a child of an earlier entry, in place, and an
-// abandoned branch stays in the file. [Header] and [Entry] are the two
+// abandoned branch stays in the file. An entry may also name further
+// predecessors in [EntryBase.Parents] — a subagent's result, a branch
+// merged back — which record where converged work came from and are
+// never walked when building a context. [Header] and [Entry] are the two
 // line shapes; the concrete entry types are [ItemEntry] (one Open
 // Responses item, verbatim), [ResponseEntry] (the envelope of one model
 // call), [ConfigEntry] (a delta to request settings), [CompactionEntry]

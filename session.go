@@ -3,6 +3,7 @@ package agentsession
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -14,6 +15,12 @@ var ErrNoEntry = errors.New("agentsession: no such entry")
 
 // ErrDuplicateEntry is returned when an appended entry reuses an ID.
 var ErrDuplicateEntry = errors.New("agentsession: duplicate entry id")
+
+// ErrBadConvergence is returned for an entry whose Parents break the
+// format's rules: a reference naming no entry, the same entry named
+// twice, a reference to the entry's own parent, or a reference into
+// this session naming an entry that does not already exist.
+var ErrBadConvergence = errors.New("agentsession: bad convergence reference")
 
 // Session is one session in memory: the header, the entries in file
 // order, the tree they form and the current leaf. It is safe for
@@ -156,8 +163,11 @@ func (s *Session) ResetLeaf() {
 // Append adds e to the tree and makes it the leaf. An empty ID is
 // assigned; an empty Parent is set to the current leaf, so an explicit
 // Parent branches in place; a zero Timestamp is set to now. The parent
-// must exist and the ID must be new. On success e is owned by the
-// session and must not be modified.
+// must exist and the ID must be new. Parents, when the caller set any,
+// is sorted into the order the format requires and checked against the
+// convergence rules; it does not move the leaf and does not reach any
+// context. On success e is owned by the session and must not be
+// modified.
 func (s *Session) Append(e Entry) (string, error) {
 	if err := validateEntry(e); err != nil {
 		return "", err
@@ -180,6 +190,10 @@ func (s *Session) Append(e Entry) (string, error) {
 	}
 	if b.Timestamp.IsZero() {
 		b.Timestamp = s.now()
+	}
+	sortParents(b.Parents)
+	if err := s.checkParents(b); err != nil {
+		return "", err
 	}
 	if d, ok := e.(*DispatchEntry); ok {
 		// The format forbids a dispatch for a call a decision rejected.
@@ -291,6 +305,66 @@ func (s *Session) resolveLeaf() string {
 		}
 	}
 	return leaf
+}
+
+// sortParents puts convergence references in the order the format
+// requires of a writer: by session, then by entry. A reference to an
+// entry in this session omits the session, and the empty string sorts
+// before every other, so "those come first" falls out of the same
+// comparison rather than needing a case of its own. Sorting is what
+// keeps a file independent of the order workers happened to finish in.
+//
+// Only a writer is held to this. A file that arrives unsorted is read
+// and written back as it was, like every other thing a reader is given
+// and does not get to improve.
+func sortParents(refs []EntryRef) {
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Session != refs[j].Session {
+			return refs[i].Session < refs[j].Session
+		}
+		return refs[i].Entry < refs[j].Entry
+	})
+}
+
+// checkParents applies the convergence rules to an entry's Parents:
+// every reference names an entry, no entry is named twice, none names
+// the entry's own parent, and a reference into this session names an
+// entry that already exists. That last one is what makes the structure
+// acyclic — with parent, every edge points at something older — so it
+// is checked on read as well as on append.
+//
+// A reference naming this session's own ID is a reference into this
+// file, which the format lets a writer say either way, so it is held
+// to the same rules as one that leaves the session out. A reference
+// into another session is not resolvable here and is only checked for
+// shape; whether that session exists is a question for a store.
+func (s *Session) checkParents(b *EntryBase) error {
+	if len(b.Parents) == 0 {
+		return nil
+	}
+	seen := make(map[EntryRef]bool, len(b.Parents))
+	for _, r := range b.Parents {
+		if r.Entry == "" {
+			return fmt.Errorf("%w: entry %s names a predecessor with no entry id", ErrBadConvergence, b.ID)
+		}
+		if r.Session == s.header.ID {
+			r.Session = ""
+		}
+		if seen[r] {
+			return fmt.Errorf("%w: entry %s names %s twice", ErrBadConvergence, b.ID, r.Entry)
+		}
+		seen[r] = true
+		if r.Session != "" {
+			continue
+		}
+		if r.Entry == b.Parent {
+			return fmt.Errorf("%w: entry %s converges its own parent %s", ErrBadConvergence, b.ID, r.Entry)
+		}
+		if _, ok := s.byID[r.Entry]; !ok {
+			return fmt.Errorf("%w: entry %s converges %s, which is not in this session yet", ErrBadConvergence, b.ID, r.Entry)
+		}
+	}
+	return nil
 }
 
 // validateEntry rejects an entry that could not be written: the checks

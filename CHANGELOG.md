@@ -7,6 +7,36 @@ versions may break the API.
 
 ## Unreleased
 
+- RFC 0001 draft 0.4 is implemented and the library writes
+  `agentsession/0.4`; 0.3, 0.2 and 0.1 files read unchanged. An entry
+  may now carry `parents`, further predecessors it converges: the leaf
+  of the subagent session that answered a call, a branch merged back,
+  several workers joined at once. `EntryBase.Parents` holds them as
+  `EntryRef` values, each naming an `entry` and optionally the
+  `session` it is in, since a bare entry ID is unique only within a
+  file.
+- `parents` is provenance and nothing else. It is not walked when
+  building a context, so `Path`, `ContextAt` and every path-derived
+  query follow `parent` alone, and a 0.3 reader given a 0.4 file
+  rebuilds the same request byte for byte — which is what keeps this a
+  minor version. That is now measured rather than asserted: the
+  round-trip fixture is read twice, once with its `parents` members
+  stripped, and the rebuilt request hashes must match at every leaf.
+- `Session.Append` sorts an entry's `Parents` by session then entry, as
+  the format requires of a writer, so a file does not depend on the
+  order the workers happened to finish in. A file that arrives unsorted
+  is written back as it came; sorting is a rule for writers.
+- `Append` and `Read` both reject a convergence that breaks the
+  format's rules, with the new `ErrBadConvergence`: a reference naming
+  no entry, one naming the entry's own parent, one naming the same
+  entry twice, and one into this session naming an entry that does not
+  exist yet — which with `parent` is what makes the structure acyclic.
+  A reference carrying this session's own ID is held to the same rules
+  as one that leaves the session out. A reference into another session
+  is checked for shape only; resolving it is a store's job.
+- `agentsession show` marks an entry that converges others. The PARENT
+  column is unchanged, because it is still the whole of an entry's line
+  of descent.
 - A leaf label now names the branch that is live rather than the entry
   the leaf is pinned at, so a session marked and then written on resumes
   where it was written to instead of rewinding to the mark. `Read`
