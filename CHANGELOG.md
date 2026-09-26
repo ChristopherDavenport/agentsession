@@ -7,6 +7,20 @@ versions may break the API.
 
 ## Unreleased
 
+- A root entry may carry `parents`, and there it records where a
+  session diverged from rather than what it converged: a session forked
+  from an entry of another opens with a copy of that entry's path,
+  under the same IDs, and its root names the entry. RFC 0001 says so
+  now, in the convergence and ingress sections and as a new open
+  question about what a diverging edge may carry beyond its point. The
+  library already accepted the shape, since a root's parent is null
+  and cannot be named; what is new is the fixture that measures the
+  claim. `fork` is `basic` forked at its tool output, and the test
+  holds that the copied path has the origin's IDs and rebuilds the
+  origin's request at the fork point, that every copied response
+  verifies in the fork, that the fork's first request hashes to the
+  value the origin's did there — the shared prefix a provider caches —
+  and that stripping the reference changes no context.
 - **Breaking for writers.** `Append` now refuses an item entry holding
   an `openresponses.ItemReference`. RFC 0001 gains the **ingress** rule
   — an entry receiving material from outside the session carries it

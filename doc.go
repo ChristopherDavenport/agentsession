@@ -12,7 +12,9 @@
 // abandoned branch stays in the file. An entry may also name further
 // predecessors in [EntryBase.Parents] — a subagent's result, a branch
 // merged back — which record where converged work came from and are
-// never walked when building a context. [Header] and [Entry] are the two
+// never walked when building a context; on a root entry the same member
+// records the point in another session this one was forked from, whose
+// path the session opens with. [Header] and [Entry] are the two
 // line shapes; the concrete entry types are [ItemEntry] (one Open
 // Responses item, verbatim), [ResponseEntry] (the envelope of one model
 // call), [ConfigEntry] (a delta to request settings), [CompactionEntry]

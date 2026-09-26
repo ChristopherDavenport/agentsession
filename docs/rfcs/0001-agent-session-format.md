@@ -150,7 +150,7 @@ RFC 2119.
 | `harness` | SHOULD | name and version of the writer |
 | `records` | SHOULD | the record entry types, core or namespaced, this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
-| `parent_session` | MAY | session ID this was forked or spawned from |
+| `parent_session` | MAY | session ID this was forked or spawned from. It names the session; for a fork, the root entry's `parents` names the point, as the convergence section says |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar` |
 
@@ -224,6 +224,39 @@ a branch merged back, several workers joined at once.
   order in which workers happened to finish.
 - A reader that does not understand `parents` builds exactly the same
   context as one that does, losing only the provenance.
+
+A root entry MAY carry `parents`, and there it records where a session
+diverged from rather than what it converged. A session forked from an
+entry of another session MUST open with a copy of that session's path
+to that entry — the same entries, in the same order, under the same
+IDs — and its root names that entry in `parents`. The reference names
+the entry in the origin session and MUST carry `session`: this file
+holds a copy of the entry under the same ID, so a reference that
+omitted `session` would name the copy, which is written after the root.
+Because the IDs are kept, the path to that ID here is the path to it
+there, and a reader holding both files can check that the two rebuild
+the same request. The copy is the ingress rule applied to a fork: the
+inherited context is in this file, materialised, and the reference
+says where it was taken from.
+
+What is copied is the path and not the context it builds: the entries
+a `compaction` on it excludes are copied too, or its `first_kept` and
+`pinned` no longer resolve. A copied reference in `parents` that
+omitted `session` MUST be rewritten to name the origin session, since
+in this file the bare ID would resolve against the copy. A copied
+`branch_summary` names in `from` a leaf that was not on the copied
+path, so it is not in this file, and a reader MUST NOT reject it. The
+fork's header MUST name the origin's payload profile and MUST NOT name
+in `records` a type the origin's header did not, or the promise would
+reach copied entries whose writer never made it. IDs are unique within
+a file, so an entry the fork appends below the point MAY carry an ID
+the origin used elsewhere; identity across the two files holds over
+the copied region only. A fork of a fork names its immediate origin,
+the session it was copied from, which is the session `parent_session`
+names. The header's `parent_session` names the session; the root's
+`parents` names the point. A subsession that opens with a copy of its
+parent's context is also a fork, and its root names the point in the
+same way, beside the `spawned_by` that names the call.
 
 ## Core entry types
 
@@ -744,6 +777,8 @@ written here once rather than implied in four places:
 - A subagent's `function_call_output` carries the output; the `link`
   naming the child session contributes nothing to any context.
 - `parents` records where converged work came from and is never walked.
+- A session forked from a point in another opens with that point's
+  path, copied; its root's `parents` says where from.
 
 The cost is duplication: the same bytes sit in the child's file and in
 the parent's. That is the price of a file that answers "what was the
@@ -952,12 +987,18 @@ appended after an export, a judge's `outcome` above all, moves the
 leaf, and the document a score names has to be reproducible from the
 entry it targets.
 
+A corpus holding an origin and a session forked from it projects the
+shared prefix twice, copied `outcome` entries included. The fork root's
+`parents` is what lets a consumer tell the copy from the original.
+
 ### OpenTelemetry
 
 Spans emitted for a session carry `session.id` and the entry ID of the
 entry they correspond to. Tool spans link to the inference span whose
 output contained the call; each inference span links to the previous
-turn's; the first span after a branch links to the branched-from entry.
+turn's; the first span after a branch links to the branched-from
+entry, and the first span of a forked session links to the entry its
+root names, under the origin session's ID.
 
 ## Versioning
 
@@ -1006,9 +1047,9 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.3
 
-Additive, with nothing tightened. `parents` on the entry envelope
-records convergence — a subagent's result, a branch merged back,
-several workers joined at once — as provenance.
+Additive but for one tightened rule, noted last. `parents` on the
+entry envelope records convergence — a subagent's result, a branch
+merged back, several workers joined at once — as provenance.
 
 The context algorithm is untouched, deliberately. `parents` is never
 walked, so a 0.3 reader given a 0.4 file walks the same `parent` chain,
@@ -1021,6 +1062,15 @@ constraint the member was designed against rather than a property it
 happened to have.
 
 A 0.3 file is a 0.4 file with no `parents` anywhere.
+
+`parents` on a root entry records where a session diverged from, so both
+directions of the graph are recorded at the entry: a fork's root names
+the entry it continues from, as a join names the leaves it took work
+from. The header's `parent_session` already named the session; the root
+names the point. A forked session opens with that entry's path copied
+under the same IDs, which is the ingress rule once more, and is what
+lets a reader with both files check that the fork continues the context
+it claims to.
 
 **Ingress** says that an entry carrying material from outside this
 session carries it materialised, and that a reference to its origin
@@ -1169,6 +1219,13 @@ which the `run` entry cannot name and which 0.3 adopts beside the
   fork is left to a `label` to resolve and an unmarked session with
   several leaves is reported as ambiguous rather than guessed at. The
   second is the honest answer and costs a host an explicit mark.
+- What a diverging edge may carry beyond the point it diverges from. A
+  fork opens with the origin's path copied whole. A successor session
+  that keeps some of the origin's items and drops others from the
+  middle — a handoff that strips one agent's tool traffic before the
+  next takes over — is not a fork of any one entry, and nothing today
+  records that an item left the context. Whatever answers one answers
+  the other.
 - Whether to allow a second payload profile at 0.x, or hold the line at
   Open Responses and rely on converters.
 - Sidecar media layout and naming.
