@@ -166,21 +166,22 @@ func TestForkIsMaterialised(t *testing.T) {
 
 	// The fork's own first model call was sent the same request the
 	// origin's was, and answered differently: same prefix, intentional
-	// divergence.
-	const first = "r0000002"
-	if err := fork.Verify(first); err != nil {
+	// divergence. Below the point the two files number their own
+	// entries; identity across them holds over the copied region only.
+	const originFirst, forkFirst = "r0000002", "f0000002"
+	if err := fork.Verify(forkFirst); err != nil {
 		t.Fatalf("the fork's first response: %v", err)
 	}
-	oe, _ := origin.Entry(first)
-	fe, _ := fork.Entry(first)
+	oe, _ := origin.Entry(originFirst)
+	fe, _ := fork.Entry(forkFirst)
 	if o, f := oe.(*ResponseEntry).RequestHash, fe.(*ResponseEntry).RequestHash; o != f {
 		t.Errorf("first request after the fork: origin %s, fork %s", o, f)
 	}
-	oc, err := origin.RequestContext(first)
+	oc, err := origin.RequestContext(originFirst)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fc, err := fork.RequestContext(first)
+	fc, err := fork.RequestContext(forkFirst)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +189,7 @@ func TestForkIsMaterialised(t *testing.T) {
 		t.Error("the request context of the first response differs between origin and fork")
 	}
 	oi, _ := origin.Entry("i0000005")
-	fi, _ := fork.Entry("i0000005")
+	fi, _ := fork.Entry("f0000001")
 	ob, _ := MarshalEntry(oi)
 	fb, _ := MarshalEntry(fi)
 	if bytes.Equal(ob, fb) {

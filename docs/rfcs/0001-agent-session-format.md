@@ -226,20 +226,37 @@ a branch merged back, several workers joined at once.
   context as one that does, losing only the provenance.
 
 A root entry MAY carry `parents`, and there it records where a session
-diverged from rather than what it converged, since a root has no path
-to have merged anything into. A session forked from an entry of another
-session MUST open with a copy of that session's path to that entry —
-the same entries, in the same order, under the same IDs — and its root
-names the entry in `parents`. The copy is the ingress rule applied to a
-fork: the inherited context is in this file, materialised, and the
-reference says where it was taken from. Keeping the IDs is what makes
-the reference locatable: the copied path ends at the entry in this file
-whose ID the root names, and a reader holding both files can check that
-the two paths rebuild the same request there. The header's
-`parent_session` names the session; the root's `parents` names the
-point. A subsession that opens with a copy of its parent's context is
-also a fork, and its root names the point in the same way, beside the
-`spawned_by` that names the call.
+diverged from rather than what it converged. A session forked from an
+entry of another session MUST open with a copy of that session's path
+to that entry — the same entries, in the same order, under the same
+IDs — and its root names that entry in `parents`. The reference names
+the entry in the origin session and MUST carry `session`: this file
+holds a copy of the entry under the same ID, so a reference that
+omitted `session` would name the copy, which is written after the root.
+Because the IDs are kept, the path to that ID here is the path to it
+there, and a reader holding both files can check that the two rebuild
+the same request. The copy is the ingress rule applied to a fork: the
+inherited context is in this file, materialised, and the reference
+says where it was taken from.
+
+What is copied is the path and not the context it builds: the entries
+a `compaction` on it excludes are copied too, or its `first_kept` and
+`pinned` no longer resolve. A copied reference in `parents` that
+omitted `session` MUST be rewritten to name the origin session, since
+in this file the bare ID would resolve against the copy. A copied
+`branch_summary` names in `from` a leaf that was not on the copied
+path, so it is not in this file, and a reader MUST NOT reject it. The
+fork's header MUST name the origin's payload profile and MUST NOT name
+in `records` a type the origin's header did not, or the promise would
+reach copied entries whose writer never made it. IDs are unique within
+a file, so an entry the fork appends below the point MAY carry an ID
+the origin used elsewhere; identity across the two files holds over
+the copied region only. A fork of a fork names its immediate origin,
+the session it was copied from, which is the session `parent_session`
+names. The header's `parent_session` names the session; the root's
+`parents` names the point. A subsession that opens with a copy of its
+parent's context is also a fork, and its root names the point in the
+same way, beside the `spawned_by` that names the call.
 
 ## Core entry types
 
@@ -970,12 +987,18 @@ appended after an export, a judge's `outcome` above all, moves the
 leaf, and the document a score names has to be reproducible from the
 entry it targets.
 
+A corpus holding an origin and a session forked from it projects the
+shared prefix twice, copied `outcome` entries included. The fork root's
+`parents` is what lets a consumer tell the copy from the original.
+
 ### OpenTelemetry
 
 Spans emitted for a session carry `session.id` and the entry ID of the
 entry they correspond to. Tool spans link to the inference span whose
 output contained the call; each inference span links to the previous
-turn's; the first span after a branch links to the branched-from entry.
+turn's; the first span after a branch links to the branched-from
+entry, and the first span of a forked session links to the entry its
+root names, under the origin session's ID.
 
 ## Versioning
 
@@ -1024,9 +1047,9 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.3
 
-Additive, with nothing tightened. `parents` on the entry envelope
-records convergence — a subagent's result, a branch merged back,
-several workers joined at once — as provenance.
+Additive but for one tightened rule, noted last. `parents` on the
+entry envelope records convergence — a subagent's result, a branch
+merged back, several workers joined at once — as provenance.
 
 The context algorithm is untouched, deliberately. `parents` is never
 walked, so a 0.3 reader given a 0.4 file walks the same `parent` chain,
