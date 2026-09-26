@@ -16,7 +16,7 @@ import (
 // namespaced items, unknown members on known entries and unknown header
 // fields, all of which the format requires a reader to preserve.
 func TestRoundTripFixtures(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge", "fork"} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join("testdata", "sessions", name+".jsonl")
 			want, err := os.ReadFile(path)

@@ -31,7 +31,9 @@ branched, and what happened afterwards.
   by walking one parent. Abandoned branches stay, because they are
   preference data. Convergence — a subagent's result coming back, a
   branch merged in — is recorded beside that tree in `parents`, which
-  says where work came from and never widens the walk.
+  says where work came from and never widens the walk. A session forked
+  from a point in another names that point the same way, on its root,
+  and opens with the path to it copied.
 - **Exportable.** One ATIF v1.8 document per root-to-leaf path, with
   the raw items in the extras, redaction at export and media spilled
   beside the documents.

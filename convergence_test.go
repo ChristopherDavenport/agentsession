@@ -26,9 +26,17 @@ var parentsMember = regexp.MustCompile(`,"parents":\[[^\]]*\]`)
 // rebuilding both sessions at every leaf. A 0.3 reader is exactly a 0.4
 // reader given the stripped file, since the member is the only thing
 // 0.4 added, so if the walk ever followed a convergence edge the two
-// would part company here.
+// would part company here. The fork fixture carries the member on its
+// root, where it records where the session came from rather than what
+// it merged, and the same must hold there.
 func TestConvergenceIsNotContext(t *testing.T) {
-	path := filepath.Join("testdata", "sessions", "converge.jsonl")
+	for _, name := range []string{"converge", "fork"} {
+		t.Run(name, func(t *testing.T) { convergenceIsNotContext(t, name) })
+	}
+}
+
+func convergenceIsNotContext(t *testing.T, name string) {
+	path := filepath.Join("testdata", "sessions", name+".jsonl")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -80,6 +88,111 @@ func TestConvergenceIsNotContext(t *testing.T) {
 		if ha != hb {
 			t.Errorf("leaf %s: request %s with parents, %s without", leaf, ha, hb)
 		}
+	}
+}
+
+// requestHashAt hashes the request the context algorithm builds at id.
+func requestHashAt(t *testing.T, s *Session, id string) string {
+	t.Helper()
+	ctx, err := s.ContextAt(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := ctx.Request()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := RequestHash(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// TestForkIsMaterialised is the claim the format makes of a root that
+// carries parents: the session continues the context the root names,
+// and that context is in this file. The fork fixture is basic forked at
+// its tool output. Its opening entries are the origin's path to that
+// entry under the same IDs, so the reference can be located; every
+// response the fork copied verifies in the fork as it did in the origin;
+// and the fork's first model call was sent the request the origin's was
+// at that point, which is the prefix a provider caches and the reason to
+// fork rather than restate. The two sessions part company only in what
+// the model answered.
+func TestForkIsMaterialised(t *testing.T) {
+	origin := loadFixture(t, "basic")
+	fork := loadFixture(t, "fork")
+
+	if got := fork.Header().ParentSession; got != origin.ID() {
+		t.Errorf("parent_session = %s, want the origin %s", got, origin.ID())
+	}
+	roots := fork.Roots()
+	if len(roots) != 1 {
+		t.Fatalf("fork has %d roots, want 1", len(roots))
+	}
+	root, _ := fork.Entry(roots[0])
+	want := []EntryRef{{Session: origin.ID(), Entry: "i0000004"}}
+	if got := root.Base().Parents; !reflect.DeepEqual(got, want) {
+		t.Fatalf("root parents = %+v, want %+v", got, want)
+	}
+	at := want[0].Entry
+
+	// The copied path is the origin's path to the named entry, under the
+	// same IDs, and rebuilds the same request there.
+	op, fp := origin.Path(at), fork.Path(at)
+	if len(fp) == 0 {
+		t.Fatalf("the fork has no entry %s, so the reference cannot be located", at)
+	}
+	if len(op) != len(fp) {
+		t.Fatalf("origin path has %d entries, fork path %d", len(op), len(fp))
+	}
+	for i := range op {
+		if op[i].Base().ID != fp[i].Base().ID || op[i].EntryType() != fp[i].EntryType() {
+			t.Errorf("path[%d]: origin %s %s, fork %s %s", i, op[i].EntryType(), op[i].Base().ID, fp[i].EntryType(), fp[i].Base().ID)
+		}
+	}
+	if ho, hf := requestHashAt(t, origin, at), requestHashAt(t, fork, at); ho != hf {
+		t.Errorf("request at %s: origin %s, fork %s", at, ho, hf)
+	}
+
+	// What the fork copied still verifies where it was copied to.
+	for _, e := range fp {
+		if r, ok := e.(*ResponseEntry); ok {
+			if err := fork.Verify(r.ID); err != nil {
+				t.Errorf("copied response %s: %v", r.ID, err)
+			}
+		}
+	}
+
+	// The fork's own first model call was sent the same request the
+	// origin's was, and answered differently: same prefix, intentional
+	// divergence.
+	const first = "r0000002"
+	if err := fork.Verify(first); err != nil {
+		t.Fatalf("the fork's first response: %v", err)
+	}
+	oe, _ := origin.Entry(first)
+	fe, _ := fork.Entry(first)
+	if o, f := oe.(*ResponseEntry).RequestHash, fe.(*ResponseEntry).RequestHash; o != f {
+		t.Errorf("first request after the fork: origin %s, fork %s", o, f)
+	}
+	oc, err := origin.RequestContext(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc, err := fork.RequestContext(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(oc.Items, fc.Items) {
+		t.Error("the request context of the first response differs between origin and fork")
+	}
+	oi, _ := origin.Entry("i0000005")
+	fi, _ := fork.Entry("i0000005")
+	ob, _ := MarshalEntry(oi)
+	fb, _ := MarshalEntry(fi)
+	if bytes.Equal(ob, fb) {
+		t.Error("the fork's answer is the origin's, so the fixture shows no divergence")
 	}
 }
 

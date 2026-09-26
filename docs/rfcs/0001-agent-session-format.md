@@ -150,7 +150,7 @@ RFC 2119.
 | `harness` | SHOULD | name and version of the writer |
 | `records` | SHOULD | the record entry types, core or namespaced, this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
-| `parent_session` | MAY | session ID this was forked or spawned from |
+| `parent_session` | MAY | session ID this was forked or spawned from. It names the session; for a fork, the root entry's `parents` names the point, as the convergence section says |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar` |
 
@@ -224,6 +224,22 @@ a branch merged back, several workers joined at once.
   order in which workers happened to finish.
 - A reader that does not understand `parents` builds exactly the same
   context as one that does, losing only the provenance.
+
+A root entry MAY carry `parents`, and there it records where a session
+diverged from rather than what it converged, since a root has no path
+to have merged anything into. A session forked from an entry of another
+session MUST open with a copy of that session's path to that entry —
+the same entries, in the same order, under the same IDs — and its root
+names the entry in `parents`. The copy is the ingress rule applied to a
+fork: the inherited context is in this file, materialised, and the
+reference says where it was taken from. Keeping the IDs is what makes
+the reference locatable: the copied path ends at the entry in this file
+whose ID the root names, and a reader holding both files can check that
+the two paths rebuild the same request there. The header's
+`parent_session` names the session; the root's `parents` names the
+point. A subsession that opens with a copy of its parent's context is
+also a fork, and its root names the point in the same way, beside the
+`spawned_by` that names the call.
 
 ## Core entry types
 
@@ -744,6 +760,8 @@ written here once rather than implied in four places:
 - A subagent's `function_call_output` carries the output; the `link`
   naming the child session contributes nothing to any context.
 - `parents` records where converged work came from and is never walked.
+- A session forked from a point in another opens with that point's
+  path, copied; its root's `parents` says where from.
 
 The cost is duplication: the same bytes sit in the child's file and in
 the parent's. That is the price of a file that answers "what was the
@@ -1022,6 +1040,15 @@ happened to have.
 
 A 0.3 file is a 0.4 file with no `parents` anywhere.
 
+`parents` on a root entry records where a session diverged from, so both
+directions of the graph are recorded at the entry: a fork's root names
+the entry it continues from, as a join names the leaves it took work
+from. The header's `parent_session` already named the session; the root
+names the point. A forked session opens with that entry's path copied
+under the same IDs, which is the ingress rule once more, and is what
+lets a reader with both files check that the fork continues the context
+it claims to.
+
 **Ingress** says that an entry carrying material from outside this
 session carries it materialised, and that a reference to its origin
 never stands in for it. Every projecting edge in 0.3 already worked
@@ -1169,6 +1196,13 @@ which the `run` entry cannot name and which 0.3 adopts beside the
   fork is left to a `label` to resolve and an unmarked session with
   several leaves is reported as ambiguous rather than guessed at. The
   second is the honest answer and costs a host an explicit mark.
+- What a diverging edge may carry beyond the point it diverges from. A
+  fork opens with the origin's path copied whole. A successor session
+  that keeps some of the origin's items and drops others from the
+  middle — a handoff that strips one agent's tool traffic before the
+  next takes over — is not a fork of any one entry, and nothing today
+  records that an item left the context. Whatever answers one answers
+  the other.
 - Whether to allow a second payload profile at 0.x, or hold the line at
   Open Responses and rely on converters.
 - Sidecar media layout and naming.
