@@ -165,11 +165,12 @@ RFC 2119.
   names and was written after that label, the label itself excepted;
   that entry itself when nothing follows it; and the last entry of the
   file when no such label is in force. A `leaf` label whose target is
-  not in the file is not in force. The label marks the branch that is
-  live, not the tip it had when marked, so a branch marked and then
-  extended resumes where it was extended to. In a store the head is the
-  leaf, and this rule is how a projection carries a head that is not the
-  last line.
+  not in the file is not in force, and a leaf so found that is itself a
+  `leaf` label resolves to its nearest ancestor that is not one. The
+  label marks the branch that is live, not the tip it had when marked,
+  so a branch marked and then extended resumes where it was extended to.
+  In a store the head is the leaf, and this rule is how a projection
+  carries a head that is not the last line.
 - A file whose header names a `base` opens with the prefix: every entry
   from the root to the base, in path order, before any entry the
   session appended itself. The prefix is another session's record,
@@ -203,7 +204,7 @@ RFC 2119.
 | `records` | SHOULD | the record entry types, core or namespaced, this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
 | `parent_session` | MAY | session ID this was forked or spawned from. Provenance, not validated: a fork made at an entry on another fork's prefix may name either session, and a `fork_of` link records the one it was made from |
-| `base` | MAY | hash of the entry this session continues from; `parent_session` names a session holding it, as provenance. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
+| `base` | MAY | hash of the entry this session continues from, never a `leaf` label, since the base is a fork's first leaf; `parent_session` names a session holding it, as provenance. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
 | `redacted` | MAY | `true` when the file's bytes were changed after they were written, as export redaction does, so its `id` and `request_hash` values no longer verify. A reader MUST NOT report such a file's hashes as verified |
@@ -1128,25 +1129,26 @@ migrating it in memory: walk the entries in file order, rewrite each
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
 compute each entry's hashes with its `parent` and every entry-naming
-member rewritten to the hashes already assigned above it, and read the
-result as a 0.5 file with no `base`. Each migrated entry carries
-`legacy_id`, the ID it had, as a member outside the envelope, added
-before the hashes are computed so that the migrated file verifies by
-construction and two readers give one file the same IDs; the ATIF and
-OpenTelemetry projections already emitted from the earlier file then
-still resolve, and a projection MAY emit `legacy_id` beside the new ID.
-The member is part of the content, so a migrated body never hashes as
-the same body written natively does, and a migrated file shares nothing
-with one; that is the price of keeping the old name. A reference the
-reader cannot rewrite — a `parents` entry in another session, or an
-entry named inside a member of an extension the reader does not know —
-keeps its original string and is reported as unresolved, and a file
-holding one MUST NOT be re-emitted as 0.5. An earlier entry whose body
-carries a top-level member by one of the envelope's reserved names,
-which earlier versions allowed, is reported as unresolved the same way,
-and a file holding one MUST NOT be re-emitted as 0.5; `content` is the
-name this will most often be. No two migrated entries hash alike, since
-`legacy_id` was unique in the earlier file, so migration never merges.
+member rewritten to the hashes already assigned to entries earlier in
+the file, and read the result as a 0.5 file with no `base`. Each
+migrated entry carries `legacy_id`, the ID it had, as a member outside
+the envelope, added before the hashes are computed so that the migrated
+file verifies by construction and two readers give one file the same
+IDs; the ATIF and OpenTelemetry projections already emitted from the
+earlier file then still resolve, and a projection MAY emit `legacy_id`
+beside the new ID. The member is part of the content, so a migrated body
+never hashes as the same body written natively does, and a migrated file
+shares nothing with one; that is the price of keeping the old name. A
+reference the reader cannot rewrite — a `parents` entry in another
+session, or an entry named inside a member of an extension the reader
+does not know — keeps its original string and is reported as unresolved,
+and a file holding one MUST NOT be re-emitted as 0.5. An earlier entry
+whose body carries a top-level member by one of the envelope's reserved
+names, which earlier versions allowed, is reported as unresolved the
+same way, and a file holding one MUST NOT be re-emitted as 0.5;
+`content` is the name this will most often be. No two migrated entries
+hash alike, since `legacy_id` was unique in the earlier file, so
+migration never merges.
 
 ## Conformance
 
@@ -1155,17 +1157,18 @@ document. A conforming **reader** implements the context algorithm and
 the preservation rules. A conforming **converter** from a native format
 documents which native entries it maps and which it drops.
 
-The reference implementation is the Go `agentsession` library. The
-conformance suite is a directory of fixture files with expected context
-output for every leaf, expected `request_hash` values, every entry's
-content hash and `id` recomputed, numbers that pass the I-JSON test only
-in canonical form, a forked fixture whose `base` is found in its origin,
-the recomputed `reason` for every `run` end, and negative cases for a
-broken parent link, a truncated last line, an unknown type, a `dispatch`
-that follows a `reject`, and a header naming `dispatch` beside a call
-that has an output and no `dispatch`. Converters for pi, Claude Code and
-Codex are part of the initial proposal so the format arrives with three
-existing corpora behind it.
+The reference implementation is the Go `agentsession` library, which at
+this draft still writes 0.4 and follows. The conformance suite is a
+directory of fixture files with expected context output for every leaf,
+expected `request_hash` values, every entry's content hash and `id`
+recomputed, numbers that pass the I-JSON test only in canonical form, a
+forked fixture whose `base` is found in its origin, the recomputed
+`reason` for every `run` end, and negative cases for a broken parent
+link, a truncated last line, an unknown type, a `dispatch` that follows
+a `reject`, and a header naming `dispatch` beside a call that has an
+output and no `dispatch`. Converters for pi, Claude Code and Codex are
+part of the initial proposal so the format arrives with three existing
+corpora behind it.
 
 ## Prior art
 

@@ -69,7 +69,8 @@ is the order, and the head is a ref, never inferred.
   to one session both succeed, with the head the only write one of them
   can lose.
 - **Nothing is garbage.** Every entry a session appended stays in its
-  log. Abandoned branches are preference data, as RFC 0001 says.
+  log. Abandoned branches are the preference data a corpus is judged on,
+  and RFC 0001's `outcome` entries score them.
 - **Projection is lossless.** A session projects to an RFC 0001 file
   that reads back to the same entries and the same head.
 
@@ -96,8 +97,9 @@ in RFC 2119.
 - **Object**: canonical bytes addressed by their hash: an envelope, a
   content, or a media blob.
 - **Context hash**: the incremental hash over the types and content
-  hashes of the context entries on a path, as the prefix-caching section
-  defines it. Record entries and responses do not enter it.
+  hashes of the entries on a path that are in context, as the
+  prefix-caching section defines it. Record entries and responses do not
+  enter it.
 - **Session**: a ref, consisting of a header, a base, a head and a log.
 - **Base**: the entry a session continues from, or none. A session with
   a base is a **fork** of the session that appended that entry.
@@ -195,11 +197,11 @@ A session is created with a header and optionally a base.
   head.
 - A session with no base is a fresh root. Its first append is a root
   entry, `parent` null.
-- A session's own entry MUST name as `parent` the session's base or one
-  of the session's own entries. Branching above the base is a new
-  session with a lower base, not an append to this one, so that a
-  session's base is the one point it diverged from and the prefix is
-  exactly the path to it.
+- A session's own entry MUST name as `parent` the session's base, one of
+  the session's own entries, or, in a session with no base, null.
+  Branching above the base is a new session with a lower base, not an
+  append to this one, so that a session's base is the one point it
+  diverged from and the prefix is exactly the path to it.
 - A session MAY have several roots only when it has no base. A session
   with a base has one prefix and everything it appends hangs from it.
 
@@ -366,14 +368,14 @@ document's concern, and it is not this journal.
   swept.
 - A store MUST NOT sweep by reachability from heads. A session's
   abandoned branches are in its log and are its record; RFC 0001's
-  outcome and preference rules depend on them. What a store may sweep is
-  what nothing retained names, following references all the way down as
-  git's collector follows a commit to its tree to its blobs: an envelope
-  is retained while any log or prefix needs it; a content is retained
-  while any retained envelope names it; a media blob is retained while
-  any retained content names it through a `sidecar:` URL; only what is
-  left may be swept, and a store may tier cold objects wherever it
-  likes.
+  `outcome` entries score them and a consumer's preference between
+  branches is read from them. What a store may sweep is what nothing
+  retained names, following references all the way down as git's
+  collector follows a commit to its tree to its blobs: an envelope is
+  retained while any log or prefix needs it; a content is retained while
+  any retained envelope names it; a media blob is retained while any
+  retained content names it through a `sidecar:` URL; only what is left
+  may be swept, and a store may tier cold objects wherever it likes.
 
 Nothing in a log expires, so retention is a policy over sessions and
 not a sweep over entries: the log is the record, where git's reflog is
@@ -545,9 +547,9 @@ like any other.
 A reader holding a fork's projection and its origin's checks the fork
 with one comparison: the fork header's `base` is one of the origin's own
 entries or on its prefix. Because the hash commits to the whole path,
-agreement on that hash is agreement on every byte of the prefix. This is
-the check RFC 0001's fork fixture performed by rebuilding requests at
-the fork point and comparing; here it is one lookup.
+agreement on that hash is agreement on every byte of the prefix. RFC
+0001's conformance suite asks for a forked fixture whose base is found
+in its origin; this is that check, and it is one lookup.
 
 `request_hash` is unchanged; RFC 0001 says how the two hashes divide
 the work.
@@ -584,12 +586,16 @@ not by any later leaf:
   `branch_summary` it is over the content with `from` removed, present
   or not, since the leaf that was left is provenance and not context,
   and a store need not hold it; and for an `item` it is over the content
-  with `queued_from` removed, for the same reason. A migrated entry's
-  `legacy_id` and a normalised entry's `normalised` are removed for
-  every type, since both are provenance, so a migrated body and the same
-  body written natively give one key while their content hashes differ.
-  The key then depends on context and not on the identity of the entries
-  that shaped it, and two stores compute it from the path alone.
+  with `queued_from` removed, for the same reason. For every type,
+  `legacy_id`, `normalised`, and on an `item` `response` and `source`
+  are removed as well, since each is provenance a provider or a harness
+  minted per run and none reaches the model; `response` above all, which
+  a provider mints anew for every call, so two sessions replaying one
+  conversation would otherwise never share a key past the first model
+  output, so a migrated body and the same body written natively give one
+  key while their content hashes differ. The key then depends on context
+  and not on the identity of the entries that shaped it, and two stores
+  compute it from the path alone.
 
 It excludes `ts` and `parents`, it is incremental, and two sessions
 whose context entries are byte-identical share it, a compaction
@@ -618,9 +624,9 @@ is what keeps the key stable at all.
 
 ## Reference implementation
 
-The SQLite store of the reference library lays out as follows, and
-another store is conforming if it satisfies the rules above by any
-layout.
+The SQLite store of the reference library becomes the following, from a
+layout keyed on a session and a sequence today, and another store is
+conforming if it satisfies the rules above by any layout.
 
 ```sql
 CREATE TABLE contents (hash TEXT PRIMARY KEY, bytes BLOB NOT NULL);
