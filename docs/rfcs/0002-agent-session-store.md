@@ -90,10 +90,15 @@ The key words MUST, MUST NOT, SHOULD and MAY are to be interpreted as
 in RFC 2119.
 
 - **Entry**: as RFC 0001 defines it, addressed by its hash. The store
-  holds it as an object.
-- **Object**: the canonical bytes of an entry or a media blob,
-  addressed by their hash. Every entry is an object; not every object
-  is an entry.
+  holds it as an envelope naming a content object.
+- **Content**: an entry's members other than the envelope's, hashed on
+  their own. Two entries with the same content share one content
+  object however they differ in parent or `ts`.
+- **Object**: canonical bytes addressed by their hash: an entry, a
+  content, or a media blob.
+- **Context hash**: the hash of the content hashes along a path,
+  computed incrementally at each entry. It excludes `ts`, so two
+  sessions whose conversations are byte-identical share it.
 - **Session**: a ref, consisting of a header, a base, a head and a log.
 - **Base**: the entry a session continues from, or none. A session with
   a base is a **fork** of the session that appended that entry.
@@ -134,6 +139,31 @@ are one entry. A writer that means two entries makes them differ; `ts`
 at sub-second precision is what usually does. A log holds a hash once,
 so the second such append to one session is a no-op the store reports
 as such.
+
+### Content
+
+An entry's hash covers its parent, its `ts` and its body together,
+which is right for the identity of a record and wrong for everything
+else a hash is wanted for. The same tool output under two parents would
+be two objects, and nothing could be shared or compared on its own.
+So a store separates them, as git separates a blob from the commit that
+names it.
+
+An entry's **content** is its canonical members with the envelope's —
+`id`, `parent`, `parents`, `ts` — removed, and its **content hash** is
+`sha256:` over those canonical bytes. The entry's `id` is unchanged: it
+is still the hash over the whole canonical entry, and RFC 0001 is
+untouched, since a file carries the body inline and verifies as it did.
+Underneath, a store MUST hold content once by content hash and MUST be
+able to serve an entry from its envelope and its content. Identical
+bodies in a thousand sessions are one content object with a thousand
+envelopes naming it.
+
+Below the hash, an object's bytes are the store's to lay out: chunked,
+compressed, or deduplicated by any means, so long as the store serves
+them by hash unchanged. Dedup of large payloads is a storage concern
+and not a format one, and this document does not push a reference into
+the payload profile, which has no shape for one.
 
 ## Sessions
 
@@ -314,6 +344,16 @@ document's concern, and it is not this journal.
   is an object that no log names and no prefix needs, and it may tier
   cold objects wherever it likes.
 
+Nothing in a log expires, so retention is a policy over sessions and
+not a sweep over entries: the log is the record, where git's reflog is
+a convenience with a shelf life. A host that no longer wants a session
+deletes it, and the store sweeps what nothing else needs. The lossless
+form of that is to export the session's projection first, under a
+manifest naming it, and delete afterwards; a session so archived can be
+imported again and verifies on the way in. Where a session is kept, the
+cost of keeping it is the store's to tier, and content shared across
+sessions is paid for once.
+
 ## Media
 
 A media blob referenced by an item is an object under its own hash. A
@@ -386,17 +426,34 @@ the work.
 
 ## Prefix caching
 
-An entry hash identifies the context at that entry, so a router that
-keys a provider's cached prefix on the hash of the last entry before a
-request has a key that is stable across sessions sharing the prefix and
-free to compute. Equal keys mean the same request. Unequal keys need not
-mean a different one, since a `dispatch` or `run` entry on the path
-changes the hash and not the request. RFC 0001's calibration applies
-without change: equal hashes say the same entries were sent, and say the
-model saw the same leading tokens only where the provider's template,
+An entry hash is the wrong key for a provider's cached prefix. It
+covers `ts`, so two sessions that sent the same system prompt and the
+same first message a second apart have different hashes where the
+provider has one prefix, and it covers record entries, so a `dispatch`
+on the path changes the hash and not the request.
+
+The **context hash** is the right one. At an entry that is in context,
+as RFC 0001's context algorithm defines it, the context hash is
+`sha256:` over the canonical JSON array of the nearest in-context
+ancestor's context hash, or `null` at the first, and this entry's
+content hash. At an entry that is not in context it is the ancestor's,
+unchanged. It excludes `ts` and `parents`, it is incremental, a store
+computes it as it appends, and it is equal across sessions whose
+conversations are byte-identical, which is the property a prefix cache
+key needs. Sibling forks share it up to the fork by construction.
+
+It is a hash over history, and `request_hash` is a hash over what was
+sent. On a path with no compaction the two identify the same thing and
+a router may key on either. After a fold they part: the context hash
+still covers the entries the fold excluded, and `request_hash` covers
+the summary that replaced them, so past a fold a router keys on
+`request_hash`, which a reader computes, and uses the context hash for
+the prefix a fold has not touched. RFC 0001's calibration applies to
+both: equal hashes say the same entries were sent, and say the model
+saw the same leading tokens only where the provider's template,
 tool-schema serialisation and tokenizer are deterministic. The
-writing-discipline rule that keeps per-run content out of the request is
-what keeps sibling forks sharing a key.
+writing-discipline rule that keeps per-run content out of the request
+is what keeps the key stable at all.
 
 ## Reference implementation
 
@@ -405,7 +462,10 @@ another store is conforming if it satisfies the rules above by any
 layout.
 
 ```sql
-CREATE TABLE objects  (hash TEXT PRIMARY KEY, bytes BLOB NOT NULL);
+CREATE TABLE contents (hash TEXT PRIMARY KEY, bytes BLOB NOT NULL);
+CREATE TABLE entries  (hash TEXT PRIMARY KEY, parent TEXT, ts TEXT NOT NULL,
+                       parents TEXT, content TEXT NOT NULL,
+                       context TEXT NOT NULL);
 CREATE TABLE sessions (id TEXT PRIMARY KEY, header TEXT NOT NULL,
                        base TEXT, head TEXT);
 CREATE TABLE log      (session TEXT NOT NULL, seq INTEGER NOT NULL,
@@ -415,9 +475,12 @@ CREATE TABLE edges    (parent TEXT NOT NULL, child TEXT NOT NULL,
                        PRIMARY KEY (parent, child));
 ```
 
-The sketch declares no foreign keys. The rows are immutable and
-content-addressed, so a constraint buys little and costs a lookup on
-every append; the append's own rules are what keep the tables in step.
+`contents` holds each body once, media blobs included; `entries` is
+the envelope, naming its content and carrying the context hash the
+store computed at append. The sketch declares no foreign keys. The rows
+are immutable and content-addressed, so a constraint buys little and
+costs a lookup on every append; the append's own rules are what keep
+the tables in step.
 
 `edges` is the reverse index the parent hashes cannot give: finding an
 entry's children, a session's leaves and the subtree below a point all

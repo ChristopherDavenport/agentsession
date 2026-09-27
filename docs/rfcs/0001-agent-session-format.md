@@ -231,6 +231,9 @@ unnoticed and a replay never collides with the record it replays.
 
 Because `parent` is itself a hash, an entry's ID commits to its whole
 path, and two files that agree on one ID agree on every byte above it.
+The members other than the envelope's are the entry's content, which
+RFC 0002 hashes on its own so that a store holds a body once however
+many entries carry it.
 Wherever this document has a member name an entry — `parent`,
 `parents`, `target`, `first_kept`, `from`, `queued_from` — it names it
 by this hash.
