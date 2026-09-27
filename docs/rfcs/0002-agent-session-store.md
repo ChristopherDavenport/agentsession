@@ -341,11 +341,6 @@ otherwise have had to make a copy testify to being one.
 
 ## Open questions
 
-- Whether `ts` belongs in the hash. In: a record's identity includes
-  when it happened, and a replay never collides with the original. Out:
-  identical content under one parent is one node whatever the clock
-  said, which is what a cache wants. Held: in, since a node is a
-  record and `request_hash` already serves the cache.
 - Hash agility. `sha256:` is the only prefix; a store meeting another
   MUST refuse it. Whether to admit a second algorithm before there is a
   reason to is held: no.
