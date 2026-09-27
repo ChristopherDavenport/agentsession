@@ -238,7 +238,12 @@ the ID it names, as the root itself or a descendant of it; it records
 the point in another session this one diverged from. Any other
 reference on a root records convergence as it would anywhere else. In
 a file cut short before the copy reached that ID the reference reads
-as convergence; that is a valid prefix, not a violation.
+as convergence; that is a valid prefix, not a violation. A root MAY
+carry more than one fork-origin reference: a fork of a fork copies its
+origin's root, which already carries the grandparent's reference, and
+the copy keeps it. The point is the deepest of them on this file's
+path, which is always the immediate origin's; the shallower ones are
+the line of descent.
 
 A root that carries a fork-origin reference MUST head a copy of the
 origin's path to that entry — the same entries, in the same order,
@@ -273,9 +278,11 @@ copy. A copied member that names an entry — a `branch_summary`'s
 `from`, an `outcome`'s or a `label`'s `target`, an item's
 `queued_from` — may name one that was off the copied path and so is
 not in this file, and a reader MUST NOT reject it. The fork's header
-MUST name the origin's payload profile and MUST NOT name in `records`
-a type the origin's header did not, or the promise would reach copied
-entries whose writer never made it. IDs are unique within a file, so
+MUST name the origin's payload profile. Its `records` promise covers
+the entries at or below the named point, which are the ones this
+writer wrote; over the copied region the promise was the origin
+header's, which this file does not carry, so there absence means the
+file does not say. IDs are unique within a file, so
 an entry the fork appends below the point MAY carry an ID the origin
 used elsewhere; identity across the two files holds over the copied
 region only. A fork of a fork names its immediate origin, the session
@@ -587,9 +594,11 @@ Why a run started and how it ended. Two entries per run, paired by
   segment of a run open there, and the fork continues that run and
   writes its `end`. When the header names `run` in `records`, no
   writer holds the file open and the leaf is on the run's segment, a
-  run with no `end` entry was cut off; that is the crash signal. A
-  fork that copied an open run and has appended nothing has not
-  crashed, and a reader MUST NOT read it as the signal.
+  run with no `end` entry was cut off; that is the crash signal. In a
+  fork it is read over the entries at or below the named point, where
+  the header's promise holds. A fork that copied an open run and has
+  appended nothing has not crashed, and a reader MUST NOT read it as
+  the signal.
 
 ### `dispatch`
 
@@ -1037,7 +1046,9 @@ entry they correspond to. Tool spans link to the inference span whose
 output contained the call; each inference span links to the previous
 turn's; the first span after a branch links to the branched-from
 entry, and the first span of a forked session links to the entry its
-root names, under the origin session's ID.
+root names, under the origin session's ID. A fork emits no spans for
+the entries it copied: that prefix is the origin's record, and the
+origin emitted it.
 
 ## Versioning
 

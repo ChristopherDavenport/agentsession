@@ -11,8 +11,9 @@ versions may break the API.
   session diverged from rather than what it converged: a session forked
   from an entry of another opens with a copy of that entry's path,
   under the same IDs, and its root names the entry. The rule binds the
-  claim: a writer that cannot copy under the origin's IDs names the
-  session in `parent_session` and not the point. RFC 0001 says so
+  claim: a writer that cannot copy the origin's path faithfully names
+  the session in `parent_session` and not the point. A fork's `records`
+  promise covers what it wrote, at or below the point. RFC 0001 says so
   now, in the convergence and ingress sections and as a new open
   question about what a diverging edge may carry beyond its point. The
   library already accepted the shape, since a root's parent is null
