@@ -207,7 +207,7 @@ RFC 2119.
 | `base` | MAY | hash of the entry this session continues from, never a `leaf` label, since the base is a fork's first leaf; `parent_session` names a session holding it, as provenance. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
-| `redacted` | MAY | `true` when bodies were changed after they were written, as export redaction does. The redactor MUST recompute every content hash and `id` over the redacted bodies and rewrite `parent`, `base` and every entry-naming member — `parents` into this file, `target`, `first_kept`, `from`, `queued_from` — to the IDs assigned earlier in the file, as migration does, leaving a reference into another session's file as it was since it still names the unredacted original; the file then walks and verifies against itself; its IDs are then not the original's and its `request_hash` values are the original's and no longer match. A reader MUST NOT report such a file's hashes as verifying the original |
+| `redacted` | MAY | `true` when bodies were changed after they were written, as export redaction does. The redactor MUST recompute every content hash and `id` over the redacted bodies and rewrite `parent`, every entry-naming member — `parents` into this file, `target`, `first_kept`, `from`, `queued_from` — and last the header's `base`, once the prefix is hashed, to the IDs assigned earlier in the file, as migration does, leaving a reference into another session's file as it was since it still names the unredacted original; the file then walks and verifies against itself; its IDs are then not the original's and its `request_hash` values are the original's and no longer match. A reader MUST NOT report such a file's hashes as verifying the original |
 
 Unknown header fields MUST be preserved by any tool that rewrites the
 file.
@@ -261,12 +261,17 @@ to binary64, which is what canonicalisation would have done silently and
 which yields a value the test accepts. The writer records what it
 changed in a member named `normalised` on the entry: a JSON array of
 objects `{"at": …, "was": …}`, `at` an RFC 6901 JSON Pointer relative to
-the body and `was` the original text of the member it names, in pointer
-order, so two writers normalising one response produce one content hash.
-The normalised form is what the next request carries, so the rebuilt
-request and `request_hash` agree with what was sent. `ts` is hashed as
-the string it is, which is why the envelope table admits one spelling of
-it.
+the body and `was` a string holding the member's original JSON source
+text, escapes included, so a lone surrogate appears as the six ASCII
+characters `\ud83d` and a 64-bit integer as its digits, and `was` is
+I-JSON whatever it describes. Output that was not valid UTF-8 has no
+JSON text to record: the writer replaces it with U+FFFD, omits `was`,
+and carries the bytes base64-encoded in `raw`. The array is sorted by
+`at` as UTF-16 code units, matching the canonical form, so two writers
+normalising one response produce one content hash. The normalised form
+is what the next request carries, so the rebuilt request and
+`request_hash` agree with what was sent. `ts` is hashed as the string it
+is, which is why the envelope table admits one spelling of it.
 
 - The entry's **content** is the object of its members with the
   envelope's — `id`, `type`, `parent`, `parents`, `ts` — removed, and
@@ -1176,13 +1181,14 @@ this draft still writes 0.4 and follows. The conformance suite is a
 directory of fixture files with expected context output for every leaf,
 expected `request_hash` values, every entry's content hash and `id`
 recomputed, 9007199254740993 in three spellings and once as a number the
-profile requires, a forked fixture whose `base` is found in its origin,
-the recomputed `reason` for every `run` end, and negative cases for a
-broken parent link, a truncated last line, an unknown type, a `dispatch`
-that follows a `reject`, and a header naming `dispatch` beside a call
-that has an output and no `dispatch`. Converters for pi, Claude Code and
-Codex are part of the initial proposal so the format arrives with three
-existing corpora behind it.
+profile requires, a lone surrogate normalised with its `was`, a forked
+fixture whose `base` is found in its origin, the recomputed `reason` for
+every `run` end, and negative cases for a broken parent link, a
+truncated last line, an unknown type, a `dispatch` that follows a
+`reject`, and a header naming `dispatch` beside a call that has an
+output and no `dispatch`. Converters for pi, Claude Code and Codex are
+part of the initial proposal so the format arrives with three existing
+corpora behind it.
 
 ## Prior art
 
