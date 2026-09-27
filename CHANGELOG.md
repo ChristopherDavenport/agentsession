@@ -58,6 +58,30 @@ versions may break the API.
 - The session fixtures under `testdata/sessions` are generated from the
   0.4 sources now kept under `testdata/sessions/v0.4`, and carry
   `legacy_id`; see CLAUDE.md.
+- **New package `cas`: the content-addressed store of RFC 0002**, on a
+  filesystem, laid out as git lays out a repository. An entry is two
+  objects, its body under the content hash and its envelope under the
+  id, so a body shared by many entries is held once and a fork stores
+  nothing until it appends. A session is a directory with its header, an
+  append-only log of entry hashes, a `HEAD` file and a record or mirror
+  mark. `Append` writes the objects first, idempotently, then one
+  journal record, which is the commit point and is fsynced, then the
+  log line and the head; `Open` replays the journal's tail so a crash
+  between the commit and the indexes loses nothing acknowledged.
+  `Create` with `Header.Base` makes a fork whose prefix is the origin's
+  shared objects. `SetHead` is the compare-and-swap of the head, with
+  `ErrHeadMoved` when it is not where the caller thought; an append
+  elsewhere than the head is a branch that moves nothing, and a `leaf`
+  label moves the head to its target. `Project` writes the RFC 0001 file
+  with a synthetic marker only when the resume rule would miss the head;
+  `Import` reads one as a mirror unless told it is the record, verifies
+  every line, refuses a redacted header and discards the marker; a
+  mirror refuses local writes until `DeclareRecord`. `Sweep` removes
+  what no log or prefix needs, following references down. A second
+  process is refused a held session by an advisory lock, as the
+  RFC permits. It runs the store conformance suite. Exchange between
+  stores, media sidecars and the SQLite relayout are not in this
+  change.
 
 - **Breaking for writers.** `Append` now refuses an item entry holding
   an `openresponses.ItemReference`. RFC 0001 gains the **ingress** rule
