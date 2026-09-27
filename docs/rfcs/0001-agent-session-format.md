@@ -47,13 +47,14 @@ a projection to each.
 ## Motivation
 
 Each coding agent has written its own version of this file. pi stores a
-JSONL tree with `id` and `parentId`. Claude Code stores a JSONL tree
-with `uuid` and `parentUuid` and documents that the format changes
-between releases. Codex stores JSONL whose `response_item` lines are
-Responses API items. OpenCode and Gemini CLI store whole-session JSON.
-Letta maintains fifteen adapters to read them and drops the lifecycle
-entries in every one. Harbor maintains its own adapters to get any of
-them into ATIF for training.
+JSONL tree with `id` and `parentId`. Claude Code stores a JSONL tree with
+`uuid` and `parentUuid` and documents that the format changes between
+releases.
+Codex stores JSONL whose `response_item` lines are Responses API items.
+OpenCode and Gemini CLI store whole-session JSON. Letta maintains fifteen
+adapters to read them and drops the lifecycle entries in every one.
+Harbor maintains its own adapters to get any of them into ATIF for
+training.
 
 They share the same shape: append-only lines, a header, a parent-linked
 tree, typed lifecycle entries, and a payload that is the model API's own
@@ -313,8 +314,8 @@ a branch merged back, several workers joined at once.
 
 Context entries: `item`, `response`, `config`, `compaction`,
 `branch_summary`. Record entries: `run`, `dispatch`, `decision`,
-`queued`, `label`, `info`, `env`, `outcome`, `link`, `custom`. A record
-entry contributes nothing to context; the context algorithm below is the
+`queued`, `label`, `info`, `env`, `outcome`, `link`, `custom`. A record entry
+contributes nothing to context; the context algorithm below is the
 normative statement.
 
 A type is core only if the event it records belongs to the loop every
@@ -505,11 +506,11 @@ Replaces earlier context with a summary.
    "reasoning":{…},"text":{…},"tools":[…],"extra":{…}}
   ```
 
-  `instructions_parts`, when the checkpoint carries it, is the full list
-  of parts in force, each with its text, not a delta, and `instructions`
-  is their join. `tools` is the full list of tool definitions in force
-  at the compaction, in the order the context algorithm would send them,
-  not a delta; there are no `tools_added`, `tools_removed` or `replace`
+  `instructions_parts`, when the checkpoint carries it, is the full
+  list of parts in force, each with its text, not a delta, and
+  `instructions` is their join. `tools` is the full list of tool
+  definitions in force at the compaction, in the order the context
+  algorithm would send them, not a delta; there are no `tools_added`, `tools_removed` or `replace`
   members. `extra` is the merged map of passthrough request members
   after every earlier delta has been applied and null deletions have
   removed their keys, so it never contains a null value. Members whose
@@ -589,11 +590,11 @@ Why a run started and how it ended. Two entries per run, paired by
 
   Two values record what the segment cannot show and are written, not
   computed: `error` when the harness failed at any point, which `ref`
-  names, and `interrupted` when a person or the host told the harness to
-  stop. A written `error` or `interrupted` stands over any segment.
+  names, and `interrupted` when a person or the host told the harness
+  to stop. A written `error` or `interrupted` stands over any segment.
   Every segment matches exactly one computable value on its path; a
-  reader MAY recompute it, and when the written value is computable and
-  the two disagree the segment is authoritative.
+  reader MAY recompute it, and when the written value is computable and the two
+  disagree the segment is authoritative.
 - `pending` lists the pending calls' IDs so a resume can read them
   without walking the segment. The segment is authoritative here too.
 - Items and responses of the run follow its `start` entry on the path.
@@ -1059,11 +1060,10 @@ turn's; the first span after a branch links to the branched-from entry.
 
 ## Versioning
 
-`format` is `agentsession/<major>.<minor>`. A minor version adds entry
-types or optional fields. A major version changes the envelope, the
-header, or the context algorithm. Readers MUST accept any minor version
-of a major they support. Files are migrated in memory, never rewritten
-in place.
+`format` is `agentsession/<major>.<minor>`. A minor version adds entry types or
+optional fields. A major version changes the envelope, the header, or
+the context algorithm. Readers MUST accept any minor version of a major
+they support. Files are migrated in memory, never rewritten in place.
 
 Adding an optional member to the envelope is a minor change. Changing
 what an existing member means, or what the context algorithm does with
@@ -1281,12 +1281,11 @@ reader preserves every new entry and rebuilds the same context.
 
 Considered and held: instructions as parts in `config`, which would add
 a second spelling of settings and change step 2 for a storage cost that
-belongs to the store, and which 0.3 adopts; and a durable leaf marker,
-which a library can carry as a reserved `label` without a format change;
-and a `source` on the item envelope for an input that joins a run
-already in flight, which the `run` entry cannot name and which 0.3
-adopts beside the `queued` entry. All three were open questions; two are
-now answered.
+belongs to the store, and which 0.3 adopts; and a durable leaf marker, which a library can
+carry as a reserved `label` without a format change; and a `source`
+on the item envelope for an input that joins a run already in flight,
+which the `run` entry cannot name and which 0.3 adopts beside the
+`queued` entry. All three were open questions; two are now answered.
 
 ## Open questions
 
