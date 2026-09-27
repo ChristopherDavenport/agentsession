@@ -362,16 +362,17 @@ sessions is paid for once.
 ## Media
 
 A media blob referenced by an item is an object under its own hash. A
-store holds it once however many items reference it. RFC 0001's
-`media` header field fixes at creation how the session carries media:
-inline as a data URL inside the item, or beside the file under a
-sidecar directory named after the session, where the file name is the
-blob's hash. An item's bytes are hashed, so a store MUST NOT convert
-between the two; a projection carries media in the form the session
-was written in. A sidecar blob is an object of its own and is held
-once; an inline data URL is part of its entry's content and is held
-once only as that content is. A push's closure over media is the
-sidecar blobs the pushed entries name.
+store holds it once however many items reference it. RFC 0001's `media`
+header field fixes at creation how the session carries media: inline as
+a data URL inside the item, or beside the file under a sidecar directory
+named after the session, where the file name is the blob's hash. An
+item's bytes are hashed, so a store MUST NOT convert between the two; a
+projection carries media in the form the session was written in. A
+sidecar blob is an object of its own and is held once; an inline data
+URL is part of its entry's content and is held once only as that content
+is. An item names a sidecar blob as RFC 0001 says, by a `sidecar:` URL
+carrying the blob's hash, so a push's closure over media is computable:
+the blobs the pushed entries' items name.
 
 ## Projection to JSONL
 
@@ -413,9 +414,9 @@ discarded, so an export and import cycle adds nothing, and a genuine
 follow. The imported session keeps the header's `id`, and a store
 already holding a session with that ID MUST refuse the import. An
 importer MUST verify each line's hash and MUST refuse a file in which
-one fails, so a redacted projection, which RFC 0001 says no longer
-verifies and must say so in its header, cannot be imported: it is a
-record to read, not one to hold.
+one fails, and MUST refuse a file whose header carries `redacted`
+whether or not its lines verify: a redacted projection is a record to
+read, not one to hold.
 
 ## Exchange between stores
 
@@ -444,11 +445,12 @@ apply here, where holding the session already is the usual case.
   at all.
 - **The log merges as a set.** The receiver takes the union of the two
   logs and assigns its own sequence in the order it receives entries,
-  and MUST refuse a push whose own entries do not each name the base or
-  another own entry of the union as `parent`. Two stores may hold one
-  session with different log orders and both are correct: the order
-  says which branch was written last in that store, and the head is the
-  fact that travels. Sequence numbers are never synchronised.
+  and MUST refuse a push whose own entries do not each name as `parent`
+  the base, another own entry of the union, or, in a session with no
+  base, null. Two stores may hold one session with different log orders
+  and both are correct: the order says which branch was written last in
+  that store, and the head is the fact that travels. Sequence numbers
+  are never synchronised.
 - **The entries land whether or not the head moves.** A push is two
   steps, admission and then the head, and only the second can fail.
   The head moves by compare-and-swap, with the expected value the
@@ -465,31 +467,33 @@ apply here, where holding the session already is the usual case.
   two lines are a fork, which the format represents, and the loser's
   answer is to push its line as a session with a base rather than to
   reconcile.
-- **One store of record, enforced.** A store marks each session it
-  holds as one it is the record for or a mirror of, and the reference
-  schema carries the mark. The mark is set at birth: a session created
-  locally or imported from a projection is the record here, since a
-  file has no record elsewhere; a session created by a push or a fetch
-  is a mirror unless the push is a handover. A store that is a mirror
-  MUST refuse a local append and a local head move for that session,
-  accepting both only through exchange, so a mirror's head follows the
-  record's because nothing else can move it. A push from a store that
-  is not the record MUST be refused. A handover is a push that clears
-  the mark at the sender and sets it at the receiver, each atomically
-  with its own step, after which the old record is a mirror. A mirror
-  whose record has deleted the session may declare itself the record,
-  since nothing else can advance it; a session archived and fetched
-  back is appended to that way.
+- **One store of record, enforced.** A store marks each session it holds
+  as one it is the record for or a mirror of, and the reference schema
+  carries the mark. The mark is set at birth: a session created locally
+  or imported from a projection is the record here, since a file has no
+  record elsewhere; a session created by a push or a fetch is a mirror
+  unless the push is a handover. A store that is a mirror MUST refuse a
+  local append and a local head move for that session, accepting both
+  only through exchange, so a mirror's head follows the record's because
+  nothing else can move it. A push from a store that is not the record
+  MUST be refused. A handover is a push that sets the mark at the
+  receiver and then clears it at the sender, each atomically with its
+  own step and in that order, so that a failure between the two leaves
+  two records and never none; two records are what the compare-and-swap
+  above reveals, and the sender finishes the handover by clearing. A
+  mirror whose record has deleted the session without handing it over
+  may declare itself the record, since nothing else can advance it.
 
-Fetch is the reverse, and any store may fetch from any store that
-holds the session, a mirror included, since a mirror holds what the
-record pushed it. A fetch admits entries as a push does and moves the
-fetcher's head to the fetched head only when the fetcher is a mirror;
-a record's head moves only by its own writers. Publishing a corpus is
-pushing a manifest, which a
-later document defines, and the objects it closes over. Archiving a
-session is a push to a store that keeps cold objects followed by
-deleting the ref here.
+Fetch is the reverse, and any store may fetch from any store that holds
+the session, a mirror included, since a mirror holds what the record
+pushed it. A fetch admits entries as a push does and moves the fetcher's
+head to the fetched head only when the fetcher is a mirror; a record's
+head moves only by its own writers. Publishing a corpus is pushing a
+manifest, which a later document defines, and the objects it closes
+over. Archiving a session is a handover to a store that keeps cold
+objects followed by deleting the ref here, and taking it back is a
+handover the other way; a fetch alone yields a mirror, which is what a
+reader wants and a writer does not.
 
 ## Verification
 
