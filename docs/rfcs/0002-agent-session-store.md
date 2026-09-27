@@ -6,13 +6,14 @@ Depends on: RFC 0001, Agent Session Format, at draft 0.5 or later.
 
 ## Summary
 
-A store holds sessions as content-addressed entries and mutable refs.
-An **entry** is one of RFC 0001's, stored once under the hash of its
-canonical bytes, immutable, and naming its parent by hash, so that a
-leaf hash commits to the whole path above it. A **session** is a ref:
-a header, a **base** entry it continues from or none, a **head** entry
-its next append will name as parent, and a **log** of the entries it
-appended, in the order the store accepted them.
+A store holds sessions as content-addressed entries and mutable refs. An
+**entry** is one of RFC 0001's, stored once, its body under the hash of
+the body and its envelope under the hash of the envelope, immutable, and
+naming its parent by hash, so that a leaf hash commits to the whole path
+above it. A **session** is a ref: a header, a **base** entry it
+continues from or none, a **head** entry its next append will name as
+parent, and a **log** of the entries it appended, in the order the store
+accepted them.
 
 The JSONL file of RFC 0001 is a projection of a session: its header,
 the path to its base, then its own entries in log order. A reader
@@ -138,20 +139,20 @@ an entry.
 - Acyclicity is structural. An entry names its parent by a hash that
   exists before the entry does, so no entry can name a descendant.
 
-Two appends of the same content under the same parent at the same `ts`
-are one entry. A writer that means two entries makes them differ; `ts`
-at sub-second precision is what usually does. A log holds a hash once,
-so the second such append to one session is a no-op the store reports
-as such.
+Two appends of the same type and content under the same parent at the
+same `ts` are one entry. A writer that means two entries makes them
+differ; `ts` at sub-second precision is what usually does. A log holds a
+hash once, so the second such append to one session is a no-op the store
+reports as such.
 
 ### Content
 
-An entry's hash covers its parent, its `ts` and its body together,
-which is right for the identity of a record and wrong for everything
-else a hash is wanted for. The same tool output under two parents would
-be two objects, and nothing could be shared or compared on its own.
-So a store separates them, as git separates a blob from the commit that
-names it.
+A single hash over an entry's parent, its `ts` and its body together
+would be right for the identity of a record and wrong for everything
+else a hash is wanted for: the same tool output under two parents would
+be two objects, and nothing could be shared or compared on its own. So
+RFC 0001 hashes in two layers, as git hashes a blob apart from the
+commit that names it, and a store holds the two apart.
 
 An entry's **content** is its body, the members outside the envelope,
 and its **content hash** is `sha256:` over the body's canonical bytes;
@@ -525,9 +526,10 @@ reader wants and a writer does not.
 
 ## Verification
 
-A reader of a projection verifies every entry's `id` against its
-canonical bytes and reports a line that fails, as RFC 0001 requires of
-every reader; a projection is a file like any other.
+A reader of a projection computes every entry's content hash and then
+its envelope hash, compares the latter to its `id`, and reports a line
+that fails, as RFC 0001 requires of every reader; a projection is a file
+like any other.
 
 A reader holding a fork's projection and its origin's checks the fork
 with one comparison: the fork header's `base` is one of the origin's own
@@ -562,11 +564,14 @@ not by any later leaf:
 - At an entry that contributes, the context hash is `sha256:` over the
   canonical bytes of a two-element JSON array: the parent's context
   hash, then this entry's content hash, both as strings carrying their
-  `sha256:` prefix. For a `compaction` and a `branch_summary` the
-  content hash used here is over the content with `first_kept` or `from`
-  replaced by the context hash at the entry it names, so that the key
-  depends on context and not on the identity of the entries that shaped
-  it.
+  `sha256:` prefix. For a `compaction` the content hash used here is
+  over the content with `first_kept` replaced by the context hash at the
+  entry it names when that entry is on the path ending here, and by
+  `null` otherwise; for a `branch_summary` it is over the content with
+  `from` replaced by `null`, since the leaf that was left is provenance
+  and not context, and a store need not hold it. The key then depends on
+  context and not on the identity of the entries that shaped it, and two
+  stores compute it from the path alone.
 
 It excludes `ts` and `parents`, it is incremental, and two sessions
 whose context entries are byte-identical share it, a compaction
