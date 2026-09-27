@@ -364,9 +364,14 @@ document's concern, and it is not this journal.
   swept.
 - A store MUST NOT sweep by reachability from heads. A session's
   abandoned branches are in its log and are its record; RFC 0001's
-  outcome and preference rules depend on them. What a store may sweep
-  is an object that no log names and no prefix needs, and it may tier
-  cold objects wherever it likes.
+  outcome and preference rules depend on them. What a store may sweep is
+  what nothing retained names, following references all the way down as
+  git's collector follows a commit to its tree to its blobs: an envelope
+  is retained while any log or prefix needs it; a content is retained
+  while any retained envelope names it; a media blob is retained while
+  any retained content names it through a `sidecar:` URL; only what is
+  left may be swept, and a store may tier cold objects wherever it
+  likes.
 
 Nothing in a log expires, so retention is a policy over sessions and
 not a sweep over entries: the log is the record, where git's reflog is
@@ -630,13 +635,14 @@ CREATE TABLE edges    (parent TEXT NOT NULL, child TEXT NOT NULL,
                        PRIMARY KEY (parent, child));
 ```
 
-`contents` holds each body once, media blobs included; `entries` is the
-envelope, naming its content and carrying the context hash the store
-computed at append; `record` is the mark the exchange section enforces,
-set when this store may advance the session. The sketch declares no
-foreign keys. The rows are immutable and content-addressed, so a
-constraint buys little and costs a lookup on every append; the append's
-own rules are what keep the tables in step.
+`contents` holds each body once, media blobs included, and a row leaves
+it only when no `entries.content` and no retained content's `sidecar:`
+URL names it; `entries` is the envelope, naming its content and carrying
+the context hash the store computed at append; `record` is the mark the
+exchange section enforces, set when this store may advance the session.
+The sketch declares no foreign keys. The rows are immutable and
+content-addressed, so a constraint buys little and costs a lookup on
+every append; the append's own rules are what keep the tables in step.
 
 `edges` is the reverse index the parent hashes cannot give: finding an
 entry's children, a session's leaves and the subtree below a point all

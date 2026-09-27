@@ -223,7 +223,7 @@ file.
 | `id` | MUST | the entry's envelope hash, defined below; unique everywhere, not only in the file |
 | `parent` | MUST | hash of the parent entry, or `null` for a root |
 | `parents` | MAY | further predecessors this entry converges; provenance only, never walked when building a context |
-| `ts` | MUST | RFC 3339 with sub-second precision RECOMMENDED |
+| `ts` | MUST | RFC 3339 in one form, since it is hashed as a string: UTC, uppercase `T` and `Z`, a fractional part only when non-zero and with no trailing zeros, as in `2026-09-17T12:00:02.5Z`. A reader MUST report any other spelling as it reports a hash that fails |
 
 A parent MUST appear earlier in the file than any child. Multiple roots
 are permitted in a file with no `base`; a file with one has one prefix
@@ -235,7 +235,12 @@ modified after it is written; corrections are new entries.
 An entry hashes in two layers, as a git commit hashes over its tree
 rather than over its files. Canonical throughout means the JSON
 Canonicalization Scheme (RFC 8785): members sorted by code point, no
-insignificant whitespace, numbers and strings in canonical form.
+insignificant whitespace, numbers and strings in canonical form. That
+scheme is defined over I-JSON (RFC 7493), so every hashed member MUST
+be I-JSON — no integer beyond 2^53, no duplicate member name, no lone
+surrogate — and a reader MUST report a line that is not, as it reports
+a hash that fails. `ts` is hashed as the string it is, which is why the
+header table admits one spelling of it.
 
 - The entry's **content** is the object of its members with the
   envelope's — `id`, `type`, `parent`, `parents`, `ts` — removed, and
@@ -1100,26 +1105,26 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0.
-A reader of 0.5 MUST read an earlier 0.x file by migrating it in memory:
-walk the entries in file order, compute each entry's hashes with its
-`parent` and every entry-naming member rewritten to the hashes already
-assigned above it, and read the result as a 0.5 file with no `base`.
-Each migrated entry carries `legacy_id`, the ID it had, as a member
-outside the envelope, added before the hashes are computed so that the
-migrated file verifies by construction and two readers give one file the
-same IDs; the ATIF and OpenTelemetry projections already emitted from
-the earlier file then still resolve, and a projection MAY emit
-`legacy_id` beside the new ID. The member is part of the content, so a
-migrated body never hashes as the same body written natively does, and a
-migrated file shares nothing with one; that is the price of keeping the
-old name. A reference the reader cannot rewrite — a `parents` entry in
-another session, or an entry named inside a member of an extension the
-reader does not know — keeps its original string and is reported as
-unresolved, and a file holding one MUST NOT be re-emitted as 0.5. An
-earlier entry whose body carries a top-level member by one of the
-envelope's reserved names, which earlier versions allowed, is reported
-as unresolved the same way, and a file holding one MUST NOT be
+it begins at 1.0. A reader of 0.5 MUST read an earlier 0.x file by
+migrating it in memory: walk the entries in file order, rewrite each
+`ts` to the one form the header table requires, compute each entry's
+hashes with its `parent` and every entry-naming member rewritten to the
+hashes already assigned above it, and read the result as a 0.5 file with
+no `base`. Each migrated entry carries `legacy_id`, the ID it had, as a
+member outside the envelope, added before the hashes are computed so
+that the migrated file verifies by construction and two readers give one
+file the same IDs; the ATIF and OpenTelemetry projections already
+emitted from the earlier file then still resolve, and a projection MAY
+emit `legacy_id` beside the new ID. The member is part of the content,
+so a migrated body never hashes as the same body written natively does,
+and a migrated file shares nothing with one; that is the price of
+keeping the old name. A reference the reader cannot rewrite — a
+`parents` entry in another session, or an entry named inside a member of
+an extension the reader does not know — keeps its original string and is
+reported as unresolved, and a file holding one MUST NOT be re-emitted as
+0.5. An earlier entry whose body carries a top-level member by one of
+the envelope's reserved names, which earlier versions allowed, is
+reported as unresolved the same way, and a file holding one MUST NOT be
 re-emitted as 0.5; `content` is the name this will most often be. No two
 migrated entries hash alike, since `legacy_id` was unique in the earlier
 file, so migration never merges.
