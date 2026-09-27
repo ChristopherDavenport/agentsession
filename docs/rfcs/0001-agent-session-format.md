@@ -98,6 +98,9 @@ RFC 2119.
   payload. On a root entry the member may instead record the point in
   another session this one was forked from; the convergence section
   says how the two are told apart.
+- **Fork**: a session opened with a copy of another session's path to
+  an entry, continuing from that entry. Its root names the entry as a
+  fork origin.
 - **Item**: an Open Responses item as defined by the Open Responses
   specification at the version named in the header.
 - **Run**: one pass of the harness's loop, from an input to the point
@@ -152,7 +155,7 @@ RFC 2119.
 | `harness` | SHOULD | name and version of the writer |
 | `records` | SHOULD | the record entry types, core or namespaced, this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
-| `parent_session` | SHOULD | session ID this was forked or spawned from, when the file has one such origin; a header cannot describe two fork roots. It names the session; for a fork, the root entry's `parents` names the point and is normative for it, as the convergence section says |
+| `parent_session` | SHOULD | session ID this was forked or spawned from, when every fork root names the same origin session; a header cannot describe two. It names the session; for a fork, the root entry's `parents` names the point and is normative for it, as the convergence section says |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar` |
 
@@ -170,7 +173,7 @@ file.
 | `type` | MUST | entry type; core types below, or namespaced `ns:type` |
 | `id` | MUST | unique within the file; opaque string |
 | `parent` | MUST | ID of the parent entry, or `null` for a root |
-| `parents` | MAY | further predecessors this entry converges; provenance only, never walked when building a context |
+| `parents` | MAY | further predecessors this entry converges; provenance only, never walked when building a context. On a root it may instead name a fork origin, as the convergence section says |
 | `ts` | MUST | RFC 3339 with sub-second precision RECOMMENDED |
 
 A parent MUST appear earlier in the file than any child. Multiple roots
@@ -217,7 +220,8 @@ a branch merged back, several workers joined at once.
 - `parents` is **provenance**. It is not walked when building a context,
   and an entry it names contributes nothing to any context by virtue of
   being named. Whatever crossed the boundary is in this entry's own
-  payload, materialised, as the ingress rule requires of every entry
+  payload, materialised — or, for a fork origin, in the copied path
+  this file opens with — as the ingress rule requires of every entry
   that receives material from outside this session; `parents` only
   records where that material came from.
 - Order is not meaningful. A writer MUST sort the references, by
@@ -228,55 +232,64 @@ a branch merged back, several workers joined at once.
   context as one that does, losing only the provenance.
 
 A root entry MAY carry `parents`, and there it records one of two
-things. A reference on a root is a **fork origin** when the entry it
-names is also in this file, under the same ID, as the root itself or
-a descendant of it; it records the point in another session this one
-diverged from. Any other reference on a root records convergence as
-it would anywhere else.
+things. A reference on a root is a **fork origin** when it carries a
+`session` other than this file's own and this file holds an entry with
+the ID it names, as the root itself or a descendant of it; it records
+the point in another session this one diverged from. Any other
+reference on a root records convergence as it would anywhere else. In
+a file cut short before the copy reached that ID the reference reads
+as convergence; that is a valid prefix, not a violation.
 
 A root that carries a fork-origin reference MUST head a copy of the
 origin's path to that entry — the same entries, in the same order,
-under the same IDs. The reference names the entry in the origin
-session and MUST carry `session`: this file holds a copy of the entry
-under the same ID, so a reference that omitted `session` would name
-the copy, which is written after the root. Because the IDs are kept,
-the path to that ID here is the path to it there, and a reader
-holding both files can check that the two rebuild the same request.
-The copy is the ingress rule applied to a fork: the inherited context
-is in this file, materialised, and the reference says where it was
-taken from. The rule binds the claim and not the event. A writer that
-cannot copy under the origin's IDs — a converter over a native format
-whose IDs differ, a harness forking from an origin it no longer holds
-whole — copies the context it has, omits the reference, and records
-the origin with `parent_session` and a `fork_of` link. Such a file
-says which session it came from and not the point, and makes no claim
-it cannot support.
+under the same IDs, unchanged but for the root's own reference and the
+`parents` rewrite below — and the fork's first entry after the copy
+MUST be a child of the named entry, which is what diverging from it
+means. The reference names the entry in the origin session and MUST
+carry `session`: this file holds a copy of the entry under the same
+ID, so a reference that omitted `session` would name the copy, which
+is written after the root. Because the IDs are kept, the path to that
+ID here is the path to it there, and a reader holding both files can
+check that the two rebuild the same request. The copy is the ingress
+rule applied to a fork: the inherited context is in this file,
+materialised, and the reference says where it was taken from. The rule
+binds the claim and not the event. A writer that cannot copy the
+origin's path faithfully — IDs that differ, a payload it must redact,
+an entry this version forbids a writer to produce — copies the context
+it has, omits the reference, and records the origin with
+`parent_session` and a `fork_of` link. Such a file says which session
+it came from and not the point, and makes no claim it cannot support.
 
 The path to the named entry is what MUST be copied. A fork MAY copy
 more of the origin — a whole file, siblings included — in the origin's
 order, and the named entry need not be the last copied line. What is
 copied is the path and not the context it builds: the entries a
 `compaction` on it excludes are copied too, or its `first_kept` and
-`pinned` no longer resolve. A copied reference in `parents` that
-omitted `session` MUST be rewritten to name the origin session, since
-in this file the bare ID would resolve against the copy. A copied
-`branch_summary` names in `from` a leaf that was not on the copied
-path, so it is not in this file, and a reader MUST NOT reject it. The
-fork's header MUST name the origin's payload profile and MUST NOT name
-in `records` a type the origin's header did not, or the promise would
-reach copied entries whose writer never made it. IDs are unique within
-a file, so an entry the fork appends below the point MAY carry an ID
-the origin used elsewhere; identity across the two files holds over
-the copied region only. A fork of a fork names its immediate origin,
-the session it was copied from.
+`pinned` no longer resolve. A copy keeps the origin's `ts`, so copied
+entries may predate the fork's `created_at`. A copied reference in
+`parents` that omitted `session` MUST be rewritten to name the origin
+session, since in this file the bare ID would resolve against the
+copy. A copied member that names an entry — a `branch_summary`'s
+`from`, an `outcome`'s or a `label`'s `target`, an item's
+`queued_from` — may name one that was off the copied path and so is
+not in this file, and a reader MUST NOT reject it. The fork's header
+MUST name the origin's payload profile and MUST NOT name in `records`
+a type the origin's header did not, or the promise would reach copied
+entries whose writer never made it. IDs are unique within a file, so
+an entry the fork appends below the point MAY carry an ID the origin
+used elsewhere; identity across the two files holds over the copied
+region only. A fork of a fork names its immediate origin, the session
+it was copied from.
 
-Three things can record a fork, and they are ranked. The root's
-`parents` is normative for the point. `parent_session` names the
-session, and a writer SHOULD set it when the file has one fork root,
-since a header cannot describe two. A `fork_of` link MAY be written
-beside them. A subsession that opens with a copy of its parent's
-context is also a fork, and its root names the point in the same way,
-beside the `spawned_by` that names the call.
+Three things can record a fork, and they are ranked: where they
+disagree the root's `parents` wins, then `parent_session`, then a
+`fork_of` link. The root's `parents` is normative for the point.
+`parent_session` names the session, and a writer SHOULD set it when
+every fork root names the same origin session, since a header cannot
+describe two. A `fork_of` link MAY be written beside them. A
+subsession that opens with a copy of its parent's context is also a
+fork, and its root names the point in the same way, beside the
+`spawned_by` that names the call.
 
 ## Core entry types
 
@@ -570,13 +583,13 @@ Why a run started and how it ended. Two entries per run, paired by
   that run. A branch closes the open run without an `end` entry, since
   the new leaf is not on its segment; the next append on the new
   branch begins a run. A fork does not close one: the fork's first
-  append is a child of the point, so it is on the segment of a run
-  open there, and the fork continues that run and writes its `end`.
-  When the header names `run` in `records`, no writer holds the file
-  open and the leaf is on the run's segment, a run with no `end` entry
-  was cut off; that is the crash signal. A run copied open from an
-  origin reads the same way in the fork, so it is not the signal while
-  the fork has a writer.
+  entry after the copy is a child of the point, so it is on the
+  segment of a run open there, and the fork continues that run and
+  writes its `end`. When the header names `run` in `records`, no
+  writer holds the file open and the leaf is on the run's segment, a
+  run with no `end` entry was cut off; that is the crash signal. A
+  fork that copied an open run and has appended nothing has not
+  crashed, and a reader MUST NOT read it as the signal.
 
 ### `dispatch`
 
@@ -757,8 +770,9 @@ before the `dispatch` entry and before the child's header exists, so a
 link whose session cannot be found means the child never started
 rather than a child that was never linked.
 
-A link names a session, not a point in one, and at the moment it is
-written there is no point to name. The other half of the round trip is
+A `subsession` link names a session, not a point in one, and at the
+moment it is written there is no point to name; a `fork_of` link's
+point is the fork root's `parents`. The other half of the round trip is
 `parents`: the entry carrying the child's `function_call_output`
 SHOULD name the child's leaf there, which is the first moment the
 parent knows it. Without that, a child that branched leaves no record
@@ -1095,9 +1109,13 @@ from. The header's `parent_session` already named the session; the root
 names the point. A root that names one opens with that entry's path
 copied under the same IDs, which is the ingress rule once more, and is
 what lets a reader with both files check that the fork continues the
-context it claims to. A writer that cannot copy under the origin's IDs
-names the session and not the point, so a file never claims a fork it
-cannot show.
+context it claims to. A writer that cannot copy the origin's path
+faithfully names the session and not the point, so a file never claims
+a fork it cannot show. `parent_session` moves from MAY to SHOULD for a
+file whose fork roots all name one origin. That a root's `parents`
+means one of two things is a rule about a member 0.4 introduces, not a
+change to one 0.3 had, so it stays behind the line the versioning
+section draws.
 
 **Ingress** says that an entry carrying material from outside this
 session carries it materialised, and that a reference to its origin
@@ -1240,10 +1258,10 @@ which the `run` entry cannot name and which 0.3 adopts beside the
   to "a session has an append sequence its store assigns", and no store
   is short of one while it takes writes in turn. The question is only
   live for a store that accepts concurrent appends. Two writes naming
-  the same parent are a fork, which the format already represents and
+  the same parent are a branch, which the format already represents and
   needs no order to record; what needs one is deciding which branch a
   later reader resumes on. Either the store supplies the order, or the
-  fork is left to a `label` to resolve and an unmarked session with
+  branch is left to a `label` to resolve and an unmarked session with
   several leaves is reported as ambiguous rather than guessed at. The
   second is the honest answer and costs a host an explicit mark.
 - What a diverging edge may carry beyond the point it diverges from. A
