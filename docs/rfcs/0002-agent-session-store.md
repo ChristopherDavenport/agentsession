@@ -82,6 +82,9 @@ is the order, and the head is a ref, never inferred.
   them.
 - Defining the node's contents. RFC 0001 does; this document stores
   them.
+- A spool for model output in flight. RFC 0001 forbids writing partial
+  output as an entry, so the bytes of a response still streaming are a
+  harness's to buffer, outside the store; see durability and recovery.
 
 ## Terminology
 
@@ -181,11 +184,10 @@ under the new head, sets the head to its own node, or leaves the branch
 is the writer's decision, not the store's. This is the whole of the
 concurrency model, and it is the one git has for refs.
 
-The durability rules of RFC 0001's writing discipline apply to append:
-a node whose type the header names in `records` MUST be durable before
-the side effect it precedes, so a store's append MUST NOT return before
-the node is durable when the store is asked for that, and a store that
-buffers MUST offer an append that does not.
+Durability is the next section's concern: an append is one commit, and
+a store offers one that returns only when the commit is durable, which
+is the one RFC 0001's writing discipline requires for a node whose type
+the header names in `records`.
 
 ## Head
 
@@ -215,6 +217,51 @@ when two writers append at once: the store does, always, because it
 serialises appends to a log even when it accepts them concurrently. No
 session is short of an order, and no reader has to guess a head from
 one.
+
+## Durability and recovery
+
+An append is three writes — the object, the log entry, the head — and
+the store promises them as one. At scale the store also promises them
+fast, to many writers at once, and those two promises are met by the
+same structure, which a database calls a write-ahead log.
+
+- A store MUST have a single commit point per append, after which the
+  append is acknowledged and before which nothing of it is visible.
+- A store MUST offer an append that does not return until its commit is
+  durable, and a writer MUST use it for a node whose type the header
+  names in `records`, as RFC 0001's writing discipline requires. A store
+  MAY acknowledge other appends before they are durable, and MUST say
+  which it did.
+- After a crash a store MUST recover to a state in which every append
+  it acknowledged as durable is present in full and no append is
+  present in part: no log entry without its node, no head moved to a
+  node the log lacks.
+- An object whose bytes do not hash to its name is corrupt. A store
+  MUST NOT serve it and MAY discard it. Content addressing is what makes
+  a half-written object detectable and a rewrite of it harmless.
+
+The design that meets these under contention is a store-wide journal.
+Every append is one record naming the session, the node's hash and
+whether the head moved, written to a sequential log. The object is
+written before its record, idempotently, since a second write of the
+same bytes under the same hash changes nothing. The record is the
+commit point, and durability is the journal's fsync, which a store
+shares across the appends of many writers in one call. Recovery
+replays the journal tail against the objects, the logs and the heads.
+Each session's log is then a projection of the journal, and the
+journal's order is the total order the ordering section describes, of
+which a session's log is a filter.
+
+A store built on a database that has its own write-ahead log gets all
+of this from the database, and the SQLite store of the reference
+implementation does. A store built on a filesystem or on object storage
+does not, and the journal is the first thing it builds.
+
+What the journal does not hold is a model call in flight. RFC 0001
+forbids writing partial output as an entry, so the bytes of a response
+still streaming are a harness's to buffer, outside the store, and reach
+it as nodes only when the items are complete. That spool is not this
+document's concern, and it is not this journal.
 
 ## Deletion and retention
 
@@ -316,14 +363,16 @@ layout.
 ```sql
 CREATE TABLE objects  (hash TEXT PRIMARY KEY, bytes BLOB NOT NULL);
 CREATE TABLE sessions (id TEXT PRIMARY KEY, header TEXT NOT NULL,
-                       base TEXT REFERENCES objects(hash),
-                       head TEXT REFERENCES objects(hash));
-CREATE TABLE log      (session TEXT NOT NULL REFERENCES sessions(id),
-                       seq INTEGER NOT NULL, hash TEXT NOT NULL,
-                       PRIMARY KEY (session, seq));
+                       base TEXT, head TEXT);
+CREATE TABLE log      (session TEXT NOT NULL, seq INTEGER NOT NULL,
+                       hash TEXT NOT NULL, PRIMARY KEY (session, seq));
 CREATE TABLE edges    (parent TEXT NOT NULL, child TEXT NOT NULL,
                        PRIMARY KEY (parent, child));
 ```
+
+The sketch declares no foreign keys. The rows are immutable and
+content-addressed, so a constraint buys little and costs a lookup on
+every append; the append's own rules are what keep the tables in step.
 
 `edges` is the reverse index the parent hashes cannot give: finding a
 node's children, a session's leaves and the subtree below a point all
