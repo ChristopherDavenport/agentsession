@@ -414,13 +414,14 @@ over media is computable: the blobs the pushed entries' items name.
 4. If RFC 0001's resume rule over the lines already written would not
    name the head, a `label` entry whose `label` is the reserved value
    `leaf`, naming the head, carrying `synthetic: true` and the head
-   entry's own `ts`, so that two stores project one session to the same
-   bytes, appended as a child of the last line written, so that the rule
-   lands a reader on the head. A genuine `leaf` label among the own
-   entries stays in force in the file, which is why the test is the rule
-   and not the last line. This entry is the projection's, not the
-   session's: it is not in the log, the member says so, and reading the
-   file back does not make it an entry.
+   entry's own `ts`, so that one store projects one session to the same
+   bytes every time and two stores whose logs agree do too, appended as
+   a child of the last line written, so that the rule lands a reader on
+   the head. A genuine `leaf` label among the own entries stays in force
+   in the file, which is why the test is the rule and not the last line.
+   This entry is the projection's, not the session's: it is not in the
+   log, the member says so, and reading the file back does not make it
+   an entry.
 5. A session whose `media` is `sidecar` projects its blobs beside the
    file, each named by its hex digest as RFC 0001 says, since RFC 0001
    counts a sidecar as part of the session and the file is not

@@ -207,7 +207,7 @@ RFC 2119.
 | `base` | MAY | hash of the entry this session continues from, never a `leaf` label, since the base is a fork's first leaf; `parent_session` names a session holding it, as provenance. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
-| `redacted` | MAY | `true` when bodies were changed after they were written, as export redaction does. The redactor MUST recompute every content hash, `id` and `parent` over the redacted bodies, so the file walks and verifies against itself; its IDs are then not the original's and its `request_hash` values are the original's and no longer match. A reader MUST NOT report such a file's hashes as verifying the original |
+| `redacted` | MAY | `true` when bodies were changed after they were written, as export redaction does. The redactor MUST recompute every content hash and `id` over the redacted bodies and rewrite `parent`, `base` and every entry-naming member — `parents` into this file, `target`, `first_kept`, `from`, `queued_from` — to the IDs assigned earlier in the file, as migration does, leaving a reference into another session's file as it was since it still names the unredacted original; the file then walks and verifies against itself; its IDs are then not the original's and its `request_hash` values are the original's and no longer match. A reader MUST NOT report such a file's hashes as verifying the original |
 
 Unknown header fields MUST be preserved by any tool that rewrites the
 file.
@@ -238,22 +238,25 @@ rather than over its files. Canonical throughout means the JSON
 Canonicalization Scheme (RFC 8785): members sorted by code point, no
 insignificant whitespace, numbers and strings in canonical form. That
 scheme is defined over I-JSON (RFC 7493), so every hashed member MUST be
-I-JSON, by a test a reader runs on the canonical form and not on the
-input, since canonicalisation changes how a number is spelled: every
-number is finite once rounded to binary64, the rounding being expected
-and not an error, and a number whose canonical form has no fraction and
-no exponent has a value within ±(2^53 − 1); no object repeats a member
-name; no string holds a lone surrogate. The result then does not depend
-on how a value was written and a canonical rewrite cannot change it. A
-reader MUST report a line that fails the test, as it reports a hash that
-fails. A model or a provider can emit what the test rejects — a string
-cut inside a surrogate pair, a 64-bit integer in a provider field — and
-the writing discipline says an output is recorded before it is acted on,
-so a writer MUST normalise before it writes: a lone surrogate becomes
-U+FFFD; an integer outside the bound is carried as a string where the
-payload profile allows it, and where the profile requires a number it is
-rounded to binary64, which is what canonicalisation would have done
-silently. The writer records what it changed in a member named
+I-JSON, by a test on the value and not on its spelling: every number is
+finite once rounded to binary64, the rounding being expected and not an
+error; a number whose exact value is a whole number is exactly
+representable in binary64, so 9007199254740993 is rejected however it is
+spelled and 9007199254740992, 1e20 and 0.1 are accepted; no object
+repeats a member name; no string holds a lone surrogate. A canonical
+rewrite cannot change the result, since canonical JSON writes a
+representable whole number exactly, and a reader checks it mechanically
+by converting the exact value and asking whether the conversion was
+exact. A reader MUST report a line that fails the test, as it reports a
+hash that fails. A model or a provider can emit what the test rejects —
+a string cut inside a surrogate pair, a 64-bit integer in a provider
+field — and the writing discipline says an output is recorded before it
+is acted on, so a writer MUST normalise before it writes: a lone
+surrogate becomes U+FFFD; an integer outside the bound is carried as a
+string where the payload profile allows it, and where the profile
+requires a number it is rounded to binary64, which is what
+canonicalisation would have done silently and which yields a value the
+test accepts. The writer records what it changed in a member named
 `normalised` on the entry: a list of RFC 6901 JSON Pointers relative to
 the body, each with the original text of the member it names. The
 normalised form is what the next request carries, so the rebuilt request
@@ -1166,14 +1169,14 @@ The reference implementation is the Go `agentsession` library, which at
 this draft still writes 0.4 and follows. The conformance suite is a
 directory of fixture files with expected context output for every leaf,
 expected `request_hash` values, every entry's content hash and `id`
-recomputed, numbers that pass the I-JSON test only in canonical form, a
-forked fixture whose `base` is found in its origin, the recomputed
-`reason` for every `run` end, and negative cases for a broken parent
-link, a truncated last line, an unknown type, a `dispatch` that follows
-a `reject`, and a header naming `dispatch` beside a call that has an
-output and no `dispatch`. Converters for pi, Claude Code and Codex are
-part of the initial proposal so the format arrives with three existing
-corpora behind it.
+recomputed, 9007199254740993 in three spellings and once as a number the
+profile requires, a forked fixture whose `base` is found in its origin,
+the recomputed `reason` for every `run` end, and negative cases for a
+broken parent link, a truncated last line, an unknown type, a `dispatch`
+that follows a `reject`, and a header naming `dispatch` beside a call
+that has an output and no `dispatch`. Converters for pi, Claude Code and
+Codex are part of the initial proposal so the format arrives with three
+existing corpora behind it.
 
 ## Prior art
 
