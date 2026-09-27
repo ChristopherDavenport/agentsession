@@ -175,10 +175,10 @@ A session is created with a header and optionally a base.
   in the grandparent's log, and the header may name either. A `fork_of`
   link records the session a fork was actually made from.
 - A store MUST refuse to create a session whose base it does not hold,
-  and MUST refuse one whose `media` differs from that of the session
-  holding its base, since the prefix was written in that form and a
-  projection carries media in one form. A session created with a base
-  has that base as its head.
+  and MUST refuse one whose `media` differs from that of a session it
+  holds whose own entries include the base, since the prefix was written
+  in that form and a projection carries media in one form. A session
+  created with a base has that base as its head.
 - A session with no base is a fresh root. Its first append is a root
   entry, `parent` null.
 - A session's own entry MUST name as `parent` the session's base or one
@@ -413,8 +413,12 @@ own entry or the marker. A store imports a projection as follows: each
 line but a synthetic marker is an entry it stores under its hash, the
 prefix entries join no log, the own entries join the imported session's
 log in file order, and the head is what RFC 0001's resume rule gives,
-held to the head rule: when the rule names a prefix entry, the head is
-the base and the store reports it. The marker names the head and is then
+held to the head rule: when the rule names a prefix entry the head is
+the base, when it names a `leaf` label the head is the label's parent,
+and the store reports either. An import is held to the checks a push is:
+the own entries hang from the base or from each other, or from null in a
+baseless session, and `media` equals that of a held session whose own
+entries include the base. The marker names the head and is then
 discarded, so an export and import cycle adds nothing, and a genuine
 `leaf` label a writer appended is an entry like any other. Two refusals
 follow. The imported session keeps the header's `id`, and a store
@@ -442,13 +446,14 @@ apply here, where holding the session already is the usual case.
   exchange moves no head. A `leaf` label among the pushed entries is
   an entry like any other here, and the head moves only by the
   compare-and-swap below.
-- **A receiver that lacks the session creates it** from the pushed
-  header, with the pushed base as its head, or no head when there is no
-  base, and then admits the entries. A receiver that holds a session
-  with that ID MUST refuse the push unless the pushed header equals the
-  held one, since a header is written once at creation and two sessions
-  alike only in ID are not one session; their union would be no session
-  at all.
+- **A receiver that lacks the session** first admits the prefix, so that
+  it holds the base, then creates the session from the pushed header
+  with the pushed base as its head, or no head when there is no base,
+  and then admits the own entries. A receiver that holds a session with
+  that ID MUST refuse the push unless the pushed header equals the held
+  one, since a header is written once at creation and two sessions alike
+  only in ID are not one session; their union would be no session at
+  all.
 - **The log merges as a set.** The receiver takes the union of the two
   logs and assigns its own sequence in the order it admits entries,
   admitting a parent before its child so that the merged log projects as
