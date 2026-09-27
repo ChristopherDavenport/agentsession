@@ -90,7 +90,7 @@ session worth training on.
 
 ## Non-goals
 
-- Multi-writer concurrency on one file. A store accepts concurrent
+- Multi-writer concurrency on one file. A store MAY accept concurrent
   appends to a session; a file is what it projects afterwards.
 - Cross-session indexing, search or listing, storage layout, and the
   head a session resumes at. Those are the store's, and RFC 0002
@@ -1128,6 +1128,11 @@ let a reader tell copy from original inside one file, is not written,
 because `base` says it in one member and the hash proves it in one
 comparison.
 
+A retry of a subsession's call is its own session, derived with an
+attempt counter, where 0.4 appended a second root to the existing
+child; a session with a base has one prefix, so a second root has no
+place in it.
+
 Nothing changes in the context algorithm, in the entry types, in
 convergence or in ingress. A 0.4 file migrates in memory as the
 versioning section says.
@@ -1289,6 +1294,8 @@ which the `run` entry cannot name and which 0.3 adopts beside the
   order.
 - Whether to allow a second payload profile at 0.x, or hold the line at
   Open Responses and rely on converters.
-- Sidecar media layout and naming.
+- Sidecar media layout and naming. RFC 0002 names a sidecar file by the
+  blob's hash and projects the blobs beside the file; the directory
+  layout beyond that is still open.
 - The venue: this repository, a standalone repository, or a proposal to
   openresponses.org as a companion document.

@@ -23,9 +23,9 @@ checked is taken on trust.
 Two writers appending to one session may both succeed. The store
 assigns each node its place in the log, and the head moves only when an
 append continues it; an append that does not is a branch, recorded and
-left where it was. The only contended write is the head, and it moves
-by compare-and-swap. A store may still take writers in turn; the model
-is what lets it not.
+left where it was. The only write an appender can lose is the head,
+and it moves by compare-and-swap. A store may still take writers in
+turn; the model is what lets it not.
 
 ## Motivation
 
@@ -65,9 +65,9 @@ is the order, and the head is a ref, never inferred.
   sharing a prefix share its nodes.
 - **Verifiable.** A projection is checked hash by hash; a fork is
   checked against its origin by one hash.
-- **Appends need no lock.** The model lets concurrent writers to one
-  session both succeed with only the head contended. A store MAY still
-  take writers in turn.
+- **Appends need no session lock.** The model lets concurrent writers
+  to one session both succeed, with the head the only write one of them
+  can lose. A store MAY still take writers in turn.
 - **Nothing is garbage.** Every node a session appended stays in its
   log. Abandoned branches are preference data, as RFC 0001 says.
 - **Projection is lossless.** A session projects to an RFC 0001 file
@@ -142,6 +142,7 @@ A session is created with a header and optionally a base.
   log holds the base node, or for a subsession with no base the
   session that spawned it.
 - A store MUST refuse to create a session whose base it does not hold.
+  A session created with a base has that base as its head.
 - A session with no base is a fresh root. Its first append is a root
   node, `parent` null.
 - A session's own node MUST name as `parent` the session's base or one
@@ -171,11 +172,11 @@ Append is the one write to a session's content, and it is atomic.
 
 - The store MUST hold the parent, per the node rules, and the parent
   MUST satisfy the session's parent rule above.
-- The store MUST store the node, MUST append its hash to the session's
-  log at the next sequence number unless the log already holds it, and
-  MUST then, if the node's parent is the session's head, move the head
-  to the node. All three happen or none does. A hash the log already
-  holds makes the append a no-op, reported as such.
+- The store MUST store the node and MUST append its hash to the
+  session's log at the next sequence number, unless the log already
+  holds it, in which case the append is a no-op, reported as such, and
+  nothing moves. Otherwise the store MUST move the head to the node
+  when the node's parent is the head. All three happen or none does.
 - If the node's parent is not the head, the head does not move. The
   append succeeded and created a branch. The store MUST tell the
   appender which happened.
@@ -236,12 +237,16 @@ fast, to many writers at once, and those two promises are met by the
 same structure, which a database calls a write-ahead log.
 
 - A store MUST have a single commit point per append, after which the
-  append is acknowledged and before which nothing of it is visible.
+  append is acknowledged and before which nothing of it is visible. An
+  object written ahead of its record is not a node the store holds, so
+  it cannot satisfy another append's parent rule.
 - A store MUST offer an append that does not return until its commit is
-  durable, and a writer MUST use it for a node whose type the header
-  names in `records`, as RFC 0001's writing discipline requires. A store
-  MAY acknowledge other appends before they are durable, and MUST say
-  which it did.
+  durable. A writer MUST use it for a node the header's `records` names
+  that precedes a side effect, as RFC 0001's writing discipline
+  requires, and SHOULD for a `response` node and for a
+  `function_call_output` item, which is where that discipline asks for
+  an fsync. A store MAY acknowledge other appends before they are
+  durable, and MUST say which it did.
 - After a crash a store MUST recover to a state in which every append
   it acknowledged as durable is present in full and no append is
   present in part: no log entry without its node, no head moved to a
@@ -276,9 +281,8 @@ document's concern, and it is not this journal.
 ## Deletion and retention
 
 - A store MUST NOT delete a node that any session's log references.
-- A store MUST NOT sweep a node that is an ancestor of any session's
-  base: it is on that session's prefix, and the session's projection
-  needs it.
+- A store MUST NOT sweep a node on any session's prefix, its base
+  included: the session's projection needs it.
 - Deleting a session removes its ref, its header and its log. Nodes
   referenced by no remaining log and on no remaining prefix MAY then be
   swept.
@@ -308,12 +312,15 @@ not dedupe.
 2. The prefix, root first: the path from the root to the base, every
    node on it, each as its canonical line with `id` set to its hash.
 3. The session's own nodes in log order, the same way.
-4. If the head is not the last node in the log, a `label` entry whose
-   `label` is the reserved value `leaf`, naming the head, appended as a
-   child of the last node, so that RFC 0001's resume rule lands a
-   reader on the head. This entry is the projection's, not the
-   session's: it is not in the log, and reading the file back does not
-   make it a node.
+4. If the head is not the last line the steps above wrote, a `label`
+   entry whose `label` is the reserved value `leaf`, naming the head,
+   appended as a child of that last line, so that RFC 0001's resume
+   rule lands a reader on the head. This entry is the projection's, not
+   the session's: it is not in the log, and reading the file back does
+   not make it a node.
+5. A session whose `media` is `sidecar` projects its blobs beside the
+   file, each named by its hash, since RFC 0001 counts a sidecar as
+   part of the session and the file is not self-contained without it.
 
 The prefix is what keeps the file self-contained: the material the
 model was sent is in the file, and the header says where it came from.
@@ -330,23 +337,16 @@ session's log in file order, and the head is what RFC 0001's resume
 rule gives; the marker names the head and is then discarded, so an
 export and import cycle adds nothing. The imported session keeps the
 header's `id`, and a store already holding a session with that ID MUST
-refuse the import. An importer MUST verify each
-line's hash and MUST refuse a file in which one fails, so a redacted
-projection cannot be imported: it is a record to read, not one to
-hold.
-
-A projection that has been redacted no longer verifies, because
-redaction changes the bytes the hashes were taken over. That is by
-design. A redacted file MUST say so in its header, and a reader MUST
-NOT treat its hashes as verified; it may still treat its structure as
-a valid RFC 0001 file, because every rule but verification holds.
+refuse the import. An importer MUST verify each line's hash and MUST
+refuse a file in which one fails, so a redacted projection, which RFC
+0001 says no longer verifies and must say so in its header, cannot be
+imported: it is a record to read, not one to hold.
 
 ## Verification
 
-A reader of a projection MUST verify every entry's `id` against the
-hash of its canonical bytes and MUST report a line that fails. A
-failing line is corruption or tampering, not an unknown extension, and
-a reader MUST NOT repair it.
+A reader of a projection verifies every entry's `id` against its
+canonical bytes and reports a line that fails, as RFC 0001 requires of
+every reader; a projection is a file like any other.
 
 A reader holding a fork's projection and its origin's checks the fork
 with one comparison: the fork header's `base` is in the origin's log.
@@ -362,13 +362,15 @@ the work.
 
 A node hash identifies the context at that node, so a router that keys
 a provider's cached prefix on the hash of the last node before a
-request has a key that is exact, stable across sessions sharing the
-prefix, and free to compute. RFC 0001's calibration applies without
-change: equal hashes say the same entries were sent, and say the model
-saw the same leading tokens only where the provider's template,
-tool-schema serialisation and tokenizer are deterministic. The
-writing-discipline rule that keeps per-run content out of the request
-is what keeps sibling forks sharing a key.
+request has a key that is stable across sessions sharing the prefix
+and free to compute. Equal keys mean the same request. Unequal keys
+need not mean a different one, since a `dispatch` or `run` node on the
+path changes the hash and not the request. RFC 0001's calibration
+applies without change: equal hashes say the same entries were sent,
+and say the model saw the same leading tokens only where the provider's
+template, tool-schema serialisation and tokenizer are deterministic.
+The writing-discipline rule that keeps per-run content out of the
+request is what keeps sibling forks sharing a key.
 
 ## Reference implementation
 
