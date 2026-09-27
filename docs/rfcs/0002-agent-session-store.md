@@ -174,8 +174,11 @@ A session is created with a header and optionally a base.
   validate: a fork made at an entry on another fork's prefix has a base
   in the grandparent's log, and the header may name either. A `fork_of`
   link records the session a fork was actually made from.
-- A store MUST refuse to create a session whose base it does not hold.
-  A session created with a base has that base as its head.
+- A store MUST refuse to create a session whose base it does not hold,
+  and MUST refuse one whose `media` differs from that of the session
+  holding its base, since the prefix was written in that form and a
+  projection carries media in one form. A session created with a base
+  has that base as its head.
 - A session with no base is a fresh root. Its first append is a root
   entry, `parent` null.
 - A session's own entry MUST name as `parent` the session's base or one
@@ -245,7 +248,8 @@ The head is a session's resume point, and it is a ref.
 - A store MUST offer a compare-and-swap on the head: move the head from
   an expected entry to a given entry, or fail if the head is not the
   expected entry. "No head" is a valid expected value. The target MUST
-  be the base or one of the session's own entries.
+  be the base or one of the session's own entries other than a `leaf`
+  label, since the head never rests on one.
 - Resume reads the head. There is no inference from log order and no
   marker to find. The head is what RFC 0001's leaf label was standing
   in for; the label survives as the projection's marker and as a head
@@ -491,13 +495,14 @@ Fetch is the reverse, and any store may fetch from any store that holds
 the session, a mirror included, since a mirror holds what the record
 pushed it. A fetch admits entries as a push does and moves the fetcher's
 head to the fetched head only when the fetcher is a mirror and the
-fetched head descends from the fetcher's, so a fetch from a stale mirror
-moves nothing and says so; a record's head moves only by its own
-writers. Publishing a corpus is pushing a manifest, which a later
-document defines, and the objects it closes over. Archiving a session is
-a handover to a store that keeps cold objects followed by deleting the
-ref here, and taking it back is a handover the other way; a fetch alone
-yields a mirror, which is what a reader wants and a writer does not.
+fetched head descends from the fetcher's or the fetcher has none, so a
+fetch from a stale mirror moves nothing and says so; a record's head
+moves only by its own writers. Publishing a corpus is pushing a
+manifest, which a later document defines, and the objects it closes
+over. Archiving a session is a handover to a store that keeps cold
+objects followed by deleting the ref here, and taking it back is a
+handover the other way; a fetch alone yields a mirror, which is what a
+reader wants and a writer does not.
 
 ## Verification
 

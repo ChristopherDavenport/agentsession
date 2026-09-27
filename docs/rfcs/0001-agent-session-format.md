@@ -155,14 +155,15 @@ RFC 2119.
   and then the store's log order for the session's own entries, which
   RFC 0002 defines; the file has no other.
 - A reader resuming from a file MUST take as leaf the newest entry in
-  file order that descends from the entry the last `leaf` label in
-  force names and was written after that label, the label itself
-  excepted; that entry itself when nothing follows it; and the last
-  entry of the file when no such label is in force. The label marks the
-  branch that is live, not the tip it had when marked, so a branch
-  marked and then extended resumes where it was extended to. In a store
-  the head is the leaf, and this rule is how a projection carries a
-  head that is not the last line.
+  file order that descends from the entry the last `leaf` label in force
+  names and was written after that label, the label itself excepted;
+  that entry itself when nothing follows it; and the last entry of the
+  file when no such label is in force. A `leaf` label whose target is
+  not in the file is not in force. The label marks the branch that is
+  live, not the tip it had when marked, so a branch marked and then
+  extended resumes where it was extended to. In a store the head is the
+  leaf, and this rule is how a projection carries a head that is not the
+  last line.
 - A file whose header names a `base` opens with the prefix: every entry
   from the root to the base, in path order, before any entry the
   session appended itself. The prefix is another session's record,
