@@ -105,7 +105,8 @@ in RFC 2119.
 - **Log**: the entries a session appended, in the order the store
   accepted them. These are the session's **own** entries.
 - **Prefix**: the path from a session's base to its root. A session's
-  prefix entries are another session's own entries.
+  prefix entries are, or were, another session's own entries; a store
+  may hold them without holding that session.
 - **Projection**: an RFC 0001 file built from a session.
 
 ## Entries
@@ -208,7 +209,9 @@ Append is the one write that adds to a session, and it is atomic.
   session's log at the next sequence number, unless the log already
   holds it, in which case the append is a no-op, reported as such, and
   nothing moves. Otherwise the store MUST move the head to the entry
-  when the entry's parent is the head. All three happen or none does.
+  when the entry's parent is the head, or, for a `leaf` label, to its
+  target as the head section says, whatever its parent. All three
+  happen or none does.
 - If the entry's parent is not the head, the head does not move, except
   for the `leaf` label the head section describes. The append succeeded
   and created a branch. The store MUST tell the appender which
@@ -267,8 +270,8 @@ The head is a session's resume point, and it is a ref.
 
 The log is the order. Each own entry has a sequence number the store
 assigned as it accepted the append, and that sequence is what RFC 0001
-calls entry order: it separates siblings and it says which branch was
-written last in this store. `ts` remains informational and a reader
+calls entry order: it separates siblings and it says which branch this
+store's log ends with. `ts` remains informational and a reader
 MUST NOT order by it. Which branch is live is the head, never the
 order, and the head is the fact that travels between stores; a
 sequence is a store's own, as the exchange section says.
@@ -365,8 +368,10 @@ inline as a data URL inside the item, or beside the file under a
 sidecar directory named after the session, where the file name is the
 blob's hash. An item's bytes are hashed, so a store MUST NOT convert
 between the two; a projection carries media in the form the session
-was written in, and an inline data URL is part of its entry and does
-not dedupe.
+was written in. A sidecar blob is an object of its own and is held
+once; an inline data URL is part of its entry's content and is held
+once only as that content is. A push's closure over media is the
+sidecar blobs the pushed entries name.
 
 ## Projection to JSONL
 
@@ -399,9 +404,10 @@ Reading a projection back yields the same entries, since the hashes are
 in the file and a reader verifies each, and the same head, from the last
 own entry or the marker. A store imports a projection as follows: each
 line but a synthetic marker is an entry it stores under its hash, the
-prefix entries join no log, the own entries join the imported session's
-log in file order, and the head is what RFC 0001's resume rule gives;
-the marker names the head and is then discarded, so an export and import
+prefix entries join no log, the own entries join the imported session's log in file order, and the head is what RFC 0001's resume
+rule gives, held to the head rule: when the rule names a prefix entry,
+the head is the base and the store reports it. The marker names the
+head and is then discarded, so an export and import
 cycle adds nothing, and a genuine `leaf` label a writer appended is an
 entry like any other. Two refusals follow. The imported session keeps
 the header's `id`, and a store already holding a session with that ID
@@ -431,9 +437,10 @@ apply here, where holding the session already is the usual case.
 - **A receiver that lacks the session creates it** from the pushed
   header, with the pushed base as its head, or no head when there is no
   base, and then admits the entries. A receiver that holds a session
-  with that ID MUST refuse the push unless the header's `base`,
-  `created_at` and `payload` agree, since two sessions alike only in ID
-  are not one session and their union would be no session at all.
+  with that ID MUST refuse the push unless the pushed header equals the
+  held one, since a header is written once at creation and two sessions
+  alike only in ID are not one session; their union would be no session
+  at all.
 - **The log merges as a set.** The receiver takes the union of the two
   logs and assigns its own sequence in the order it receives entries,
   and MUST refuse a push whose own entries do not each name the base or
@@ -449,24 +456,36 @@ apply here, where holding the session already is the usual case.
   is wrong leaves its entries in the log as a branch and reports that
   the head did not move, which is what an append that is not a
   fast-forward does. A force is an explicit override, and a store MUST
-  distinguish it from a push that fast-forwarded. There is no merge of
-  heads: two writers who advanced one session on two stores have made a
-  fork, which the format represents, and the loser's answer is to push
-  its line as a session with a base rather than to reconcile.
+  distinguish it from a push that fast-forwarded. With the record mark
+  below, a wrong expected value means two stores each believed they
+  were the record: a mirror declared itself the record while the old
+  one continued, or a handover was retried across a failure. The
+  compare-and-swap is what reveals it. There is no merge of heads: the
+  two lines are a fork, which the format represents, and the loser's
+  answer is to push its line as a session with a base rather than to
+  reconcile.
 - **One store of record, enforced.** A store marks each session it
   holds as one it is the record for or a mirror of, and the reference
-  schema carries the mark. A store that is a mirror MUST refuse a local
-  append and a local head move for that session, accepting both only
-  through exchange from the record, so a mirror's head follows the
+  schema carries the mark. The mark is set at birth: a session created
+  locally or imported from a projection is the record here, since a
+  file has no record elsewhere; a session created by a push or a fetch
+  is a mirror unless the push is a handover. A store that is a mirror
+  MUST refuse a local append and a local head move for that session,
+  accepting both only through exchange, so a mirror's head follows the
   record's because nothing else can move it. A push from a store that
   is not the record MUST be refused. A handover is a push that clears
   the mark at the sender and sets it at the receiver, each atomically
   with its own step, after which the old record is a mirror. A mirror
   whose record has deleted the session may declare itself the record,
-  since nothing else can advance it.
+  since nothing else can advance it; a session archived and fetched
+  back is appended to that way.
 
 Fetch is the reverse, and any store may fetch from any store that
-holds the session. Publishing a corpus is pushing a manifest, which a
+holds the session, a mirror included, since a mirror holds what the
+record pushed it. A fetch admits entries as a push does and moves the
+fetcher's head to the fetched head only when the fetcher is a mirror;
+a record's head moves only by its own writers. Publishing a corpus is
+pushing a manifest, which a
 later document defines, and the objects it closes over. Archiving a
 session is a push to a store that keeps cold objects followed by
 deleting the ref here.
