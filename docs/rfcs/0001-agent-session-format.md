@@ -369,7 +369,8 @@ One conversation item in the payload profile.
   slug-prefixed item the profile allows. It does not include
   `item_reference`, which the profile permits and the ingress rule
   excludes: a reader accepts one, a writer does not produce one.
-- `response` MAY name the response entry this item belongs to when the
+- `response` MAY carry the `response_id` of the model call this item
+  belongs to, a provider's identifier and not an entry's, when the
   item was model output.
 - `visible` MAY be `false` to mark an item that is part of the model
   context but that a renderer SHOULD hide.
@@ -1113,9 +1114,8 @@ a migrated file shares nothing with one; that is the price of keeping
 the old name. A reference the reader cannot rewrite — a `parents` entry
 in another session, or an entry named inside a member of an extension
 the reader does not know — keeps its original string and is reported as
-unresolved, and a file holding one MUST NOT be re-emitted as 0.5. Two
-earlier entries identical in type, content, parent and `ts` migrate to
-one entry; a reader merges them and reports that it did.
+unresolved, and a file holding one MUST NOT be re-emitted as 0.5. No two migrated entries hash alike, since `legacy_id` was unique in the
+earlier file, so migration never merges.
 
 ## Conformance
 
@@ -1178,9 +1178,11 @@ attempt counter, where 0.4 appended a second root to the existing
 child; a session with a base has one prefix, so a second root has no
 place in it.
 
-Nothing changes in the context algorithm, in the entry types, in
-convergence or in ingress. A 0.4 file migrates in memory as the
-versioning section says.
+Nothing changes in the context algorithm, in convergence or in
+ingress. Among the entry types, `label` gains the reserved `leaf` value
+and the `synthetic` member, and an `outcome`'s `target` may name a
+prefix entry. A 0.4 file migrates in memory as the versioning section
+says.
 
 ## Changes since 0.3
 

@@ -568,10 +568,10 @@ not by any later leaf:
   over the content with `first_kept` replaced by the context hash at the
   entry it names when that entry is on the path ending here, and by
   `null` otherwise; for a `branch_summary` it is over the content with
-  `from` replaced by `null`, since the leaf that was left is provenance
-  and not context, and a store need not hold it. The key then depends on
-  context and not on the identity of the entries that shaped it, and two
-  stores compute it from the path alone.
+  `from` removed, present or not, since the leaf that was left is
+  provenance and not context, and a store need not hold it. The key then
+  depends on context and not on the identity of the entries that shaped
+  it, and two stores compute it from the path alone.
 
 It excludes `ts` and `parents`, it is incremental, and two sessions
 whose context entries are byte-identical share it, a compaction
