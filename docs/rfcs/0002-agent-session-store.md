@@ -139,11 +139,11 @@ an entry.
 - Acyclicity is structural. An entry names its parent by a hash that
   exists before the entry does, so no entry can name a descendant.
 
-Two appends of the same type and content under the same parent at the
-same `ts` are one entry. A writer that means two entries makes them
-differ; `ts` at sub-second precision is what usually does. A log holds a
-hash once, so the second such append to one session is a no-op the store
-reports as such.
+Two appends of the same type, content and `parents` under the same
+parent at the same `ts` are one entry. A writer that means two entries
+makes them differ; `ts` at sub-second precision is what usually does. A
+log holds a hash once, so the second such append to one session is a
+no-op the store reports as such.
 
 ### Content
 
@@ -427,18 +427,19 @@ prefix entries join no log, the own entries join the imported session's
 log in file order, and the head is what RFC 0001's resume rule gives,
 held to the head rule: when the rule names a prefix entry the head is
 the base, when it names a `leaf` label the head is the nearest ancestor
-that is not one, and the store reports either. An import is held to the
-checks a push is: the own entries hang from the base or from each other,
-or from null in a baseless session, and `media` equals that of a held
-session whose own entries include the base. The marker names the head
-and is then discarded, so an export and import cycle adds nothing, and a
-genuine `leaf` label a writer appended is an entry like any other. Two
-refusals follow. The imported session keeps the header's `id`, and a
-store already holding a session with that ID MUST refuse the import. An
-importer MUST verify each line's hash and MUST refuse a file in which
-one fails, and MUST refuse a file whose header carries `redacted`
-whether or not its lines verify: a redacted projection is a record to
-read, not one to hold.
+that is not one, the base when no such ancestor lies above the base, and
+no head in a baseless session with none, and the store reports any of
+these. An import is held to the checks a push is: the own entries hang
+from the base or from each other, or from null in a baseless session,
+and `media` equals that of a held session whose own entries include the
+base. The marker names the head and is then discarded, so an export and
+import cycle adds nothing, and a genuine `leaf` label a writer appended
+is an entry like any other. Two refusals follow. The imported session
+keeps the header's `id`, and a store already holding a session with that
+ID MUST refuse the import. An importer MUST verify each line's hash and
+MUST refuse a file in which one fails, and MUST refuse a file whose
+header carries `redacted` whether or not its lines verify: a redacted
+projection is a record to read, not one to hold.
 
 ## Exchange between stores
 
@@ -569,9 +570,10 @@ not by any later leaf:
   entry it names when that entry is on the path ending here, and by
   `null` otherwise; for a `branch_summary` it is over the content with
   `from` removed, present or not, since the leaf that was left is
-  provenance and not context, and a store need not hold it. The key then
-  depends on context and not on the identity of the entries that shaped
-  it, and two stores compute it from the path alone.
+  provenance and not context, and a store need not hold it; and for an
+  `item` it is over the content with `queued_from` removed, for the same
+  reason. The key then depends on context and not on the identity of the
+  entries that shaped it, and two stores compute it from the path alone.
 
 It excludes `ts` and `parents`, it is incremental, and two sessions
 whose context entries are byte-identical share it, a compaction

@@ -262,9 +262,9 @@ entries name it, which RFC 0002 builds on. Wherever this document has a
 member name an entry — `parent`, `parents`, `target`, `first_kept`,
 `from`, `queued_from` — it names it by `id`.
 
-Two entries with the same type, content, parent and `ts` are one
-entry. A writer that means two makes them differ, and sub-second `ts`
-is what usually does.
+Two entries with the same type, content, parent, `parents` and `ts`
+are one entry. A writer that means two makes them differ, and
+sub-second `ts` is what usually does.
 
 Preservation is of members, not bytes. A rewriter MAY re-serialise a
 line, since both hashes are over canonical forms and verification does
@@ -279,7 +279,8 @@ that has been redacted no longer verifies, since redaction changes the
 bytes; such a file MUST say so in its header and a reader MUST NOT
 report its hashes as verified.
 
-Appending an entry of either kind makes it the leaf. A record entry is
+Appending an entry of either kind makes it the leaf, a `leaf` label
+excepted, which makes its target the leaf. A record entry is
 a child of the leaf like any other, so it lies on the path of every
 entry appended after it. The run and call shapes below depend on that:
 a writer MUST NOT hang a record entry off an earlier entry as a
