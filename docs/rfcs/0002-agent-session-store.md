@@ -6,8 +6,8 @@ Depends on: RFC 0001, Agent Session Format, at draft 0.5 or later.
 
 ## Summary
 
-A store holds sessions as content-addressed entries and mutable refs. A
-**entry** is one entry of RFC 0001, stored once under the hash of its
+A store holds sessions as content-addressed entries and mutable refs.
+An **entry** is one of RFC 0001's, stored once under the hash of its
 canonical bytes, immutable, and naming its parent by hash, so that a
 leaf hash commits to the whole path above it. A **session** is a ref:
 a header, a **base** entry it continues from or none, a **head** entry
@@ -89,10 +89,9 @@ in RFC 2119.
 
 - **Entry**: as RFC 0001 defines it, addressed by its hash. The store
   holds it as an envelope naming a content object.
-- **Content**: an entry's canonical members with `id`, `parent`,
-  `parents` and `ts` removed, `type` kept, hashed on their own. Two
-  entries with the same content share one content object however they
-  differ in parent or `ts`.
+- **Content**: the part of an entry hashed on its own, as the content
+  section defines; two entries alike in content share one content
+  object however they differ in parent or `ts`.
 - **Object**: canonical bytes addressed by their hash: an entry, a
   content, or a media blob.
 - **Context hash**: the incremental hash over the content hashes of the
@@ -269,8 +268,10 @@ The head is a session's resume point, and it is a ref.
 The log is the order. Each own entry has a sequence number the store
 assigned as it accepted the append, and that sequence is what RFC 0001
 calls entry order: it separates siblings and it says which branch was
-written last. `ts` remains informational and a reader MUST NOT order
-by it. Which branch is live is the head, never the order.
+written last in this store. `ts` remains informational and a reader
+MUST NOT order by it. Which branch is live is the head, never the
+order, and the head is the fact that travels between stores; a
+sequence is a store's own, as the exchange section says.
 
 This answers the question RFC 0001 left open, who assigns the sequence
 when two writers append at once: the store does, always, because it
@@ -348,9 +349,10 @@ Nothing in a log expires, so retention is a policy over sessions and
 not a sweep over entries: the log is the record, where git's reflog is
 a convenience with a shelf life. A host that no longer wants a session
 deletes it, and the store sweeps what nothing else needs. The lossless
-form of that is to export the session's projection first, under a
-manifest naming it, and delete afterwards; a session so archived can be
-imported again and verifies on the way in. Where a session is kept, the
+form of that is to push the session to a store that keeps cold objects,
+or to export its projection, and delete the ref here afterwards; a
+session so archived is fetched or imported again and verifies on the
+way in. Where a session is kept, the
 cost of keeping it is the store's to tier, and content shared across
 sessions is paid for once.
 
@@ -412,36 +414,62 @@ be imported: it is a record to read, not one to hold.
 
 A session moves between stores as a push or a fetch. The wire protocol
 is a non-goal; what a store owes when it sends or receives one is not.
+Exchange is between stores and is not import: import is of a projection
+file, and its refusal of a session the store already holds does not
+apply here, where holding the session already is the usual case.
 
 - **A push carries the closure of the session**: its own entries and
   their contents, its prefix entries and their contents, and its media
   blobs. The prefix goes because the receiver's parent rule needs it,
   and the receiver retains it under the prefix rule even when it never
   holds the origin session. A sender MAY negotiate what the receiver
-  lacks; a receiver admits objects as it admits an append, hash
-  verified and parent first.
+  lacks. A receiver admits objects as it admits an append, hash
+  verified and parent first, with one difference: admission under
+  exchange moves no head. A `leaf` label among the pushed entries is
+  an entry like any other here, and the head moves only by the
+  compare-and-swap below.
+- **A receiver that lacks the session creates it** from the pushed
+  header, with the pushed base as its head, or no head when there is no
+  base, and then admits the entries. A receiver that holds a session
+  with that ID MUST refuse the push unless the header's `base`,
+  `created_at` and `payload` agree, since two sessions alike only in ID
+  are not one session and their union would be no session at all.
 - **The log merges as a set.** The receiver takes the union of the two
-  logs and assigns its own sequence in the order it receives entries.
-  Two stores may hold one session with different log orders and both
-  are correct, since the head is authoritative and the order decides
-  only how a projection lays out siblings. Sequence numbers are never
-  synchronised.
-- **The head moves by compare-and-swap**, with the expected value the
-  remote head the sender last saw. A push that finds the remote head
-  moved fails. A force is an explicit override, and a store MUST
+  logs and assigns its own sequence in the order it receives entries,
+  and MUST refuse a push whose own entries do not each name the base or
+  another own entry of the union as `parent`. Two stores may hold one
+  session with different log orders and both are correct: the order
+  says which branch was written last in that store, and the head is the
+  fact that travels. Sequence numbers are never synchronised.
+- **The entries land whether or not the head moves.** A push is two
+  steps, admission and then the head, and only the second can fail.
+  The head moves by compare-and-swap, with the expected value the
+  remote head the sender last saw, or the head a freshly created
+  session has when the receiver lacked it. A push whose expected value
+  is wrong leaves its entries in the log as a branch and reports that
+  the head did not move, which is what an append that is not a
+  fast-forward does. A force is an explicit override, and a store MUST
   distinguish it from a push that fast-forwarded. There is no merge of
   heads: two writers who advanced one session on two stores have made a
   fork, which the format represents, and the loser's answer is to push
   its line as a session with a base rather than to reconcile.
-- **One store of record.** A push either mirrors a session whose record
-  stays with the sender, or hands the record over, and both stores
-  record which. A mirror's head follows the record's; a handover moves
-  the right to advance it.
+- **One store of record, enforced.** A store marks each session it
+  holds as one it is the record for or a mirror of, and the reference
+  schema carries the mark. A store that is a mirror MUST refuse a local
+  append and a local head move for that session, accepting both only
+  through exchange from the record, so a mirror's head follows the
+  record's because nothing else can move it. A push from a store that
+  is not the record MUST be refused. A handover is a push that clears
+  the mark at the sender and sets it at the receiver, each atomically
+  with its own step, after which the old record is a mirror. A mirror
+  whose record has deleted the session may declare itself the record,
+  since nothing else can advance it.
 
-Fetch is the reverse. Publishing a corpus is pushing a manifest and the
-objects it closes over. Archiving a session is a push to cold storage
-followed by deleting the ref, which is the retention paragraph made
-concrete.
+Fetch is the reverse, and any store may fetch from any store that
+holds the session. Publishing a corpus is pushing a manifest, which a
+later document defines, and the objects it closes over. Archiving a
+session is a push to a store that keeps cold objects followed by
+deleting the ref here.
 
 ## Verification
 
@@ -471,10 +499,9 @@ The **context hash** is the key a store can compute as it appends. It
 is defined over the path ending at an entry, by the entry's type and
 not by any later leaf:
 
-- An entry **contributes** when its type is a context entry type in
-  RFC 0001's terms: `item`, `config`, `compaction` or
-  `branch_summary`. A `response`, a record entry and an extension entry
-  do not.
+- An entry **contributes** when its type is `item`, `config`,
+  `compaction` or `branch_summary`. A `response`, a record entry and an
+  extension entry do not.
 - The context hash before any contributing entry is `sha256:` over the
   canonical bytes of the JSON value `null`. A root that does not
   contribute has that value.
@@ -495,7 +522,11 @@ forks do and independent sessions do not. And content covers every
 member of an entry, undefined ones included, so a harness member on an
 `item` that never reaches the model still moves the key; a harness that
 wants the key stable keeps such detail in a record entry, as the
-writing discipline already asks of per-run content.
+writing discipline already asks of per-run content. And an extension
+entry that its extension puts in context is excluded, since a store
+cannot know the extension, so two paths that differ only in such an
+entry share a key while their requests differ; `request_hash` tells
+them apart.
 
 It is a hash over history, and `request_hash` is a hash over what was
 sent. On a path with no compaction the two identify the same request.
@@ -522,7 +553,8 @@ CREATE TABLE entries  (hash TEXT PRIMARY KEY, parent TEXT, ts TEXT NOT NULL,
                        parents TEXT, content TEXT NOT NULL,
                        context TEXT NOT NULL);
 CREATE TABLE sessions (id TEXT PRIMARY KEY, header TEXT NOT NULL,
-                       base TEXT, head TEXT);
+                       base TEXT, head TEXT,
+                       record INTEGER NOT NULL);
 CREATE TABLE log      (session TEXT NOT NULL, seq INTEGER NOT NULL,
                        hash TEXT NOT NULL, PRIMARY KEY (session, seq),
                        UNIQUE (session, hash));
@@ -532,7 +564,8 @@ CREATE TABLE edges    (parent TEXT NOT NULL, child TEXT NOT NULL,
 
 `contents` holds each body once, media blobs included; `entries` is
 the envelope, naming its content and carrying the context hash the
-store computed at append. The sketch declares no foreign keys. The rows
+store computed at append; `record` is the mark the exchange section
+enforces, set when this store may advance the session. The sketch declares no foreign keys. The rows
 are immutable and content-addressed, so a constraint buys little and
 costs a lookup on every append; the append's own rules are what keep
 the tables in step.
