@@ -103,7 +103,9 @@ session worth training on.
 The key words MUST, MUST NOT, SHOULD and MAY are to be interpreted as in
 RFC 2119.
 
-- **Session**: one file, one header, zero or more entries.
+- **Session**: a header, a base or none, a head, and the entries
+  appended under it. A file is its projection; a file written directly
+  is a session whose store is the file.
 - **Entry**: one JSON object on one line after the header.
 - **Path**: the sequence of entries from an entry to a root, reversed,
   following `parent` alone.
@@ -188,7 +190,7 @@ RFC 2119.
 | `records` | SHOULD | the record entry types, core or namespaced, this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
 | `parent_session` | MAY | session ID this was forked or spawned from. Provenance, not validated: a fork made at an entry on another fork's prefix may name either session, and a `fork_of` link records the one it was made from |
-| `base` | MAY | hash of the entry in `parent_session` this session continues from. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
+| `base` | MAY | hash of the entry this session continues from; `parent_session` names a session holding it, as provenance. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
 | `redacted` | MAY | `true` when the file's bytes were changed after they were written, as export redaction does, so its `id` and `request_hash` values no longer verify. A reader MUST NOT report such a file's hashes as verified |
