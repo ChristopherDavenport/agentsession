@@ -249,9 +249,11 @@ insignificant whitespace, numbers and strings in canonical form.
   empty one; `ts`; and `content` holding the content hash. `content` is
   computed, not written: a line carries the body inline, and a reader
   computes the content hash first and the envelope hash from it. The
-  envelope's names — `id`, `type`, `parent`, `parents`, `ts`,
-  `content` — are reserved, and a body MUST NOT carry a top-level
-  member by any of them.
+  envelope's names — `id`, `type`, `parent`, `parents`, `ts`, `content`
+  — are reserved, and a body MUST NOT carry a top-level member by any of
+  them. A reader that meets one in a body MUST report the line as it
+  reports a hash that fails, since an `id` over a body that collides
+  with its own envelope verifies nothing.
 
 Because `parent` is itself a hash, an entry's ID commits to its whole
 path, and two files that agree on one ID agree on every byte above it.
@@ -1099,7 +1101,6 @@ minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
 it begins at 1.0.
-
 A reader of 0.5 MUST read an earlier 0.x file by migrating it in memory:
 walk the entries in file order, compute each entry's hashes with its
 `parent` and every entry-naming member rewritten to the hashes already
@@ -1115,7 +1116,11 @@ migrated file shares nothing with one; that is the price of keeping the
 old name. A reference the reader cannot rewrite — a `parents` entry in
 another session, or an entry named inside a member of an extension the
 reader does not know — keeps its original string and is reported as
-unresolved, and a file holding one MUST NOT be re-emitted as 0.5. No two
+unresolved, and a file holding one MUST NOT be re-emitted as 0.5. An
+earlier entry whose body carries a top-level member by one of the
+envelope's reserved names, which earlier versions allowed, is reported
+as unresolved the same way, and a file holding one MUST NOT be
+re-emitted as 0.5; `content` is the name this will most often be. No two
 migrated entries hash alike, since `legacy_id` was unique in the earlier
 file, so migration never merges.
 

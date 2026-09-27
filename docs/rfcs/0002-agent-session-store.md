@@ -95,9 +95,9 @@ in RFC 2119.
   differ in type, parent or `ts`.
 - **Object**: canonical bytes addressed by their hash: an envelope, a
   content, or a media blob.
-- **Context hash**: the incremental hash over the content hashes of the
-  context entries on a path, as the prefix-caching section defines it.
-  Record entries and responses do not enter it.
+- **Context hash**: the incremental hash over the types and content
+  hashes of the context entries on a path, as the prefix-caching section
+  defines it. Record entries and responses do not enter it.
 - **Session**: a ref, consisting of a header, a base, a head and a log.
 - **Base**: the entry a session continues from, or none. A session with
   a base is a **fork** of the session that appended that entry.
@@ -563,17 +563,23 @@ not by any later leaf:
 - At an entry that does not contribute, the context hash is its
   parent's, unchanged.
 - At an entry that contributes, the context hash is `sha256:` over the
-  canonical bytes of a two-element JSON array: the parent's context
-  hash, then this entry's content hash, both as strings carrying their
-  `sha256:` prefix. For a `compaction` the content hash used here is
-  over the content with `first_kept` replaced by the context hash at the
-  entry it names when that entry is on the path ending here, and by
-  `null` otherwise; for a `branch_summary` it is over the content with
-  `from` removed, present or not, since the leaf that was left is
-  provenance and not context, and a store need not hold it; and for an
-  `item` it is over the content with `queued_from` removed, for the same
-  reason. The key then depends on context and not on the identity of the
-  entries that shaped it, and two stores compute it from the path alone.
+  canonical bytes of a three-element JSON array: the parent's context
+  hash, this entry's `type`, then this entry's content hash, the hashes
+  as strings carrying their `sha256:` prefix. The type is there for the
+  reason a git tree entry records a mode beside its blob hash: an `item`
+  and a `config` with identical bodies are different context. For a
+  `compaction` the content hash used here is over the content with
+  `first_kept` replaced by the context hash at the entry it names when
+  that entry is on the path ending here, and by `null` otherwise; for a
+  `branch_summary` it is over the content with `from` removed, present
+  or not, since the leaf that was left is provenance and not context,
+  and a store need not hold it; and for an `item` it is over the content
+  with `queued_from` removed, for the same reason. A migrated entry's
+  `legacy_id` is removed for every type, since it is provenance too, so
+  a migrated body and the same body written natively give one key while
+  their content hashes differ. The key then depends on context and not
+  on the identity of the entries that shaped it, and two stores compute
+  it from the path alone.
 
 It excludes `ts` and `parents`, it is incremental, and two sessions
 whose context entries are byte-identical share it, a compaction
