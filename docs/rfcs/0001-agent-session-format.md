@@ -266,12 +266,14 @@ text, escapes included, so a lone surrogate appears as the six ASCII
 characters `\ud83d` and a 64-bit integer as its digits, and `was` is
 I-JSON whatever it describes. Output that was not valid UTF-8 has no
 JSON text to record: the writer replaces it with U+FFFD, omits `was`,
-and carries the bytes base64-encoded in `raw`. The array is sorted by
-`at` as UTF-16 code units, matching the canonical form, so two writers
-normalising one response produce one content hash. The normalised form
-is what the next request carries, so the rebuilt request and
-`request_hash` agree with what was sent. `ts` is hashed as the string it
-is, which is why the envelope table admits one spelling of it.
+and carries the bytes in `raw` as base64 under RFC 4648 §4, with
+padding, since the URL-safe alphabet and an unpadded form would give one
+response two hashes. The array is sorted by `at` as UTF-16 code units,
+matching the canonical form, so two writers normalising one response
+produce one content hash. The normalised form is what the next request
+carries, so the rebuilt request and `request_hash` agree with what was
+sent. `ts` is hashed as the string it is, which is why the envelope
+table admits one spelling of it.
 
 - The entry's **content** is the object of its members with the
   envelope's — `id`, `type`, `parent`, `parents`, `ts` — removed, and
