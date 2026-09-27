@@ -24,6 +24,11 @@ versions may break the API.
   verifies in the fork, that the fork's first request hashes to the
   value the origin's did there — the shared prefix a provider caches —
   and that stripping the reference changes no context.
+  `Session.ForkOrigins` applies the format's test for telling a fork's
+  root from one that joined workers, and the ATIF export carries a fork
+  root's references in the document's extra under `fork_of`, so a
+  corpus holding an origin and its fork can tell the copied prefix
+  from the original.
 - **Breaking for writers.** `Append` now refuses an item entry holding
   an `openresponses.ItemReference`. RFC 0001 gains the **ingress** rule
   — an entry receiving material from outside the session carries it

@@ -91,6 +91,58 @@ func convergenceIsNotContext(t *testing.T, name string) {
 	}
 }
 
+// TestForkOrigins checks the test the format gives for telling a fork's
+// root from a root that joined workers: the reference carries another
+// session and names an entry this file holds under that root.
+func TestForkOrigins(t *testing.T) {
+	fork := loadFixture(t, "fork")
+	root := fork.Roots()[0]
+	want := []EntryRef{{Session: "01995b2a-0000-7000-8000-000000000001", Entry: "i0000004"}}
+	if got := fork.ForkOrigins(root); !reflect.DeepEqual(got, want) {
+		t.Errorf("ForkOrigins(root) = %+v, want %+v", got, want)
+	}
+	if got := fork.ForkOrigins("i0000001"); got != nil {
+		t.Errorf("ForkOrigins of a non-root = %+v", got)
+	}
+	if got := fork.ForkOrigins("nope"); got != nil {
+		t.Errorf("ForkOrigins of an unknown entry = %+v", got)
+	}
+	// A join carries parents but names nothing in this file under its
+	// root, and a root with no parents has none.
+	converge := loadFixture(t, "converge")
+	if got := converge.ForkOrigins(converge.Roots()[0]); got != nil {
+		t.Errorf("ForkOrigins of a plain root = %+v", got)
+	}
+
+	// A root converging an entry of another session that is not in this
+	// file is convergence, and a second root naming an entry under the
+	// first root is too: the entry is here, but not under that root.
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000011"})
+	first := NewItemEntry(openresponses.UserText("a"))
+	first.Parents = []EntryRef{{Session: "other", Entry: "zzz"}}
+	a, err := s.Append(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	under, err := s.Append(NewItemEntry(openresponses.UserText("b")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.ForkOrigins(a); got != nil {
+		t.Errorf("a root naming an absent entry = %+v, want convergence", got)
+	}
+	s.ResetLeaf()
+	second := NewItemEntry(openresponses.UserText("c"))
+	second.Parents = []EntryRef{{Session: "other", Entry: under}}
+	c, err := s.Append(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.ForkOrigins(c); got != nil {
+		t.Errorf("a root naming an entry under another root = %+v, want convergence", got)
+	}
+}
+
 // requestHashAt hashes the request the context algorithm builds at id.
 func requestHashAt(t *testing.T, s *Session, id string) string {
 	t.Helper()

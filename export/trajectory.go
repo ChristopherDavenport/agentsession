@@ -46,6 +46,13 @@ type Trajectory struct {
 	// session alone, and a subsession reference that cannot be embedded
 	// points at that file.
 	Main bool
+	// ForkOrigins are the root's fork-origin references, when the
+	// session opened with a copy of another session's path: the point
+	// this path's history was taken from, as [agentsession.Session.ForkOrigins]
+	// defines it. ToATIF carries them in the document's extra under
+	// [ExtraForkOf], which is what lets a corpus holding both sessions
+	// tell the copied prefix from the original.
+	ForkOrigins []agentsession.EntryRef
 }
 
 // A Preference chooses the continued child at a fork: fork is the
@@ -279,6 +286,7 @@ func (w *tree) at(id string, prefs []Preference) (Trajectory, error) {
 		Labels:  w.labels,
 		Main:    id == w.mainLeaf,
 	}
+	t.ForkOrigins = s.ForkOrigins(t.Path[0].Base().ID)
 	for _, e := range t.Path {
 		b := e.Base()
 		if b.ID == id {

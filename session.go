@@ -103,6 +103,41 @@ func (s *Session) Children(id string) []string {
 // Roots returns the IDs of the root entries in file order.
 func (s *Session) Roots() []string { return s.Children("") }
 
+// ForkOrigins returns the fork-origin references of the root entry
+// rootID, in the order written, or nil when the entry is not a root or
+// carries none. A reference on a root is a fork origin when it carries
+// a session other than this one and names an entry this session holds
+// as that root or a descendant of it, as the format's convergence
+// section defines; every other reference on a root records convergence
+// as it would anywhere else. The session then opened with a copy of the
+// origin's path to that entry, under the same IDs, which is why the ID
+// is here to be found.
+func (s *Session) ForkOrigins(rootID string) []EntryRef {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.byID[rootID]
+	if !ok || e.Base().Parent != "" {
+		return nil
+	}
+	var out []EntryRef
+	for _, r := range e.Base().Parents {
+		if r.Session == "" || r.Session == s.header.ID {
+			continue
+		}
+		if _, ok := s.byID[r.Entry]; !ok {
+			continue
+		}
+		root := r.Entry
+		for id := r.Entry; id != ""; id = s.byID[id].Base().Parent {
+			root = id
+		}
+		if root == rootID {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // Leaves returns the IDs of the entries that have no children, in file
 // order.
 func (s *Session) Leaves() []string {

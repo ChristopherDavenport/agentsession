@@ -28,9 +28,9 @@
 //
 // [Session] is the tree in memory: [Read] loads one, [Write] emits one,
 // and [Session.Append] adds an entry as a child of the current leaf.
-// [Session.Branch] moves the leaf so the next append forks; a fresh root
-// follows [Session.ResetLeaf]. A file cut short by a crash still loads,
-// and [Session.Truncated] reports the broken line.
+// [Session.Branch] moves the leaf so the next append branches; a fresh
+// root follows [Session.ResetLeaf]. A file cut short by a crash still
+// loads, and [Session.Truncated] reports the broken line.
 //
 // # Context
 //

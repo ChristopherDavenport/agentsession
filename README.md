@@ -77,7 +77,7 @@ _, err = agentsession.RecordResponse(ctx, store, id, req, resp, time.Since(start
 
 `RecordResponse` appends the output items and the response entry with
 the hash of the request it was given. Every append becomes the leaf.
-`sess.Branch(entryID)` moves the leaf so the next append forks in
+`sess.Branch(entryID)` moves the leaf so the next append branches in
 place, and appending `sess.MarkLeaf()` makes that choice durable, so a
 reopened session resumes from it rather than from the last line;
 `sess.ResetLeaf()` starts a new root. `sess.Compact(firstKept,
@@ -232,8 +232,8 @@ Each document is one root-to-leaf path with compaction applied. The
 session's current path is written as `<session-id>.json`, the others
 as `<session-id>_<leaf>.json`. A branch that was continued lists the
 leaves it was preferred over in `extra.preferred_over`; an abandoned
-one names the fork in `extra.abandoned_at`. By default the continued
-branch is the one appended to last; pass `export.PreferCurrentLeaf`,
+one names the branch point in `extra.abandoned_at`. By default the
+continued branch is the one appended to last; pass `export.PreferCurrentLeaf`,
 `export.PreferLabel("kept")` or `export.PreferScore` to `Trajectories`
 to decide otherwise. `export.Items(doc)` reads the raw items back out, and
 `export.ItemsFrom(doc)` rebuilds them, lossily, from the declared

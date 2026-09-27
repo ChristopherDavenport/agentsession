@@ -55,7 +55,12 @@ const (
 	ExtraPreferredOver = "preferred_over"
 	ExtraAbandonedAt   = "abandoned_at"
 	ExtraBranchFrom    = "branch_from"
-	ExtraContextMgmt   = "context_management"
+	// ExtraForkOf carries, in the document's top-level extra, the fork
+	// root's references into the session this one was copied from. A
+	// corpus holding an origin and its fork projects the shared prefix
+	// twice, and this is what tells the copy from the original.
+	ExtraForkOf      = "fork_of"
+	ExtraContextMgmt = "context_management"
 	// ExtraRun carries, as a list, the runs whose records belong to a
 	// step: a run's source, trigger, end reason, cause and pending
 	// calls go in the extra of the first step its segment produces, or
@@ -86,6 +91,9 @@ func ToATIF(t Trajectory, opts Options) (*atif.Trajectory, error) {
 		SessionID:     t.Header.ID,
 		TrajectoryID:  t.LeafID,
 		Notes:         opts.Notes,
+	}
+	if len(t.ForkOrigins) > 0 {
+		b.rootExtra()[ExtraForkOf] = t.ForkOrigins
 	}
 	b.doc.Agent = atif.Agent{Name: opts.AgentName, Version: opts.AgentVersion}
 	if b.doc.Agent.Name == "" && t.Header.Harness != nil {

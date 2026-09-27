@@ -14,7 +14,9 @@ the record stopped. It is an append-only JSONL file whose entries form
 a tree: every entry names one `parent`, and a context is built by
 walking it. An entry MAY additionally name predecessors it converges —
 the results of subagent sessions, a branch merged back — which record
-provenance and never enter a context.
+provenance and never enter a context, and a root MAY name the point in
+another session this one was forked from, whose path the file opens
+with, copied.
 
 The file holds two kinds of entry. **Context entries** are what the
 model was sent and what it returned: items, responses, configuration,
@@ -155,7 +157,7 @@ RFC 2119.
 | `harness` | SHOULD | name and version of the writer |
 | `records` | SHOULD | the record entry types, core or namespaced, this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
-| `parent_session` | SHOULD | session ID this was forked or spawned from, when every fork root names the same origin session; a header cannot describe two. It names the session; for a fork, the root entry's `parents` names the point and is normative for it, as the convergence section says |
+| `parent_session` | SHOULD | session ID this was forked or spawned from. A file whose fork roots name two origin sessions omits it, since a header cannot describe two. It names the session; for a fork, the root entry's `parents` names the point, as the convergence section says |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar` |
 
@@ -241,9 +243,9 @@ a file cut short before the copy reached that ID the reference reads
 as convergence; that is a valid prefix, not a violation. A root MAY
 carry more than one fork-origin reference: a fork of a fork copies its
 origin's root, which already carries the grandparent's reference, and
-the copy keeps it. The point is the deepest of them on this file's
-path, which is always the immediate origin's; the shallower ones are
-the line of descent.
+the copy keeps it. The point is the deepest of them, which every
+shallower one is an ancestor of, and it is always the immediate
+origin's; the shallower ones are the line of descent.
 
 A root that carries a fork-origin reference MUST head a copy of the
 origin's path to that entry — the same entries, in the same order,
@@ -279,14 +281,12 @@ copy. A copied member that names an entry — a `branch_summary`'s
 `queued_from` — may name one that was off the copied path and so is
 not in this file, and a reader MUST NOT reject it. The fork's header
 MUST name the origin's payload profile. Its `records` promise covers
-the entries at or below the named point, which are the ones this
-writer wrote; over the copied region the promise was the origin
-header's, which this file does not carry, so there absence means the
-file does not say. IDs are unique within a file, so
-an entry the fork appends below the point MAY carry an ID the origin
-used elsewhere; identity across the two files holds over the copied
-region only. A fork of a fork names its immediate origin, the session
-it was copied from.
+the entries below the named point, where this writer's own appends
+begin; above it the promise was the origin header's, which this file
+does not carry, so absence there means the file does not say. IDs are
+unique within a file, so an entry the fork appends below the point MAY
+carry an ID the origin used elsewhere; identity across the two files
+holds over the copied region only.
 
 Three things can record a fork, and they are ranked: where they
 disagree the root's `parents` wins, then `parent_session`, then a
@@ -521,7 +521,8 @@ left. `summary` is an item that enters context.
 ### `run`
 
 Why a run started and how it ended. Two entries per run, paired by
-`run_id`, both written by the harness that runs the loop.
+`run_id`, both written by the harness that runs the loop — or, in a
+fork, the `start` copied from the origin and the `end` written here.
 
 ```json
 {"type":"run","id":"…","parent":"…","ts":"…","run_id":"…","phase":"start",
@@ -595,8 +596,8 @@ Why a run started and how it ended. Two entries per run, paired by
   writes its `end`. When the header names `run` in `records`, no
   writer holds the file open and the leaf is on the run's segment, a
   run with no `end` entry was cut off; that is the crash signal. In a
-  fork it is read over the entries at or below the named point, where
-  the header's promise holds. A fork that copied an open run and has
+  fork it is read over the entries below the named point, where the
+  header's promise holds. A fork that copied an open run and has
   appended nothing has not crashed, and a reader MUST NOT read it as
   the signal.
 
@@ -780,8 +781,9 @@ link whose session cannot be found means the child never started
 rather than a child that was never linked.
 
 A `subsession` link names a session, not a point in one, and at the
-moment it is written there is no point to name; a `fork_of` link's
-point is the fork root's `parents`. The other half of the round trip is
+moment it is written there is no point to name; a `fork_of` or
+`continued_in` link's point is the fork root's `parents`, in whichever
+file holds it. The other half of the round trip is
 `parents`: the entry carrying the child's `function_call_output`
 SHOULD name the child's leaf there, which is the first moment the
 parent knows it. Without that, a child that branched leaves no record
@@ -1036,8 +1038,10 @@ leaf, and the document a score names has to be reproducible from the
 entry it targets.
 
 A corpus holding an origin and a session forked from it projects the
-shared prefix twice, copied `outcome` entries included. The fork root's
-`parents` is what lets a consumer tell the copy from the original.
+shared prefix twice, copied `outcome` entries included. The fork
+root's references travel in the trajectory's top-level `extra` under
+`fork_of`, which is what lets a consumer tell the copy from the
+original.
 
 ### OpenTelemetry
 
