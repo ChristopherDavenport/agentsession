@@ -271,10 +271,10 @@ The head is a session's resume point, and it is a ref.
 The log is the order. Each own entry has a sequence number the store
 assigned as it accepted the append, and that sequence is what RFC 0001
 calls entry order: it separates siblings and it says which branch this
-store's log ends with. `ts` remains informational and a reader
-MUST NOT order by it. Which branch is live is the head, never the
-order, and the head is the fact that travels between stores; a
-sequence is a store's own, as the exchange section says.
+store's log ends with. `ts` remains informational and a reader MUST NOT
+order by it. Which branch is live is the head, never the order, and the
+head is the fact that travels between stores; a sequence is a store's
+own, as the exchange section says.
 
 This answers the question RFC 0001 left open, who assigns the sequence
 when two writers append at once: the store does, always, because it
