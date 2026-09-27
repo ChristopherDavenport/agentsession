@@ -745,9 +745,9 @@ A judgement of how the session, or a range of it, went.
 ```
 
 - `target` MUST name an entry on a path in this file, the prefix
-  included, usually the last entry of the range judged. A reader that selects branches by outcome resolves
-  `target` as an entry on a path; a task or test name belongs in
-  `details`.
+  included, usually the last entry of the range judged. A reader that
+  selects branches by outcome resolves `target` as an entry on a path;
+  a task or test name belongs in `details`.
 - `score` is any finite number. Its scale is the judge's, named by
   `label`; a normalised score belongs beside the raw one in `details`,
   not in place of it. `pass` is the judge's verdict when it has one.

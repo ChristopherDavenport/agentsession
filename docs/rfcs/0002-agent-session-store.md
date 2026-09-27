@@ -328,12 +328,12 @@ CREATE TABLE edges    (parent TEXT NOT NULL, child TEXT NOT NULL,
 `edges` is the reverse index the parent hashes cannot give: finding a
 node's children, a session's leaves and the subtree below a point all
 walk it downward. It spans sessions, since a node's children may be in
-several logs, so a session's leaves are its log filtered by it. A store at scale keys objects by hash, which spreads
-writes rather than hot-spotting a tail, keeps a membership table per
-session rather than a session column on the node, since a node belongs
-to every session whose prefix it is on, and avoids a secondary index
-ordered by time, which puts the tail of every busy session on one
-range again.
+several logs, so a session's leaves are its log filtered by it. A store
+at scale keys objects by hash, which spreads writes rather than
+hot-spotting a tail, keeps a membership table per session rather than a
+session column on the node, since a node belongs to every session whose
+prefix it is on, and avoids a secondary index ordered by time, which
+puts the tail of every busy session on one range again.
 
 ## Relationship to RFC 0001
 
