@@ -119,9 +119,10 @@ RFC 0001 has them name an entry.
   objects under one hash. Storing a node whose hash is already present
   is a no-op that succeeds. `sha256:` is the only prefix, and a store
   MUST refuse a node whose `id` carries another.
-- A store MUST NOT accept a node whose `parent` it does not hold. A
-  `parents` reference is provenance and MUST NOT be a condition of
-  acceptance; a store MAY report one it cannot resolve.
+- A store MUST NOT accept a node whose `parent` it does not hold. No
+  other reference is a condition of acceptance: `parents`, `target`,
+  `first_kept`, `from` and `queued_from` are the writer's to place, as
+  RFC 0001 says, and a store MAY report one it cannot resolve.
 - A node is immutable. There is no update and no in-place correction;
   a correction is a new node, as RFC 0001 already requires of entries.
 - Acyclicity is structural. A node names its parent by a hash that
@@ -138,9 +139,10 @@ as such.
 A session is created with a header and optionally a base.
 
 - The header is RFC 0001's, and its `base` member is the base node's
-  hash or absent. `parent_session`, when set, names the session whose
-  log holds the base node, or for a subsession with no base the
-  session that spawned it.
+  hash or absent. `parent_session` is provenance a store does not
+  validate: a fork made at a node on another fork's prefix has a base
+  in the grandparent's log, and the header may name either. A `fork_of`
+  link records the session a fork was actually made from.
 - A store MUST refuse to create a session whose base it does not hold.
   A session created with a base has that base as its head.
 - A session with no base is a fresh root. Its first append is a root
@@ -214,6 +216,12 @@ The head is a session's resume point, and it is a ref.
 - Moving the head to an earlier node is how a session branches back.
   The next append under it is a new child, and the nodes that were on
   the old head's path stay in the log as an abandoned branch.
+- Appending a `label` node whose `label` is the reserved value `leaf`
+  moves the head to the label's `target` rather than to the label, once
+  the node is in the log. That is the head move a bare file can
+  express, and a store honours it so a writer built against files
+  behaves the same against a store. A store MUST refuse a `label` node
+  carrying `synthetic`, which marks a projection's own marker.
 
 ## Ordering
 
@@ -314,10 +322,10 @@ not dedupe.
 3. The session's own nodes in log order, the same way.
 4. If the head is not the last line the steps above wrote, a `label`
    entry whose `label` is the reserved value `leaf`, naming the head,
-   appended as a child of that last line, so that RFC 0001's resume
-   rule lands a reader on the head. This entry is the projection's, not
-   the session's: it is not in the log, and reading the file back does
-   not make it a node.
+   carrying `synthetic: true`, appended as a child of that last line, so
+   that RFC 0001's resume rule lands a reader on the head. This entry is
+   the projection's, not the session's: it is not in the log, the
+   member says so, and reading the file back does not make it a node.
 5. A session whose `media` is `sidecar` projects its blobs beside the
    file, each named by its hash, since RFC 0001 counts a sidecar as
    part of the session and the file is not self-contained without it.
@@ -331,11 +339,12 @@ anything, and a store pays it only on export.
 Reading a projection back yields the same nodes, since the hashes are
 in the file and a reader verifies each, and the same head, from the
 last own node or the marker. A store MUST accept a projection as an
-import: each line but a trailing leaf marker is a node it stores under
-its hash, the prefix nodes join no log, the own nodes join the imported
+import: each line but a synthetic marker is a node it stores under its
+hash, the prefix nodes join no log, the own nodes join the imported
 session's log in file order, and the head is what RFC 0001's resume
 rule gives; the marker names the head and is then discarded, so an
-export and import cycle adds nothing. The imported session keeps the
+export and import cycle adds nothing, and a genuine `leaf` label a
+writer appended is a node like any other. The imported session keeps the
 header's `id`, and a store already holding a session with that ID MUST
 refuse the import. An importer MUST verify each line's hash and MUST
 refuse a file in which one fails, so a redacted projection, which RFC

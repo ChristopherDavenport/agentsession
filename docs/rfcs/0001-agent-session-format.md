@@ -187,7 +187,7 @@ RFC 2119.
 | `harness` | SHOULD | name and version of the writer |
 | `records` | SHOULD | the record entry types, core or namespaced, this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
-| `parent_session` | MAY | session ID this was forked or spawned from: the session whose own entries include the `base`, or for a subsession with no base the session that spawned it |
+| `parent_session` | MAY | session ID this was forked or spawned from. Provenance, not validated: a fork made at an entry on another fork's prefix may name either session, and a `fork_of` link records the one it was made from |
 | `base` | MAY | hash of the entry in `parent_session` this session continues from. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
@@ -715,7 +715,10 @@ sent rather than the model or the loop may carry it.
 Not in context. A `label` with `label: null` clears. The value `leaf`
 is reserved: a `label` carrying it marks the branch its `target` is on
 as the one a reader resumes on, as the file section says, and a later
-`label: null` naming the same target clears it.
+`label: null` naming the same target clears it. A `label` carrying
+`synthetic: true` was written by a projection to record a store's head,
+not by the session; a reader honours it as any other, and a store
+importing the file discards it, as RFC 0002 says.
 
 ### `env`
 
@@ -751,9 +754,10 @@ A judgement of how the session, or a range of it, went.
 ```
 
 - `target` MUST name an entry on a path in this file, the prefix
-  included, usually the last entry of the range judged. A reader that
-  selects branches by outcome resolves `target` as an entry on a path;
-  a task or test name belongs in `details`.
+  included, usually the last entry of the range judged. Placing it on
+  a path is the writer's obligation; a store does not check it. A
+  reader that selects branches by outcome resolves `target` as an entry
+  on a path; a task or test name belongs in `details`.
 - `score` is any finite number. Its scale is the judge's, named by
   `label`; a normalised score belongs beside the raw one in `details`,
   not in place of it. `pass` is the judge's verdict when it has one.
