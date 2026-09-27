@@ -74,9 +74,9 @@ session worth training on.
   says the writer records dispatches and decisions.
 - **Append-only.** A writer only ever appends lines. A crashed session
   is a valid prefix.
-- **Content-addressed.** An entry's ID is the hash of its bytes and its
-  parent link is a hash, so a file verifies itself and two sessions
-  that share history share the same entries.
+- **Content-addressed.** An entry's ID is the hash of its canonical
+  form and its parent link is a hash, so a file verifies itself and two
+  sessions that share history share the same entries.
 - **Tree-shaped context, DAG-shaped provenance.** A context is built by
   walking one `parent` per entry, so branching is a child of an earlier
   entry, in place. Convergence — a subagent's result, a branch merged
@@ -93,8 +93,9 @@ session worth training on.
 - Multi-writer concurrency on one file. A store MAY accept concurrent
   appends to a session; a file is what it projects afterwards.
 - Cross-session indexing, search or listing, storage layout, and the
-  head a session resumes at. Those are the store's, and RFC 0002
-  defines the store.
+  head a session in a store resumes at. Those are the store's, and RFC
+  0002 defines the store; the file section's resume rule governs a bare
+  file.
 - Rendering hints beyond a display flag.
 - Defining tool semantics. A tool is a name, a schema and a result.
 
@@ -151,12 +152,13 @@ RFC 2119.
   RFC 0002 defines; the file has no other.
 - A reader resuming from a file MUST take as leaf the newest entry in
   file order that descends from the entry the last `leaf` label in
-  force names and was written after that label; that entry itself when
-  nothing follows it; and the last entry of the file when no such label
-  is in force. The label marks the branch that is live, not the tip it
-  had when marked, so a branch marked and then extended resumes where
-  it was extended to. In a store the head is the leaf, and this rule is
-  how a projection carries a head that is not the last line.
+  force names and was written after that label, the label itself
+  excepted; that entry itself when nothing follows it; and the last
+  entry of the file when no such label is in force. The label marks the
+  branch that is live, not the tip it had when marked, so a branch
+  marked and then extended resumes where it was extended to. In a store
+  the head is the leaf, and this rule is how a projection carries a
+  head that is not the last line.
 - A file whose header names a `base` opens with the prefix: every entry
   from the root to the base, in path order, before any entry the
   session appended itself. The prefix is another session's record,
@@ -243,11 +245,12 @@ not depend on the bytes a file happens to carry; a projection from a
 store writes canonical lines. `sha256:` is the only prefix, and a
 reader MUST refuse an `id` carrying another.
 
-A reader MUST verify each entry's `id` against its bytes and MUST
-report a line that fails. It is corruption, not an extension, and a
-reader MUST NOT repair it. A file that has been redacted no longer
-verifies, since redaction changes the bytes; such a file MUST say so in
-its header and a reader MUST NOT report its hashes as verified.
+A reader MUST verify each entry's `id` against the hash of its
+canonical form and MUST report a line that fails. It is corruption, not
+an extension, and a reader MUST NOT repair it. A file that has been
+redacted no longer verifies, since redaction changes the bytes; such a
+file MUST say so in its header and a reader MUST NOT report its hashes
+as verified.
 
 Appending an entry of either kind makes it the leaf. A record entry is
 a child of the leaf like any other, so it lies on the path of every
@@ -1089,14 +1092,13 @@ documents which native entries it maps and which it drops.
 The reference implementation is the Go `agentsession` library. The
 conformance suite is a directory of fixture files with expected context
 output for every leaf, expected `request_hash` values, every entry's
-`id` recomputed from its bytes, a forked fixture whose `base` is found
-in its origin, the recomputed
-`reason` for every `run` end, and negative cases for a broken parent
-link, a truncated last line, an unknown type, a `dispatch` that
-follows a `reject`, and a header naming `dispatch` beside a call that
-has an output and no `dispatch`. Converters for pi, Claude Code and
-Codex are part of the initial proposal so the format arrives with three
-existing corpora behind it.
+`id` recomputed from its canonical form, a forked fixture whose `base`
+is found in its origin, the recomputed `reason` for every `run` end,
+and negative cases for a broken parent link, a truncated last line, an
+unknown type, a `dispatch` that follows a `reject`, and a header naming
+`dispatch` beside a call that has an output and no `dispatch`.
+Converters for pi, Claude Code and Codex are part of the initial
+proposal so the format arrives with three existing corpora behind it.
 
 ## Prior art
 

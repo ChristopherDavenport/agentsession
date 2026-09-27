@@ -24,8 +24,7 @@ Two writers appending to one session may both succeed. The store
 assigns each entry its place in the log, and the head moves only when an
 append continues it; an append that does not is a branch, recorded and
 left where it was. The only write an appender can lose is the head,
-and it moves by compare-and-swap. A store may still take writers in
-turn; the model is what lets it not.
+and it moves by compare-and-swap.
 
 ## Motivation
 
@@ -67,7 +66,7 @@ is the order, and the head is a ref, never inferred.
   checked against its origin by one hash.
 - **Appends need no session lock.** The model lets concurrent writers
   to one session both succeed, with the head the only write one of them
-  can lose. A store MAY still take writers in turn.
+  can lose.
 - **Nothing is garbage.** Every entry a session appended stays in its
   log. Abandoned branches are preference data, as RFC 0001 says.
 - **Projection is lossless.** A session projects to an RFC 0001 file
@@ -222,13 +221,18 @@ The head is a session's resume point, and it is a ref.
   The next append under it is a new child, and the entries that were on
   the old head's path stay in the log as an abandoned branch.
 - Appending a `label` entry whose `label` is the reserved value `leaf`
-  moves the head to the label's `target`, which MUST be the base or one
-  of the session's own entries, rather than to the label, once the entry
-  is in the log, and does so wherever the label's own parent sits. That
-  is the head move a bare file can express, where the label is honoured
-  wherever it is, and a store honours it so a writer built against files
-  behaves the same against a store. A store MUST refuse a `label` entry
-  carrying `synthetic`, which marks a projection's own marker.
+  moves the head to the label's `target` rather than to the label, once
+  the entry is in the log, and does so wherever the label's own parent
+  sits. A target that is not the base or one of the session's own
+  entries moves nothing, and the store reports it: the label is
+  accepted, since no reference conditions acceptance, and the head is
+  held to its rule. A `leaf` label the log already holds is a no-op like
+  any other re-append and moves nothing; a writer that wants the head
+  moved again uses the compare-and-swap. That is the head move a bare
+  file can express, where the label is honoured wherever it is, and a
+  store honours it so a writer built against files behaves the same
+  against a store. A store MUST refuse a `label` entry carrying
+  `synthetic`, which marks a projection's own marker.
 
 ## Ordering
 
@@ -262,10 +266,10 @@ same structure, which a database calls a write-ahead log.
   `function_call_output` item, which is where that discipline asks for
   an fsync. A store MAY acknowledge other appends before they are
   durable, and MUST say which it did.
-- After a crash a store MUST recover to a state in which every append
-  it acknowledged as durable is present in full and no append is
-  present in part: no log entry without its entry, no head moved to a
-  entry the log lacks.
+- After a crash a store MUST recover to a state in which every append it
+  acknowledged as durable is present in full and no append is present in
+  part: no log entry without its entry, no head moved to an entry the
+  log lacks.
 - An object whose bytes do not hash to its name is corrupt. A store
   MUST NOT serve it and MAY discard it. Content addressing is what makes
   a half-written object detectable and a rewrite of it harmless.
@@ -335,10 +339,10 @@ not dedupe.
    `leaf`, naming the head, carrying `synthetic: true`, appended as a
    child of the last line written, so that the rule lands a reader on
    the head. A genuine `leaf` label among the own entries stays in force
-   in the file, which is why the test is the rule and not the last
-   line. This entry is
-   the projection's, not the session's: it is not in the log, the
-   member says so, and reading the file back does not make it an entry.
+   in the file, which is why the test is the rule and not the last line.
+   This entry is the projection's, not the session's: it is not in the
+   log, the member says so, and reading the file back does not make it
+   an entry.
 5. A session whose `media` is `sidecar` projects its blobs beside the
    file, each named by its hash, since RFC 0001 counts a sidecar as
    part of the session and the file is not self-contained without it.
@@ -371,12 +375,11 @@ canonical bytes and reports a line that fails, as RFC 0001 requires of
 every reader; a projection is a file like any other.
 
 A reader holding a fork's projection and its origin's checks the fork
-with one comparison: the fork header's `base` is one of the origin's
-own entries or on its prefix.
-Because the hash commits to the whole path, agreement on that hash is
-agreement on every byte of the prefix. This is the check RFC 0001's
-fork fixture performed by rebuilding requests at the fork point and
-comparing; here it is one lookup.
+with one comparison: the fork header's `base` is one of the origin's own
+entries or on its prefix. Because the hash commits to the whole path,
+agreement on that hash is agreement on every byte of the prefix. This is
+the check RFC 0001's fork fixture performed by rebuilding requests at
+the fork point and comparing; here it is one lookup.
 
 `request_hash` is unchanged; RFC 0001 says how the two hashes divide
 the work.
@@ -416,7 +419,7 @@ The sketch declares no foreign keys. The rows are immutable and
 content-addressed, so a constraint buys little and costs a lookup on
 every append; the append's own rules are what keep the tables in step.
 
-`edges` is the reverse index the parent hashes cannot give: finding a
+`edges` is the reverse index the parent hashes cannot give: finding an
 entry's children, a session's leaves and the subtree below a point all
 walk it downward. It spans sessions, since an entry's children may be in
 several logs, so a session's leaves are the entries of its log with no
