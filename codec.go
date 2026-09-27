@@ -9,6 +9,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/agentsession/internal/jsonx"
 )
 
@@ -41,6 +42,7 @@ func Read(r io.Reader) (*Session, error) {
 	var (
 		s    *Session
 		line int
+		m    *migration
 	)
 	for {
 		data, err := br.ReadBytes('\n')
@@ -65,25 +67,35 @@ func Read(r io.Reader) (*Session, error) {
 			if err := h.Validate(); err != nil {
 				return nil, err
 			}
+			_, minor, _ := ParseFormat(h.Format)
+			if minor < FormatMinor {
+				m = &migration{ids: map[string]string{}}
+			}
 			if err := migrate(&h); err != nil {
 				return nil, err
 			}
 			s = New(h)
+			s.migrated = m != nil
 		} else {
 			e, err := UnmarshalEntry(data)
 			if err != nil {
+				// Only a last line that is not JSON is a truncated line,
+				// which a crash mid-append leaves behind. A last line
+				// that parses and is refused for what it says is an
+				// error like any other line's.
 				if !atEOF {
-					// Only the last line may be broken; see whether more
-					// non-blank lines follow.
 					rest, _ := br.Peek(1)
 					if len(rest) > 0 {
 						return nil, fmt.Errorf("agentsession: line %d: %w", line, err)
 					}
 				}
+				if json.Valid(data) {
+					return nil, fmt.Errorf("agentsession: line %d: %w", line, err)
+				}
 				s.truncated = &TruncatedLine{Line: line, Data: append([]byte(nil), data...), Err: err}
 				break
 			}
-			if err := s.link(e); err != nil {
+			if err := s.link(e, m); err != nil {
 				return nil, fmt.Errorf("agentsession: line %d: %w", line, err)
 			}
 		}
@@ -94,15 +106,55 @@ func Read(r io.Reader) (*Session, error) {
 	if s == nil {
 		return nil, errors.New("agentsession: empty input")
 	}
+	if s.header.Base != "" {
+		if _, ok := s.byID[s.header.Base]; !ok {
+			return nil, fmt.Errorf("%w: base %s is not in the file", ErrNoEntry, s.header.Base)
+		}
+		s.prefix = map[string]bool{}
+		for _, e := range s.path(s.header.Base) {
+			s.prefix[e.Base().ID] = true
+		}
+	}
 	s.leaf = s.resolveLeaf()
 	return s, nil
 }
 
-// link adds a decoded entry, checking the tree invariants.
-func (s *Session) link(e Entry) error {
+// migration carries the state of an in-memory migration from an earlier
+// minor version: the map from each entry's old id to its new hash.
+type migration struct {
+	ids map[string]string
+}
+
+// link adds a decoded entry, checking the tree invariants. For a 0.5
+// line the id is verified against the hashes the format defines; for a
+// line of an earlier minor the entry is rewritten — references to the
+// hashes assigned earlier in the file, the old id to legacy_id, ts to
+// its one spelling — and hashed. A repeated id is the same entry, kept
+// once and reported.
+func (s *Session) link(e Entry, m *migration) error {
 	b := e.Base()
+	if m != nil {
+		if err := m.rewrite(e, s); err != nil {
+			return err
+		}
+	} else {
+		if b.ID == "" {
+			return fmt.Errorf("%w: missing id", ErrBadID)
+		}
+		if _, ok := ParseCanonicalTime(b.tsRaw); !ok {
+			return fmt.Errorf("%w: ts %q is not in the one form the format admits", ErrBadID, b.tsRaw)
+		}
+		want := b.ID
+		if err := s.hashEntry(e); err != nil {
+			return err
+		}
+		if b.ID != want {
+			return fmt.Errorf("%w: line says %s, hashes to %s", ErrBadID, want, b.ID)
+		}
+	}
 	if _, taken := s.byID[b.ID]; taken {
-		return fmt.Errorf("%w: %s", ErrDuplicateEntry, b.ID)
+		s.repeated = append(s.repeated, b.ID)
+		return nil
 	}
 	if b.Parent != "" {
 		if _, ok := s.byID[b.Parent]; !ok {
@@ -116,11 +168,90 @@ func (s *Session) link(e Entry) error {
 	return nil
 }
 
+// rewrite migrates one entry of an earlier minor version in place: every
+// member that names an entry in this file takes the hash assigned to
+// that entry earlier in the file, the old id moves to legacy_id, ts
+// takes its one spelling with the instant unchanged, and the entry is
+// hashed. An extension entry's members are opaque, so it is rewritten
+// only in its envelope and recorded as unresolved.
+func (m *migration) rewrite(e Entry, s *Session) error {
+	b := e.Base()
+	old := b.ID
+	if old == "" {
+		return fmt.Errorf("%w: missing id", ErrBadID)
+	}
+	b.LegacyID = old
+	b.Timestamp = b.Timestamp.UTC().Truncate(time.Nanosecond)
+	if b.Parent != "" {
+		if id, ok := m.ids[b.Parent]; ok {
+			b.Parent = id
+		}
+	}
+	for i, r := range b.Parents {
+		if r.Session == "" || r.Session == s.header.ID {
+			if id, ok := m.ids[r.Entry]; ok {
+				b.Parents[i].Entry = id
+			}
+		}
+	}
+	ref := func(p *string) {
+		if id, ok := m.ids[*p]; ok {
+			*p = id
+		}
+	}
+	switch v := e.(type) {
+	case *ItemEntry:
+		ref(&v.QueuedFrom)
+	case *CompactionEntry:
+		ref(&v.FirstKept)
+	case *BranchSummaryEntry:
+		ref(&v.From)
+	case *LabelEntry:
+		ref(&v.Target)
+	case *OutcomeEntry:
+		ref(&v.Target)
+	case *DispatchEntry:
+		ref(&v.Target)
+	case *DecisionEntry:
+		ref(&v.Target)
+	case *UnknownEntry:
+		s.unresolved = append(s.unresolved, old)
+	}
+	b.ID = ""
+	if u, ok := e.(*UnknownEntry); ok {
+		raw, err := rewriteEnvelope(u)
+		if err != nil {
+			return err
+		}
+		u.Raw = raw
+	}
+	if err := s.hashEntry(e); err != nil {
+		return err
+	}
+	if u, ok := e.(*UnknownEntry); ok {
+		raw, err := rewriteEnvelope(u)
+		if err != nil {
+			return err
+		}
+		u.Raw = raw
+	}
+	m.ids[old] = b.ID
+	return nil
+}
+
 // Write encodes the session as JSONL: the header, then every entry in
-// file order, one per line.
+// file order, one per line, each in its canonical form. Preservation is
+// of members and not bytes, and the hashes are over canonical forms, so
+// a canonical line is what a reader verifies most directly. A session
+// migrated from an earlier minor version that holds an entry the
+// migration could not rewrite is refused, since the format forbids
+// re-emitting such a file as 0.5.
 func Write(w io.Writer, s *Session) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.migrated && len(s.unresolved) > 0 {
+		return fmt.Errorf("%w: %d entries the migration could not rewrite", ErrUnresolvedMigration, len(s.unresolved))
+	}
 	bw := bufio.NewWriter(w)
 	if err := writeLine(bw, s.header); err != nil {
 		return err
@@ -133,9 +264,18 @@ func Write(w io.Writer, s *Session) error {
 	return bw.Flush()
 }
 
-// writeLine writes v as one JSON line.
+// ErrUnresolvedMigration is returned by Write for a session migrated
+// from an earlier minor version that holds an entry the migration could
+// not rewrite.
+var ErrUnresolvedMigration = errors.New("agentsession: migrated session holds entries that could not be rewritten")
+
+// writeLine writes v as one canonical JSON line.
 func writeLine(w io.Writer, v any) error {
 	data, err := jsonx.MarshalNoEscape(v)
+	if err != nil {
+		return err
+	}
+	data, err = jcs.Transform(data)
 	if err != nil {
 		return err
 	}
@@ -168,6 +308,14 @@ func rewriteEnvelope(u *UnknownEntry) ([]byte, error) {
 	}
 	for _, k := range envelopeKeys {
 		delete(all, k)
+	}
+	for _, k := range commonBodyKeys {
+		delete(all, k)
+	}
+	for k, v := range u.extraMembers() {
+		if k == "legacy_id" || k == "normalised" {
+			all[k] = v
+		}
 	}
 	return jsonx.JoinObjects(head, []byte("{}"), all), nil
 }

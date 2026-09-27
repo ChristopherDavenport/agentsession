@@ -181,6 +181,13 @@ reader must preserve what it does not understand; that is tested, not
 assumed.
 
 Golden files live under `testdata/`. `go test ./... -update` rewrites the
-generated ones; the session fixtures under `testdata/sessions` are
-written by hand in the exact form the library emits, because the
-round-trip test compares bytes.
+generated ones. The session fixtures under `testdata/sessions` are
+generated too: an entry's `id` is its hash, so a fixture cannot be
+written by hand. The hand-written sources are the 0.4 files under
+`testdata/sessions/v0.4`, and `TestRegenerateFixtures` migrates each
+into a 0.5 file whose entries keep their readable old id in `legacy_id`;
+tests name entries by that through the `lid` helper. To change a
+fixture, edit its 0.4 source and run `-update`. The negative fixtures
+are built from the generated lines by breaking each in the one way its
+test expects, in the same test. `fork.jsonl` is the one native fixture,
+built in the same place.

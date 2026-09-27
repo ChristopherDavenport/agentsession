@@ -1,5 +1,5 @@
 {
-  "o0000001": {
+  "sha256:6f45dcf88ab8ca856b214bcdf8ce4fc02b88cff40ab66f7d33d7761248717fd5": {
     "settings": {
       "model": "gpt-5",
       "instructions": "Be brief.",
@@ -9,7 +9,6 @@
           "name": "bash",
           "description": "Run a shell command",
           "parameters": {
-            "type": "object",
             "properties": {
               "cmd": {
                 "type": "string"
@@ -17,7 +16,8 @@
             },
             "required": [
               "cmd"
-            ]
+            ],
+            "type": "object"
           }
         }
       ]
@@ -87,38 +87,38 @@
       }
     ],
     "entries": [
-      "c0000001",
-      "e0000001",
-      "u0000001",
-      "i0000001",
-      "r0000001-1",
-      "r0000001-2",
-      "r0000001-3",
-      "r0000001",
-      "d0000001",
-      "d0000002",
-      "p0000001",
-      "i0000002",
-      "d0000003",
-      "i0000003",
-      "u0000002",
-      "u0000003",
-      "p0000002",
-      "i0000004",
-      "r0000002-1",
-      "r0000002",
-      "u0000004",
-      "o0000001"
+      "sha256:dd27d82c6bb5f3dc95871f8d8324f050758b8348730191697b513e673cba6fda",
+      "sha256:e8cf7b9e8f904540da8333109dfd9f8a767a42c3ba219269df557bcb4e2593ae",
+      "sha256:6d3b1a7ea3c11e5da33aea63fe2baa8349f3b1218cb62a66bb54f72c0c9ff988",
+      "sha256:c20ac57e30d7a5a8898738d60dafe822bb16fb338108971c1a2e0e8c3affd499",
+      "sha256:8b9795645ad670b83696bce8a4f215c0b998b2ef8d7cb21ad65ddb083847b912",
+      "sha256:c261576cc6e79b8c8ebb7b7f8f27b899b0fddfe6e6935d62d9c39482858b016c",
+      "sha256:d04ecb1f133eec75401b7a3b3c60f49b61ab927cb5e4f3bded6a3a72dc4b5d9c",
+      "sha256:485aac5231943b27b92d427cefe7d1a960eba4e03d2621ff746420e4c8927aef",
+      "sha256:b8229ffcc86d269526df7ca2556f93c3769c50c1f14d62215f93e83332f67ec2",
+      "sha256:30b201e3dc88bd2d641a1d080e7fb1ba87e9292fe709c37f0f273c96a0a6e0fb",
+      "sha256:5d236bd7764eb2eaca19a704b9f6a3716f969be65080687d155871bb8b1d5d27",
+      "sha256:c6193579e46c05c8a3dd51d7cf47236733a303abca4fd012acf547c7c91aea42",
+      "sha256:4186cc3f90ffe746b62177f4f77fe75491eb34dd1baed6b3dff34951f6fbab9d",
+      "sha256:1a09714fcb1c799d485b4a502f31856c26b561e515b1cc7db1e44c8902055550",
+      "sha256:cd4d6c8436f40d16c8ceda564c438a1351375294db7f46bf51d61c46b58d874f",
+      "sha256:51bb9d445d1d138d5f4d2331ac7a5d4ef44b6ba2fd6662f763a2fd8d9b70d23f",
+      "sha256:5774ca0aea75687ae0b516cfc7c8324fcda3e776968f55a5e0b6374acb7d6894",
+      "sha256:fd922f7ddfd46dface06e674b1aa2b445e83372a3df124306a2cd21fc251504a",
+      "sha256:ceedefff9912e00ab065039c015d0d3205d523e105ec40fb6bb78a6e0636ec72",
+      "sha256:edd3d7b5b4d17496b558ca82991aeddbbbdb00106fcfd302e5a1b37ca061b858",
+      "sha256:9a7ccfe48e3a09e3be7680c6c64a84e9856ec1119ae77a25341a76e51e891a38",
+      "sha256:6f45dcf88ab8ca856b214bcdf8ce4fc02b88cff40ab66f7d33d7761248717fd5"
     ],
     "item_entries": [
-      "i0000001",
-      "r0000001-1",
-      "r0000001-2",
-      "r0000001-3",
-      "i0000002",
-      "i0000003",
-      "i0000004",
-      "r0000002-1"
+      "sha256:c20ac57e30d7a5a8898738d60dafe822bb16fb338108971c1a2e0e8c3affd499",
+      "sha256:8b9795645ad670b83696bce8a4f215c0b998b2ef8d7cb21ad65ddb083847b912",
+      "sha256:c261576cc6e79b8c8ebb7b7f8f27b899b0fddfe6e6935d62d9c39482858b016c",
+      "sha256:d04ecb1f133eec75401b7a3b3c60f49b61ab927cb5e4f3bded6a3a72dc4b5d9c",
+      "sha256:c6193579e46c05c8a3dd51d7cf47236733a303abca4fd012acf547c7c91aea42",
+      "sha256:1a09714fcb1c799d485b4a502f31856c26b561e515b1cc7db1e44c8902055550",
+      "sha256:fd922f7ddfd46dface06e674b1aa2b445e83372a3df124306a2cd21fc251504a",
+      "sha256:ceedefff9912e00ab065039c015d0d3205d523e105ec40fb6bb78a6e0636ec72"
     ]
   }
 }

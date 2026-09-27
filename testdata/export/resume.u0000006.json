@@ -1,7 +1,7 @@
 {
   "schema_version": "ATIF-v1.8",
   "session_id": "01995b2a-0000-7000-8000-000000000009",
-  "trajectory_id": "u0000006",
+  "trajectory_id": "sha256:06ce3e510c451f2e99e05cc116becfe0ce1d295194db45cf5bea6d417b49c5b7",
   "agent": {
     "name": "fixture",
     "version": "1",
@@ -12,7 +12,6 @@
           "description": "Run a shell command",
           "name": "bash",
           "parameters": {
-            "type": "object",
             "properties": {
               "cmd": {
                 "type": "string"
@@ -20,7 +19,8 @@
             },
             "required": [
               "cmd"
-            ]
+            ],
+            "type": "object"
           }
         },
         "type": "function"
@@ -35,10 +35,10 @@
       "message": "Delete the logs.",
       "extra": {
         "agentsession": {
-          "entry_id": "i0000001"
+          "entry_id": "sha256:c24a77cdd2b070f694edf181f46efc46dd3777b39bf1592dc0a7ae984e36340a"
         },
         "config_entries": [
-          "c0000001"
+          "sha256:c76f5301c344a529d7f74bc9d493fbfb9c1c222a49a0377659bad6cdac880b4a"
         ],
         "openresponses": {
           "item": {
@@ -54,14 +54,14 @@
         },
         "run": [
           {
-            "end_entry_id": "u0000002",
+            "end_entry_id": "sha256:cae43ab2c805ac1fb5445d15099f27a440a297df0520cf851197db436a30997a",
             "pending": [
               "call_1"
             ],
             "reason": "input_required",
             "run_id": "run-1",
             "source": "input",
-            "start_entry_id": "u0000001"
+            "start_entry_id": "sha256:48cec887308385e92c25f72741f53b82990d4fe76bdcb81ba1e3d1f5f2f221b2"
           }
         ],
         "tool_changes": {
@@ -111,20 +111,20 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "r0000001"
+          "entry_id": "sha256:751f4d2ccf2b22247ba1681563319b0934eebd1e8b43d1554fb8feaa34e1d2cf"
         },
         "calls": {
           "call_1": {
             "decisions": [
               {
                 "by": "policy",
-                "entry_id": "d0000001",
+                "entry_id": "sha256:bdfcd2a1836ef6a24500b7d7622f7a02d29294af43b54726a765b343c161de38",
                 "reason": "destructive; needs approval",
                 "verdict": "hold"
               },
               {
                 "by": "human",
-                "entry_id": "d0000002",
+                "entry_id": "sha256:4bf46070c4d2440dae28815a0c45505d94de22692e17ec5c4b9132e57c5828ed",
                 "reason": "refused by the operator",
                 "verdict": "reject"
               }
@@ -132,7 +132,7 @@
           }
         },
         "item_entry_ids": [
-          "i0000002"
+          "sha256:8cc4d99035499989867dc252ad9acad2adf499c5c931f686725aef5b94dde73e"
         ],
         "latency_ms": 400,
         "openresponses": {
@@ -147,8 +147,9 @@
             }
           ],
           "response": {
-            "entry_id": "r0000001",
+            "entry_id": "sha256:751f4d2ccf2b22247ba1681563319b0934eebd1e8b43d1554fb8feaa34e1d2cf",
             "latency_ms": 400,
+            "legacy_id": "r0000001",
             "model": "gpt-5",
             "request_hash": "sha256:174a1eb1ae646a6e8c25c43c1311e9d562d5663b166c8baf1fe931212eca2601",
             "response_id": "resp_1",
@@ -176,7 +177,7 @@
       "message": "Fine, list them instead.",
       "extra": {
         "agentsession": {
-          "entry_id": "i0000004"
+          "entry_id": "sha256:d7e4549217232a56cca4b4acf8227a1ab0e946b8c28ba098d03754297c40a1a1"
         },
         "openresponses": {
           "item": {
@@ -193,21 +194,21 @@
         "run": [
           {
             "cause": "refused",
-            "end_entry_id": "u0000004",
+            "end_entry_id": "sha256:16778725287c0bf7afb70e021d4aeb2894c1ed8aea191254533658da279edba9",
             "pending": [],
             "reason": "stopped",
             "run_id": "run-2",
             "source": "resume",
-            "start_entry_id": "u0000003",
+            "start_entry_id": "sha256:67e8f25618e9dbc4e5c32fa5c8d0d22d10468b9914400dd9c4e341930bfcb528",
             "trigger": "operator"
           },
           {
-            "end_entry_id": "u0000006",
+            "end_entry_id": "sha256:06ce3e510c451f2e99e05cc116becfe0ce1d295194db45cf5bea6d417b49c5b7",
             "pending": [],
             "reason": "done",
             "run_id": "run-3",
             "source": "input",
-            "start_entry_id": "u0000005"
+            "start_entry_id": "sha256:4e2517f6a58afd043aa4c7bef64fbb747909e009e9b16190ea397c80c59b2c2d"
           }
         ]
       }
@@ -226,10 +227,10 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "r0000002"
+          "entry_id": "sha256:952f064da1be551be6bd1db4a6980c298695a6237314dda364b135f0bbbba280"
         },
         "item_entry_ids": [
-          "i0000005"
+          "sha256:bd308cec0f3c2767776bd7e0f6f0db2564043715d4c18ba7c9f1c296464ec5a4"
         ],
         "latency_ms": 300,
         "openresponses": {
@@ -249,8 +250,9 @@
             }
           ],
           "response": {
-            "entry_id": "r0000002",
+            "entry_id": "sha256:952f064da1be551be6bd1db4a6980c298695a6237314dda364b135f0bbbba280",
             "latency_ms": 300,
+            "legacy_id": "r0000002",
             "model": "gpt-5",
             "request_hash": "sha256:141354363fa34e263dff6e6e36e6851a803accc3d16d2490ae4dee29b0334289",
             "response_id": "resp_2",
@@ -281,8 +283,8 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.3",
-      "leaf": "u0000006",
+      "format": "agentsession/0.5",
+      "leaf": "sha256:06ce3e510c451f2e99e05cc116becfe0ce1d295194db45cf5bea6d417b49c5b7",
       "main": true,
       "records": [
         "run",

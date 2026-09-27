@@ -26,6 +26,12 @@ branched, and what happened afterwards.
 - **Append-only and crash-tolerant.** A session file is always a valid
   prefix of the run; a line cut short by a crash is reported and
   skipped.
+- **Content-addressed.** An entry's `id` is the hash of its envelope
+  over the hash of its body, and `parent` is a hash, so a file verifies
+  itself line by line, a leaf commits to its whole path, and two
+  sessions that share history share the same entries. A session that
+  continues from a point in another names that point as its `base` and
+  opens with the path to it.
 - **Tree-shaped context, DAG-shaped provenance.** Branching creates
   children of an earlier entry in the same file, and a context is built
   by walking one parent. Abandoned branches stay, because they are

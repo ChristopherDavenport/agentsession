@@ -35,6 +35,17 @@ type Session struct {
 	leaf      string
 	truncated *TruncatedLine
 	now       func() time.Time
+	// prefix holds the IDs on the path to the header's base, when the
+	// session has one: the entries another session wrote, carried so
+	// the file stands alone. Own entries hang from the base or from
+	// each other.
+	prefix map[string]bool
+	// repeated lists the IDs Read met a second time, each treated as
+	// the same entry; unresolved lists the entries a migration could
+	// not rewrite, which keeps a migrated file from being re-emitted.
+	repeated   []string
+	unresolved []string
+	migrated   bool
 }
 
 // New creates an empty session. Header fields left empty are filled:
@@ -160,14 +171,26 @@ func (s *Session) ResetLeaf() {
 	s.leaf = ""
 }
 
-// Append adds e to the tree and makes it the leaf. An empty ID is
-// assigned; an empty Parent is set to the current leaf, so an explicit
-// Parent branches in place; a zero Timestamp is set to now. The parent
-// must exist and the ID must be new. Parents, when the caller set any,
-// is sorted into the order the format requires and checked against the
-// convergence rules; it does not move the leaf and does not reach any
-// context. On success e is owned by the session and must not be
-// modified.
+// Append adds e to the tree. Its ID is the hash of its envelope over the
+// hash of its body, as the format defines, and is computed here; an ID
+// the caller set must match or the append is refused. An empty Parent
+// is set to the current leaf, so an explicit Parent branches in place;
+// a zero Timestamp is set to now, and any timestamp is taken to UTC,
+// the one spelling the format admits. In a session with a base, the
+// parent must be the base or an own entry.
+//
+// An append under the leaf makes the entry the leaf; an append elsewhere
+// is a branch and the leaf does not move. A leaf label makes its target
+// the leaf, wherever the label's own parent sits, when the target is the
+// base or an own entry and not itself a label; otherwise nothing moves.
+// The leaf never rests on a leaf label. An entry the session already
+// holds — same type, body, parent, parents and timestamp — is a no-op
+// that returns the existing ID.
+//
+// Parents, when the caller set any, is sorted into the order the format
+// requires and checked against the convergence rules; it does not move
+// the leaf and does not reach any context. On success e is owned by the
+// session and must not be modified.
 func (s *Session) Append(e Entry) (string, error) {
 	if err := validateEntry(e); err != nil {
 		return "", err
@@ -175,22 +198,21 @@ func (s *Session) Append(e Entry) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b := e.Base()
+	for k := range b.Unknown {
+		if isEnvelopeKey(k) {
+			return "", fmt.Errorf("%w: %s", ErrReservedMember, k)
+		}
+	}
 	if b.Parent == "" {
 		b.Parent = s.leaf
 	}
-	if b.Parent != "" {
-		if _, ok := s.byID[b.Parent]; !ok {
-			return "", fmt.Errorf("%w: parent %s", ErrNoEntry, b.Parent)
-		}
-	}
-	if b.ID == "" {
-		b.ID = newUniqueEntryID(func(id string) bool { _, taken := s.byID[id]; return taken })
-	} else if _, taken := s.byID[b.ID]; taken {
-		return "", fmt.Errorf("%w: %s", ErrDuplicateEntry, b.ID)
+	if err := s.checkParentRule(b.Parent); err != nil {
+		return "", err
 	}
 	if b.Timestamp.IsZero() {
 		b.Timestamp = s.now()
 	}
+	b.Timestamp = b.Timestamp.UTC()
 	sortParents(b.Parents)
 	if err := s.checkParents(b); err != nil {
 		return "", err
@@ -203,26 +225,141 @@ func (s *Session) Append(e Entry) (string, error) {
 			}
 		}
 	}
+	want := b.ID
+	b.ID = ""
 	if u, ok := e.(*UnknownEntry); ok {
-		// The raw line is what gets written; keep it in step with the
-		// envelope that was just filled in.
+		// The raw line is what gets written and hashed; keep it in step
+		// with the envelope that was just filled in.
 		raw, err := rewriteEnvelope(u)
 		if err != nil {
 			return "", err
 		}
 		u.Raw = raw
 	}
+	if err := s.hashEntry(e); err != nil {
+		return "", err
+	}
+	if want != "" && want != b.ID {
+		return "", fmt.Errorf("%w: given %s, computed %s", ErrBadID, want, b.ID)
+	}
+	if u, ok := e.(*UnknownEntry); ok {
+		raw, err := rewriteEnvelope(u)
+		if err != nil {
+			return "", err
+		}
+		u.Raw = raw
+	}
+	if _, held := s.byID[b.ID]; held {
+		// One entry: same type, body, parent, parents and ts. Nothing
+		// moves, and the caller learns the ID it already had.
+		return b.ID, nil
+	}
 	s.add(e)
-	s.leaf = b.ID
+	s.moveLeafFor(e)
+	return b.ID, nil
+}
+
+// ErrBadID is returned by Append for an entry whose ID was set by the
+// caller and does not match the hash the format defines, and by Read
+// for a line whose id does not verify.
+var ErrBadID = errors.New("agentsession: entry id does not match its hash")
+
+// checkParentRule holds a parent to the format's rule: it exists, and in
+// a session with a base it is the base or an own entry, since the
+// prefix is another session's record and branching above the base is a
+// new session with a lower base.
+func (s *Session) checkParentRule(parent string) error {
+	if parent == "" {
+		if s.header.Base != "" {
+			return fmt.Errorf("%w: a session with a base has no second root", ErrNoEntry)
+		}
+		return nil
+	}
+	if _, ok := s.byID[parent]; !ok {
+		return fmt.Errorf("%w: parent %s", ErrNoEntry, parent)
+	}
+	if s.header.Base != "" && parent != s.header.Base && s.prefix[parent] {
+		return fmt.Errorf("%w: parent %s is on the prefix above the base", ErrNoEntry, parent)
+	}
+	return nil
+}
+
+// hashEntry computes the entry's content hash and ID from its encoded
+// form and sets them on the envelope.
+func (s *Session) hashEntry(e Entry) error {
+	data, err := MarshalEntry(e)
+	if err != nil {
+		return err
+	}
+	id, content, err := EntryHashes(data)
+	if err != nil {
+		return err
+	}
+	b := e.Base()
+	b.ID = id
+	b.content = content
+	return nil
+}
+
+// moveLeafFor applies the leaf rule after an append: under the leaf, the
+// entry is the leaf; elsewhere, a branch and nothing moves; a leaf label
+// moves the leaf to its target when the target is one the leaf may rest
+// on.
+func (s *Session) moveLeafFor(e Entry) {
+	b := e.Base()
 	if l, ok := e.(*LabelEntry); ok && l.Label != nil && *l.Label == LeafLabel {
-		// The marker names the durable leaf; it is not the leaf itself,
-		// so a live session and a reopened one hang the next entry from
-		// the same place.
-		if _, ok := s.byID[l.Target]; ok {
+		if s.mayRestOn(l.Target) {
 			s.leaf = l.Target
 		}
+		return
 	}
-	return b.ID, nil
+	if b.Parent == s.leaf {
+		s.leaf = b.ID
+	}
+}
+
+// mayRestOn reports whether the leaf may rest on id: it exists, it is
+// the base or an own entry, and it is not a leaf label.
+func (s *Session) mayRestOn(id string) bool {
+	e, ok := s.byID[id]
+	if !ok {
+		return false
+	}
+	if s.header.Base != "" && id != s.header.Base && s.prefix[id] {
+		return false
+	}
+	if l, ok := e.(*LabelEntry); ok && l.Label != nil && *l.Label == LeafLabel {
+		return false
+	}
+	return true
+}
+
+// Repeated returns the IDs Read met a second time in the file, each
+// treated as the same entry as the first, in file order.
+func (s *Session) Repeated() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string(nil), s.repeated...)
+}
+
+// Migrated reports whether the session was read from a file of an
+// earlier minor version and rewritten in memory, so its entries carry
+// LegacyID, and returns the IDs of entries the migration could not
+// rewrite: extension entries, whose members may name entries the reader
+// cannot recognise. A migrated session with unresolved entries cannot
+// be written as 0.5.
+func (s *Session) Migrated() (bool, []string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.migrated, append([]string(nil), s.unresolved...)
+}
+
+// Prefix reports whether id is on the path to the session's base: an
+// entry another session wrote, carried so the file stands alone.
+func (s *Session) Prefix(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.prefix[id]
 }
 
 // MarkLeaf builds the label entry that makes the current leaf durable,
@@ -256,7 +393,11 @@ func (s *Session) durableLeafAt() (string, int) {
 		}
 		switch {
 		case l.Label != nil && *l.Label == LeafLabel:
-			if _, ok := s.byID[l.Target]; ok {
+			// In force only when the leaf may rest on the target: an
+			// entry in the file that is the base or an own entry and
+			// not itself a leaf label. Otherwise the label moved
+			// nothing when it was appended, and moves nothing now.
+			if s.mayRestOn(l.Target) {
 				marked, at = l.Target, i
 			}
 		case l.Label == nil && l.Target == marked:
@@ -289,7 +430,7 @@ func (s *Session) resolveLeaf() string {
 	}
 	marked, at := s.durableLeafAt()
 	if marked == "" {
-		return s.entries[len(s.entries)-1].Base().ID
+		return s.notOnLabel(s.entries[len(s.entries)-1].Base().ID)
 	}
 	// A parent always precedes its children in the file, so descent is a
 	// single forward pass and needs no walk back up any path.
@@ -304,7 +445,26 @@ func (s *Session) resolveLeaf() string {
 			}
 		}
 	}
-	return leaf
+	return s.notOnLabel(leaf)
+}
+
+// notOnLabel walks up from id while it is a leaf label, since the leaf
+// never rests on one; the base stands in when the walk would leave the
+// session's own entries, and "" when a baseless session has nothing
+// above.
+func (s *Session) notOnLabel(id string) string {
+	for id != "" {
+		e := s.byID[id]
+		l, ok := e.(*LabelEntry)
+		if !ok || l.Label == nil || *l.Label != LeafLabel {
+			break
+		}
+		id = e.Base().Parent
+	}
+	if s.header.Base != "" && (id == "" || (s.prefix[id] && id != s.header.Base)) {
+		return s.header.Base
+	}
+	return id
 }
 
 // sortParents puts convergence references in the order the format
@@ -607,3 +767,40 @@ func (s *Session) SummarizeBranch(from string, summary openresponses.Item) (*Bra
 // utcNow is the session clock: the current time in UTC with the
 // monotonic reading dropped, so what is stamped is what reaches disk.
 func utcNow() time.Time { return time.Now().UTC().Round(0) }
+
+// Fork creates a session that continues from entry at of origin: a
+// session with a base, in the format's terms. The new session's header
+// is h with Base set to at and ParentSession to origin's ID; its
+// entries open with origin's path to at, the prefix, which the new
+// session shares with origin rather than copies, and its leaf is the
+// base. Every entry it appends hangs from the base or from an entry it
+// appended itself, and its file opens with the prefix so it stands
+// alone. The base may not be a leaf label, since it is the fork's first
+// leaf and the leaf never rests on one.
+func Fork(origin *Session, at string, h Header) (*Session, error) {
+	origin.mu.RLock()
+	defer origin.mu.RUnlock()
+	path := origin.path(at)
+	if path == nil {
+		return nil, fmt.Errorf("%w: %s", ErrNoEntry, at)
+	}
+	if l, ok := path[len(path)-1].(*LabelEntry); ok && l.Label != nil && *l.Label == LeafLabel {
+		return nil, fmt.Errorf("%w: a base may not be a leaf label", ErrNoEntry)
+	}
+	h.Base = at
+	h.ParentSession = origin.header.ID
+	if h.Media == "" {
+		h.Media = origin.header.Media
+	}
+	if h.Payload == "" {
+		h.Payload = origin.header.Payload
+	}
+	s := New(h)
+	s.prefix = map[string]bool{}
+	for _, e := range path {
+		s.add(e)
+		s.prefix[e.Base().ID] = true
+	}
+	s.leaf = at
+	return s, nil
+}

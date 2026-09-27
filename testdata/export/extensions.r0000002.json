@@ -1,7 +1,7 @@
 {
   "schema_version": "ATIF-v1.8",
   "session_id": "01995b2a-0000-7000-8000-000000000004",
-  "trajectory_id": "r0000002",
+  "trajectory_id": "sha256:7099cfd9ac3a8b30f64ae79e9abf5939620b4da41466b835e63da188f54932c5",
   "agent": {
     "name": "fixture",
     "version": "1",
@@ -15,15 +15,15 @@
       "message": "hello",
       "extra": {
         "agentsession": {
-          "entry_id": "i0000001"
+          "entry_id": "sha256:a59feae65ca6f16dddcb340b405e95dac8dc6832f958b57ed78fbd7f1ccaf4db"
         },
         "config_entries": [
-          "c0000001"
+          "sha256:ee58faaa90523b0450e520f0534d52dd870aa0e83b038a4af9b5e92f35d7dbc0"
         ],
         "config_extensions": [
           {
             "acme_note": "kept on a known entry",
-            "entry_id": "c0000001"
+            "entry_id": "sha256:ee58faaa90523b0450e520f0534d52dd870aa0e83b038a4af9b5e92f35d7dbc0"
           }
         ],
         "openresponses": {
@@ -47,37 +47,38 @@
       "message": "\u003chi\u003e \u0026 bye",
       "extra": {
         "agentsession": {
-          "entry_id": "i0000002"
+          "entry_id": "sha256:395c1309639ca3743698f2a9a789f71be3ec72680e24aa2b8ea2ab7cad4d0cee"
         },
         "extensions": [
           {
-            "type": "agentturn:note",
-            "id": "n0000001",
-            "parent": "i0000001",
-            "ts": "2026-09-17T15:00:02Z",
-            "text": "<b>&</b> stays literal",
+            "id": "sha256:ee03a1cf1c6b27980e4284e152f439884886435968210e15e419ab8baee1aae4",
+            "legacy_id": "n0000001",
             "nested": {
-              "z": 1,
               "a": [
                 1,
                 2,
                 {
                   "y": true
                 }
-              ]
+              ],
+              "z": 1
             },
-            "order": "is preserved"
+            "order": "is preserved",
+            "parent": "sha256:a59feae65ca6f16dddcb340b405e95dac8dc6832f958b57ed78fbd7f1ccaf4db",
+            "text": "<b>&</b> stays literal",
+            "ts": "2026-09-17T15:00:02Z",
+            "type": "agentturn:note"
           }
         ],
         "item_type": "agentturn:note",
         "openresponses": {
           "item": {
-            "type": "agentturn:note",
+            "a": 2,
             "id": "nt_1",
             "status": "completed",
             "text": "\u003chi\u003e \u0026 bye",
-            "z": 1,
-            "a": 2
+            "type": "agentturn:note",
+            "z": 1
           }
         },
         "visible": false
@@ -97,7 +98,7 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "r0000001"
+          "entry_id": "sha256:5114553995fe43b35aa5298320ed5379a1d20246e82cd3fb7aa8a60c3f052abb"
         },
         "custom": [
           {
@@ -109,12 +110,12 @@
                 3
               ]
             },
-            "entry_id": "u0000001",
+            "entry_id": "sha256:cdb580316cd8179244fa15b23e4e8f0472c1b58c154b63f21633ace24c4888f9",
             "ns": "acme"
           }
         ],
         "item_entry_ids": [
-          "i0000003"
+          "sha256:5d9fc9aadd2e2deda31bda70c13339e1f227a63eeb1e753b788ef0c049e6dfff"
         ],
         "openresponses": {
           "items": [
@@ -133,7 +134,8 @@
             }
           ],
           "response": {
-            "entry_id": "r0000001",
+            "entry_id": "sha256:5114553995fe43b35aa5298320ed5379a1d20246e82cd3fb7aa8a60c3f052abb",
+            "legacy_id": "r0000001",
             "model": "gpt-5",
             "request_hash": "sha256:54c271723c0ccf37d2672f2d64a1e622a2dfb19bd8b155548e548efb2f5b3276",
             "response_id": "resp_1",
@@ -163,7 +165,7 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "r0000002"
+          "entry_id": "sha256:7099cfd9ac3a8b30f64ae79e9abf5939620b4da41466b835e63da188f54932c5"
         },
         "error": {
           "type": "server_error",
@@ -174,13 +176,14 @@
         "openresponses": {
           "items": [],
           "response": {
-            "entry_id": "r0000002",
+            "entry_id": "sha256:7099cfd9ac3a8b30f64ae79e9abf5939620b4da41466b835e63da188f54932c5",
             "error": {
               "type": "server_error",
               "code": "upstream",
               "message": "boom",
               "param": null
             },
+            "legacy_id": "r0000002",
             "response_id": "resp_2",
             "status": "failed",
             "ts": "2026-09-17T15:00:08Z"
@@ -199,13 +202,13 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.1",
-      "leaf": "r0000002",
+      "format": "agentsession/0.5",
+      "leaf": "sha256:7099cfd9ac3a8b30f64ae79e9abf5939620b4da41466b835e63da188f54932c5",
       "main": true
     },
     "environment": {
       "cwd": "/home/u/proj",
-      "entry_id": "e0000001",
+      "entry_id": "sha256:61ff74d9d2f54719242ee26ee8e709bf7cfdc51c929b0033aca48572eca40fd8",
       "files": {
         "read": {
           "go.mod": "sha256:aaaa"
@@ -226,14 +229,14 @@
     "links": [
       {
         "call_id": "call_9",
-        "entry_id": "k0000001",
+        "entry_id": "sha256:3e914381fb23912de580fc48a485540339def58a93d42e1e49717efd10b72ca6",
         "rel": "subsession",
         "session": "01995b2a-0000-7000-8000-0000000000aa",
         "subagent_trajectory_ref": {
           "session_id": "01995b2a-0000-7000-8000-0000000000aa",
           "trajectory_path": "01995b2a-0000-7000-8000-0000000000aa.json",
           "extra": {
-            "entry_id": "k0000001"
+            "entry_id": "sha256:3e914381fb23912de580fc48a485540339def58a93d42e1e49717efd10b72ca6"
           }
         }
       }

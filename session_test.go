@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,8 +52,10 @@ func TestAssignedTimesAreUTC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := mustEntry(t, s, id).Base().Timestamp; !got.Equal(given) || got.Location() != local {
-		t.Errorf("caller's timestamp changed: %v", got)
+	// The format admits one spelling of ts, so a caller's time is taken
+	// to UTC with the instant unchanged.
+	if got := mustEntry(t, s, id).Base().Timestamp; !got.Equal(given) || got.Location() != time.UTC {
+		t.Errorf("caller's timestamp = %v, want the same instant in UTC", got)
 	}
 }
 
@@ -84,16 +87,28 @@ func TestAppend(t *testing.T) {
 		t.Errorf("second append parent %q leaf %s", u.Parent, s.Leaf())
 	}
 
-	// An explicit parent branches in place and becomes the leaf.
-	alt := &ItemEntry{EntryBase: EntryBase{Parent: id, ID: "alt", Timestamp: fixedTime}, Item: openresponses.UserText("other")}
-	if _, err := s.Append(alt); err != nil {
+	// An ID the caller set must be the hash the format defines.
+	wrong := &ItemEntry{EntryBase: EntryBase{Parent: id, ID: "alt", Timestamp: fixedTime}, Item: openresponses.UserText("other")}
+	if _, err := s.Append(wrong); !errors.Is(err, ErrBadID) {
+		t.Fatalf("Append with a wrong id = %v, want ErrBadID", err)
+	}
+	// An explicit parent branches in place; the leaf does not move, since
+	// an append elsewhere than the leaf is a branch.
+	alt := &ItemEntry{EntryBase: EntryBase{Parent: id, Timestamp: fixedTime}, Item: openresponses.UserText("other")}
+	altID, err := s.Append(alt)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Leaf() != "alt" || !reflect.DeepEqual(s.Children(id), []string{uid, "alt"}) {
-		t.Errorf("branch: leaf %s children %v", s.Leaf(), s.Children(id))
+	if !strings.HasPrefix(altID, HashPrefix) || s.Leaf() != uid || !reflect.DeepEqual(s.Children(id), []string{uid, altID}) {
+		t.Errorf("branch: id %s leaf %s children %v", altID, s.Leaf(), s.Children(id))
 	}
 	if !alt.Timestamp.Equal(fixedTime) {
 		t.Error("explicit timestamp was replaced")
+	}
+	// Appending the same entry again is a no-op that returns its ID.
+	again := &ItemEntry{EntryBase: EntryBase{Parent: id, Timestamp: fixedTime}, Item: openresponses.UserText("other")}
+	if id2, err := s.Append(again); err != nil || id2 != altID || len(s.Children(id)) != 2 {
+		t.Errorf("re-append = %s, %v; children %v", id2, err, s.Children(id))
 	}
 
 	// Branch moves the leaf; ResetLeaf starts a new root.
@@ -113,8 +128,8 @@ func TestAppend(t *testing.T) {
 	}
 
 	// Errors.
-	if _, err := s.Append(&InfoEntry{EntryBase: EntryBase{ID: "alt"}}); !errors.Is(err, ErrDuplicateEntry) {
-		t.Errorf("duplicate = %v", err)
+	if _, err := s.Append(&InfoEntry{EntryBase: EntryBase{ID: "alt"}}); !errors.Is(err, ErrBadID) {
+		t.Errorf("wrong id = %v", err)
 	}
 	if _, err := s.Append(&InfoEntry{EntryBase: EntryBase{Parent: "ghost"}}); !errors.Is(err, ErrNoEntry) {
 		t.Errorf("missing parent = %v", err)
@@ -128,7 +143,7 @@ func TestAppend(t *testing.T) {
 	if s.Len() != 4 {
 		t.Errorf("len = %d", s.Len())
 	}
-	if got := s.Path("alt"); len(got) != 2 || got[0].Base().ID != id || got[1].Base().ID != "alt" {
+	if got := s.Path(altID); len(got) != 2 || got[0].Base().ID != id || got[1].Base().ID != altID {
 		t.Errorf("Path(alt) = %v", got)
 	}
 	if s.Path("nope") != nil {
@@ -256,14 +271,14 @@ func TestHeaderValidate(t *testing.T) {
 func TestCompactAndSummarizeBranch(t *testing.T) {
 	s := loadFixture(t, "compaction")
 	// Before any compaction the checkpoint is the plain config replay.
-	if err := s.Branch("i0000005"); err != nil {
+	if err := s.Branch(lid(t, s, "i0000005")); err != nil {
 		t.Fatal(err)
 	}
-	comp, err := s.Compact("i0000003", openresponses.SystemText("summary"))
+	comp, err := s.Compact(lid(t, s, "i0000003"), openresponses.SystemText("summary"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if comp.FirstKept != "i0000003" || comp.Config.Model != "gpt-5-mini" || comp.Config.Instructions != "Be brief." || comp.Summary.ItemType() != "message" {
+	if comp.FirstKept != lid(t, s, "i0000003") || comp.Config.Model != "gpt-5-mini" || comp.Config.Instructions != "Be brief." || comp.Summary.ItemType() != "message" {
 		t.Errorf("compaction = %+v", comp)
 	}
 	if _, ok := comp.Config.Extra["temperature"]; ok {
@@ -298,7 +313,7 @@ func TestCompactAndSummarizeBranch(t *testing.T) {
 	if _, err := s.Compact("zzzz", openresponses.SystemText("x")); !errors.Is(err, ErrNoEntry) {
 		t.Errorf("unknown first_kept = %v", err)
 	}
-	if _, err := s.Compact("i0000003", nil); err == nil {
+	if _, err := s.Compact(lid(t, s, "i0000003"), nil); err == nil {
 		t.Error("nil summary accepted")
 	}
 	empty := New(Header{})
@@ -311,20 +326,20 @@ func TestCompactAndSummarizeBranch(t *testing.T) {
 	if _, err := b.SummarizeBranch("nope", openresponses.SystemText("x")); !errors.Is(err, ErrNoEntry) {
 		t.Errorf("unknown from = %v", err)
 	}
-	if _, err := b.SummarizeBranch("r0000003", nil); err == nil {
+	if _, err := b.SummarizeBranch(lid(t, b, "r0000003"), nil); err == nil {
 		t.Error("nil summary accepted")
 	}
 	// An entry that exists but is on another branch is off the path.
-	if err := b.Branch("r0000002"); err != nil {
+	if err := b.Branch(lid(t, b, "r0000002")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Compact("i0000005", openresponses.SystemText("x")); !errors.Is(err, ErrNoEntry) {
+	if _, err := b.Compact(lid(t, b, "i0000005"), openresponses.SystemText("x")); !errors.Is(err, ErrNoEntry) {
 		t.Errorf("first_kept on another branch = %v", err)
 	}
-	if err := b.Branch("r0000001"); err != nil {
+	if err := b.Branch(lid(t, b, "r0000001")); err != nil {
 		t.Fatal(err)
 	}
-	bs, err := b.SummarizeBranch("r0000003", openresponses.SystemText("tried B"))
+	bs, err := b.SummarizeBranch(lid(t, b, "r0000003"), openresponses.SystemText("tried B"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +347,7 @@ func TestCompactAndSummarizeBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bs.Parent != "r0000001" || bs.From != "r0000003" {
+	if bs.Parent != lid(t, b, "r0000001") || bs.From != lid(t, b, "r0000003") {
 		t.Errorf("branch summary = %+v", bs.EntryBase)
 	}
 	c, err = b.ContextAt(bid)
@@ -370,12 +385,12 @@ func TestCompactByIndex(t *testing.T) {
 		build     func(openresponses.Item) (*CompactionEntry, error)
 		firstKept string // "" means an error is expected
 	}{
-		{"from 1", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(1, it) }, "i0000003"},
-		{"from 3 skips config", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(3, it) }, "i0000005"},
-		{"from last", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(5, it) }, "i0000007"},
-		{"keeping 1", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactKeeping(1, it) }, "i0000007"},
-		{"keeping 2", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactKeeping(2, it) }, "i0000006"},
-		{"keeping all but summary", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactKeeping(5, it) }, "i0000003"},
+		{"from 1", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(1, it) }, lid(t, s, "i0000003")},
+		{"from 3 skips config", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(3, it) }, lid(t, s, "i0000005")},
+		{"from last", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(5, it) }, lid(t, s, "i0000007")},
+		{"keeping 1", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactKeeping(1, it) }, lid(t, s, "i0000007")},
+		{"keeping 2", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactKeeping(2, it) }, lid(t, s, "i0000006")},
+		{"keeping all but summary", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactKeeping(5, it) }, lid(t, s, "i0000003")},
 		{"from 0 is the old summary", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(0, it) }, ""},
 		{"keeping the old summary", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactKeeping(6, it) }, ""},
 		{"from negative", func(it openresponses.Item) (*CompactionEntry, error) { return s.CompactFrom(-1, it) }, ""},
@@ -423,7 +438,7 @@ func TestCompactByIndex(t *testing.T) {
 	if got := itemTexts(c.Items); !reflect.DeepEqual(got, []string{"folded", "third", "three", "fourth"}) {
 		t.Errorf("context after compaction = %q", got)
 	}
-	if c.ItemEntries[0] != Entry(comp) || c.ItemEntries[1].Base().ID != "i0000005" {
+	if c.ItemEntries[0] != Entry(comp) || c.ItemEntries[1].Base().ID != lid(t, s, "i0000005") {
 		t.Errorf("item entries after compaction = %s %s", c.ItemEntries[0].Base().ID, c.ItemEntries[1].Base().ID)
 	}
 

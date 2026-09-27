@@ -134,7 +134,7 @@ func TestCorruptRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Release("s1")
-	if _, err := st.Open(ctx, "s1"); !errors.Is(err, agentsession.ErrNoEntry) {
+	if _, err := st.Open(ctx, "s1"); !errors.Is(err, agentsession.ErrNoEntry) && !errors.Is(err, agentsession.ErrBadID) {
 		t.Errorf("Open(corrupt) = %v, want ErrNoEntry", err)
 	}
 	if _, err := sqlite.Open(filepath.Join(t.TempDir(), "missing", "dir", "x.db")); err == nil {

@@ -67,7 +67,7 @@ func TestContextShape(t *testing.T) {
 	if !reflect.DeepEqual(texts, want) {
 		t.Errorf("items = %q, want %q", texts, want)
 	}
-	if ctx.Entries[0].Base().ID != "k0000001" || ctx.Entries[1].Base().ID != "i0000003" {
+	if ctx.Entries[0].Base().ID != lid(t, s, "k0000001") || ctx.Entries[1].Base().ID != lid(t, s, "i0000003") {
 		t.Errorf("entries start %s %s", ctx.Entries[0].Base().ID, ctx.Entries[1].Base().ID)
 	}
 	// ItemEntries skips the config and response entries that Entries
@@ -76,7 +76,7 @@ func TestContextShape(t *testing.T) {
 	for _, e := range ctx.ItemEntries {
 		itemIDs = append(itemIDs, e.Base().ID)
 	}
-	wantIDs := []string{"k0000001", "i0000003", "i0000004", "i0000005", "i0000006", "i0000007"}
+	wantIDs := []string{lid(t, s, "k0000001"), lid(t, s, "i0000003"), lid(t, s, "i0000004"), lid(t, s, "i0000005"), lid(t, s, "i0000006"), lid(t, s, "i0000007")}
 	if !reflect.DeepEqual(itemIDs, wantIDs) {
 		t.Errorf("item entries = %q, want %q", itemIDs, wantIDs)
 	}
@@ -88,7 +88,7 @@ func TestContextShape(t *testing.T) {
 
 	// Before the compaction, nothing is summarised and the checkpoint
 	// is not consulted: the config replay alone gives the settings.
-	ctx, err = s.ContextAt("i0000005")
+	ctx, err = s.ContextAt(lid(t, s, "i0000005"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestContextShape(t *testing.T) {
 
 func TestBranchContext(t *testing.T) {
 	s := loadFixture(t, "branch")
-	ctx, err := s.ContextAt("n0000001")
+	ctx, err := s.ContextAt(lid(t, s, "n0000001"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,23 +127,23 @@ func TestBranchContext(t *testing.T) {
 	if got := itemTexts(ctx.Items); !reflect.DeepEqual(got, want) {
 		t.Errorf("items = %q, want %q", got, want)
 	}
-	ctx, err = s.ContextAt("r0000002")
+	ctx, err = s.ContextAt(lid(t, s, "r0000002"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := itemTexts(ctx.Items); !reflect.DeepEqual(got, []string{"Q", "A1", "follow-up A", "A2"}) {
 		t.Errorf("abandoned branch items = %q", got)
 	}
-	if got := s.Labels(); !reflect.DeepEqual(got, map[string]string{"r0000001": "fork"}) {
+	if got := s.Labels(); !reflect.DeepEqual(got, map[string]string{lid(t, s, "r0000001"): "fork"}) {
 		t.Errorf("labels = %v", got)
 	}
 	if s.Name() != "Branching demo" {
 		t.Errorf("name = %q", s.Name())
 	}
-	if got := s.Leaves(); !reflect.DeepEqual(got, []string{"r0000002", "n0000001"}) {
+	if got := s.Leaves(); !reflect.DeepEqual(got, []string{lid(t, s, "r0000002"), lid(t, s, "n0000001")}) {
 		t.Errorf("leaves = %v", got)
 	}
-	if got := s.Children("r0000001"); !reflect.DeepEqual(got, []string{"i0000003", "b0000001"}) {
+	if got := s.Children(lid(t, s, "r0000001")); !reflect.DeepEqual(got, []string{lid(t, s, "i0000003"), lid(t, s, "b0000001")}) {
 		t.Errorf("children = %v", got)
 	}
 }
@@ -172,7 +172,7 @@ func TestVerifyFixtureHashes(t *testing.T) {
 
 func TestRequestContext(t *testing.T) {
 	s := loadFixture(t, "basic")
-	ctx, err := s.RequestContext("r0000001")
+	ctx, err := s.RequestContext(lid(t, s, "r0000001"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,14 +195,14 @@ func TestRequestContext(t *testing.T) {
 		t.Errorf("request = %+v", req)
 	}
 
-	ctx, err = s.RequestContext("r0000002")
+	ctx, err = s.RequestContext(lid(t, s, "r0000002"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ctx.Items) != 4 { // user, reasoning, call, output
 		t.Errorf("second request has %d items", len(ctx.Items))
 	}
-	if _, err := s.RequestContext("i0000001"); err == nil {
+	if _, err := s.RequestContext(lid(t, s, "i0000001")); err == nil {
 		t.Error("RequestContext accepted an item entry")
 	}
 	if _, err := s.RequestContext("nope"); !errors.Is(err, ErrNoEntry) {
@@ -247,8 +247,8 @@ func TestRequestContextInterleaved(t *testing.T) {
 		name, response string
 		items          []string
 	}{
-		{"first request keeps the user item alone", "r0000001", []string{"List the files."}},
-		{"second request keeps the first turn", "r0000002", []string{
+		{"first request keeps the user item alone", lid(t, s, "r0000001"), []string{"List the files."}},
+		{"second request keeps the first turn", lid(t, s, "r0000002"), []string{
 			"List the files.", "reasoning:A shell call will do.", "call:bash", "output:a.txt\nb.txt"}},
 	}
 	for _, tt := range tests {
@@ -272,7 +272,7 @@ func TestRequestContextInterleaved(t *testing.T) {
 	}
 	// The custom entries stay on the path: they carry no item, so they
 	// change neither the request nor its hash.
-	ctx, err := s.RequestContext("r0000002")
+	ctx, err := s.RequestContext(lid(t, s, "r0000002"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestRequestContextInterleaved(t *testing.T) {
 // is a hash mismatch the writer avoids only by recording no hash.
 func TestPinnedContext(t *testing.T) {
 	s := loadFixture(t, "pinned")
-	comp, ok := s.Entry("k0000001")
+	comp, ok := s.Entry(lid(t, s, "k0000001"))
 	if !ok {
 		t.Fatal("no compaction entry")
 	}
@@ -310,7 +310,7 @@ func TestPinnedContext(t *testing.T) {
 	// The pinned items sit between the summary and the kept window, in
 	// the order written, which is where the request that was sent had
 	// them.
-	ctx, err := s.RequestContext("r0000003")
+	ctx, err := s.RequestContext(lid(t, s, "r0000003"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ func TestPinnedContext(t *testing.T) {
 	if got := itemTexts(ctx.Items); !reflect.DeepEqual(got, want) {
 		t.Errorf("request items = %q, want %q", got, want)
 	}
-	if err := s.Verify("r0000003"); err != nil {
+	if err := s.Verify(lid(t, s, "r0000003")); err != nil {
 		t.Errorf("Verify: %v", err)
 	}
 
@@ -355,7 +355,7 @@ func TestPinnedContext(t *testing.T) {
 	// new input: it is reachable as an item entry on the path before
 	// first_kept, so a reader that ignores the member loses context
 	// but never invents it.
-	for id, pin := range map[string]string{"i0000001": pins[0], "i0000008": pins[1]} {
+	for id, pin := range map[string]string{lid(t, s, "i0000001"): pins[0], lid(t, s, "i0000008"): pins[1]} {
 		e, ok := s.Entry(id)
 		if !ok {
 			t.Fatalf("no entry %s", id)
@@ -370,7 +370,7 @@ func TestPinnedContext(t *testing.T) {
 // pinned items writes no `pinned` and rebuilds as it did before.
 func TestPinnedOmitted(t *testing.T) {
 	s := loadFixture(t, "compaction")
-	e, _ := s.Entry("k0000001")
+	e, _ := s.Entry(lid(t, s, "k0000001"))
 	if got := e.(*CompactionEntry).Pinned; got != nil {
 		t.Errorf("compaction fixture gained %d pinned items", len(got))
 	}
@@ -450,7 +450,7 @@ func TestCompactionMembersSurviveARoundTrip(t *testing.T) {
 // drifting: order, membership, and what is left out.
 func TestOutputEntries(t *testing.T) {
 	s := loadFixture(t, "interleaved")
-	path := s.Path("r0000002")
+	path := s.Path(lid(t, s, "r0000002"))
 	resp := path[len(path)-1].(*ResponseEntry)
 
 	// Path order, not the backward order the walk runs in. Serving
@@ -461,14 +461,14 @@ func TestOutputEntries(t *testing.T) {
 	for _, e := range got {
 		ids = append(ids, e.ID)
 	}
-	if want := []string{"i0000005", "i0000006"}; !reflect.DeepEqual(ids, want) {
+	if want := []string{lid(t, s, "i0000005"), lid(t, s, "i0000006")}; !reflect.DeepEqual(ids, want) {
 		t.Errorf("output entries = %v, want %v", ids, want)
 	}
 
 	// The custom entry between the two output items is skipped and not
 	// returned: it is on the path for its own reasons and stays there.
 	for _, e := range got {
-		if e.ID == "u0000002" {
+		if e.ID == lid(t, s, "u0000002") {
 			t.Error("a skipped non-item entry was returned as output")
 		}
 	}
@@ -481,7 +481,7 @@ func TestOutputEntries(t *testing.T) {
 
 	// The entries are the session's own, so a caller that serves their
 	// items knows it has to clone.
-	if e, _ := s.Entry("i0000006"); got[len(got)-1] != e {
+	if e, _ := s.Entry(lid(t, s, "i0000006")); got[len(got)-1] != e {
 		t.Error("OutputEntries returned a copy, not the session's own entry")
 	}
 
@@ -500,13 +500,13 @@ func TestOutputEntries(t *testing.T) {
 	// The walk stops at the first item entry belonging to something
 	// else rather than running to the root: the first response's items
 	// are not the second's.
-	first := s.Path("r0000001")
+	first := s.Path(lid(t, s, "r0000001"))
 	out := OutputEntries(first, first[len(first)-1].(*ResponseEntry))
 	ids = nil
 	for _, e := range out {
 		ids = append(ids, e.ID)
 	}
-	if want := []string{"i0000002", "i0000003"}; !reflect.DeepEqual(ids, want) {
+	if want := []string{lid(t, s, "i0000002"), lid(t, s, "i0000003")}; !reflect.DeepEqual(ids, want) {
 		t.Errorf("first response output = %v, want %v", ids, want)
 	}
 }

@@ -1,5 +1,5 @@
 {
-  "r0000003": {
+  "sha256:cdf62b2f1a34e4de8b0773622e5fca4ac3c9f2f25348e49dbb5cbfb6b7ae12ed": {
     "settings": {
       "model": "gpt-5",
       "instructions": "Be brief."
@@ -83,22 +83,22 @@
       }
     ],
     "entries": [
-      "k0000001",
-      "i0000004",
-      "i0000005",
-      "r0000002",
-      "i0000006",
-      "i0000007",
-      "r0000003"
+      "sha256:eea1eec9f14c86e12d5992fdb6951cb565e18fd75a9f7184d575d36a8bc5d2d1",
+      "sha256:2ba742c12acc3992fa8c29f50cb4738689e76a7e3100b2019d8a0df029b76ee6",
+      "sha256:0d7d06d3aeb399dc85e36d8d33e7a58100ee1ff7924459eee04e331be160f4d3",
+      "sha256:5d4c40ccb8a67c41d9d04cc2ed24f74faf2cec4f4f946cc37ce7555f781e5756",
+      "sha256:278e2e4ad632327fdc949eebc3fa2d20f260d212c0d73a22085ba334b70233a5",
+      "sha256:7bc75ea823db6bea95fd3778464a7d38ddd70f689179cec72f4449d1942fe40f",
+      "sha256:cdf62b2f1a34e4de8b0773622e5fca4ac3c9f2f25348e49dbb5cbfb6b7ae12ed"
     ],
     "item_entries": [
-      "k0000001",
-      "k0000001",
-      "k0000001",
-      "i0000004",
-      "i0000005",
-      "i0000006",
-      "i0000007"
+      "sha256:eea1eec9f14c86e12d5992fdb6951cb565e18fd75a9f7184d575d36a8bc5d2d1",
+      "sha256:eea1eec9f14c86e12d5992fdb6951cb565e18fd75a9f7184d575d36a8bc5d2d1",
+      "sha256:eea1eec9f14c86e12d5992fdb6951cb565e18fd75a9f7184d575d36a8bc5d2d1",
+      "sha256:2ba742c12acc3992fa8c29f50cb4738689e76a7e3100b2019d8a0df029b76ee6",
+      "sha256:0d7d06d3aeb399dc85e36d8d33e7a58100ee1ff7924459eee04e331be160f4d3",
+      "sha256:278e2e4ad632327fdc949eebc3fa2d20f260d212c0d73a22085ba334b70233a5",
+      "sha256:7bc75ea823db6bea95fd3778464a7d38ddd70f689179cec72f4449d1942fe40f"
     ]
   }
 }

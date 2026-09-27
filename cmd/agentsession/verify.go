@@ -28,8 +28,8 @@ func verify(args []string, stdout, stderr io.Writer) error {
 		if !ok {
 			continue
 		}
-		id := r.ID
-		switch err := s.Verify(id); {
+		id := shortID(r.ID)
+		switch err := s.Verify(r.ID); {
 		case errors.Is(err, agentsession.ErrNoHash):
 			unhashed++
 			fmt.Fprintf(stdout, "%s  no hash recorded\n", id)
@@ -49,7 +49,7 @@ func verify(args []string, stdout, stderr io.Writer) error {
 	for _, leaf := range s.Leaves() {
 		if err := s.VerifyRecords(leaf); err != nil {
 			problem = true
-			fmt.Fprintf(stdout, "records to %s  ERROR %v\n", leaf, err)
+			fmt.Fprintf(stdout, "records to %s  ERROR %v\n", shortID(leaf), err)
 		}
 	}
 	if t := s.Truncated(); t != nil {

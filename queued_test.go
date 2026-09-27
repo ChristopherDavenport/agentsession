@@ -16,8 +16,8 @@ func TestQueuedFixture(t *testing.T) {
 		name, leaf string
 		want       []string
 	}{
-		{"the steer was drained before the run ended", "i0000003", nil},
-		{"the follow-up is still owed", s.Leaf(), []string{"q0000002"}},
+		{"the steer was drained before the run ended", lid(t, s, "i0000003"), nil},
+		{"the follow-up is still owed", s.Leaf(), []string{lid(t, s, "q0000002")}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -55,12 +55,12 @@ func TestQueuedFixture(t *testing.T) {
 	}
 
 	// The item that drained it says where it came from.
-	e, ok := s.Entry("i0000002")
+	e, ok := s.Entry(lid(t, s, "i0000002"))
 	if !ok {
 		t.Fatal("no drained item")
 	}
 	item := e.(*ItemEntry)
-	if item.QueuedFrom != "q0000001" {
+	if item.QueuedFrom != lid(t, s, "q0000001") {
 		t.Errorf("queued_from = %q", item.QueuedFrom)
 	}
 	if item.Source == nil || item.Source.Kind != "human" || item.Source.Ref != "slack:1758412800.0002" || item.Source.Source != "gateway" {

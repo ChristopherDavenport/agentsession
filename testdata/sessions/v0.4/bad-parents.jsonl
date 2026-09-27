@@ -1,0 +1,4 @@
+{"type":"session","format":"agentsession/0.4","id":"01995b2a-0000-7000-8000-00000000000d","created_at":"2026-09-25T09:00:00Z","payload":"openresponses/2026-04-24"}
+{"type":"item","id":"i0000001","parent":null,"ts":"2026-09-25T09:00:00Z","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"a"}]}}
+{"type":"item","id":"i0000002","parent":"i0000001","parents":[{"entry":"i0000003"}],"ts":"2026-09-25T09:00:01Z","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"converges an entry not yet written"}]}}
+{"type":"item","id":"i0000003","parent":"i0000002","ts":"2026-09-25T09:00:02Z","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"c"}]}}

@@ -7,9 +7,13 @@
 // # Shape
 //
 // A session file is a header line followed by entries, one JSON object
-// per line. Entries form a tree through their id and parent members,
-// so a branch is a child of an earlier entry, in place, and an
-// abandoned branch stays in the file. An entry may also name further
+// per line. An entry's id is the hash of its envelope over the hash of
+// its body, and parent names a parent by hash, so a file verifies
+// itself and a leaf commits to its whole path; [Session.Append]
+// computes both. Entries form a tree through those members, so a
+// branch is a child of an earlier entry, in place, and an abandoned
+// branch stays in the file. A session made with [Fork] continues from
+// an entry of another, its base, and opens with the path to it. An entry may also name further
 // predecessors in [EntryBase.Parents] — a subagent's result, a branch
 // merged back — which record where converged work came from and are
 // never walked when building a context. [Header] and [Entry] are the two

@@ -6,81 +6,81 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/ChristopherDavenport/openresponses"
 )
 
-// parentsMember matches a whole parents member on one line. The
-// references it holds are objects of strings, so nothing inside the
-// array carries a closing bracket.
-var parentsMember = regexp.MustCompile(`,"parents":\[[^\]]*\]`)
-
-// TestConvergenceIsNotContext is the claim that makes parents a minor
-// version rather than a major one: a reader that does not understand
-// the member rebuilds the same request, byte for byte.
-//
-// It is measured by stripping every parents member from the fixture and
-// rebuilding both sessions at every leaf. A 0.3 reader is exactly a 0.4
-// reader given the stripped file, since the member is the only thing
-// 0.4 added, so if the walk ever followed a convergence edge the two
-// would part company here.
+// TestConvergenceIsNotContext is the claim that keeps parents out of the
+// walk: a reader that ignores the member rebuilds the same request. It
+// is measured by replaying each fixture with every parents member
+// dropped and rebuilding both sessions at every leaf; the IDs differ,
+// since parents is in the envelope hash, so leaves are matched by their
+// legacy ids, and the rebuilt request hashes must agree.
 func TestConvergenceIsNotContext(t *testing.T) {
-	path := filepath.Join("testdata", "sessions", "converge.jsonl")
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"converge"} {
+		t.Run(name, func(t *testing.T) { convergenceIsNotContext(t, name) })
 	}
-	stripped := parentsMember.ReplaceAll(raw, nil)
-	if bytes.Equal(raw, stripped) {
+}
+
+func convergenceIsNotContext(t *testing.T, name string) {
+	with := loadFixture(t, name)
+	without := New(with.Header())
+	ids := map[string]string{}
+	stripped := 0
+	for _, e := range with.Entries() {
+		data, err := MarshalEntry(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		copyE, err := UnmarshalEntry(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := copyE.Base()
+		if len(b.Parents) > 0 {
+			stripped++
+		}
+		b.Parents = nil
+		b.ID = ""
+		if b.Parent != "" {
+			b.Parent = ids[b.Parent]
+		}
+		id, err := without.Append(copyE)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[e.Base().ID] = id
+	}
+	if stripped == 0 {
 		t.Fatal("the fixture carries no parents member, so this proves nothing")
 	}
-	if bytes.Contains(stripped, []byte(`"parents"`)) {
-		t.Fatal("stripping left a parents member behind")
-	}
-
-	with, err := Read(bytes.NewReader(raw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	without, err := Read(bytes.NewReader(stripped))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(with.Leaves(), without.Leaves()) {
-		t.Fatalf("leaves differ: %v and %v", with.Leaves(), without.Leaves())
-	}
 	for _, leaf := range with.Leaves() {
-		a, err := with.ContextAt(leaf)
-		if err != nil {
-			t.Fatal(err)
-		}
-		b, err := without.ContextAt(leaf)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ra, err := a.Request()
-		if err != nil {
-			t.Fatal(err)
-		}
-		rb, err := b.Request()
-		if err != nil {
-			t.Fatal(err)
-		}
-		ha, err := RequestHash(ra)
-		if err != nil {
-			t.Fatal(err)
-		}
-		hb, err := RequestHash(rb)
-		if err != nil {
-			t.Fatal(err)
-		}
+		ha := requestHashAt(t, with, leaf)
+		hb := requestHashAt(t, without, ids[leaf])
 		if ha != hb {
 			t.Errorf("leaf %s: request %s with parents, %s without", leaf, ha, hb)
 		}
 	}
+}
+
+// requestHashAt hashes the request the context algorithm builds at id.
+func requestHashAt(t *testing.T, s *Session, id string) string {
+	t.Helper()
+	ctx, err := s.ContextAt(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := ctx.Request()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := RequestHash(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
 }
 
 // TestConvergenceIsRecorded checks the other half: the member survives
@@ -92,7 +92,7 @@ func TestConvergenceIsRecorded(t *testing.T) {
 	// The output entry names the leaf of the child that answered, which
 	// the link entry beside it cannot: a link names a session, and when
 	// it is written the child has no point to name yet.
-	e, ok := s.Entry("i0000004")
+	e, ok := s.Entry(lid(t, s, "i0000004"))
 	if !ok {
 		t.Fatal("no i0000004")
 	}
@@ -103,18 +103,18 @@ func TestConvergenceIsRecorded(t *testing.T) {
 
 	// The join names a branch in this file and a leaf in another. The
 	// one in this file omits the session, and sorts first.
-	e, _ = s.Entry("i0000009")
-	want = []EntryRef{{Entry: "i0000008"}, {Session: "01995b2a-0000-7000-8000-0000000000c2", Entry: "b0000009"}}
+	e, _ = s.Entry(lid(t, s, "i0000009"))
+	want = []EntryRef{{Entry: lid(t, s, "i0000008")}, {Session: "01995b2a-0000-7000-8000-0000000000c2", Entry: "b0000009"}}
 	if got := e.Base().Parents; !reflect.DeepEqual(got, want) {
 		t.Errorf("join parents = %+v, want %+v", got, want)
 	}
 
 	// The converged branch is not the parent, and is not on the path.
-	if p := e.Base().Parent; p != "i0000007" {
+	if p := e.Base().Parent; p != lid(t, s, "i0000007") {
 		t.Errorf("join parent = %s", p)
 	}
-	for _, pe := range s.Path("i0000009") {
-		if pe.Base().ID == "i0000008" {
+	for _, pe := range s.Path(lid(t, s, "i0000009")) {
+		if pe.Base().ID == lid(t, s, "i0000008") {
 			t.Error("the converged branch is on the path to the join")
 		}
 	}
@@ -329,18 +329,24 @@ func TestItemReferenceIsNotWritten(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read refused a file carrying an item_reference: %v", err)
 	}
-	e, ok := read.Entry("i1")
+	e, ok := read.Entry(lid(t, read, "i1"))
 	if !ok {
 		t.Fatal("the item_reference entry is missing")
 	}
 	if _, ok := e.(*ItemEntry).Item.(*openresponses.ItemReference); !ok {
 		t.Errorf("item = %T, want *openresponses.ItemReference", e.(*ItemEntry).Item)
 	}
+	// It writes back — the file was 0.4, so the rewrite is its migration
+	// to 0.5 — and reads again as the same entry.
 	var buf bytes.Buffer
 	if err := Write(&buf, read); err != nil {
 		t.Fatal(err)
 	}
-	if buf.String() != file {
-		t.Errorf("round trip changed the file\nwant: %s\ngot:  %s", file, buf.String())
+	again, err := Read(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Len() != 1 || again.Entries()[0].Base().ID != e.Base().ID {
+		t.Errorf("round trip changed the entry")
 	}
 }

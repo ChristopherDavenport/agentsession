@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/ChristopherDavenport/agentsession"
 )
@@ -138,6 +139,44 @@ func readSession(path string) (*agentsession.Session, error) {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return s, nil
+}
+
+// shortID abbreviates an entry hash for display: the first twelve hex
+// characters of the digest, as git shows a commit. Anything that is not
+// a hash is returned as it is.
+func shortID(id string) string {
+	if strings.HasPrefix(id, agentsession.HashPrefix) && len(id) > len(agentsession.HashPrefix)+12 {
+		return id[len(agentsession.HashPrefix) : len(agentsession.HashPrefix)+12]
+	}
+	return id
+}
+
+// resolveEntry finds the entry a user named: by its full id, by a
+// unique prefix of its digest, with or without the "sha256:" prefix, or
+// by the legacy id a migrated entry carries.
+func resolveEntry(s *agentsession.Session, arg string) (string, error) {
+	if _, ok := s.Entry(arg); ok {
+		return arg, nil
+	}
+	want := strings.TrimPrefix(arg, agentsession.HashPrefix)
+	var found []string
+	for _, e := range s.Entries() {
+		b := e.Base()
+		if b.LegacyID == arg {
+			return b.ID, nil
+		}
+		if want != "" && strings.HasPrefix(strings.TrimPrefix(b.ID, agentsession.HashPrefix), want) {
+			found = append(found, b.ID)
+		}
+	}
+	switch len(found) {
+	case 1:
+		return found[0], nil
+	case 0:
+		return "", fmt.Errorf("%w: %s", agentsession.ErrNoEntry, arg)
+	default:
+		return "", fmt.Errorf("%s names %d entries; give more of the hash", arg, len(found))
+	}
 }
 
 // stringList collects a repeatable flag.

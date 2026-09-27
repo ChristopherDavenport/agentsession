@@ -59,3 +59,18 @@ func checkGolden(t *testing.T, path string, got any) {
 		t.Errorf("golden %s differs\nwant:\n%s\ngot:\n%s", path, want, data)
 	}
 }
+
+// lid returns the id of the fixture entry whose legacy_id is name. The
+// fixtures are generated from the 0.4 sources by migration, so every
+// entry carries the readable id the source gave it, and the tests name
+// entries by that.
+func lid(t *testing.T, s *Session, name string) string {
+	t.Helper()
+	for _, e := range s.Entries() {
+		if e.Base().LegacyID == name {
+			return e.Base().ID
+		}
+	}
+	t.Fatalf("no fixture entry with legacy id %s", name)
+	return ""
+}

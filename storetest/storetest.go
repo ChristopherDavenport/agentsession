@@ -258,7 +258,7 @@ func testAppend(t *testing.T, opts Options) {
 	if _, err := st.Append(ctx, "missing", &agentsession.InfoEntry{}); !errors.Is(err, agentsession.ErrNoSession) {
 		t.Errorf("Append(missing) = %v", err)
 	}
-	if _, err := st.Append(ctx, id, &agentsession.InfoEntry{EntryBase: agentsession.EntryBase{ID: cfgID}}); !errors.Is(err, agentsession.ErrDuplicateEntry) {
+	if _, err := st.Append(ctx, id, &agentsession.InfoEntry{EntryBase: agentsession.EntryBase{ID: cfgID}}); !errors.Is(err, agentsession.ErrBadID) {
 		t.Errorf("Append(duplicate) = %v", err)
 	}
 	if _, err := st.Append(ctx, id, &agentsession.InfoEntry{EntryBase: agentsession.EntryBase{Parent: "ghost"}}); !errors.Is(err, agentsession.ErrNoEntry) {

@@ -7,6 +7,58 @@ versions may break the API.
 
 ## Unreleased
 
+- **RFC 0001 draft 0.5 is implemented and the library writes
+  `agentsession/0.5`.** An entry's `id` is now the hash of its envelope
+  — `type`, `parent`, `parents` when non-empty, `ts` and the hash of its
+  body — so `Append` computes it and refuses an id a caller set that
+  does not match (`ErrBadID`), a reader verifies every line and reports
+  one that fails, and `EntryBase.ContentHash` gives the body's own hash.
+  `ts` has one spelling, UTC with at most nine fractional digits, which
+  `Append` converts a caller's time to and `Read` refuses any other
+  form of. Every hashed member must be I-JSON by the exactness rule;
+  `Append` refuses a body that is not, and the envelope's names are
+  reserved in a body (`ErrReservedMember`). `Write` emits canonical
+  lines, since preservation is of members and not bytes. Breaking for
+  any caller that chose entry IDs.
+- **Migration.** A 0.4 or earlier file reads by migrating in memory:
+  every entry is rehashed with its references rewritten, keeps its old
+  id in `EntryBase.LegacyID`, and takes the one `ts` spelling. A file
+  holding an extension entry cannot be written back as 0.5, since the
+  reader cannot rewrite what such an entry names (`Session.Migrated`,
+  `ErrUnresolvedMigration`). A repeated id in a file is one entry,
+  reported by `Session.Repeated`.
+- **Leaf rule.** An append under the leaf makes the entry the leaf; an
+  append elsewhere is a branch and the leaf does not move. A `leaf`
+  label moves the leaf to its target wherever the label sits, when the
+  target is one the leaf may rest on; the leaf never rests on a label,
+  and a label it cannot honour is not in force on resume either.
+  Appending an entry the session already holds is a no-op that returns
+  its id.
+- **Sessions with a base.** `Header.Base` names the entry another
+  session's file this one continues from, `Fork` makes such a session
+  in memory, and its file opens with the prefix; own entries hang from
+  the base or from each other, and `Session.Prefix` tells the two apart.
+  `Header.Redacted` marks a file whose hashes were recomputed over
+  redacted bodies.
+- **Context hash.** `Session.ContextHash` computes RFC 0002's cache key
+  at an entry: incremental over the type and content hash of the
+  entries that carry context, with per-run provenance members removed
+  and a compaction's `first_kept` substituted.
+- The CLI shows entry ids abbreviated to twelve hex characters, as git
+  shows a commit, and `-leaf` resolves a full id, a unique prefix or a
+  migrated entry's legacy id. ATIF documents are named by the leaf's
+  digest without its `sha256:` prefix, since a colon is not a legal
+  file name everywhere.
+- Not yet done: writer-side normalisation. The format has a writer
+  replace a lone surrogate with U+FFFD and round or stringify an integer
+  outside binary64, recording the change in `normalised`; this library
+  refuses such a body instead. Go's JSON decoder already replaces a lone
+  surrogate on the way in, so the remaining case is a large integer in a
+  passthrough member.
+- The session fixtures under `testdata/sessions` are generated from the
+  0.4 sources now kept under `testdata/sessions/v0.4`, and carry
+  `legacy_id`; see CLAUDE.md.
+
 - **Breaking for writers.** `Append` now refuses an item entry holding
   an `openresponses.ItemReference`. RFC 0001 gains the **ingress** rule
   — an entry receiving material from outside the session carries it

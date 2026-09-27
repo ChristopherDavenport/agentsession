@@ -1,5 +1,5 @@
 {
-  "r0000002": {
+  "sha256:34b29c015cbacf1005e56cfe7292e3ac3bf57a31d3ba99bf9deeb9373af0faff": {
     "settings": {
       "model": "gpt-5",
       "instructions": "Be brief.",
@@ -9,7 +9,6 @@
           "name": "bash",
           "description": "Run a shell command",
           "parameters": {
-            "type": "object",
             "properties": {
               "cmd": {
                 "type": "string"
@@ -17,7 +16,8 @@
             },
             "required": [
               "cmd"
-            ]
+            ],
+            "type": "object"
           }
         }
       ]
@@ -81,25 +81,25 @@
       }
     ],
     "entries": [
-      "c0000001",
-      "i0000001",
-      "i0000002",
-      "u0000001",
-      "i0000003",
-      "r0000001",
-      "i0000004",
-      "i0000005",
-      "u0000002",
-      "i0000006",
-      "r0000002"
+      "sha256:5bc858a2cee30e83ca19dbd6f3bce774b2fadc41bcb0021d9b0045c9f03dbf8d",
+      "sha256:4f88e978c95fdeeae6bae9e82fc5a652c7d322266c222091a62c10682ef51813",
+      "sha256:d6aec57bc788b5566aba5e8251fed1c428f0f37f3273fda790e0becf4818a980",
+      "sha256:92d3b59efa291de713f99c7ffb480d1cb790174a21945927574e72d9efc46b04",
+      "sha256:573ab629ae1ec0cc8e3fd66cac31b6fdb24e24a8c114a5b4d95ce1bf8abc7a30",
+      "sha256:41367e5c15f58cb3ac8554b2eec643b4ba2d378b7811f7e7a703714fc0807ed1",
+      "sha256:e9de4a9a26f4263f5c3e95bcdc4051e9abb1ec98e70ee95a3d9d06bad6560b19",
+      "sha256:6996c62b216e421196dc2189b2369fc9010f865451fbbc966578b894b8c0fea5",
+      "sha256:938b02611d178e649e5c66ca80be0dea2105531794fbeecf47bc4a8d88bab114",
+      "sha256:6c05859b1a995f48a20fdd9622d7a658de01aae59223dbb4d290963ffb0ad49a",
+      "sha256:34b29c015cbacf1005e56cfe7292e3ac3bf57a31d3ba99bf9deeb9373af0faff"
     ],
     "item_entries": [
-      "i0000001",
-      "i0000002",
-      "i0000003",
-      "i0000004",
-      "i0000005",
-      "i0000006"
+      "sha256:4f88e978c95fdeeae6bae9e82fc5a652c7d322266c222091a62c10682ef51813",
+      "sha256:d6aec57bc788b5566aba5e8251fed1c428f0f37f3273fda790e0becf4818a980",
+      "sha256:573ab629ae1ec0cc8e3fd66cac31b6fdb24e24a8c114a5b4d95ce1bf8abc7a30",
+      "sha256:e9de4a9a26f4263f5c3e95bcdc4051e9abb1ec98e70ee95a3d9d06bad6560b19",
+      "sha256:6996c62b216e421196dc2189b2369fc9010f865451fbbc966578b894b8c0fea5",
+      "sha256:6c05859b1a995f48a20fdd9622d7a658de01aae59223dbb4d290963ffb0ad49a"
     ]
   }
 }

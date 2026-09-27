@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/ChristopherDavenport/agentsession"
 	"iter"
 	"os"
 	"path/filepath"
@@ -69,7 +70,9 @@ func DocumentName(doc *atif.Trajectory) string {
 	if doc.SessionID != "" && isMain(doc) {
 		return MainDocumentName(doc.SessionID)
 	}
-	id := safeName(doc.TrajectoryID)
+	// A trajectory id is an entry hash; the digest alone names the file,
+	// since a colon is not a legal file name everywhere.
+	id := safeName(strings.TrimPrefix(doc.TrajectoryID, agentsession.HashPrefix))
 	if id == "" {
 		id = "trajectory"
 	}
