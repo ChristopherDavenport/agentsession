@@ -236,11 +236,12 @@ An entry hashes in two layers, as a git commit hashes over its tree
 rather than over its files. Canonical throughout means the JSON
 Canonicalization Scheme (RFC 8785): members sorted by code point, no
 insignificant whitespace, numbers and strings in canonical form. That
-scheme is defined over I-JSON (RFC 7493), so every hashed member MUST
-be I-JSON — no integer beyond 2^53, no duplicate member name, no lone
-surrogate — and a reader MUST report a line that is not, as it reports
-a hash that fails. `ts` is hashed as the string it is, which is why the
-header table admits one spelling of it.
+scheme is defined over I-JSON (RFC 7493), so every hashed member MUST be I-JSON — no number outside the range or
+precision of an IEEE 754 binary64, integers within ±(2^53 − 1), no
+duplicate member name, no lone surrogate — and a reader MUST report a
+line that is not, as it reports a hash that fails. `ts` is hashed as
+the string it is, which is why the envelope table admits one spelling
+of it.
 
 - The entry's **content** is the object of its members with the
   envelope's — `id`, `type`, `parent`, `parents`, `ts` — removed, and
@@ -1107,10 +1108,11 @@ a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
 it begins at 1.0. A reader of 0.5 MUST read an earlier 0.x file by
 migrating it in memory: walk the entries in file order, rewrite each
-`ts` to the one form the header table requires, compute each entry's
-hashes with its `parent` and every entry-naming member rewritten to the
-hashes already assigned above it, and read the result as a 0.5 file with
-no `base`. Each migrated entry carries `legacy_id`, the ID it had, as a
+`ts` to the one form the envelope table requires, the instant unchanged,
+so a non-UTC offset converts to UTC, compute each entry's hashes with
+its `parent` and every entry-naming member rewritten to the hashes
+already assigned above it, and read the result as a 0.5 file with no
+`base`. Each migrated entry carries `legacy_id`, the ID it had, as a
 member outside the envelope, added before the hashes are computed so
 that the migrated file verifies by construction and two readers give one
 file the same IDs; the ATIF and OpenTelemetry projections already
@@ -1190,11 +1192,12 @@ attempt counter, where 0.4 appended a second root to the existing
 child; a session with a base has one prefix, so a second root has no
 place in it.
 
-Nothing changes in the context algorithm, in convergence or in
-ingress. Among the entry types, `label` gains the reserved `leaf` value
-and the `synthetic` member, and an `outcome`'s `target` may name a
-prefix entry. A 0.4 file migrates in memory as the versioning section
-says.
+`ts` has one spelling, since it is hashed as a string, and every hashed
+member is I-JSON. Nothing changes in the context algorithm, in
+convergence or in ingress. Among the entry types, `label` gains the
+reserved `leaf` value and the `synthetic` member, and an `outcome`'s
+`target` may name a prefix entry. A 0.4 file migrates in memory as the
+versioning section says.
 
 ## Changes since 0.3
 

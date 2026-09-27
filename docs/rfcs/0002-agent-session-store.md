@@ -121,18 +121,20 @@ member names an entry by hash, and so do `parents`, `target`,
 an entry.
 
 - A store computes an entry's hashes itself and MUST refuse an append
-  whose `id` is present and differs from it, and MUST refuse one whose
-  body carries a top-level member by one of the envelope's reserved
-  names, since every RFC 0001 reader would reject the line a store
-  holding it would project. A store MUST store an envelope under its
-  `id` and a content under its content hash, and MUST NOT store two
-  objects under one hash within a space. There are three hash spaces:
-  envelopes, contents and media blobs. Contents and blobs are both
-  bodies and MAY share a lookup table; envelopes MUST NOT share one with
-  either; the context hash is never stored as an object. Storing an
-  object whose hash is already present is a no-op that succeeds.
-  `sha256:` is the only prefix, and a store MUST refuse an entry whose
-  `id` carries another.
+  whose `id` is present and differs from it, and MUST refuse one that an
+  RFC 0001 reader would report: a body carrying a top-level member by
+  one of the envelope's reserved names, a `ts` not in the one form that
+  document requires, or a member that is not I-JSON. Each hashes
+  consistently, so the `id` alone would not catch it, and a store
+  holding one would project a line every reader must reject. A store
+  MUST store an envelope under its `id` and a content under its content
+  hash, and MUST NOT store two objects under one hash within a space.
+  There are three hash spaces: envelopes, contents and media blobs.
+  Contents and blobs are both bodies and MAY share a lookup table;
+  envelopes MUST NOT share one with either; the context hash is never
+  stored as an object. Storing an object whose hash is already present
+  is a no-op that succeeds. `sha256:` is the only prefix, and a store
+  MUST refuse an entry whose `id` carries another.
 - A store MUST NOT accept an entry whose `parent` it does not hold. No
   other reference is a condition of acceptance: `parents`, `target`,
   `first_kept`, `from` and `queued_from` are the writer's to place, as
@@ -636,13 +638,15 @@ CREATE TABLE edges    (parent TEXT NOT NULL, child TEXT NOT NULL,
 ```
 
 `contents` holds each body once, media blobs included, and a row leaves
-it only when no `entries.content` and no retained content's `sidecar:`
-URL names it; `entries` is the envelope, naming its content and carrying
-the context hash the store computed at append; `record` is the mark the
-exchange section enforces, set when this store may advance the session.
-The sketch declares no foreign keys. The rows are immutable and
-content-addressed, so a constraint buys little and costs a lookup on
-every append; the append's own rules are what keep the tables in step.
+it only when no retained `entries` row's `content` and no retained
+content's `sidecar:` URL names it, an `entries` row being retained while
+any log or prefix needs it; `entries` is the envelope, naming its
+content and carrying the context hash the store computed at append;
+`record` is the mark the exchange section enforces, set when this store
+may advance the session. The sketch declares no foreign keys. The rows
+are immutable and content-addressed, so a constraint buys little and
+costs a lookup on every append; the append's own rules are what keep the
+tables in step.
 
 `edges` is the reverse index the parent hashes cannot give: finding an
 entry's children, a session's leaves and the subtree below a point all
