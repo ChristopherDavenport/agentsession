@@ -404,17 +404,18 @@ Reading a projection back yields the same entries, since the hashes are
 in the file and a reader verifies each, and the same head, from the last
 own entry or the marker. A store imports a projection as follows: each
 line but a synthetic marker is an entry it stores under its hash, the
-prefix entries join no log, the own entries join the imported session's log in file order, and the head is what RFC 0001's resume
-rule gives, held to the head rule: when the rule names a prefix entry,
-the head is the base and the store reports it. The marker names the
-head and is then discarded, so an export and import
-cycle adds nothing, and a genuine `leaf` label a writer appended is an
-entry like any other. Two refusals follow. The imported session keeps
-the header's `id`, and a store already holding a session with that ID
-MUST refuse the import. An importer MUST verify each line's hash and
-MUST refuse a file in which one fails, so a redacted projection, which
-RFC 0001 says no longer verifies and must say so in its header, cannot
-be imported: it is a record to read, not one to hold.
+prefix entries join no log, the own entries join the imported session's
+log in file order, and the head is what RFC 0001's resume rule gives,
+held to the head rule: when the rule names a prefix entry, the head is
+the base and the store reports it. The marker names the head and is then
+discarded, so an export and import cycle adds nothing, and a genuine
+`leaf` label a writer appended is an entry like any other. Two refusals
+follow. The imported session keeps the header's `id`, and a store
+already holding a session with that ID MUST refuse the import. An
+importer MUST verify each line's hash and MUST refuse a file in which
+one fails, so a redacted projection, which RFC 0001 says no longer
+verifies and must say so in its header, cannot be imported: it is a
+record to read, not one to hold.
 
 ## Exchange between stores
 
