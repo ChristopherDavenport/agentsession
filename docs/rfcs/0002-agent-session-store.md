@@ -562,13 +562,13 @@ CREATE TABLE edges    (parent TEXT NOT NULL, child TEXT NOT NULL,
                        PRIMARY KEY (parent, child));
 ```
 
-`contents` holds each body once, media blobs included; `entries` is
-the envelope, naming its content and carrying the context hash the
-store computed at append; `record` is the mark the exchange section
-enforces, set when this store may advance the session. The sketch declares no foreign keys. The rows
-are immutable and content-addressed, so a constraint buys little and
-costs a lookup on every append; the append's own rules are what keep
-the tables in step.
+`contents` holds each body once, media blobs included; `entries` is the
+envelope, naming its content and carrying the context hash the store
+computed at append; `record` is the mark the exchange section enforces,
+set when this store may advance the session. The sketch declares no
+foreign keys. The rows are immutable and content-addressed, so a
+constraint buys little and costs a lookup on every append; the append's
+own rules are what keep the tables in step.
 
 `edges` is the reverse index the parent hashes cannot give: finding an
 entry's children, a session's leaves and the subtree below a point all
