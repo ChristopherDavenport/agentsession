@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 1.0
+Status: draft 0.5
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -170,7 +170,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/1.0","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.5","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -181,7 +181,7 @@ RFC 2119.
 |---|---|---|
 | `type` | MUST | the string `session` |
 | `format` | MUST | `agentsession/<major>.<minor>` |
-| `id` | MUST | globally unique; UUIDv7 RECOMMENDED. For a subsession, a UUIDv5 under the nil namespace over `<parent session id>/<call_id>` is RECOMMENDED, so a reader can compute the child's ID from the parent's `link` or `function_call` alone. A second child for the same call appends a new root to the existing child session rather than minting a second ID |
+| `id` | MUST | globally unique; UUIDv7 RECOMMENDED. For a subsession, a UUIDv5 under the nil namespace over `<parent session id>/<call_id>` is RECOMMENDED, so a reader can compute the child's ID from the parent's `link` or `function_call` alone. A retry of the call is another session, derived the same way over `<parent session id>/<call_id>/<n>` for the n-th attempt after the first |
 | `created_at` | MUST | RFC 3339 |
 | `payload` | MUST | payload profile; `openresponses/<spec-date>` is the only profile this RFC defines |
 | `harness` | SHOULD | name and version of the writer |
@@ -190,7 +190,7 @@ RFC 2119.
 | `parent_session` | MAY | session ID this was forked or spawned from: the session whose own entries include the `base`, or for a subsession with no base the session that spawned it |
 | `base` | MAY | hash of the entry in `parent_session` this session continues from. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
-| `media` | MAY | `inline` (default) or `sidecar` |
+| `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
 | `redacted` | MAY | `true` when the file's bytes were changed after they were written, as export redaction does, so its `id` and `request_hash` values no longer verify. A reader MUST NOT report such a file's hashes as verified |
 
 Unknown header fields MUST be preserved by any tool that rewrites the
@@ -234,6 +234,12 @@ by this hash.
 Two entries with the same content, the same parent and the same `ts`
 are one entry. A writer that means two makes them differ, and
 sub-second `ts` is what usually does.
+
+Preservation is of members, not bytes. A rewriter MAY re-serialise a
+line, since the hash is over the canonical form and verification does
+not depend on the bytes a file happens to carry; a projection from a
+store writes canonical lines. `sha256:` is the only prefix, and a
+reader MUST refuse an `id` carrying another.
 
 A reader MUST verify each entry's `id` against its bytes and MUST
 report a line that fails. It is corruption, not an extension, and a
@@ -1048,12 +1054,24 @@ what an existing member means, or what the context algorithm does with
 any member, is major — which is the line an addition has to stay behind
 to arrive in a minor version at all.
 
-A reader that supports 1.0 MUST read a 0.x file by migrating it in
+The 0.x series is exempt from that rule until the first release. A 0.x
+minor MAY change the envelope, the header or the context algorithm, and
+a reader of 0.x supports the minors it names rather than every minor of
+the major. The guarantee that a reader of a major reads every minor of
+it begins at 1.0.
+
+A reader of 0.5 MUST read an earlier 0.x file by migrating it in
 memory: walk the entries in file order, compute each entry's hash with
 its `parent` and every entry-naming member rewritten to the hashes
-already assigned above it, and read the result as a 1.0 file with no
+already assigned above it, and read the result as a 0.5 file with no
 `base`. The migrated file verifies by construction; the original IDs
-are not kept, since nothing in a 1.0 file has a place for them.
+are not kept, since nothing in a 0.5 file has a place for them. A
+reference the reader cannot rewrite — a `parents` entry in another
+session, or an entry named inside a member of an extension the reader
+does not know — keeps its original string and is reported as
+unresolved, and a file holding one MUST NOT be re-emitted as 0.5. Two
+earlier entries identical in content, parent and `ts` migrate to one
+entry; a reader merges them and reports that it did.
 
 ## Conformance
 
@@ -1092,11 +1110,12 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.4
 
-Major, and the envelope is what changed. An entry's `id` is the hash of
-its canonical bytes and `parent` names a parent by hash, so a file
-verifies line by line and a leaf commits to its path. The header names
-a `base`, the entry in another session this one continues from, and a
-file with one opens with the path to it.
+The envelope changed, which after 1.0 would make this a major version;
+the 0.x series is exempt, as the versioning section now says. An
+entry's `id` is the hash of its canonical bytes and `parent` names a
+parent by hash, so a file verifies line by line and a leaf commits to
+its path. The header names a `base`, the entry in another session this
+one continues from, and a file with one opens with the path to it.
 
 RFC 0002 arrives beside this version and takes three things off it. The
 durable leaf marker stops being a resume mechanism: a store's head is,
@@ -1268,11 +1287,6 @@ which the `run` entry cannot name and which 0.3 adopts beside the
   appends to a session's log even when it accepts them concurrently,
   and which branch is live is the head, a ref, never inferred from the
   order.
-- The format version. The envelope changed, so by this document's own
-  rule this is a major version, and the draft says 1.0. Whether a
-  format still in draft should take that number, or whether the 0.x
-  series should be declared exempt from the rule until the first
-  release, is held for the author.
 - Whether to allow a second payload profile at 0.x, or hold the line at
   Open Responses and rely on converters.
 - Sidecar media layout and naming.

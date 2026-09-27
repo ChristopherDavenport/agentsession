@@ -2,7 +2,7 @@
 
 Status: draft
 Author: Christopher Davenport
-Depends on: RFC 0001, Agent Session Format, at draft 1.0 or later.
+Depends on: RFC 0001, Agent Session Format, at draft 0.5 or later.
 
 ## Summary
 
@@ -20,11 +20,12 @@ verifies a projection node by node by recomputing hashes, and verifies
 a fork against its origin by comparing one hash. Nothing that can be
 checked is taken on trust.
 
-Two writers appending to one session both succeed. The store assigns
-each node its place in the log, and the head moves only when an append
-continues it; an append that does not is a branch, recorded and left
-where it was. The only contended write is the head, and it moves by
-compare-and-swap.
+Two writers appending to one session may both succeed. The store
+assigns each node its place in the log, and the head moves only when an
+append continues it; an append that does not is a branch, recorded and
+left where it was. The only contended write is the head, and it moves
+by compare-and-swap. A store may still take writers in turn; the model
+is what lets it not.
 
 ## Motivation
 
@@ -64,9 +65,9 @@ is the order, and the head is a ref, never inferred.
   sharing a prefix share its nodes.
 - **Verifiable.** A projection is checked hash by hash; a fork is
   checked against its origin by one hash.
-- **Lock-free appends.** Concurrent writers to one session both
-  succeed; an append never fails for contention, and only the head is
-  contended.
+- **Appends need no lock.** The model lets concurrent writers to one
+  session both succeed with only the head contended. A store MAY still
+  take writers in turn.
 - **Nothing is garbage.** Every node a session appended stays in its
   log. Abandoned branches are preference data, as RFC 0001 says.
 - **Projection is lossless.** A session projects to an RFC 0001 file
@@ -116,7 +117,8 @@ RFC 0001 has them name an entry.
 
 - A store MUST store a node under its hash and MUST NOT store two
   objects under one hash. Storing a node whose hash is already present
-  is a no-op that succeeds.
+  is a no-op that succeeds. `sha256:` is the only prefix, and a store
+  MUST refuse a node whose `id` carries another.
 - A store MUST NOT accept a node whose `parent` it does not hold. A
   `parents` reference is provenance and MUST NOT be a condition of
   acceptance; a store MAY report one it cannot resolve.
@@ -127,8 +129,9 @@ RFC 0001 has them name an entry.
 
 Two appends of the same content under the same parent at the same `ts`
 are one node. A writer that means two entries makes them differ; `ts`
-at sub-second precision is what usually does. A store MAY report to an
-appender that the node it appended already existed.
+at sub-second precision is what usually does. A log holds a hash once,
+so the second such append to one session is a no-op the store reports
+as such.
 
 ## Sessions
 
@@ -169,12 +172,19 @@ Append is the one write to a session's content, and it is atomic.
 - The store MUST hold the parent, per the node rules, and the parent
   MUST satisfy the session's parent rule above.
 - The store MUST store the node, MUST append its hash to the session's
-  log at the next sequence number, and MUST then, if the node's parent
-  is the session's head, move the head to the node. All three happen or
-  none does.
+  log at the next sequence number unless the log already holds it, and
+  MUST then, if the node's parent is the session's head, move the head
+  to the node. All three happen or none does. A hash the log already
+  holds makes the append a no-op, reported as such.
 - If the node's parent is not the head, the head does not move. The
   append succeeded and created a branch. The store MUST tell the
   appender which happened.
+- A node with `parent` null continues when the session has no head,
+  and is otherwise a branch like any other.
+- A store MAY hold a session for one writer at a time and refuse or
+  wait for another, provided an append it accepted is never re-parented
+  and the log and head rules hold. The rules above are what let a store
+  accept writers concurrently, not a requirement that it do so.
 
 Two writers appending to one session at once both succeed. If both
 name the head as parent, the store serialises them: the first moves the
@@ -195,8 +205,8 @@ The head is a session's resume point, and it is a ref.
 
 - A store MUST offer a compare-and-swap on the head: move the head from
   an expected node to a given node, or fail if the head is not the
-  expected node. The target MUST be the base or one of the session's
-  own nodes.
+  expected node. "No head" is a valid expected value. The target MUST
+  be the base or one of the session's own nodes.
 - Resume reads the head. There is no inference from log order and no
   marker to find. The head is what RFC 0001's leaf label was standing
   in for, and the label survives only in the projection, below.
@@ -282,9 +292,13 @@ document's concern, and it is not this journal.
 
 A media blob referenced by an item is an object under its own hash. A
 store holds it once however many items reference it. RFC 0001's
-`media` header field says how a projection carries it: inline as a data
-URL, or beside the file under a sidecar directory named after the
-session, where the file name is the blob's hash.
+`media` header field fixes at creation how the session carries media:
+inline as a data URL inside the item, or beside the file under a
+sidecar directory named after the session, where the file name is the
+blob's hash. An item's bytes are hashed, so a store MUST NOT convert
+between the two; a projection carries media in the form the session
+was written in, and an inline data URL is part of its node and does
+not dedupe.
 
 ## Projection to JSONL
 
@@ -314,7 +328,9 @@ import: each line but a trailing leaf marker is a node it stores under
 its hash, the prefix nodes join no log, the own nodes join the imported
 session's log in file order, and the head is what RFC 0001's resume
 rule gives; the marker names the head and is then discarded, so an
-export and import cycle adds nothing. An importer MUST verify each
+export and import cycle adds nothing. The imported session keeps the
+header's `id`, and a store already holding a session with that ID MUST
+refuse the import. An importer MUST verify each
 line's hash and MUST refuse a file in which one fails, so a redacted
 projection cannot be imported: it is a record to read, not one to
 hold.
@@ -365,7 +381,8 @@ CREATE TABLE objects  (hash TEXT PRIMARY KEY, bytes BLOB NOT NULL);
 CREATE TABLE sessions (id TEXT PRIMARY KEY, header TEXT NOT NULL,
                        base TEXT, head TEXT);
 CREATE TABLE log      (session TEXT NOT NULL, seq INTEGER NOT NULL,
-                       hash TEXT NOT NULL, PRIMARY KEY (session, seq));
+                       hash TEXT NOT NULL, PRIMARY KEY (session, seq),
+                       UNIQUE (session, hash));
 CREATE TABLE edges    (parent TEXT NOT NULL, child TEXT NOT NULL,
                        PRIMARY KEY (parent, child));
 ```
@@ -397,9 +414,6 @@ otherwise have had to make a copy testify to being one.
 
 ## Open questions
 
-- Hash agility. `sha256:` is the only prefix; a store meeting another
-  MUST refuse it. Whether to admit a second algorithm before there is a
-  reason to is held: no.
 - What a store owes an importer of a projection whose prefix it
   already holds under a different session: nothing but the log entries,
   since the nodes are the same nodes. Whether it should record that the
