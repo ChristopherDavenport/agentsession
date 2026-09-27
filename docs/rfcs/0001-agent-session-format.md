@@ -966,8 +966,8 @@ provider's chat template, tool-schema serialisation and tokenizer make
 of it. Two equal hashes say the same request was sent. They say the
 model saw the same leading tokens only if all three of those are
 deterministic, which this document cannot promise on a provider's
-behalf. Verify a record with it, and key a cache on it if you like; what it
-cannot do is predict that the provider's cache will hit.
+behalf. Verify a record with it, and key a cache on it if you like; what
+it cannot do is predict that the provider's cache will hit.
 
 ## Writing discipline
 

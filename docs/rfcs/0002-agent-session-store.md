@@ -161,9 +161,9 @@ envelopes naming it.
 
 Below the hash, an object's bytes are the store's to lay out: chunked,
 compressed, or deduplicated by any means, so long as the store serves
-them by hash unchanged. Deduplication of large payloads is a storage concern
-and not a format one, and this document does not push a reference into
-the payload profile, which has no shape for one.
+them by hash unchanged. Deduplication of large payloads is a storage
+concern and not a format one, and this document does not push a
+reference into the payload profile, which has no shape for one.
 
 ## Sessions
 
