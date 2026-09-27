@@ -585,11 +585,11 @@ not by any later leaf:
   or not, since the leaf that was left is provenance and not context,
   and a store need not hold it; and for an `item` it is over the content
   with `queued_from` removed, for the same reason. A migrated entry's
-  `legacy_id` is removed for every type, since it is provenance too, so
-  a migrated body and the same body written natively give one key while
-  their content hashes differ. The key then depends on context and not
-  on the identity of the entries that shaped it, and two stores compute
-  it from the path alone.
+  `legacy_id` and a normalised entry's `normalised` are removed for
+  every type, since both are provenance, so a migrated body and the same
+  body written natively give one key while their content hashes differ.
+  The key then depends on context and not on the identity of the entries
+  that shaped it, and two stores compute it from the path alone.
 
 It excludes `ts` and `parents`, it is incremental, and two sessions
 whose context entries are byte-identical share it, a compaction

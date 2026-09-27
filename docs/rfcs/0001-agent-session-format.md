@@ -223,7 +223,7 @@ file.
 | `id` | MUST | the entry's envelope hash, defined below; unique everywhere, not only in the file |
 | `parent` | MUST | hash of the parent entry, or `null` for a root |
 | `parents` | MAY | further predecessors this entry converges; provenance only, never walked when building a context |
-| `ts` | MUST | RFC 3339 in one form, since it is hashed as a string: UTC, uppercase `T` and `Z`, seconds `00` to `59`, a fractional part only when non-zero, with no trailing zeros and at most nine digits, as in `2026-09-17T12:00:02.5Z`. Mainstream time types hold neither a tenth digit nor a second `60`; a writer whose clock reports one writes `59` with the same fraction. A reader MUST report any other spelling as it reports a hash that fails |
+| `ts` | MUST | RFC 3339 in one form, since it is hashed as a string: UTC, uppercase `T` and `Z`, seconds `00` to `59`, a fractional part only when non-zero, with no trailing zeros and at most nine digits, as in `2026-09-17T12:00:02.5Z`. Mainstream time types hold neither a tenth digit nor a second `60`; a writer truncates the fraction to nine digits and writes a second `60` as `59` with the same fraction. A reader MUST report any other spelling as it reports a hash that fails |
 
 A parent MUST appear earlier in the file than any child. Multiple roots
 are permitted in a file with no `base`; a file with one has one prefix
@@ -237,18 +237,24 @@ rather than over its files. Canonical throughout means the JSON
 Canonicalization Scheme (RFC 8785): members sorted by code point, no
 insignificant whitespace, numbers and strings in canonical form. That
 scheme is defined over I-JSON (RFC 7493), so every hashed member MUST be
-I-JSON, by a test a reader can run: a number with no fraction and no
-exponent is within ±(2^53 − 1); any other number is finite once rounded
-to binary64, and the rounding is expected and not an error; no object
-repeats a member name; no string holds a lone surrogate. A reader MUST
-report a line that fails the test, as it reports a hash that fails. A
-model or a provider can emit what the test rejects — a string cut inside
-a surrogate pair, a 64-bit integer in a provider field — and the writing
-discipline says an output is recorded before it is acted on, so a writer
-MUST normalise before it writes: a lone surrogate becomes U+FFFD, and an
-integer outside the bound is carried as a string where the payload
-profile allows it. The writer records what it changed in a member named
-`normalised` on the entry, a list of the members touched, and the
+I-JSON, by a test a reader runs on the canonical form and not on the
+input, since canonicalisation changes how a number is spelled: every
+number is finite once rounded to binary64, the rounding being expected
+and not an error, and a number whose canonical form has no fraction and
+no exponent has a value within ±(2^53 − 1); no object repeats a member
+name; no string holds a lone surrogate. The result then does not depend
+on how a value was written and a canonical rewrite cannot change it. A
+reader MUST report a line that fails the test, as it reports a hash that
+fails. A model or a provider can emit what the test rejects — a string
+cut inside a surrogate pair, a 64-bit integer in a provider field — and
+the writing discipline says an output is recorded before it is acted on,
+so a writer MUST normalise before it writes: a lone surrogate becomes
+U+FFFD; an integer outside the bound is carried as a string where the
+payload profile allows it, and where the profile requires a number it is
+rounded to binary64, which is what canonicalisation would have done
+silently. The writer records what it changed in a member named
+`normalised` on the entry: a list of RFC 6901 JSON Pointers relative to
+the body, each with the original text of the member it names. The
 normalised form is what the next request carries, so the rebuilt request
 and `request_hash` agree with what was sent. `ts` is hashed as the
 string it is, which is why the envelope table admits one spelling of it.
@@ -1118,28 +1124,29 @@ a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
 it begins at 1.0. A reader of 0.5 MUST read an earlier 0.x file by
 migrating it in memory: walk the entries in file order, rewrite each
-`ts` to the one form the envelope table requires, the instant unchanged,
-so a non-UTC offset converts to UTC, compute each entry's hashes with
-its `parent` and every entry-naming member rewritten to the hashes
-already assigned above it, and read the result as a 0.5 file with no
-`base`. Each migrated entry carries `legacy_id`, the ID it had, as a
-member outside the envelope, added before the hashes are computed so
-that the migrated file verifies by construction and two readers give one
-file the same IDs; the ATIF and OpenTelemetry projections already
-emitted from the earlier file then still resolve, and a projection MAY
-emit `legacy_id` beside the new ID. The member is part of the content,
-so a migrated body never hashes as the same body written natively does,
-and a migrated file shares nothing with one; that is the price of
-keeping the old name. A reference the reader cannot rewrite — a
-`parents` entry in another session, or an entry named inside a member of
-an extension the reader does not know — keeps its original string and is
-reported as unresolved, and a file holding one MUST NOT be re-emitted as
-0.5. An earlier entry whose body carries a top-level member by one of
-the envelope's reserved names, which earlier versions allowed, is
-reported as unresolved the same way, and a file holding one MUST NOT be
-re-emitted as 0.5; `content` is the name this will most often be. No two
-migrated entries hash alike, since `legacy_id` was unique in the earlier
-file, so migration never merges.
+`ts` to the one form the envelope table requires, converting a non-UTC
+offset to UTC with the instant unchanged and, as a writer does,
+truncating a fraction to nine digits and writing a second `60` as `59`,
+compute each entry's hashes with its `parent` and every entry-naming
+member rewritten to the hashes already assigned above it, and read the
+result as a 0.5 file with no `base`. Each migrated entry carries
+`legacy_id`, the ID it had, as a member outside the envelope, added
+before the hashes are computed so that the migrated file verifies by
+construction and two readers give one file the same IDs; the ATIF and
+OpenTelemetry projections already emitted from the earlier file then
+still resolve, and a projection MAY emit `legacy_id` beside the new ID.
+The member is part of the content, so a migrated body never hashes as
+the same body written natively does, and a migrated file shares nothing
+with one; that is the price of keeping the old name. A reference the
+reader cannot rewrite — a `parents` entry in another session, or an
+entry named inside a member of an extension the reader does not know —
+keeps its original string and is reported as unresolved, and a file
+holding one MUST NOT be re-emitted as 0.5. An earlier entry whose body
+carries a top-level member by one of the envelope's reserved names,
+which earlier versions allowed, is reported as unresolved the same way,
+and a file holding one MUST NOT be re-emitted as 0.5; `content` is the
+name this will most often be. No two migrated entries hash alike, since
+`legacy_id` was unique in the earlier file, so migration never merges.
 
 ## Conformance
 
@@ -1151,13 +1158,14 @@ documents which native entries it maps and which it drops.
 The reference implementation is the Go `agentsession` library. The
 conformance suite is a directory of fixture files with expected context
 output for every leaf, expected `request_hash` values, every entry's
-content hash and `id` recomputed, a forked fixture whose `base` is found
-in its origin, the recomputed `reason` for every `run` end, and negative
-cases for a broken parent link, a truncated last line, an unknown type,
-a `dispatch` that follows a `reject`, and a header naming `dispatch`
-beside a call that has an output and no `dispatch`. Converters for pi,
-Claude Code and Codex are part of the initial proposal so the format
-arrives with three existing corpora behind it.
+content hash and `id` recomputed, numbers that pass the I-JSON test only
+in canonical form, a forked fixture whose `base` is found in its origin,
+the recomputed `reason` for every `run` end, and negative cases for a
+broken parent link, a truncated last line, an unknown type, a `dispatch`
+that follows a `reject`, and a header naming `dispatch` beside a call
+that has an output and no `dispatch`. Converters for pi, Claude Code and
+Codex are part of the initial proposal so the format arrives with three
+existing corpora behind it.
 
 ## Prior art
 
