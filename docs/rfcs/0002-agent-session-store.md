@@ -2,8 +2,7 @@
 
 Status: draft
 Author: Christopher Davenport
-Depends on: RFC 0001, Agent Session Format, at the version that makes
-an entry's `id` its content hash.
+Depends on: RFC 0001, Agent Session Format, at draft 1.0 or later.
 
 ## Summary
 
@@ -18,8 +17,8 @@ appended, in the order the store accepted them.
 The JSONL file of RFC 0001 is a projection of a session: its header,
 the path to its base, then its own nodes in log order. A reader
 verifies a projection node by node by recomputing hashes, and verifies
-a fork against its origin by comparing one hash. Nothing in a file is
-trusted that can be checked.
+a fork against its origin by comparing one hash. Nothing that can be
+checked is taken on trust.
 
 Two writers appending to one session both succeed. The store assigns
 each node its place in the log, and the head moves only when an append
@@ -66,7 +65,8 @@ is the order, and the head is a ref, never inferred.
 - **Verifiable.** A projection is checked hash by hash; a fork is
   checked against its origin by one hash.
 - **Lock-free appends.** Concurrent writers to one session both
-  succeed; only the head is contended, and it never blocks an append.
+  succeed; an append never fails for contention, and only the head is
+  contended.
 - **Nothing is garbage.** Every node a session appended stays in its
   log. Abandoned branches are preference data, as RFC 0001 says.
 - **Projection is lossless.** A session projects to an RFC 0001 file
@@ -111,11 +111,9 @@ RFC 0001 has them name an entry.
 - A store MUST store a node under its hash and MUST NOT store two
   objects under one hash. Storing a node whose hash is already present
   is a no-op that succeeds.
-- A store MUST NOT accept a node whose `parent` it does not hold, and
-  MUST NOT accept one whose `parents` name a node it does not hold
-  unless the reference carries a `session` the store does not hold
-  either, in which case the reference is foreign provenance and is
-  accepted unresolved, as RFC 0001 permits.
+- A store MUST NOT accept a node whose `parent` it does not hold. A
+  `parents` reference is provenance and MUST NOT be a condition of
+  acceptance; a store MAY report one it cannot resolve.
 - A node is immutable. There is no update and no in-place correction;
   a correction is a new node, as RFC 0001 already requires of entries.
 - Acyclicity is structural. A node names its parent by a hash that
@@ -218,9 +216,12 @@ one.
 ## Deletion and retention
 
 - A store MUST NOT delete a node that any session's log references.
+- A store MUST NOT sweep a node that is an ancestor of any session's
+  base: it is on that session's prefix, and the session's projection
+  needs it.
 - Deleting a session removes its ref, its header and its log. Nodes
-  referenced by no remaining log MAY then be swept. Nodes on a deleted
-  session's prefix belong to other logs and stay.
+  referenced by no remaining log and on no remaining prefix MAY then be
+  swept.
 - A store MUST NOT sweep by reachability from heads. A session's
   abandoned branches are in its log and are its record; RFC 0001's
   outcome and preference rules depend on them. What a store may sweep
@@ -243,25 +244,27 @@ session, where the file name is the blob's hash.
 2. The prefix, root first: the path from the root to the base, every
    node on it, each as its canonical line with `id` set to its hash.
 3. The session's own nodes in log order, the same way.
-4. If the head is not the last node in the log, a `label` entry of the
-   reserved leaf kind naming the head, appended as a child of the last
-   node, so that RFC 0001's rule for honouring the marker lands a
+4. If the head is not the last node in the log, a `label` entry whose
+   `label` is the reserved value `leaf`, naming the head, appended as a
+   child of the last node, so that RFC 0001's resume rule lands a
    reader on the head. This entry is the projection's, not the
    session's: it is not in the log, and reading the file back does not
    make it a node.
 
-The prefix is the ingress rule at work: the material the model was
-sent is in the file, materialised, and the header says where it came
-from. It is the same duplication RFC 0001 accepts for compaction and
-the same trade, a file that answers what the model was sent without
-resolving anything, and a store pays it only on export.
+The prefix is what keeps the file self-contained: the material the
+model was sent is in the file, and the header says where it came from.
+It is the same duplication RFC 0001 accepts for compaction and the same
+trade, a file that answers what the model was sent without resolving
+anything, and a store pays it only on export.
 
 Reading a projection back yields the same nodes, since the hashes are
 in the file and a reader verifies each, and the same head, from the
 last own node or the marker. A store MUST accept a projection as an
-import: each line is a node it stores under its hash, the prefix nodes
-join no log, the own nodes join the imported session's log in file
-order, and the head is what the file's rule gives.
+import: each line but a trailing leaf marker is a node it stores under
+its hash, the prefix nodes join no log, the own nodes join the imported
+session's log in file order, and the head is what RFC 0001's resume
+rule gives; the marker names the head and is then discarded, so an
+export and import cycle adds nothing.
 
 A projection that has been redacted no longer verifies, because
 redaction changes the bytes the hashes were taken over. That is by
@@ -283,11 +286,8 @@ agreement on every byte of the prefix. This is the check RFC 0001's
 fork fixture performed by rebuilding requests at the fork point and
 comparing; here it is one lookup.
 
-`request_hash` is unchanged and does a different job. A node hash
-identifies a record, timestamps included, so a replay never collides
-with the original. A request hash identifies what the model was sent,
-timestamps excluded, so a replay that sent the same request matches.
-A verifier uses both.
+`request_hash` is unchanged; RFC 0001 says how the two hashes divide
+the work.
 
 ## Prefix caching
 

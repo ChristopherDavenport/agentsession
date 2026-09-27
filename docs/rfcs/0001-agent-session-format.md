@@ -19,11 +19,11 @@ additionally name predecessors it converges — the results of subagent
 sessions, a branch merged back — which record provenance and never
 enter a context.
 
-A file is a projection of a session held in a store, which RFC 0002
-defines. A session that continues from a point in another names that
-point in its header, and its file opens with the path to it, so a file
-stands alone as it always did while a reader holding both can check
-the one against the other by a single hash.
+A file may be written directly, or projected from a store, which RFC
+0002 defines. A session that continues from a point in another names
+that point in its header, and its file opens with the path to it, so a
+file stands alone as it always did while a reader holding both can
+check the one against the other by a single hash.
 
 The file holds two kinds of entry. **Context entries** are what the
 model was sent and what it returned: items, responses, configuration,
@@ -144,8 +144,17 @@ RFC 2119.
   every entry below it, and says nothing between two children of one
   entry. Entry order is what separates siblings, so it is what decides
   which of several branches below a point was written last. In a file
-  projected from a store, entry order is the store's log order, which
+  projected from a store, entry order is path order through the prefix
+  and then the store's log order for the session's own entries, which
   RFC 0002 defines; the file has no other.
+- A reader resuming from a file MUST take as leaf the newest entry in
+  file order that descends from the entry the last `leaf` label in
+  force names and was written after that label; that entry itself when
+  nothing follows it; and the last entry of the file when no such label
+  is in force. The label marks the branch that is live, not the tip it
+  had when marked, so a branch marked and then extended resumes where
+  it was extended to. In a store the head is the leaf, and this rule is
+  how a projection carries a head that is not the last line.
 - A file whose header names a `base` opens with the prefix: every entry
   from the root to the base, in path order, before any entry the
   session appended itself. The prefix is another session's record,
@@ -182,6 +191,7 @@ RFC 2119.
 | `base` | MAY | hash of the entry in `parent_session` this session continues from. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar` |
+| `redacted` | MAY | `true` when the file's bytes were changed after they were written, as export redaction does, so its `id` and `request_hash` values no longer verify. A reader MUST NOT report such a file's hashes as verified |
 
 Unknown header fields MUST be preserved by any tool that rewrites the
 file.
@@ -696,7 +706,10 @@ sent rather than the model or the loop may carry it.
 {"type":"info","id":"…","parent":"…","ts":"…","name":"Refactor auth"}
 ```
 
-Not in context. A `label` with `label: null` clears.
+Not in context. A `label` with `label: null` clears. The value `leaf`
+is reserved: a `label` carrying it marks the branch its `target` is on
+as the one a reader resumes on, as the file section says, and a later
+`label: null` naming the same target clears it.
 
 ### `env`
 
@@ -1240,10 +1253,11 @@ which the `run` entry cannot name and which 0.3 adopts beside the
 - Whether the rule for honouring a durable leaf marker belongs here.
   Answered by RFC 0002: a session resumes at its store's head, and the
   marker is how a projection records a head that is not the last line.
-  A reader of a bare file still applies the rule the reference
-  implementation settled on, the newest entry in file order that
-  descends from the mark, and with the head in the store that rule is
-  no longer what a resume depends on.
+  A reader of a bare file applies the rule the file section now
+  states, the newest entry in file order that descends from the mark
+  and was written after it, or the mark itself when nothing follows,
+  and with the head in the store that rule is no longer what a resume
+  depends on.
 - Whether a core `exchange` type is worth defining for the common case
   of one entry converging several subagent results, or whether
   `parents` on an `item` already covers it. Held: `parents` covers it,
