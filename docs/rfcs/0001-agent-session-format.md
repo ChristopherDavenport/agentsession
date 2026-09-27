@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.4
+Status: draft 1.0
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -12,9 +12,18 @@ model, kept so that every request the model received can be rebuilt and
 every call the model made can be followed to its output or to the point
 the record stopped. It is an append-only JSONL file whose entries form
 a tree: every entry names one `parent`, and a context is built by
-walking it. An entry MAY additionally name predecessors it converges —
-the results of subagent sessions, a branch merged back — which record
-provenance and never enter a context.
+walking it. An entry is named by the hash of its own bytes, and it
+names its parent by hash, so a leaf's ID commits to the whole path
+above it and a reader verifies a file line by line. An entry MAY
+additionally name predecessors it converges — the results of subagent
+sessions, a branch merged back — which record provenance and never
+enter a context.
+
+A file is a projection of a session held in a store, which RFC 0002
+defines. A session that continues from a point in another names that
+point in its header, and its file opens with the path to it, so a file
+stands alone as it always did while a reader holding both can check
+the one against the other by a single hash.
 
 The file holds two kinds of entry. **Context entries** are what the
 model was sent and what it returned: items, responses, configuration,
@@ -65,6 +74,9 @@ session worth training on.
   says the writer records dispatches and decisions.
 - **Append-only.** A writer only ever appends lines. A crashed session
   is a valid prefix.
+- **Content-addressed.** An entry's ID is the hash of its bytes and its
+  parent link is a hash, so a file verifies itself and two sessions
+  that share history share the same entries.
 - **Tree-shaped context, DAG-shaped provenance.** A context is built by
   walking one `parent` per entry, so branching is a child of an earlier
   entry, in place. Convergence — a subagent's result, a branch merged
@@ -78,8 +90,11 @@ session worth training on.
 
 ## Non-goals
 
-- Multi-writer concurrency on one file.
-- Cross-session indexing, search or listing. That is a store's concern.
+- Multi-writer concurrency on one file. A store accepts concurrent
+  appends to a session; a file is what it projects afterwards.
+- Cross-session indexing, search or listing, storage layout, and the
+  head a session resumes at. Those are the store's, and RFC 0002
+  defines the store.
 - Rendering hints beyond a display flag.
 - Defining tool semantics. A tool is a name, a schema and a result.
 
@@ -92,7 +107,12 @@ RFC 2119.
 - **Entry**: one JSON object on one line after the header.
 - **Path**: the sequence of entries from an entry to a root, reversed,
   following `parent` alone.
-- **Leaf**: the entry the next append will name as its parent.
+- **Leaf**: the entry the next append will name as its parent. In a
+  store this is the session's head; in a file it is what the file's
+  rules give.
+- **Base**: the entry, in another session, that this session continues
+  from, named by the header. The entries from the root to the base are
+  the file's **prefix**; the entries after it are the session's own.
 - **Convergence**: an entry naming predecessors in `parents` beyond its
   `parent`, recording that their work was merged into this entry's
   payload.
@@ -123,7 +143,14 @@ RFC 2119.
   different things: `parent` orders a path, since an ancestor precedes
   every entry below it, and says nothing between two children of one
   entry. Entry order is what separates siblings, so it is what decides
-  which of several branches below a point was written last.
+  which of several branches below a point was written last. In a file
+  projected from a store, entry order is the store's log order, which
+  RFC 0002 defines; the file has no other.
+- A file whose header names a `base` opens with the prefix: every entry
+  from the root to the base, in path order, before any entry the
+  session appended itself. The prefix is another session's record,
+  carried here so the file stands alone; the header's `records` promise
+  and the rules that rest on it apply to the entries after the base.
 - `ts` is informational and a reader MUST NOT order entries by it;
   clocks step backwards. This is a rule about the member an entry
   carries, which its writer asserts. A sequence a store assigns as it
@@ -134,10 +161,11 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.3","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/1.0","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
- "cwd":"/path","parent_session":"…","spawned_by":"call_…","media":"inline"}
+ "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
+ "media":"inline"}
 ```
 
 | field | req | meaning |
@@ -150,7 +178,8 @@ RFC 2119.
 | `harness` | SHOULD | name and version of the writer |
 | `records` | SHOULD | the record entry types, core or namespaced, this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
-| `parent_session` | MAY | session ID this was forked or spawned from |
+| `parent_session` | MAY | session ID this was forked or spawned from: the session whose own entries include the `base`, or for a subsession with no base the session that spawned it |
+| `base` | MAY | hash of the entry in `parent_session` this session continues from. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar` |
 
@@ -166,14 +195,41 @@ file.
 | field | req | meaning |
 |---|---|---|
 | `type` | MUST | entry type; core types below, or namespaced `ns:type` |
-| `id` | MUST | unique within the file; opaque string |
-| `parent` | MUST | ID of the parent entry, or `null` for a root |
+| `id` | MUST | the entry's hash, defined below; unique everywhere, not only in the file |
+| `parent` | MUST | hash of the parent entry, or `null` for a root |
 | `parents` | MAY | further predecessors this entry converges; provenance only, never walked when building a context |
 | `ts` | MUST | RFC 3339 with sub-second precision RECOMMENDED |
 
 A parent MUST appear earlier in the file than any child. Multiple roots
-are permitted. An entry MUST NOT be modified after it is written;
-corrections are new entries.
+are permitted in a file with no `base`; a file with one has one prefix
+and every own entry descends from the base. An entry MUST NOT be
+modified after it is written; corrections are new entries.
+
+### Entry hash
+
+`id` is `sha256:` followed by the lowercase hexadecimal SHA-256 of the
+entry's canonical bytes with the `id` member removed. Canonical means
+the JSON Canonicalization Scheme (RFC 8785): members sorted by code
+point, no insignificant whitespace, numbers and strings in canonical
+form. Every other member is hashed, `ts` and members this document does
+not define included, so that nothing a tool preserves can change
+unnoticed and a replay never collides with the record it replays.
+
+Because `parent` is itself a hash, an entry's ID commits to its whole
+path, and two files that agree on one ID agree on every byte above it.
+Wherever this document has a member name an entry — `parent`,
+`parents`, `target`, `first_kept`, `from`, `queued_from` — it names it
+by this hash.
+
+Two entries with the same content, the same parent and the same `ts`
+are one entry. A writer that means two makes them differ, and
+sub-second `ts` is what usually does.
+
+A reader MUST verify each entry's `id` against its bytes and MUST
+report a line that fails. It is corruption, not an extension, and a
+reader MUST NOT repair it. A file that has been redacted no longer
+verifies, since redaction changes the bytes; such a file MUST say so in
+its header and a reader MUST NOT report its hashes as verified.
 
 Appending an entry of either kind makes it the leaf. A record entry is
 a child of the leaf like any other, so it lies on the path of every
@@ -204,9 +260,11 @@ a branch merged back, several workers joined at once.
  "parents":[{"entry":"w7"},{"session":"01J…","entry":"c4"}]}
 ```
 
-- Each reference MUST name an `entry`. `session` names the session that
-  entry is in and MAY be omitted when it is in this file, which is the
-  only case a reader can resolve without a store.
+- Each reference MUST name an `entry` by hash. `session` names a
+  session whose file holds that entry, so a reader without a store
+  knows where to look; it MAY be omitted when the entry is in this
+  file. The hash is the identity, and it is the same hash wherever the
+  entry is held.
 - `parents` MUST NOT contain the value of `parent`, and MUST NOT name
   the same entry twice.
 - A reference MUST name an entry that already existed when this entry
@@ -865,6 +923,12 @@ separately agree without sharing code.
 A writer that records `request_hash` MUST compute it this way. A reader
 MAY verify it by rebuilding the request from the path and comparing.
 
+`request_hash` and an entry's `id` are two hashes with two jobs. The
+entry hash identifies a record, `ts` included, so a replay never
+collides with the original; the request hash identifies what the model
+was sent, `ts` excluded, so a replay that sent the same request
+matches. A verifier uses both.
+
 `request_hash` identifies a request; it is not a token-exact prefix. It
 hashes the canonical request JSON, which sits a layer above whatever a
 provider's chat template, tool-schema serialisation and tokenizer make
@@ -971,6 +1035,13 @@ what an existing member means, or what the context algorithm does with
 any member, is major — which is the line an addition has to stay behind
 to arrive in a minor version at all.
 
+A reader that supports 1.0 MUST read a 0.x file by migrating it in
+memory: walk the entries in file order, compute each entry's hash with
+its `parent` and every entry-naming member rewritten to the hashes
+already assigned above it, and read the result as a 1.0 file with no
+`base`. The migrated file verifies by construction; the original IDs
+are not kept, since nothing in a 1.0 file has a place for them.
+
 ## Conformance
 
 A conforming **writer** produces files that satisfy every MUST in this
@@ -980,7 +1051,9 @@ documents which native entries it maps and which it drops.
 
 The reference implementation is the Go `agentsession` library. The
 conformance suite is a directory of fixture files with expected context
-output for every leaf, expected `request_hash` values, the recomputed
+output for every leaf, expected `request_hash` values, every entry's
+`id` recomputed from its bytes, a forked fixture whose `base` is found
+in its origin, the recomputed
 `reason` for every `run` end, and negative cases for a broken parent
 link, a truncated last line, an unknown type, a `dispatch` that
 follows a `reject`, and a header naming `dispatch` beside a call that
@@ -1003,6 +1076,29 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.4
+
+Major, and the envelope is what changed. An entry's `id` is the hash of
+its canonical bytes and `parent` names a parent by hash, so a file
+verifies line by line and a leaf commits to its path. The header names
+a `base`, the entry in another session this one continues from, and a
+file with one opens with the path to it.
+
+RFC 0002 arrives beside this version and takes three things off it. The
+durable leaf marker stops being a resume mechanism: a store's head is,
+and the marker survives as the projection's way of saying where the
+head was when the head is not the last line. The ordering open
+question closes: a store's log is the order, always. And the fork rule
+this version would otherwise have needed, a root's `parents` naming the
+point another session was copied from together with every rule that
+let a reader tell copy from original inside one file, is not written,
+because `base` says it in one member and the hash proves it in one
+comparison.
+
+Nothing changes in the context algorithm, in the entry types, in
+convergence or in ingress. A 0.4 file migrates in memory as the
+versioning section says.
 
 ## Changes since 0.3
 
@@ -1142,33 +1238,27 @@ which the `run` entry cannot name and which 0.3 adopts beside the
 ## Open questions
 
 - Whether the rule for honouring a durable leaf marker belongs here.
-  Held so far: a reserved `label` covers the marker without a format
-  change, and how a library reads it is its own business. The reference
-  implementation now resolves it to the newest entry in file order that
-  descends from the mark and was appended after it — the mark names the
-  branch that is live, not the entry the leaf is pinned at — because
-  reading it as a pin rewinds a branch that was marked and then written
-  on, and takes every path-derived query with it. Two conforming readers
-  can still disagree about where a session resumes, which for a resume
-  format is the last resume-critical algorithm left unwritten.
+  Answered by RFC 0002: a session resumes at its store's head, and the
+  marker is how a projection records a head that is not the last line.
+  A reader of a bare file still applies the rule the reference
+  implementation settled on, the newest entry in file order that
+  descends from the mark, and with the head in the store that rule is
+  no longer what a resume depends on.
 - Whether a core `exchange` type is worth defining for the common case
   of one entry converging several subagent results, or whether
   `parents` on an `item` already covers it. Held: `parents` covers it,
   and a type earns its place only once a reader needs to treat the
   convergence differently from the item that carries it.
 - Who assigns a session's append sequence when two writers append at
-  once. Every store has such a sequence already — line order in a file,
-  `(session_id, seq)` in the SQLite store, which is also how that store
-  notices a second writer — so "file order is the ordering" generalises
-  to "a session has an append sequence its store assigns", and no store
-  is short of one while it takes writes in turn. The question is only
-  live for a store that accepts concurrent appends. Two writes naming
-  the same parent are a fork, which the format already represents and
-  needs no order to record; what needs one is deciding which branch a
-  later reader resumes on. Either the store supplies the order, or the
-  fork is left to a `label` to resolve and an unmarked session with
-  several leaves is reported as ambiguous rather than guessed at. The
-  second is the honest answer and costs a host an explicit mark.
+  once. Answered by RFC 0002: the store does, always, by serialising
+  appends to a session's log even when it accepts them concurrently,
+  and which branch is live is the head, a ref, never inferred from the
+  order.
+- The format version. The envelope changed, so by this document's own
+  rule this is a major version, and the draft says 1.0. Whether a
+  format still in draft should take that number, or whether the 0.x
+  series should be declared exempt from the rule until the first
+  release, is held for the author.
 - Whether to allow a second payload profile at 0.x, or hold the line at
   Open Responses and rely on converters.
 - Sidecar media layout and naming.
