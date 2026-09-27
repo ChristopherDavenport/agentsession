@@ -174,11 +174,13 @@ A session is created with a header and optionally a base.
   validate: a fork made at an entry on another fork's prefix has a base
   in the grandparent's log, and the header may name either. A `fork_of`
   link records the session a fork was actually made from.
-- A store MUST refuse to create a session whose base it does not hold,
-  and MUST refuse one whose `media` differs from that of a session it
-  holds whose own entries include the base, since the prefix was written
-  in that form and a projection carries media in one form. A session
-  created with a base has that base as its head.
+- A store MUST refuse to create a session whose base it does not hold or
+  whose base is a `leaf` label, since the base is the first head and the
+  head never rests on one, and MUST refuse one whose `media` differs
+  from that of a session it holds whose own entries include the base,
+  since the prefix was written in that form and a projection carries
+  media in one form. A session created with a base has that base as its
+  head.
 - A session with no base is a fresh root. Its first append is a root
   entry, `parent` null.
 - A session's own entry MUST name as `parent` the session's base or one
@@ -261,15 +263,15 @@ The head is a session's resume point, and it is a ref.
   moves the head to the label's `target` rather than to the label, once
   the entry is in the log, and does so wherever the label's own parent
   sits. A target that is not the base or one of the session's own
-  entries moves nothing, and the store reports it: the label is
-  accepted, since no reference conditions acceptance, and the head is
-  held to its rule. A `leaf` label the log already holds is a no-op like
-  any other re-append and moves nothing; a writer that wants the head
-  moved again uses the compare-and-swap. That is the head move a bare
-  file can express, where the label is honoured wherever it is, and a
-  store honours it so a writer built against files behaves the same
-  against a store. A store MUST refuse a `label` entry carrying
-  `synthetic`, which marks a projection's own marker.
+  entries, or that is itself a `leaf` label, moves nothing, and the
+  store reports it: the label is accepted, since no reference conditions
+  acceptance, and the head is held to its rule. A `leaf` label the log
+  already holds is a no-op like any other re-append and moves nothing; a
+  writer that wants the head moved again uses the compare-and-swap. That
+  is the head move a bare file can express, where the label is honoured
+  wherever it is, and a store honours it so a writer built against files
+  behaves the same against a store. A store MUST refuse a `label` entry
+  carrying `synthetic`, which marks a projection's own marker.
 
 ## Ordering
 
@@ -414,15 +416,15 @@ line but a synthetic marker is an entry it stores under its hash, the
 prefix entries join no log, the own entries join the imported session's
 log in file order, and the head is what RFC 0001's resume rule gives,
 held to the head rule: when the rule names a prefix entry the head is
-the base, when it names a `leaf` label the head is the label's parent,
-and the store reports either. An import is held to the checks a push is:
-the own entries hang from the base or from each other, or from null in a
-baseless session, and `media` equals that of a held session whose own
-entries include the base. The marker names the head and is then
-discarded, so an export and import cycle adds nothing, and a genuine
-`leaf` label a writer appended is an entry like any other. Two refusals
-follow. The imported session keeps the header's `id`, and a store
-already holding a session with that ID MUST refuse the import. An
+the base, when it names a `leaf` label the head is the nearest ancestor
+that is not one, and the store reports either. An import is held to the
+checks a push is: the own entries hang from the base or from each other,
+or from null in a baseless session, and `media` equals that of a held
+session whose own entries include the base. The marker names the head
+and is then discarded, so an export and import cycle adds nothing, and a
+genuine `leaf` label a writer appended is an entry like any other. Two
+refusals follow. The imported session keeps the header's `id`, and a
+store already holding a session with that ID MUST refuse the import. An
 importer MUST verify each line's hash and MUST refuse a file in which
 one fails, and MUST refuse a file whose header carries `redacted`
 whether or not its lines verify: a redacted projection is a record to
