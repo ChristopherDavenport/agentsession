@@ -1312,7 +1312,7 @@ which the `run` entry cannot name and which 0.3 adopts beside the
   Open Responses and rely on converters.
 - Sidecar media layout and naming. Answered in the file section: a
   `sidecar:` URL carrying the blob's hash, and a file named by the hex
-  digest in the session's directory. Whether a store's projection may share one
-  directory across sessions is still open.
+  digest in the session's directory. Whether a store's projection may
+  share one directory across sessions is still open.
 - The venue: this repository, a standalone repository, or a proposal to
   openresponses.org as a companion document.
