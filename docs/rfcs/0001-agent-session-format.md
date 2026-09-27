@@ -231,9 +231,9 @@ unnoticed and a replay never collides with the record it replays.
 
 Because `parent` is itself a hash, an entry's ID commits to its whole
 path, and two files that agree on one ID agree on every byte above it.
-The members other than the envelope's are the entry's content, which
-RFC 0002 hashes on its own so that a store holds a body once however
-many entries carry it.
+The entry's members with `id`, `parent`, `parents` and `ts` removed,
+`type` among those kept, are its content, which RFC 0002 hashes on its
+own so that a store holds a body once however many entries carry it.
 Wherever this document has a member name an entry — `parent`,
 `parents`, `target`, `first_kept`, `from`, `queued_from` — it names it
 by this hash.
@@ -966,7 +966,8 @@ provider's chat template, tool-schema serialisation and tokenizer make
 of it. Two equal hashes say the same request was sent. They say the
 model saw the same leading tokens only if all three of those are
 deterministic, which this document cannot promise on a provider's
-behalf. Verify a record with it; do not predict a cache hit with it.
+behalf. Verify a record with it, and key a cache on it if you like; what it
+cannot do is predict that the provider's cache will hit.
 
 ## Writing discipline
 

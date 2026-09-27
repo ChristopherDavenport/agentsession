@@ -75,11 +75,9 @@ is the order, and the head is a ref, never inferred.
 ## Non-goals
 
 - A query language or index beyond what the projections need.
-- A network protocol between stores. Replication is by exchanging
-  entries and refs, and how is a store's business. A session's ref has
-  one store of record; two stores accepting the same appends would
-  order two logs and could move two heads, and nothing here merges
-  them.
+- A network protocol between stores. What a store owes when it sends or
+  receives a session is the exchange section's; how the bytes move is
+  not this document's.
 - Defining the entry's contents. RFC 0001 does; this document stores
   them.
 - A spool for model output in flight; see durability and recovery.
@@ -91,14 +89,15 @@ in RFC 2119.
 
 - **Entry**: as RFC 0001 defines it, addressed by its hash. The store
   holds it as an envelope naming a content object.
-- **Content**: an entry's members other than the envelope's, hashed on
-  their own. Two entries with the same content share one content
-  object however they differ in parent or `ts`.
+- **Content**: an entry's canonical members with `id`, `parent`,
+  `parents` and `ts` removed, `type` kept, hashed on their own. Two
+  entries with the same content share one content object however they
+  differ in parent or `ts`.
 - **Object**: canonical bytes addressed by their hash: an entry, a
   content, or a media blob.
-- **Context hash**: the hash of the content hashes along a path,
-  computed incrementally at each entry. It excludes `ts`, so two
-  sessions whose conversations are byte-identical share it.
+- **Context hash**: the incremental hash over the content hashes of the
+  context entries on a path, as the prefix-caching section defines it.
+  Record entries and responses do not enter it.
 - **Session**: a ref, consisting of a header, a base, a head and a log.
 - **Base**: the entry a session continues from, or none. A session with
   a base is a **fork** of the session that appended that entry.
@@ -149,11 +148,12 @@ be two objects, and nothing could be shared or compared on its own.
 So a store separates them, as git separates a blob from the commit that
 names it.
 
-An entry's **content** is its canonical members with the envelope's —
-`id`, `parent`, `parents`, `ts` — removed, and its **content hash** is
-`sha256:` over those canonical bytes. The entry's `id` is unchanged: it
-is still the hash over the whole canonical entry, and RFC 0001 is
-untouched, since a file carries the body inline and verifies as it did.
+An entry's **content** is its canonical members with `id`, `parent`,
+`parents` and `ts` removed and `type` kept, since a `label` and an
+`info` alike in every other member are not one content; its **content
+hash** is `sha256:` over those canonical bytes. The entry's `id` is
+unchanged: it is still the hash over the whole canonical entry, and a
+file carries the body inline and verifies as it did.
 Underneath, a store MUST hold content once by content hash and MUST be
 able to serve an entry from its envelope and its content. Identical
 bodies in a thousand sessions are one content object with a thousand
@@ -161,7 +161,7 @@ envelopes naming it.
 
 Below the hash, an object's bytes are the store's to lay out: chunked,
 compressed, or deduplicated by any means, so long as the store serves
-them by hash unchanged. Dedup of large payloads is a storage concern
+them by hash unchanged. Deduplication of large payloads is a storage concern
 and not a format one, and this document does not push a reference into
 the payload profile, which has no shape for one.
 
@@ -201,7 +201,7 @@ it at no cost.
 
 ## Append
 
-Append is the one write to a session's content, and it is atomic.
+Append is the one write that adds to a session, and it is atomic.
 
 - The store MUST hold the parent, per the entry rules, and the parent
   MUST satisfy the session's parent rule above.
@@ -408,6 +408,41 @@ MUST refuse a file in which one fails, so a redacted projection, which
 RFC 0001 says no longer verifies and must say so in its header, cannot
 be imported: it is a record to read, not one to hold.
 
+## Exchange between stores
+
+A session moves between stores as a push or a fetch. The wire protocol
+is a non-goal; what a store owes when it sends or receives one is not.
+
+- **A push carries the closure of the session**: its own entries and
+  their contents, its prefix entries and their contents, and its media
+  blobs. The prefix goes because the receiver's parent rule needs it,
+  and the receiver retains it under the prefix rule even when it never
+  holds the origin session. A sender MAY negotiate what the receiver
+  lacks; a receiver admits objects as it admits an append, hash
+  verified and parent first.
+- **The log merges as a set.** The receiver takes the union of the two
+  logs and assigns its own sequence in the order it receives entries.
+  Two stores may hold one session with different log orders and both
+  are correct, since the head is authoritative and the order decides
+  only how a projection lays out siblings. Sequence numbers are never
+  synchronised.
+- **The head moves by compare-and-swap**, with the expected value the
+  remote head the sender last saw. A push that finds the remote head
+  moved fails. A force is an explicit override, and a store MUST
+  distinguish it from a push that fast-forwarded. There is no merge of
+  heads: two writers who advanced one session on two stores have made a
+  fork, which the format represents, and the loser's answer is to push
+  its line as a session with a base rather than to reconcile.
+- **One store of record.** A push either mirrors a session whose record
+  stays with the sender, or hands the record over, and both stores
+  record which. A mirror's head follows the record's; a handover moves
+  the right to advance it.
+
+Fetch is the reverse. Publishing a corpus is pushing a manifest and the
+objects it closes over. Archiving a session is a push to cold storage
+followed by deleting the ref, which is the retention paragraph made
+concrete.
+
 ## Verification
 
 A reader of a projection verifies every entry's `id` against its
@@ -432,24 +467,44 @@ same first message a second apart have different hashes where the
 provider has one prefix, and it covers record entries, so a `dispatch`
 on the path changes the hash and not the request.
 
-The **context hash** is the right one. At an entry that is in context,
-as RFC 0001's context algorithm defines it, the context hash is
-`sha256:` over the canonical JSON array of the nearest in-context
-ancestor's context hash, or `null` at the first, and this entry's
-content hash. At an entry that is not in context it is the ancestor's,
-unchanged. It excludes `ts` and `parents`, it is incremental, a store
-computes it as it appends, and it is equal across sessions whose
-conversations are byte-identical, which is the property a prefix cache
-key needs. Sibling forks share it up to the fork by construction.
+The **context hash** is the key a store can compute as it appends. It
+is defined over the path ending at an entry, by the entry's type and
+not by any later leaf:
+
+- An entry **contributes** when its type is a context entry type in
+  RFC 0001's terms: `item`, `config`, `compaction` or
+  `branch_summary`. A `response`, a record entry and an extension entry
+  do not.
+- The context hash before any contributing entry is `sha256:` over the
+  canonical bytes of the JSON value `null`. A root that does not
+  contribute has that value.
+- At an entry that does not contribute, the context hash is its
+  parent's, unchanged.
+- At an entry that contributes, the context hash is `sha256:` over the
+  canonical bytes of a two-element JSON array: the parent's context
+  hash, then this entry's content hash, both as strings carrying their
+  `sha256:` prefix.
+
+It excludes `ts` and `parents`, it is incremental, and two sessions
+whose context entries are byte-identical share it. Sibling forks share
+it up to the fork by construction. Two limits are worth knowing. A
+`compaction` names `first_kept` and a `branch_summary` names `from`,
+both entry hashes that cover `ts`, so past the first of either on a
+path the key is shared only by sessions that share those entries, which
+forks do and independent sessions do not. And content covers every
+member of an entry, undefined ones included, so a harness member on an
+`item` that never reaches the model still moves the key; a harness that
+wants the key stable keeps such detail in a record entry, as the
+writing discipline already asks of per-run content.
 
 It is a hash over history, and `request_hash` is a hash over what was
-sent. On a path with no compaction the two identify the same thing and
-a router may key on either. After a fold they part: the context hash
-still covers the entries the fold excluded, and `request_hash` covers
-the summary that replaced them, so past a fold a router keys on
-`request_hash`, which a reader computes, and uses the context hash for
-the prefix a fold has not touched. RFC 0001's calibration applies to
-both: equal hashes say the same entries were sent, and say the model
+sent. On a path with no compaction the two identify the same request.
+After a fold they part, since the context hash still covers the entries
+the fold excluded and `request_hash` covers the summary that replaced
+them; a router that wants a key past a fold computes `request_hash`
+from the path as a reader would. Keying a router on either is a
+routing decision, and RFC 0001's calibration is about what neither can
+promise: equal hashes say the same entries were sent, and say the model
 saw the same leading tokens only where the provider's template,
 tool-schema serialisation and tokenizer are deterministic. The
 writing-discipline rule that keeps per-run content out of the request
