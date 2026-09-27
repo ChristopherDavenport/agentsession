@@ -223,7 +223,7 @@ file.
 | `id` | MUST | the entry's envelope hash, defined below; unique everywhere, not only in the file |
 | `parent` | MUST | hash of the parent entry, or `null` for a root |
 | `parents` | MAY | further predecessors this entry converges; provenance only, never walked when building a context |
-| `ts` | MUST | RFC 3339 in one form, since it is hashed as a string: UTC, uppercase `T` and `Z`, a fractional part only when non-zero and with no trailing zeros, as in `2026-09-17T12:00:02.5Z`. A reader MUST report any other spelling as it reports a hash that fails |
+| `ts` | MUST | RFC 3339 in one form, since it is hashed as a string: UTC, uppercase `T` and `Z`, seconds `00` to `59`, a fractional part only when non-zero, with no trailing zeros and at most nine digits, as in `2026-09-17T12:00:02.5Z`. Mainstream time types hold neither a tenth digit nor a second `60`; a writer whose clock reports one writes `59` with the same fraction. A reader MUST report any other spelling as it reports a hash that fails |
 
 A parent MUST appear earlier in the file than any child. Multiple roots
 are permitted in a file with no `base`; a file with one has one prefix
@@ -237,11 +237,21 @@ rather than over its files. Canonical throughout means the JSON
 Canonicalization Scheme (RFC 8785): members sorted by code point, no
 insignificant whitespace, numbers and strings in canonical form. That
 scheme is defined over I-JSON (RFC 7493), so every hashed member MUST be
-I-JSON — no number outside the range or precision of an IEEE 754
-binary64, integers within ±(2^53 − 1), no duplicate member name, no lone
-surrogate — and a reader MUST report a line that is not, as it reports a
-hash that fails. `ts` is hashed as the string it is, which is why the
-envelope table admits one spelling of it.
+I-JSON, by a test a reader can run: a number with no fraction and no
+exponent is within ±(2^53 − 1); any other number is finite once rounded
+to binary64, and the rounding is expected and not an error; no object
+repeats a member name; no string holds a lone surrogate. A reader MUST
+report a line that fails the test, as it reports a hash that fails. A
+model or a provider can emit what the test rejects — a string cut inside
+a surrogate pair, a 64-bit integer in a provider field — and the writing
+discipline says an output is recorded before it is acted on, so a writer
+MUST normalise before it writes: a lone surrogate becomes U+FFFD, and an
+integer outside the bound is carried as a string where the payload
+profile allows it. The writer records what it changed in a member named
+`normalised` on the entry, a list of the members touched, and the
+normalised form is what the next request carries, so the rebuilt request
+and `request_hash` agree with what was sent. `ts` is hashed as the
+string it is, which is why the envelope table admits one spelling of it.
 
 - The entry's **content** is the object of its members with the
   envelope's — `id`, `type`, `parent`, `parents`, `ts` — removed, and
