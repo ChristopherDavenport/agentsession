@@ -89,10 +89,10 @@ in RFC 2119.
 
 - **Entry**: as RFC 0001 defines it, addressed by its hash. The store
   holds it as an envelope naming a content object.
-- **Content**: the part of an entry hashed on its own, as the content
-  section defines; two entries alike in content share one content
-  object however they differ in parent or `ts`.
-- **Object**: canonical bytes addressed by their hash: an entry, a
+- **Content**: an entry's body, hashed on its own, as RFC 0001 defines;
+  two entries alike in content share one content object however they
+  differ in type, parent or `ts`.
+- **Object**: canonical bytes addressed by their hash: an envelope, a
   content, or a media blob.
 - **Context hash**: the incremental hash over the content hashes of the
   context entries on a path, as the prefix-caching section defines it.
@@ -111,19 +111,24 @@ in RFC 2119.
 
 ## Entries
 
-An entry's hash is defined by RFC 0001: `sha256:` followed by the
-lowercase hexadecimal SHA-256 of the entry's canonical bytes with its
-`id` member removed, canonical meaning the JSON Canonicalization Scheme
-(RFC 8785). The `parent` member names an entry by hash, and so do
-`parents`, `target`, `first_kept`, `from` and `queued_from` wherever
-RFC 0001 has them name an entry.
+An entry's hashes are defined by RFC 0001 in two layers: a content hash
+over the body, and the entry's `id` over the envelope, which carries the
+content hash. A store checks an `id` from an envelope and a content hash
+without the body, and holds the two as separate objects. The `parent`
+member names an entry by hash, and so do `parents`, `target`,
+`first_kept`, `from` and `queued_from` wherever RFC 0001 has them name
+an entry.
 
-- A store computes an entry's hash itself and MUST refuse an append
-  whose `id` is present and differs from it. A store MUST store an entry
-  under its hash and MUST NOT store two objects under one hash. Storing
-  an entry whose hash is already present is a no-op that succeeds.
-  `sha256:` is the only prefix, and a store MUST refuse an entry whose
-  `id` carries another.
+- A store computes an entry's hashes itself and MUST refuse an append
+  whose `id` is present and differs from it. A store MUST store an
+  envelope under its `id` and a content under its content hash, and MUST
+  NOT store two objects under one hash within a space. There are three
+  hash spaces: envelopes, contents and media blobs. Contents and blobs
+  are both bodies and MAY share a lookup table; envelopes MUST NOT share
+  one with either; the context hash is never stored as an object.
+  Storing an object whose hash is already present is a no-op that
+  succeeds. `sha256:` is the only prefix, and a store MUST refuse an
+  entry whose `id` carries another.
 - A store MUST NOT accept an entry whose `parent` it does not hold. No
   other reference is a condition of acceptance: `parents`, `target`,
   `first_kept`, `from` and `queued_from` are the writer's to place, as
@@ -148,16 +153,17 @@ be two objects, and nothing could be shared or compared on its own.
 So a store separates them, as git separates a blob from the commit that
 names it.
 
-An entry's **content** is its canonical members with `id`, `parent`,
-`parents` and `ts` removed and `type` kept, since a `label` and an
-`info` alike in every other member are not one content; its **content
-hash** is `sha256:` over those canonical bytes. The entry's `id` is
-unchanged: it is still the hash over the whole canonical entry, and a
-file carries the body inline and verifies as it did.
-Underneath, a store MUST hold content once by content hash and MUST be
-able to serve an entry from its envelope and its content. Identical
-bodies in a thousand sessions are one content object with a thousand
-envelopes naming it.
+An entry's **content** is its body, the members outside the envelope,
+and its **content hash** is `sha256:` over the body's canonical bytes;
+the envelope carries the type, so a body's meaning comes from the entry
+that names it, as a git blob's comes from its tree entry, and a body
+shared across types is one object. The `id` is the hash of the envelope
+over the content hash, as RFC 0001 defines, so a file still carries the
+body inline and verifies line by line, and a chain of envelopes verifies
+without its bodies. Underneath, a store MUST hold content once by
+content hash and MUST be able to serve an entry from its envelope and
+its content. Identical bodies in a thousand sessions are one content
+object with a thousand envelopes naming it.
 
 Below the hash, an object's bytes are the store's to lay out: chunked,
 compressed, or deduplicated by any means, so long as the store serves
@@ -253,9 +259,12 @@ The head is a session's resume point, and it is a ref.
   be the base or one of the session's own entries other than a `leaf`
   label, since the head never rests on one.
 - Resume reads the head. There is no inference from log order and no
-  marker to find. The head is what RFC 0001's leaf label was standing
-  in for; the label survives as the projection's marker and as a head
-  move a writer may still append.
+  marker to find. The head is what RFC 0001's leaf label was standing in
+  for. The label exists only because an append-only file with a
+  write-once header has nowhere else to record a head move; it survives
+  as the projection's marker and as a head move a file-bound writer may
+  still append, and a writer built against a store uses the
+  compare-and-swap instead.
 - Moving the head to an earlier entry is how a session branches back.
   The next append under it is a new child, and the entries that were on
   the old head's path stay in the log as an abandoned branch.
@@ -442,12 +451,15 @@ apply here, where holding the session already is the usual case.
   their contents, its prefix entries and their contents, and its media
   blobs. The prefix goes because the receiver's parent rule needs it,
   and the receiver retains it under the prefix rule even when it never
-  holds the origin session. A sender MAY negotiate what the receiver
-  lacks. A receiver admits objects as it admits an append, hash
-  verified and parent first, with one difference: admission under
-  exchange moves no head. A `leaf` label among the pushed entries is
-  an entry like any other here, and the head moves only by the
-  compare-and-swap below.
+  holds the origin session. A push carries the sender's record mark for
+  the session, and until heads are signed, which a later document takes
+  up, the receiver takes the sender's word for it: the rules here are
+  what two honest stores agree to, not a defence against a dishonest
+  one. A sender MAY negotiate what the receiver lacks. A receiver admits
+  objects as it admits an append, hash verified and parent first, with
+  one difference: admission under exchange moves no head. A `leaf` label
+  among the pushed entries is an entry like any other here, and the head
+  moves only by the compare-and-swap below.
 - **A receiver that lacks the session** first admits the prefix, so that
   it holds the base, then creates the session from the pushed header
   with the pushed base as its head, or no head when there is no base,
@@ -550,23 +562,23 @@ not by any later leaf:
 - At an entry that contributes, the context hash is `sha256:` over the
   canonical bytes of a two-element JSON array: the parent's context
   hash, then this entry's content hash, both as strings carrying their
-  `sha256:` prefix.
+  `sha256:` prefix. For a `compaction` and a `branch_summary` the
+  content hash used here is over the content with `first_kept` or `from`
+  replaced by the context hash at the entry it names, so that the key
+  depends on context and not on the identity of the entries that shaped
+  it.
 
 It excludes `ts` and `parents`, it is incremental, and two sessions
-whose context entries are byte-identical share it. Sibling forks share
-it up to the fork by construction. Two limits are worth knowing. A
-`compaction` names `first_kept` and a `branch_summary` names `from`,
-both entry hashes that cover `ts`, so past the first of either on a
-path the key is shared only by sessions that share those entries, which
-forks do and independent sessions do not. And content covers every
-member of an entry, undefined ones included, so a harness member on an
-`item` that never reaches the model still moves the key; a harness that
-wants the key stable keeps such detail in a record entry, as the
-writing discipline already asks of per-run content. And an extension
-entry that its extension puts in context is excluded, since a store
-cannot know the extension, so two paths that differ only in such an
-entry share a key while their requests differ; `request_hash` tells
-them apart.
+whose context entries are byte-identical share it, a compaction
+included. Sibling forks share it up to the fork by construction. Two
+limits are worth knowing. Content covers every member of an entry,
+undefined ones included, so a harness member on an `item` that never
+reaches the model still moves the key; a harness that wants the key
+stable keeps such detail in a record entry, as the writing discipline
+already asks of per-run content. And an extension entry that its
+extension puts in context is excluded, since a store cannot know the
+extension, so two paths that differ only in such an entry share a key
+while their requests differ; `request_hash` tells them apart.
 
 It is a hash over history, and `request_hash` is a hash over what was
 sent. On a path with no compaction the two identify the same request.
@@ -589,9 +601,9 @@ layout.
 
 ```sql
 CREATE TABLE contents (hash TEXT PRIMARY KEY, bytes BLOB NOT NULL);
-CREATE TABLE entries  (hash TEXT PRIMARY KEY, parent TEXT, ts TEXT NOT NULL,
-                       parents TEXT, content TEXT NOT NULL,
-                       context TEXT NOT NULL);
+CREATE TABLE entries  (hash TEXT PRIMARY KEY, type TEXT NOT NULL,
+                       parent TEXT, ts TEXT NOT NULL, parents TEXT,
+                       content TEXT NOT NULL, context TEXT NOT NULL);
 CREATE TABLE sessions (id TEXT PRIMARY KEY, header TEXT NOT NULL,
                        base TEXT, head TEXT,
                        record INTEGER NOT NULL);
@@ -638,6 +650,12 @@ otherwise have had to make a copy testify to being one.
   holds under a different session: nothing but the log entries, since
   the entries are the same entries. Whether it should record that the
   two sessions share a base is a query the `edges` table answers.
-- Retention of swept objects: whether a store MUST keep a tombstone so
-  a reference to a deleted session's own entry can be told from a
+- Retention of swept objects: whether a store MUST keep a tombstone so a
+  reference to a deleted session's own entry can be told from a
   reference to an entry that never existed.
+- Shallow boundaries. A push carries the full prefix and a store holds
+  an entry's parent before the entry, so a long session that compacted
+  early pushes its pre-compaction history to every mirror forever. The
+  envelope layer makes a chain verifiable without its bodies, so a store
+  could hold envelopes above a compaction and no contents, as git holds
+  a graft. Not needed yet.
