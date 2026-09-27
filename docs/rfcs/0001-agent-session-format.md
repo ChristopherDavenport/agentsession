@@ -236,12 +236,12 @@ An entry hashes in two layers, as a git commit hashes over its tree
 rather than over its files. Canonical throughout means the JSON
 Canonicalization Scheme (RFC 8785): members sorted by code point, no
 insignificant whitespace, numbers and strings in canonical form. That
-scheme is defined over I-JSON (RFC 7493), so every hashed member MUST be I-JSON — no number outside the range or
-precision of an IEEE 754 binary64, integers within ±(2^53 − 1), no
-duplicate member name, no lone surrogate — and a reader MUST report a
-line that is not, as it reports a hash that fails. `ts` is hashed as
-the string it is, which is why the envelope table admits one spelling
-of it.
+scheme is defined over I-JSON (RFC 7493), so every hashed member MUST be
+I-JSON — no number outside the range or precision of an IEEE 754
+binary64, integers within ±(2^53 − 1), no duplicate member name, no lone
+surrogate — and a reader MUST report a line that is not, as it reports a
+hash that fails. `ts` is hashed as the string it is, which is why the
+envelope table admits one spelling of it.
 
 - The entry's **content** is the object of its members with the
   envelope's — `id`, `type`, `parent`, `parents`, `ts` — removed, and
