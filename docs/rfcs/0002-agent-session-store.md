@@ -413,13 +413,14 @@ over media is computable: the blobs the pushed entries' items name.
 3. The session's own entries in log order, the same way.
 4. If RFC 0001's resume rule over the lines already written would not
    name the head, a `label` entry whose `label` is the reserved value
-   `leaf`, naming the head, carrying `synthetic: true`, appended as a
-   child of the last line written, so that the rule lands a reader on
-   the head. A genuine `leaf` label among the own entries stays in force
-   in the file, which is why the test is the rule and not the last line.
-   This entry is the projection's, not the session's: it is not in the
-   log, the member says so, and reading the file back does not make it
-   an entry.
+   `leaf`, naming the head, carrying `synthetic: true` and the head
+   entry's own `ts`, so that two stores project one session to the same
+   bytes, appended as a child of the last line written, so that the rule
+   lands a reader on the head. A genuine `leaf` label among the own
+   entries stays in force in the file, which is why the test is the rule
+   and not the last line. This entry is the projection's, not the
+   session's: it is not in the log, the member says so, and reading the
+   file back does not make it an entry.
 5. A session whose `media` is `sidecar` projects its blobs beside the
    file, each named by its hex digest as RFC 0001 says, since RFC 0001
    counts a sidecar as part of the session and the file is not
@@ -450,8 +451,9 @@ is an entry like any other. Two refusals follow. The imported session
 keeps the header's `id`, and a store already holding a session with that
 ID MUST refuse the import. An importer MUST verify each line's hash and
 MUST refuse a file in which one fails, and MUST refuse a file whose
-header carries `redacted` whether or not its lines verify: a redacted
-projection is a record to read, not one to hold.
+header carries `redacted` whether or not its lines verify against
+themselves, which RFC 0001 requires they do: a redacted projection is a
+record to read, not one to hold.
 
 ## Exchange between stores
 
@@ -526,16 +528,20 @@ apply here, where holding the session already is the usual case.
 
 Fetch is the reverse, and any store may fetch from any store that holds
 the session, a mirror included, since a mirror holds what the record
-pushed it. A fetch admits entries as a push does and moves the fetcher's
-head to the fetched head only when the fetcher is a mirror and the
-fetched head descends from the fetcher's or the fetcher has none, so a
-fetch from a stale mirror moves nothing and says so; a record's head
-moves only by its own writers. Publishing a corpus is pushing a
-manifest, which a later document defines, and the objects it closes
-over. Archiving a session is a handover to a store that keeps cold
-objects followed by deleting the ref here, and taking it back is a
-handover the other way; a fetch alone yields a mirror, which is what a
-reader wants and a writer does not.
+pushed it. The two rules turn on who initiates and not on which way the
+bytes move: a push is initiated by the sender and only the record may
+initiate one; a fetch is initiated by the receiver and any holder may
+serve it, the record mark travelling with the session either way. A
+fetch admits entries as a push does and moves the fetcher's head to the
+fetched head only when the fetcher is a mirror and the fetched head
+descends from the fetcher's or the fetcher has none, so a fetch from a
+stale mirror moves nothing and says so; a record's head moves only by
+its own writers. Publishing a corpus is pushing a manifest, which a
+later document defines, and the objects it closes over. Archiving a
+session is a handover to a store that keeps cold objects followed by
+deleting the ref here, and taking it back is a handover the other way; a
+fetch alone yields a mirror, which is what a reader wants and a writer
+does not.
 
 ## Verification
 
@@ -613,14 +619,14 @@ It is a hash over history, and `request_hash` is a hash over what was
 sent. On a path with no compaction the two identify the same request.
 After a fold they part, since the context hash still covers the entries
 the fold excluded and `request_hash` covers the summary that replaced
-them; a router that wants a key past a fold computes `request_hash`
-from the path as a reader would. Keying a router on either is a
-routing decision, and RFC 0001's calibration is about what neither can
+them; a router that wants a key past a fold computes `request_hash` from
+the path as a reader would. Keying a router on either is a routing
+decision, and RFC 0001's request hash section is about what neither can
 promise: equal hashes say the same entries were sent, and say the model
 saw the same leading tokens only where the provider's template,
 tool-schema serialisation and tokenizer are deterministic. The
-writing-discipline rule that keeps per-run content out of the request
-is what keeps the key stable at all.
+writing-discipline rule that keeps per-run content out of the request is
+what keeps the key stable at all.
 
 ## Reference implementation
 

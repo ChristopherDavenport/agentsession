@@ -207,7 +207,7 @@ RFC 2119.
 | `base` | MAY | hash of the entry this session continues from, never a `leaf` label, since the base is a fork's first leaf; `parent_session` names a session holding it, as provenance. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
-| `redacted` | MAY | `true` when the file's bytes were changed after they were written, as export redaction does, so its `id` and `request_hash` values no longer verify. A reader MUST NOT report such a file's hashes as verified |
+| `redacted` | MAY | `true` when bodies were changed after they were written, as export redaction does. The redactor MUST recompute every content hash, `id` and `parent` over the redacted bodies, so the file walks and verifies against itself; its IDs are then not the original's and its `request_hash` values are the original's and no longer match. A reader MUST NOT report such a file's hashes as verifying the original |
 
 Unknown header fields MUST be preserved by any tool that rewrites the
 file.
@@ -287,9 +287,12 @@ entries name it, which RFC 0002 builds on. Wherever this document has a
 member name an entry — `parent`, `parents`, `target`, `first_kept`,
 `from`, `queued_from` — it names it by `id`.
 
-Two entries with the same type, content, parent, `parents` and `ts`
-are one entry. A writer that means two makes them differ, and
-sub-second `ts` is what usually does.
+Two entries with the same type, content, parent, `parents` and `ts` are
+one entry. A writer that means two makes them differ, and sub-second
+`ts` is what usually does. A reader that meets an `id` a second time in
+one file MUST treat the line as that same entry and report the repeat; a
+projection never writes one, since a store's log holds a hash once, but
+a hand-written file can.
 
 Preservation is of members, not bytes. A rewriter MAY re-serialise a
 line, since both hashes are over canonical forms and verification does
@@ -300,9 +303,11 @@ MUST refuse an `id` carrying another.
 A reader MUST verify each entry's `id` by computing its content hash and
 then its envelope hash, and MUST report a line that fails. It is
 corruption, not an extension, and a reader MUST NOT repair it. A file
-that has been redacted no longer verifies, since redaction changes the
-bytes; such a file MUST say so in its header and a reader MUST NOT
-report its hashes as verified.
+that has been redacted has had its hashes recomputed over the redacted
+bodies, as the header's `redacted` row requires, so it walks and
+verifies against itself and not against the original; such a file MUST
+say so in its header, and a reader MUST NOT report its hashes as
+verifying the original.
 
 Appending an entry of either kind makes it the leaf, a `leaf` label
 excepted, which makes its target the leaf. A record entry is
@@ -1018,8 +1023,8 @@ provider's chat template, tool-schema serialisation and tokenizer make
 of it. Two equal hashes say the same request was sent. They say the
 model saw the same leading tokens only if all three of those are
 deterministic, which this document cannot promise on a provider's
-behalf. Verify a record with it, and key a cache on it if you like; what
-it cannot do is predict that the provider's cache will hit.
+behalf. Verify a record with it, or key a cache on it; what it cannot do
+is predict that the provider's cache will hit.
 
 ## Writing discipline
 
