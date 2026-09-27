@@ -210,7 +210,8 @@ Append is the one write that adds to a session, and it is atomic.
   holds it, in which case the append is a no-op, reported as such, and
   nothing moves. Otherwise the store MUST move the head to the entry
   when the entry's parent is the head, or, for a `leaf` label, to its
-  target as the head section says, whatever its parent. All three
+  target when the head section allows and otherwise nowhere, whatever
+  the label's parent; the head never rests on a `leaf` label. All three
   happen or none does.
 - If the entry's parent is not the head, the head does not move, except
   for the `leaf` label the head section describes. The append succeeded
@@ -365,14 +366,14 @@ A media blob referenced by an item is an object under its own hash. A
 store holds it once however many items reference it. RFC 0001's `media`
 header field fixes at creation how the session carries media: inline as
 a data URL inside the item, or beside the file under a sidecar directory
-named after the session, where the file name is the blob's hash. An
-item's bytes are hashed, so a store MUST NOT convert between the two; a
-projection carries media in the form the session was written in. A
-sidecar blob is an object of its own and is held once; an inline data
-URL is part of its entry's content and is held once only as that content
-is. An item names a sidecar blob as RFC 0001 says, by a `sidecar:` URL
-carrying the blob's hash, so a push's closure over media is computable:
-the blobs the pushed entries' items name.
+named after the session, where the file name is the blob's hex digest
+alone, as RFC 0001 says. An item's bytes are hashed, so a store MUST NOT
+convert between the two; a projection carries media in the form the
+session was written in. A sidecar blob is an object of its own and is
+held once; an inline data URL is part of its entry's content and is held
+once only as that content is. An item names a sidecar blob as RFC 0001
+says, by a `sidecar:` URL carrying the blob's hash, so a push's closure
+over media is computable: the blobs the pushed entries' items name.
 
 ## Projection to JSONL
 
@@ -392,8 +393,9 @@ the blobs the pushed entries' items name.
    log, the member says so, and reading the file back does not make it
    an entry.
 5. A session whose `media` is `sidecar` projects its blobs beside the
-   file, each named by its hash, since RFC 0001 counts a sidecar as
-   part of the session and the file is not self-contained without it.
+   file, each named by its hex digest as RFC 0001 says, since RFC 0001
+   counts a sidecar as part of the session and the file is not
+   self-contained without it.
 
 The prefix is what keeps the file self-contained: the material the
 model was sent is in the file, and the header says where it came from.
@@ -444,13 +446,14 @@ apply here, where holding the session already is the usual case.
   alike only in ID are not one session; their union would be no session
   at all.
 - **The log merges as a set.** The receiver takes the union of the two
-  logs and assigns its own sequence in the order it receives entries,
-  and MUST refuse a push whose own entries do not each name as `parent`
-  the base, another own entry of the union, or, in a session with no
-  base, null. Two stores may hold one session with different log orders
-  and both are correct: the order says which branch was written last in
-  that store, and the head is the fact that travels. Sequence numbers
-  are never synchronised.
+  logs and assigns its own sequence in the order it admits entries,
+  admitting a parent before its child so that the merged log projects as
+  a valid file, and MUST refuse a push whose own entries do not each
+  name as `parent` the base, another own entry of the union, or, in a
+  session with no base, null. Two stores may hold one session with
+  different log orders and both are correct: the order says which branch
+  was written last in that store, and the head is the fact that travels.
+  Sequence numbers are never synchronised.
 - **The entries land whether or not the head moves.** A push is two
   steps, admission and then the head, and only the second can fail.
   The head moves by compare-and-swap, with the expected value the
@@ -487,13 +490,14 @@ apply here, where holding the session already is the usual case.
 Fetch is the reverse, and any store may fetch from any store that holds
 the session, a mirror included, since a mirror holds what the record
 pushed it. A fetch admits entries as a push does and moves the fetcher's
-head to the fetched head only when the fetcher is a mirror; a record's
-head moves only by its own writers. Publishing a corpus is pushing a
-manifest, which a later document defines, and the objects it closes
-over. Archiving a session is a handover to a store that keeps cold
-objects followed by deleting the ref here, and taking it back is a
-handover the other way; a fetch alone yields a mirror, which is what a
-reader wants and a writer does not.
+head to the fetched head only when the fetcher is a mirror and the
+fetched head descends from the fetcher's, so a fetch from a stale mirror
+moves nothing and says so; a record's head moves only by its own
+writers. Publishing a corpus is pushing a manifest, which a later
+document defines, and the objects it closes over. Archiving a session is
+a handover to a store that keeps cold objects followed by deleting the
+ref here, and taking it back is a handover the other way; a fetch alone
+yields a mirror, which is what a reader wants and a writer does not.
 
 ## Verification
 

@@ -143,8 +143,9 @@ RFC 2119.
   the file under a directory named after the session ID. A header field
   says which. A sidecar reference is a URL of the form
   `sidecar:sha256:<hex>`, the hash being the blob's, and the blob is the
-  file of that name in the session's directory, so a reference names
-  its bytes and a reader verifies the blob as it verifies an entry.
+  file named `<hex>` alone in the session's directory, since a colon is
+  not a legal file name everywhere; a reference names its bytes and a
+  reader verifies the blob as it verifies an entry.
 - Entry order and `parent` links are the ordering, and they order
   different things: `parent` orders a path, since an ancestor precedes
   every entry below it, and says nothing between two children of one
@@ -1310,8 +1311,8 @@ which the `run` entry cannot name and which 0.3 adopts beside the
 - Whether to allow a second payload profile at 0.x, or hold the line at
   Open Responses and rely on converters.
 - Sidecar media layout and naming. Answered in the file section: a
-  `sidecar:` URL carrying the blob's hash, and a file of that name in
-  the session's directory. Whether a store's projection may share one
+  `sidecar:` URL carrying the blob's hash, and a file named by the hex
+  digest in the session's directory. Whether a store's projection may share one
   directory across sessions is still open.
 - The venue: this repository, a standalone repository, or a proposal to
   openresponses.org as a companion document.
