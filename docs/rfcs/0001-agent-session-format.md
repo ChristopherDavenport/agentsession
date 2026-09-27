@@ -744,8 +744,8 @@ A judgement of how the session, or a range of it, went.
  "score":1.0,"pass":true,"label":"…","details":{…}}
 ```
 
-- `target` MUST name an entry in this session, usually the last entry of
-  the range judged. A reader that selects branches by outcome resolves
+- `target` MUST name an entry on a path in this file, the prefix
+  included, usually the last entry of the range judged. A reader that selects branches by outcome resolves
   `target` as an entry on a path; a task or test name belongs in
   `details`.
 - `score` is any finite number. Its scale is the judge's, named by

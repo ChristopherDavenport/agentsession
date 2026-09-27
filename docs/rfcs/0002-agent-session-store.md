@@ -76,7 +76,10 @@ is the order, and the head is a ref, never inferred.
 
 - A query language or index beyond what the projections need.
 - A network protocol between stores. Replication is by exchanging
-  nodes and refs, and how is a store's business.
+  nodes and refs, and how is a store's business. A session's ref has
+  one store of record; two stores accepting the same appends would
+  order two logs and could move two heads, and nothing here merges
+  them.
 - Defining the node's contents. RFC 0001 does; this document stores
   them.
 
@@ -264,7 +267,10 @@ import: each line but a trailing leaf marker is a node it stores under
 its hash, the prefix nodes join no log, the own nodes join the imported
 session's log in file order, and the head is what RFC 0001's resume
 rule gives; the marker names the head and is then discarded, so an
-export and import cycle adds nothing.
+export and import cycle adds nothing. An importer MUST verify each
+line's hash and MUST refuse a file in which one fails, so a redacted
+projection cannot be imported: it is a record to read, not one to
+hold.
 
 A projection that has been redacted no longer verifies, because
 redaction changes the bytes the hashes were taken over. That is by
@@ -321,7 +327,8 @@ CREATE TABLE edges    (parent TEXT NOT NULL, child TEXT NOT NULL,
 
 `edges` is the reverse index the parent hashes cannot give: finding a
 node's children, a session's leaves and the subtree below a point all
-walk it downward. A store at scale keys objects by hash, which spreads
+walk it downward. It spans sessions, since a node's children may be in
+several logs, so a session's leaves are its log filtered by it. A store at scale keys objects by hash, which spreads
 writes rather than hot-spotting a tail, keeps a membership table per
 session rather than a session column on the node, since a node belongs
 to every session whose prefix it is on, and avoids a secondary index
