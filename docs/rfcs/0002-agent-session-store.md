@@ -97,9 +97,9 @@ in RFC 2119.
 - **Object**: canonical bytes addressed by their hash: an envelope, a
   content, or a media blob.
 - **Context hash**: the incremental hash over the types and content
-  hashes of the entries on a path that are in context, as the
-  prefix-caching section defines it. Record entries and responses do not
-  enter it.
+  hashes of the entries on a path whose type is `item`, `config`,
+  `compaction` or `branch_summary`, as the prefix-caching section
+  defines it. Record entries and responses do not enter it.
 - **Session**: a ref, consisting of a header, a base, a head and a log.
 - **Base**: the entry a session continues from, or none. A session with
   a base is a **fork** of the session that appended that entry.
@@ -510,11 +510,14 @@ apply here, where holding the session already is the usual case.
   two lines are a fork, which the format represents, and the loser's
   answer is to push its line as a session with a base rather than to
   reconcile.
-- **One store of record, enforced.** A store marks each session it holds
-  as one it is the record for or a mirror of, and the reference schema
-  carries the mark. The mark is set at birth: a session created locally
-  or imported from a projection is the record here, since a file has no
-  record elsewhere; a session created by a push or a fetch is a mirror
+- **One store of record, enforced between stores that exchange.** A
+  store marks each session it holds as one it is the record for or a
+  mirror of, and the reference schema carries the mark. The mark is set
+  at birth: a session created locally is the record here; a session
+  imported from a projection is a mirror unless the importer declares it
+  the record, since a file cannot say whether the store that wrote it
+  still holds the session and two records would otherwise surface only
+  at the next push; a session created by a push or a fetch is a mirror
   unless the push is a handover. A store that is a mirror MUST refuse a
   local append and a local head move for that session, accepting both
   only through exchange, so a mirror's head follows the record's because
@@ -588,21 +591,24 @@ not by any later leaf:
   reason a git tree entry records a mode beside its blob hash: an `item`
   and a `config` with identical bodies are different context. For a
   `compaction` the content hash used here is over the content with
-  `first_kept` replaced by the context hash at the entry it names when
-  that entry is on the path ending here, and by `null` otherwise; for a
-  `branch_summary` it is over the content with `from` removed, present
-  or not, since the leaf that was left is provenance and not context,
-  and a store need not hold it; and for an `item` it is over the content
-  with `queued_from` removed, for the same reason. For every type,
-  `legacy_id`, `normalised`, and on an `item` `response` and `source`
-  are removed as well, since each is provenance a provider or a harness
-  minted per run and none reaches the model; `response` above all, which
-  a provider mints anew for every call, so two sessions replaying one
-  conversation would otherwise never share a key past the first model
-  output, so a migrated body and the same body written natively give one
-  key while their content hashes differ. The key then depends on context
-  and not on the identity of the entries that shaped it, and two stores
-  compute it from the path alone.
+  `first_kept` replaced by a two-element array of the context hash at
+  the entry it names and that entry's `type`, when the entry is on the
+  path ending here, and by `null` otherwise — the type because a record
+  entry and its contributing parent share a context hash while a
+  compaction keeping from one keeps a different item list from one
+  keeping from the other; for a `branch_summary` it is over the content
+  with `from` removed, present or not, since the leaf that was left is
+  provenance and not context, and a store need not hold it; and for an
+  `item` it is over the content with `queued_from` removed, for the same
+  reason. For every type, `legacy_id`, `normalised`, and on an `item`
+  `response` and `source` are removed as well, since each is provenance
+  a provider or a harness minted per run and none reaches the model;
+  `response` above all, which a provider mints anew for every call, so
+  two sessions replaying one conversation would otherwise never share a
+  key past the first model output, so a migrated body and the same body
+  written natively give one key while their content hashes differ. The
+  key then depends on context and not on the identity of the entries
+  that shaped it, and two stores compute it from the path alone.
 
 It excludes `ts` and `parents`, it is incremental, and two sessions
 whose context entries are byte-identical share it, a compaction

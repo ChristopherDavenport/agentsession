@@ -235,33 +235,38 @@ modified after it is written; corrections are new entries.
 
 An entry hashes in two layers, as a git commit hashes over its tree
 rather than over its files. Canonical throughout means the JSON
-Canonicalization Scheme (RFC 8785): members sorted by code point, no
-insignificant whitespace, numbers and strings in canonical form. That
-scheme is defined over I-JSON (RFC 7493), so every hashed member MUST be
-I-JSON, by a test on the value and not on its spelling: every number is
-finite once rounded to binary64, the rounding being expected and not an
-error; a number whose exact value is a whole number is exactly
-representable in binary64, so 9007199254740993 is rejected however it is
-spelled and 9007199254740992, 1e20 and 0.1 are accepted; no object
-repeats a member name; no string holds a lone surrogate. A canonical
-rewrite cannot change the result, since canonical JSON writes a
-representable whole number exactly, and a reader checks it mechanically
-by converting the exact value and asking whether the conversion was
-exact. A reader MUST report a line that fails the test, as it reports a
-hash that fails. A model or a provider can emit what the test rejects —
-a string cut inside a surrogate pair, a 64-bit integer in a provider
-field — and the writing discipline says an output is recorded before it
-is acted on, so a writer MUST normalise before it writes: a lone
-surrogate becomes U+FFFD; an integer outside the bound is carried as a
-string where the payload profile allows it, and where the profile
-requires a number it is rounded to binary64, which is what
-canonicalisation would have done silently and which yields a value the
-test accepts. The writer records what it changed in a member named
-`normalised` on the entry: a list of RFC 6901 JSON Pointers relative to
-the body, each with the original text of the member it names. The
-normalised form is what the next request carries, so the rebuilt request
-and `request_hash` agree with what was sent. `ts` is hashed as the
-string it is, which is why the envelope table admits one spelling of it.
+Canonicalization Scheme (RFC 8785): members sorted by UTF-16 code units,
+as that scheme requires and as code-point order does not give for a name
+holding a supplementary character; no insignificant whitespace; numbers
+and strings in canonical form. That scheme is defined over I-JSON (RFC
+7493), so every hashed member MUST be I-JSON, by a test on the value and
+not on its spelling: every number is finite once rounded to binary64,
+the rounding being expected and not an error; a number whose exact value
+is a whole number MUST be exactly representable in binary64, which
+rejects 9007199254740993 however it is spelled and accepts
+9007199254740992, 1e20 and 0.1; no object repeats a member name; no
+string holds a lone surrogate. A canonical rewrite cannot change the
+result, since canonical JSON writes a representable whole number
+exactly, and a reader checks the whole-number rule mechanically by
+asking, of a number whose exact value is a whole number, whether
+converting that value to binary64 is exact. A reader MUST report a line
+that fails the test, as it reports a hash that fails. A model or a
+provider can emit what the test rejects — a string cut inside a
+surrogate pair, a 64-bit integer in a provider field — and the writing
+discipline says an output is recorded before it is acted on, so a writer
+MUST normalise before it writes: a lone surrogate becomes U+FFFD; an
+integer outside the bound is carried as a string where the payload
+profile allows it, and where the profile requires a number it is rounded
+to binary64, which is what canonicalisation would have done silently and
+which yields a value the test accepts. The writer records what it
+changed in a member named `normalised` on the entry: a JSON array of
+objects `{"at": …, "was": …}`, `at` an RFC 6901 JSON Pointer relative to
+the body and `was` the original text of the member it names, in pointer
+order, so two writers normalising one response produce one content hash.
+The normalised form is what the next request carries, so the rebuilt
+request and `request_hash` agree with what was sent. `ts` is hashed as
+the string it is, which is why the envelope table admits one spelling of
+it.
 
 - The entry's **content** is the object of its members with the
   envelope's — `id`, `type`, `parent`, `parents`, `ts` — removed, and
@@ -312,12 +317,12 @@ verifies against itself and not against the original; such a file MUST
 say so in its header, and a reader MUST NOT report its hashes as
 verifying the original.
 
-Appending an entry of either kind makes it the leaf, a `leaf` label
-excepted, which makes its target the leaf. A record entry is
-a child of the leaf like any other, so it lies on the path of every
-entry appended after it. The run and call shapes below depend on that:
-a writer MUST NOT hang a record entry off an earlier entry as a
-sibling.
+Appending an entry of either kind under the leaf makes it the leaf; an
+append elsewhere is a branch and the leaf does not move. A `leaf` label
+makes its target the leaf. A record entry is a child of the leaf like
+any other, so it lies on the path of every entry appended after it. The
+run and call shapes below depend on that: a writer MUST NOT hang a
+record entry off an earlier entry as a sibling.
 
 A member of a core entry that this document does not define MUST be
 preserved by any tool that rewrites the file and MUST be ignored by a
@@ -1004,9 +1009,9 @@ separately agree without sharing code.
 - The input is the request object of step 5 as it was sent, including
   any passthrough keys the payload profile allows, because those reached
   the model.
-- The object is serialised with the JSON Canonicalization Scheme
-  (RFC 8785): members sorted by code point, no insignificant whitespace,
-  numbers and strings in their canonical forms.
+- The object is serialised with the JSON Canonicalization Scheme (RFC
+  8785): members sorted by UTF-16 code units, no insignificant
+  whitespace, numbers and strings in their canonical forms.
 - The value is `sha256:` followed by the lowercase hexadecimal SHA-256
   of the canonical bytes.
 
@@ -1138,25 +1143,26 @@ offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
 compute each entry's hashes with its `parent` and every entry-naming
 member rewritten to the hashes already assigned to entries earlier in
-the file, and read the result as a 0.5 file with no `base`. Each
-migrated entry carries `legacy_id`, the ID it had, as a member outside
-the envelope, added before the hashes are computed so that the migrated
-file verifies by construction and two readers give one file the same
-IDs; the ATIF and OpenTelemetry projections already emitted from the
-earlier file then still resolve, and a projection MAY emit `legacy_id`
-beside the new ID. The member is part of the content, so a migrated body
-never hashes as the same body written natively does, and a migrated file
-shares nothing with one; that is the price of keeping the old name. A
-reference the reader cannot rewrite — a `parents` entry in another
-session, or an entry named inside a member of an extension the reader
-does not know — keeps its original string and is reported as unresolved,
-and a file holding one MUST NOT be re-emitted as 0.5. An earlier entry
-whose body carries a top-level member by one of the envelope's reserved
-names, which earlier versions allowed, is reported as unresolved the
-same way, and a file holding one MUST NOT be re-emitted as 0.5;
-`content` is the name this will most often be. No two migrated entries
-hash alike, since `legacy_id` was unique in the earlier file, so
-migration never merges.
+the file, an `item`'s `response` not among them since it carries a
+provider's `response_id`, and read the result as a 0.5 file with no
+`base`. Each migrated entry carries `legacy_id`, the ID it had, as a
+member outside the envelope, added before the hashes are computed so
+that the migrated file verifies by construction and two readers give one
+file the same IDs; the ATIF and OpenTelemetry projections already
+emitted from the earlier file then still resolve, and a projection MAY
+emit `legacy_id` beside the new ID. The member is part of the content,
+so a migrated body never hashes as the same body written natively does,
+and a migrated file shares nothing with one; that is the price of
+keeping the old name. A reference the reader cannot rewrite — a
+`parents` entry in another session, or an entry named inside a member of
+an extension the reader does not know — keeps its original string and is
+reported as unresolved, and a file holding one MUST NOT be re-emitted as
+0.5. An earlier entry whose body carries a top-level member by one of
+the envelope's reserved names, which earlier versions allowed, is
+reported as unresolved the same way, and a file holding one MUST NOT be
+re-emitted as 0.5; `content` is the name this will most often be. No two
+migrated entries hash alike, since `legacy_id` was unique in the earlier
+file, so migration never merges.
 
 ## Conformance
 
@@ -1224,9 +1230,11 @@ place in it.
 `ts` has one spelling, since it is hashed as a string, and every hashed
 member is I-JSON. Nothing changes in the context algorithm, in
 convergence or in ingress. Among the entry types, `label` gains the
-reserved `leaf` value and the `synthetic` member, and an `outcome`'s
-`target` may name a prefix entry. A 0.4 file migrates in memory as the
-versioning section says.
+reserved `leaf` value and the `synthetic` member, an `outcome`'s
+`target` may name a prefix entry, and an `item`'s `response` is said to
+be what it always carried, the provider's `response_id`, and not an
+entry's ID. A 0.4 file migrates in memory as the versioning section
+says.
 
 ## Changes since 0.3
 
