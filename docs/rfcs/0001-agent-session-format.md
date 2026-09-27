@@ -1105,17 +1105,18 @@ walk the entries in file order, compute each entry's hashes with its
 assigned above it, and read the result as a 0.5 file with no `base`.
 Each migrated entry carries `legacy_id`, the ID it had, as a member
 outside the envelope, added before the hashes are computed so that the
-migrated file verifies by construction and two readers give one file
-the same IDs; the ATIF and OpenTelemetry projections already emitted
-from the earlier file then still resolve, and a projection MAY emit
+migrated file verifies by construction and two readers give one file the
+same IDs; the ATIF and OpenTelemetry projections already emitted from
+the earlier file then still resolve, and a projection MAY emit
 `legacy_id` beside the new ID. The member is part of the content, so a
-migrated body never hashes as the same body written natively does, and
-a migrated file shares nothing with one; that is the price of keeping
-the old name. A reference the reader cannot rewrite — a `parents` entry
-in another session, or an entry named inside a member of an extension
-the reader does not know — keeps its original string and is reported as
-unresolved, and a file holding one MUST NOT be re-emitted as 0.5. No two migrated entries hash alike, since `legacy_id` was unique in the
-earlier file, so migration never merges.
+migrated body never hashes as the same body written natively does, and a
+migrated file shares nothing with one; that is the price of keeping the
+old name. A reference the reader cannot rewrite — a `parents` entry in
+another session, or an entry named inside a member of an extension the
+reader does not know — keeps its original string and is reported as
+unresolved, and a file holding one MUST NOT be re-emitted as 0.5. No two
+migrated entries hash alike, since `legacy_id` was unique in the earlier
+file, so migration never merges.
 
 ## Conformance
 
