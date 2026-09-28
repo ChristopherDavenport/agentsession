@@ -356,7 +356,12 @@ record entry off an earlier entry as a sibling.
 A member of a core entry that this document does not define MUST be
 preserved by any tool that rewrites the file and MUST be ignored by a
 reader that does not know it. That is where a harness keeps detail
-richer than a core member allows.
+richer than a core member allows. The rule holds at every depth: a
+member this document does not define inside an object it does, such as
+a `host` inside `workspace`, is preserved the same way, and like every
+member it is hashed as the line holds it. A reader MUST NOT compute an
+entry's hashes from its own model of the entry when that model cannot
+hold everything the line does.
 
 A record entry named in the header's `records` is written whenever its
 event occurs, so a reader MAY take its absence on a path as the event
@@ -1301,6 +1306,9 @@ with none of the new members.
 - `env` says that a later entry with a different `workspace` is a
   substitution, and what a reader holding the environment fixed does
   with it.
+- The preservation rule says it holds inside the objects this document
+  defines as well as at an entry's top level, and that a member is
+  hashed as the line holds it.
 - `run` says who closes a run left open on a path no writer is
   running: the writer that continues the path, before anything else,
   with `interrupted` after a rewind into the run and the computed

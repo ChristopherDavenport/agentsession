@@ -102,7 +102,15 @@ type EntryBase struct {
 	// or read; tsRaw is the ts member as the line spelled it.
 	content string
 	tsRaw   string
+	// kept holds, for an entry that was read, each member whose line
+	// value the typed fields could not reproduce: see keepAsRead.
+	kept map[string]keptMember
 }
+
+// keptMember is a member as the line held it, raw, and as the typed
+// fields encoded it when the entry was read, seen. A nil value is a
+// member that was absent.
+type keptMember struct{ raw, seen json.RawMessage }
 
 // ContentHash returns the hash of the entry's body, the members outside
 // the envelope, as computed when the entry was appended or read. It is
@@ -484,7 +492,7 @@ func (e *UnknownEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *UnknownEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -554,34 +562,158 @@ func MarshalEntry(e Entry) ([]byte, error) {
 // UnmarshalEntry decodes one line, dispatching on its type. Types this
 // package does not define decode to [*UnknownEntry].
 func UnmarshalEntry(data []byte) (Entry, error) {
+	e, _, err := decodeLine(data)
+	return e, err
+}
+
+// decodeLine is UnmarshalEntry that also returns the entry's typed
+// encoding as read, before kept members are restored, which Read
+// hashes rather than encoding the entry a second time. It is nil for an
+// extension entry.
+func decodeLine(data []byte) (Entry, []byte, error) {
 	// The line is split into its members once; the envelope, the
 	// unknown-member check and, for item entries, the body all read
 	// from the split, so a large line is not parsed again for each.
 	all, err := splitMembers(data)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	env, err := envelopeFrom(all)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if env.Type == "" {
-		return nil, errors.New("agentsession: entry has no type")
+		return nil, nil, errors.New("agentsession: entry has no type")
 	}
 	if env.ID == "" {
-		return nil, fmt.Errorf("agentsession: %s entry has no id", env.Type)
+		return nil, nil, fmt.Errorf("agentsession: %s entry has no id", env.Type)
 	}
 	if env.TS.IsZero() {
-		return nil, fmt.Errorf("agentsession: entry %s has no ts", env.ID)
+		return nil, nil, fmt.Errorf("agentsession: entry %s has no ts", env.ID)
 	}
 	var e memberDecoder = &UnknownEntry{}
 	if mk, ok := coreEntries[env.Type]; ok {
 		e = mk()
 	}
-	if err := e.decodeMembers(data, all); err != nil {
-		return nil, fmt.Errorf("agentsession: entry %s (%s): %w", env.ID, env.Type, err)
+	form, err := decodeForm(e, data, all)
+	if err != nil {
+		return nil, nil, fmt.Errorf("agentsession: entry %s (%s): %w", env.ID, env.Type, err)
 	}
-	return e, nil
+	return e, form, nil
+}
+
+// finishDecode decodes a split line into e and, for a core entry,
+// remembers what its typed fields could not hold.
+func finishDecode(e memberDecoder, data []byte, all map[string]json.RawMessage) error {
+	_, err := decodeForm(e, data, all)
+	return err
+}
+
+// decodeForm is finishDecode returning the typed encoding keepAsRead
+// compared the line with, nil for an extension entry.
+func decodeForm(e memberDecoder, data []byte, all map[string]json.RawMessage) ([]byte, error) {
+	if err := e.decodeMembers(data, all); err != nil {
+		return nil, err
+	}
+	if _, unknown := e.(*UnknownEntry); unknown {
+		return nil, nil // written back from its raw line
+	}
+	return keepAsRead(e, all)
+}
+
+// untracked are the members keepAsRead leaves to the envelope's own
+// rules: the id is recomputed, and type, parent and ts have one form
+// each that the reader checks or a migration rewrites.
+var untracked = map[string]bool{"id": true, "type": true, "parent": true, "ts": true}
+
+// keepAsRead compares each member of the line with what the entry's
+// typed fields encode it as, and remembers every member they do not
+// reproduce: one nested inside an object this package types, such as a
+// workspace's host, or one spelled in a form the type cannot hold. The
+// format has a reader preserve every member and hash the line as
+// written, so marshalEntry writes such a member back as read for as
+// long as the typed fields still encode it the way they did; a caller
+// that changes the field has changed the member, and the field wins.
+func keepAsRead(e Entry, all map[string]json.RawMessage) ([]byte, error) {
+	b := e.Base()
+	b.kept = nil
+	form, err := jsonx.MarshalNoEscape(e)
+	if err != nil {
+		return nil, err
+	}
+	typed, err := splitMembers(form)
+	if err != nil {
+		return nil, err
+	}
+	note := func(key string, raw, seen json.RawMessage) {
+		if b.kept == nil {
+			b.kept = map[string]keptMember{}
+		}
+		b.kept[key] = keptMember{raw: raw, seen: seen}
+	}
+	for key, raw := range all {
+		if untracked[key] {
+			continue
+		}
+		seen, ok := typed[key]
+		if !ok {
+			note(key, raw, nil)
+		} else if !sameMember(raw, seen) {
+			note(key, raw, seen)
+		}
+	}
+	for key, seen := range typed {
+		if _, ok := all[key]; !ok && !untracked[key] {
+			note(key, nil, seen)
+		}
+	}
+	return form, nil
+}
+
+// sameMember reports whether two member values are the same JSON: equal
+// bytes, or equal canonical forms. A nil value is an absent member. a is
+// the line's value, which a conforming writer wrote canonically, so b
+// alone is canonicalised first and a only when that does not settle it.
+func sameMember(a, b json.RawMessage) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if bytes.Equal(a, b) {
+		return true
+	}
+	cb, err := jcs.Transform(b)
+	if err != nil {
+		return false
+	}
+	if bytes.Equal(a, cb) {
+		return true
+	}
+	ca, err := jcs.Transform(a)
+	return err == nil && bytes.Equal(ca, cb)
+}
+
+// restoreKept writes each kept member back as it was read, when the
+// typed fields still encode it as they did then.
+func restoreKept(out []byte, kept map[string]keptMember) ([]byte, error) {
+	members, err := splitMembers(out)
+	if err != nil {
+		return nil, err
+	}
+	for key, k := range kept {
+		cur, ok := members[key]
+		if !ok {
+			cur = nil
+		}
+		if !sameMember(cur, k.seen) {
+			continue
+		}
+		if k.raw == nil {
+			delete(members, key)
+		} else {
+			members[key] = k.raw
+		}
+	}
+	return jsonx.JoinObjects([]byte("{}"), []byte("{}"), members), nil
 }
 
 // coreEntries makes an empty entry of each core type, by type name. It is
@@ -680,7 +812,11 @@ func marshalEntry(typ string, base *EntryBase, body any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return jsonx.JoinObjects(head, b, base.extraMembers()), nil
+	out := jsonx.JoinObjects(head, b, base.extraMembers())
+	if len(base.kept) > 0 {
+		return restoreKept(out, base.kept)
+	}
+	return out, nil
 }
 
 // extraMembers returns the unknown members with the common body members
@@ -734,6 +870,7 @@ func fillBase(all map[string]json.RawMessage, base *EntryBase, known map[string]
 			base.tsRaw = s
 		}
 	}
+	base.kept = nil
 	base.LegacyID = ""
 	if raw, ok := all["legacy_id"]; ok && !isNull(raw) {
 		if err := json.Unmarshal(raw, &base.LegacyID); err != nil {
@@ -780,7 +917,7 @@ func (e *ItemEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 // decodeMembers reads the item entry from the split alone: item lines
@@ -843,7 +980,7 @@ func (e *ResponseEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *ResponseEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -863,7 +1000,7 @@ func (e *ConfigEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *ConfigEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -886,7 +1023,7 @@ func (e *CompactionEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 // decodeMembers decodes into aux and then assigns, because Summary is
@@ -941,7 +1078,7 @@ func (e *BranchSummaryEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *BranchSummaryEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -978,7 +1115,7 @@ func (e *LabelEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *LabelEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -998,7 +1135,7 @@ func (e *InfoEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *InfoEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -1018,7 +1155,7 @@ func (e *EnvEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *EnvEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -1038,7 +1175,7 @@ func (e *OutcomeEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *OutcomeEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -1058,7 +1195,7 @@ func (e *LinkEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *LinkEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -1086,7 +1223,7 @@ func (e *CustomEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *CustomEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -1100,12 +1237,12 @@ func (e *CustomEntry) decodeMembers(data []byte, all map[string]json.RawMessage)
 }
 
 // promote moves the unknown member key into *dst when it decodes into
-// dst's type and encodes back to the same canonical JSON, and leaves it
-// unknown otherwise. It is for members a minor version added: a file
-// from before the member was defined may spell it any way at all, and
-// a member this package cannot hold exactly is kept as written, so the
-// entry's hash still verifies and a rewrite loses nothing. A zero value
-// is left unknown too, since the typed field would omit it. A field
+// dst's type as a non-zero value, and leaves it unknown otherwise. It is
+// for members a minor version added: a file from before the member was
+// defined may spell it any way at all. What the typed field cannot hold
+// of a member it does take, such as a member nested in it that the type
+// does not define, is kept by keepAsRead and written back as read, so
+// the entry's hash still verifies and a rewrite loses nothing. A field
 // filled this way is tagged json:"-" with a member tag naming its wire
 // member, which the member round-trip test reads.
 func promote[T any](base *EntryBase, key string, dst *T) {
@@ -1114,18 +1251,7 @@ func promote[T any](base *EntryBase, key string, dst *T) {
 		return
 	}
 	var v T
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if dec.Decode(&v) != nil || reflect.ValueOf(v).IsZero() {
-		return
-	}
-	back, err := jsonx.MarshalNoEscape(v)
-	if err != nil {
-		return
-	}
-	a, errA := jcs.Transform(raw)
-	b, errB := jcs.Transform(back)
-	if errA != nil || errB != nil || !bytes.Equal(a, b) {
+	if json.Unmarshal(raw, &v) != nil || reflect.ValueOf(v).IsZero() {
 		return
 	}
 	*dst = v

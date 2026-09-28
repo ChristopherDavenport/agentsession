@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -478,8 +479,8 @@ func TestResolveLegacyID(t *testing.T) {
 // custom entry were unknown members before 0.6, so a 0.5 file may spell
 // them any way at all, and a 0.6 writer may put a member this package
 // does not define inside trigger. Each such line reads, verifies and
-// writes back as it was; the typed field is filled only when it holds
-// the member exactly.
+// writes back as it was; the typed field is filled whenever the member
+// decodes into it, and what it cannot hold is kept as read.
 func TestAddedMembersReadAsWritten(t *testing.T) {
 	head := `{"type":"session","format":"agentsession/0.5","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}`
 	tests := []struct {
@@ -487,8 +488,8 @@ func TestAddedMembersReadAsWritten(t *testing.T) {
 		typed      bool
 	}{
 		{"trigger as a string", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":"cron:nightly"`, false},
-		{"trigger with a member not defined", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":"schedule","due":"2026-09-17T03:00:00Z"}`, false},
-		{"trigger with an empty member", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":""}`, false},
+		{"trigger with a member not defined", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":"schedule","due":"2026-09-17T03:00:00Z"}`, true},
+		{"trigger with an empty member", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":""}`, true},
 		{"trigger null", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":null`, false},
 		{"trigger exact", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":"schedule","ref":"nightly"}`, true},
 		{"call_id an object", `"type":"custom","ns":"acme","call_id":{"n":1}`, false},
@@ -555,5 +556,102 @@ func TestForkRefusesUnresolvedPrefix(t *testing.T) {
 	// Forking where the prefix holds only rewritten entries is fine.
 	if _, err := Fork(s, s.Path(at)[0].Base().ID, Header{}); err != nil {
 		t.Errorf("Fork at the root = %v", err)
+	}
+}
+
+// TestNestedMembersReadAsWritten: a member nested inside an object this
+// package types, which the format has a reader preserve, is hashed as
+// the line holds it and written back as read. A file another writer
+// hashed correctly reads; one whose nested member was edited without
+// its id does not; and a caller that changes the typed field has
+// changed the member.
+func TestNestedMembersReadAsWritten(t *testing.T) {
+	head := `{"type":"session","format":"agentsession/0.6","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}`
+	hashed := func(body string) string {
+		t.Helper()
+		line := `{` + body + `,"parent":null,"ts":"2026-09-17T16:00:01Z"}`
+		id, _, err := EntryHashes([]byte(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return `{"id":"` + id + `",` + line[1:]
+	}
+	for name, body := range map[string]string{
+		"workspace host":      `"type":"env","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7"}`,
+		"queued trigger":      `"type":"queued","mode":"steer","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},"trigger":{"kind":"human","seat":2}`,
+		"run end, no pending": `"type":"run","run_id":"r","phase":"end","reason":"done"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			line := hashed(body)
+			s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
+			if err != nil {
+				t.Fatalf("Read of a correctly hashed line: %v", err)
+			}
+			var buf bytes.Buffer
+			if err := Write(&buf, s); err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+			var want, got map[string]any
+			json.Unmarshal([]byte(line), &want)
+			json.Unmarshal([]byte(lines[1]), &got)
+			if !reflect.DeepEqual(want, got) {
+				t.Errorf("rewrite changed the line\nread  %s\nwrote %s", line, lines[1])
+			}
+			// The same entry appended to another session hashes the same.
+			e := s.Entries()[0]
+			other := New(Header{})
+			if id, err := other.Append(e); err != nil || id != e.Base().ID {
+				t.Errorf("re-append = %s, %v; want %s", id, err, e.Base().ID)
+			}
+		})
+	}
+	t.Run("tampered nested member", func(t *testing.T) {
+		line := strings.Replace(hashed(`"type":"env","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7"}`), "build-7", "build-8", 1)
+		if _, err := Read(strings.NewReader(head + "\n" + line + "\n")); !errors.Is(err, ErrBadID) {
+			t.Errorf("Read of an edited nested member = %v, want ErrBadID", err)
+		}
+	})
+	t.Run("a caller's change wins", func(t *testing.T) {
+		line := hashed(`"type":"env","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7"}`)
+		s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := s.Entries()[0].(*EnvEntry)
+		changed := *env
+		changed.Workspace = &Workspace{Kind: WorkspaceLocal}
+		changed.CWD = "/elsewhere"
+		data, err := MarshalEntry(&changed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "build-7") || !strings.Contains(string(data), `"kind":"local"`) {
+			t.Errorf("changed workspace written as %s", data)
+		}
+	})
+}
+
+// TestMigrationKeepsNestedMembers: a 0.4 entry is rewritten and rehashed
+// on read, and a member nested in an object this package types survives
+// that as it survives a 0.5 read.
+func TestMigrationKeepsNestedMembers(t *testing.T) {
+	in := `{"type":"session","format":"agentsession/0.4","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}
+{"type":"env","id":"e1","parent":null,"ts":"2026-09-17T16:00:01Z","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7"}}
+{"type":"info","id":"e2","parent":"e1","ts":"2026-09-17T16:00:02Z","name":"n"}
+`
+	s, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"host":"build-7"`) || !strings.Contains(buf.String(), `"legacy_id":"e1"`) {
+		t.Errorf("migration lost the nested member or the legacy id:\n%s", buf.String())
+	}
+	if _, err := Read(&buf); err != nil {
+		t.Errorf("migrated file reads back: %v", err)
 	}
 }

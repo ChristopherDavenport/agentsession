@@ -372,7 +372,7 @@ func (e *RunEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *RunEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -400,7 +400,7 @@ func (e *DispatchEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *DispatchEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -426,7 +426,7 @@ func (e *DecisionEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *DecisionEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -453,7 +453,7 @@ func (e *QueuedEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *QueuedEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {

@@ -87,7 +87,7 @@ func Read(r io.Reader) (*Session, error) {
 			s = New(h)
 			s.migrated = m != nil
 		} else {
-			e, err := UnmarshalEntry(data)
+			e, form, err := decodeLine(data)
 			if err != nil {
 				// Only a last line that is not JSON is a truncated line,
 				// which a crash mid-append leaves behind. A last line
@@ -105,7 +105,7 @@ func Read(r io.Reader) (*Session, error) {
 				s.truncated = &TruncatedLine{Line: line, Data: append([]byte(nil), data...), Err: err}
 				break
 			}
-			if err := s.link(e, m); err != nil {
+			if err := s.link(e, m, form); err != nil {
 				return nil, fmt.Errorf("agentsession: line %d: %w", line, err)
 			}
 		}
@@ -141,7 +141,10 @@ type migration struct {
 // hashes assigned earlier in the file, the old id to legacy_id, ts to
 // its one spelling — and hashed. A repeated id is the same entry, kept
 // once and reported.
-func (s *Session) link(e Entry, m *migration) error {
+//
+// form is the entry's typed encoding as read, which a 0.5 line is
+// hashed from rather than encoded again; nil encodes it.
+func (s *Session) link(e Entry, m *migration, form []byte) error {
 	b := e.Base()
 	if m != nil {
 		if err := m.rewrite(e, s); err != nil {
@@ -155,7 +158,13 @@ func (s *Session) link(e Entry, m *migration) error {
 			return fmt.Errorf("%w: ts %q is not in the one form the format admits", ErrBadID, b.tsRaw)
 		}
 		want := b.ID
-		if err := s.hashEntry(e, nil); err != nil {
+		if form != nil && len(b.kept) > 0 {
+			var err error
+			if form, err = restoreKept(form, b.kept); err != nil {
+				return err
+			}
+		}
+		if err := s.hashEntry(e, form); err != nil {
 			return err
 		}
 		if b.ID != want {
