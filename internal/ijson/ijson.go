@@ -1,8 +1,9 @@
 // Package ijson checks that a JSON document is I-JSON (RFC 7493) by the
 // test the session format states: every number is finite once rounded
 // to binary64, a number whose exact value is a whole number is exactly
-// representable in binary64, no object repeats a member name, and no
-// string holds a lone surrogate. The JSON Canonicalization Scheme is
+// representable in binary64 or is the exact value of the canonical
+// rendering of the nearest double, no object repeats a member name, and
+// no string holds a lone surrogate. The JSON Canonicalization Scheme is
 // defined over I-JSON, so this is what makes two implementations hash
 // one document the same way; the format's writer normalises what a
 // model or a provider emits so that every hashed member passes.
@@ -93,10 +94,12 @@ func Check(data []byte) error {
 }
 
 // CheckNumber applies the number rule to one JSON number literal: finite
-// once rounded to binary64, and exactly representable when its exact
-// value is a whole number. The rounding of a fraction is expected and
-// is not an error, so 0.1 passes; 9007199254740993 fails however it is
-// spelled, and 9007199254740992 and 1e20 pass.
+// once rounded to binary64, and, when its exact value is a whole
+// number, either exactly representable or the exact value of the
+// canonical rendering of the nearest double. The rounding of a fraction
+// is expected and is not an error, so 0.1 passes; 9007199254740993
+// fails however it is spelled, and 9007199254740992, 1e20, 2^60 and
+// 1152921504606847000, what canonical form writes for 2^60, pass.
 func CheckNumber(lit string) error {
 	r, ok := new(big.Rat).SetString(lit)
 	if !ok {
@@ -118,7 +121,7 @@ func CheckNumber(lit string) error {
 				return nil
 			}
 		}
-		return fmt.Errorf("%w: whole number %q is not exactly representable in binary64", ErrNotIJSON, lit)
+		return fmt.Errorf("%w: whole number %q is not exactly representable in binary64, nor the canonical rendering of a double", ErrNotIJSON, lit)
 	}
 	return nil
 }

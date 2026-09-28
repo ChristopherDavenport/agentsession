@@ -253,7 +253,11 @@ because the canonical rendering is ECMAScript's, which below 10^21 pads
 the shortest digits that round-trip a double with zeros, so from 2^53 it
 writes many representable whole numbers, 2^60 as 1152921504606847000, as
 a whole number no double holds; with the arm the canonical form is
-always admissible and a canonical rewrite cannot change the result. A
+always admissible and a canonical rewrite cannot change the result. The
+arm admits a literal that a bignum reader and a double reader decode
+differently, as RFC 8785 itself emits such literals; the format's
+numbers are binary64 values, and the test rejects what a double reader
+would silently alter in a spelling that need not have been altered. A
 reader checks the whole-number rule mechanically by asking, of a number
 whose exact value is a whole number, whether converting that value to
 binary64 is exact, and if not, whether rendering the result canonically
@@ -264,28 +268,31 @@ integer in a provider field — and the writing discipline says an output
 is recorded before it is acted on, so a writer MUST normalise before it
 writes: a lone surrogate becomes U+FFFD; each maximal subpart of an
 ill-formed UTF-8 sequence, as Unicode §3.9 defines it, becomes one
-U+FFFD, so that writers in every language substitute alike; an integer
-outside the bound is rounded to binary64 and written canonically, which
-is what canonicalisation would have done silently and which yields a
-value the test accepts, except where the payload profile types the
-member as a string, in which case the digits are carried as that string.
-The writer records what it changed in a member named `normalised` on the
-entry: a JSON array of objects `{"at": …, "was": …}`, `at` an RFC 6901
-JSON Pointer relative to the body and `was` a string holding the
-member's original JSON source text, escapes and a string's quotes
-included, so a lone surrogate appears as the six ASCII characters
-`\ud83d` inside its quotes, `"\ud83d"`, and a 64-bit integer as its
-digits, and `was` is I-JSON whatever it describes. Output that was not
-valid UTF-8 has no JSON text to record: the writer substitutes U+FFFD as
-above, omits `was`, and carries the member's source bytes, quotes
-included, in `raw` as base64 under RFC 4648 §4, with padding, since the
-URL-safe alphabet and an unpadded form would give one response two
-hashes. The array is sorted by `at` as UTF-16 code units, matching the
-canonical form, so two writers normalising one response produce one
-content hash. The normalised form is what the next request carries, so
-the rebuilt request and `request_hash` agree with what was sent. `ts` is
-hashed as the string it is, which is why the envelope table admits one
-spelling of it.
+U+FFFD, so that writers in every language substitute alike; a whole
+number that fails the test is rounded to binary64 and written
+canonically, which is what canonicalisation would have done silently and
+which yields a value the test accepts, except where the payload profile
+types the member as a string, in which case the digits are carried as
+that string. The writer records what it changed in a member named
+`normalised` on the entry: a JSON array of objects `{"at": …, "was":
+…}`, `at` an RFC 6901 JSON Pointer relative to the body and `was` a
+string holding the member's original JSON source text, escapes and a
+string's quotes included, so a lone surrogate appears as the six ASCII
+characters `\ud83d` inside its quotes, `"\ud83d"`, and a 64-bit integer
+as its digits, and `was` is I-JSON whatever it describes. Output that
+was not valid UTF-8 has no JSON text to record: the writer substitutes
+U+FFFD as above, omits `was`, and carries the member's source bytes,
+quotes included, in `raw` as base64 under RFC 4648 §4, with padding,
+since the URL-safe alphabet and an unpadded form would give one response
+two hashes. A value that had no source text, one the writer held
+decoded, is recorded as its canonical string serialisation with the
+ill-formed bytes kept as they were, so two writers holding the same
+bytes record one `raw`. The array is sorted by `at` as UTF-16 code
+units, matching the canonical form, so two writers normalising one
+response produce one content hash. The normalised form is what the next
+request carries, so the rebuilt request and `request_hash` agree with
+what was sent. `ts` is hashed as the string it is, which is why the
+envelope table admits one spelling of it.
 
 - The entry's **content** is the object of its members with the
   envelope's — `id`, `type`, `parent`, `parents`, `ts` — removed, and
@@ -1190,19 +1197,20 @@ document. A conforming **reader** implements the context algorithm and
 the preservation rules. A conforming **converter** from a native format
 documents which native entries it maps and which it drops.
 
-The reference implementation is the Go `agentsession` library, which at
-this draft still writes 0.4 and follows. The conformance suite is a
-directory of fixture files with expected context output for every leaf,
-expected `request_hash` values, every entry's content hash and `id`
-recomputed, 9007199254740993 in three spellings and once as a number the
-profile requires, a lone surrogate normalised with its `was`, a forked
-fixture whose `base` is found in its origin, the recomputed `reason` for
-every `run` end, and negative cases for a broken parent link, a
-truncated last line, an unknown type, a `dispatch` that follows a
-`reject`, and a header naming `dispatch` beside a call that has an
-output and no `dispatch`. Converters for pi, Claude Code and Codex are
-part of the initial proposal so the format arrives with three existing
-corpora behind it.
+The reference implementation is the Go `agentsession` library, which
+writes this draft. The conformance suite is a directory of fixture files
+with expected context output for every leaf, expected `request_hash`
+values, every entry's content hash and `id` recomputed, 9007199254740993
+in three spellings and once as a number the profile requires, a lone
+surrogate normalised with its `was`, output that was not valid UTF-8
+replaced with its `raw`, 2^60 written as its canonical rendering
+1152921504606847000 and read back, a forked fixture whose `base` is
+found in its origin, the recomputed `reason` for every `run` end, and
+negative cases for a broken parent link, a truncated last line, an
+unknown type, a `dispatch` that follows a `reject`, and a header naming
+`dispatch` beside a call that has an output and no `dispatch`.
+Converters for pi, Claude Code and Codex are part of the initial
+proposal so the format arrives with three existing corpora behind it.
 
 ## Prior art
 

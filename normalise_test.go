@@ -175,6 +175,11 @@ func TestNormalisedFixture(t *testing.T) {
 		switch v := e.(type) {
 		case *InfoEntry:
 			name = v.Name
+			// 2^60 is written as its canonical rendering, which is
+			// what a reader decodes, with nothing to record.
+			if got := string(v.Unknown["acme:pow60"]); got != "1152921504606847000" {
+				t.Errorf("acme:pow60 read back as %s, want 1152921504606847000", got)
+			}
 		case *ResponseEntry:
 			name = "typed"
 		case *CustomEntry:
@@ -279,6 +284,74 @@ func TestCallerNormalisedIsSortedAndChecked(t *testing.T) {
 	} {
 		e := &InfoEntry{Name: "n"}
 		e.Normalised = []Normalisation{bad}
+		if _, err := s.Append(e); !errors.Is(err, ErrBadNormalisation) {
+			t.Errorf("%s: err = %v, want ErrBadNormalisation", name, err)
+		}
+	}
+}
+
+// TestFailedAppendLeavesTheEntryUntouched: when an append is refused,
+// every string is back as the caller had it, neither repaired nor
+// holding a sentinel, so a retry after fixing the refusal still
+// records the repair.
+func TestFailedAppendLeavesTheEntryUntouched(t *testing.T) {
+	s := New(Header{})
+	e := &InfoEntry{Name: "n\xff"}
+	e.Unknown = map[string]json.RawMessage{"acme:n": json.RawMessage(`1e400`)}
+	if _, err := s.Append(e); err == nil {
+		t.Fatal("Append of 1e400 succeeded")
+	}
+	if e.Name != "n\xff" {
+		t.Errorf("name = %q after a refused append, want the original bytes", e.Name)
+	}
+	delete(e.Unknown, "acme:n")
+	if _, err := s.Append(e); err != nil {
+		t.Fatal(err)
+	}
+	if want := []Normalisation{{At: "/name", Raw: base64.StdEncoding.EncodeToString([]byte("\"n\xff\""))}}; !reflect.DeepEqual(e.Normalised, want) {
+		t.Errorf("Normalised = %+v, want %+v", e.Normalised, want)
+	}
+	// A refusal from inside the walk, a member name that is not valid
+	// UTF-8, restores what was already replaced.
+	env := &EnvEntry{CWD: "/tmp/\xff", Tools: map[string]string{"bad\xff": "x"}}
+	if _, err := s.Append(env); err == nil {
+		t.Fatal("Append with a bad member name succeeded")
+	}
+	if env.CWD != "/tmp/\xff" {
+		t.Errorf("cwd = %q after a refused append, want the original bytes", env.CWD)
+	}
+	// A rounding the type cannot hold beside a bad string: both back.
+	r := &ResponseEntry{ResponseID: "r\xff", LatencyMS: 9223372036854775807}
+	if _, err := s.Append(r); err == nil {
+		t.Fatal("Append of max int64 succeeded")
+	}
+	if r.ResponseID != "r\xff" || r.LatencyMS != 9223372036854775807 {
+		t.Errorf("entry = %q/%d after a refused append, want the originals", r.ResponseID, r.LatencyMS)
+	}
+	// A string a custom marshaller leaves out is never written: nothing
+	// to record, the entry keeps it, and the append succeeds.
+	out := NewItemEntry(&openresponses.FunctionCallOutput{CallID: "c", Output: openresponses.FunctionCallOutputData{Text: "t\xff", Parts: openresponses.Contents{&openresponses.InputText{Text: "ok"}}}})
+	if _, err := s.Append(out); err != nil {
+		t.Fatalf("Append with an unmarshalled bad string: %v", err)
+	}
+	if len(out.Normalised) != 0 {
+		t.Errorf("Normalised = %+v for a string that was not written", out.Normalised)
+	}
+}
+
+// TestCallerNormalisedIsCheckedDeeply: a was must be JSON text, a raw
+// padded standard base64, and a pointer recorded once.
+func TestCallerNormalisedIsCheckedDeeply(t *testing.T) {
+	s := New(Header{})
+	for name, bad := range map[string][]Normalisation{
+		"raw not base64": {{At: "/x", Raw: "not base64!"}},
+		"raw unpadded":   {{At: "/x", Raw: "MQ"}},
+		"was not json":   {{At: "/x", Was: "not json"}},
+		"was bad utf-8":  {{At: "/x", Was: "\"\xff\""}},
+		"twice":          {{At: "/x", Was: "1"}, {At: "/x", Was: "2"}},
+	} {
+		e := &InfoEntry{Name: "n"}
+		e.Normalised = bad
 		if _, err := s.Append(e); !errors.Is(err, ErrBadNormalisation) {
 			t.Errorf("%s: err = %v, want ErrBadNormalisation", name, err)
 		}

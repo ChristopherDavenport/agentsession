@@ -318,10 +318,11 @@ func (s *Session) prepare(e Entry) (Result, error) {
 	// A body a provider produced may fail the I-JSON test the hash
 	// is defined over; the format has the writer normalise it and
 	// record what changed, rather than refuse it.
-	if err := normaliseEntry(e); err != nil {
+	line, err := normaliseEntry(e)
+	if err != nil {
 		return Result{}, err
 	}
-	if err := s.hashEntry(e); err != nil {
+	if err := s.hashEntry(e, line); err != nil {
 		return Result{}, err
 	}
 	if want != "" && want != b.ID {
@@ -384,11 +385,13 @@ func (s *Session) checkParentRule(parent string) error {
 }
 
 // hashEntry computes the entry's content hash and ID from its encoded
-// form and sets them on the envelope.
-func (s *Session) hashEntry(e Entry) error {
-	data, err := MarshalEntry(e)
-	if err != nil {
-		return err
+// form, data when the caller has it and the entry marshalled otherwise and sets them on the envelope.
+func (s *Session) hashEntry(e Entry, data []byte) error {
+	if data == nil {
+		var err error
+		if data, err = MarshalEntry(e); err != nil {
+			return err
+		}
 	}
 	id, content, err := EntryHashes(data)
 	if err != nil {

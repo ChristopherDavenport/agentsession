@@ -154,6 +154,7 @@ func TestRegenerateFixtures(t *testing.T) {
 		"acme:digits":   json.RawMessage(`9007199254740993`),
 		"acme:fraction": json.RawMessage(`9007199254740993.0`),
 		"acme:exponent": json.RawMessage(`9.007199254740993e15`),
+		"acme:pow60":    json.RawMessage(`1152921504606846976`),
 	}
 	if _, err := norm.Append(spellings); err != nil {
 		t.Fatal(err)

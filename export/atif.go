@@ -474,7 +474,7 @@ func (b *builder) flushGroup(resp *agentsession.ResponseEntry) {
 		return
 	}
 	if g == nil {
-		g = &agentGroup{responseID: resp.ResponseID}
+		g = &agentGroup{responseID: resp.ResponseID, copied: b.copied}
 	}
 	if resp != nil && g.responseID != "" && g.responseID != resp.ResponseID {
 		// The group belongs to another call; close it on its own first.

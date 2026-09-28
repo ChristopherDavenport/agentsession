@@ -1587,3 +1587,48 @@ func TestKeptWindowConfigIsNotReplayed(t *testing.T) {
 		}
 	}
 }
+
+// TestItemlessResponseInTheKeptWindow: a response with no output items,
+// a failed or empty call, opens its own group when it arrives, and one
+// inside the kept window takes the window's settings like any other.
+func TestItemlessResponseInTheKeptWindow(t *testing.T) {
+	s := agentsession.New(agentsession.Header{})
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-A"})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("one")))
+	first := s.Leaf()
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-B", Reasoning: &openresponses.ReasoningConfig{Effort: "high"}})
+	mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp_2", Status: openresponses.ResponseStatusFailed,
+		Usage: &openresponses.Usage{InputTokens: 2, OutputTokens: 0}})
+	mustAppend(t, s, &agentsession.CompactionEntry{FirstKept: first, Summary: openresponses.SystemText("summary"),
+		Config: agentsession.Settings{Model: "model-C"}})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("two")))
+	for _, withPath := range []bool{true, false} {
+		tr, err := At(s, s.Leaf())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !withPath {
+			tr.Path = nil
+		}
+		asked := map[string]bool{}
+		doc, err := ToATIF(tr, Options{Cost: func(model string, u openresponses.Usage) (float64, bool) { asked[model] = true; return 1, true }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var agent *atif.Step
+		for i := range doc.Steps {
+			if doc.Steps[i].Source == atif.SourceAgent {
+				agent = &doc.Steps[i]
+			}
+		}
+		if agent == nil {
+			t.Fatalf("path=%v: no agent step", withPath)
+		}
+		if agent.ModelName != "model-B" || agent.ReasoningEffort != "high" {
+			t.Errorf("path=%v: itemless step = %s/%s, want model-B/high", withPath, agent.ModelName, agent.ReasoningEffort)
+		}
+		if asked["model-C"] {
+			t.Errorf("path=%v: the window's response was priced under the checkpoint's model", withPath)
+		}
+	}
+}
