@@ -93,8 +93,13 @@ versions may break the API.
   log line never reached disk is kept, and it spares every object
   younger than a grace period the caller gives, as git spares a young
   loose object, so it needs no lock on writers and runs alongside live
-  sessions. A network filesystem is not supported, since `O_APPEND` is
-  not atomic across NFS clients. A session changed behind the store's
+  sessions; an object a new append finds already stored is freshened, as
+  git freshens a loose object, and a fork's prefix is freshened when the
+  fork is made, so neither can be swept between the write and the record
+  that names it. A grace of zero is safe only with no writer active.
+  Lock files live under `locks/` and are never unlinked, so a holder is
+  never left locking an inode a delete removed. A network filesystem is
+  not supported, since `O_APPEND` is not atomic across NFS clients. A session changed behind the store's
   back, by an append made on it directly or a leaf moved to an entry
   never committed, is refused (`ErrModified`). An index write that
   fails after the journal commit does not fail the append, which is

@@ -9,7 +9,8 @@
 //	    log                               one entry hash per line, in append order
 //	    HEAD                              the head's hash, or empty
 //	    record                            "record" or "mirror"
-//	    lock                              the advisory lock of the process holding it
+//	  locks/<session id>                  the lock of the process holding the session
+//	  sweep.lock                          the lock of a running sweep
 //	  journal                             one line per commit: the commit point
 //
 // An entry is stored as two objects, its body under the content hash
@@ -128,7 +129,7 @@ type handle struct {
 // against the logs and heads so a crash between the commit point and
 // the indexes leaves no acknowledged append missing.
 func Open(root string) (*Store, error) {
-	for _, d := range []string{filepath.Join(root, "objects", "contents"), filepath.Join(root, "objects", "entries"), filepath.Join(root, "sessions")} {
+	for _, d := range []string{filepath.Join(root, "objects", "contents"), filepath.Join(root, "objects", "entries"), filepath.Join(root, "sessions"), filepath.Join(root, "locks")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("cas: %w", err)
 		}
@@ -164,6 +165,13 @@ func (s *Store) sessionDir(id string) (string, error) {
 		return "", fmt.Errorf("%w: session id %q", ErrBadName, id)
 	}
 	return filepath.Join(s.root, "sessions", id), nil
+}
+
+// lockSession takes a session's lock. Lock files live under locks/ and
+// are never unlinked, so a holder cannot be left locking an inode that a
+// delete or a failed create removed from under it.
+func (s *Store) lockSession(id string) (*dirLock, error) {
+	return lockFile(filepath.Join(s.root, "locks", id))
 }
 
 func objectPath(dir, hash string) (string, error) {
@@ -202,6 +210,13 @@ func syncDir(dir string) error {
 // durable journal record never names an object that did not survive.
 func writeObject(path string, data []byte) error {
 	if _, err := os.Stat(path); err == nil {
+		// Freshen it, as git does a loose object it finds it already has:
+		// the sweep spares a young object, and this write is what makes
+		// the object needed again, perhaps before its record lands.
+		now := time.Now()
+		if err := os.Chtimes(path, now, now); err != nil {
+			return err
+		}
 		return nil
 	}
 	if _, err := os.Stat(filepath.Dir(path)); errors.Is(err, os.ErrNotExist) {
@@ -329,6 +344,39 @@ func (s *Store) storeEntry(e agentsession.Entry) error {
 	}
 	if err := writeObject(ep, env); err != nil {
 		return fmt.Errorf("cas: store entry: %w", err)
+	}
+	return nil
+}
+
+// freshenPath touches the objects on the path to id, so a fork's prefix
+// is young to the sweep until the fork's header lands.
+func (s *Store) freshenPath(id string) error {
+	now := time.Now()
+	for id != "" {
+		ep, err := s.entryPath(id)
+		if err != nil {
+			return err
+		}
+		if err := os.Chtimes(ep, now, now); err != nil {
+			return err
+		}
+		e, err := s.envelope(id)
+		if err != nil {
+			return err
+		}
+		var c string
+		if json.Unmarshal(e["content"], &c) == nil {
+			if cp, err := s.contentPath(c); err == nil {
+				if err := os.Chtimes(cp, now, now); err != nil {
+					return err
+				}
+			}
+		}
+		var parent *string
+		if err := json.Unmarshal(e["parent"], &parent); err != nil || parent == nil {
+			return err
+		}
+		id = *parent
 	}
 	return nil
 }
@@ -601,8 +649,22 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// index builds what the store holds from the logs and the bases.
+// index builds what the store holds from the journal, the logs and the
+// bases. The journal counts as well as the logs, since a log may lag an
+// acknowledged append until its session is next opened.
 func (s *Store) index() error {
+	states, err := s.replay()
+	if err != nil {
+		return err
+	}
+	for id, st := range states {
+		if st.deleted {
+			continue
+		}
+		for _, e := range st.entries {
+			s.owner[e] = id
+		}
+	}
 	dirs, err := os.ReadDir(filepath.Join(s.root, "sessions"))
 	if err != nil {
 		return fmt.Errorf("cas: %w", err)
@@ -784,6 +846,10 @@ func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.
 		if prefix, err = s.pathLines(h.Base); err != nil {
 			return nil, err
 		}
+		// Young to the sweep until the header names them.
+		if err := s.freshenPath(h.Base); err != nil {
+			return nil, err
+		}
 	}
 	tmp := agentsession.New(h)
 	h = tmp.Header()
@@ -794,10 +860,7 @@ func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.
 	if _, ok := s.open[h.ID]; ok {
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("cas: %w", err)
-	}
-	lk, err := lockDir(dir)
+	lk, err := s.lockSession(h.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -812,9 +875,6 @@ func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.
 		lk.release()
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
-	// Recovery may have removed a directory the journal said was deleted,
-	// and the lock file with it; the lock is held on the open file
-	// either way, and the directory is made again before writing.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fail(fmt.Errorf("cas: %w", err))
 	}
@@ -935,7 +995,7 @@ func (s *Store) openLocked(id string) (*handle, error) {
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
 	}
-	lk, err := lockDir(dir)
+	lk, err := s.lockSession(id)
 	if err != nil {
 		return nil, err
 	}
@@ -1314,7 +1374,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if h, ok := s.open[id]; ok {
 		delete(s.open, id)
 		lk = h.lock
-	} else if lk, err = lockDir(dir); err != nil {
+	} else if lk, err = s.lockSession(id); err != nil {
 		return err
 	}
 	defer lk.release()
@@ -1478,7 +1538,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("cas: %w", err)
 	}
-	lk, err := lockDir(dir)
+	lk, err := s.lockSession(h.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -1493,6 +1553,8 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		lk.release()
 		return nil, fmt.Errorf("cas: %w", err)
 	}
+	// The prefix objects are written below, which makes them young to
+	// the sweep; a fork made by Create freshens them instead.
 	// The create record is the boundary; a failure after it commits a
 	// delete, so the ID is free again and nothing half-imported counts.
 	if err := s.commit(journalRecord{Op: "create", Session: h.ID}); err != nil {
@@ -1577,14 +1639,18 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 // collector spares a young loose object, so an object written ahead of
 // its journal record is safe. It therefore needs no lock on writers and
 // runs alongside live sessions; a store-wide lock keeps two sweeps
-// apart. Media blobs are contents. It returns how many objects went.
+// apart. A grace of zero is safe only when no writer is active
+// anywhere, as git says of pruning with an expiry of now: with one, it
+// sweeps objects written ahead of their records and temporary files
+// mid-write. An hour is a reasonable grace for a live store. Media
+// blobs are contents. It returns how many objects went.
 func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	lk, err := lockDir(s.root)
+	lk, err := lockFile(filepath.Join(s.root, "sweep.lock"))
 	if err != nil {
 		return 0, err
 	}
@@ -1616,9 +1682,8 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	for id := range s.prefix {
 		keepEntry[id] = true
 	}
-	// A base the journal knows but no header names yet: a fork being
-	// created. Its prefix is kept through the grace period, and the
-	// header lands before that runs out.
+	// A fork being created has its prefix freshened before its header
+	// lands, so those objects are young and spared.
 	keepContent := map[string]bool{}
 	for id := range keepEntry {
 		e, err := s.envelope(id)
