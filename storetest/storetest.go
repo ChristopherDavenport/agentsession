@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +35,8 @@ func Run(t *testing.T, opts Options) {
 	t.Run("List", func(t *testing.T) { testList(t, opts) })
 	t.Run("Continue", func(t *testing.T) { testContinue(t, opts) })
 	t.Run("Delete", func(t *testing.T) { testDelete(t, opts) })
+	t.Run("Fork", func(t *testing.T) { testFork(t, opts) })
+	t.Run("ForkPrefix", func(t *testing.T) { testForkPrefix(t, opts) })
 	if opts.Reopen != nil {
 		t.Run("Persistence", func(t *testing.T) { testPersistence(t, opts) })
 		t.Run("DurableLeaf", func(t *testing.T) { testDurableLeaf(t, opts) })
@@ -162,6 +165,183 @@ func testDurableLeaf(t *testing.T, opts Options) {
 	}
 	if len(c.Items) != 3 {
 		t.Errorf("context after reopen = %d items, want 3", len(c.Items))
+	}
+}
+
+// testFork creates sessions whose header names a base. Create opens
+// such a session with the path to the base and refuses a base it cannot
+// honour, so the failure lands at the call that made it and never at
+// the first append; the fork's appends reach neither the origin nor its
+// file, and with a persistent store both read back as they were.
+func testFork(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	o, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := o.ID()
+	var ids []string
+	for _, e := range []agentsession.Entry{
+		&agentsession.ConfigEntry{Model: "m"},
+		agentsession.NewItemEntry(openresponses.UserText("q")),
+		agentsession.NewItemEntry(openresponses.AssistantText("a")),
+		agentsession.NewItemEntry(openresponses.UserText("later")),
+	} {
+		id, err := st.Append(ctx, origin, e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	base := ids[2]
+	f, err := st.Create(ctx, agentsession.Header{ID: "fork-1", ParentSession: origin, Base: base})
+	if err != nil {
+		t.Fatalf("Create with a base: %v", err)
+	}
+	if h := f.Header(); h.Base != base || h.ParentSession != origin {
+		t.Errorf("fork header base %q parent %q", h.Base, h.ParentSession)
+	}
+	if f.Leaf() != base || f.Len() != 3 || !f.Prefix(base) || !f.Prefix(ids[0]) {
+		t.Errorf("fork opens with leaf %s, %d entries; want the base and the 3 on its path", f.Leaf(), f.Len())
+	}
+	own, err := st.Append(ctx, "fork-1", agentsession.NewItemEntry(openresponses.UserText("instead")))
+	if err != nil {
+		t.Fatalf("fork's first append: %v", err)
+	}
+	if e, _ := f.Entry(own); e.Base().Parent != base || f.Leaf() != own || f.Prefix(own) {
+		t.Errorf("own entry parent %s, leaf %s", e.Base().Parent, f.Leaf())
+	}
+	above := agentsession.NewItemEntry(openresponses.UserText("above"))
+	above.Parent = ids[0]
+	if _, err := st.Append(ctx, "fork-1", above); !errors.Is(err, agentsession.ErrNoEntry) {
+		t.Errorf("append above the base = %v, want ErrNoEntry", err)
+	}
+	// A header that names no parent session finds the holder; one on a
+	// fork's prefix is the origin's entry wherever it is found.
+	f2, err := st.Create(ctx, agentsession.Header{ID: "fork-2", Base: ids[1]})
+	if err != nil {
+		t.Fatalf("Create with a base and no parent session: %v", err)
+	}
+	if f2.Len() != 2 || f2.Leaf() != ids[1] {
+		t.Errorf("fork-2 opens with %d entries, leaf %s", f2.Len(), f2.Leaf())
+	}
+	f3, err := st.Create(ctx, agentsession.Header{ID: "fork-3", ParentSession: "fork-1", Base: ids[1]})
+	if err != nil {
+		t.Fatalf("Create at a fork's prefix entry: %v", err)
+	}
+	if f3.Len() != 2 || f3.Leaf() != ids[1] {
+		t.Errorf("fork-3 opens with %d entries, leaf %s", f3.Len(), f3.Leaf())
+	}
+	if _, err := st.Append(ctx, "fork-3", agentsession.NewItemEntry(openresponses.UserText("again"))); err != nil {
+		t.Fatalf("fork-3's first append: %v", err)
+	}
+	// Refusals come from Create.
+	if _, err := st.Create(ctx, agentsession.Header{ID: "fork-x", ParentSession: origin, Base: "sha256:" + strings.Repeat("0", 64)}); !errors.Is(err, agentsession.ErrNoEntry) {
+		t.Errorf("Create with a base not held = %v, want ErrNoEntry", err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "fork-y", ParentSession: origin, Base: base, Media: agentsession.MediaSidecar}); err == nil {
+		t.Error("Create with a media form other than the origin's succeeded")
+	}
+	label, err := st.Append(ctx, origin, agentsession.NewLabelEntry(ids[3], agentsession.LeafLabel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "fork-z", ParentSession: origin, Base: label}); err == nil {
+		t.Error("Create at a leaf label succeeded")
+	}
+	for _, id := range []string{"fork-x", "fork-y", "fork-z"} {
+		if _, err := st.Open(ctx, id); !errors.Is(err, agentsession.ErrNoSession) {
+			t.Errorf("a refused Create left %s: Open = %v", id, err)
+		}
+	}
+	// The origin saw none of it.
+	if o.Len() != 5 || o.Leaf() != ids[3] || o.Header().Base != "" {
+		t.Errorf("origin changed: %d entries, leaf %s", o.Len(), o.Leaf())
+	}
+	if opts.Reopen == nil {
+		return
+	}
+	st2 := opts.Reopen(t, st)
+	again, err := st2.Open(ctx, "fork-1")
+	if err != nil {
+		t.Fatalf("reopen the fork: %v", err)
+	}
+	if again.Header().Base != base || again.Len() != 4 || again.Leaf() != own || !again.Prefix(base) || again.Prefix(own) {
+		t.Errorf("fork read back: base %s, %d entries, leaf %s", again.Header().Base, again.Len(), again.Leaf())
+	}
+	if _, err := st2.Append(ctx, "fork-1", agentsession.NewItemEntry(openresponses.UserText("more"))); err != nil {
+		t.Errorf("append to the reopened fork: %v", err)
+	}
+	// A fork made from a session this handle has not opened reads it
+	// without claiming it.
+	if _, err := st2.Create(ctx, agentsession.Header{ID: "fork-4", Base: ids[0]}); err != nil {
+		t.Fatalf("Create a fork after reopen: %v", err)
+	}
+	ro, err := st2.Open(ctx, origin)
+	if err != nil {
+		t.Fatalf("reopen the origin: %v", err)
+	}
+	if ro.Len() != 5 || ro.Header().Base != "" {
+		t.Errorf("origin read back with %d entries", ro.Len())
+	}
+	if _, err := st2.Append(ctx, origin, agentsession.NewItemEntry(openresponses.UserText("origin goes on"))); err != nil {
+		t.Errorf("append to the origin after forking it: %v", err)
+	}
+}
+
+// testForkPrefix: a fork takes its origin's payload profile, since the
+// prefix was written under it, and Create refuses a prefix that could
+// not stand as a file of its own: one converging an entry of the origin
+// off the path, which the fork would not hold.
+func testForkPrefix(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	const payload = "openresponses/2020-01-01"
+	if _, err := st.Create(ctx, agentsession.Header{ID: "o", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	app := func(e agentsession.Entry) string {
+		t.Helper()
+		id, err := st.Append(ctx, "o", e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	app(&agentsession.ConfigEntry{Model: "m"})
+	u := app(agentsession.NewItemEntry(openresponses.UserText("q")))
+	a := app(agentsession.NewItemEntry(openresponses.AssistantText("a")))
+	b := agentsession.NewItemEntry(openresponses.AssistantText("b"))
+	b.Parent = u
+	bID := app(b)
+	j := agentsession.NewItemEntry(openresponses.UserText("join"))
+	j.Parent = bID
+	j.Parents = []agentsession.EntryRef{{Entry: a}}
+	jID := app(j)
+
+	f, err := st.Create(ctx, agentsession.Header{ID: "f", ParentSession: "o", Base: bID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Header().Payload; got != payload {
+		t.Errorf("fork payload = %s, want the origin's %s", got, payload)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "g", ParentSession: "o", Base: jID}); !errors.Is(err, agentsession.ErrBadConvergence) {
+		t.Errorf("Create at an entry converging one off its path = %v, want ErrBadConvergence", err)
+	}
+	if _, err := st.Open(ctx, "g"); !errors.Is(err, agentsession.ErrNoSession) {
+		t.Errorf("a refused Create left g: Open = %v", err)
+	}
+	if opts.Reopen == nil {
+		return
+	}
+	again, err := opts.Reopen(t, st).Open(ctx, "f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := again.Header().Payload; got != payload {
+		t.Errorf("fork payload read back = %s", got)
 	}
 }
 

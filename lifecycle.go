@@ -92,6 +92,15 @@ type RunEntry struct {
 	// Ref names the trigger of a start or the cause of an end in the
 	// harness's own terms. Readers treat it as opaque.
 	Ref string `json:"ref,omitempty"`
+	// Trigger, on a start entry, says how the input that started the run
+	// arrived, in parts, beside Ref and changing nothing about it. A
+	// harness's richer facts about the firing, such as when it was due
+	// or which attempt it is, go in members of the run entry this
+	// package does not define, kept in [EntryBase.Unknown]. A trigger
+	// member this type cannot hold exactly, one with a member it does
+	// not define or one written before the member was, is kept there as
+	// written and Trigger is nil.
+	Trigger *Trigger `json:"-"`
 	// Pending lists, on an end entry, the IDs of the calls left without
 	// an output. It is written even when empty.
 	Pending []string `json:"pending"`
@@ -324,6 +333,11 @@ func (e *RunEntry) MarshalJSON() ([]byte, error) {
 	if err := validateLifecycle(e); err != nil {
 		return nil, err
 	}
+	if e.Trigger != nil {
+		if _, dup := e.Unknown["trigger"]; dup {
+			return nil, errors.New("agentsession: run entry has trigger both typed and unknown")
+		}
+	}
 	if e.Phase == RunStart {
 		aux := struct {
 			RunID   string   `json:"run_id"`
@@ -332,7 +346,8 @@ func (e *RunEntry) MarshalJSON() ([]byte, error) {
 			Reason  string   `json:"reason,omitempty"`
 			Ref     string   `json:"ref,omitempty"`
 			Pending []string `json:"pending,omitempty"`
-		}{e.RunID, e.Phase, e.Source, e.Reason, e.Ref, e.Pending}
+			Trigger *Trigger `json:"trigger,omitempty"`
+		}{e.RunID, e.Phase, e.Source, e.Reason, e.Ref, e.Pending, e.Trigger}
 		return marshalEntry(TypeRun, &e.EntryBase, aux)
 	}
 	pending := e.Pending
@@ -346,7 +361,8 @@ func (e *RunEntry) MarshalJSON() ([]byte, error) {
 		Reason  string   `json:"reason"`
 		Ref     string   `json:"ref,omitempty"`
 		Pending []string `json:"pending"`
-	}{e.RunID, e.Phase, e.Source, e.Reason, e.Ref, pending}
+		Trigger *Trigger `json:"trigger,omitempty"`
+	}{e.RunID, e.Phase, e.Source, e.Reason, e.Ref, pending, e.Trigger}
 	return marshalEntry(TypeRun, &e.EntryBase, aux)
 }
 
@@ -361,9 +377,11 @@ func (e *RunEntry) UnmarshalJSON(data []byte) error {
 
 func (e *RunEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain RunEntry
+	e.Trigger = nil
 	if err := unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), runKeys); err != nil {
 		return err
 	}
+	promote(&e.EntryBase, "trigger", &e.Trigger)
 	return validateLifecycle(e)
 }
 

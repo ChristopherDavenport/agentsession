@@ -155,16 +155,13 @@ func shortID(id string) string {
 // unique prefix of its digest, with or without the "sha256:" prefix, or
 // by the legacy id a migrated entry carries.
 func resolveEntry(s *agentsession.Session, arg string) (string, error) {
-	if _, ok := s.Entry(arg); ok {
-		return arg, nil
+	if id, ok := s.Resolve(arg); ok {
+		return id, nil
 	}
 	want := strings.TrimPrefix(arg, agentsession.HashPrefix)
 	var found []string
 	for _, e := range s.Entries() {
 		b := e.Base()
-		if b.LegacyID == arg {
-			return b.ID, nil
-		}
 		if want != "" && strings.HasPrefix(strings.TrimPrefix(b.ID, agentsession.HashPrefix), want) {
 			found = append(found, b.ID)
 		}

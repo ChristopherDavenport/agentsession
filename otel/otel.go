@@ -57,6 +57,9 @@ const (
 	AttrRunID          = "agentsession.run.id"
 	AttrRunSource      = "agentsession.run.source"
 	AttrRunTrigger     = "agentsession.run.trigger"
+	AttrTriggerKind    = "agentsession.run.trigger.kind"
+	AttrTriggerRef     = "agentsession.run.trigger.ref"
+	AttrTriggerSource  = "agentsession.run.trigger.source"
 	AttrRunReason      = "agentsession.run.reason"
 	AttrRunCause       = "agentsession.run.cause"
 	AttrRunPending     = "agentsession.run.pending"
@@ -479,6 +482,13 @@ func (t *tracker) startRun(r *agentsession.RunEntry, ts time.Time) {
 	}
 	if r.Ref != "" {
 		attrs = append(attrs, attribute.String(AttrRunTrigger, r.Ref))
+	}
+	if tr := r.Trigger; tr != nil {
+		for _, kv := range [][2]string{{AttrTriggerKind, tr.Kind}, {AttrTriggerRef, tr.Ref}, {AttrTriggerSource, tr.Source}} {
+			if kv[1] != "" {
+				attrs = append(attrs, attribute.String(kv[0], kv[1]))
+			}
+		}
 	}
 	opts := []trace.SpanStartOption{trace.WithTimestamp(ts), trace.WithAttributes(attrs...)}
 	opts = t.withBranchLink(opts)

@@ -5,6 +5,66 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **RFC 0001 draft 0.6; the library writes `agentsession/0.6`.**
+  Additive: three optional members and three paragraphs. A 0.5 file
+  reads as it stands, with nothing rehashed and no `legacy_id`, and its
+  header takes the current format; v0.0.8 refuses a 0.6 file, as a 0.x
+  reader refuses a later minor. A 0.5 file was free to hold `trigger` or
+  `call_id` in any form while the names were undefined, so the typed
+  field is filled only from a member it holds exactly; any other form,
+  or a `trigger` carrying a member the type does not define, stays in
+  `Unknown` as written, and the entry's hash still verifies.
+  - `RunEntry.Trigger`: a run start carries the `Trigger` a `queued`
+    entry already had, beside `Ref`, which is unchanged. A due time or
+    an attempt goes in the run entry's own unknown members. The ATIF
+    run record carries it as `trigger_parts`, since `trigger` there has
+    always been the start's `ref`; OTel adds
+    `agentsession.run.trigger.{kind,ref,source}`. (#82; the recorder
+    half, writing it from the loop's trigger, is agentturn's.)
+  - `CustomEntry.CallID`: the call a record belongs to, since a record's
+    position cannot say which call of a parallel batch wrote it. The
+    ATIF `custom` record carries it. (#87; the recorder half, filling it
+    from `agenttool.CallFrom`, is agentturn's.)
+  - A `proceed` no longer promises a `dispatch`: an approval that an
+    abort or a later refusal overtook stays as written. `Call.State`
+    and `VerifyRecords` already read it that way; tests now pin it.
+    (#78, settling agentturn #105's open question.)
+  - `env`: a later entry with a different `workspace` is a
+    substitution, and a reader that holds the environment fixed treats
+    the path from it on as unverifiable. Text only. (#88)
+- **Every store honours a header's `base` at `Create`.** `MemoryStore`,
+  `jsonl` and `sqlite` accepted a header with a base and refused the
+  session's first append, and a jsonl file written that way could not
+  be read back. `Create` now forks the session holding the base, the one
+  `parent_session` names when it holds it and any other otherwise, and
+  writes the prefix after the header, as `cas` already did; a base the
+  store does not hold (`ErrNoEntry`), a `leaf` label or a media form
+  other than the origin's is refused by `Create`, as is a prefix that
+  could not stand as a file of its own: one holding an entry that
+  converges an entry of the origin off the path (`ErrBadConvergence`),
+  or an entry a migration could not rewrite (`ErrUnresolvedMigration`).
+  The fork takes the origin's payload profile. The origin is read,
+  never claimed or written. The jsonl store writes a new session's
+  header and prefix to a temporary file and links it into place, so a
+  crash cannot leave a fork whose prefix was cut short. `storetest` holds every store to it. The
+  sqlite store gains an index on `entries(id)`. (#79, #84, #85; the
+  sqlite store had the same defect. agentturn#118, `session.Start` on a
+  forked header, can now build on it.)
+- `Fork` keeps a `parent_session` the caller named, since RFC 0002 makes
+  it provenance a header may point at either the origin or the session
+  that owns the base, and refuses a `media` other than the origin's.
+- `Session.Resolve` returns the entry an ID names, or the one whose
+  `legacy_id` it is, so a report written before a file was migrated
+  still finds its targets. `export.At` and the CLI's `-leaf` accept
+  such an ID, and the document is built at and named by the entry's
+  current ID; `Entry` stays strict, since `Append` checks a parent with
+  it. (#80)
+- `export.At` carries the outcomes below the entry it ends at that
+  target its path, in `Trajectory.Outcomes`, so the document a score
+  names says how it scored; steps and totals do not count them. (#81)
+
 ## v0.0.8 - 2026-09-28
 
 - **RFC 0001 draft 0.5 is implemented and the library writes

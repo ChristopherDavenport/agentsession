@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS entries (
 	UNIQUE (session_id, seq),
 	UNIQUE (session_id, id)
 ) STRICT;
+CREATE INDEX IF NOT EXISTS entries_id ON entries(id);
 CREATE TABLE IF NOT EXISTS holders (
 	session_id TEXT    PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
 	pid        INTEGER NOT NULL,
@@ -339,14 +340,23 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	if s.readOnly {
 		return nil, agentsession.ErrReadOnly
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	sess := agentsession.New(h)
+	if h.Base != "" {
+		origin, err := s.forkOrigin(ctx, h.ParentSession, h.Base)
+		if err != nil {
+			return nil, err
+		}
+		if sess, err = agentsession.Fork(origin, h.Base, h); err != nil {
+			return nil, err
+		}
+	}
 	h = sess.Header()
 	line, err := h.MarshalJSON()
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, ok := s.open[h.ID]; ok {
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
@@ -364,6 +374,29 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 			return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 		}
 		return nil, fmt.Errorf("sqlite: insert session: %w", err)
+	}
+	// A fork's rows open with the prefix, so the session reads back from
+	// its own rows as its file would.
+	for i, e := range sess.Entries() {
+		line, err := agentsession.MarshalEntry(e)
+		if err != nil {
+			return nil, err
+		}
+		b := e.Base()
+		var parent any
+		if b.Parent != "" {
+			parent = b.Parent
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO entries (session_id, seq, id, parent, type, line) VALUES (?, ?, ?, ?, ?, ?)`,
+			h.ID, i+1, b.ID, parent, e.EntryType(), string(line)); err != nil {
+			return nil, fmt.Errorf("sqlite: insert prefix entry %s: %w", b.ID, err)
+		}
+	}
+	if name, next := sess.Name(), sess.SupersededBy(); name != "" || next != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET name = ?, superseded_by = ? WHERE id = ?`, name, next, h.ID); err != nil {
+			return nil, fmt.Errorf("sqlite: insert session: %w", err)
+		}
 	}
 	if err := s.claim(ctx, tx, h.ID); err != nil {
 		return nil, err
@@ -411,6 +444,16 @@ func (s *Store) openLocked(ctx context.Context, id string) (*agentsession.Sessio
 			return nil, fmt.Errorf("sqlite: hold session: %w", err)
 		}
 	}
+	sess, err := s.load(ctx, id, header)
+	if err != nil {
+		return nil, err
+	}
+	s.open[id] = sess
+	return sess, nil
+}
+
+// load rebuilds a session from its rows without claiming it.
+func (s *Store) load(ctx context.Context, id, header string) (*agentsession.Session, error) {
 	// Rebuild the JSONL form and let the library validate the tree.
 	var buf bytes.Buffer
 	buf.WriteString(header)
@@ -438,8 +481,67 @@ func (s *Store) openLocked(ctx context.Context, id string) (*agentsession.Sessio
 	if sess.ID() != id {
 		return nil, fmt.Errorf("sqlite: row %s holds session %s", id, sess.ID())
 	}
-	s.open[id] = sess
 	return sess, nil
+}
+
+// forkOrigin returns the session a fork at base continues from: named, when
+// the named session holds base, else one whose own entries include it,
+// else one that holds it on its prefix. A session not open here is read
+// without being claimed, so a fork can be made from a session another
+// process is writing. The caller holds s.mu.
+func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsession.Session, error) {
+	read := func(id string) (*agentsession.Session, error) {
+		if sess, ok := s.open[id]; ok {
+			return sess, nil
+		}
+		var header string
+		err := s.r.QueryRowContext(ctx, `SELECT header FROM sessions WHERE id = ?`, id).Scan(&header)
+		if err != nil {
+			return nil, err
+		}
+		return s.load(ctx, id, header)
+	}
+	if named != "" {
+		if sess, err := read(named); err == nil {
+			if _, ok := sess.Entry(base); ok {
+				return sess, nil
+			}
+		}
+	}
+	rows, err := s.r.QueryContext(ctx, `SELECT DISTINCT session_id FROM entries WHERE id = ? ORDER BY session_id`, base)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: find base: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("sqlite: find base: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: find base: %w", err)
+	}
+	var onPrefix *agentsession.Session
+	for _, id := range ids {
+		sess, err := read(id)
+		if err != nil {
+			continue
+		}
+		if !sess.Prefix(base) {
+			return sess, nil
+		}
+		if onPrefix == nil {
+			onPrefix = sess
+		}
+	}
+	if onPrefix == nil {
+		return nil, fmt.Errorf("%w: base %s is not held by this store", agentsession.ErrNoEntry, base)
+	}
+	return onPrefix, nil
 }
 
 // Append implements agentsession.Store: the entry joins the in-memory

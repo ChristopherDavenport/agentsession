@@ -92,6 +92,30 @@ func (s *Session) Entry(id string) (Entry, bool) {
 	return e, ok
 }
 
+// Resolve returns the ID of the entry id names: id itself when it is an
+// entry's ID, else the ID of the entry a migration rewrote from id,
+// whose LegacyID it is, in the session as read or in a 0.5 file that
+// kept the member. Everything written about a session before its
+// file was migrated names entries by their old IDs; Resolve is how a
+// reader holding one finds the entry, since Entry, Path and the rest
+// take the current ID alone.
+func (s *Session) Resolve(id string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.byID[id]; ok {
+		return id, true
+	}
+	if id == "" {
+		return "", false
+	}
+	for _, e := range s.entries {
+		if b := e.Base(); b.LegacyID == id {
+			return b.ID, true
+		}
+	}
+	return "", false
+}
+
 // Entries returns the entries in file order. The slice is a copy; the
 // entries are shared.
 func (s *Session) Entries() []Entry {
@@ -896,19 +920,59 @@ func (s *Session) SummarizeBranch(from string, summary openresponses.Item) (*Bra
 	return &BranchSummaryEntry{From: from, Summary: summary}, nil
 }
 
+// prefixStandsAlone checks that path, a prefix a fork would open with,
+// can be written as a file of its own: no entry on it converges an
+// entry of this session that is off the path, which the fork's file
+// would not hold, and no entry on it is one a migration could not
+// rewrite, which a file of this version may not carry. The caller
+// holds s.mu.
+func (s *Session) prefixStandsAlone(path []Entry) error {
+	on := make(map[string]bool, len(path))
+	for _, e := range path {
+		on[e.Base().ID] = true
+	}
+	var unresolved map[string]bool
+	if s.migrated && len(s.unresolved) > 0 {
+		unresolved = make(map[string]bool, len(s.unresolved))
+		for _, id := range s.unresolved {
+			unresolved[id] = true
+		}
+	}
+	for _, e := range path {
+		b := e.Base()
+		for _, r := range b.Parents {
+			if r.Session == "" && !on[r.Entry] {
+				return fmt.Errorf("%w: prefix entry %s converges %s, which is off the path to the base and so not in the fork", ErrBadConvergence, b.ID, r.Entry)
+			}
+		}
+		if b.LegacyID != "" && unresolved[b.LegacyID] {
+			return fmt.Errorf("%w: prefix entry %s (was %s)", ErrUnresolvedMigration, b.ID, b.LegacyID)
+		}
+	}
+	return nil
+}
+
 // utcNow is the session clock: the current time in UTC with the
 // monotonic reading dropped, so what is stamped is what reaches disk.
 func utcNow() time.Time { return time.Now().UTC().Round(0) }
 
 // Fork creates a session that continues from entry at of origin: a
 // session with a base, in the format's terms. The new session's header
-// is h with Base set to at and ParentSession to origin's ID; its
-// entries open with origin's path to at, the prefix, which the new
-// session shares with origin rather than copies, and its leaf is the
-// base. Every entry it appends hangs from the base or from an entry it
-// appended itself, and its file opens with the prefix so it stands
-// alone. The base may not be a leaf label, since it is the fork's first
-// leaf and the leaf never rests on one.
+// is h with Base set to at and, when h names none, ParentSession set to
+// origin's ID; its entries open with origin's path to at, the prefix,
+// which the new session shares with origin rather than copies, and its
+// leaf is the base. Every entry it appends hangs from the base or from
+// an entry it appended itself, and its file opens with the prefix so it
+// stands alone. The base may not be a leaf label, since it is the
+// fork's first leaf and the leaf never rests on one, and h's media, when
+// set, must be origin's, since the prefix was written in that form.
+// Fork refuses a prefix that could not stand alone: one holding an
+// entry that converges an entry of origin off the path
+// ([ErrBadConvergence]), or an entry of a migrated origin that the
+// migration could not rewrite ([ErrUnresolvedMigration]).
+//
+// A store's Create does the same for a header whose Base is set, so
+// Fork is the in-memory form and a store's Create the persistent one.
 func Fork(origin *Session, at string, h Header) (*Session, error) {
 	origin.mu.RLock()
 	defer origin.mu.RUnlock()
@@ -919,8 +983,16 @@ func Fork(origin *Session, at string, h Header) (*Session, error) {
 	if l, ok := path[len(path)-1].(*LabelEntry); ok && l.Label != nil && *l.Label == LeafLabel {
 		return nil, fmt.Errorf("%w: a base may not be a leaf label", ErrNoEntry)
 	}
+	if err := origin.prefixStandsAlone(path); err != nil {
+		return nil, err
+	}
+	if h.Media != "" && mediaForm(h.Media) != mediaForm(origin.header.Media) {
+		return nil, fmt.Errorf("agentsession: a fork's media %q differs from its origin's %q", h.Media, mediaForm(origin.header.Media))
+	}
 	h.Base = at
-	h.ParentSession = origin.header.ID
+	if h.ParentSession == "" {
+		h.ParentSession = origin.header.ID
+	}
 	if h.Media == "" {
 		h.Media = origin.header.Media
 	}

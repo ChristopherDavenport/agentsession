@@ -78,7 +78,7 @@ func Read(r io.Reader) (*Session, error) {
 				return nil, err
 			}
 			_, minor, _ := ParseFormat(h.Format)
-			if minor < FormatMinor {
+			if minor < hashedMinor {
 				m = &migration{ids: map[string]string{}}
 			}
 			if err := migrate(&h); err != nil {

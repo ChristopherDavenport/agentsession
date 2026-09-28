@@ -189,7 +189,15 @@ func TestReadMinorVersion(t *testing.T) {
 	if _, err := Read(strings.NewReader(later)); !errors.Is(err, ErrUnsupportedFormat) {
 		t.Errorf("Read of a later 0.x minor = %v, want ErrUnsupportedFormat", err)
 	}
-	in := `{"type":"session","format":"agentsession/0.5","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24","future_field":{"a":1}}` + "\n"
+	// 0.6 only adds optional members, so a 0.5 file reads as it stands:
+	// nothing is rehashed and the header takes the current format.
+	v05 := `{"type":"session","format":"agentsession/0.5","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}` + "\n"
+	if s, err := Read(strings.NewReader(v05)); err != nil {
+		t.Errorf("Read of 0.5 = %v", err)
+	} else if migrated, _ := s.Migrated(); migrated || s.Header().Format != Format {
+		t.Errorf("0.5 read as migrated %v, format %s", migrated, s.Header().Format)
+	}
+	in := `{"type":"session","format":"agentsession/0.6","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24","future_field":{"a":1}}` + "\n"
 	s, err := Read(strings.NewReader(in))
 	if err != nil {
 		t.Fatal(err)

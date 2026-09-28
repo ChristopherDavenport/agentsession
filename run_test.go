@@ -210,6 +210,11 @@ func TestCallState(t *testing.T) {
 		{"never started", "calls:a resp", promised, CallNeverStarted},
 		{"unknown without promise", "calls:a resp", silent, CallUnknown},
 		{"in flight without promise", "calls:a resp dispatch:a", silent, CallInFlight},
+		// A proceed need not reach a dispatch: an approval something
+		// else overtook stays as written and the call reads as what
+		// happened to it.
+		{"approved, overtaken", "calls:a resp hold:a proceed:a", promised, CallNeverStarted},
+		{"approved, then refused", "calls:a resp proceed:a reject:a out:a", promised, CallCompleted},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -332,6 +337,8 @@ func TestVerifyRecords(t *testing.T) {
 		{"missing dispatch, promised", "user calls:a resp out:a", Header{Records: []string{TypeDispatch}}, ErrRecordMissing},
 		{"missing dispatch, not promised", "user calls:a resp out:a", Header{}, nil},
 		{"rejected call needs no dispatch", "user calls:a resp reject:a out:a", Header{Records: []string{TypeDispatch}}, nil},
+		{"proceed overtaken by an abort", "start user calls:a resp hold:a proceed:a end:aborted", Header{Records: AllRecords}, nil},
+		{"proceed then refused", "user calls:a resp proceed:a reject:a out:a", Header{Records: []string{TypeDispatch}}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

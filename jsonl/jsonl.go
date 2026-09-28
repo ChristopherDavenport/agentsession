@@ -176,7 +176,9 @@ func sessionPath(root string, h agentsession.Header) string {
 }
 
 // Create implements agentsession.Store. The file is created with the
-// header line and synced before Create returns.
+// header line, and for a header with a base the prefix after it, and
+// synced before Create returns. The origin is read, not claimed: a fork
+// can be made from a session another process is writing.
 func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -184,10 +186,19 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	if s.readOnly {
 		return nil, agentsession.ErrReadOnly
 	}
-	sess := agentsession.New(h)
-	h = sess.Header()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	sess := agentsession.New(h)
+	if h.Base != "" {
+		origin, err := s.forkOrigin(ctx, h.ParentSession, h.Base)
+		if err != nil {
+			return nil, err
+		}
+		if sess, err = agentsession.Fork(origin, h.Base, h); err != nil {
+			return nil, err
+		}
+	}
+	h = sess.Header()
 	if _, ok := s.open[h.ID]; ok {
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
@@ -201,27 +212,129 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	if err := acquireLock(path, s.staleReport); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_APPEND, 0o600)
+	// The header and any prefix are written beside the file and linked
+	// into place once synced, so a crash never leaves a session file
+	// that opens with a header naming a base and a prefix cut short. A
+	// temporary file left by an earlier crash is ours to replace, since
+	// the lock is held.
+	tmp := path + ".tmp"
+	os.Remove(tmp)
+	fail := func(err error) (*agentsession.Session, error) {
+		os.Remove(tmp)
+		releaseLock(path)
+		return nil, err
+	}
+	t, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fail(fmt.Errorf("jsonl: create session file: %w", err))
+	}
+	w := bufio.NewWriter(t)
+	lines := []any{h}
+	for _, e := range sess.Entries() {
+		lines = append(lines, e)
+	}
+	for _, v := range lines {
+		if err := writeLine(w, v); err != nil {
+			t.Close()
+			return fail(fmt.Errorf("jsonl: write header and prefix: %w", err))
+		}
+	}
+	if err := w.Flush(); err != nil {
+		t.Close()
+		return fail(fmt.Errorf("jsonl: write header and prefix: %w", err))
+	}
+	if err := t.Sync(); err != nil {
+		t.Close()
+		return fail(fmt.Errorf("jsonl: sync header: %w", err))
+	}
+	if err := t.Close(); err != nil {
+		return fail(fmt.Errorf("jsonl: close session file: %w", err))
+	}
+	if err := os.Link(tmp, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fail(fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID))
+		}
+		return fail(fmt.Errorf("jsonl: create session file: %w", err))
+	}
+	os.Remove(tmp)
+	syncDir(filepath.Dir(path))
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		releaseLock(path)
-		if errors.Is(err, os.ErrExist) {
-			return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
-		}
-		return nil, fmt.Errorf("jsonl: create session file: %w", err)
-	}
-	if err := writeLine(f, h); err != nil {
-		f.Close()
-		os.Remove(path)
-		releaseLock(path)
-		return nil, fmt.Errorf("jsonl: write header: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		releaseLock(path)
-		return nil, fmt.Errorf("jsonl: sync header: %w", err)
+		return nil, fmt.Errorf("jsonl: open %s for append: %w", path, err)
 	}
 	s.open[h.ID] = &handle{session: sess, file: f, path: path}
 	return sess, nil
+}
+
+// syncDir makes a new directory entry durable. A failure is ignored:
+// the file's contents are synced, and a file system that cannot sync a
+// directory does not offer more.
+func syncDir(dir string) {
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
+}
+
+// forkOrigin returns the session a fork at base continues from: named, when
+// the named session holds base, else one whose own entries include it,
+// else one that holds it on its prefix. Finding it without a name reads
+// every session under the root. A session not open here is read without
+// taking its lock. The caller holds s.mu.
+func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsession.Session, error) {
+	read := func(id, path string) *agentsession.Session {
+		if h, ok := s.open[id]; ok {
+			return h.session
+		}
+		h, err := loadHandle(path, id, true)
+		if err != nil {
+			return nil
+		}
+		return h.session
+	}
+	if named != "" {
+		if path, err := s.find(named); err == nil {
+			if sess := read(named, path); sess != nil {
+				if _, ok := sess.Entry(base); ok {
+					return sess, nil
+				}
+			}
+		}
+	}
+	matches, err := filepath.Glob(filepath.Join(s.root, "*", "*.jsonl"))
+	if err != nil {
+		return nil, fmt.Errorf("jsonl: glob: %w", err)
+	}
+	sort.Strings(matches)
+	var onPrefix *agentsession.Session
+	for _, path := range matches {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+		_, id, ok := strings.Cut(name, "_")
+		if !ok {
+			continue
+		}
+		sess := read(id, path)
+		if sess == nil {
+			continue
+		}
+		if _, ok := sess.Entry(base); !ok {
+			continue
+		}
+		if !sess.Prefix(base) {
+			return sess, nil
+		}
+		if onPrefix == nil {
+			onPrefix = sess
+		}
+	}
+	if onPrefix == nil {
+		return nil, fmt.Errorf("%w: base %s is not held by this store", agentsession.ErrNoEntry, base)
+	}
+	return onPrefix, nil
 }
 
 // Open implements agentsession.Store. A session already open in this

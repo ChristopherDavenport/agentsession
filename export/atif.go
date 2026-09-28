@@ -206,6 +206,9 @@ func (b *builder) run() error {
 		}
 	}
 	b.flushGroup(nil)
+	for _, o := range b.t.Outcomes {
+		b.outcome(o)
+	}
 	b.finish()
 	return nil
 }
@@ -325,7 +328,11 @@ func (b *builder) entry(e agentsession.Entry) error {
 		}
 		b.addPendingList("info", copyUnknown(info, v.Unknown))
 	case *agentsession.CustomEntry:
-		b.addPendingList("custom", copyUnknown(map[string]any{"ns": v.NS, "data": json.RawMessage(v.Data), "entry_id": v.ID}, v.Unknown))
+		rec := map[string]any{"ns": v.NS, "data": json.RawMessage(v.Data), "entry_id": v.ID}
+		if v.CallID != "" {
+			rec["call_id"] = v.CallID
+		}
+		b.addPendingList("custom", copyUnknown(rec, v.Unknown))
 	case *agentsession.EnvEntry:
 		env := envExtra(v)
 		if !b.sawEnv {
@@ -736,6 +743,11 @@ func (b *builder) runEntry(r *agentsession.RunEntry) {
 		rec := map[string]any{"run_id": r.RunID, "source": r.Source, "start_entry_id": r.ID}
 		if r.Ref != "" {
 			rec["trigger"] = r.Ref
+		}
+		if r.Trigger != nil {
+			// "trigger" has carried the start's ref since before the
+			// structured form existed, so the parts sit beside it.
+			rec["trigger_parts"] = r.Trigger
 		}
 		copyUnknown(rec, r.Unknown)
 		b.currentRun = rec
