@@ -16,9 +16,12 @@ versions may break the API.
   encode, a nested member they do not define or a zero value they omit,
   is now remembered at decode and grafted back onto what the fields hold
   when the entry is written: onto an object member the caller left in
-  place, and onto an array element that still encodes as it did at read,
-  wherever it now sits, so sorting `parents` keeps each reference's
-  extras and a reference the caller replaced takes none. A key in
+  place, and onto an array element that still encodes as it did at
+  read, matched where it was first and otherwise to the one element it
+  still equals, so sorting `parents` keeps each reference's extras and a
+  changed element takes none. Equal elements that differ only in their
+  extras cannot be told apart once one is removed. A null a payload type
+  adds where the line has nothing reads as the same line. A key in
   another case, such as `CWD` beside `cwd`, is a member the format does
   not define: Go's decoder would read it as the member it resembles, so
   such a line is decoded again without it and keeps it as unknown. A

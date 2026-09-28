@@ -778,3 +778,71 @@ func TestKeptArrayExtrasFollowTheirElement(t *testing.T) {
 		t.Errorf("a replaced reference inherited the note, on %s:\n%s", got, data)
 	}
 }
+
+// TestThirdReviewShapes: the shapes a third review of #89 found. A
+// folded key beside the member it resembles is read as a conforming
+// reader reads it, at the top level and nested, even where the decoder
+// then leaves the member empty; a null a third-party type adds where the
+// line has nothing is the same line; and a changed array element does
+// not take another element's extras.
+func TestThirdReviewShapes(t *testing.T) {
+	head := `{"type":"session","format":"agentsession/0.6","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}`
+	read := func(t *testing.T, body string) Entry {
+		t.Helper()
+		line := `{` + body + `,"parent":null,"ts":"2026-09-17T16:00:01Z"}`
+		id, _, err := EntryHashes([]byte(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		line = `{"id":"` + id + `",` + line[1:]
+		s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
+		if err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+		var buf bytes.Buffer
+		if err := Write(&buf, s); err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+		var want, got map[string]any
+		json.Unmarshal([]byte(line), &want)
+		json.Unmarshal([]byte(lines[1]), &got)
+		if !reflect.DeepEqual(want, got) {
+			t.Errorf("rewrite changed the line\nread  %s\nwrote %s", line, lines[1])
+		}
+		return s.Entries()[0]
+	}
+	t.Run("nested folded key after the member", func(t *testing.T) {
+		e := read(t, `"type":"env","cwd":"/w","workspace":{"kind":"container","ref":"x","REF":""}`).(*EnvEntry)
+		if e.Workspace.Ref != "x" {
+			t.Errorf("Ref = %q, want x", e.Workspace.Ref)
+		}
+	})
+	t.Run("folded key after the member in a trigger", func(t *testing.T) {
+		e := read(t, `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":"k","ref":"r","REF":""}`).(*RunEntry)
+		if e.Trigger == nil || e.Trigger.Ref != "r" {
+			t.Errorf("Trigger = %+v, want ref r", e.Trigger)
+		}
+	})
+	t.Run("top-level folded key after the member", func(t *testing.T) {
+		e := read(t, `"type":"env","cwd":"/w","CWD":""`).(*EnvEntry)
+		if e.CWD != "/w" {
+			t.Errorf("CWD = %q, want /w", e.CWD)
+		}
+	})
+	t.Run("a null the payload type adds", func(t *testing.T) {
+		read(t, `"type":"config","model":"m","reasoning":{"effort":"low","zz":1}`)
+	})
+	t.Run("a changed element keeps its own extras", func(t *testing.T) {
+		raw := []any{map[string]any{"p": "a", "x": json.Number("1")}, map[string]any{"p": "b", "x": json.Number("2")}}
+		seen := []any{map[string]any{"p": "a"}, map[string]any{"p": "b"}}
+		cur := []any{map[string]any{"p": "b"}, map[string]any{"p": "b"}}
+		got := overlay(cur, raw, seen).([]any)
+		if x := got[1].(map[string]any)["x"]; x != json.Number("2") {
+			t.Errorf("the unchanged element lost its extra: %v", got)
+		}
+		if _, ok := got[0].(map[string]any)["x"]; ok {
+			t.Errorf("the changed element took an extra: %v", got)
+		}
+	})
+}

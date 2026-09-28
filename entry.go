@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
@@ -107,9 +108,9 @@ type EntryBase struct {
 	kept map[string]keptMember
 }
 
-// keptMember is a member as the line held it, raw, and as the typed
-// fields encoded it when the entry was read, seen, which is nil when
-// they left it out.
+// keptMember is a member as the line held it, raw, which is nil when
+// the line did not have it, and as the typed fields encoded it when the
+// entry was read, seen, which is nil when they left it out.
 type keptMember struct{ raw, seen json.RawMessage }
 
 // ContentHash returns the hash of the entry's body, the members outside
@@ -618,15 +619,16 @@ func decodeForm(e memberDecoder, data []byte, all map[string]json.RawMessage) ([
 	if _, unknown := e.(*UnknownEntry); unknown {
 		return nil, nil // written back from its raw line
 	}
-	form, typed, exact, err := keepAsRead(e, all)
-	if err != nil || exact {
+	form, typed, suspect, err := keepAsRead(e, all)
+	if err != nil || len(suspect) == 0 {
 		return form, err
 	}
-	// The line does not read as written. When that is Go's decoder
-	// matching a key in another case to a member, which a conforming
-	// reader would not, decode again without such keys.
-	clean, folded := unfold(all, typed, e.Base().Unknown)
-	if len(folded) == 0 && sameMembers(clean, all) {
+	// A member did not reproduce, or held more than the fields encode.
+	// Where that is Go's decoder matching a key in another case to a
+	// member, which a conforming reader would not, decode again without
+	// such keys.
+	clean, folded, changed := unfold(all, typed, suspect, definedMembers(e))
+	if !changed {
 		return form, nil
 	}
 	rv := reflect.ValueOf(e).Elem()
@@ -647,18 +649,44 @@ func decodeForm(e memberDecoder, data []byte, all map[string]json.RawMessage) ([
 	return form, err
 }
 
-// sameMembers reports whether two split lines hold the same bytes.
-func sameMembers(a, b map[string]json.RawMessage) bool {
-	if len(a) != len(b) {
-		return false
+// definedMembers returns the member names an entry's type defines: its
+// fields' json names, a hand-decoded field's member tag, and the
+// envelope and common body members.
+func definedMembers(e Entry) map[string]bool {
+	t := reflect.TypeOf(e).Elem()
+	if v, ok := definedCache.Load(t); ok {
+		return v.(map[string]bool)
 	}
-	for k, v := range a {
-		if !bytes.Equal(v, b[k]) {
-			return false
+	names := map[string]bool{}
+	for _, k := range envelopeKeys {
+		names[k] = true
+	}
+	for _, k := range commonBodyKeys {
+		names[k] = true
+	}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.Anonymous {
+			continue
 		}
+		tag := f.Tag.Get("json")
+		if tag == "-" {
+			if m := f.Tag.Get("member"); m != "" {
+				names[m] = true
+			}
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "" {
+			name = f.Name
+		}
+		names[name] = true
 	}
-	return true
+	definedCache.Store(t, names)
+	return names
 }
+
+var definedCache sync.Map
 
 // untracked are the members keepAsRead leaves to the envelope's own
 // rules: the id is recomputed, and type, parent and ts have one form
@@ -668,34 +696,41 @@ var untracked = map[string]bool{"id": true, "type": true, "parent": true, "ts": 
 // keepAsRead compares each member of the line with what the entry's
 // typed fields encode it as, and remembers every member the line holds
 // more of: one with a member nested inside it that the typed object does
-// not define, such as a workspace's host, or a member the typed fields
-// omit because it holds a zero value. The format has a reader preserve
-// every member and hash the line as written, so marshalEntry grafts
-// what was remembered back onto what the fields encode.
+// not define, such as a workspace's host, a member the typed fields omit
+// because it holds a zero value, or a null the typed fields add where
+// the line has nothing. The format has a reader preserve every member
+// and hash the line as written, so marshalEntry grafts what was
+// remembered back onto what the fields encode.
 //
 // An extra is anything the typed encoding does not name, so a field a
 // decoder of another package should know and drops is kept too, and
 // cannot be told from a member no one defined: the entry still verifies
 // and writes back whole, and only the typed value is missing.
 //
-// Only extra members are remembered. A member the typed encoding has
-// and the line lacks, or holds with a different value, is not: that is
-// a line the reader does not read as written, whether through a key
-// spelled in another case, a required member left out or a decoder
-// fault, and it stays refused, since its hash is then computed from
-// what the reader understood.
-func keepAsRead(e Entry, all map[string]json.RawMessage) ([]byte, map[string]json.RawMessage, bool, error) {
+// Only extras are remembered. A member the typed encoding has and the
+// line lacks, or holds with a different value, is not: that is a line
+// the reader does not read as written, through a required member left
+// out or a decoder fault, and it stays refused, since its hash is then
+// computed from what the reader understood. suspect names every member
+// that did not reproduce exactly, remembered or not.
+func keepAsRead(e Entry, all map[string]json.RawMessage) ([]byte, map[string]json.RawMessage, map[string]bool, error) {
 	b := e.Base()
 	b.kept = nil
 	form, err := jsonx.MarshalNoEscape(e)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, nil, err
 	}
 	typed, err := splitMembers(form)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, nil, err
 	}
-	exact := true
+	var suspect map[string]bool
+	mark := func(key string) {
+		if suspect == nil {
+			suspect = map[string]bool{}
+		}
+		suspect[key] = true
+	}
 	for key, raw := range all {
 		if untracked[key] {
 			continue
@@ -711,68 +746,79 @@ func keepAsRead(e Entry, all map[string]json.RawMessage) ([]byte, map[string]jso
 				continue
 			}
 		}
+		mark(key)
 		rv, err := parseValue(raw)
 		if err != nil {
-			exact = false
 			continue
 		}
 		if !ok {
 			if isZeroValue(rv) {
 				b.keep(key, raw, nil)
-			} else {
-				exact = false
 			}
 			continue
 		}
 		sv, err := parseValue(seen)
 		if err != nil {
-			exact = false
 			continue
 		}
-		same, extras := extrasOnly(rv, sv)
-		switch {
-		case !same:
-			exact = false
-		case extras:
+		if same, extras := extrasOnly(rv, sv); same && extras {
 			b.keep(key, raw, seen)
 		}
 	}
-	for key := range typed {
-		if _, ok := all[key]; !ok && !untracked[key] {
-			exact = false
+	for key, seen := range typed {
+		if _, ok := all[key]; ok || untracked[key] {
+			continue
+		}
+		mark(key)
+		if string(seen) == "null" {
+			b.keep(key, nil, seen)
 		}
 	}
-	return form, typed, exact, nil
+	return form, typed, suspect, nil
+}
+
+// foldKey is key under simple case folding, which is how Go's decoder
+// matches a key to a struct field.
+func foldKey(key string) string { return strings.ToLower(strings.ToUpper(key)) }
+
+// lowerASCII reports whether key is lower-case ASCII, as every member
+// name this package and its payload define is, so a key that is not
+// cannot name a defined member exactly.
+func lowerASCII(key string) bool {
+	for i := 0; i < len(key); i++ {
+		if c := key[i]; c >= 0x80 || ('A' <= c && c <= 'Z') {
+			return false
+		}
+	}
+	return true
 }
 
 // unfold returns the line's members with every key removed that Go's
-// decoder would match, in another case, to a member the typed encoding
-// has beside it, at any depth. Such a key is a member the format does
-// not define, which a conforming reader ignores, and the decoder must
-// not read it as the member it resembles. Keys removed at the top level
-// are returned apart, to keep as unknown members.
-//
-// unknown holds the members the first decode kept as unknown, which are
-// in typed but are not member names the type defines.
-func unfold(all, typed, unknown map[string]json.RawMessage) (clean, folded map[string]json.RawMessage) {
-	defined := make(map[string]bool, len(typed))
-	for k := range typed {
-		if _, u := unknown[k]; !u {
-			defined[k] = true
-		}
+// decoder may have matched, in another case, to a member the type
+// defines. Such a key is a member the format does not define, which a
+// conforming reader ignores, and the decoder must not read it as the
+// member it resembles. At the top level the defined names are the
+// type's; below, the members suspect names are walked beside their
+// typed encoding. Keys removed at the top level are returned apart, to
+// keep as unknown members; changed reports whether anything was removed.
+func unfold(all, typed map[string]json.RawMessage, suspect, defined map[string]bool) (clean, folded map[string]json.RawMessage, changed bool) {
+	definedFolds := make(map[string]bool, len(defined))
+	for k := range defined {
+		definedFolds[foldKey(k)] = true
 	}
 	clean = make(map[string]json.RawMessage, len(all))
 	for key, raw := range all {
-		seen, ok := typed[key]
-		if !defined[key] && foldsTo(key, defined) {
+		if !defined[key] && definedFolds[foldKey(key)] {
 			if folded == nil {
 				folded = map[string]json.RawMessage{}
 			}
 			folded[key] = raw
+			changed = true
 			continue
 		}
 		clean[key] = raw
-		if !ok || bytes.Equal(raw, seen) {
+		seen, ok := typed[key]
+		if !suspect[key] || !ok {
 			continue
 		}
 		rv, err1 := parseValue(raw)
@@ -780,55 +826,70 @@ func unfold(all, typed, unknown map[string]json.RawMessage) (clean, folded map[s
 		if err1 != nil || err2 != nil {
 			continue
 		}
-		if out, err := jsonx.MarshalNoEscape(unfoldValue(rv, sv)); err == nil {
-			clean[key] = out
+		out, ch := unfoldValue(rv, sv)
+		if !ch {
+			continue
+		}
+		if data, err := jsonx.MarshalNoEscape(out); err == nil {
+			clean[key] = data
+			changed = true
 		}
 	}
-	return clean, folded
+	return clean, folded, changed
 }
 
-// foldsTo reports whether key matches another key of members when case
-// is ignored.
-func foldsTo[V any](key string, members map[string]V) bool {
-	for k := range members {
-		if k != key && strings.EqualFold(k, key) {
-			return true
-		}
-	}
-	return false
-}
-
-func unfoldValue(raw, seen any) any {
+// unfoldValue removes from raw, in each object the typed encoding seen
+// also has, every key seen does not hold exactly that is not lower-case
+// ASCII and folds to a key of that object in seen or in raw: the key a
+// decoder that folds case may have read into a field. A key seen holds
+// exactly, as a map's keys are, is never removed.
+func unfoldValue(raw, seen any) (any, bool) {
 	switch r := raw.(type) {
 	case map[string]any:
 		s, ok := seen.(map[string]any)
 		if !ok {
-			return raw
+			return raw, false
 		}
+		folds := make(map[string]int, len(r)+len(s))
+		for k := range r {
+			folds[foldKey(k)]++
+		}
+		for k := range s {
+			if _, inRaw := r[k]; !inRaw {
+				folds[foldKey(k)]++
+			}
+		}
+		changed := false
 		out := make(map[string]any, len(r))
 		for k, v := range r {
 			sv, exact := s[k]
-			if !exact && foldsTo(k, s) {
+			if !exact && !lowerASCII(k) && folds[foldKey(k)] > 1 {
+				changed = true
 				continue
 			}
 			if exact {
-				v = unfoldValue(v, sv)
+				var ch bool
+				v, ch = unfoldValue(v, sv)
+				changed = changed || ch
 			}
 			out[k] = v
 		}
-		return out
+		return out, changed
 	case []any:
 		s, ok := seen.([]any)
 		if !ok || len(s) != len(r) {
-			return raw
+			return raw, false
 		}
+		changed := false
 		out := make([]any, len(r))
 		for i := range r {
-			out[i] = unfoldValue(r[i], s[i])
+			var ch bool
+			out[i], ch = unfoldValue(r[i], s[i])
+			changed = changed || ch
 		}
-		return out
+		return out, changed
 	}
-	return raw
+	return raw, false
 }
 
 // remapKeptParents applies a migration's rewrite of parents to the kept
@@ -918,6 +979,12 @@ func extrasOnly(raw, seen any) (same, extras bool) {
 		for k, sv := range s {
 			rv, ok := r[k]
 			if !ok {
+				if sv == nil {
+					// A null the typed encoding adds where the line has
+					// nothing: the same value, spelled by omission.
+					extras = true
+					continue
+				}
 				return false, false
 			}
 			same, ex := extrasOnly(rv, sv)
@@ -926,7 +993,13 @@ func extrasOnly(raw, seen any) (same, extras bool) {
 			}
 			extras = extras || ex
 		}
-		return true, extras || len(r) > len(s)
+		for k := range r {
+			if _, ok := s[k]; !ok {
+				extras = true
+				break
+			}
+		}
+		return true, extras
 	case []any:
 		r, ok := raw.([]any)
 		if !ok || len(r) != len(s) {
@@ -995,27 +1068,54 @@ func overlay(cur, raw, seen any) any {
 				out[k] = overlay(cv, rv, sv)
 			}
 		}
+		for k, sv := range s {
+			if _, inRaw := r[k]; !inRaw && sv == nil && out[k] == nil {
+				delete(out, k)
+			}
+		}
 		return out
 	case []any:
-		// Elements are matched by what they encode, not by position: an
-		// element the caller left as it was takes its extras back
-		// wherever it now sits, and one the caller changed or added is
-		// the caller's alone.
 		r, rok := raw.([]any)
 		s, sok := seen.([]any)
 		if !rok || !sok || len(r) != len(s) {
 			return cur
 		}
+		unchanged := func(cv, sv any) bool {
+			same, extras := extrasOnly(cv, sv)
+			return same && !extras
+		}
 		used := make([]bool, len(s))
+		done := make([]bool, len(c))
 		out := make([]any, len(c))
+		copy(out, c)
+		// An element still where it was and as it was is matched first,
+		// so a changed element cannot claim another's extras; then each
+		// element left over takes the extras of the one unused element
+		// it matches, when exactly one does. Equal elements that differ
+		// only in their extras cannot be told apart once one is gone.
 		for i, cv := range c {
-			out[i] = cv
+			if i < len(s) && unchanged(cv, s[i]) {
+				used[i], done[i] = true, true
+				out[i] = r[i]
+			}
+		}
+		for i, cv := range c {
+			if done[i] {
+				continue
+			}
+			match := -1
 			for j, sv := range s {
-				if same, extras := extrasOnly(cv, sv); !used[j] && same && !extras {
-					used[j] = true
-					out[i] = r[j]
-					break
+				if !used[j] && unchanged(cv, sv) {
+					if match >= 0 {
+						match = -2
+						break
+					}
+					match = j
 				}
+			}
+			if match >= 0 {
+				used[match] = true
+				out[i] = r[match]
 			}
 		}
 		return out
@@ -1033,6 +1133,13 @@ func restoreKept(out []byte, kept map[string]keptMember) ([]byte, error) {
 	}
 	for key, k := range kept {
 		cur, ok := members[key]
+		if k.raw == nil {
+			// A null the fields add that the line did not have.
+			if ok && bytes.Equal(cur, k.seen) {
+				delete(members, key)
+			}
+			continue
+		}
 		if k.seen == nil {
 			if !ok {
 				members[key] = k.raw
