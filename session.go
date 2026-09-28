@@ -902,13 +902,17 @@ func utcNow() time.Time { return time.Now().UTC().Round(0) }
 
 // Fork creates a session that continues from entry at of origin: a
 // session with a base, in the format's terms. The new session's header
-// is h with Base set to at and ParentSession to origin's ID; its
-// entries open with origin's path to at, the prefix, which the new
-// session shares with origin rather than copies, and its leaf is the
-// base. Every entry it appends hangs from the base or from an entry it
-// appended itself, and its file opens with the prefix so it stands
-// alone. The base may not be a leaf label, since it is the fork's first
-// leaf and the leaf never rests on one.
+// is h with Base set to at and, when h names none, ParentSession set to
+// origin's ID; its entries open with origin's path to at, the prefix,
+// which the new session shares with origin rather than copies, and its
+// leaf is the base. Every entry it appends hangs from the base or from
+// an entry it appended itself, and its file opens with the prefix so it
+// stands alone. The base may not be a leaf label, since it is the
+// fork's first leaf and the leaf never rests on one, and h's media, when
+// set, must be origin's, since the prefix was written in that form.
+//
+// A store's Create does the same for a header whose Base is set, so
+// Fork is the in-memory form and a store's Create the persistent one.
 func Fork(origin *Session, at string, h Header) (*Session, error) {
 	origin.mu.RLock()
 	defer origin.mu.RUnlock()
@@ -919,8 +923,13 @@ func Fork(origin *Session, at string, h Header) (*Session, error) {
 	if l, ok := path[len(path)-1].(*LabelEntry); ok && l.Label != nil && *l.Label == LeafLabel {
 		return nil, fmt.Errorf("%w: a base may not be a leaf label", ErrNoEntry)
 	}
+	if h.Media != "" && mediaForm(h.Media) != mediaForm(origin.header.Media) {
+		return nil, fmt.Errorf("agentsession: a fork's media %q differs from its origin's %q", h.Media, mediaForm(origin.header.Media))
+	}
 	h.Base = at
-	h.ParentSession = origin.header.ID
+	if h.ParentSession == "" {
+		h.ParentSession = origin.header.ID
+	}
 	if h.Media == "" {
 		h.Media = origin.header.Media
 	}

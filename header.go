@@ -29,6 +29,15 @@ const (
 	MediaSidecar = "sidecar"
 )
 
+// mediaForm is the media mode a header's media member means: absent is
+// inline.
+func mediaForm(m string) string {
+	if m == "" {
+		return MediaInline
+	}
+	return m
+}
+
 // ErrUnsupportedFormat is returned when a header names a format this
 // package cannot read.
 var ErrUnsupportedFormat = errors.New("agentsession: unsupported format")

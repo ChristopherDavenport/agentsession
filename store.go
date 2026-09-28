@@ -43,6 +43,13 @@ var ErrReadOnly = errors.New("agentsession: store is read-only")
 // write.
 type Store interface {
 	// Create starts a new session from h, filling empty header fields.
+	// A header whose Base is set makes a fork, as [Fork] does: the
+	// session opens with the path to the base, taken from the session
+	// ParentSession names when that session holds it and otherwise from
+	// any session the store holds it in. Create refuses a base the store
+	// does not hold with ErrNoEntry, and a base that is a leaf label or a
+	// media form other than the origin's, rather than letting the first
+	// append fail.
 	Create(ctx context.Context, h Header) (*Session, error)
 	// Open loads the session with the given ID.
 	Open(ctx context.Context, id string) (*Session, error)
@@ -137,16 +144,49 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{sessions: map[string]*Session{}}
 }
 
-// Create implements Store.
+// Create implements Store. A header whose Base is set makes a fork of
+// the session holding the base, as [Fork] does.
 func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
-	s := New(h)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	s := New(h)
+	if h.Base != "" {
+		origin := m.forkOrigin(h.ParentSession, h.Base)
+		if origin == nil {
+			return nil, fmt.Errorf("%w: base %s is not held by this store", ErrNoEntry, h.Base)
+		}
+		var err error
+		if s, err = Fork(origin, h.Base, s.Header()); err != nil {
+			return nil, err
+		}
+	}
 	if _, exists := m.sessions[s.ID()]; exists {
 		return nil, fmt.Errorf("%w: %s", ErrSessionExists, s.ID())
 	}
 	m.sessions[s.ID()] = s
 	return s, nil
+}
+
+// forkOrigin returns the session a fork at base continues from: named, when
+// the named session holds base, else one whose own entries include it,
+// else one that holds it on its prefix. The caller holds m.mu.
+func (m *MemoryStore) forkOrigin(named, base string) *Session {
+	if s, ok := m.sessions[named]; ok {
+		if _, ok := s.Entry(base); ok {
+			return s
+		}
+	}
+	var onPrefix *Session
+	for _, s := range m.sessions {
+		if _, ok := s.Entry(base); !ok {
+			continue
+		}
+		if !s.Prefix(base) {
+			return s
+		}
+		onPrefix = s
+	}
+	return onPrefix
 }
 
 // Open implements Store.
