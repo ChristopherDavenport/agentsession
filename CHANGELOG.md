@@ -49,12 +49,24 @@ versions may break the API.
   migrated entry's legacy id. ATIF documents are named by the leaf's
   digest without its `sha256:` prefix, since a colon is not a legal
   file name everywhere.
-- Not yet done: writer-side normalisation. The format has a writer
-  replace a lone surrogate with U+FFFD and round or stringify an integer
-  outside binary64, recording the change in `normalised`; this library
-  refuses such a body instead. Go's JSON decoder already replaces a lone
-  surrogate on the way in, so the remaining case is a large integer in a
-  passthrough member.
+- **Writer-side normalisation.** `Append` rewrites a body that fails
+  the I-JSON test rather than refusing it, as the format has a writer
+  do: a whole number outside binary64 is rounded and written
+  canonically, a lone surrogate escape becomes U+FFFD, a string that is
+  not valid UTF-8 has each invalid byte replaced, and each change is
+  recorded in the entry's `normalised` with its pointer and original
+  source text, or its bytes in base64 when there was no valid text. The
+  rewrite is what the caller's entry holds afterwards, so what is hashed
+  and written is what a reader sees. An integer is rounded wherever it
+  sits, a passthrough member included, since the original digits are in
+  `normalised` and rounding keeps the member's type. `NormaliseJSON` is
+  the same rewrite over arbitrary bytes, for a harness that wants the
+  record of a lone surrogate Go's decoder would otherwise repair
+  silently before the entry exists. A repeated member name and a number
+  that is not finite in binary64 are still refused. The `normalised`
+  fixture carries 9007199254740993 in three spellings and once in a
+  member the profile types as a number, and a lone surrogate with its
+  `was`.
 - The session fixtures under `testdata/sessions` are generated from the
   0.4 sources now kept under `testdata/sessions/v0.4`, and carry
   `legacy_id`; see CLAUDE.md.
