@@ -123,13 +123,14 @@ type builder struct {
 	callStep     map[string]int // call ID -> step index
 	copied       bool           // inside the kept window after a compaction
 	compactionID string
-	// pathModel is the model in force at each model call on the path,
-	// by ID, replayed once over Trajectory.Path with the context
-	// algorithm's rule: a config applies, a compaction resets to its
-	// checkpoint. A step and the totals both price a response that
-	// names no model from it, so the two cannot disagree; it is nil
-	// for a Trajectory built without a Path.
-	pathModel  map[string]string
+	// window is the settings in force inside the kept window after a
+	// compaction, which the checkpoint does not describe: the
+	// checkpoint stands in for every config entry up to the
+	// compaction, so settings holds it and the deltas after, while a
+	// call inside the window ran under what the config entries before
+	// it said. With a Path that is known exactly; without one the
+	// window starts from the checkpoint, the nearest description.
+	window     agentsession.Settings
 	sawEnv     bool
 	currentRun map[string]any // the open run's record, shared with the step or root that holds it
 
@@ -177,16 +178,17 @@ func (b *builder) costOf(entryID, model string, u openresponses.Usage) (float64,
 type agentGroup struct {
 	responseID string
 	entries    []*agentsession.ItemEntry
+	copied     bool // opened inside the kept window after a compaction
 }
 
 func (b *builder) run() error {
-	b.pathModel = pathModels(b.t.Path)
 	entries := b.t.Context.Entries
 	if len(entries) > 0 {
 		if c, ok := entries[0].(*agentsession.CompactionEntry); ok {
 			b.settings = c.Config
 			b.compactionID = c.ID
 			b.copied = true
+			b.window = settingsBefore(b.t.Path, c.FirstKept, c.Config)
 		}
 	}
 	// Settings at the first step: the agent's default model and tools.
@@ -243,16 +245,18 @@ func (b *builder) entry(e agentsession.Entry) error {
 	case *agentsession.ResponseEntry:
 		b.flushGroup(v)
 	case *agentsession.ConfigEntry:
-		// A config entry inside the kept window is shown, since the
-		// document is lossless, but not applied: the checkpoint already
-		// holds its effect, and applying it again would price the next
+		// A config entry inside the kept window applies to the window
+		// alone: the checkpoint already holds its effect on what
+		// follows, and applying it there too would price the next
 		// step under a model the totals do not use (#46).
-		if !b.copied {
-			before := b.settings
-			b.settings = b.settings.Apply(v)
-			if change := toolChange(before.Tools, b.settings.Tools); change != nil {
-				b.addPending("tool_changes", change)
-			}
+		target := &b.settings
+		if b.copied {
+			target = &b.window
+		}
+		before := *target
+		*target = target.Apply(v)
+		if change := toolChange(before.Tools, target.Tools); change != nil {
+			b.addPending("tool_changes", change)
 		}
 		b.addPendingList("config_entries", e.Base().ID)
 		if len(v.Unknown) > 0 {
@@ -301,7 +305,7 @@ func (b *builder) entry(e agentsession.Entry) error {
 				ExtraOpenResponses: map[string]any{"item": rawItem(v.Summary)},
 			},
 		}
-		b.foldUsage(v.ID, step.Extra, b.wireModel(v.ID, ""), v.Usage)
+		b.foldUsage(v.ID, step.Extra, b.inForce(b.copied).Model, v.Usage)
 		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.LabelEntry:
@@ -374,7 +378,7 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 			b.flushGroup(nil)
 		}
 		if b.group == nil {
-			b.group = &agentGroup{responseID: e.ResponseID}
+			b.group = &agentGroup{responseID: e.ResponseID, copied: b.copied}
 		}
 		if b.group.responseID == "" {
 			b.group.responseID = e.ResponseID
@@ -475,7 +479,7 @@ func (b *builder) flushGroup(resp *agentsession.ResponseEntry) {
 	if resp != nil && g.responseID != "" && g.responseID != resp.ResponseID {
 		// The group belongs to another call; close it on its own first.
 		b.flushGroupItems(g, nil)
-		g = &agentGroup{responseID: resp.ResponseID}
+		g = &agentGroup{responseID: resp.ResponseID, copied: b.copied}
 	}
 	b.flushGroupItems(g, resp)
 }
@@ -489,57 +493,41 @@ func (b *builder) modelName(model string) string {
 	return model
 }
 
-// wireModel is the model a call was sent with: the one its entry
-// names, else the one in force at that point on the path, else the
-// settings in force at this point in the context. The path answer
-// matters inside the kept window after a compaction, where the
-// settings are the checkpoint's and the call ran under whatever the
-// config entries before it said.
-func (b *builder) wireModel(entryID, named string) string {
-	if named != "" {
-		return named
+// inForce is the settings a step at this point ran under: inside the
+// kept window after a compaction the window's, else the context's.
+func (b *builder) inForce(copied bool) agentsession.Settings {
+	if copied {
+		return b.window
 	}
-	if m, ok := b.pathModel[entryID]; ok {
-		return m
-	}
-	return b.settings.Model
+	return b.settings
 }
 
-// pathModels replays the model over a root-first path and returns the
-// model in force at each response, compaction and branch summary. A
-// compaction is priced under its own checkpoint, and resets the model
-// for what follows, as BuildContext starts from the checkpoint.
-func pathModels(path []agentsession.Entry) map[string]string {
-	if len(path) == 0 {
-		return nil
-	}
-	out := make(map[string]string)
-	model := ""
+// settingsBefore replays the settings over a root-first path up to the
+// entry firstKept, exclusive, with the context algorithm's rule: a
+// config applies and a compaction resets to its checkpoint. It is what
+// a call at the start of the kept window ran under. Without a path, or
+// with one that does not hold the entry, it is fallback.
+func settingsBefore(path []agentsession.Entry, firstKept string, fallback agentsession.Settings) agentsession.Settings {
+	var settings agentsession.Settings
 	for _, e := range path {
+		if e.Base().ID == firstKept {
+			return settings
+		}
 		switch v := e.(type) {
 		case *agentsession.ConfigEntry:
-			if v.Replace {
-				model = ""
-			}
-			if v.Model != "" {
-				model = v.Model
-			}
+			settings = settings.Apply(v)
 		case *agentsession.CompactionEntry:
-			model = v.Config.Model
-			out[v.ID] = model
-		case *agentsession.ResponseEntry:
-			out[v.ID] = model
-		case *agentsession.BranchSummaryEntry:
-			out[v.ID] = model
+			settings = v.Config
 		}
 	}
-	return out
+	return fallback
 }
 
 func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntry) {
-	step := atif.Step{Source: atif.SourceAgent, ModelName: b.modelName(b.settings.Model), LLMCallCount: atif.Ptr(1)}
-	if b.settings.Reasoning.Effort != "" {
-		step.ReasoningEffort = string(b.settings.Reasoning.Effort)
+	settings := b.inForce(g.copied)
+	step := atif.Step{Source: atif.SourceAgent, ModelName: b.modelName(settings.Model), LLMCallCount: atif.Ptr(1)}
+	if settings.Reasoning.Effort != "" {
+		step.ReasoningEffort = string(settings.Reasoning.Effort)
 	}
 	var (
 		texts     []string
@@ -604,8 +592,11 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 	if resp != nil {
 		anchor = resp
 		or["response"] = responseBody(resp)
-		wire := b.wireModel(resp.ID, resp.Model)
-		step.ModelName = b.modelName(wire)
+		wire := settings.Model
+		if resp.Model != "" {
+			wire = resp.Model
+			step.ModelName = b.modelName(resp.Model)
+		}
 		step.Timestamp = resp.Timestamp.UTC().Format(time.RFC3339Nano)
 		if resp.Usage != nil {
 			u := resp.Usage
@@ -895,17 +886,32 @@ func (b *builder) pathTotals() int {
 		inContext[e.Base().ID] = true
 	}
 	b.prompt, b.completion, b.cached, b.cost, b.hasCost = 0, 0, 0, 0, false
-	hidden := 0
+	hidden, model := 0, ""
 	for _, e := range b.t.Path {
 		var u *openresponses.Usage
 		priced := ""
 		switch v := e.(type) {
+		case *agentsession.ConfigEntry:
+			// The model in force, for a fold or a response that does
+			// not name its own: the same replay the steps use, so the
+			// two agree.
+			if v.Replace {
+				model = ""
+			}
+			if v.Model != "" {
+				model = v.Model
+			}
+			continue
 		case *agentsession.ResponseEntry:
-			u, priced = v.Usage, b.wireModel(v.ID, v.Model)
+			u, priced = v.Usage, model
+			if v.Model != "" {
+				priced = v.Model
+			}
 		case *agentsession.CompactionEntry:
+			model = v.Config.Model
 			u, priced = v.Usage, v.Config.Model
 		case *agentsession.BranchSummaryEntry:
-			u, priced = v.Usage, b.wireModel(v.ID, "")
+			u, priced = v.Usage, model
 		default:
 			continue
 		}

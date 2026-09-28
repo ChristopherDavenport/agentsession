@@ -1519,24 +1519,25 @@ func TestSubagentLeafFromTheRecord(t *testing.T) {
 }
 
 // TestKeptWindowConfigIsNotReplayed: a config entry inside the kept
-// window after a compaction is shown but not applied, since the
+// window after a compaction applies to the window alone, since the
 // checkpoint stands in for every config entry up to the compaction.
-// The step's model, the agent's model and the price asked for a
-// response that names no model all come from the checkpoint, as the
-// totals already did.
+// A call after the compaction takes the checkpoint's settings, then
+// later deltas; a call inside the window takes what the config entries
+// before it on the path said; and the price asked for a response that
+// names no model agrees with the totals in both cases.
 func TestKeptWindowConfigIsNotReplayed(t *testing.T) {
 	s := agentsession.New(agentsession.Header{})
-	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-A"})
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-A", Reasoning: &openresponses.ReasoningConfig{Effort: "low"}})
 	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("one")))
 	first := s.Leaf()
-	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-B"})
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-B", Reasoning: &openresponses.ReasoningConfig{Effort: "high"}})
 	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("two")))
 	mustAppend(t, s, &agentsession.ItemEntry{ResponseID: "resp_2", Item: &openresponses.Message{Role: openresponses.RoleAssistant,
 		Content: openresponses.Contents{&openresponses.OutputText{Text: "under B"}}}})
 	mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp_2", Status: openresponses.ResponseStatusCompleted,
 		Usage: &openresponses.Usage{InputTokens: 2, OutputTokens: 2}})
 	mustAppend(t, s, &agentsession.CompactionEntry{FirstKept: first, Summary: openresponses.SystemText("summary"),
-		Config: agentsession.Settings{Model: "model-A"}, Usage: &openresponses.Usage{InputTokens: 5, OutputTokens: 5}})
+		Config: agentsession.Settings{Model: "model-A", Reasoning: openresponses.ReasoningConfig{Effort: "medium"}}, Usage: &openresponses.Usage{InputTokens: 5, OutputTokens: 5}})
 	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("three")))
 	mustAppend(t, s, &agentsession.ItemEntry{ResponseID: "resp_9", Item: &openresponses.Message{Role: openresponses.RoleAssistant,
 		Content: openresponses.Contents{&openresponses.OutputText{Text: "under the checkpoint"}}}})
@@ -1569,11 +1570,11 @@ func TestKeptWindowConfigIsNotReplayed(t *testing.T) {
 	}
 	// The kept-window call ran under model-B, which the path says; the
 	// call after the compaction ran under the checkpoint.
-	if agents[0].ModelName != "model-B" {
-		t.Errorf("kept-window step model_name = %q, want model-B", agents[0].ModelName)
+	if agents[0].ModelName != "model-B" || agents[0].ReasoningEffort != "high" {
+		t.Errorf("kept-window step = %s/%s, want model-B/high", agents[0].ModelName, agents[0].ReasoningEffort)
 	}
-	if agents[1].ModelName != "model-A" {
-		t.Errorf("step model_name = %q, want the checkpoint's model-A", agents[1].ModelName)
+	if agents[1].ModelName != "model-A" || agents[1].ReasoningEffort != "medium" {
+		t.Errorf("step after the compaction = %s/%s, want the checkpoint's model-A/medium", agents[1].ModelName, agents[1].ReasoningEffort)
 	}
 	for _, m := range asked[999] {
 		if m != "model-A" {
