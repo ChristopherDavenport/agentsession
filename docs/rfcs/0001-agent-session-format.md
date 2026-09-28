@@ -699,11 +699,23 @@ Why a run started and how it ended. Two entries per run, paired by
   without walking the segment. The segment is authoritative here too.
 - Items and responses of the run follow its `start` entry on the path.
   Runs do not nest: an input that arrives while a run is open joins
-  that run. A branch closes the open run without an `end` entry, since
-  the new leaf is not on its segment; the next append on the new
-  branch begins a run. When the header names `run` in `records`, no
-  writer holds the file open and the leaf is on the run's segment, a
-  run with no `end` entry was cut off; that is the crash signal.
+  that run. A branch to an entry before a run's `start` leaves that run
+  off the new path, so the run needs no `end` there, and the next run
+  on the new branch begins with its own `start`. When the header names
+  `run` in `records`, no writer holds the file open and the leaf is on
+  the run's segment, a run with no `end` entry was cut off; that is the
+  crash signal.
+- A branch to an entry inside a run, such as a rewind to a checkpoint
+  the run made, leaves that run open on the new path, since its `end`,
+  if it has one, is on the branch left behind. The two shapes are one
+  case: a path on which a run is open that no writer is running. The
+  writer that continues such a path owns that run and closes it before
+  it appends anything else: it appends the run's `end` at the leaf,
+  with `interrupted` and a `ref` naming the rewind when it branched
+  into the run, and with the reason the segment computes and a `ref`
+  naming the cut when it resumes a run that was cut off. The record
+  then says what happened on that path, and no later reader takes a
+  rewind for a crash or a resumed session for one still running.
 
 ### `dispatch`
 
@@ -1289,6 +1301,11 @@ with none of the new members.
 - `env` says that a later entry with a different `workspace` is a
   substitution, and what a reader holding the environment fixed does
   with it.
+- `run` says who closes a run left open on a path no writer is
+  running: the writer that continues the path, before anything else,
+  with `interrupted` after a rewind into the run and the computed
+  reason after a crash. The old sentence that a branch closes the open
+  run held only for a branch to before the run's `start`.
 
 ## Changes since 0.4
 
