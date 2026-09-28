@@ -447,3 +447,29 @@ func TestContextHashVector(t *testing.T) {
 		t.Errorf("compaction: %s, want %s", got, want)
 	}
 }
+
+// TestResolveLegacyID: an id written about a session before its file
+// was migrated finds the entry, whether the file is migrated as it is
+// read or was written at 0.5 with the member kept, and a current id
+// resolves to itself.
+func TestResolveLegacyID(t *testing.T) {
+	for name, s := range map[string]*Session{
+		"migrated on read": loadV04(t, "basic"),
+		"0.5 fixture":      loadFixture(t, "basic"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			id := lid(t, s, "i0000004")
+			if got, ok := s.Resolve("i0000004"); !ok || got != id {
+				t.Errorf("Resolve(legacy) = %s, %v; want %s", got, ok, id)
+			}
+			if got, ok := s.Resolve(id); !ok || got != id {
+				t.Errorf("Resolve(id) = %s, %v", got, ok)
+			}
+			for _, miss := range []string{"", "i9999999"} {
+				if got, ok := s.Resolve(miss); ok {
+					t.Errorf("Resolve(%q) = %s", miss, got)
+				}
+			}
+		})
+	}
+}

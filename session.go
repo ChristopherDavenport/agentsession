@@ -92,6 +92,30 @@ func (s *Session) Entry(id string) (Entry, bool) {
 	return e, ok
 }
 
+// Resolve returns the ID of the entry id names: id itself when it is an
+// entry's ID, else the ID of the entry a migration rewrote from id,
+// whose LegacyID it is, in the session as read or in a 0.5 file that
+// kept the member. Everything written about a session before its
+// file was migrated names entries by their old IDs; Resolve is how a
+// reader holding one finds the entry, since Entry, Path and the rest
+// take the current ID alone.
+func (s *Session) Resolve(id string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.byID[id]; ok {
+		return id, true
+	}
+	if id == "" {
+		return "", false
+	}
+	for _, e := range s.entries {
+		if b := e.Base(); b.LegacyID == id {
+			return b.ID, true
+		}
+	}
+	return "", false
+}
+
 // Entries returns the entries in file order. The slice is a copy; the
 // entries are shared.
 func (s *Session) Entries() []Entry {
