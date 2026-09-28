@@ -1,7 +1,6 @@
 package agentsession
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -111,8 +110,13 @@ func EntryHashes(data []byte) (id, content string, err error) {
 	if env["parent"] == nil {
 		env["parent"] = json.RawMessage("null")
 	}
-	if p, ok := all["parents"]; ok && len(bytes.TrimSpace(p)) > 0 && string(bytes.TrimSpace(p)) != "null" && string(bytes.TrimSpace(p)) != "[]" {
-		env["parents"] = p
+	if p, ok := all["parents"]; ok {
+		// Decided on the value, not the spelling: an empty array however
+		// written is omitted, as a conforming writer omits it.
+		var refs []json.RawMessage
+		if json.Unmarshal(p, &refs) == nil && len(refs) > 0 {
+			env["parents"] = p
+		}
 	}
 	envJSON, err := json.Marshal(env)
 	if err != nil {

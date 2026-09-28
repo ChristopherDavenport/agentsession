@@ -46,3 +46,19 @@ func (l *dirLock) release() error {
 	l.f = nil
 	return err
 }
+
+// lockShared takes a shared lock at path: many holders at once, none
+// while an exclusive holder has it. Object writers hold the sweep's
+// lock shared from the object write through the journal commit, so a
+// sweep never runs between the two.
+func lockShared(path string) (*dirLock, error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("cas: lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("cas: lock: %w", err)
+	}
+	return &dirLock{f: f}, nil
+}

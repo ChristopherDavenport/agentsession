@@ -114,6 +114,9 @@ type Store struct {
 	// of its journal record is in neither.
 	owner  map[string]string
 	prefix map[string]bool
+	// faulty records sessions the index could not read, with why, so
+	// one fault is reported at that session's Open and hides no other.
+	faulty map[string]error
 }
 
 type handle struct {
@@ -134,7 +137,7 @@ func Open(root string) (*Store, error) {
 			return nil, fmt.Errorf("cas: %w", err)
 		}
 	}
-	s := &Store{root: root, open: map[string]*handle{}, owner: map[string]string{}, prefix: map[string]bool{}}
+	s := &Store{root: root, open: map[string]*handle{}, owner: map[string]string{}, prefix: map[string]bool{}, faulty: map[string]error{}}
 	if err := s.index(); err != nil {
 		return nil, err
 	}
@@ -165,6 +168,15 @@ func (s *Store) sessionDir(id string) (string, error) {
 		return "", fmt.Errorf("%w: session id %q", ErrBadName, id)
 	}
 	return filepath.Join(s.root, "sessions", id), nil
+}
+
+// mediaOf returns a header's media with the format's default applied,
+// so "" and "inline" compare as one value.
+func mediaOf(h agentsession.Header) string {
+	if h.Media == "" {
+		return agentsession.MediaInline
+	}
+	return h.Media
 }
 
 // lockSession takes a session's lock. Lock files live under locks/ and
@@ -676,7 +688,8 @@ func (s *Store) index() error {
 		dir := filepath.Join(s.root, "sessions", d.Name())
 		hashes, err := readLog(dir)
 		if err != nil {
-			return err
+			s.faulty[d.Name()] = err
+			continue
 		}
 		for _, h := range hashes {
 			s.owner[h] = d.Name()
@@ -687,9 +700,11 @@ func (s *Store) index() error {
 		}
 		if h.Base != "" {
 			if err := s.markPrefix(h.Base); err != nil {
-				return err
+				s.faulty[d.Name()] = err
+				continue
 			}
 		}
+		delete(s.faulty, d.Name())
 	}
 	return nil
 }
@@ -832,7 +847,7 @@ func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.
 			}
 			if dir, err := s.sessionDir(owner); err == nil {
 				if oh, err := readHeader(dir); err == nil {
-					if h.Media != "" && h.Media != oh.Media {
+					if h.Media != "" && mediaOf(h) != mediaOf(oh) {
 						return nil, errors.New("cas: a fork's media must equal its origin's")
 					}
 					h.Media = oh.Media
@@ -844,10 +859,6 @@ func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.
 		}
 		var err error
 		if prefix, err = s.pathLines(h.Base); err != nil {
-			return nil, err
-		}
-		// Young to the sweep until the header names them.
-		if err := s.freshenPath(h.Base); err != nil {
 			return nil, err
 		}
 	}
@@ -864,16 +875,21 @@ func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.
 	if err != nil {
 		return nil, err
 	}
+	// Nothing is removed until this call knows the directory is its own:
+	// a failure before the existence check leaves whatever is there.
 	fail := func(err error) (*agentsession.Session, error) {
 		lk.release()
-		os.RemoveAll(dir)
 		return nil, err
 	}
 	if exists, err := s.recoverSession(h.ID, dir); err != nil {
 		return fail(err)
 	} else if exists {
+		return fail(fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID))
+	}
+	fail = func(err error) (*agentsession.Session, error) {
 		lk.release()
-		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
+		os.RemoveAll(dir)
+		return nil, err
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fail(fmt.Errorf("cas: %w", err))
@@ -885,6 +901,18 @@ func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.
 		}
 	} else {
 		sess = tmp
+	}
+	// No sweep from here until the header names the prefix. The prefix
+	// is freshened too, so it is young once the lock is dropped.
+	guard, err := lockShared(filepath.Join(s.root, "sweep.lock"))
+	if err != nil {
+		return fail(err)
+	}
+	defer guard.release()
+	if h.Base != "" {
+		if err := s.freshenPath(h.Base); err != nil {
+			return fail(err)
+		}
 	}
 	// The create record is the boundary: whatever the journal said about
 	// this ID before belongs to a session that is gone. The header is
@@ -995,6 +1023,9 @@ func (s *Store) openLocked(id string) (*handle, error) {
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
 	}
+	if err, ok := s.faulty[id]; ok {
+		return nil, fmt.Errorf("cas: session %s could not be indexed: %w", id, err)
+	}
 	lk, err := s.lockSession(id)
 	if err != nil {
 		return nil, err
@@ -1095,7 +1126,14 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	if r.Outcome == agentsession.Held {
 		return r, nil
 	}
+	// From the object write through the commit no sweep may run: the
+	// object may be one the sweep would otherwise find old and unnamed.
+	guard, err := lockShared(filepath.Join(s.root, "sweep.lock"))
+	if err != nil {
+		return agentsession.Result{}, err
+	}
 	if err := s.storeEntry(e); err != nil {
+		guard.release()
 		return agentsession.Result{}, err
 	}
 	head := ""
@@ -1105,7 +1143,9 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	case agentsession.LeafMoved:
 		head = e.(*agentsession.LabelEntry).Target
 	}
-	if err := s.commit(journalRecord{Op: "append", Session: sessionID, Entry: r.ID, Head: head, Seq: h.session.Len() + 1}); err != nil {
+	err = s.commit(journalRecord{Op: "append", Session: sessionID, Entry: r.ID, Head: head, Seq: h.session.Len() + 1})
+	guard.release()
+	if err != nil {
 		return agentsession.Result{}, err
 	}
 	// The append is durable from here. The log and the head are
@@ -1528,7 +1568,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	if h.Base != "" {
 		if owner, ok := s.owner[h.Base]; ok {
 			if odir, err := s.sessionDir(owner); err == nil {
-				if oh, err := readHeader(odir); err == nil && oh.Media != h.Media {
+				if oh, err := readHeader(odir); err == nil && mediaOf(oh) != mediaOf(h) {
 					return nil, errors.New("cas: import: media differs from the session holding the base")
 				}
 			}
@@ -1567,6 +1607,11 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		os.RemoveAll(dir)
 		return nil, err
 	}
+	guard, err := lockShared(filepath.Join(s.root, "sweep.lock"))
+	if err != nil {
+		return fail(err)
+	}
+	defer guard.release()
 	for _, e := range entries {
 		if l, ok := e.(*agentsession.LabelEntry); ok {
 			if _, synthetic := l.Unknown["synthetic"]; synthetic {
@@ -1718,7 +1763,13 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 			rel, _ := filepath.Rel(space.dir, path)
 			hash := agentsession.HashPrefix + strings.ReplaceAll(rel, string(filepath.Separator), "")
 			if !space.keep[hash] {
-				if err := os.Remove(path); err != nil {
+				// Writers hold the lock shared through their commit, so
+				// none is between an object write and its record now; the
+				// second stat is for a writer on a platform without flock.
+				if again, err := os.Stat(path); err != nil || again.ModTime().After(young) {
+					return nil
+				}
+				if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 					return err
 				}
 				swept++

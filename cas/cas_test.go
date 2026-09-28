@@ -801,3 +801,70 @@ func TestSweepGrace(t *testing.T) {
 		t.Errorf("swept %d old objects, want 2", n)
 	}
 }
+
+// TestFailedCreateKeepsLiveSession: a Create of an ID that exists fails
+// without touching the session that holds it, even when the check
+// itself failed.
+func TestFailedCreateKeepsLiveSession(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	st.Create(ctx, agentsession.Header{ID: "live"})
+	last := mustAppend(t, st, "live", agentsession.NewItemEntry(openresponses.UserText("a")))
+	st.Close()
+	st2, _ := Open(st.Root())
+	if _, err := st2.Create(ctx, agentsession.Header{ID: "live"}); !errors.Is(err, agentsession.ErrSessionExists) {
+		t.Errorf("Create of an existing id = %v", err)
+	}
+	// Make the journal unreadable so the existence check fails too.
+	os.Chmod(filepath.Join(st.Root(), "journal"), 0o000)
+	_, err := st2.Create(ctx, agentsession.Header{ID: "live"})
+	os.Chmod(filepath.Join(st.Root(), "journal"), 0o600)
+	if err == nil {
+		t.Skip("running as a user that can read a mode-0 file")
+	}
+	s, err := st2.Open(ctx, "live")
+	if err != nil {
+		t.Fatalf("the live session is gone after a failed Create: %v", err)
+	}
+	if s.Leaf() != last {
+		t.Errorf("leaf %s", s.Leaf())
+	}
+	st2.Close()
+}
+
+// TestFaultIsolated: a session whose log cannot be read does not keep the
+// store or the other sessions from opening.
+func TestFaultIsolated(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	st.Create(ctx, agentsession.Header{ID: "good"})
+	st.Create(ctx, agentsession.Header{ID: "bad"})
+	mustAppend(t, st, "good", agentsession.NewItemEntry(openresponses.UserText("a")))
+	mustAppend(t, st, "bad", agentsession.NewItemEntry(openresponses.UserText("b")))
+	st.Close()
+	os.Chmod(filepath.Join(st.Root(), "sessions", "bad", "log"), 0o000)
+	defer os.Chmod(filepath.Join(st.Root(), "sessions", "bad", "log"), 0o600)
+	st2, err := Open(st.Root())
+	if err != nil {
+		t.Fatalf("one faulty session closed the store: %v", err)
+	}
+	defer st2.Close()
+	if _, err := st2.Open(ctx, "good"); err != nil {
+		t.Errorf("the good session did not open: %v", err)
+	}
+	if _, err := st2.Open(ctx, "bad"); err == nil {
+		t.Skip("running as a user that can read a mode-0 file")
+	}
+}
+
+// TestMediaDefault: "" and "inline" are one media, for a fork and an import.
+func TestMediaDefault(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "o"}) // media omitted: inline
+	a := mustAppend(t, st, "o", agentsession.NewItemEntry(openresponses.UserText("a")))
+	if _, err := st.Create(ctx, agentsession.Header{ID: "f", Base: a, Media: agentsession.MediaInline}); err != nil {
+		t.Errorf("a fork spelling the default media was refused: %v", err)
+	}
+}

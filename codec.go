@@ -197,16 +197,29 @@ func (m *migration) rewrite(e Entry, s *Session) error {
 			b.Parent = id
 		}
 	}
+	unresolved := false
 	for i, r := range b.Parents {
 		if r.Session == "" || r.Session == s.header.ID {
 			if id, ok := m.ids[r.Entry]; ok {
 				b.Parents[i].Entry = id
+			} else {
+				unresolved = true
 			}
+		} else {
+			// A reference into another session names an entry by an id
+			// this reader cannot rewrite; it keeps its string and the
+			// file is not re-emitted as 0.5.
+			unresolved = true
 		}
 	}
 	ref := func(p *string) {
+		if *p == "" {
+			return
+		}
 		if id, ok := m.ids[*p]; ok {
 			*p = id
+		} else {
+			unresolved = true
 		}
 	}
 	switch v := e.(type) {
@@ -225,6 +238,9 @@ func (m *migration) rewrite(e Entry, s *Session) error {
 	case *DecisionEntry:
 		ref(&v.Target)
 	case *UnknownEntry:
+		unresolved = true
+	}
+	if unresolved {
 		s.unresolved = append(s.unresolved, old)
 	}
 	b.ID = ""

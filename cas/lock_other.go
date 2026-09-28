@@ -39,3 +39,10 @@ func (l *dirLock) release() error {
 	}
 	return nil
 }
+
+// lockShared on a platform without flock takes nothing: the sweep and a
+// writer are not kept apart there, and the grace period is the only
+// protection. The unix build holds a real shared lock.
+func lockShared(path string) (*dirLock, error) {
+	return &dirLock{}, nil
+}

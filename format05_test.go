@@ -312,3 +312,62 @@ func mustCtx(t *testing.T, s *Session, id string) string {
 	}
 	return h
 }
+
+// TestMigrationReportsUnresolved: a 0.4 reference the reader cannot
+// rewrite — into another session, or to an id not seen earlier — is
+// reported, and the file is not re-emitted as 0.5.
+func TestMigrationReportsUnresolved(t *testing.T) {
+	m := loadV04(t, "converge")
+	migrated, unresolved := m.Migrated()
+	if !migrated || len(unresolved) == 0 {
+		t.Fatalf("converge carries references into other sessions; unresolved = %v", unresolved)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, m); !errors.Is(err, ErrUnresolvedMigration) {
+		t.Errorf("Write of a migrated file with unresolved references = %v", err)
+	}
+	// A file whose references all resolve writes.
+	if b := loadV04(t, "basic"); len(mustMigrated(t, b)) != 0 {
+		t.Errorf("basic reported unresolved references: %v", mustMigrated(t, b))
+	}
+}
+
+func loadV04(t *testing.T, name string) *Session {
+	t.Helper()
+	f, err := os.Open(filepath.Join("testdata", "sessions", "v0.4", name+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	s, err := Read(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func mustMigrated(t *testing.T, s *Session) []string {
+	t.Helper()
+	_, unresolved := s.Migrated()
+	return unresolved
+}
+
+// TestEntryHashesParentsSpelling: an empty parents however spelled is
+// omitted from the envelope, so two spellings give one id.
+func TestEntryHashesParentsSpelling(t *testing.T) {
+	base := `{"type":"info","id":"","parent":null,"ts":"2026-09-17T12:00:00Z","name":"n"}`
+	want, _, err := EntryHashes([]byte(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spelled := range []string{`[]`, `[ ]`, "[\n]", `null`} {
+		line := strings.Replace(base, `"parent":null,`, `"parent":null,"parents":`+spelled+`,`, 1)
+		got, _, err := EntryHashes([]byte(line))
+		if err != nil {
+			t.Fatalf("%s: %v", spelled, err)
+		}
+		if got != want {
+			t.Errorf("parents %q gave id %s, want %s", spelled, got, want)
+		}
+	}
+}
