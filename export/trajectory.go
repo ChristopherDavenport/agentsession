@@ -40,6 +40,13 @@ type Trajectory struct {
 	// AbandonedAt names the fork entry at which this path left the
 	// preferred route, or "" when it is a preferred path throughout.
 	AbandonedAt string
+	// Outcomes are the outcome entries appended below LeafID whose
+	// target is on the path: the scores that judge this document,
+	// which a judge appends after it and so are not on it. They are
+	// provenance and not context, so the steps and totals do not count
+	// them; the document carries them as it carries an outcome on the
+	// path. [At] fills it; a leaf has none.
+	Outcomes []*agentsession.OutcomeEntry
 	// Main is true for exactly one trajectory of a non-empty session:
 	// the path ending at the most recently appended entry, which is the
 	// session's current path. WriteATIF names its document after the
@@ -211,7 +218,11 @@ func Trajectories(s *agentsession.Session, prefs ...Preference) iter.Seq2[Trajec
 // applies and LeafID set to entryID. The entry need not be a leaf:
 // anything appended to a session after it was exported moves the
 // leaf, and this is how the document that was exported, the one a
-// judge read and a score names, is built again.
+// judge read and a score names, is built again. The document carries
+// the outcomes appended below entryID that target its path, so the
+// document a score names says how it scored. entryID is an entry's
+// current ID; resolve an ID written before the session was migrated
+// with [agentsession.Session.Resolve] first.
 func At(s *agentsession.Session, entryID string, prefs ...Preference) (Trajectory, error) {
 	if _, ok := s.Entry(entryID); !ok {
 		return Trajectory{}, fmt.Errorf("export: %w: %s", agentsession.ErrNoEntry, entryID)
@@ -279,6 +290,7 @@ func (w *tree) at(id string, prefs []Preference) (Trajectory, error) {
 		Labels:  w.labels,
 		Main:    id == w.mainLeaf,
 	}
+	t.Outcomes = outcomesBelow(s, id, t.Path)
 	for _, e := range t.Path {
 		b := e.Base()
 		if b.ID == id {
@@ -320,6 +332,33 @@ func (w *tree) at(id string, prefs []Preference) (Trajectory, error) {
 		}
 	}
 	return t, nil
+}
+
+// outcomesBelow returns the outcome entries in the subtree strictly
+// below id, in file order, whose target is on path.
+func outcomesBelow(s *agentsession.Session, id string, path []agentsession.Entry) []*agentsession.OutcomeEntry {
+	below := s.Children(id)
+	if len(below) == 0 {
+		return nil
+	}
+	onPath := make(map[string]bool, len(path))
+	for _, e := range path {
+		onPath[e.Base().ID] = true
+	}
+	inSubtree := map[string]bool{}
+	for len(below) > 0 {
+		c := below[0]
+		below = below[1:]
+		inSubtree[c] = true
+		below = append(below, s.Children(c)...)
+	}
+	var out []*agentsession.OutcomeEntry
+	for _, e := range s.Entries() {
+		if o, ok := e.(*agentsession.OutcomeEntry); ok && inSubtree[o.ID] && onPath[o.Target] {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // nextOnPath returns the child of parent that lies on the path to leaf.

@@ -206,6 +206,9 @@ func (b *builder) run() error {
 		}
 	}
 	b.flushGroup(nil)
+	for _, o := range b.t.Outcomes {
+		b.outcome(o)
+	}
 	b.finish()
 	return nil
 }

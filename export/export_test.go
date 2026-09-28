@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1251,7 +1252,29 @@ func TestAtEntry(t *testing.T) {
 		t.Errorf("trajectory_id = %q, want %q", again.TrajectoryID, target)
 	}
 	assertSameJSON(t, encode(t, first.Steps), encode(t, again.Steps))
+	// The document a score names carries the scores: the outcomes below
+	// it that target its path join the one it already held.
+	if len(after.Outcomes) != 2 {
+		t.Fatalf("At carries %d outcomes below the target, want 2", len(after.Outcomes))
+	}
+	var labels []string
+	for _, o := range again.FinalMetrics.Extra[ExtraOutcome].([]any) {
+		labels = append(labels, o.(map[string]any)["label"].(string))
+	}
+	if want := []string{"judge-v1", "judge-a", "judge-b"}; !slices.Equal(labels, want) {
+		t.Errorf("outcomes on the document at the target = %v, want %v", labels, want)
+	}
+	first.FinalMetrics.Extra[ExtraOutcome] = again.FinalMetrics.Extra[ExtraOutcome]
 	assertSameJSON(t, encode(t, first.FinalMetrics), encode(t, again.FinalMetrics))
+	// An outcome below the target that judges something off its path is
+	// another document's.
+	off := &agentsession.OutcomeEntry{Kind: agentsession.OutcomeEval, Target: s.Leaf(), Label: "judge-c"}
+	if _, err := s.Append(off); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := At(s, target); err != nil || len(again.Outcomes) != 2 {
+		t.Errorf("At after an outcome judging a later entry: %d outcomes, %v", len(again.Outcomes), err)
+	}
 
 	if _, err := At(s, "nope"); !errors.Is(err, agentsession.ErrNoEntry) {
 		t.Errorf("At an unknown entry = %v", err)
