@@ -520,17 +520,19 @@ func TestCrashWindows(t *testing.T) {
 	}
 	st3.Close()
 
-	// Torn journal tail: garbage after the last record is cut, and the
-	// next commit follows the last good record.
+	// Torn journal record: a record a crashed process cut short is
+	// skipped, the journal is not truncated since another process may
+	// have fsynced records after it, and the next commit is found even
+	// when it lands on the same line as the torn bytes.
 	journal := filepath.Join(st.Root(), "journal")
-	before, _ := os.ReadFile(journal)
 	f, _ := os.OpenFile(journal, os.O_WRONLY|os.O_APPEND, 0o600)
 	f.WriteString(`{"op":"append","session":"c","entry":"sha256:trunc`)
 	f.Close()
+	before, _ := os.ReadFile(journal)
 	st4, _ := Open(st.Root())
 	after, _ := os.ReadFile(journal)
 	if !bytes.Equal(before, after) {
-		t.Error("the torn tail was not cut")
+		t.Error("opening the store changed the journal")
 	}
 	c := mustAppend(t, st4, "c", agentsession.NewItemEntry(openresponses.UserText("c")))
 	st4.Close()
@@ -606,5 +608,147 @@ func TestNames(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(st.Root(), "..", "escaped")); err == nil {
 		t.Error("a path escaped the store")
+	}
+}
+
+// TestModifiedOutsideTheStore: an entry appended on the session directly
+// is not in any log, so nothing may build on it, and a head moved to
+// one is refused.
+func TestModifiedOutsideTheStore(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	s, _ := st.Create(ctx, agentsession.Header{ID: "m"})
+	mustAppend(t, st, "m", agentsession.NewItemEntry(openresponses.UserText("a")))
+	if _, err := s.Append(agentsession.NewItemEntry(openresponses.UserText("direct"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, "m", agentsession.NewItemEntry(openresponses.UserText("b"))); !errors.Is(err, ErrModified) {
+		t.Errorf("append after a direct append = %v", err)
+	}
+	var buf bytes.Buffer
+	if err := st.Project(ctx, &buf, "m"); !errors.Is(err, ErrModified) {
+		t.Errorf("project after a direct append = %v", err)
+	}
+	// Reopened from disk, the store's record stands: one entry.
+	st.Release("m")
+	again, err := st.Open(ctx, "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Len() != 1 {
+		t.Errorf("len after reopen = %d", again.Len())
+	}
+}
+
+// TestImportCleansUp: a synthetic marker anywhere but the end is refused,
+// and a failed import leaves nothing that blocks its ID.
+func TestImportCleansUp(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "i"})
+	a := mustAppend(t, st, "i", agentsession.NewItemEntry(openresponses.UserText("a")))
+	mustAppend(t, st, "i", agentsession.NewItemEntry(openresponses.UserText("b")))
+	var buf bytes.Buffer
+	st.Project(ctx, &buf, "i")
+	// Insert a synthetic marker in the middle by rebuilding through a
+	// session, so the ids verify.
+	file, _ := agentsession.Read(bytes.NewReader(buf.Bytes()))
+	rebuilt := agentsession.New(file.Header())
+	ids := map[string]string{}
+	for i, e := range file.Entries() {
+		data, _ := agentsession.MarshalEntry(e)
+		c, _ := agentsession.UnmarshalEntry(data)
+		c.Base().ID = ""
+		if p := c.Base().Parent; p != "" {
+			c.Base().Parent = ids[p]
+		}
+		id, _ := rebuilt.Append(c)
+		ids[e.Base().ID] = id
+		if i == 0 {
+			marker := agentsession.NewLabelEntry(id, agentsession.LeafLabel)
+			marker.Unknown = map[string]json.RawMessage{"synthetic": json.RawMessage("true")}
+			if _, err := rebuilt.Append(marker); err != nil {
+				t.Fatal(err)
+			}
+			rebuilt.Branch(id)
+		}
+	}
+	_ = a
+	var mid bytes.Buffer
+	agentsession.Write(&mid, rebuilt)
+	other, _ := Open(t.TempDir())
+	defer other.Close()
+	if _, err := other.Import(ctx, bytes.NewReader(mid.Bytes()), false); !errors.Is(err, ErrSynthetic) {
+		t.Errorf("import with a marker in the middle = %v", err)
+	}
+	// The ID is free: a clean import of the same session works.
+	if _, err := other.Import(ctx, bytes.NewReader(buf.Bytes()), false); err != nil {
+		t.Errorf("import after a refused import = %v", err)
+	}
+}
+
+// TestCrashDuringDelete: a directory left behind after the delete record
+// is removed on the next open, and the ID can be created again.
+func TestCrashDuringDelete(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	st.Create(ctx, agentsession.Header{ID: "x"})
+	mustAppend(t, st, "x", agentsession.NewItemEntry(openresponses.UserText("a")))
+	st.Close()
+	// The delete record lands, the directory does not go.
+	st2, _ := Open(st.Root())
+	if err := st2.commit(journalRecord{Op: "delete", Session: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st2.Open(ctx, "x"); !errors.Is(err, agentsession.ErrNoSession) {
+		t.Errorf("open of a deleted session = %v", err)
+	}
+	if _, err := st2.Create(ctx, agentsession.Header{ID: "x"}); err != nil {
+		t.Errorf("recreate after a crashed delete = %v", err)
+	}
+	st2.Close()
+}
+
+// TestTwoProcesses: two stores on one directory, as two processes would
+// be, each appending to its own session; both survive a reopen, a store
+// cannot open the other's held session, and the sweep refuses while
+// either holds one.
+func TestTwoProcesses(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	a, _ := Open(root)
+	b, _ := Open(root)
+	a.Create(ctx, agentsession.Header{ID: "pa"})
+	b.Create(ctx, agentsession.Header{ID: "pb"})
+	var la, lb string
+	for i := 0; i < 5; i++ {
+		la = mustAppend(t, a, "pa", agentsession.NewItemEntry(openresponses.UserText("a")))
+		lb = mustAppend(t, b, "pb", agentsession.NewItemEntry(openresponses.UserText("b")))
+	}
+	if _, err := b.Open(ctx, "pa"); !errors.Is(err, agentsession.ErrSessionLocked) {
+		t.Errorf("b opened a's held session: %v", err)
+	}
+	if _, err := a.Sweep(ctx); !errors.Is(err, agentsession.ErrSessionLocked) {
+		t.Errorf("sweep with held sessions = %v", err)
+	}
+	a.Close()
+	b.Close()
+	c, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	sa, err := c.Open(ctx, "pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sb, err := c.Open(ctx, "pb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sa.Len() != 5 || sa.Leaf() != la || sb.Len() != 5 || sb.Leaf() != lb {
+		t.Errorf("after two writers: a %d %s, b %d %s", sa.Len(), sa.Leaf(), sb.Len(), sb.Leaf())
 	}
 }

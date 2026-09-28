@@ -83,9 +83,16 @@ versions may break the API.
   held, leaf moved or leaf not moved. A session ID or a hash that cannot
   be a path is refused (`ErrBadName`), a synthetic marker appended as an
   entry is refused (`ErrSynthetic`), and every rename or creation is
-  followed by an fsync of its directory. A second process is refused a
-  held session by an advisory lock, as the RFC permits. It runs the
-  store conformance suite. Exchange between stores, media sidecars and
+  followed by an fsync of its directory. Several processes share a
+  store: each session is held by one at a time through an advisory
+  lock, the journal is shared and never truncated by a reader, a record
+  a crash cut short is skipped and the records after it still count,
+  recovery is per session by the process that holds it, and the sweep
+  takes a store-wide lock and refuses while any session is held
+  anywhere, with sessions refusing to open while a sweep holds the
+  store. A session changed behind the store's back, by an append made
+  on it directly or a leaf moved to an entry never committed, is refused
+  (`ErrModified`). It runs the store conformance suite. Exchange between stores, media sidecars and
   the SQLite relayout are not in this change.
 - `Session.Prepare` and `Session.Commit` split `Append` into the part
   that computes an entry's hashes and outcome without adding it and the
