@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -141,6 +142,9 @@ type envelope struct {
 	Parents []EntryRef `json:"parents,omitempty"`
 	TS      time.Time  `json:"ts"`
 }
+
+// leapSecond matches the seconds field of an RFC 3339 time spelled 60.
+var leapSecond = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:)60((?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2}))$`)
 
 // envelopeKeys are the envelope's names, all reserved: a body MUST NOT
 // carry a top-level member by any of them. content is computed and
@@ -640,7 +644,21 @@ func envelopeFrom(all map[string]json.RawMessage) (envelope, error) {
 	}
 	if raw, ok := all["ts"]; ok && !isNull(raw) {
 		if err := json.Unmarshal(raw, &env.TS); err != nil {
-			return env, fmt.Errorf("ts: %w", err)
+			// A second 60, which time.Time cannot hold: the format has a
+			// writer and a migration write it as 59 with the same
+			// fraction. The raw spelling is still checked by a 0.5
+			// reader, so this only lets an earlier file through.
+			var str string
+			if json.Unmarshal(raw, &str) != nil {
+				return env, fmt.Errorf("ts: %w", err)
+			}
+			fixed := leapSecond.ReplaceAllString(str, "${1}59${2}")
+			if fixed == str {
+				return env, fmt.Errorf("ts: %w", err)
+			}
+			if env.TS, err = time.Parse(time.RFC3339Nano, fixed); err != nil {
+				return env, fmt.Errorf("ts: %w", err)
+			}
 		}
 	}
 	return env, nil

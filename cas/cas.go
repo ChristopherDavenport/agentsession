@@ -59,6 +59,7 @@ import (
 	"iter"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -94,7 +95,7 @@ var ErrBadName = errors.New("cas: not a usable name")
 var ErrSynthetic = errors.New("cas: a synthetic leaf marker is the projection's, not the session's")
 
 // ErrSessionLocked is [agentsession.ErrSessionLocked]: another process
-// holds the session, or a sweep holds the store.
+// holds the session, or, from Sweep, another sweep is running.
 var ErrSessionLocked = agentsession.ErrSessionLocked
 
 // ErrModified is returned when a session the store handed out was
@@ -108,11 +109,12 @@ type Store struct {
 	root string
 	mu   sync.Mutex
 	open map[string]*handle
-	// owner maps each committed own entry to the session whose log holds
-	// it; prefix holds the entries some session's base path needs.
-	// Together they are what the store holds: an object written ahead
-	// of its journal record is in neither.
-	owner  map[string]string
+	// owners maps each committed own entry to the sessions whose logs
+	// hold it — one entry can be in two, when two sessions append the
+	// same entry under the same parent — and prefix holds the entries
+	// some session's base path needs. Together they are what the store
+	// holds: an object written ahead of its journal record is in neither.
+	owners map[string]map[string]bool
 	prefix map[string]bool
 	// faulty records sessions the index could not read, with why, so
 	// one fault is reported at that session's Open and hides no other.
@@ -137,7 +139,7 @@ func Open(root string) (*Store, error) {
 			return nil, fmt.Errorf("cas: %w", err)
 		}
 	}
-	s := &Store{root: root, open: map[string]*handle{}, owner: map[string]string{}, prefix: map[string]bool{}, faulty: map[string]error{}}
+	s := &Store{root: root, open: map[string]*handle{}, owners: map[string]map[string]bool{}, prefix: map[string]bool{}, faulty: map[string]error{}}
 	if err := s.index(); err != nil {
 		return nil, err
 	}
@@ -480,8 +482,84 @@ func (s *Store) isLeafLabel(id string) (bool, error) {
 // log or on a session's prefix. An object written ahead of its journal
 // record is in neither.
 func (s *Store) holds(id string) bool {
-	_, own := s.owner[id]
-	return own || s.prefix[id]
+	return len(s.owners[id]) > 0 || s.prefix[id]
+}
+
+// own records that session's log holds entry.
+func (s *Store) own(entry, session string) {
+	set := s.owners[entry]
+	if set == nil {
+		set = map[string]bool{}
+		s.owners[entry] = set
+	}
+	set[session] = true
+}
+
+// anyOwner returns one session whose log holds the entry, or "".
+func (s *Store) anyOwner(entry string) (string, bool) {
+	for id := range s.owners[entry] {
+		return id, true
+	}
+	return "", false
+}
+
+// --- media blobs ---
+
+// sidecarRef matches a sidecar reference inside a content, the URL RFC
+// 0001 gives an item that names a blob beside the file.
+var sidecarRef = regexp.MustCompile(`sidecar:sha256:[0-9a-f]{64}`)
+
+// PutBlob stores a media blob under its hash and returns the hash. An
+// item names it with a sidecar: URL carrying the hash, and a projection
+// of a sidecar session writes it beside the file as the file named by
+// the hex digest. A blob is a content object, held once.
+func (s *Store) PutBlob(ctx context.Context, data []byte) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	hash := agentsession.HashBytes(data)
+	cp, err := s.contentPath(hash)
+	if err != nil {
+		return "", err
+	}
+	guard, err := lockShared(filepath.Join(s.root, "sweep.lock"))
+	if err != nil {
+		return "", err
+	}
+	defer guard.release()
+	if err := writeObject(cp, data); err != nil {
+		return "", fmt.Errorf("cas: store blob: %w", err)
+	}
+	return hash, nil
+}
+
+// Blob returns a media blob by its hash.
+func (s *Store) Blob(ctx context.Context, hash string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cp, err := s.contentPath(hash)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(cp)
+	if err != nil {
+		return nil, fmt.Errorf("cas: blob %s: %w", hash, err)
+	}
+	if agentsession.HashBytes(data) != hash {
+		return nil, fmt.Errorf("cas: blob %s: bytes do not hash to their name", hash)
+	}
+	return data, nil
+}
+
+// blobsNamedBy returns the blob hashes the content names through sidecar
+// references.
+func blobsNamedBy(content []byte) []string {
+	var out []string
+	for _, m := range sidecarRef.FindAll(content, -1) {
+		out = append(out, strings.TrimPrefix(string(m), "sidecar:"))
+	}
+	return out
 }
 
 // --- the journal ---
@@ -674,7 +752,7 @@ func (s *Store) index() error {
 			continue
 		}
 		for _, e := range st.entries {
-			s.owner[e] = id
+			s.own(e, id)
 		}
 	}
 	dirs, err := os.ReadDir(filepath.Join(s.root, "sessions"))
@@ -692,7 +770,7 @@ func (s *Store) index() error {
 			continue
 		}
 		for _, h := range hashes {
-			s.owner[h] = d.Name()
+			s.own(h, d.Name())
 		}
 		h, err := readHeader(dir)
 		if err != nil {
@@ -841,7 +919,7 @@ func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.
 		} else if isLabel {
 			return nil, errors.New("cas: a base may not be a leaf label")
 		}
-		if owner, ok := s.owner[h.Base]; ok {
+		if owner, ok := s.anyOwner(h.Base); ok {
 			if h.ParentSession == "" {
 				h.ParentSession = owner
 			}
@@ -1072,7 +1150,7 @@ func (s *Store) openLocked(id string) (*handle, error) {
 		return fail(err)
 	}
 	for _, h := range hashes {
-		s.owner[h] = id // another process may have appended since the index was built
+		s.own(h, id) // another process may have appended since the index was built
 	}
 	h := &handle{session: sess, dir: dir, lock: lk, mark: readMark(dir), head: head, count: sess.Len()}
 	s.open[id] = h
@@ -1107,10 +1185,8 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	if h.mark != MarkRecord {
 		return agentsession.Result{}, fmt.Errorf("%w: %s", ErrMirror, sessionID)
 	}
-	if l, ok := e.(*agentsession.LabelEntry); ok {
-		if _, synthetic := l.Unknown["synthetic"]; synthetic {
-			return agentsession.Result{}, ErrSynthetic
-		}
+	if l, ok := e.(*agentsession.LabelEntry); ok && isSynthetic(l) {
+		return agentsession.Result{}, ErrSynthetic
 	}
 	if err := s.untouched(h); err != nil {
 		return agentsession.Result{}, err
@@ -1156,22 +1232,48 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 		_ = writeHead(h.dir, head)
 		h.head = head
 	}
-	s.owner[r.ID] = sessionID
+	s.own(r.ID, sessionID)
 	if h.session.Leaf() != leafAtPrepare {
 		// A reader moved the leaf between Prepare and Commit, through
 		// Session.Branch, which does not take the store's lock. The
 		// journal has spoken; the store is authoritative, and the move
 		// is undone rather than recorded as something it was not.
-		if err := h.session.Branch(leafAtPrepare); err != nil && leafAtPrepare != "" {
-			return agentsession.Result{}, err
+		if leafAtPrepare == "" {
+			h.session.ResetLeaf()
+		} else if err := h.session.Branch(leafAtPrepare); err != nil {
+			return s.committedButNotApplied(sessionID, r)
 		}
 	}
-	got, err := h.session.Commit(e)
-	if err != nil {
-		return agentsession.Result{}, err
+	if _, err := h.session.Commit(e); err != nil {
+		return s.committedButNotApplied(sessionID, r)
 	}
 	h.count++
-	return got, nil
+	return r, nil
+}
+
+// committedButNotApplied is what Write returns when the journal record is
+// durable and the in-memory session could not be brought in step: the
+// append happened, so it is reported as a success, and the handle is
+// dropped so the next Open rebuilds the session from what the store
+// holds. Nothing after the commit point may turn a durable append into
+// a reported failure.
+func (s *Store) committedButNotApplied(sessionID string, r agentsession.Result) (agentsession.Result, error) {
+	if h, ok := s.open[sessionID]; ok {
+		delete(s.open, sessionID)
+		h.lock.release()
+	}
+	return r, nil
+}
+
+// isSynthetic reports whether a label carries synthetic: true, the
+// projection's own marker.
+func isSynthetic(l *agentsession.LabelEntry) bool {
+	raw, ok := l.Unknown["synthetic"]
+	if !ok {
+		return false
+	}
+	var v bool
+	return json.Unmarshal(raw, &v) == nil && v
 }
 
 // untouched checks that the session holds exactly the entries the store
@@ -1199,7 +1301,7 @@ func (s *Store) syncHead(h *handle, sessionID string) error {
 		// The head must be something the store committed: the base or
 		// an entry in this session's log, never one appended on the
 		// session behind the store's back.
-		if owner, ok := s.owner[leaf]; (!ok || owner != sessionID) && leaf != h.session.Header().Base {
+		if !s.owners[leaf][sessionID] && leaf != h.session.Header().Base {
 			return fmt.Errorf("%w: head %s is not in the log", ErrModified, leaf)
 		}
 	} else if h.session.Header().Base != "" {
@@ -1245,7 +1347,12 @@ func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) err
 	}
 	_ = writeHead(h.dir, to) // an index; the journal has it
 	h.head = to
-	return h.session.Branch(to)
+	if err := h.session.Branch(to); err != nil {
+		// Durable; the session is rebuilt on the next Open.
+		delete(s.open, sessionID)
+		h.lock.release()
+	}
+	return nil
 }
 
 func orNone(s string) string {
@@ -1421,9 +1528,10 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if err := s.commit(journalRecord{Op: "delete", Session: id}); err != nil {
 		return err
 	}
-	for h, owner := range s.owner {
-		if owner == id {
-			delete(s.owner, h)
+	for h, set := range s.owners {
+		delete(set, id)
+		if len(set) == 0 {
+			delete(s.owners, h)
 		}
 	}
 	if err := os.RemoveAll(dir); err != nil {
@@ -1475,6 +1583,59 @@ func (s *Store) Project(ctx context.Context, w io.Writer, sessionID string) erro
 		return err
 	}
 	return project(w, h.session, h.head)
+}
+
+// ProjectDir writes the session's file into dir as <id>.jsonl and, for a
+// sidecar session, every blob its entries name as <id>/<hex>, so the
+// projection is self-contained as RFC 0001 requires. It returns the
+// file's path.
+func (s *Store) ProjectDir(ctx context.Context, dir, sessionID string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.openLocked(sessionID)
+	if err != nil {
+		return "", err
+	}
+	if err := s.untouched(h); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	if err := project(&buf, h.session, h.head); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, sessionID+".jsonl")
+	if err := writeAtomic(path, buf.Bytes()); err != nil {
+		return "", err
+	}
+	if mediaOf(h.session.Header()) != agentsession.MediaSidecar {
+		return path, nil
+	}
+	blobDir := filepath.Join(dir, sessionID)
+	for _, e := range h.session.Entries() {
+		_, body, err := split(e)
+		if err != nil {
+			return "", err
+		}
+		for _, b := range blobsNamedBy(body) {
+			data, err := s.Blob(ctx, b)
+			if err != nil {
+				return "", err
+			}
+			if err := os.MkdirAll(blobDir, 0o755); err != nil {
+				return "", err
+			}
+			if err := writeAtomic(filepath.Join(blobDir, strings.TrimPrefix(b, agentsession.HashPrefix)), data); err != nil {
+				return "", err
+			}
+		}
+	}
+	return path, nil
 }
 
 // project is Project over a session in memory with the given head.
@@ -1546,13 +1707,11 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	entries := sess.Entries()
 	var own []agentsession.Entry
 	for i, e := range entries {
-		if l, ok := e.(*agentsession.LabelEntry); ok {
-			if _, synthetic := l.Unknown["synthetic"]; synthetic {
-				if i == len(entries)-1 && l.Label != nil && *l.Label == agentsession.LeafLabel {
-					continue // the projection's marker, discarded
-				}
-				return nil, fmt.Errorf("%w: at line %d", ErrSynthetic, i+2)
+		if l, ok := e.(*agentsession.LabelEntry); ok && isSynthetic(l) {
+			if i == len(entries)-1 && l.Label != nil && *l.Label == agentsession.LeafLabel {
+				continue // the projection's marker, discarded
 			}
+			return nil, fmt.Errorf("%w: at line %d", ErrSynthetic, i+2)
 		}
 		if sess.Prefix(e.Base().ID) {
 			continue
@@ -1566,7 +1725,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		own = append(own, e)
 	}
 	if h.Base != "" {
-		if owner, ok := s.owner[h.Base]; ok {
+		if owner, ok := s.anyOwner(h.Base); ok {
 			if odir, err := s.sessionDir(owner); err == nil {
 				if oh, err := readHeader(odir); err == nil && mediaOf(oh) != mediaOf(h) {
 					return nil, errors.New("cas: import: media differs from the session holding the base")
@@ -1613,10 +1772,8 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	}
 	defer guard.release()
 	for _, e := range entries {
-		if l, ok := e.(*agentsession.LabelEntry); ok {
-			if _, synthetic := l.Unknown["synthetic"]; synthetic {
-				continue
-			}
+		if l, ok := e.(*agentsession.LabelEntry); ok && isSynthetic(l) {
+			continue
 		}
 		if err := s.storeEntry(e); err != nil {
 			return fail(err)
@@ -1642,7 +1799,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	hashes := make([]string, 0, len(own))
 	for _, e := range own {
 		hashes = append(hashes, e.Base().ID)
-		s.owner[e.Base().ID] = h.ID
+		s.own(e.Base().ID, h.ID)
 	}
 	if len(hashes) > 0 {
 		if err := appendLog(dir, hashes...); err != nil {
@@ -1716,12 +1873,12 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 			keepEntry[st.head] = true
 		}
 	}
-	s.owner = map[string]string{}
+	s.owners = map[string]map[string]bool{}
 	s.prefix = map[string]bool{}
 	if err := s.index(); err != nil {
 		return 0, err
 	}
-	for id := range s.owner {
+	for id := range s.owners {
 		keepEntry[id] = true
 	}
 	for id := range s.prefix {
@@ -1736,8 +1893,18 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 			continue
 		}
 		var c string
-		if json.Unmarshal(e["content"], &c) == nil {
-			keepContent[c] = true
+		if json.Unmarshal(e["content"], &c) != nil {
+			continue
+		}
+		keepContent[c] = true
+		// A media blob is retained while a retained content names it
+		// through a sidecar URL: references followed all the way down.
+		if cp, err := s.contentPath(c); err == nil {
+			if body, err := os.ReadFile(cp); err == nil {
+				for _, b := range blobsNamedBy(body) {
+					keepContent[b] = true
+				}
+			}
 		}
 	}
 	swept := 0

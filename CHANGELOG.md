@@ -103,8 +103,20 @@ versions may break the API.
   back, by an append made on it directly or a leaf moved to an entry
   never committed, is refused (`ErrModified`). An index write that
   fails after the journal commit does not fail the append, which is
-  durable; the next open repairs the index. It runs the store
-  conformance suite. Exchange between stores, media sidecars and
+  durable; the next open repairs the index, and nothing after the commit
+  point turns a durable append into a reported failure. Media blobs are
+  content objects: `PutBlob` stores one under its hash, `Blob` reads it,
+  the sweep follows a content's `sidecar:` references to keep them, and
+  `ProjectDir` writes a sidecar session's blobs beside its file. One
+  session whose files cannot be read is reported at its own `Open` and
+  hides no other. It runs the store conformance suite.
+- A 0.x file of a later minor than this reader's is refused, since the
+  0.x series is exempt from the rule that a reader reads every minor of
+  its major. A migration reports a reference it cannot rewrite, into
+  another session or to an id not seen earlier, and such a file is not
+  re-emitted. A `ts` spelled with second 60 in an earlier file migrates
+  as 59 with the same fraction. `ErrDuplicateEntry` is gone; nothing
+  returned it. Exchange between stores, media sidecars and
   the SQLite relayout are not in this change.
 - `Session.Prepare` and `Session.Commit` split `Append` into the part
   that computes an entry's hashes and outcome without adding it and the

@@ -179,12 +179,17 @@ func TestReadErrors(t *testing.T) {
 	}
 }
 
-// TestReadMinorVersion checks that a later minor version of the format
-// is accepted and that the header keeps its version and its unknown
-// members on rewrite; the rewrite is canonical, so members are compared
-// and not bytes.
+// TestReadMinorVersion checks that a later 0.x minor is refused, since
+// the 0.x series is exempt from the rule that a reader reads every minor
+// of its major, and that this minor keeps its unknown header members on
+// rewrite; the rewrite is canonical, so members are compared and not
+// bytes.
 func TestReadMinorVersion(t *testing.T) {
-	in := `{"type":"session","format":"agentsession/0.7","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24","future_field":{"a":1}}` + "\n"
+	later := `{"type":"session","format":"agentsession/0.7","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}` + "\n"
+	if _, err := Read(strings.NewReader(later)); !errors.Is(err, ErrUnsupportedFormat) {
+		t.Errorf("Read of a later 0.x minor = %v, want ErrUnsupportedFormat", err)
+	}
+	in := `{"type":"session","format":"agentsession/0.5","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24","future_field":{"a":1}}` + "\n"
 	s, err := Read(strings.NewReader(in))
 	if err != nil {
 		t.Fatal(err)

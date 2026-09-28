@@ -868,3 +868,70 @@ func TestMediaDefault(t *testing.T) {
 		t.Errorf("a fork spelling the default media was refused: %v", err)
 	}
 }
+
+// TestSidecarMedia: a blob is held once, kept by the sweep while a
+// content names it, and written beside a sidecar session's projection.
+func TestSidecarMedia(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "s", Media: agentsession.MediaSidecar})
+	blob, err := st.PutBlob(ctx, []byte("PNG bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputImage{ImageURL: "sidecar:" + blob}))
+	mustAppend(t, st, "s", item)
+	orphan, _ := st.PutBlob(ctx, []byte("nothing names this"))
+	if n, err := st.Sweep(ctx, 0); err != nil || n != 1 {
+		t.Errorf("sweep = %d, %v; want the orphan blob alone", n, err)
+	}
+	if _, err := st.Blob(ctx, blob); err != nil {
+		t.Errorf("the named blob was swept: %v", err)
+	}
+	if _, err := st.Blob(ctx, orphan); err == nil {
+		t.Error("the orphan blob survived")
+	}
+	dir := t.TempDir()
+	path, err := st.ProjectDir(ctx, dir, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(path) != "s.jsonl" {
+		t.Errorf("file %s", path)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "s", strings.TrimPrefix(blob, agentsession.HashPrefix)))
+	if err != nil || string(data) != "PNG bytes" {
+		t.Errorf("blob beside the file: %q, %v", data, err)
+	}
+}
+
+// TestSweepAgainstWriter runs sweeps with no grace against a writer in
+// the same process: the shared lock keeps the two apart, so every
+// append survives.
+func TestSweepAgainstWriter(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "w"})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			st.Sweep(ctx, 0)
+		}
+	}()
+	var last string
+	for i := 0; i < 200; i++ {
+		last = mustAppend(t, st, "w", agentsession.NewItemEntry(openresponses.UserText("x")))
+	}
+	<-done
+	st.Release("w")
+	s, err := st.Open(ctx, "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 200 || s.Leaf() != last {
+		t.Errorf("after sweeps against a writer: len %d leaf %s", s.Len(), s.Leaf())
+	}
+}

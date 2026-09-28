@@ -146,6 +146,12 @@ func (h Header) Validate() error {
 	if major != FormatMajor {
 		return fmt.Errorf("%w: %s", ErrUnsupportedFormat, h.Format)
 	}
+	if minor, _ := func() (int, error) { _, m, e := ParseFormat(h.Format); return m, e }(); major == 0 && minor > FormatMinor {
+		// The 0.x series is exempt from the rule that a reader reads
+		// every minor of its major: a later 0.x may have changed the
+		// envelope, and a reader of 0.x supports the minors it names.
+		return fmt.Errorf("%w: %s is later than this reader's %s", ErrUnsupportedFormat, h.Format, Format)
+	}
 	if h.ID == "" {
 		return errors.New("agentsession: header id is required")
 	}

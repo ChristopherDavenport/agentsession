@@ -371,3 +371,71 @@ func TestEntryHashesParentsSpelling(t *testing.T) {
 		}
 	}
 }
+
+// TestContextHashVector pins the context hash to RFC 0002's definition
+// with values computed here from the rules alone: the seed is the hash
+// of canonical null; a contributing entry hashes the array of the
+// parent's context hash, its type and its content hash; a record entry
+// inherits; response, source and queued_from leave an item's body; a
+// compaction's first_kept becomes [context hash, type] of the entry it
+// names.
+func TestContextHashVector(t *testing.T) {
+	s := New(Header{})
+	seed, _ := HashRequestJSON([]byte("null"))
+	step := func(prev, typ, content string) string {
+		arr, _ := json.Marshal([]string{prev, typ, content})
+		h, _ := HashRequestJSON(arr)
+		return h
+	}
+	bodyHash := func(members string) string {
+		h, _ := HashRequestJSON([]byte(members))
+		return h
+	}
+	cfg := &ConfigEntry{Model: "m"}
+	cfgID, _ := s.Append(cfg)
+	want := step(seed, TypeConfig, bodyHash(`{"model":"m"}`))
+	if got, _ := s.ContextHash(cfgID); got != want {
+		t.Errorf("config: %s, want %s", got, want)
+	}
+	// A record entry inherits.
+	runID, _ := s.Append(NewRunStart("r1", SourceInput, ""))
+	if got, _ := s.ContextHash(runID); got != want {
+		t.Errorf("run start changed the key: %s", got)
+	}
+	// An item with response and source: both leave the body for the key.
+	item := NewItemEntry(openresponses.UserText("hi"))
+	item.ResponseID = "resp_1"
+	item.Source = &Trigger{Kind: "cron", Ref: "nightly"}
+	itemID, _ := s.Append(item)
+	itemJSON, _ := json.Marshal(openresponses.UserText("hi"))
+	want = step(want, TypeItem, bodyHash(`{"item":`+string(itemJSON)+`}`))
+	if got, _ := s.ContextHash(itemID); got != want {
+		t.Errorf("item: %s, want %s", got, want)
+	}
+	// A compaction: first_kept is replaced by [context hash, type] of the
+	// entry it names — here the run entry, whose context hash is the
+	// config's and whose type is run.
+	comp := &CompactionEntry{FirstKept: runID, Summary: openresponses.SystemText("s")}
+	compID, err := s.Append(comp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, _ := s.ContextHash(runID)
+	sub, _ := json.Marshal([]string{runCtx, TypeRun})
+	// The compaction's body as written, with first_kept substituted: the
+	// checkpoint members the entry carries are part of the body, so the
+	// body is taken from the marshalled entry and only the substitution
+	// is applied by hand.
+	data, _ := MarshalEntry(comp)
+	var all map[string]json.RawMessage
+	json.Unmarshal(data, &all)
+	for _, k := range []string{"id", "type", "parent", "parents", "ts"} {
+		delete(all, k)
+	}
+	all["first_kept"] = sub
+	body, _ := json.Marshal(all)
+	want = step(want, TypeCompaction, bodyHash(string(body)))
+	if got, _ := s.ContextHash(compID); got != want {
+		t.Errorf("compaction: %s, want %s", got, want)
+	}
+}

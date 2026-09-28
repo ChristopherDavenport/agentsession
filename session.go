@@ -13,9 +13,6 @@ import (
 // ErrNoEntry is returned when an entry ID is not in the session.
 var ErrNoEntry = errors.New("agentsession: no such entry")
 
-// ErrDuplicateEntry is returned when an appended entry reuses an ID.
-var ErrDuplicateEntry = errors.New("agentsession: duplicate entry id")
-
 // ErrBadConvergence is returned for an entry whose Parents break the
 // format's rules: a reference naming no entry, the same entry named
 // twice, a reference to the entry's own parent, or a reference into
