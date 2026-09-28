@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.8 - 2026-09-28
 
 - **RFC 0001 draft 0.5 is implemented and the library writes
   `agentsession/0.5`.** An entry's `id` is now the hash of its envelope
