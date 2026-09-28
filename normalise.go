@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -226,7 +227,7 @@ func sortNormalisations(n []Normalisation) {
 func checkNormalisations(n []Normalisation) error {
 	seen := make(map[string]bool, len(n))
 	for _, x := range n {
-		if !strings.HasPrefix(x.At, "/") {
+		if !strings.HasPrefix(x.At, "/") || !utf8.ValidString(x.At) || !validPointerEscapes(x.At) {
 			return fmt.Errorf("%w: at %q is not a pointer into the body", ErrBadNormalisation, x.At)
 		}
 		if seen[x.At] {
@@ -236,16 +237,28 @@ func checkNormalisations(n []Normalisation) error {
 		if (x.Was == "") == (x.Raw == "") {
 			return fmt.Errorf("%w: %s must carry exactly one of was and raw", ErrBadNormalisation, x.At)
 		}
-		if x.Was != "" && (!utf8.ValidString(x.Was) || !json.Valid([]byte(x.Was))) {
-			return fmt.Errorf("%w: %s: was is not JSON source text", ErrBadNormalisation, x.At)
+		if x.Was != "" && (!utf8.ValidString(x.Was) || !json.Valid([]byte(x.Was)) || strings.TrimSpace(x.Was) != x.Was) {
+			return fmt.Errorf("%w: %s: was is not a value's JSON source text", ErrBadNormalisation, x.At)
 		}
 		if x.Raw != "" {
-			if _, err := base64.StdEncoding.Strict().DecodeString(x.Raw); err != nil {
+			decoded, err := base64.StdEncoding.Strict().DecodeString(x.Raw)
+			if err != nil || base64.StdEncoding.EncodeToString(decoded) != x.Raw {
 				return fmt.Errorf("%w: %s: raw is not padded standard base64", ErrBadNormalisation, x.At)
 			}
 		}
 	}
 	return nil
+}
+
+// validPointerEscapes reports whether every ~ in an RFC 6901 pointer
+// is followed by 0 or 1.
+func validPointerEscapes(p string) bool {
+	for i := 0; i < len(p); i++ {
+		if p[i] == '~' && (i+1 >= len(p) || (p[i+1] != '0' && p[i+1] != '1')) {
+			return false
+		}
+	}
+	return true
 }
 
 // quoteBytes renders s as the JSON string literal a writer would have
@@ -426,6 +439,13 @@ func fixSurrogates(s []byte) []byte {
 // a map or an interface, is an error rather than a silent repair.
 func repairStrings(e Entry) (map[string]stringRepair, error) {
 	var found map[string]stringRepair
+	// A sentinel carries a nonce drawn per call, so a caller's string
+	// cannot be one by construction.
+	var nonce [8]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, err
+	}
+	prefix := fmt.Sprintf("\x00\x01agentsession:normalise:%x:", nonce)
 	var walk func(v reflect.Value) error
 	walk = func(v reflect.Value) error {
 		switch v.Kind() {
@@ -461,7 +481,7 @@ func repairStrings(e Entry) (map[string]stringRepair, error) {
 				mv := v.MapIndex(k)
 				if mv.Kind() == reflect.String {
 					if !utf8.ValidString(mv.String()) {
-						s := newSentinel(&found, mv.String())
+						s := newSentinel(&found, prefix, mv.String())
 						v.SetMapIndex(k, reflect.ValueOf(s).Convert(mv.Type()))
 					}
 					continue
@@ -477,7 +497,7 @@ func repairStrings(e Entry) (map[string]stringRepair, error) {
 			if !v.CanSet() {
 				return errors.New("agentsession: a string that is not valid UTF-8 cannot be repaired in place")
 			}
-			v.SetString(newSentinel(&found, v.String()))
+			v.SetString(newSentinel(&found, prefix, v.String()))
 		}
 		return nil
 	}
@@ -488,11 +508,11 @@ func repairStrings(e Entry) (map[string]stringRepair, error) {
 	return found, nil
 }
 
-func newSentinel(found *map[string]stringRepair, s string) string {
+func newSentinel(found *map[string]stringRepair, prefix, s string) string {
 	if *found == nil {
 		*found = map[string]stringRepair{}
 	}
-	sentinel := fmt.Sprintf("\x00\x01agentsession:normalise:%d\x01\x00", len(*found))
+	sentinel := fmt.Sprintf("%s%d\x01\x00", prefix, len(*found))
 	(*found)[sentinel] = stringRepair{original: []byte(s), repaired: string(replaceInvalidUTF8([]byte(s)))}
 	return sentinel
 }
@@ -569,6 +589,9 @@ func normaliseEntry(e Entry) ([]byte, error) {
 	if err := checkNormalisations(prior); err != nil {
 		return nil, err
 	}
+	// Sorted before the line is marshalled, since on the clean path
+	// that line is what is hashed and Write emits the sorted list.
+	sortNormalisations(prior)
 	sentinels, err := repairStrings(e)
 	if err != nil {
 		return nil, err
@@ -579,7 +602,6 @@ func normaliseEntry(e Entry) ([]byte, error) {
 		return nil, err
 	}
 	if len(sentinels) == 0 && ijson.Check(data) == nil {
-		sortNormalisations(prior)
 		return data, nil
 	}
 	all, err := splitMembers(data)
@@ -611,7 +633,6 @@ func normaliseEntry(e Entry) ([]byte, error) {
 		// The strings that were not valid UTF-8 are ones the
 		// marshaller leaves out, so the line is as it was.
 		restoreStrings(e, sentinels, nil)
-		sortNormalisations(prior)
 		return nil, nil
 	}
 	norm := append(append([]Normalisation(nil), prior...), changes...)

@@ -277,6 +277,15 @@ func TestCallerNormalisedIsSortedAndChecked(t *testing.T) {
 	if e.Normalised[0].At != "/aaa" {
 		t.Errorf("Normalised = %+v, want sorted by at", e.Normalised)
 	}
+	// The line hashed is the line written: the sort happens before
+	// either, or Read would refuse the id.
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(strings.NewReader(buf.String())); err != nil {
+		t.Errorf("Read of a caller's unsorted list written back: %v", err)
+	}
 	for name, bad := range map[string]Normalisation{
 		"no pointer": {At: "zzz", Was: "1"},
 		"neither":    {At: "/a"},
@@ -349,11 +358,57 @@ func TestCallerNormalisedIsCheckedDeeply(t *testing.T) {
 		"was not json":   {{At: "/x", Was: "not json"}},
 		"was bad utf-8":  {{At: "/x", Was: "\"\xff\""}},
 		"twice":          {{At: "/x", Was: "1"}, {At: "/x", Was: "2"}},
+		"at bad utf-8":   {{At: "/\xff", Was: "1"}},
+		"at bad escape":  {{At: "/~2", Was: "1"}},
+		"raw newline":    {{At: "/x", Raw: "MQ==\n"}},
+		"raw pad bits":   {{At: "/x", Raw: "MR=="}},
+		"was whitespace": {{At: "/x", Was: " 1 "}},
 	} {
 		e := &InfoEntry{Name: "n"}
 		e.Normalised = bad
 		if _, err := s.Append(e); !errors.Is(err, ErrBadNormalisation) {
 			t.Errorf("%s: err = %v, want ErrBadNormalisation", name, err)
 		}
+	}
+}
+
+// TestRefusedAppendKeepsTheEnvelope: a refusal leaves the parent, the
+// timestamp and a caller-set id as they were, so a retry continues
+// from the leaf at the time of the retry.
+func TestRefusedAppendKeepsTheEnvelope(t *testing.T) {
+	s := New(Header{})
+	a := appendText(t, s, "a")
+	e := &InfoEntry{Name: "n"}
+	e.Unknown = map[string]json.RawMessage{"acme:n": json.RawMessage(`1e400`)}
+	if _, err := s.Append(e); err == nil {
+		t.Fatal("Append of 1e400 succeeded")
+	}
+	if e.Parent != "" || !e.Timestamp.IsZero() {
+		t.Errorf("refused entry has parent %q and ts %v, want neither", e.Parent, e.Timestamp)
+	}
+	b := appendText(t, s, "b")
+	delete(e.Unknown, "acme:n")
+	r, err := s.Commit(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Outcome != Continued || e.Parent != b || a == b {
+		t.Errorf("retry: outcome %v under %s, want Continued under %s", r.Outcome, e.Parent, b)
+	}
+}
+
+// TestSentinelCannotCollide: a string that spells the sentinel's prefix
+// is a string like any other, since each call draws a nonce.
+func TestSentinelCannotCollide(t *testing.T) {
+	s := New(Header{})
+	r := &ResponseEntry{ResponseID: "\x00\x01agentsession:normalise:0\x01\x00", Model: "m\xff"}
+	if _, err := s.Append(r); err != nil {
+		t.Fatal(err)
+	}
+	if r.ResponseID != "\x00\x01agentsession:normalise:0\x01\x00" || r.Model != "m\ufffd" {
+		t.Errorf("entry = %q/%q after append", r.ResponseID, r.Model)
+	}
+	if len(r.Normalised) != 1 || r.Normalised[0].At != "/model" {
+		t.Errorf("Normalised = %+v, want the model alone", r.Normalised)
 	}
 }

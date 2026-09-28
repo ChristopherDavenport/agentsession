@@ -526,6 +526,12 @@ func settingsBefore(path []agentsession.Entry, firstKept string, fallback agents
 func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntry) {
 	settings := b.inForce(g.copied)
 	step := atif.Step{Source: atif.SourceAgent, ModelName: b.modelName(settings.Model), LLMCallCount: atif.Ptr(1)}
+	if g.copied {
+		// Marked from the group, not from where the flush happens: a
+		// group the first entry after the compaction flushes is still
+		// copied context.
+		step.IsCopiedContext = atif.Ptr(true)
+	}
 	if settings.Reasoning.Effort != "" {
 		step.ReasoningEffort = string(settings.Reasoning.Effort)
 	}

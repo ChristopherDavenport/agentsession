@@ -284,15 +284,17 @@ was not valid UTF-8 has no JSON text to record: the writer substitutes
 U+FFFD as above, omits `was`, and carries the member's source bytes,
 quotes included, in `raw` as base64 under RFC 4648 §4, with padding,
 since the URL-safe alphabet and an unpadded form would give one response
-two hashes. A value that had no source text, one the writer held
+two hashes. A string that had no source text, one the writer held
 decoded, is recorded as its canonical string serialisation with the
 ill-formed bytes kept as they were, so two writers holding the same
-bytes record one `raw`. The array is sorted by `at` as UTF-16 code
-units, matching the canonical form, so two writers normalising one
-response produce one content hash. The normalised form is what the next
-request carries, so the rebuilt request and `request_hash` agree with
-what was sent. `ts` is hashed as the string it is, which is why the
-envelope table admits one spelling of it.
+bytes record one `raw`. What no rewrite reaches, a number that is not
+finite in binary64 or an object that repeats a member name, a writer
+MUST NOT record. The array is sorted by `at` as UTF-16 code units,
+matching the canonical form, so two writers normalising one response
+produce one content hash. The normalised form is what the next request
+carries, so the rebuilt request and `request_hash` agree with what was
+sent. `ts` is hashed as the string it is, which is why the envelope
+table admits one spelling of it.
 
 - The entry's **content** is the object of its members with the
   envelope's — `id`, `type`, `parent`, `parents`, `ts` — removed, and
@@ -1201,9 +1203,9 @@ The reference implementation is the Go `agentsession` library, which
 writes this draft. The conformance suite is a directory of fixture files
 with expected context output for every leaf, expected `request_hash`
 values, every entry's content hash and `id` recomputed, 9007199254740993
-in three spellings and once as a number the profile requires, a lone
-surrogate normalised with its `was`, output that was not valid UTF-8
-replaced with its `raw`, 2^60 written as its canonical rendering
+in three spellings and once in a member the format types as a number, a
+lone surrogate normalised with its `was`, output that was not valid
+UTF-8 replaced with its `raw`, 2^60 written as its canonical rendering
 1152921504606847000 and read back, a forked fixture whose `base` is
 found in its origin, the recomputed `reason` for every `run` end, and
 negative cases for a broken parent link, a truncated last line, an

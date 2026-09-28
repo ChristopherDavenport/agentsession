@@ -1632,3 +1632,35 @@ func TestItemlessResponseInTheKeptWindow(t *testing.T) {
 		}
 	}
 }
+
+// TestCopiedContextFollowsTheGroup: a kept-window group the first entry
+// after the compaction flushes is still copied context, priced under
+// the window's settings and marked as copied.
+func TestCopiedContextFollowsTheGroup(t *testing.T) {
+	s := agentsession.New(agentsession.Header{})
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-A"})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("one")))
+	first := s.Leaf()
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-B"})
+	mustAppend(t, s, &agentsession.ItemEntry{ResponseID: "resp_2", Item: &openresponses.Message{Role: openresponses.RoleAssistant,
+		Content: openresponses.Contents{&openresponses.OutputText{Text: "in the window"}}}})
+	mustAppend(t, s, &agentsession.CompactionEntry{FirstKept: first, Summary: openresponses.SystemText("summary"),
+		Config: agentsession.Settings{Model: "model-C"}})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("two")))
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ToATIF(tr, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range doc.Steps {
+		if step.Source != atif.SourceAgent {
+			continue
+		}
+		if step.ModelName != "model-B" || step.IsCopiedContext == nil || !*step.IsCopiedContext {
+			t.Errorf("window step flushed after the compaction = %s copied=%v, want model-B and copied", step.ModelName, step.IsCopiedContext)
+		}
+	}
+}

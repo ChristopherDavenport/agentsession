@@ -275,7 +275,25 @@ func (s *Session) Commit(e Entry) (Result, error) {
 	return r, nil
 }
 
+// prepare is prepareEntry with the envelope put back on refusal: the
+// parent, timestamp, id and parents it fills in or clears belong to
+// the caller until the entry is accepted, so a retry starts from what
+// the caller set and not from where the first attempt would have gone.
 func (s *Session) prepare(e Entry) (Result, error) {
+	b := e.Base()
+	parent, ts, id := b.Parent, b.Timestamp, b.ID
+	parents := append([]EntryRef(nil), b.Parents...)
+	r, err := s.prepareEntry(e)
+	if err != nil {
+		b.Parent, b.Timestamp, b.ID = parent, ts, id
+		if b.Parents != nil {
+			copy(b.Parents, parents)
+		}
+	}
+	return r, err
+}
+
+func (s *Session) prepareEntry(e Entry) (Result, error) {
 	b := e.Base()
 	for k := range b.Unknown {
 		if isEnvelopeKey(k) {
