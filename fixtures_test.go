@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,41 @@ import (
 // fixtureNames are the sources that read cleanly and regenerate as
 // valid 0.5 files.
 var fixtureNames = []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge", "bad-first-kept", "bad-records"}
+
+// nestedFixtures are the fixtures a nested module's tests read, copied
+// under that module's own testdata so its tests run from the published
+// module, where the parent directory is not part of the artifact. The
+// copies are written by TestRegenerateFixtures and checked against the
+// originals by TestNestedModuleFixtures.
+var nestedFixtures = map[string][]string{
+	"otel": {"runs", "branch"},
+}
+
+// TestNestedModuleFixtures checks that every fixture copy a nested
+// module carries is byte for byte the root's generated fixture. It
+// skips outside the repository, where the nested modules are not
+// present.
+func TestNestedModuleFixtures(t *testing.T) {
+	for module, names := range nestedFixtures {
+		dir := filepath.Join(module, "testdata", "sessions")
+		if _, err := os.Stat(filepath.Join(module, "go.mod")); err != nil {
+			t.Skipf("%s is not beside this module: %v", module, err)
+		}
+		for _, name := range names {
+			want, err := os.ReadFile(filepath.Join("testdata", "sessions", name+".jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(filepath.Join(dir, name+".jsonl"))
+			if err != nil {
+				t.Fatalf("%s: %v; run go test -update", module, err)
+			}
+			if !bytes.Equal(want, got) {
+				t.Errorf("%s/testdata/sessions/%s.jsonl differs from the root fixture; run go test -update", module, name)
+			}
+		}
+	}
+}
 
 func TestRegenerateFixtures(t *testing.T) {
 	if !*update {
@@ -104,6 +140,51 @@ func TestRegenerateFixtures(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join("testdata", "sessions", "fork.jsonl"), fbuf.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
+	}
+
+	// normalised: the conformance vectors for writer-side normalisation,
+	// appended natively since a source file carrying them could not be
+	// read. 9007199254740993 in three spellings, once in a member the
+	// profile types as a number, and a lone surrogate with its was.
+	nat, _ := time.Parse(time.RFC3339, "2026-09-28T10:00:00Z")
+	norm := New(Header{ID: "01995b2a-0000-7000-8000-000000000011", CreatedAt: nat, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	norm.setClock(func() time.Time { nat = nat.Add(time.Second); return nat })
+	spellings := &InfoEntry{Name: "spellings"}
+	spellings.Unknown = map[string]json.RawMessage{
+		"acme:digits":   json.RawMessage(`9007199254740993`),
+		"acme:fraction": json.RawMessage(`9007199254740993.0`),
+		"acme:exponent": json.RawMessage(`9.007199254740993e15`),
+	}
+	if _, err := norm.Append(spellings); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := norm.Append(NewItemEntry(openresponses.UserText("hi"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := norm.Append(&ResponseEntry{ResponseID: "resp_1", Status: openresponses.ResponseStatusCompleted, LatencyMS: 9007199254740993}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := norm.Append(&CustomEntry{NS: "acme", Data: json.RawMessage(`{"text":"cut \ud83d"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	var nbuf bytes.Buffer
+	if err := Write(&nbuf, norm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("testdata", "sessions", "normalised.jsonl"), nbuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for module, names := range nestedFixtures {
+		dir := filepath.Join(module, "testdata", "sessions")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range names {
+			if err := os.WriteFile(filepath.Join(dir, name+".jsonl"), []byte(strings.Join(gen[name], "\n")+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 
 	basic := gen["basic"]
