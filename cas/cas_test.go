@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/storetest"
@@ -267,7 +268,7 @@ func TestSweep(t *testing.T) {
 	if err := st.Release("f"); err != nil {
 		t.Fatal(err)
 	}
-	swept, err := st.Sweep(ctx)
+	swept, err := st.Sweep(ctx, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -730,7 +731,8 @@ func TestTwoProcesses(t *testing.T) {
 	if _, err := b.Open(ctx, "pa"); !errors.Is(err, agentsession.ErrSessionLocked) {
 		t.Errorf("b opened a's held session: %v", err)
 	}
-	if _, err := a.Sweep(ctx); !errors.Is(err, agentsession.ErrSessionLocked) {
+	// The sweep runs alongside live sessions and keeps their objects.
+	if _, err := a.Sweep(ctx, 0); err != nil {
 		t.Errorf("sweep with held sessions = %v", err)
 	}
 	a.Close()
@@ -750,5 +752,52 @@ func TestTwoProcesses(t *testing.T) {
 	}
 	if sa.Len() != 5 || sa.Leaf() != la || sb.Len() != 5 || sb.Leaf() != lb {
 		t.Errorf("after two writers: a %d %s, b %d %s", sa.Len(), sa.Leaf(), sb.Len(), sb.Leaf())
+	}
+}
+
+// TestSweepKeepsWhatTheJournalNames: an append acknowledged as durable
+// whose log line never reached disk, in a session nobody has reopened,
+// is kept by the sweep, since the sweep works from the journal.
+func TestSweepKeepsWhatTheJournalNames(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	st.Create(ctx, agentsession.Header{ID: "j"})
+	mustAppend(t, st, "j", agentsession.NewItemEntry(openresponses.UserText("a")))
+	last := mustAppend(t, st, "j", agentsession.NewItemEntry(openresponses.UserText("b")))
+	st.Close()
+	dir := filepath.Join(st.Root(), "sessions", "j")
+	log, _ := os.ReadFile(filepath.Join(dir, "log"))
+	lines := strings.Split(strings.TrimRight(string(log), "\n"), "\n")
+	os.WriteFile(filepath.Join(dir, "log"), []byte(lines[0]+"\n"), 0o600)
+	st2, _ := Open(st.Root())
+	defer st2.Close()
+	if _, err := st2.Sweep(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	s, err := st2.Open(ctx, "j")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 2 || s.Leaf() != last {
+		t.Errorf("after a sweep before recovery: len %d leaf %s", s.Len(), s.Leaf())
+	}
+}
+
+// TestSweepGrace keeps a young object nothing names yet.
+func TestSweepGrace(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	ghost := agentsession.NewItemEntry(openresponses.UserText("ahead of its record"))
+	scratch := agentsession.New(agentsession.Header{})
+	scratch.Append(ghost)
+	if err := st.storeEntry(ghost); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := st.Sweep(ctx, time.Hour); n != 0 {
+		t.Errorf("swept %d young objects", n)
+	}
+	if n, _ := st.Sweep(ctx, 0); n != 2 {
+		t.Errorf("swept %d old objects, want 2", n)
 	}
 }

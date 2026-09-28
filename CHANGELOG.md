@@ -84,15 +84,22 @@ versions may break the API.
   be a path is refused (`ErrBadName`), a synthetic marker appended as an
   entry is refused (`ErrSynthetic`), and every rename or creation is
   followed by an fsync of its directory. Several processes share a
-  store: each session is held by one at a time through an advisory
-  lock, the journal is shared and never truncated by a reader, a record
-  a crash cut short is skipped and the records after it still count,
-  recovery is per session by the process that holds it, and the sweep
-  takes a store-wide lock and refuses while any session is held
-  anywhere, with sessions refusing to open while a sweep holds the
-  store. A session changed behind the store's back, by an append made
-  on it directly or a leaf moved to an entry never committed, is refused
-  (`ErrModified`). It runs the store conformance suite. Exchange between stores, media sidecars and
+  store on one machine: each session is held by one at a time through
+  `flock`, which the kernel drops when the holder exits, so there is no
+  stale lock to detect; the journal is shared and never truncated by a
+  reader, a record a crash cut short is skipped and the records after
+  it still count, and recovery is per session by the process that holds
+  it. `Sweep` works from the journal, so an acknowledged append whose
+  log line never reached disk is kept, and it spares every object
+  younger than a grace period the caller gives, as git spares a young
+  loose object, so it needs no lock on writers and runs alongside live
+  sessions. A network filesystem is not supported, since `O_APPEND` is
+  not atomic across NFS clients. A session changed behind the store's
+  back, by an append made on it directly or a leaf moved to an entry
+  never committed, is refused (`ErrModified`). An index write that
+  fails after the journal commit does not fail the append, which is
+  durable; the next open repairs the index. It runs the store
+  conformance suite. Exchange between stores, media sidecars and
   the SQLite relayout are not in this change.
 - `Session.Prepare` and `Session.Commit` split `Append` into the part
   that computes an entry's hashes and outcome without adding it and the

@@ -29,20 +29,22 @@
 // directory, so a durable journal record never points at a file the
 // power loss took.
 //
-// Several processes may share a store. Each session is held by one
-// process at a time through an advisory lock in its directory, which
-// RFC 0002 permits: a store may take writers in turn provided it never
-// re-parents an accepted append. The journal is shared: a record is one
-// line written in one call with O_APPEND, so records from different
-// processes do not interleave, and the journal is never truncated by a
-// reader; a record a crash cut short is skipped and the records after
-// it still count. Recovery is per session, done by the process that
-// holds the session's lock when it opens it, so no process rewrites the
-// indexes of a session another process has open. The sweep takes a
-// store-wide lock and refuses to run while any session is held, and a
-// session refuses to open while a sweep holds the store, each acquiring
-// its own lock before looking for the other so there is no window
-// between them.
+// Several processes may share a store on one machine. Each session is
+// held by one process at a time through a lock the kernel drops when
+// the process exits (flock on unix), which RFC 0002 permits: a store
+// may take writers in turn provided it never re-parents an accepted
+// append. The journal is shared: a record is one line written in one
+// call with O_APPEND, so records from different processes do not
+// interleave, and the journal is never truncated by a reader; a record
+// a crash cut short is skipped and the records after it still count.
+// Recovery is per session, done by the process that holds the
+// session's lock when it opens it, so no process rewrites the indexes
+// of a session another process has open. The sweep needs no lock on
+// writers: it keeps everything the journal names and every object
+// younger than a grace period, as git's collector spares a young loose
+// object, so an object written ahead of its record is safe. A store on
+// a network filesystem is not supported: O_APPEND is not atomic across
+// NFS clients, so records could interleave.
 package cas
 
 import (
@@ -64,7 +66,6 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/internal/ijson"
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
-	"github.com/ChristopherDavenport/agentsession/internal/procs"
 )
 
 // Marks a session carries: whether this store may advance it.
@@ -117,6 +118,7 @@ type Store struct {
 type handle struct {
 	session *agentsession.Session
 	dir     string
+	lock    *dirLock
 	mark    string
 	head    string // the head as the HEAD file has it
 	count   int    // entries the store has committed into the session
@@ -795,29 +797,26 @@ func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("cas: %w", err)
 	}
-	if err := s.lockSession(dir); err != nil {
+	lk, err := lockDir(dir)
+	if err != nil {
 		return nil, err
 	}
 	fail := func(err error) (*agentsession.Session, error) {
-		releaseLock(dir)
+		lk.release()
 		os.RemoveAll(dir)
 		return nil, err
 	}
 	if exists, err := s.recoverSession(h.ID, dir); err != nil {
 		return fail(err)
 	} else if exists {
-		releaseLock(dir)
+		lk.release()
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
 	// Recovery may have removed a directory the journal said was deleted,
-	// and the lock with it; make sure of both before writing.
+	// and the lock file with it; the lock is held on the open file
+	// either way, and the directory is made again before writing.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fail(fmt.Errorf("cas: %w", err))
-	}
-	if held, _ := lockHeld(dir); !held {
-		if err := s.lockSession(dir); err != nil {
-			return fail(err)
-		}
 	}
 	if h.Base != "" {
 		sess, err = s.assemble(h, prefix, nil, h.Base)
@@ -852,7 +851,7 @@ func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.
 			return fail(err)
 		}
 	}
-	s.open[h.ID] = &handle{session: sess, dir: dir, mark: mark, head: h.Base, count: sess.Len()}
+	s.open[h.ID] = &handle{session: sess, dir: dir, lock: lk, mark: mark, head: h.Base, count: sess.Len()}
 	return sess, nil
 }
 
@@ -936,11 +935,12 @@ func (s *Store) openLocked(id string) (*handle, error) {
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
 	}
-	if err := s.lockSession(dir); err != nil {
+	lk, err := lockDir(dir)
+	if err != nil {
 		return nil, err
 	}
 	fail := func(err error) (*handle, error) {
-		releaseLock(dir)
+		lk.release()
 		return nil, err
 	}
 	exists, err := s.recoverSession(id, dir)
@@ -983,23 +983,9 @@ func (s *Store) openLocked(id string) (*handle, error) {
 	for _, h := range hashes {
 		s.owner[h] = id // another process may have appended since the index was built
 	}
-	h := &handle{session: sess, dir: dir, mark: readMark(dir), head: head, count: sess.Len()}
+	h := &handle{session: sess, dir: dir, lock: lk, mark: readMark(dir), head: head, count: sess.Len()}
 	s.open[id] = h
 	return h, nil
-}
-
-// lockSession takes a session's lock, then refuses if a sweep holds the
-// store: the sweep takes its lock and then looks for held sessions, and
-// this order on both sides leaves no window between them.
-func (s *Store) lockSession(dir string) error {
-	if err := acquireLock(dir); err != nil {
-		return err
-	}
-	if held, _ := lockHeld(s.root); held {
-		releaseLock(dir)
-		return fmt.Errorf("%w: a sweep holds the store", ErrSessionLocked)
-	}
-	return nil
 }
 
 // Append implements agentsession.Store; see Write for what it reports.
@@ -1062,13 +1048,12 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	if err := s.commit(journalRecord{Op: "append", Session: sessionID, Entry: r.ID, Head: head, Seq: h.session.Len() + 1}); err != nil {
 		return agentsession.Result{}, err
 	}
-	if err := appendLog(h.dir, r.ID); err != nil {
-		return agentsession.Result{}, err
-	}
+	// The append is durable from here. The log and the head are
+	// indexes the next open rebuilds from the journal, so a failure to
+	// write them is not a failed append and is not reported as one.
+	_ = appendLog(h.dir, r.ID)
 	if head != "" {
-		if err := writeHead(h.dir, head); err != nil {
-			return agentsession.Result{}, err
-		}
+		_ = writeHead(h.dir, head)
 		h.head = head
 	}
 	s.owner[r.ID] = sessionID
@@ -1123,9 +1108,7 @@ func (s *Store) syncHead(h *handle, sessionID string) error {
 	if err := s.commit(journalRecord{Op: "head", Session: sessionID, Head: leaf, Seq: h.session.Len()}); err != nil {
 		return err
 	}
-	if err := writeHead(h.dir, leaf); err != nil {
-		return err
-	}
+	_ = writeHead(h.dir, leaf) // an index; the journal has it
 	h.head = leaf
 	return nil
 }
@@ -1160,9 +1143,7 @@ func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) err
 	if err := s.commit(journalRecord{Op: "head", Session: sessionID, Head: to, Seq: h.session.Len()}); err != nil {
 		return err
 	}
-	if err := writeHead(h.dir, to); err != nil {
-		return err
-	}
+	_ = writeHead(h.dir, to) // an index; the journal has it
 	h.head = to
 	return h.session.Branch(to)
 }
@@ -1329,11 +1310,14 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if _, err := os.Stat(filepath.Join(dir, "header")); errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
 	}
-	if _, ok := s.open[id]; ok {
+	var lk *dirLock
+	if h, ok := s.open[id]; ok {
 		delete(s.open, id)
-	} else if err := s.lockSession(dir); err != nil {
+		lk = h.lock
+	} else if lk, err = lockDir(dir); err != nil {
 		return err
 	}
+	defer lk.release()
 	if err := s.commit(journalRecord{Op: "delete", Session: id}); err != nil {
 		return err
 	}
@@ -1357,7 +1341,7 @@ func (s *Store) Release(id string) error {
 		return nil
 	}
 	delete(s.open, id)
-	return releaseLock(h.dir)
+	return h.lock.release()
 }
 
 // Close releases every session this store holds.
@@ -1366,7 +1350,7 @@ func (s *Store) Close() error {
 	defer s.mu.Unlock()
 	var first error
 	for id, h := range s.open {
-		if err := releaseLock(h.dir); err != nil && first == nil {
+		if err := h.lock.release(); err != nil && first == nil {
 			first = err
 		}
 		delete(s.open, id)
@@ -1494,33 +1478,30 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("cas: %w", err)
 	}
-	if err := s.lockSession(dir); err != nil {
+	lk, err := lockDir(dir)
+	if err != nil {
 		return nil, err
 	}
 	if exists, err := s.recoverSession(h.ID, dir); err != nil {
-		releaseLock(dir)
+		lk.release()
 		return nil, err
 	} else if exists {
-		releaseLock(dir)
+		lk.release()
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		lk.release()
 		return nil, fmt.Errorf("cas: %w", err)
-	}
-	if held, _ := lockHeld(dir); !held {
-		if err := s.lockSession(dir); err != nil {
-			return nil, err
-		}
 	}
 	// The create record is the boundary; a failure after it commits a
 	// delete, so the ID is free again and nothing half-imported counts.
 	if err := s.commit(journalRecord{Op: "create", Session: h.ID}); err != nil {
-		releaseLock(dir)
+		lk.release()
 		return nil, err
 	}
 	fail := func(err error) (*agentsession.Session, error) {
 		s.commit(journalRecord{Op: "delete", Session: h.ID})
-		releaseLock(dir)
+		lk.release()
 		os.RemoveAll(dir)
 		return nil, err
 	}
@@ -1580,7 +1561,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	}
 	// What the store returns is what it holds: the session rebuilt from
 	// the objects and the log, marker gone, head from HEAD.
-	releaseLock(dir)
+	lk.release()
 	hd, err := s.openLocked(h.ID)
 	if err != nil {
 		return nil, err
@@ -1588,33 +1569,40 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	return hd.session, nil
 }
 
-// Sweep removes objects no session's log or prefix needs, following
-// references down: an envelope is kept while a log or a prefix names it,
-// a content while a kept envelope names it. A temporary file younger
-// than a minute is left for the writer that may be about to rename it.
-// Sweep takes a store-wide lock so two sweeps do not run at once, and
-// it does not run while this process holds sessions open, since their
-// appends may have written objects ahead of the records that would keep
-// them. It returns how many objects went.
-func (s *Store) Sweep(ctx context.Context) (int, error) {
+// Sweep removes objects nothing needs, following references down: an
+// envelope is kept while the journal, a log or a prefix names it, a
+// content while a kept envelope names it. It works from the journal, so
+// an append acknowledged as durable whose log line never reached disk
+// is kept, and it keeps every object younger than grace, as git's
+// collector spares a young loose object, so an object written ahead of
+// its journal record is safe. It therefore needs no lock on writers and
+// runs alongside live sessions; a store-wide lock keeps two sweeps
+// apart. Media blobs are contents. It returns how many objects went.
+func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := acquireLock(s.root); err != nil {
+	lk, err := lockDir(s.root)
+	if err != nil {
 		return 0, err
 	}
-	defer releaseLock(s.root)
-	// A session held anywhere — by this process or another — may have
-	// objects written ahead of the records that would keep them.
-	dirs, err := os.ReadDir(filepath.Join(s.root, "sessions"))
+	defer lk.release()
+	states, err := s.replay()
 	if err != nil {
-		return 0, fmt.Errorf("cas: %w", err)
+		return 0, err
 	}
-	for _, d := range dirs {
-		if held, _ := lockHeld(filepath.Join(s.root, "sessions", d.Name())); held {
-			return 0, fmt.Errorf("%w: session %s is held; sweep later", ErrSessionLocked, d.Name())
+	keepEntry := map[string]bool{}
+	for _, st := range states {
+		if st.deleted {
+			continue
+		}
+		for _, e := range st.entries {
+			keepEntry[e] = true
+		}
+		if st.head != "" {
+			keepEntry[st.head] = true
 		}
 	}
 	s.owner = map[string]string{}
@@ -1622,14 +1610,16 @@ func (s *Store) Sweep(ctx context.Context) (int, error) {
 	if err := s.index(); err != nil {
 		return 0, err
 	}
-	keepContent := map[string]bool{}
-	keepEntry := map[string]bool{}
 	for id := range s.owner {
 		keepEntry[id] = true
 	}
 	for id := range s.prefix {
 		keepEntry[id] = true
 	}
+	// A base the journal knows but no header names yet: a fork being
+	// created. Its prefix is kept through the grace period, and the
+	// header lands before that runs out.
+	keepContent := map[string]bool{}
 	for id := range keepEntry {
 		e, err := s.envelope(id)
 		if err != nil {
@@ -1641,7 +1631,7 @@ func (s *Store) Sweep(ctx context.Context) (int, error) {
 		}
 	}
 	swept := 0
-	grace := time.Now().Add(-time.Minute)
+	young := time.Now().Add(-grace)
 	for _, space := range []struct {
 		dir  string
 		keep map[string]bool
@@ -1650,10 +1640,14 @@ func (s *Store) Sweep(ctx context.Context) (int, error) {
 			if err != nil || d.IsDir() {
 				return err
 			}
+			info, err := d.Info()
+			if err != nil {
+				return nil
+			}
+			if info.ModTime().After(young) {
+				return nil // young: perhaps written ahead of its record
+			}
 			if strings.HasPrefix(d.Name(), ".tmp-") {
-				if info, err := d.Info(); err == nil && info.ModTime().After(grace) {
-					return nil
-				}
 				return os.Remove(path)
 			}
 			rel, _ := filepath.Rel(space.dir, path)
@@ -1671,81 +1665,6 @@ func (s *Store) Sweep(ctx context.Context) (int, error) {
 		}
 	}
 	return swept, nil
-}
-
-// --- locking, as the jsonl store does it ---
-
-type lockInfo struct {
-	PID   int       `json:"pid"`
-	Host  string    `json:"host,omitempty"`
-	Since time.Time `json:"since"`
-}
-
-func acquireLock(dir string) error {
-	path := filepath.Join(dir, "lock")
-	for attempt := 0; attempt < 2; attempt++ {
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err == nil {
-			host, _ := os.Hostname()
-			werr := json.NewEncoder(f).Encode(lockInfo{PID: os.Getpid(), Host: host, Since: time.Now().UTC().Round(0)})
-			if cerr := f.Close(); werr == nil {
-				werr = cerr
-			}
-			if werr != nil {
-				os.Remove(path)
-				return fmt.Errorf("cas: write lock: %w", werr)
-			}
-			return nil
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("cas: lock: %w", err)
-		}
-		data, rerr := os.ReadFile(path)
-		if rerr != nil {
-			if errors.Is(rerr, os.ErrNotExist) {
-				continue
-			}
-			return fmt.Errorf("%w: %s", ErrSessionLocked, path)
-		}
-		var holder lockInfo
-		if json.Unmarshal(data, &holder) != nil {
-			return fmt.Errorf("%w: %s (unreadable lock)", ErrSessionLocked, path)
-		}
-		host, _ := os.Hostname()
-		if holder.Host == host && holder.PID > 0 && !procs.Alive(holder.PID) {
-			os.Remove(path)
-			continue
-		}
-		return fmt.Errorf("%w: %s held by pid %d on %s", ErrSessionLocked, path, holder.PID, holder.Host)
-	}
-	return fmt.Errorf("%w: %s", ErrSessionLocked, path)
-}
-
-// lockHeld reports whether a live process holds the lock in dir.
-func lockHeld(dir string) (bool, error) {
-	data, err := os.ReadFile(filepath.Join(dir, "lock"))
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	var holder lockInfo
-	if json.Unmarshal(data, &holder) != nil {
-		return true, nil // unreadable: treat as held
-	}
-	host, _ := os.Hostname()
-	if holder.Host == host && holder.PID > 0 && !procs.Alive(holder.PID) {
-		return false, nil
-	}
-	return true, nil
-}
-
-func releaseLock(dir string) error {
-	if err := os.Remove(filepath.Join(dir, "lock")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
 }
 
 var _ agentsession.Store = (*Store)(nil)
