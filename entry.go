@@ -618,7 +618,46 @@ func decodeForm(e memberDecoder, data []byte, all map[string]json.RawMessage) ([
 	if _, unknown := e.(*UnknownEntry); unknown {
 		return nil, nil // written back from its raw line
 	}
-	return keepAsRead(e, all)
+	form, typed, exact, err := keepAsRead(e, all)
+	if err != nil || exact {
+		return form, err
+	}
+	// The line does not read as written. When that is Go's decoder
+	// matching a key in another case to a member, which a conforming
+	// reader would not, decode again without such keys.
+	clean, folded := unfold(all, typed, e.Base().Unknown)
+	if len(folded) == 0 && sameMembers(clean, all) {
+		return form, nil
+	}
+	rv := reflect.ValueOf(e).Elem()
+	rv.Set(reflect.Zero(rv.Type()))
+	if err := e.decodeMembers(jsonx.JoinObjects([]byte("{}"), []byte("{}"), clean), clean); err != nil {
+		return nil, err
+	}
+	if len(folded) > 0 {
+		b := e.Base()
+		if b.Unknown == nil {
+			b.Unknown = map[string]json.RawMessage{}
+		}
+		for k, v := range folded {
+			b.Unknown[k] = v
+		}
+	}
+	form, _, _, err = keepAsRead(e, all)
+	return form, err
+}
+
+// sameMembers reports whether two split lines hold the same bytes.
+func sameMembers(a, b map[string]json.RawMessage) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if !bytes.Equal(v, b[k]) {
+			return false
+		}
+	}
+	return true
 }
 
 // untracked are the members keepAsRead leaves to the envelope's own
@@ -634,23 +673,29 @@ var untracked = map[string]bool{"id": true, "type": true, "parent": true, "ts": 
 // every member and hash the line as written, so marshalEntry grafts
 // what was remembered back onto what the fields encode.
 //
+// An extra is anything the typed encoding does not name, so a field a
+// decoder of another package should know and drops is kept too, and
+// cannot be told from a member no one defined: the entry still verifies
+// and writes back whole, and only the typed value is missing.
+//
 // Only extra members are remembered. A member the typed encoding has
 // and the line lacks, or holds with a different value, is not: that is
 // a line the reader does not read as written, whether through a key
 // spelled in another case, a required member left out or a decoder
 // fault, and it stays refused, since its hash is then computed from
 // what the reader understood.
-func keepAsRead(e Entry, all map[string]json.RawMessage) ([]byte, error) {
+func keepAsRead(e Entry, all map[string]json.RawMessage) ([]byte, map[string]json.RawMessage, bool, error) {
 	b := e.Base()
 	b.kept = nil
 	form, err := jsonx.MarshalNoEscape(e)
 	if err != nil {
-		return nil, err
+		return nil, nil, false, err
 	}
 	typed, err := splitMembers(form)
 	if err != nil {
-		return nil, err
+		return nil, nil, false, err
 	}
+	exact := true
 	for key, raw := range all {
 		if untracked[key] {
 			continue
@@ -668,23 +713,159 @@ func keepAsRead(e Entry, all map[string]json.RawMessage) ([]byte, error) {
 		}
 		rv, err := parseValue(raw)
 		if err != nil {
+			exact = false
 			continue
 		}
 		if !ok {
 			if isZeroValue(rv) {
 				b.keep(key, raw, nil)
+			} else {
+				exact = false
 			}
 			continue
 		}
 		sv, err := parseValue(seen)
 		if err != nil {
+			exact = false
 			continue
 		}
-		if same, extras := extrasOnly(rv, sv); same && extras {
+		same, extras := extrasOnly(rv, sv)
+		switch {
+		case !same:
+			exact = false
+		case extras:
 			b.keep(key, raw, seen)
 		}
 	}
-	return form, nil
+	for key := range typed {
+		if _, ok := all[key]; !ok && !untracked[key] {
+			exact = false
+		}
+	}
+	return form, typed, exact, nil
+}
+
+// unfold returns the line's members with every key removed that Go's
+// decoder would match, in another case, to a member the typed encoding
+// has beside it, at any depth. Such a key is a member the format does
+// not define, which a conforming reader ignores, and the decoder must
+// not read it as the member it resembles. Keys removed at the top level
+// are returned apart, to keep as unknown members.
+//
+// unknown holds the members the first decode kept as unknown, which are
+// in typed but are not member names the type defines.
+func unfold(all, typed, unknown map[string]json.RawMessage) (clean, folded map[string]json.RawMessage) {
+	defined := make(map[string]bool, len(typed))
+	for k := range typed {
+		if _, u := unknown[k]; !u {
+			defined[k] = true
+		}
+	}
+	clean = make(map[string]json.RawMessage, len(all))
+	for key, raw := range all {
+		seen, ok := typed[key]
+		if !defined[key] && foldsTo(key, defined) {
+			if folded == nil {
+				folded = map[string]json.RawMessage{}
+			}
+			folded[key] = raw
+			continue
+		}
+		clean[key] = raw
+		if !ok || bytes.Equal(raw, seen) {
+			continue
+		}
+		rv, err1 := parseValue(raw)
+		sv, err2 := parseValue(seen)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		if out, err := jsonx.MarshalNoEscape(unfoldValue(rv, sv)); err == nil {
+			clean[key] = out
+		}
+	}
+	return clean, folded
+}
+
+// foldsTo reports whether key matches another key of members when case
+// is ignored.
+func foldsTo[V any](key string, members map[string]V) bool {
+	for k := range members {
+		if k != key && strings.EqualFold(k, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func unfoldValue(raw, seen any) any {
+	switch r := raw.(type) {
+	case map[string]any:
+		s, ok := seen.(map[string]any)
+		if !ok {
+			return raw
+		}
+		out := make(map[string]any, len(r))
+		for k, v := range r {
+			sv, exact := s[k]
+			if !exact && foldsTo(k, s) {
+				continue
+			}
+			if exact {
+				v = unfoldValue(v, sv)
+			}
+			out[k] = v
+		}
+		return out
+	case []any:
+		s, ok := seen.([]any)
+		if !ok || len(s) != len(r) {
+			return raw
+		}
+		out := make([]any, len(r))
+		for i := range r {
+			out[i] = unfoldValue(r[i], s[i])
+		}
+		return out
+	}
+	return raw
+}
+
+// remapKeptParents applies a migration's rewrite of parents to the kept
+// copy, so each reference's extras stay on the reference they described:
+// ref returns the new entry ID for a reference it rewrites.
+func (b *EntryBase) remapKeptParents(ref func(session, entry string) (string, bool)) {
+	k, ok := b.kept["parents"]
+	if !ok || k.seen == nil {
+		return
+	}
+	remap := func(data json.RawMessage) json.RawMessage {
+		v, err := parseValue(data)
+		if err != nil {
+			return data
+		}
+		list, ok := v.([]any)
+		if !ok {
+			return data
+		}
+		for _, el := range list {
+			obj, ok := el.(map[string]any)
+			if !ok {
+				continue
+			}
+			entry, _ := obj["entry"].(string)
+			session, _ := obj["session"].(string)
+			if id, ok := ref(session, entry); ok {
+				obj["entry"] = id
+			}
+		}
+		out, err := jsonx.MarshalNoEscape(list)
+		if err != nil {
+			return data
+		}
+		return out
+	}
+	b.kept["parents"] = keptMember{raw: remap(k.raw), seen: remap(k.seen)}
 }
 
 func (b *EntryBase) keep(key string, raw, seen json.RawMessage) {
@@ -767,6 +948,11 @@ func extrasOnly(raw, seen any) (same, extras bool) {
 		if r == s {
 			return true, false
 		}
+		ri, errRI := r.Int64()
+		si, errSI := s.Int64()
+		if errRI == nil && errSI == nil {
+			return ri == si, false
+		}
 		rf, errR := r.Float64()
 		sf, errS := s.Float64()
 		return errR == nil && errS == nil && rf == sf, false
@@ -784,8 +970,8 @@ func extrasOnly(raw, seen any) (same, extras bool) {
 
 // overlay grafts onto cur, what the typed fields encode now, the members
 // raw held that seen, what they encoded at read, did not: at every depth
-// where the three are objects, and element by element where they are
-// arrays of one length. What the caller changed is cur's; what the
+// where the three are objects, and onto each array element that still
+// encodes as one did at read. What the caller changed is cur's; what the
 // reader could not hold is raw's.
 func overlay(cur, raw, seen any) any {
 	switch c := cur.(type) {
@@ -811,14 +997,26 @@ func overlay(cur, raw, seen any) any {
 		}
 		return out
 	case []any:
+		// Elements are matched by what they encode, not by position: an
+		// element the caller left as it was takes its extras back
+		// wherever it now sits, and one the caller changed or added is
+		// the caller's alone.
 		r, rok := raw.([]any)
 		s, sok := seen.([]any)
-		if !rok || !sok || len(r) != len(c) || len(s) != len(c) {
+		if !rok || !sok || len(r) != len(s) {
 			return cur
 		}
+		used := make([]bool, len(s))
 		out := make([]any, len(c))
-		for i := range c {
-			out[i] = overlay(c[i], r[i], s[i])
+		for i, cv := range c {
+			out[i] = cv
+			for j, sv := range s {
+				if same, extras := extrasOnly(cv, sv); !used[j] && same && !extras {
+					used[j] = true
+					out[i] = r[j]
+					break
+				}
+			}
 		}
 		return out
 	}

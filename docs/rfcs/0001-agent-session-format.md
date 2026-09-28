@@ -704,9 +704,9 @@ Why a run started and how it ended. Two entries per run, paired by
   without walking the segment. The segment is authoritative here too.
 - Items and responses of the run follow its `start` entry on the path.
   Runs do not nest: an input that arrives while a writer is running a
-  run joins that run. A branch to an entry before a run's `start` leaves that run
-  off the new path, so the run needs no `end` there, and the next run
-  on the new branch begins with its own `start`. When the header names
+  run joins that run. A branch to an entry before a run's `start`
+  leaves that run off the new path, so the run needs no `end` there,
+  and the next run on the new branch begins with its own `start`. When the header names
   `run` in `records`, no writer holds the file open and the leaf is on
   the run's segment, a run with no `end` entry was cut off; that is the
   crash signal.

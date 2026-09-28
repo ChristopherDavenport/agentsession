@@ -207,6 +207,13 @@ func (m *migration) rewrite(e Entry, s *Session) error {
 		}
 	}
 	unresolved := false
+	b.remapKeptParents(func(session, entry string) (string, bool) {
+		if session != "" && session != s.header.ID {
+			return "", false
+		}
+		id, ok := m.ids[entry]
+		return id, ok
+	})
 	for i, r := range b.Parents {
 		if r.Session == "" || r.Session == s.header.ID {
 			if id, ok := m.ids[r.Entry]; ok {

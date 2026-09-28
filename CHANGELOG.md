@@ -14,12 +14,17 @@ versions may break the API.
   hashed correctly was refused as corrupt while an edit to such a member
   went unnoticed. A member the line holds more of than the typed fields
   encode, a nested member they do not define or a zero value they omit,
-  is now remembered at decode and grafted back onto whatever the fields
-  hold when the entry is written, so a caller's change keeps what it did
-  not touch. Only extras are kept: a key in another case, a required
-  member left out or a value the reader does not reproduce is refused as
-  before. The RFC says preservation holds at every depth. Reads cost
-  five to ten percent more. (#89)
+  is now remembered at decode and grafted back onto what the fields hold
+  when the entry is written: onto an object member the caller left in
+  place, and onto an array element that still encodes as it did at read,
+  wherever it now sits, so sorting `parents` keeps each reference's
+  extras and a reference the caller replaced takes none. A key in
+  another case, such as `CWD` beside `cwd`, is a member the format does
+  not define: Go's decoder would read it as the member it resembles, so
+  such a line is decoded again without it and keeps it as unknown. A
+  required member left out or a value the reader does not reproduce is
+  refused as before. The RFC says preservation holds at every depth.
+  Reads cost ten to twenty percent more. (#89)
 - **Who closes a run left open.** A rewind into a run leaves it open on
   the new path, as a crash leaves one open at the leaf; RFC 0001 now
   says the writer that continues such a path closes the run before

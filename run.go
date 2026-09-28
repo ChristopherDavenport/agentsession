@@ -343,6 +343,9 @@ func (s *Session) EndRun(reason, ref string) (*RunEntry, error) {
 	if run == nil {
 		return nil, errors.New("agentsession: no open run at the leaf")
 	}
+	if reason == "" {
+		return nil, errors.New("agentsession: a run end needs a reason")
+	}
 	return NewRunEnd(run.RunID(), reason, ref, run.Pending()), nil
 }
 

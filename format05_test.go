@@ -612,13 +612,47 @@ func TestNestedMembersReadAsWritten(t *testing.T) {
 			t.Errorf("Read of an edited nested member = %v, want ErrBadID", err)
 		}
 	})
-	// What the reader does not read as written stays refused: a key in
-	// another case, which Go's decoder would match and no conforming
-	// reader would, and a required member left out.
+	// A key in another case is a member the format does not define:
+	// Go's decoder would match it to the member it resembles, and a
+	// conforming reader ignores it, so it is kept and not read.
+	for name, tt := range map[string]struct {
+		body  string
+		check func(Entry) bool
+	}{
+		"reason in another case": {`"type":"run","run_id":"r","phase":"end","reason":"done","Reason":"aborted","pending":[]`,
+			func(e Entry) bool { return e.(*RunEntry).Reason == ReasonDone }},
+		"cwd in another case": {`"type":"env","CWD":"/etc"`,
+			func(e Entry) bool { return e.(*EnvEntry).CWD == "" }},
+		"kind in another case": {`"type":"env","cwd":"/w","workspace":{"kind":"local","KIND":"container"}`,
+			func(e Entry) bool { return e.(*EnvEntry).Workspace.Kind == WorkspaceLocal }},
+		"folded key first": {`"type":"env","cwd":"/w","workspace":{"KIND":"container","kind":"local"}`,
+			func(e Entry) bool { return e.(*EnvEntry).Workspace.Kind == WorkspaceLocal }},
+	} {
+		t.Run("folded: "+name, func(t *testing.T) {
+			line := hashed(tt.body)
+			s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			e := s.Entries()[0]
+			if !tt.check(e) {
+				t.Errorf("read the folded key as the member: %+v", e)
+			}
+			var buf bytes.Buffer
+			if err := Write(&buf, s); err != nil {
+				t.Fatal(err)
+			}
+			again, err := Read(&buf)
+			if err != nil {
+				t.Fatalf("read back: %v", err)
+			}
+			if _, ok := again.Entry(e.Base().ID); !ok {
+				t.Error("rewrite changed the id")
+			}
+		})
+	}
+	// What the reader does not read as written stays refused.
 	for name, body := range map[string]string{
-		"reason in another case":    `"type":"run","run_id":"r","phase":"end","reason":"done","Reason":"aborted","pending":[]`,
-		"cwd in another case":       `"type":"env","CWD":"/etc"`,
-		"kind in another case":      `"type":"env","cwd":"/w","workspace":{"kind":"local","KIND":"container"}`,
 		"run end without pending":   `"type":"run","run_id":"r","phase":"end","reason":"done"`,
 		"label without target":      `"type":"label","label":"x"`,
 		"compaction, no first_kept": `"type":"compaction","summary":{"type":"message","role":"user","content":[{"type":"input_text","text":"s"}]}`,
@@ -683,5 +717,64 @@ func TestMigrationKeepsNestedMembers(t *testing.T) {
 	}
 	if _, err := Read(&buf); err != nil {
 		t.Errorf("migrated file reads back: %v", err)
+	}
+}
+
+// TestKeptArrayExtrasFollowTheirElement: an extra member of an array
+// element belongs to that element. When Append sorts parents it stays
+// on the reference it described, and a reference the caller replaces
+// does not inherit it.
+func TestKeptArrayExtrasFollowTheirElement(t *testing.T) {
+	in := `{"type":"session","format":"agentsession/0.4","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}
+{"type":"info","id":"e0","parent":null,"ts":"2026-09-17T16:00:00Z","name":"a"}
+{"type":"info","id":"e1","parent":"e0","ts":"2026-09-17T16:00:01Z","name":"b"}
+{"type":"info","id":"e3","parent":"e1","ts":"2026-09-17T16:00:02Z","name":"c"}
+{"type":"info","id":"e2","parent":"e3","ts":"2026-09-17T16:00:03Z","name":"n","parents":[{"entry":"e1","note":"keep-me"},{"entry":"e0"}]}
+`
+	s, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e1, _ := s.Resolve("e1")
+	e0, _ := s.Resolve("e0")
+	orig := s.Entries()[3].(*InfoEntry)
+	noteOn := func(data []byte) string {
+		t.Helper()
+		var line struct {
+			Parents []map[string]any `json:"parents"`
+		}
+		if err := json.Unmarshal(data, &line); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range line.Parents {
+			if p["note"] == "keep-me" {
+				return p["entry"].(string)
+			}
+		}
+		return ""
+	}
+	// Append sorts parents: the note stays on e1.
+	c := *orig
+	c.ID, c.Name = "", "changed"
+	if _, err := s.Append(&c); err != nil {
+		t.Fatal(err)
+	}
+	data, err := MarshalEntry(&c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := noteOn(data); got != e1 {
+		t.Errorf("after sorting the note is on %s, want e1 %s:\n%s", got, e1, data)
+	}
+	// A replaced reference is the caller's: it takes no note.
+	r := *orig
+	r.ID = ""
+	r.Parents = []EntryRef{{Entry: e0}, {Session: "other", Entry: "x"}}
+	data, err = MarshalEntry(&r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := noteOn(data); got != "" {
+		t.Errorf("a replaced reference inherited the note, on %s:\n%s", got, data)
 	}
 }
