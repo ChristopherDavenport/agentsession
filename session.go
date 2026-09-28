@@ -3,8 +3,6 @@ package agentsession
 import (
 	"errors"
 	"fmt"
-	"github.com/ChristopherDavenport/agentsession/internal/ijson"
-	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"sort"
 	"sync"
 	"time"
@@ -391,20 +389,6 @@ func (s *Session) hashEntry(e Entry) error {
 	data, err := MarshalEntry(e)
 	if err != nil {
 		return err
-	}
-	// Write emits the canonical line and a reader tests the line as
-	// written, so a body must pass the I-JSON test in canonical form
-	// too. It can pass as marshalled and fail canonically: a whole
-	// number from 1e21 that binary64 holds exactly, 2^70 say, is
-	// written in an exponent form whose exact value is not the
-	// double's (#76). Refusing it here beats writing a file Read
-	// refuses.
-	canonical, err := jcs.Transform(data)
-	if err != nil {
-		return fmt.Errorf("agentsession: entry: %w", err)
-	}
-	if err := ijson.Check(canonical); err != nil {
-		return fmt.Errorf("agentsession: entry in canonical form: %w", err)
 	}
 	id, content, err := EntryHashes(data)
 	if err != nil {

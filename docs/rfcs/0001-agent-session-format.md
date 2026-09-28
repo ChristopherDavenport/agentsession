@@ -244,38 +244,48 @@ and strings in canonical form. That scheme is defined over I-JSON (RFC
 7493), so every hashed member MUST be I-JSON, by a test on the value and
 not on its spelling: every number is finite once rounded to binary64,
 the rounding being expected and not an error; a number whose exact value
-is a whole number MUST be exactly representable in binary64, which
-rejects 9007199254740993 however it is spelled and accepts
-9007199254740992, 1e20 and 0.1; no object repeats a member name; no
-string holds a lone surrogate. A canonical rewrite cannot change the
-result, since canonical JSON writes a representable whole number
-exactly, and a reader checks the whole-number rule mechanically by
-asking, of a number whose exact value is a whole number, whether
-converting that value to binary64 is exact. A reader MUST report a line
-that fails the test, as it reports a hash that fails. A model or a
-provider can emit what the test rejects — a string cut inside a
-surrogate pair, a 64-bit integer in a provider field — and the writing
-discipline says an output is recorded before it is acted on, so a writer
-MUST normalise before it writes: a lone surrogate becomes U+FFFD; an
-integer outside the bound is carried as a string where the payload
-profile allows it, and where the profile requires a number it is rounded
-to binary64, which is what canonicalisation would have done silently and
-which yields a value the test accepts. The writer records what it
-changed in a member named `normalised` on the entry: a JSON array of
-objects `{"at": …, "was": …}`, `at` an RFC 6901 JSON Pointer relative to
-the body and `was` a string holding the member's original JSON source
-text, escapes included, so a lone surrogate appears as the six ASCII
-characters `\ud83d` and a 64-bit integer as its digits, and `was` is
-I-JSON whatever it describes. Output that was not valid UTF-8 has no
-JSON text to record: the writer replaces it with U+FFFD, omits `was`,
-and carries the bytes in `raw` as base64 under RFC 4648 §4, with
-padding, since the URL-safe alphabet and an unpadded form would give one
-response two hashes. The array is sorted by `at` as UTF-16 code units,
-matching the canonical form, so two writers normalising one response
-produce one content hash. The normalised form is what the next request
-carries, so the rebuilt request and `request_hash` agree with what was
-sent. `ts` is hashed as the string it is, which is why the envelope
-table admits one spelling of it.
+is a whole number MUST either be exactly representable in binary64 or
+have the exact value of the canonical rendering of the nearest binary64
+value, which rejects 9007199254740993 however it is spelled and accepts
+9007199254740992, 1e20, 0.1 and 1152921504606847000; no object repeats a
+member name; no string holds a lone surrogate. The second arm exists
+because the canonical rendering is ECMAScript's, which below 10^21 pads
+the shortest digits that round-trip a double with zeros, so from 2^53 it
+writes many representable whole numbers, 2^60 as 1152921504606847000, as
+a whole number no double holds; with the arm the canonical form is
+always admissible and a canonical rewrite cannot change the result. A
+reader checks the whole-number rule mechanically by asking, of a number
+whose exact value is a whole number, whether converting that value to
+binary64 is exact, and if not, whether rendering the result canonically
+gives back that exact value. A reader MUST report a line that fails the
+test, as it reports a hash that fails. A model or a provider can emit
+what the test rejects — a string cut inside a surrogate pair, a 64-bit
+integer in a provider field — and the writing discipline says an output
+is recorded before it is acted on, so a writer MUST normalise before it
+writes: a lone surrogate becomes U+FFFD; each maximal subpart of an
+ill-formed UTF-8 sequence, as Unicode §3.9 defines it, becomes one
+U+FFFD, so that writers in every language substitute alike; an integer
+outside the bound is rounded to binary64 and written canonically, which
+is what canonicalisation would have done silently and which yields a
+value the test accepts, except where the payload profile types the
+member as a string, in which case the digits are carried as that string.
+The writer records what it changed in a member named `normalised` on the
+entry: a JSON array of objects `{"at": …, "was": …}`, `at` an RFC 6901
+JSON Pointer relative to the body and `was` a string holding the
+member's original JSON source text, escapes and a string's quotes
+included, so a lone surrogate appears as the six ASCII characters
+`\ud83d` inside its quotes, `"\ud83d"`, and a 64-bit integer as its
+digits, and `was` is I-JSON whatever it describes. Output that was not
+valid UTF-8 has no JSON text to record: the writer substitutes U+FFFD as
+above, omits `was`, and carries the member's source bytes, quotes
+included, in `raw` as base64 under RFC 4648 §4, with padding, since the
+URL-safe alphabet and an unpadded form would give one response two
+hashes. The array is sorted by `at` as UTF-16 code units, matching the
+canonical form, so two writers normalising one response produce one
+content hash. The normalised form is what the next request carries, so
+the rebuilt request and `request_hash` agree with what was sent. `ts` is
+hashed as the string it is, which is why the envelope table admits one
+spelling of it.
 
 - The entry's **content** is the object of its members with the
   envelope's — `id`, `type`, `parent`, `parents`, `ts` — removed, and

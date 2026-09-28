@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"io"
 	"math"
 	"math/big"
@@ -106,6 +107,17 @@ func CheckNumber(lit string) error {
 		return fmt.Errorf("%w: number %q is not finite in binary64", ErrNotIJSON, lit)
 	}
 	if r.IsInt() && !exact {
+		// The canonical form is ECMAScript's, which below 1e21 pads the
+		// shortest digits that round-trip a double with zeros, so from
+		// 2^53 it writes many representable whole numbers as a whole
+		// number no double holds: 2^60 as 1152921504606847000. That
+		// rendering is admissible, or a canonical rewrite could fail
+		// the test the original passed.
+		if c, err := jcs.FormatNumber(f); err == nil {
+			if cr, ok := new(big.Rat).SetString(c); ok && cr.Cmp(r) == 0 {
+				return nil
+			}
+		}
 		return fmt.Errorf("%w: whole number %q is not exactly representable in binary64", ErrNotIJSON, lit)
 	}
 	return nil

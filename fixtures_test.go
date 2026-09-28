@@ -167,6 +167,9 @@ func TestRegenerateFixtures(t *testing.T) {
 	if _, err := norm.Append(&CustomEntry{NS: "acme", Data: json.RawMessage(`{"text":"cut \ud83d"}`)}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := norm.Append(NewItemEntry(openresponses.UserText("bytes \xe2\x82 end"))); err != nil {
+		t.Fatal(err)
+	}
 	var nbuf bytes.Buffer
 	if err := Write(&nbuf, norm); err != nil {
 		t.Fatal(err)

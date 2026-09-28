@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession/internal/ijson"
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // TestNormaliseJSON covers the rewrite the format has a writer make
@@ -30,6 +32,17 @@ func TestNormaliseJSON(t *testing.T) {
 		{"escaped backslash before u", `{"s":"\\ud83d"}`, `{"s":"\\ud83d"}`, nil},
 		{"invalid utf-8", "{\"s\":\"a\xffb\"}", `{"s":"a` + "�" + `b"}`, []Normalisation{{At: "/s", Raw: "ImH/YiI="}}},
 		{"invalid utf-8 and a surrogate", "{\"s\":\"\xff\\ud83d\"}", `{"s":"` + "�" + `�"}`, []Normalisation{{At: "/s", Raw: "Iv9cdWQ4M2Qi"}}},
+		// One U+FFFD per maximal subpart, as the WHATWG decoder does: a
+		// truncated two-byte and a truncated four-byte sequence are one
+		// each, and a surrogate encoded in UTF-8 is three.
+		{"maximal subpart", "{\"s\":\"x\xe2\x82y\"}", `{"s":"x` + "�" + `y"}`, []Normalisation{{At: "/s", Raw: "Injignki"}}},
+		{"truncated four-byte", "{\"s\":\"\xf0\x9f\x98\"}", `{"s":"` + "�" + `"}`, []Normalisation{{At: "/s", Raw: "IvCfmCI="}}},
+		{"utf-8 surrogate", "{\"s\":\"\xed\xa0\xbd\"}", `{"s":"` + "���" + `"}`, []Normalisation{{At: "/s", Raw: "Iu2gvSI="}}},
+		// From 2^53 the canonical rendering of a double may not be exact
+		// and is admissible anyway, so a 64-bit id rounds to it.
+		{"64-bit id", `{"n":1234567890123456789}`, `{"n":1234567890123456800}`, []Normalisation{{At: "/n", Was: "1234567890123456789"}}},
+		{"2^60 as written", `{"n":1152921504606846976}`, `{"n":1152921504606846976}`, nil},
+		{"large whole number", `{"n":123456789012345678901234567890}`, `{"n":1.2345678901234568e+29}`, []Normalisation{{At: "/n", Was: "123456789012345678901234567890"}}},
 		{"nested with escaped pointer", `{"a/b":[1,{"~":9007199254740993}]}`, `{"a/b":[1,{"~":9007199254740992}]}`, []Normalisation{{At: "/a~1b/1/~0", Was: "9007199254740993"}}},
 		{"array indexes", `[9007199254740993,"x",9007199254740993]`, `[9007199254740992,"x",9007199254740992]`, []Normalisation{{At: "/0", Was: "9007199254740993"}, {At: "/2", Was: "9007199254740993"}}},
 		{"whitespace kept", `{ "n" : 9007199254740993 , "m" : 1 }`, `{ "n" : 9007199254740992 , "m" : 1 }`, []Normalisation{{At: "/n", Was: "9007199254740993"}}},
@@ -61,10 +74,6 @@ func TestNormaliseJSON(t *testing.T) {
 		"repeated member": `{"a":1,"a":2}`,
 		"bad member name": `{"\ud83d":1}`,
 		"not json":        `{"a":`,
-		// From 1e21 the rounding's canonical form is an exponent whose
-		// exact value fails the test, so there is nothing to rewrite
-		// to; see TestAppendRefusesWhatCanonicalFormCannotWrite.
-		"beyond 1e21": `{"n":123456789012345678901234567890}`,
 	} {
 		if _, _, err := NormaliseJSON([]byte(in)); !errors.Is(err, ijson.ErrNotIJSON) {
 			t.Errorf("%s: err = %v, want ErrNotIJSON", name, err)
@@ -158,6 +167,7 @@ func TestNormalisedFixture(t *testing.T) {
 		"spellings": {{At: "/acme:digits", Was: "9007199254740993"}, {At: "/acme:exponent", Was: "9.007199254740993e15"}, {At: "/acme:fraction", Was: "9007199254740993.0"}},
 		"typed":     {{At: "/latency_ms", Was: "9007199254740993"}},
 		"surrogate": {{At: "/data/text", Was: `"cut \ud83d"`}},
+		"bytes":     {{At: "/item/content/0/text", Raw: base64.StdEncoding.EncodeToString([]byte("\"bytes \xe2\x82 end\""))}},
 	}
 	seen := 0
 	for _, e := range s.Entries() {
@@ -169,6 +179,10 @@ func TestNormalisedFixture(t *testing.T) {
 			name = "typed"
 		case *CustomEntry:
 			name = "surrogate"
+		case *ItemEntry:
+			if len(v.Normalised) > 0 {
+				name = "bytes"
+			}
 		}
 		w, ok := want[name]
 		if !ok {
@@ -184,21 +198,89 @@ func TestNormalisedFixture(t *testing.T) {
 	}
 }
 
-// TestAppendRefusesWhatCanonicalFormCannotWrite: a whole number from
-// 1e21 that binary64 holds exactly passes the I-JSON test as written
-// and fails it in the canonical form Write emits, since ES6 renders it
-// as an exponent whose exact value is not the double's. Append refuses
-// it rather than write a line Read would refuse.
-func TestAppendRefusesWhatCanonicalFormCannotWrite(t *testing.T) {
+// TestLargeWholeNumbersRoundTrip: a whole number from 2^53 that
+// binary64 holds exactly is written in a canonical form whose exact
+// value may not be a double, 2^60 as 1152921504606847000, and the rule
+// admits that rendering, so what Append accepts Read accepts back.
+func TestLargeWholeNumbersRoundTrip(t *testing.T) {
+	s := New(Header{})
+	for _, lit := range []string{"1152921504606846976", "9223372036854775808", "1000000000000000000000", "1234567890123456789"} {
+		e := &InfoEntry{Name: lit}
+		e.Unknown = map[string]json.RawMessage{"acme:n": json.RawMessage(lit)}
+		if _, err := s.Append(e); err != nil {
+			t.Fatalf("Append %s: %v", lit, err)
+		}
+	}
+	// math.MaxInt64 rounds to 2^63, which int64 cannot hold, so the
+	// entry cannot carry what its line would say and is refused; the
+	// band is the last 512 values of the type.
+	r := &ResponseEntry{ResponseID: "r", LatencyMS: 9223372036854775807}
+	if _, err := s.Append(r); err == nil || !strings.Contains(err.Error(), "does not fit") {
+		t.Errorf("Append max int64 = %v, want a refusal naming the type", err)
+	}
+	// 2^63-514 rounds to the double 2^63-1024, whose canonical
+	// rendering is 9223372036854775000; the entry holds that value,
+	// which is what any reader of the line decodes.
+	r = &ResponseEntry{ResponseID: "r", LatencyMS: 9223372036854775807 - 513}
+	if _, err := s.Append(r); err != nil || r.LatencyMS != 9223372036854775000 {
+		t.Errorf("Append 2^63-514 = %v, latency %d; want 9223372036854775000", err, r.LatencyMS)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(strings.NewReader(buf.String())); err != nil {
+		t.Errorf("Read of what Write emitted: %v\n%s", err, buf.String())
+	}
+}
+
+// TestAppendRepairsGoStrings: a Go string that is not valid UTF-8, which
+// the marshaller would repair silently, is repaired in place and the
+// bytes recorded under the pointer of the member it became.
+func TestAppendRepairsGoStrings(t *testing.T) {
+	s := New(Header{})
+	e := NewItemEntry(openresponses.UserText("cut \xe2\x82 and \xff"))
+	if _, err := s.Append(e); err != nil {
+		t.Fatal(err)
+	}
+	want := []Normalisation{{At: "/item/content/0/text", Raw: base64.StdEncoding.EncodeToString([]byte("\"cut \xe2\x82 and \xff\""))}}
+	if !reflect.DeepEqual(e.Normalised, want) {
+		t.Errorf("Normalised = %+v, want %+v", e.Normalised, want)
+	}
+	if got := e.Item.(*openresponses.Message).Content[0].(*openresponses.InputText).Text; got != "cut � and �" {
+		t.Errorf("text = %q after repair", got)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(strings.NewReader(buf.String())); err != nil {
+		t.Errorf("Read: %v", err)
+	}
+}
+
+// TestCallerNormalisedIsSortedAndChecked: a list the caller set is
+// written in the order the format fixes even when nothing needed
+// rewriting, and a malformed element is refused.
+func TestCallerNormalisedIsSortedAndChecked(t *testing.T) {
 	s := New(Header{})
 	e := &InfoEntry{Name: "n"}
-	e.Unknown = map[string]json.RawMessage{"acme:n": json.RawMessage(`1180591620717411303424`)} // 2^70
-	if _, err := s.Append(e); !errors.Is(err, ijson.ErrNotIJSON) || !strings.Contains(err.Error(), "canonical form") {
-		t.Errorf("Append of 2^70 = %v, want a refusal naming the canonical form", err)
+	e.Normalised = []Normalisation{{At: "/zzz", Was: "1"}, {At: "/aaa", Was: "2"}}
+	if _, err := s.Append(e); err != nil {
+		t.Fatal(err)
 	}
-	ok := &InfoEntry{Name: "n"}
-	ok.Unknown = map[string]json.RawMessage{"acme:n": json.RawMessage(`1000000000000000000000`)} // 1e21, canonical "1e+21", exact
-	if _, err := s.Append(ok); err != nil {
-		t.Errorf("Append of 1e21 = %v", err)
+	if e.Normalised[0].At != "/aaa" {
+		t.Errorf("Normalised = %+v, want sorted by at", e.Normalised)
+	}
+	for name, bad := range map[string]Normalisation{
+		"no pointer": {At: "zzz", Was: "1"},
+		"neither":    {At: "/a"},
+		"both":       {At: "/a", Was: "1", Raw: "MQ=="},
+	} {
+		e := &InfoEntry{Name: "n"}
+		e.Normalised = []Normalisation{bad}
+		if _, err := s.Append(e); !errors.Is(err, ErrBadNormalisation) {
+			t.Errorf("%s: err = %v, want ErrBadNormalisation", name, err)
+		}
 	}
 }
