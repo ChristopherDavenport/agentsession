@@ -192,22 +192,95 @@ func (s *Session) ResetLeaf() {
 // the leaf and does not reach any context. On success e is owned by the
 // session and must not be modified.
 func (s *Session) Append(e Entry) (string, error) {
+	r, err := s.Commit(e)
+	return r.ID, err
+}
+
+// Outcome is what an append did, which the format has a store report.
+type Outcome int
+
+const (
+	// Continued: the entry was added under the leaf and is the leaf.
+	Continued Outcome = iota
+	// Branched: the entry was added elsewhere and the leaf did not move.
+	Branched
+	// Held: the session already held the entry; nothing changed.
+	Held
+	// LeafMoved: a leaf label moved the leaf to its target.
+	LeafMoved
+	// LeafNotMoved: a leaf label named a target the leaf may not rest
+	// on, and was added without moving it.
+	LeafNotMoved
+)
+
+// String names the outcome.
+func (o Outcome) String() string {
+	switch o {
+	case Continued:
+		return "continued"
+	case Branched:
+		return "branched"
+	case Held:
+		return "held"
+	case LeafMoved:
+		return "leaf moved"
+	case LeafNotMoved:
+		return "leaf not moved"
+	}
+	return fmt.Sprintf("outcome(%d)", int(o))
+}
+
+// Result is what Commit reports: the entry's ID and what appending it
+// did.
+type Result struct {
+	ID      string
+	Outcome Outcome
+}
+
+// Prepare does everything Append does short of adding the entry: it
+// fills the parent and the timestamp, sorts and checks the references,
+// applies the parent rule, and computes the hashes, setting the ID on
+// the entry. It reports the outcome Commit would have. A store uses it
+// to know the entry's hashes before anything is written, so that
+// nothing is visible in memory before the store's commit point; a
+// Commit of the same entry afterwards recomputes the same values.
+func (s *Session) Prepare(e Entry) (Result, error) {
 	if err := validateEntry(e); err != nil {
-		return "", err
+		return Result{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.prepare(e)
+}
+
+// Commit is Append with its outcome reported.
+func (s *Session) Commit(e Entry) (Result, error) {
+	if err := validateEntry(e); err != nil {
+		return Result{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, err := s.prepare(e)
+	if err != nil || r.Outcome == Held {
+		return r, err
+	}
+	s.add(e)
+	s.moveLeafFor(e)
+	return r, nil
+}
+
+func (s *Session) prepare(e Entry) (Result, error) {
 	b := e.Base()
 	for k := range b.Unknown {
 		if isEnvelopeKey(k) {
-			return "", fmt.Errorf("%w: %s", ErrReservedMember, k)
+			return Result{}, fmt.Errorf("%w: %s", ErrReservedMember, k)
 		}
 	}
 	if b.Parent == "" {
 		b.Parent = s.leaf
 	}
 	if err := s.checkParentRule(b.Parent); err != nil {
-		return "", err
+		return Result{}, err
 	}
 	if b.Timestamp.IsZero() {
 		b.Timestamp = s.now()
@@ -215,13 +288,13 @@ func (s *Session) Append(e Entry) (string, error) {
 	b.Timestamp = b.Timestamp.UTC()
 	sortParents(b.Parents)
 	if err := s.checkParents(b); err != nil {
-		return "", err
+		return Result{}, err
 	}
 	if d, ok := e.(*DispatchEntry); ok {
 		// The format forbids a dispatch for a call a decision rejected.
 		for _, c := range Calls(s.path(b.Parent)) {
 			if c.ID() == d.CallID && c.Rejected() {
-				return "", fmt.Errorf("%w: %s", ErrCallRejected, d.CallID)
+				return Result{}, fmt.Errorf("%w: %s", ErrCallRejected, d.CallID)
 			}
 		}
 	}
@@ -232,31 +305,45 @@ func (s *Session) Append(e Entry) (string, error) {
 		// with the envelope that was just filled in.
 		raw, err := rewriteEnvelope(u)
 		if err != nil {
-			return "", err
+			return Result{}, err
 		}
 		u.Raw = raw
 	}
 	if err := s.hashEntry(e); err != nil {
-		return "", err
+		return Result{}, err
 	}
 	if want != "" && want != b.ID {
-		return "", fmt.Errorf("%w: given %s, computed %s", ErrBadID, want, b.ID)
+		return Result{}, fmt.Errorf("%w: given %s, computed %s", ErrBadID, want, b.ID)
 	}
 	if u, ok := e.(*UnknownEntry); ok {
 		raw, err := rewriteEnvelope(u)
 		if err != nil {
-			return "", err
+			return Result{}, err
 		}
 		u.Raw = raw
 	}
+	r := Result{ID: b.ID}
 	if _, held := s.byID[b.ID]; held {
-		// One entry: same type, body, parent, parents and ts. Nothing
-		// moves, and the caller learns the ID it already had.
-		return b.ID, nil
+		r.Outcome = Held
+		return r, nil
 	}
-	s.add(e)
-	s.moveLeafFor(e)
-	return b.ID, nil
+	r.Outcome = s.outcomeFor(e)
+	return r, nil
+}
+
+// outcomeFor says what moveLeafFor will do with e once added.
+func (s *Session) outcomeFor(e Entry) Outcome {
+	b := e.Base()
+	if l, ok := e.(*LabelEntry); ok && l.Label != nil && *l.Label == LeafLabel {
+		if s.mayRestOn(l.Target) {
+			return LeafMoved
+		}
+		return LeafNotMoved
+	}
+	if b.Parent == s.leaf {
+		return Continued
+	}
+	return Branched
 }
 
 // ErrBadID is returned by Append for an entry whose ID was set by the

@@ -75,6 +75,12 @@ func ParseCanonicalTime(s string) (time.Time, bool) {
 // ignored; ts is taken as the string it is. Both are "sha256:" plus
 // lowercase hex over the canonical bytes.
 func EntryHashes(data []byte) (id, content string, err error) {
+	// The test runs on the line as written: the decoder would repair a
+	// duplicate member, a lone surrogate or invalid UTF-8 on its way to
+	// the structs, and the format says a reader reports them.
+	if err := ijson.Check(data); err != nil {
+		return "", "", fmt.Errorf("agentsession: entry: %w", err)
+	}
 	var all map[string]json.RawMessage
 	if err := json.Unmarshal(data, &all); err != nil {
 		return "", "", fmt.Errorf("agentsession: entry: %w", err)
@@ -117,6 +123,21 @@ func EntryHashes(data []byte) (id, content string, err error) {
 		return "", "", err
 	}
 	return id, content, nil
+}
+
+// ValidHash reports whether s is a hash in the format's notation:
+// "sha256:" followed by exactly 64 lowercase hexadecimal characters.
+// Anything a store puts on a filesystem as a hash is checked with it.
+func ValidHash(s string) bool {
+	if len(s) != len(HashPrefix)+64 || s[:len(HashPrefix)] != HashPrefix {
+		return false
+	}
+	for _, c := range s[len(HashPrefix):] {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // isEnvelopeKey reports whether k is one of the envelope's names, which

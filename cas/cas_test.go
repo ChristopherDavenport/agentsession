@@ -3,6 +3,7 @@ package cas
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -263,6 +264,9 @@ func TestSweep(t *testing.T) {
 	if err := st.Delete(ctx, "o"); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.Release("f"); err != nil {
+		t.Fatal(err)
+	}
 	swept, err := st.Sweep(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -298,5 +302,309 @@ func TestLock(t *testing.T) {
 	}
 	if _, err := st2.Open(ctx, "l"); err != nil {
 		t.Errorf("open after release = %v", err)
+	}
+}
+
+// TestRefusals covers what the RFC has a store refuse: a synthetic
+// marker appended as an entry, a base that is a leaf label, a base
+// written as an object but never committed, a fork whose media differs
+// from its origin's, and an import with a torn last line, an own entry
+// above the base, or a differing media.
+func TestRefusals(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "o", Media: agentsession.MediaInline})
+	r := mustAppend(t, st, "o", agentsession.NewItemEntry(openresponses.UserText("r")))
+	a := mustAppend(t, st, "o", agentsession.NewItemEntry(openresponses.UserText("a")))
+	marker := agentsession.NewLabelEntry(a, agentsession.LeafLabel)
+	marker.Unknown = map[string]json.RawMessage{"synthetic": json.RawMessage("true")}
+	if _, err := st.Append(ctx, "o", marker); !errors.Is(err, ErrSynthetic) {
+		t.Errorf("appending a synthetic marker = %v", err)
+	}
+	label := mustAppend(t, st, "o", agentsession.NewLabelEntry(a, agentsession.LeafLabel))
+	if _, err := st.Create(ctx, agentsession.Header{ID: "f1", Base: label}); err == nil {
+		t.Error("a fork at a leaf label was created")
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "f2", Base: a, Media: agentsession.MediaSidecar}); err == nil {
+		t.Error("a fork with another media was created")
+	}
+	// An object written ahead of its record is not held.
+	ghost := agentsession.NewItemEntry(openresponses.UserText("ghost"))
+	scratch := agentsession.New(agentsession.Header{})
+	if _, err := scratch.Append(ghost); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.storeEntry(ghost); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "f3", Base: ghost.ID}); !errors.Is(err, agentsession.ErrNoEntry) {
+		t.Errorf("a fork at an uncommitted object = %v", err)
+	}
+	// Import refusals.
+	var buf bytes.Buffer
+	if err := st.Project(ctx, &buf, "o"); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := Open(t.TempDir())
+	defer other.Close()
+	torn := buf.String()[:buf.Len()-10]
+	if _, err := other.Import(ctx, strings.NewReader(torn), false); err == nil || !strings.Contains(err.Error(), "cut short") {
+		t.Errorf("import of a torn file = %v", err)
+	}
+	// A fork file whose own entry hangs above the base.
+	fork, err := st.Create(ctx, agentsession.Header{ID: "f4", Base: a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, st, "f4", agentsession.NewItemEntry(openresponses.UserText("own")))
+	buf.Reset()
+	if err := st.Project(ctx, &buf, "f4"); err != nil {
+		t.Fatal(err)
+	}
+	_ = fork
+	// A file claiming base a whose own entry hangs from r, above the
+	// base: the lines are rebuilt through a session so the ids verify,
+	// then the header is given the base.
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	prefixOnly, err := agentsession.Read(strings.NewReader(strings.Join(lines[:3], "\n") + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdr := prefixOnly.Header()
+	loose := agentsession.New(agentsession.Header{ID: "f5", CreatedAt: hdr.CreatedAt, Payload: hdr.Payload, Media: hdr.Media})
+	for _, e := range prefixOnly.Entries() {
+		data, _ := agentsession.MarshalEntry(e)
+		c, _ := agentsession.UnmarshalEntry(data)
+		c.Base().ID = ""
+		if _, err := loose.Append(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	above := agentsession.NewItemEntry(openresponses.UserText("above"))
+	above.Parent = r
+	if _, err := loose.Append(above); err != nil {
+		t.Fatal(err)
+	}
+	var loosebuf bytes.Buffer
+	agentsession.Write(&loosebuf, loose)
+	claimed := strings.Replace(loosebuf.String(), `"id":"f5"`, `"base":"`+a+`","id":"f5","parent_session":"o"`, 1)
+	if _, err := other.Import(ctx, strings.NewReader(claimed), false); err == nil || !strings.Contains(err.Error(), "above the base") {
+		t.Errorf("import with an own entry above the base = %v", err)
+	}
+	// Media differing from the session holding the base.
+	buf.Reset()
+	st.Project(ctx, &buf, "f4")
+	if _, err := other.Import(ctx, strings.NewReader(buf.String()), false); err != nil {
+		t.Fatalf("a clean fork import failed: %v", err)
+	}
+	other.Release("f4")
+	if _, err := other.Import(ctx, strings.NewReader(strings.Replace(buf.String(), `"media":"inline"`, `"media":"sidecar"`, 1)), false); err == nil {
+		t.Error("an import with another media than the base's session was accepted")
+	}
+}
+
+// TestWriteOutcomes checks what Write reports.
+func TestWriteOutcomes(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "w"})
+	ra, _ := st.Write(ctx, "w", agentsession.NewItemEntry(openresponses.UserText("a")))
+	rb, _ := st.Write(ctx, "w", agentsession.NewItemEntry(openresponses.UserText("b")))
+	if ra.Outcome != agentsession.Continued || rb.Outcome != agentsession.Continued {
+		t.Errorf("continues = %s %s", ra.Outcome, rb.Outcome)
+	}
+	br := agentsession.NewItemEntry(openresponses.UserText("c"))
+	br.Parent = ra.ID
+	rc, _ := st.Write(ctx, "w", br)
+	if rc.Outcome != agentsession.Branched {
+		t.Errorf("branch = %s", rc.Outcome)
+	}
+	again := agentsession.NewItemEntry(openresponses.UserText("c"))
+	again.Parent = ra.ID
+	again.Timestamp = br.Timestamp
+	rh, _ := st.Write(ctx, "w", again)
+	if rh.Outcome != agentsession.Held || rh.ID != rc.ID {
+		t.Errorf("re-append = %s %s", rh.Outcome, rh.ID)
+	}
+	rl, _ := st.Write(ctx, "w", agentsession.NewLabelEntry(rc.ID, agentsession.LeafLabel))
+	if rl.Outcome != agentsession.LeafMoved {
+		t.Errorf("leaf label = %s", rl.Outcome)
+	}
+	rn, _ := st.Write(ctx, "w", agentsession.NewLabelEntry(rl.ID, agentsession.LeafLabel))
+	if rn.Outcome != agentsession.LeafNotMoved {
+		t.Errorf("leaf label onto a label = %s", rn.Outcome)
+	}
+	// A head moved in memory is journaled before the next append.
+	s, _ := st.Open(ctx, "w")
+	if err := s.Branch(rb.ID); err != nil {
+		t.Fatal(err)
+	}
+	rd, _ := st.Write(ctx, "w", agentsession.NewItemEntry(openresponses.UserText("d")))
+	if rd.Outcome != agentsession.Continued {
+		t.Errorf("append after an in-memory branch = %s", rd.Outcome)
+	}
+	journal, _ := os.ReadFile(filepath.Join(st.Root(), "journal"))
+	if !strings.Contains(string(journal), `"op":"head","session":"w","head":"`+rb.ID+`"`) {
+		t.Error("the in-memory head move was not journaled")
+	}
+}
+
+// TestSetHeadEdges: "" is a valid expected value, a wrong one reports
+// ErrHeadMoved, and a mirror is refused.
+func TestSetHeadEdges(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "e"})
+	if err := st.SetHead(ctx, "e", "", "nope"); !errors.Is(err, agentsession.ErrNoEntry) {
+		t.Errorf("SetHead from no head to an absent entry = %v, want ErrNoEntry (the expected value matched)", err)
+	}
+	if err := st.SetHead(ctx, "e", "wrong", "nope"); !errors.Is(err, ErrHeadMoved) {
+		t.Errorf("SetHead with a wrong expected = %v", err)
+	}
+	a := mustAppend(t, st, "e", agentsession.NewItemEntry(openresponses.UserText("a")))
+	var buf bytes.Buffer
+	st.Project(ctx, &buf, "e")
+	other, _ := Open(t.TempDir())
+	defer other.Close()
+	if _, err := other.Import(ctx, &buf, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.SetHead(ctx, "e", a, a); !errors.Is(err, ErrMirror) {
+		t.Errorf("SetHead on a mirror = %v", err)
+	}
+}
+
+// TestCrashWindows breaks the store between each pair of writes and
+// checks what a reopen sees: objects without a journal record are not
+// an entry, a journal record without a log line is, a stale head is
+// brought forward, and a torn journal tail is cut so the next commit
+// lands after the last good record.
+func TestCrashWindows(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	st.Create(ctx, agentsession.Header{ID: "c"})
+	a := mustAppend(t, st, "c", agentsession.NewItemEntry(openresponses.UserText("a")))
+	b := mustAppend(t, st, "c", agentsession.NewItemEntry(openresponses.UserText("b")))
+	st.Close()
+	dir := filepath.Join(st.Root(), "sessions", "c")
+
+	// Objects written, no journal record: the entry does not exist.
+	orphan := agentsession.NewItemEntry(openresponses.UserText("orphan"))
+	orphan.Parent = b
+	scratch, _ := agentsession.Read(bytes.NewReader(projectFile(t, st.Root(), "c")))
+	if _, err := scratch.Append(orphan); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.storeEntry(orphan); err != nil {
+		t.Fatal(err)
+	}
+	st2, _ := Open(st.Root())
+	s, err := st2.Open(ctx, "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 2 || st2.holds(orphan.ID) {
+		t.Errorf("an object without a record counted: len %d held %v", s.Len(), st2.holds(orphan.ID))
+	}
+	st2.Close()
+
+	// Stale head: the HEAD file behind the journal.
+	writeHead(dir, a)
+	st3, _ := Open(st.Root())
+	s, _ = st3.Open(ctx, "c")
+	if s.Leaf() != b {
+		t.Errorf("stale head not brought forward: %s", s.Leaf())
+	}
+	st3.Close()
+
+	// Torn journal tail: garbage after the last record is cut, and the
+	// next commit follows the last good record.
+	journal := filepath.Join(st.Root(), "journal")
+	before, _ := os.ReadFile(journal)
+	f, _ := os.OpenFile(journal, os.O_WRONLY|os.O_APPEND, 0o600)
+	f.WriteString(`{"op":"append","session":"c","entry":"sha256:trunc`)
+	f.Close()
+	st4, _ := Open(st.Root())
+	after, _ := os.ReadFile(journal)
+	if !bytes.Equal(before, after) {
+		t.Error("the torn tail was not cut")
+	}
+	c := mustAppend(t, st4, "c", agentsession.NewItemEntry(openresponses.UserText("c")))
+	st4.Close()
+	st5, _ := Open(st.Root())
+	defer st5.Close()
+	s, _ = st5.Open(ctx, "c")
+	if s.Len() != 3 || s.Leaf() != c {
+		t.Errorf("after a torn tail and a commit: len %d leaf %s", s.Len(), s.Leaf())
+	}
+}
+
+func projectFile(t *testing.T, root, id string) []byte {
+	t.Helper()
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	var buf bytes.Buffer
+	if err := st.Project(context.Background(), &buf, id); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestDeleteThenRecreate: a session made under a deleted session's ID
+// starts from nothing, since the journal records the delete.
+func TestDeleteThenRecreate(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	st.Create(ctx, agentsession.Header{ID: "d"})
+	mustAppend(t, st, "d", agentsession.NewItemEntry(openresponses.UserText("old")))
+	if err := st.Delete(ctx, "d"); err != nil {
+		t.Fatal(err)
+	}
+	st.Create(ctx, agentsession.Header{ID: "d"})
+	n := mustAppend(t, st, "d", agentsession.NewItemEntry(openresponses.UserText("new")))
+	st.Close()
+	st2, err := Open(st.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	s, err := st2.Open(ctx, "d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 1 || s.Leaf() != n {
+		t.Errorf("recreated session: len %d leaf %s", s.Len(), s.Leaf())
+	}
+}
+
+// TestNames refuses a session ID or a hash that cannot be a path.
+func TestNames(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	for _, id := range []string{"../escaped", "a/b", "", ".", ".."} {
+		if id != "" { // an empty ID is filled with a UUID
+			if _, err := st.Create(ctx, agentsession.Header{ID: id}); !errors.Is(err, ErrBadName) {
+				t.Errorf("Create(%q) = %v", id, err)
+			}
+		}
+		if _, err := st.Open(ctx, id); !errors.Is(err, ErrBadName) {
+			t.Errorf("Open(%q) = %v", id, err)
+		}
+		if err := st.Delete(ctx, id); !errors.Is(err, ErrBadName) {
+			t.Errorf("Delete(%q) = %v", id, err)
+		}
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "ok", Base: "sha256:a"}); err == nil {
+		t.Error("a short hash as a base was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(st.Root(), "..", "escaped")); err == nil {
+		t.Error("a path escaped the store")
 	}
 }

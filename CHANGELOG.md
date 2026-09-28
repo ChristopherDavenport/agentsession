@@ -77,11 +77,22 @@ versions may break the API.
   `Import` reads one as a mirror unless told it is the record, verifies
   every line, refuses a redacted header and discards the marker; a
   mirror refuses local writes until `DeclareRecord`. `Sweep` removes
-  what no log or prefix needs, following references down. A second
-  process is refused a held session by an advisory lock, as the
-  RFC permits. It runs the store conformance suite. Exchange between
-  stores, media sidecars and the SQLite relayout are not in this
-  change.
+  what no log or prefix needs, following references down, and leaves a
+  temporary file a writer may be about to rename. `Write` is `Append`
+  reporting what happened, as the format asks: continued, branched,
+  held, leaf moved or leaf not moved. A session ID or a hash that cannot
+  be a path is refused (`ErrBadName`), a synthetic marker appended as an
+  entry is refused (`ErrSynthetic`), and every rename or creation is
+  followed by an fsync of its directory. A second process is refused a
+  held session by an advisory lock, as the RFC permits. It runs the
+  store conformance suite. Exchange between stores, media sidecars and
+  the SQLite relayout are not in this change.
+- `Session.Prepare` and `Session.Commit` split `Append` into the part
+  that computes an entry's hashes and outcome without adding it and the
+  part that adds it, so a store can write and commit before anything is
+  visible in memory. `Read` checks every line as written, before the
+  decoder can repair a repeated member, a lone surrogate or invalid
+  UTF-8; `ValidHash` says what a hash string may be.
 
 - **Breaking for writers.** `Append` now refuses an item entry holding
   an `openresponses.ItemReference`. RFC 0001 gains the **ingress** rule

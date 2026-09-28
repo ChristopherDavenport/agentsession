@@ -39,6 +39,19 @@ func Check(data []byte) error {
 		expectKey bool
 	}
 	var stack []*frame
+	top := func() *frame {
+		if len(stack) == 0 {
+			return nil
+		}
+		return stack[len(stack)-1]
+	}
+	// valueDone tells the enclosing object that a value finished, so the
+	// next string is a key again.
+	valueDone := func() {
+		if t := top(); t != nil && t.object {
+			t.expectKey = true
+		}
+	}
 	for {
 		tok, err := dec.Token()
 		if err == io.EOF {
@@ -47,29 +60,25 @@ func Check(data []byte) error {
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrNotIJSON, err)
 		}
-		var top *frame
-		if len(stack) > 0 {
-			top = stack[len(stack)-1]
-		}
 		switch t := tok.(type) {
 		case json.Delim:
 			switch t {
 			case '{':
 				stack = append(stack, &frame{object: true, keys: map[string]bool{}, expectKey: true})
-				continue
 			case '[':
 				stack = append(stack, &frame{})
-				continue
 			case '}', ']':
 				stack = stack[:len(stack)-1]
+				valueDone()
 			}
+			continue
 		case string:
-			if top != nil && top.object && top.expectKey {
-				if top.keys[t] {
+			if f := top(); f != nil && f.object && f.expectKey {
+				if f.keys[t] {
 					return fmt.Errorf("%w: member %q repeated", ErrNotIJSON, t)
 				}
-				top.keys[t] = true
-				top.expectKey = false
+				f.keys[t] = true
+				f.expectKey = false
 				continue
 			}
 		case json.Number:
@@ -77,9 +86,7 @@ func Check(data []byte) error {
 				return err
 			}
 		}
-		if top != nil && top.object {
-			top.expectKey = true
-		}
+		valueDone()
 	}
 	return nil
 }

@@ -228,3 +228,28 @@ func TestReadCRLFAndBlankLines(t *testing.T) {
 		t.Errorf("entries %d name %q", s.Len(), s.Name())
 	}
 }
+
+// TestReadRefusesRepairedLines checks that a line the decoder would
+// quietly repair is refused as written: a repeated member, a lone
+// surrogate, invalid UTF-8.
+func TestReadRefusesRepairedLines(t *testing.T) {
+	s := New(Header{})
+	if _, err := s.Append(&InfoEntry{Name: "n"}); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+	for name, line := range map[string]string{
+		"repeated member":   strings.Replace(lines[1], `"name":"n"`, `"name":"n","name":"n"`, 1),
+		"repeated envelope": strings.Replace(lines[1], `"type":"info"`, `"type":"info","type":"label"`, 1),
+		"lone surrogate":    strings.Replace(lines[1], `"name":"n"`, `"name":"\ud83d"`, 1),
+		"invalid utf-8":     strings.Replace(lines[1], `"name":"n"`, "\"name\":\"\xff\"", 1),
+	} {
+		if _, err := Read(strings.NewReader(lines[0] + "\n" + line + "\n")); err == nil {
+			t.Errorf("%s: Read accepted the line", name)
+		}
+	}
+}

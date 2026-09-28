@@ -9,16 +9,25 @@
 //	    log                               one entry hash per line, in append order
 //	    HEAD                              the head's hash, or empty
 //	    record                            "record" or "mirror"
-//	  journal                             one line per append: the commit point
+//	    lock                              the advisory lock of the process holding it
+//	  journal                             one line per commit: the commit point
 //
 // An entry is stored as two objects, its body under the content hash
 // and its envelope under the id, so a body shared by many entries is
 // held once and a chain of envelopes verifies without its bodies. A
 // session is a ref: a header, a base, a head, and a log of the entries
-// it appended. Append writes the objects first, idempotently, then one
-// journal record, which is the commit point and is fsynced, then the
-// log line and the head, which are indexes the journal rebuilds on open
-// if a crash left them behind.
+// it appended.
+//
+// Every write follows one order. The objects go first, idempotently,
+// since their bytes are their names. Then one journal record is
+// appended and fsynced: that is the commit point, and nothing is
+// visible before it, in memory or on disk. Then the log line and the
+// head, which are indexes; Open replays the journal against them, in
+// journal order, so a crash after the commit point leaves no
+// acknowledged append missing and a crash before it leaves nothing
+// behind. Every rename and creation is followed by an fsync of its
+// directory, so a durable journal record never points at a file the
+// power loss took.
 //
 // Two writers in one process append through one Store, which
 // serialises them. A second process is refused the session by an
@@ -43,6 +52,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/internal/ijson"
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/agentsession/internal/procs"
 )
@@ -61,6 +71,16 @@ var ErrMirror = errors.New("cas: session is a mirror here; only the record may a
 // entry, which is how a writer learns that another moved it.
 var ErrHeadMoved = errors.New("cas: head is not the expected entry")
 
+// ErrBadName is returned for a session ID or a hash that cannot be used
+// as a path: a session ID is letters, digits, '.', '_' and '-' and is
+// neither "." nor ".."; a hash is "sha256:" and 64 lowercase hex.
+var ErrBadName = errors.New("cas: not a usable name")
+
+// ErrSynthetic is returned by Append for a leaf label carrying
+// `synthetic`, which marks a projection's own marker and is never an
+// entry a session appends.
+var ErrSynthetic = errors.New("cas: a synthetic leaf marker is the projection's, not the session's")
+
 // ErrSessionLocked is [agentsession.ErrSessionLocked].
 var ErrSessionLocked = agentsession.ErrSessionLocked
 
@@ -69,25 +89,35 @@ type Store struct {
 	root string
 	mu   sync.Mutex
 	open map[string]*handle
+	// owner maps each committed own entry to the session whose log holds
+	// it; prefix holds the entries some session's base path needs.
+	// Together they are what the store holds: an object written ahead
+	// of its journal record is in neither.
+	owner  map[string]string
+	prefix map[string]bool
 }
 
 type handle struct {
 	session *agentsession.Session
 	dir     string
 	mark    string
+	head    string // the head as the HEAD file has it
 }
 
-// Open opens or creates the store at root, and replays the journal's
-// tail against the logs and heads so a crash between the commit point
-// and the indexes leaves no acknowledged append missing.
+// Open opens or creates the store at root, and replays the journal
+// against the logs and heads so a crash between the commit point and
+// the indexes leaves no acknowledged append missing.
 func Open(root string) (*Store, error) {
 	for _, d := range []string{filepath.Join(root, "objects", "contents"), filepath.Join(root, "objects", "entries"), filepath.Join(root, "sessions")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("cas: %w", err)
 		}
 	}
-	s := &Store{root: root, open: map[string]*handle{}}
+	s := &Store{root: root, open: map[string]*handle{}, owner: map[string]string{}, prefix: map[string]bool{}}
 	if err := s.recover(); err != nil {
+		return nil, err
+	}
+	if err := s.index(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -96,22 +126,63 @@ func Open(root string) (*Store, error) {
 // Root returns the store's directory.
 func (s *Store) Root() string { return s.root }
 
-func (s *Store) sessionDir(id string) string { return filepath.Join(s.root, "sessions", id) }
-func objectPath(dir, hash string) string {
-	hex := strings.TrimPrefix(hash, agentsession.HashPrefix)
-	return filepath.Join(dir, hex[:2], hex[2:])
+// --- names and paths ---
+
+func validSessionID(id string) bool {
+	if id == "" || id == "." || id == ".." || len(id) > 200 {
+		return false
+	}
+	for _, c := range id {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '.', c == '_', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
-func (s *Store) contentPath(hash string) string {
+
+func (s *Store) sessionDir(id string) (string, error) {
+	if !validSessionID(id) {
+		return "", fmt.Errorf("%w: session id %q", ErrBadName, id)
+	}
+	return filepath.Join(s.root, "sessions", id), nil
+}
+
+func objectPath(dir, hash string) (string, error) {
+	if !agentsession.ValidHash(hash) {
+		return "", fmt.Errorf("%w: hash %q", ErrBadName, hash)
+	}
+	hex := strings.TrimPrefix(hash, agentsession.HashPrefix)
+	return filepath.Join(dir, hex[:2], hex[2:]), nil
+}
+
+func (s *Store) contentPath(hash string) (string, error) {
 	return objectPath(filepath.Join(s.root, "objects", "contents"), hash)
 }
-func (s *Store) entryPath(hash string) string {
+
+func (s *Store) entryPath(hash string) (string, error) {
 	return objectPath(filepath.Join(s.root, "objects", "entries"), hash)
+}
+
+// --- durable file writes ---
+
+// syncDir fsyncs a directory, so a rename or a creation in it survives
+// a power loss once the call returns.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 // writeObject stores data under path, idempotently: an object already
 // present is left as it is, since its bytes are its name. The write
-// goes to a temporary file and is renamed into place, so a reader never
-// sees a partial object.
+// goes to a temporary file, is fsynced, renamed into place, and the
+// directory is fsynced, so a reader never sees a partial object and a
+// durable journal record never names an object that did not survive.
 func writeObject(path string, data []byte) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
@@ -119,6 +190,18 @@ func writeObject(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	if err := writeAtomic(path, data); err != nil {
+		if _, serr := os.Stat(path); serr == nil {
+			return nil // another writer stored the same object
+		}
+		return err
+	}
+	return nil
+}
+
+// writeAtomic replaces the file at path with data through a temporary
+// file, an fsync, a rename and an fsync of the directory.
+func writeAtomic(path string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
 		return err
@@ -136,33 +219,12 @@ func writeObject(path string, data []byte) error {
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		os.Remove(tmp.Name())
-		if _, serr := os.Stat(path); serr == nil {
-			return nil // another writer stored the same object
-		}
 		return err
 	}
-	return nil
+	return syncDir(filepath.Dir(path))
 }
 
-// writeAtomic replaces the file at path with data, through a rename.
-func writeAtomic(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
-	if err != nil {
-		return err
-	}
-	_, werr := tmp.Write(data)
-	if serr := tmp.Sync(); werr == nil {
-		werr = serr
-	}
-	if cerr := tmp.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		os.Remove(tmp.Name())
-		return werr
-	}
-	return os.Rename(tmp.Name(), path)
-}
+// --- objects ---
 
 // split takes an entry's encoded line apart into the envelope object
 // the id hashes and the body the content hash hashes, both canonical.
@@ -232,18 +294,48 @@ func (s *Store) storeEntry(e agentsession.Entry) error {
 	if err != nil {
 		return err
 	}
-	if err := writeObject(s.contentPath(e.Base().ContentHash()), body); err != nil {
+	cp, err := s.contentPath(e.Base().ContentHash())
+	if err != nil {
+		return err
+	}
+	ep, err := s.entryPath(e.Base().ID)
+	if err != nil {
+		return err
+	}
+	if err := writeObject(cp, body); err != nil {
 		return fmt.Errorf("cas: store content: %w", err)
 	}
-	if err := writeObject(s.entryPath(e.Base().ID), env); err != nil {
+	if err := writeObject(ep, env); err != nil {
 		return fmt.Errorf("cas: store entry: %w", err)
 	}
 	return nil
 }
 
-// loadLine reads an entry's two objects and rebuilds its line.
+// envelope reads an entry's envelope object.
+func (s *Store) envelope(id string) (map[string]json.RawMessage, error) {
+	ep, err := s.entryPath(id)
+	if err != nil {
+		return nil, err
+	}
+	env, err := os.ReadFile(ep)
+	if err != nil {
+		return nil, fmt.Errorf("cas: entry %s: %w", id, err)
+	}
+	var e map[string]json.RawMessage
+	if err := json.Unmarshal(env, &e); err != nil {
+		return nil, fmt.Errorf("cas: entry %s: %w", id, err)
+	}
+	return e, nil
+}
+
+// loadLine reads an entry's two objects and rebuilds its line, checked
+// as written.
 func (s *Store) loadLine(id string) ([]byte, error) {
-	env, err := os.ReadFile(s.entryPath(id))
+	ep, err := s.entryPath(id)
+	if err != nil {
+		return nil, err
+	}
+	env, err := os.ReadFile(ep)
 	if err != nil {
 		return nil, fmt.Errorf("cas: entry %s: %w", id, err)
 	}
@@ -253,133 +345,201 @@ func (s *Store) loadLine(id string) ([]byte, error) {
 	if err := json.Unmarshal(env, &e); err != nil {
 		return nil, fmt.Errorf("cas: entry %s: %w", id, err)
 	}
-	body, err := os.ReadFile(s.contentPath(e.Content))
+	cp, err := s.contentPath(e.Content)
+	if err != nil {
+		return nil, err
+	}
+	body, err := os.ReadFile(cp)
 	if err != nil {
 		return nil, fmt.Errorf("cas: content %s of entry %s: %w", e.Content, id, err)
+	}
+	if err := ijson.Check(env); err != nil {
+		return nil, fmt.Errorf("cas: entry %s: %w", id, err)
+	}
+	if err := ijson.Check(body); err != nil {
+		return nil, fmt.Errorf("cas: content %s: %w", e.Content, err)
 	}
 	return join(id, env, body)
 }
 
 // parentOf reads an entry's parent from its envelope object alone, the
 // walk a chain of envelopes allows without bodies.
-func (s *Store) parentOf(id string) (string, bool, error) {
-	env, err := os.ReadFile(s.entryPath(id))
+func (s *Store) parentOf(id string) (string, error) {
+	e, err := s.envelope(id)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", false, nil
-		}
-		return "", false, err
+		return "", err
 	}
-	var e struct {
-		Parent *string `json:"parent"`
+	var parent *string
+	if err := json.Unmarshal(e["parent"], &parent); err != nil {
+		return "", err
 	}
-	if err := json.Unmarshal(env, &e); err != nil {
-		return "", false, err
+	if parent == nil {
+		return "", nil
 	}
-	if e.Parent == nil {
-		return "", true, nil
-	}
-	return *e.Parent, true, nil
+	return *parent, nil
 }
 
-// holds reports whether the store has the entry's envelope.
+// isLeafLabel reports whether the stored entry is a label carrying the
+// reserved leaf value.
+func (s *Store) isLeafLabel(id string) (bool, error) {
+	line, err := s.loadLine(id)
+	if err != nil {
+		return false, err
+	}
+	e, err := agentsession.UnmarshalEntry(line)
+	if err != nil {
+		return false, err
+	}
+	l, ok := e.(*agentsession.LabelEntry)
+	return ok && l.Label != nil && *l.Label == agentsession.LeafLabel, nil
+}
+
+// holds reports whether the store holds the entry: it is in a session's
+// log or on a session's prefix. An object written ahead of its journal
+// record is in neither.
 func (s *Store) holds(id string) bool {
-	_, err := os.Stat(s.entryPath(id))
-	return err == nil
+	_, own := s.owner[id]
+	return own || s.prefix[id]
 }
 
-// journalRecord is one line of the journal: one append's commit.
+// --- the journal ---
+
+// journalRecord is one line of the journal: one commit.
 type journalRecord struct {
+	Op      string `json:"op"` // append, head, delete
 	Session string `json:"session"`
-	Entry   string `json:"entry"`
-	Head    string `json:"head"`
-	Seq     int    `json:"seq"`
+	Entry   string `json:"entry,omitempty"`
+	Head    string `json:"head,omitempty"`
+	Seq     int    `json:"seq,omitempty"`
 }
 
 // commit appends the journal record and fsyncs it: the commit point.
 func (s *Store) commit(rec journalRecord) error {
-	f, err := os.OpenFile(filepath.Join(s.root, "journal"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	path := filepath.Join(s.root, "journal")
+	_, existed := os.Stat(path)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("cas: journal: %w", err)
 	}
-	defer f.Close()
 	data, err := json.Marshal(rec)
 	if err != nil {
+		f.Close()
 		return err
 	}
 	if _, err := f.Write(append(data, '\n')); err != nil {
+		f.Close()
 		return fmt.Errorf("cas: journal: %w", err)
 	}
-	return f.Sync()
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("cas: journal: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if existed != nil {
+		return syncDir(s.root)
+	}
+	return nil
 }
 
-// recover replays the journal against the logs and heads: every record
-// whose session still exists has its entry in the session's log and,
-// when the record moved the head, the head at that entry unless a later
-// record moved it again. Indexes are what a crash can leave behind; the
-// journal is what it cannot.
-func (s *Store) recover() error {
+// sessionState is what the journal says about one session.
+type sessionState struct {
+	entries []string // own entries in journal order, each once
+	seen    map[string]bool
+	head    string
+	hasHead bool
+}
+
+// replay reads the journal and returns each session's state as the
+// records say, in order, with a delete record clearing what came
+// before it. It also returns the offset of the end of the last record
+// that parsed, so a torn tail can be cut.
+func (s *Store) replay() (map[string]*sessionState, int64, error) {
 	f, err := os.Open(filepath.Join(s.root, "journal"))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return map[string]*sessionState{}, 0, nil
 	}
 	if err != nil {
-		return fmt.Errorf("cas: journal: %w", err)
+		return nil, 0, fmt.Errorf("cas: journal: %w", err)
 	}
 	defer f.Close()
-	type state struct {
-		log  map[string]bool
-		seq  int
-		head string
-		has  bool
-	}
-	seen := map[string]*state{}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<26)
-	for sc.Scan() {
+	states := map[string]*sessionState{}
+	var good int64
+	br := bufio.NewReaderSize(f, 1<<20)
+	for {
+		line, err := br.ReadBytes('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, 0, fmt.Errorf("cas: journal: %w", err)
+		}
+		if len(line) == 0 || line[len(line)-1] != '\n' {
+			break // a torn last record: nothing after it was acknowledged
+		}
 		var rec journalRecord
-		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
-			break // a torn last line: nothing after it was acknowledged
+		if json.Unmarshal(line, &rec) != nil {
+			break
 		}
-		st, ok := seen[rec.Session]
-		if !ok {
-			st = &state{log: map[string]bool{}}
-			seen[rec.Session] = st
+		good += int64(len(line))
+		st := states[rec.Session]
+		if st == nil {
+			st = &sessionState{seen: map[string]bool{}}
+			states[rec.Session] = st
 		}
-		st.log[rec.Entry] = true
-		st.seq = rec.Seq
-		if rec.Head != "" {
-			st.head, st.has = rec.Head, true
+		switch rec.Op {
+		case "delete":
+			states[rec.Session] = &sessionState{seen: map[string]bool{}}
+		case "append":
+			if rec.Entry != "" && !st.seen[rec.Entry] {
+				st.entries = append(st.entries, rec.Entry)
+				st.seen[rec.Entry] = true
+			}
+			if rec.Head != "" {
+				st.head, st.hasHead = rec.Head, true
+			}
+		case "head":
+			st.head, st.hasHead = rec.Head, true
 		}
 	}
-	for id, st := range seen {
-		dir := s.sessionDir(id)
+	return states, good, nil
+}
+
+// recover makes the indexes say what the journal says: the journal is
+// what a crash cannot take, the log and the head are what it can leave
+// behind. A torn tail is cut so the next commit does not land after it.
+func (s *Store) recover() error {
+	states, good, err := s.replay()
+	if err != nil {
+		return err
+	}
+	if info, err := os.Stat(filepath.Join(s.root, "journal")); err == nil && info.Size() > good {
+		if err := os.Truncate(filepath.Join(s.root, "journal"), good); err != nil {
+			return fmt.Errorf("cas: journal: %w", err)
+		}
+	}
+	for id, st := range states {
+		dir, err := s.sessionDir(id)
+		if err != nil {
+			continue
+		}
 		if _, err := os.Stat(filepath.Join(dir, "header")); err != nil {
-			continue // deleted since
+			continue // deleted, or never created
 		}
 		have, err := readLog(dir)
 		if err != nil {
 			return err
 		}
-		held := map[string]bool{}
-		for _, h := range have {
-			held[h] = true
-		}
-		var missing []string
-		for h := range st.log {
-			if !held[h] {
-				missing = append(missing, h)
+		if !equalStrings(have, st.entries) {
+			var buf bytes.Buffer
+			for _, h := range st.entries {
+				buf.WriteString(h + "\n")
 			}
-		}
-		if len(missing) > 0 {
-			sort.Strings(missing)
-			if err := appendLog(dir, missing...); err != nil {
+			if err := writeAtomic(filepath.Join(dir, "log"), buf.Bytes()); err != nil {
 				return err
 			}
 		}
-		if st.has {
+		if st.hasHead {
 			cur, _ := readHead(dir)
-			if cur == "" && st.head != "" {
+			if cur != st.head {
 				if err := writeHead(dir, st.head); err != nil {
 					return err
 				}
@@ -388,6 +548,64 @@ func (s *Store) recover() error {
 	}
 	return nil
 }
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// index builds what the store holds from the logs and the bases.
+func (s *Store) index() error {
+	dirs, err := os.ReadDir(filepath.Join(s.root, "sessions"))
+	if err != nil {
+		return fmt.Errorf("cas: %w", err)
+	}
+	for _, d := range dirs {
+		if !d.IsDir() || !validSessionID(d.Name()) {
+			continue
+		}
+		dir := filepath.Join(s.root, "sessions", d.Name())
+		hashes, err := readLog(dir)
+		if err != nil {
+			return err
+		}
+		for _, h := range hashes {
+			s.owner[h] = d.Name()
+		}
+		h, err := readHeader(dir)
+		if err != nil {
+			continue
+		}
+		if h.Base != "" {
+			if err := s.markPrefix(h.Base); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// markPrefix records the path to base as held.
+func (s *Store) markPrefix(base string) error {
+	for id := base; id != ""; {
+		s.prefix[id] = true
+		parent, err := s.parentOf(id)
+		if err != nil {
+			return err
+		}
+		id = parent
+	}
+	return nil
+}
+
+// --- per-session files ---
 
 func readLog(dir string) ([]string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "log"))
@@ -443,11 +661,37 @@ func readMark(dir string) string {
 	return strings.TrimSpace(string(data))
 }
 
+func readHeader(dir string) (agentsession.Header, error) {
+	var h agentsession.Header
+	data, err := os.ReadFile(filepath.Join(dir, "header"))
+	if err != nil {
+		return h, err
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(data), &h); err != nil {
+		return h, fmt.Errorf("cas: header: %w", err)
+	}
+	return h, nil
+}
+
+func writeHeader(dir string, h agentsession.Header) error {
+	hdr, err := json.Marshal(h)
+	if err != nil {
+		return err
+	}
+	if hdr, err = jcs.Transform(hdr); err != nil {
+		return err
+	}
+	return writeAtomic(filepath.Join(dir, "header"), append(hdr, '\n'))
+}
+
+// --- Store ---
+
 // Create implements agentsession.Store. A header with a Base makes a
-// fork: the base must be an entry the store holds and not a leaf label,
-// the session's media must match a held session whose own entries
-// include the base, and the head starts at the base. The session is the
-// record here.
+// fork: the base must be an entry the store holds, that is, one in a
+// session's log or on a session's prefix, and not a leaf label; the
+// media must match that of the session whose own entries include the
+// base, when the store holds that session; and the head starts at the
+// base. The session is the record here.
 func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -458,43 +702,47 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 }
 
 func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.Session, error) {
-	var sess *agentsession.Session
+	var (
+		sess   *agentsession.Session
+		prefix [][]byte
+	)
 	if h.Base != "" {
 		if !s.holds(h.Base) {
-			return nil, fmt.Errorf("%w: base %s is not in this store", agentsession.ErrNoEntry, h.Base)
+			return nil, fmt.Errorf("%w: base %s is not held by this store", agentsession.ErrNoEntry, h.Base)
 		}
-		lines, err := s.pathLines(h.Base)
-		if err != nil {
+		if isLabel, err := s.isLeafLabel(h.Base); err != nil {
+			return nil, err
+		} else if isLabel {
+			return nil, errors.New("cas: a base may not be a leaf label")
+		}
+		if owner, ok := s.owner[h.Base]; ok {
+			if h.ParentSession == "" {
+				h.ParentSession = owner
+			}
+			if dir, err := s.sessionDir(owner); err == nil {
+				if oh, err := readHeader(dir); err == nil {
+					if h.Media != "" && h.Media != oh.Media {
+						return nil, errors.New("cas: a fork's media must equal its origin's")
+					}
+					h.Media = oh.Media
+					if h.Payload == "" {
+						h.Payload = oh.Payload
+					}
+				}
+			}
+		}
+		var err error
+		if prefix, err = s.pathLines(h.Base); err != nil {
 			return nil, err
 		}
-		if h.ParentSession == "" {
-			return nil, errors.New("cas: a fork's header names its parent_session")
-		}
-		origin, err := s.openLocked(h.ParentSession)
-		if err == nil && h.Media != "" && h.Media != origin.session.Header().Media {
-			return nil, errors.New("cas: a fork's media must equal its origin's")
-		}
-		if err == nil && h.Media == "" {
-			h.Media = origin.session.Header().Media
-		}
-		if err == nil && h.Payload == "" {
-			h.Payload = origin.session.Header().Payload
-		}
-		tmp := agentsession.New(h)
-		h = tmp.Header()
-		sess, err = s.assemble(h, lines, nil, h.Base)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		sess = agentsession.New(h)
-		h = sess.Header()
 	}
-	dir := s.sessionDir(h.ID)
+	tmp := agentsession.New(h)
+	h = tmp.Header()
+	dir, err := s.sessionDir(h.ID)
+	if err != nil {
+		return nil, err
+	}
 	if _, ok := s.open[h.ID]; ok {
-		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "header")); err == nil {
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -503,15 +751,20 @@ func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.
 	if err := acquireLock(dir); err != nil {
 		return nil, err
 	}
-	hdr, err := json.Marshal(h)
-	if err != nil {
-		return nil, err
+	if _, err := os.Stat(filepath.Join(dir, "header")); err == nil {
+		releaseLock(dir)
+		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
-	hdr, err = jcs.Transform(hdr)
-	if err != nil {
-		return nil, err
+	if h.Base != "" {
+		sess, err = s.assemble(h, prefix, nil, h.Base)
+		if err != nil {
+			releaseLock(dir)
+			return nil, err
+		}
+	} else {
+		sess = tmp
 	}
-	if err := writeAtomic(filepath.Join(dir, "header"), append(hdr, '\n')); err != nil {
+	if err := writeHeader(dir, h); err != nil {
 		releaseLock(dir)
 		return nil, fmt.Errorf("cas: header: %w", err)
 	}
@@ -524,8 +777,16 @@ func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.
 			releaseLock(dir)
 			return nil, err
 		}
+		if err := s.markPrefix(h.Base); err != nil {
+			releaseLock(dir)
+			return nil, err
+		}
 	}
-	s.open[h.ID] = &handle{session: sess, dir: dir, mark: mark}
+	if err := syncDir(filepath.Join(s.root, "sessions")); err != nil {
+		releaseLock(dir)
+		return nil, err
+	}
+	s.open[h.ID] = &handle{session: sess, dir: dir, mark: mark, head: h.Base}
 	return sess, nil
 }
 
@@ -539,12 +800,9 @@ func (s *Store) pathLines(id string) ([][]byte, error) {
 			return nil, err
 		}
 		rev = append(rev, line)
-		parent, ok, err := s.parentOf(id)
+		parent, err := s.parentOf(id)
 		if err != nil {
 			return nil, err
-		}
-		if !ok {
-			return nil, fmt.Errorf("%w: %s", agentsession.ErrNoEntry, id)
 		}
 		id = parent
 	}
@@ -605,108 +863,158 @@ func (s *Store) openLocked(id string) (*handle, error) {
 	if h, ok := s.open[id]; ok {
 		return h, nil
 	}
-	dir := s.sessionDir(id)
-	hdrData, err := os.ReadFile(filepath.Join(dir, "header"))
+	dir, err := s.sessionDir(id)
+	if err != nil {
+		return nil, err
+	}
+	hdr, err := readHeader(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("cas: %w", err)
-	}
-	var hdr agentsession.Header
-	if err := json.Unmarshal(bytes.TrimSpace(hdrData), &hdr); err != nil {
-		return nil, fmt.Errorf("cas: session %s: header: %w", id, err)
+		return nil, err
 	}
 	if err := acquireLock(dir); err != nil {
+		return nil, err
+	}
+	fail := func(err error) (*handle, error) {
+		releaseLock(dir)
 		return nil, err
 	}
 	var prefix [][]byte
 	if hdr.Base != "" {
 		if prefix, err = s.pathLines(hdr.Base); err != nil {
-			releaseLock(dir)
-			return nil, err
+			return fail(err)
 		}
 	}
 	hashes, err := readLog(dir)
 	if err != nil {
-		releaseLock(dir)
-		return nil, err
+		return fail(err)
 	}
 	own := make([][]byte, 0, len(hashes))
 	for _, h := range hashes {
 		line, err := s.loadLine(h)
 		if err != nil {
-			releaseLock(dir)
-			return nil, err
+			return fail(err)
 		}
 		own = append(own, line)
 	}
 	head, err := readHead(dir)
 	if err != nil {
-		releaseLock(dir)
-		return nil, err
+		return fail(err)
 	}
 	sess, err := s.assemble(hdr, prefix, own, head)
 	if err != nil {
-		releaseLock(dir)
-		return nil, err
+		return fail(err)
 	}
-	h := &handle{session: sess, dir: dir, mark: readMark(dir)}
+	h := &handle{session: sess, dir: dir, mark: readMark(dir), head: head}
 	s.open[id] = h
 	return h, nil
 }
 
-// Append implements agentsession.Store: the entry's objects are stored,
-// the journal record is committed, then the log and the head follow.
-// A session held as a mirror is refused. An entry the session already
-// holds is a no-op that returns its id and moves nothing.
+// Append implements agentsession.Store; see Write for what it reports.
 func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Entry) (string, error) {
+	r, err := s.Write(ctx, sessionID, e)
+	return r.ID, err
+}
+
+// Write appends an entry and reports what happened, as the format asks
+// a store to: whether the entry continued the head, branched, was
+// already held, or as a leaf label moved the head or could not. The
+// order is the store's one order: the entry is prepared, its objects
+// are written, the journal record is committed, the log and the head
+// follow, and only then is the entry visible in the session. A session
+// held as a mirror is refused, as is a leaf label carrying `synthetic`.
+// A head moved in memory through Session.Branch since the last commit
+// is journaled first, so a head move never bypasses the journal.
+func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entry) (agentsession.Result, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return agentsession.Result{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.openLocked(sessionID)
 	if err != nil {
-		return "", err
+		return agentsession.Result{}, err
 	}
 	if h.mark != MarkRecord {
-		return "", fmt.Errorf("%w: %s", ErrMirror, sessionID)
+		return agentsession.Result{}, fmt.Errorf("%w: %s", ErrMirror, sessionID)
 	}
-	before := h.session.Len()
-	oldHead := h.session.Leaf()
-	id, err := h.session.Append(e)
+	if l, ok := e.(*agentsession.LabelEntry); ok {
+		if _, synthetic := l.Unknown["synthetic"]; synthetic {
+			return agentsession.Result{}, ErrSynthetic
+		}
+	}
+	if err := s.syncHead(h, sessionID); err != nil {
+		return agentsession.Result{}, err
+	}
+	r, err := h.session.Prepare(e)
 	if err != nil {
-		return "", err
+		return agentsession.Result{}, err
 	}
-	if h.session.Len() == before {
-		return id, nil // already held
+	if r.Outcome == agentsession.Held {
+		return r, nil
 	}
 	if err := s.storeEntry(e); err != nil {
-		return "", err
+		return agentsession.Result{}, err
 	}
 	head := ""
-	if h.session.Leaf() != oldHead {
-		head = h.session.Leaf()
+	switch r.Outcome {
+	case agentsession.Continued:
+		head = r.ID
+	case agentsession.LeafMoved:
+		head = e.(*agentsession.LabelEntry).Target
 	}
-	if err := s.commit(journalRecord{Session: sessionID, Entry: id, Head: head, Seq: h.session.Len()}); err != nil {
-		return "", err
+	if err := s.commit(journalRecord{Op: "append", Session: sessionID, Entry: r.ID, Head: head, Seq: h.session.Len() + 1}); err != nil {
+		return agentsession.Result{}, err
 	}
-	if err := appendLog(h.dir, id); err != nil {
-		return "", err
+	if err := appendLog(h.dir, r.ID); err != nil {
+		return agentsession.Result{}, err
 	}
 	if head != "" {
 		if err := writeHead(h.dir, head); err != nil {
-			return "", err
+			return agentsession.Result{}, err
 		}
+		h.head = head
 	}
-	return id, nil
+	s.owner[r.ID] = sessionID
+	got, err := h.session.Commit(e)
+	if err != nil {
+		return agentsession.Result{}, err
+	}
+	return got, nil
+}
+
+// syncHead journals a head the session moved in memory, through
+// Session.Branch, since the last commit, so the move is recorded before
+// anything builds on it.
+func (s *Store) syncHead(h *handle, sessionID string) error {
+	leaf := h.session.Leaf()
+	if leaf == h.head {
+		return nil
+	}
+	if leaf != "" {
+		if err := s.mayRestOn(h.session, leaf); err != nil {
+			return err
+		}
+	} else if h.session.Header().Base != "" {
+		return fmt.Errorf("%w: a session with a base has a head", agentsession.ErrNoEntry)
+	}
+	if err := s.commit(journalRecord{Op: "head", Session: sessionID, Head: leaf, Seq: h.session.Len()}); err != nil {
+		return err
+	}
+	if err := writeHead(h.dir, leaf); err != nil {
+		return err
+	}
+	h.head = leaf
+	return nil
 }
 
 // SetHead moves a session's head from expected to the entry to, or
 // returns ErrHeadMoved when the head is not expected. "" is a valid
 // expected value for a session with no head. The target must be the
-// base or an own entry and not a leaf label; a mirror is refused.
+// base or an own entry and not a leaf label; a mirror is refused. The
+// journal record is committed before the head moves anywhere.
 func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -720,19 +1028,27 @@ func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) err
 	if h.mark != MarkRecord {
 		return fmt.Errorf("%w: %s", ErrMirror, sessionID)
 	}
-	if h.session.Leaf() != expected {
-		return fmt.Errorf("%w: head is %s", ErrHeadMoved, h.session.Leaf())
+	if h.head != expected {
+		return fmt.Errorf("%w: head is %s", ErrHeadMoved, orNone(h.head))
 	}
 	if err := s.mayRestOn(h.session, to); err != nil {
 		return err
 	}
-	if err := h.session.Branch(to); err != nil {
+	if err := s.commit(journalRecord{Op: "head", Session: sessionID, Head: to, Seq: h.session.Len()}); err != nil {
 		return err
 	}
-	if err := s.commit(journalRecord{Session: sessionID, Entry: "", Head: to, Seq: h.session.Len()}); err != nil {
+	if err := writeHead(h.dir, to); err != nil {
 		return err
 	}
-	return writeHead(h.dir, to)
+	h.head = to
+	return h.session.Branch(to)
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
 }
 
 // mayRestOn holds a head target to the rule: the base or an own entry,
@@ -796,7 +1112,7 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 		var out []agentsession.Summary
 		var errs []error
 		for _, d := range dirs {
-			if !d.IsDir() {
+			if !d.IsDir() || !validSessionID(d.Name()) {
 				continue
 			}
 			sum, err := s.summarize(d.Name(), f.WithNames || f.Current)
@@ -826,14 +1142,10 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 }
 
 func (s *Store) summarize(id string, withMeta bool) (agentsession.Summary, error) {
-	dir := s.sessionDir(id)
-	data, err := os.ReadFile(filepath.Join(dir, "header"))
+	dir := filepath.Join(s.root, "sessions", id)
+	h, err := readHeader(dir)
 	if err != nil {
 		return agentsession.Summary{}, fmt.Errorf("cas: %s: %w", id, err)
-	}
-	var h agentsession.Header
-	if err := json.Unmarshal(bytes.TrimSpace(data), &h); err != nil {
-		return agentsession.Summary{}, fmt.Errorf("cas: %s: header: %w", id, err)
 	}
 	sum := agentsession.Summary{Header: h, Path: dir}
 	if info, err := os.Stat(filepath.Join(dir, "log")); err == nil {
@@ -869,26 +1181,40 @@ func (s *Store) summarize(id string, withMeta bool) (agentsession.Summary, error
 	return sum, nil
 }
 
-// Delete implements agentsession.Store: it removes the session's ref,
-// header and log. Objects stay; what no log and no prefix needs is
-// swept by Sweep.
+// Delete implements agentsession.Store: it commits a delete record, so
+// a later session under the same ID starts from nothing, then removes
+// the session's ref, header and log. Objects stay; what no log and no
+// prefix needs is swept by Sweep.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	dir := s.sessionDir(id)
+	dir, err := s.sessionDir(id)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(filepath.Join(dir, "header")); errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
 	}
-	if h, ok := s.open[id]; ok {
+	if _, ok := s.open[id]; ok {
 		delete(s.open, id)
-		_ = h
 	} else if err := acquireLock(dir); err != nil {
 		return err
 	}
-	return os.RemoveAll(dir)
+	if err := s.commit(journalRecord{Op: "delete", Session: id}); err != nil {
+		return err
+	}
+	for h, owner := range s.owner {
+		if owner == id {
+			delete(s.owner, h)
+		}
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	return syncDir(filepath.Join(s.root, "sessions"))
 }
 
 // Release closes a session this process holds, freeing its lock.
@@ -930,38 +1256,31 @@ func (s *Store) Project(ctx context.Context, w io.Writer, sessionID string) erro
 	if err != nil {
 		return err
 	}
-	return project(w, h.session)
+	return project(w, h.session, h.head)
 }
 
-// project is Project over a session in memory.
-func project(w io.Writer, sess *agentsession.Session) error {
+// project is Project over a session in memory with the given head.
+func project(w io.Writer, sess *agentsession.Session, head string) error {
 	var buf bytes.Buffer
 	if err := agentsession.Write(&buf, sess); err != nil {
 		return err
 	}
-	// Would the resume rule over these lines name the head?
 	check, err := agentsession.Read(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return err
 	}
-	head := sess.Leaf()
-	if check.Leaf() != head && head != "" {
+	if head != "" && check.Leaf() != head {
 		last := sess.Entries()[sess.Len()-1]
 		headEntry, _ := sess.Entry(head)
 		marker := agentsession.NewLabelEntry(head, agentsession.LeafLabel)
 		marker.Parent = last.Base().ID
 		marker.Timestamp = headEntry.Base().Timestamp
 		marker.Unknown = map[string]json.RawMessage{"synthetic": json.RawMessage("true")}
-		// Hash it as a line of the file without adding it to the session.
-		scratch, err := agentsession.Read(bytes.NewReader(buf.Bytes()))
-		if err != nil {
-			return err
-		}
-		if _, err := scratch.Append(marker); err != nil {
+		if _, err := check.Append(marker); err != nil {
 			return err
 		}
 		buf.Reset()
-		if err := agentsession.Write(&buf, scratch); err != nil {
+		if err := agentsession.Write(&buf, check); err != nil {
 			return err
 		}
 	}
@@ -970,12 +1289,15 @@ func project(w io.Writer, sess *agentsession.Session) error {
 }
 
 // Import reads an RFC 0001 file into the store as a mirror of the
-// session it holds, unless asRecord says this file is the only copy.
-// Every line is verified by the reader, a redacted header is refused, a
-// trailing synthetic marker names the head and is discarded, prefix
-// entries become objects and join no log, and the session's own entries
-// join its log in file order. A session the store already holds is
-// refused.
+// session it holds, unless asRecord says this file is the only copy. It
+// is held to a push's checks: every line verifies, a truncated last
+// line is refused, a redacted header is refused, every own entry hangs
+// from the base or another own entry, and the media matches that of a
+// held session whose own entries include the base. A trailing synthetic
+// marker names the head and is discarded; prefix entries become objects
+// and join no log; own entries join the log in file order, each
+// committed to the journal before the log. A session the store already
+// holds is refused.
 func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -983,6 +1305,9 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	sess, err := agentsession.Read(r)
 	if err != nil {
 		return nil, err
+	}
+	if t := sess.Truncated(); t != nil {
+		return nil, fmt.Errorf("cas: import: line %d is cut short: %w", t.Line, t.Err)
 	}
 	h := sess.Header()
 	if h.Redacted {
@@ -993,65 +1318,112 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := os.Stat(filepath.Join(s.sessionDir(h.ID), "header")); err == nil {
+	dir, err := s.sessionDir(h.ID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(filepath.Join(dir, "header")); err == nil {
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
-	head := sess.Leaf()
-	// Store every entry's objects, prefix included; the prefix joins no
-	// log. A trailing synthetic marker is the projection's and is
-	// dropped.
-	var own []string
+	if _, ok := s.open[h.ID]; ok {
+		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
+	}
 	entries := sess.Entries()
+	var own []agentsession.Entry
 	for i, e := range entries {
 		if l, ok := e.(*agentsession.LabelEntry); ok && i == len(entries)-1 {
 			if _, synthetic := l.Unknown["synthetic"]; synthetic && l.Label != nil && *l.Label == agentsession.LeafLabel {
 				continue
 			}
 		}
-		if err := s.storeEntry(e); err != nil {
-			return nil, err
+		if sess.Prefix(e.Base().ID) {
+			continue
 		}
-		if !sess.Prefix(e.Base().ID) {
-			own = append(own, e.Base().ID)
+		// An own entry hangs from the base or another own entry, or from
+		// null in a baseless session.
+		p := e.Base().Parent
+		if h.Base != "" && p != h.Base && (p == "" || sess.Prefix(p)) {
+			return nil, fmt.Errorf("cas: import: own entry %s hangs from %s, above the base", e.Base().ID, orNone(p))
+		}
+		own = append(own, e)
+	}
+	if h.Base != "" {
+		if owner, ok := s.owner[h.Base]; ok {
+			if odir, err := s.sessionDir(owner); err == nil {
+				if oh, err := readHeader(odir); err == nil && oh.Media != h.Media {
+					return nil, errors.New("cas: import: media differs from the session holding the base")
+				}
+			}
+		}
+	}
+	head := sess.Leaf()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("cas: %w", err)
+	}
+	if err := acquireLock(dir); err != nil {
+		return nil, err
+	}
+	fail := func(err error) (*agentsession.Session, error) {
+		releaseLock(dir)
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	for _, e := range entries {
+		if l, ok := e.(*agentsession.LabelEntry); ok {
+			if _, synthetic := l.Unknown["synthetic"]; synthetic {
+				continue
+			}
+		}
+		if err := s.storeEntry(e); err != nil {
+			return fail(err)
 		}
 	}
 	mark := MarkMirror
 	if asRecord {
 		mark = MarkRecord
 	}
-	dir := s.sessionDir(h.ID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("cas: %w", err)
-	}
-	hdr, err := json.Marshal(h)
-	if err != nil {
-		return nil, err
-	}
-	hdr, _ = jcs.Transform(hdr)
-	if err := writeAtomic(filepath.Join(dir, "header"), append(hdr, '\n')); err != nil {
-		return nil, err
+	if err := writeHeader(dir, h); err != nil {
+		return fail(err)
 	}
 	if err := writeAtomic(filepath.Join(dir, "record"), []byte(mark+"\n")); err != nil {
-		return nil, err
+		return fail(err)
 	}
-	if len(own) > 0 {
-		if err := appendLog(dir, own...); err != nil {
-			return nil, err
+	for i, e := range own {
+		if err := s.commit(journalRecord{Op: "append", Session: h.ID, Entry: e.Base().ID, Seq: i + 1}); err != nil {
+			return fail(err)
 		}
 	}
-	for i, id := range own {
-		if err := s.commit(journalRecord{Session: h.ID, Entry: id, Seq: i + 1}); err != nil {
-			return nil, err
+	if head != "" {
+		if err := s.commit(journalRecord{Op: "head", Session: h.ID, Head: head, Seq: len(own)}); err != nil {
+			return fail(err)
+		}
+	}
+	hashes := make([]string, 0, len(own))
+	for _, e := range own {
+		hashes = append(hashes, e.Base().ID)
+		s.owner[e.Base().ID] = h.ID
+	}
+	if len(hashes) > 0 {
+		if err := appendLog(dir, hashes...); err != nil {
+			return fail(err)
 		}
 	}
 	if head != "" {
 		if err := writeHead(dir, head); err != nil {
-			return nil, err
-		}
-		if err := s.commit(journalRecord{Session: h.ID, Head: head, Seq: len(own)}); err != nil {
-			return nil, err
+			return fail(err)
 		}
 	}
+	if h.Base != "" {
+		if err := s.markPrefix(h.Base); err != nil {
+			return fail(err)
+		}
+	}
+	if err := syncDir(filepath.Join(s.root, "sessions")); err != nil {
+		return fail(err)
+	}
+	// What the store returns is what it holds: the session rebuilt from
+	// the objects and the log, marker gone, head from HEAD.
+	releaseLock(dir)
 	hd, err := s.openLocked(h.ID)
 	if err != nil {
 		return nil, err
@@ -1061,55 +1433,50 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 
 // Sweep removes objects no session's log or prefix needs, following
 // references down: an envelope is kept while a log or a prefix names it,
-// a content while a kept envelope names it. Media blobs are contents.
-// It returns how many objects went.
+// a content while a kept envelope names it. A temporary file younger
+// than a minute is left for the writer that may be about to rename it.
+// Sweep takes a store-wide lock so two sweeps do not run at once, and
+// it does not run while this process holds sessions open, since their
+// appends may have written objects ahead of the records that would keep
+// them. It returns how many objects went.
 func (s *Store) Sweep(ctx context.Context) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	keepEntry := map[string]bool{}
-	dirs, err := os.ReadDir(filepath.Join(s.root, "sessions"))
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	for _, d := range dirs {
-		dir := s.sessionDir(d.Name())
-		hashes, err := readLog(dir)
-		if err != nil {
-			return 0, err
-		}
-		for _, h := range hashes {
-			keepEntry[h] = true
-		}
-		data, err := os.ReadFile(filepath.Join(dir, "header"))
-		if err != nil {
-			continue
-		}
-		var h agentsession.Header
-		if json.Unmarshal(bytes.TrimSpace(data), &h) == nil && h.Base != "" {
-			for id := h.Base; id != ""; {
-				keepEntry[id] = true
-				parent, ok, err := s.parentOf(id)
-				if err != nil || !ok {
-					break
-				}
-				id = parent
-			}
-		}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.open) > 0 {
+		return 0, errors.New("cas: sweep with sessions open; release them first")
+	}
+	if err := acquireLock(s.root); err != nil {
+		return 0, err
+	}
+	defer releaseLock(s.root)
+	s.owner = map[string]string{}
+	s.prefix = map[string]bool{}
+	if err := s.index(); err != nil {
+		return 0, err
 	}
 	keepContent := map[string]bool{}
+	keepEntry := map[string]bool{}
+	for id := range s.owner {
+		keepEntry[id] = true
+	}
+	for id := range s.prefix {
+		keepEntry[id] = true
+	}
 	for id := range keepEntry {
-		env, err := os.ReadFile(s.entryPath(id))
+		e, err := s.envelope(id)
 		if err != nil {
 			continue
 		}
-		var e struct {
-			Content string `json:"content"`
-		}
-		if json.Unmarshal(env, &e) == nil {
-			keepContent[e.Content] = true
+		var c string
+		if json.Unmarshal(e["content"], &c) == nil {
+			keepContent[c] = true
 		}
 	}
 	swept := 0
+	grace := time.Now().Add(-time.Minute)
 	for _, space := range []struct {
 		dir  string
 		keep map[string]bool
@@ -1117,6 +1484,12 @@ func (s *Store) Sweep(ctx context.Context) (int, error) {
 		err := filepath.WalkDir(space.dir, func(path string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return err
+			}
+			if strings.HasPrefix(d.Name(), ".tmp-") {
+				if info, err := d.Info(); err == nil && info.ModTime().After(grace) {
+					return nil
+				}
+				return os.Remove(path)
 			}
 			rel, _ := filepath.Rel(space.dir, path)
 			hash := agentsession.HashPrefix + strings.ReplaceAll(rel, string(filepath.Separator), "")

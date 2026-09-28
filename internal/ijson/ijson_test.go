@@ -41,3 +41,24 @@ func TestCheck(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckNested(t *testing.T) {
+	for _, doc := range []string{
+		`{"id":"x","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},"parent":null,"ts":"t","type":"item"}`,
+		`{"a":{"b":1},"c":{"b":2},"d":[{"e":1},{"e":2}],"f":"g"}`,
+		`[{"a":1},{"a":1}]`,
+	} {
+		if err := Check([]byte(doc)); err != nil {
+			t.Errorf("Check(%s) = %v", doc, err)
+		}
+	}
+	for _, doc := range []string{
+		`{"a":{"b":1,"b":2}}`,
+		`{"a":[1],"a":[2]}`,
+		`{"a":{"x":1},"a":2}`,
+	} {
+		if err := Check([]byte(doc)); err == nil {
+			t.Errorf("Check(%s) accepted a repeated member", doc)
+		}
+	}
+}
