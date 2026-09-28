@@ -12,25 +12,27 @@ versions may break the API.
   re-encoding, so a member such as `host` inside `workspace`, which RFC
   0001 invites, was dropped on rewrite, and a file another writer
   hashed correctly was refused as corrupt while an edit to such a member
-  went unnoticed. Each member the typed fields cannot reproduce is now
-  remembered at decode and written back as read while the caller leaves
-  the field alone; a caller that changes the field has changed the
-  member. The RFC says preservation holds at every depth. Reads cost
-  about ten percent more. (#89)
+  went unnoticed. A member the line holds more of than the typed fields
+  encode, a nested member they do not define or a zero value they omit,
+  is now remembered at decode and grafted back onto whatever the fields
+  hold when the entry is written, so a caller's change keeps what it did
+  not touch. Only extras are kept: a key in another case, a required
+  member left out or a value the reader does not reproduce is refused as
+  before. The RFC says preservation holds at every depth. Reads cost
+  five to ten percent more. (#89)
 - **Who closes a run left open.** A rewind into a run leaves it open on
   the new path, as a crash leaves one open at the leaf; RFC 0001 now
   says the writer that continues such a path closes the run before
-  appending anything else, `interrupted` after a rewind and the computed
-  reason after a cut, and drops the sentence that a branch closes the
+  appending anything else, `interrupted` after a rewind and `error`
+  after a cut, and drops the sentence that a branch closes the
   open run, which held only for a branch to before the run's start. The
-  loop owns the decision. `EndRun("")` computes the reason, and
-  `Branch`, `SummarizeBranch` and `EndRun` say when to call it. (#86;
-  agentturn's `Rebase` and `Resume`, agentturn#120, write the entry.)
+  loop owns the decision; `Branch`, `SummarizeBranch` and `EndRun` say
+  when to write it. (#86; the entry is agentturn's to write, from
+  `Rebase` and from `Resume`, which agentturn#120 tracks.)
 - The member round-trip guard compares values as well as keys, fills
   slices with two elements, and walks the table `UnmarshalEntry` now
   decodes through, so a new core type is covered without being listed.
   (#50)
-
 - **RFC 0001 draft 0.6; the library writes `agentsession/0.6`.**
   Additive: three optional members and three paragraphs. A 0.5 file
   reads as it stands, with nothing rehashed and no `legacy_id`, and its

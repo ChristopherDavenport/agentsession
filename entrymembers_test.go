@@ -61,6 +61,15 @@ func TestEveryEntryMemberSurvivesARoundTrip(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s: unmarshal %s: %v", variant.name, data, err)
 				}
+				// The wire form holds only declared members, so nothing
+				// should be kept as read: a kept member here is one the
+				// codec did not reproduce, which restoring would hide.
+				if kept := back.Base().kept; len(kept) > 0 {
+					for k := range kept {
+						t.Errorf("%s: member %q was not reproduced by the codec and was kept as read", variant.name, k)
+					}
+					back.Base().kept = nil
+				}
 				again, err := MarshalEntry(back)
 				if err != nil {
 					t.Fatalf("%s: re-marshal: %v", variant.name, err)

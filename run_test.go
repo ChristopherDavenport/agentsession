@@ -534,12 +534,12 @@ func TestCloseARunLeftOpen(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		end, err := s.EndRun("", "cut_off")
+		end, err := s.EndRun(ReasonError, "cut_off")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if end.Reason != ReasonAborted || len(end.Pending) != 1 {
-			t.Errorf("computed end = %s pending %v, want aborted with the call in flight", end.Reason, end.Pending)
+		if len(end.Pending) != 1 {
+			t.Errorf("end pending %v, want the call in flight", end.Pending)
 		}
 		if _, err := s.Append(end); err != nil {
 			t.Fatal(err)

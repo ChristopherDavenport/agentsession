@@ -577,9 +577,9 @@ func TestNestedMembersReadAsWritten(t *testing.T) {
 		return `{"id":"` + id + `",` + line[1:]
 	}
 	for name, body := range map[string]string{
-		"workspace host":      `"type":"env","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7"}`,
-		"queued trigger":      `"type":"queued","mode":"steer","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},"trigger":{"kind":"human","seat":2}`,
-		"run end, no pending": `"type":"run","run_id":"r","phase":"end","reason":"done"`,
+		"workspace host": `"type":"env","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7"}`,
+		"queued trigger": `"type":"queued","mode":"steer","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},"trigger":{"kind":"human","seat":2}`,
+		"parents":        `"type":"info","name":"n","parents":[{"session":"other","entry":"x","note":"keep-me"}]`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			line := hashed(body)
@@ -612,7 +612,33 @@ func TestNestedMembersReadAsWritten(t *testing.T) {
 			t.Errorf("Read of an edited nested member = %v, want ErrBadID", err)
 		}
 	})
-	t.Run("a caller's change wins", func(t *testing.T) {
+	// What the reader does not read as written stays refused: a key in
+	// another case, which Go's decoder would match and no conforming
+	// reader would, and a required member left out.
+	for name, body := range map[string]string{
+		"reason in another case":    `"type":"run","run_id":"r","phase":"end","reason":"done","Reason":"aborted","pending":[]`,
+		"cwd in another case":       `"type":"env","CWD":"/etc"`,
+		"kind in another case":      `"type":"env","cwd":"/w","workspace":{"kind":"local","KIND":"container"}`,
+		"run end without pending":   `"type":"run","run_id":"r","phase":"end","reason":"done"`,
+		"label without target":      `"type":"label","label":"x"`,
+		"compaction, no first_kept": `"type":"compaction","summary":{"type":"message","role":"user","content":[{"type":"input_text","text":"s"}]}`,
+	} {
+		t.Run("refused: "+name, func(t *testing.T) {
+			if _, err := Read(strings.NewReader(head + "\n" + hashed(body) + "\n")); err == nil {
+				t.Error("Read accepted a line the reader does not read as written")
+			}
+		})
+	}
+	t.Run("a trigger in another case stays unknown", func(t *testing.T) {
+		s, err := Read(strings.NewReader(head + "\n" + hashed(`"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"KIND":"schedule"}`) + "\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := s.Entries()[0].(*RunEntry); r.Trigger != nil {
+			t.Errorf("Trigger = %+v, want nil: no conforming reader sees a kind", r.Trigger)
+		}
+	})
+	t.Run("a caller's change keeps what it did not touch", func(t *testing.T) {
 		line := hashed(`"type":"env","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7"}`)
 		s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
 		if err != nil {
@@ -626,7 +652,10 @@ func TestNestedMembersReadAsWritten(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(string(data), "build-7") || !strings.Contains(string(data), `"kind":"local"`) {
+		// The caller's kind and the reader's host: the change is the
+		// caller's, and the host is a member no field of this package
+		// holds, which a rewriter preserves.
+		if !strings.Contains(string(data), `"host":"build-7"`) || !strings.Contains(string(data), `"kind":"local"`) || strings.Contains(string(data), "sha256:ab") {
 			t.Errorf("changed workspace written as %s", data)
 		}
 	})
@@ -639,6 +668,7 @@ func TestMigrationKeepsNestedMembers(t *testing.T) {
 	in := `{"type":"session","format":"agentsession/0.4","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}
 {"type":"env","id":"e1","parent":null,"ts":"2026-09-17T16:00:01Z","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7"}}
 {"type":"info","id":"e2","parent":"e1","ts":"2026-09-17T16:00:02Z","name":"n"}
+{"type":"info","id":"e3","parent":"e2","ts":"2026-09-17T16:00:03Z","name":"m","parents":[{"entry":"e1","note":"keep-me"}]}
 `
 	s, err := Read(strings.NewReader(in))
 	if err != nil {
@@ -648,7 +678,7 @@ func TestMigrationKeepsNestedMembers(t *testing.T) {
 	if err := Write(&buf, s); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), `"host":"build-7"`) || !strings.Contains(buf.String(), `"legacy_id":"e1"`) {
+	if !strings.Contains(buf.String(), `"host":"build-7"`) || !strings.Contains(buf.String(), `"legacy_id":"e1"`) || !strings.Contains(buf.String(), `"note":"keep-me"`) {
 		t.Errorf("migration lost the nested member or the legacy id:\n%s", buf.String())
 	}
 	if _, err := Read(&buf); err != nil {
