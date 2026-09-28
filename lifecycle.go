@@ -100,7 +100,7 @@ type RunEntry struct {
 	// member this type cannot hold exactly, one with a member it does
 	// not define or one written before the member was, is kept there as
 	// written and Trigger is nil.
-	Trigger *Trigger `json:"-"`
+	Trigger *Trigger `json:"-" member:"trigger"`
 	// Pending lists, on an end entry, the IDs of the calls left without
 	// an output. It is written even when empty.
 	Pending []string `json:"pending"`

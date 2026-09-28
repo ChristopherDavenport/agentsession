@@ -452,7 +452,7 @@ type CustomEntry struct {
 	// member that is not a non-empty string, which a file from before
 	// the member was defined may hold, is kept as written in Unknown and
 	// CallID is empty.
-	CallID string `json:"-"`
+	CallID string `json:"-" member:"call_id"`
 }
 
 // EntryType returns "custom".
@@ -574,45 +574,35 @@ func UnmarshalEntry(data []byte) (Entry, error) {
 	if env.TS.IsZero() {
 		return nil, fmt.Errorf("agentsession: entry %s has no ts", env.ID)
 	}
-	var e memberDecoder
-	switch env.Type {
-	case TypeItem:
-		e = &ItemEntry{}
-	case TypeResponse:
-		e = &ResponseEntry{}
-	case TypeConfig:
-		e = &ConfigEntry{}
-	case TypeCompaction:
-		e = &CompactionEntry{}
-	case TypeBranchSummary:
-		e = &BranchSummaryEntry{}
-	case TypeRun:
-		e = &RunEntry{}
-	case TypeDispatch:
-		e = &DispatchEntry{}
-	case TypeDecision:
-		e = &DecisionEntry{}
-	case TypeQueued:
-		e = &QueuedEntry{}
-	case TypeLabel:
-		e = &LabelEntry{}
-	case TypeInfo:
-		e = &InfoEntry{}
-	case TypeEnv:
-		e = &EnvEntry{}
-	case TypeOutcome:
-		e = &OutcomeEntry{}
-	case TypeLink:
-		e = &LinkEntry{}
-	case TypeCustom:
-		e = &CustomEntry{}
-	default:
-		e = &UnknownEntry{}
+	var e memberDecoder = &UnknownEntry{}
+	if mk, ok := coreEntries[env.Type]; ok {
+		e = mk()
 	}
 	if err := e.decodeMembers(data, all); err != nil {
 		return nil, fmt.Errorf("agentsession: entry %s (%s): %w", env.ID, env.Type, err)
 	}
 	return e, nil
+}
+
+// coreEntries makes an empty entry of each core type, by type name. It is
+// the one list of core types: UnmarshalEntry decodes through it and the
+// member round-trip test walks it, so a type added here is covered.
+var coreEntries = map[string]func() memberDecoder{
+	TypeItem:          func() memberDecoder { return &ItemEntry{} },
+	TypeResponse:      func() memberDecoder { return &ResponseEntry{} },
+	TypeConfig:        func() memberDecoder { return &ConfigEntry{} },
+	TypeCompaction:    func() memberDecoder { return &CompactionEntry{} },
+	TypeBranchSummary: func() memberDecoder { return &BranchSummaryEntry{} },
+	TypeRun:           func() memberDecoder { return &RunEntry{} },
+	TypeDispatch:      func() memberDecoder { return &DispatchEntry{} },
+	TypeDecision:      func() memberDecoder { return &DecisionEntry{} },
+	TypeQueued:        func() memberDecoder { return &QueuedEntry{} },
+	TypeLabel:         func() memberDecoder { return &LabelEntry{} },
+	TypeInfo:          func() memberDecoder { return &InfoEntry{} },
+	TypeEnv:           func() memberDecoder { return &EnvEntry{} },
+	TypeOutcome:       func() memberDecoder { return &OutcomeEntry{} },
+	TypeLink:          func() memberDecoder { return &LinkEntry{} },
+	TypeCustom:        func() memberDecoder { return &CustomEntry{} },
 }
 
 // memberDecoder is implemented by every entry type: decode from the
@@ -1115,7 +1105,9 @@ func (e *CustomEntry) decodeMembers(data []byte, all map[string]json.RawMessage)
 // from before the member was defined may spell it any way at all, and
 // a member this package cannot hold exactly is kept as written, so the
 // entry's hash still verifies and a rewrite loses nothing. A zero value
-// is left unknown too, since the typed field would omit it.
+// is left unknown too, since the typed field would omit it. A field
+// filled this way is tagged json:"-" with a member tag naming its wire
+// member, which the member round-trip test reads.
 func promote[T any](base *EntryBase, key string, dst *T) {
 	raw, ok := base.Unknown[key]
 	if !ok {

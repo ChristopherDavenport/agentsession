@@ -1,12 +1,16 @@
 package agentsession
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -19,16 +23,21 @@ import (
 // silence. Nothing else in the suite sees that — TestRoundTripFixtures
 // only covers members a fixture happens to carry.
 //
-// So: populate every JSON-tagged field on every entry type, write it,
-// read it back, write it again, and require the member sets to match.
-// It needs no discipline from whoever adds the next member.
+// So: populate every member field on every entry type, write it, read
+// it back, write it again, and require every member to come back with
+// the value it went out with. A key that survives holding its zero value
+// is a loss as much as a key that is dropped. The types are the ones
+// UnmarshalEntry decodes, so a new type is covered without being listed,
+// and a field decoded by hand under json:"-" is found by its member tag.
+// It needs no discipline from whoever adds the next member or type.
 func TestEveryEntryMemberSurvivesARoundTrip(t *testing.T) {
-	for _, e := range []Entry{
-		&ItemEntry{}, &ResponseEntry{}, &ConfigEntry{}, &CompactionEntry{},
-		&BranchSummaryEntry{}, &LabelEntry{}, &InfoEntry{}, &EnvEntry{},
-		&OutcomeEntry{}, &LinkEntry{}, &CustomEntry{},
-		&RunEntry{}, &DispatchEntry{}, &DecisionEntry{}, &QueuedEntry{},
-	} {
+	names := make([]string, 0, len(coreEntries))
+	for name := range coreEntries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		e := coreEntries[name]()
 		typ := reflect.TypeOf(e).Elem()
 		t.Run(typ.Name(), func(t *testing.T) {
 			for _, variant := range entryVariants(e) {
@@ -57,11 +66,23 @@ func TestEveryEntryMemberSurvivesARoundTrip(t *testing.T) {
 					t.Fatalf("%s: re-marshal: %v", variant.name, err)
 				}
 				wrote, read := members(t, data), members(t, again)
-				for key := range wrote {
-					if _, ok := read[key]; !ok {
+				for key, w := range wrote {
+					r, ok := read[key]
+					if !ok {
 						t.Errorf("%s: member %q was dropped on the round trip.\nwrote:     %s\nread back: %s",
 							variant.name, key, data, again)
+						continue
 					}
+					if key == "ts" {
+						continue // one spelling on the wire; compared as an instant below
+					}
+					if !sameJSON(t, w, r) {
+						t.Errorf("%s: member %q changed on the round trip.\nwrote:     %s\nread back: %s",
+							variant.name, key, w, r)
+					}
+				}
+				if !back.Base().Timestamp.Equal(fixedTime) {
+					t.Errorf("%s: ts changed on the round trip: %v", variant.name, back.Base().Timestamp)
 				}
 				if u := back.Base().Unknown; len(u) > 0 {
 					t.Errorf("%s: declared members parked in Unknown: %v", variant.name, u)
@@ -105,17 +126,45 @@ func wireForm(t *testing.T, entry Entry) []byte {
 	typ := v.Type()
 	for i := 0; i < typ.NumField(); i++ {
 		f := typ.Field(i)
-		tag := f.Tag.Get("json")
-		if tag == "-" || f.Anonymous {
+		if f.Anonymous {
 			continue
 		}
-		name, _, _ := strings.Cut(tag, ",")
-		if name == "" {
-			name = f.Name
+		name, ok := memberName(f)
+		if !ok {
+			continue
 		}
 		obj[name] = mustJSON(t, v.Field(i).Interface())
 	}
 	return mustJSON(t, obj)
+}
+
+// memberName is the wire member a field carries: its json name, or for
+// a field decoded by hand under json:"-", its member tag.
+func memberName(f reflect.StructField) (string, bool) {
+	tag := f.Tag.Get("json")
+	if tag == "-" {
+		m := f.Tag.Get("member")
+		return m, m != ""
+	}
+	name, _, _ := strings.Cut(tag, ",")
+	if name == "" {
+		name = f.Name
+	}
+	return name, true
+}
+
+// sameJSON compares two JSON values by their canonical form.
+func sameJSON(t *testing.T, a, b json.RawMessage) bool {
+	t.Helper()
+	ca, err := jcs.Transform(a)
+	if err != nil {
+		t.Fatalf("canonicalise %s: %v", a, err)
+	}
+	cb, err := jcs.Transform(b)
+	if err != nil {
+		t.Fatalf("canonicalise %s: %v", b, err)
+	}
+	return bytes.Equal(ca, cb)
 }
 
 func mustJSON(t *testing.T, v any) json.RawMessage {
@@ -143,7 +192,7 @@ func fillStruct(t *testing.T, v reflect.Value) {
 	typ := v.Type()
 	for i := 0; i < typ.NumField(); i++ {
 		f := typ.Field(i)
-		if !v.Field(i).CanSet() || f.Tag.Get("json") == "-" {
+		if _, ok := memberName(f); !v.Field(i).CanSet() || !ok {
 			continue
 		}
 		if f.Anonymous && f.Type == reflect.TypeOf(EntryBase{}) {
@@ -190,9 +239,14 @@ func fillValue(t *testing.T, v reflect.Value, name string) {
 		fillValue(t, p.Elem(), name)
 		v.Set(p)
 	case reflect.Slice:
-		el := reflect.New(v.Type().Elem())
-		fillValue(t, el.Elem(), name)
-		v.Set(reflect.Append(reflect.MakeSlice(v.Type(), 0, 1), el.Elem()))
+		// Two elements, so a codec that keeps only the first is seen.
+		s := reflect.MakeSlice(v.Type(), 0, 2)
+		for i := range 2 {
+			el := reflect.New(v.Type().Elem())
+			fillValue(t, el.Elem(), fmt.Sprintf("%s%d", name, i))
+			s = reflect.Append(s, el.Elem())
+		}
+		v.Set(s)
 	case reflect.Map:
 		m := reflect.MakeMap(v.Type())
 		key := reflect.New(v.Type().Key())
