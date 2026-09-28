@@ -195,6 +195,10 @@ func (b *builder) run() error {
 	b.setAgentDefaults()
 	for _, e := range entries {
 		if b.compactionID != "" && b.copied && e.Base().Parent == b.compactionID {
+			// The window ends here: a group still open in it, an
+			// output without a response_id say, is closed before the
+			// first entry after the compaction can be taken into it.
+			b.flushGroup(nil)
 			b.copied = false
 		}
 		if err := b.entry(e); err != nil {

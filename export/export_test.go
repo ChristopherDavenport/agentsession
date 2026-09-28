@@ -1664,3 +1664,44 @@ func TestCopiedContextFollowsTheGroup(t *testing.T) {
 		}
 	}
 }
+
+// TestWindowGroupClosesAtTheBoundary: a model output in the kept window
+// with no response_id cannot take the first output after the
+// compaction into its group; the window closes where it ends.
+func TestWindowGroupClosesAtTheBoundary(t *testing.T) {
+	s := agentsession.New(agentsession.Header{})
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-A"})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("one")))
+	first := s.Leaf()
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-B"})
+	mustAppend(t, s, &agentsession.ItemEntry{Item: &openresponses.Message{Role: openresponses.RoleAssistant,
+		Content: openresponses.Contents{&openresponses.OutputText{Text: "in the window"}}}})
+	mustAppend(t, s, &agentsession.CompactionEntry{FirstKept: first, Summary: openresponses.SystemText("summary"),
+		Config: agentsession.Settings{Model: "model-C"}})
+	mustAppend(t, s, &agentsession.ItemEntry{ResponseID: "resp_3", Item: &openresponses.Message{Role: openresponses.RoleAssistant,
+		Content: openresponses.Contents{&openresponses.OutputText{Text: "after"}}}})
+	mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp_3", Status: openresponses.ResponseStatusCompleted})
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ToATIF(tr, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agents []atif.Step
+	for _, step := range doc.Steps {
+		if step.Source == atif.SourceAgent {
+			agents = append(agents, step)
+		}
+	}
+	if len(agents) != 2 {
+		t.Fatalf("%d agent steps, want the window's and the one after", len(agents))
+	}
+	if agents[0].ModelName != "model-B" || agents[0].IsCopiedContext == nil || !*agents[0].IsCopiedContext {
+		t.Errorf("window step = %s copied=%v, want model-B and copied", agents[0].ModelName, agents[0].IsCopiedContext)
+	}
+	if agents[1].ModelName != "model-C" || agents[1].IsCopiedContext != nil {
+		t.Errorf("step after = %s copied=%v, want model-C and not copied", agents[1].ModelName, agents[1].IsCopiedContext)
+	}
+}

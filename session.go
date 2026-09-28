@@ -276,18 +276,30 @@ func (s *Session) Commit(e Entry) (Result, error) {
 }
 
 // prepare is prepareEntry with the envelope put back on refusal: the
-// parent, timestamp, id and parents it fills in or clears belong to
-// the caller until the entry is accepted, so a retry starts from what
-// the caller set and not from where the first attempt would have gone.
+// parent, timestamp, id and parents it fills in, sorts or clears, and
+// an unknown entry's raw line, belong to the caller until the entry is
+// accepted, so a retry starts from what the caller set and not from
+// where the first attempt would have gone. The body is a different
+// matter: a caller-set id is checked against the normalised line,
+// since that is what the id is the hash of, so an entry refused with
+// ErrBadID keeps its normalised body and the record of the rewrite,
+// and a retry produces the same line.
 func (s *Session) prepare(e Entry) (Result, error) {
 	b := e.Base()
 	parent, ts, id := b.Parent, b.Timestamp, b.ID
-	parents := append([]EntryRef(nil), b.Parents...)
+	orig := b.Parents
+	parents := append([]EntryRef(nil), orig...)
+	var raw []byte
+	if u, ok := e.(*UnknownEntry); ok {
+		raw = u.Raw
+	}
 	r, err := s.prepareEntry(e)
 	if err != nil {
 		b.Parent, b.Timestamp, b.ID = parent, ts, id
-		if b.Parents != nil {
-			copy(b.Parents, parents)
+		b.Parents = orig
+		copy(orig, parents)
+		if u, ok := e.(*UnknownEntry); ok {
+			u.Raw = raw
 		}
 	}
 	return r, err

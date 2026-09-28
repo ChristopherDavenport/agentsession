@@ -395,6 +395,27 @@ func TestRefusedAppendKeepsTheEnvelope(t *testing.T) {
 	if r.Outcome != Continued || e.Parent != b || a == b {
 		t.Errorf("retry: outcome %v under %s, want Continued under %s", r.Outcome, e.Parent, b)
 	}
+	// The caller's own parents slice, which the check sorts in place,
+	// is back in the caller's order and is still the caller's slice;
+	// an unknown entry's raw line is back too.
+	callers := []EntryRef{{Entry: b}, {Entry: a}}
+	bad := &InfoEntry{Name: "n"}
+	bad.ID, bad.Parents = "sha256:deadbeef", callers
+	bad.Unknown = map[string]json.RawMessage{"acme:n": json.RawMessage(`9007199254740993`)}
+	if _, err := s.Append(bad); !errors.Is(err, ErrBadID) {
+		t.Fatalf("Append with a wrong id = %v", err)
+	}
+	if &bad.Parents[0] != &callers[0] || callers[0].Entry != b || bad.ID != "sha256:deadbeef" {
+		t.Errorf("after ErrBadID: parents %v (same slice %v), id %q", callers, &bad.Parents[0] == &callers[0], bad.ID)
+	}
+	u := &UnknownEntry{Type: "acme:thing", Raw: json.RawMessage(`{"type":"acme:thing","x":1}`)}
+	u.ID = "sha256:deadbeef"
+	if _, err := s.Append(u); !errors.Is(err, ErrBadID) {
+		t.Fatalf("Append of an unknown entry with a wrong id = %v", err)
+	}
+	if string(u.Raw) != `{"type":"acme:thing","x":1}` {
+		t.Errorf("raw = %s after a refused append", u.Raw)
+	}
 }
 
 // TestSentinelCannotCollide: a string that spells the sentinel's prefix

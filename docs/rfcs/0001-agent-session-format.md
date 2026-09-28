@@ -289,12 +289,13 @@ decoded, is recorded as its canonical string serialisation with the
 ill-formed bytes kept as they were, so two writers holding the same
 bytes record one `raw`. What no rewrite reaches, a number that is not
 finite in binary64 or an object that repeats a member name, a writer
-MUST NOT record. The array is sorted by `at` as UTF-16 code units,
-matching the canonical form, so two writers normalising one response
-produce one content hash. The normalised form is what the next request
-carries, so the rebuilt request and `request_hash` agree with what was
-sent. `ts` is hashed as the string it is, which is why the envelope
-table admits one spelling of it.
+MUST NOT write: it refuses the entry, since no normalisation can make
+the line pass the test. The array is sorted by `at` as UTF-16 code
+units, matching the canonical form, so two writers normalising one
+response produce one content hash. The normalised form is what the next
+request carries, so the rebuilt request and `request_hash` agree with
+what was sent. `ts` is hashed as the string it is, which is why the
+envelope table admits one spelling of it.
 
 - The entry's **content** is the object of its members with the
   envelope's — `id`, `type`, `parent`, `parents`, `ts` — removed, and
