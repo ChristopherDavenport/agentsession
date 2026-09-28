@@ -194,7 +194,7 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 		if err != nil {
 			return nil, err
 		}
-		if sess, err = agentsession.Fork(origin, h.Base, sess.Header()); err != nil {
+		if sess, err = agentsession.Fork(origin, h.Base, h); err != nil {
 			return nil, err
 		}
 	}
@@ -212,33 +212,69 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	if err := acquireLock(path, s.staleReport); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_APPEND, 0o600)
-	if err != nil {
+	// The header and any prefix are written beside the file and linked
+	// into place once synced, so a crash never leaves a session file
+	// that opens with a header naming a base and a prefix cut short. A
+	// temporary file left by an earlier crash is ours to replace, since
+	// the lock is held.
+	tmp := path + ".tmp"
+	os.Remove(tmp)
+	fail := func(err error) (*agentsession.Session, error) {
+		os.Remove(tmp)
 		releaseLock(path)
-		if errors.Is(err, os.ErrExist) {
-			return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
-		}
-		return nil, fmt.Errorf("jsonl: create session file: %w", err)
+		return nil, err
 	}
+	t, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fail(fmt.Errorf("jsonl: create session file: %w", err))
+	}
+	w := bufio.NewWriter(t)
 	lines := []any{h}
 	for _, e := range sess.Entries() {
 		lines = append(lines, e)
 	}
 	for _, v := range lines {
-		if err := writeLine(f, v); err != nil {
-			f.Close()
-			os.Remove(path)
-			releaseLock(path)
-			return nil, fmt.Errorf("jsonl: write header and prefix: %w", err)
+		if err := writeLine(w, v); err != nil {
+			t.Close()
+			return fail(fmt.Errorf("jsonl: write header and prefix: %w", err))
 		}
 	}
-	if err := f.Sync(); err != nil {
-		f.Close()
+	if err := w.Flush(); err != nil {
+		t.Close()
+		return fail(fmt.Errorf("jsonl: write header and prefix: %w", err))
+	}
+	if err := t.Sync(); err != nil {
+		t.Close()
+		return fail(fmt.Errorf("jsonl: sync header: %w", err))
+	}
+	if err := t.Close(); err != nil {
+		return fail(fmt.Errorf("jsonl: close session file: %w", err))
+	}
+	if err := os.Link(tmp, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fail(fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID))
+		}
+		return fail(fmt.Errorf("jsonl: create session file: %w", err))
+	}
+	os.Remove(tmp)
+	syncDir(filepath.Dir(path))
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
 		releaseLock(path)
-		return nil, fmt.Errorf("jsonl: sync header: %w", err)
+		return nil, fmt.Errorf("jsonl: open %s for append: %w", path, err)
 	}
 	s.open[h.ID] = &handle{session: sess, file: f, path: path}
 	return sess, nil
+}
+
+// syncDir makes a new directory entry durable. A failure is ignored:
+// the file's contents are synced, and a file system that cannot sync a
+// directory does not offer more.
+func syncDir(dir string) {
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
 }
 
 // forkOrigin returns the session a fork at base continues from: named, when

@@ -156,7 +156,7 @@ func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
 			return nil, fmt.Errorf("%w: base %s is not held by this store", ErrNoEntry, h.Base)
 		}
 		var err error
-		if s, err = Fork(origin, h.Base, s.Header()); err != nil {
+		if s, err = Fork(origin, h.Base, h); err != nil {
 			return nil, err
 		}
 	}
@@ -169,22 +169,31 @@ func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
 
 // forkOrigin returns the session a fork at base continues from: named, when
 // the named session holds base, else one whose own entries include it,
-// else one that holds it on its prefix. The caller holds m.mu.
+// else one that holds it on its prefix, the first by ID when several
+// do. The caller holds m.mu.
 func (m *MemoryStore) forkOrigin(named, base string) *Session {
 	if s, ok := m.sessions[named]; ok {
 		if _, ok := s.Entry(base); ok {
 			return s
 		}
 	}
+	ids := make([]string, 0, len(m.sessions))
+	for id := range m.sessions {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
 	var onPrefix *Session
-	for _, s := range m.sessions {
+	for _, id := range ids {
+		s := m.sessions[id]
 		if _, ok := s.Entry(base); !ok {
 			continue
 		}
 		if !s.Prefix(base) {
 			return s
 		}
-		onPrefix = s
+		if onPrefix == nil {
+			onPrefix = s
+		}
 	}
 	return onPrefix
 }

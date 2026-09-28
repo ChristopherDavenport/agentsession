@@ -920,6 +920,38 @@ func (s *Session) SummarizeBranch(from string, summary openresponses.Item) (*Bra
 	return &BranchSummaryEntry{From: from, Summary: summary}, nil
 }
 
+// prefixStandsAlone checks that path, a prefix a fork would open with,
+// can be written as a file of its own: no entry on it converges an
+// entry of this session that is off the path, which the fork's file
+// would not hold, and no entry on it is one a migration could not
+// rewrite, which a file of this version may not carry. The caller
+// holds s.mu.
+func (s *Session) prefixStandsAlone(path []Entry) error {
+	on := make(map[string]bool, len(path))
+	for _, e := range path {
+		on[e.Base().ID] = true
+	}
+	var unresolved map[string]bool
+	if s.migrated && len(s.unresolved) > 0 {
+		unresolved = make(map[string]bool, len(s.unresolved))
+		for _, id := range s.unresolved {
+			unresolved[id] = true
+		}
+	}
+	for _, e := range path {
+		b := e.Base()
+		for _, r := range b.Parents {
+			if r.Session == "" && !on[r.Entry] {
+				return fmt.Errorf("%w: prefix entry %s converges %s, which is off the path to the base and so not in the fork", ErrBadConvergence, b.ID, r.Entry)
+			}
+		}
+		if b.LegacyID != "" && unresolved[b.LegacyID] {
+			return fmt.Errorf("%w: prefix entry %s (was %s)", ErrUnresolvedMigration, b.ID, b.LegacyID)
+		}
+	}
+	return nil
+}
+
 // utcNow is the session clock: the current time in UTC with the
 // monotonic reading dropped, so what is stamped is what reaches disk.
 func utcNow() time.Time { return time.Now().UTC().Round(0) }
@@ -934,6 +966,10 @@ func utcNow() time.Time { return time.Now().UTC().Round(0) }
 // stands alone. The base may not be a leaf label, since it is the
 // fork's first leaf and the leaf never rests on one, and h's media, when
 // set, must be origin's, since the prefix was written in that form.
+// Fork refuses a prefix that could not stand alone: one holding an
+// entry that converges an entry of origin off the path
+// ([ErrBadConvergence]), or an entry of a migrated origin that the
+// migration could not rewrite ([ErrUnresolvedMigration]).
 //
 // A store's Create does the same for a header whose Base is set, so
 // Fork is the in-memory form and a store's Create the persistent one.
@@ -946,6 +982,9 @@ func Fork(origin *Session, at string, h Header) (*Session, error) {
 	}
 	if l, ok := path[len(path)-1].(*LabelEntry); ok && l.Label != nil && *l.Label == LeafLabel {
 		return nil, fmt.Errorf("%w: a base may not be a leaf label", ErrNoEntry)
+	}
+	if err := origin.prefixStandsAlone(path); err != nil {
+		return nil, err
 	}
 	if h.Media != "" && mediaForm(h.Media) != mediaForm(origin.header.Media) {
 		return nil, fmt.Errorf("agentsession: a fork's media %q differs from its origin's %q", h.Media, mediaForm(origin.header.Media))

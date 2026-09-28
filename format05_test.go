@@ -473,3 +473,87 @@ func TestResolveLegacyID(t *testing.T) {
 		})
 	}
 }
+
+// TestAddedMembersReadAsWritten: trigger on a run start and call_id on a
+// custom entry were unknown members before 0.6, so a 0.5 file may spell
+// them any way at all, and a 0.6 writer may put a member this package
+// does not define inside trigger. Each such line reads, verifies and
+// writes back as it was; the typed field is filled only when it holds
+// the member exactly.
+func TestAddedMembersReadAsWritten(t *testing.T) {
+	head := `{"type":"session","format":"agentsession/0.5","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}`
+	tests := []struct {
+		name, body string
+		typed      bool
+	}{
+		{"trigger as a string", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":"cron:nightly"`, false},
+		{"trigger with a member not defined", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":"schedule","due":"2026-09-17T03:00:00Z"}`, false},
+		{"trigger with an empty member", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":""}`, false},
+		{"trigger null", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":null`, false},
+		{"trigger exact", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":"schedule","ref":"nightly"}`, true},
+		{"call_id an object", `"type":"custom","ns":"acme","call_id":{"n":1}`, false},
+		{"call_id empty", `"type":"custom","ns":"acme","call_id":""`, false},
+		{"call_id exact", `"type":"custom","ns":"acme","call_id":"call_1"`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			line := `{` + tt.body + `,"parent":null,"ts":"2026-09-17T16:00:01Z"}`
+			id, _, err := EntryHashes([]byte(line))
+			if err != nil {
+				t.Fatal(err)
+			}
+			line = `{"id":"` + id + `",` + line[1:]
+			s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			e, ok := s.Entry(id)
+			if !ok {
+				t.Fatal("entry missing")
+			}
+			switch v := e.(type) {
+			case *RunEntry:
+				if (v.Trigger != nil) != tt.typed {
+					t.Errorf("Trigger typed = %v", v.Trigger != nil)
+				}
+			case *CustomEntry:
+				if (v.CallID != "") != tt.typed {
+					t.Errorf("CallID typed = %q", v.CallID)
+				}
+			}
+			var buf bytes.Buffer
+			if err := Write(&buf, s); err != nil {
+				t.Fatal(err)
+			}
+			again, err := Read(&buf)
+			if err != nil {
+				t.Fatalf("read back: %v", err)
+			}
+			if _, ok := again.Entry(id); !ok {
+				t.Errorf("rewrite changed the entry's id")
+			}
+		})
+	}
+}
+
+// TestForkRefusesUnresolvedPrefix: a migrated origin holding an entry
+// the migration could not rewrite may not be re-emitted, and a fork
+// whose prefix holds that entry would re-emit it under another name.
+func TestForkRefusesUnresolvedPrefix(t *testing.T) {
+	s := loadV04(t, "converge")
+	_, unresolved := s.Migrated()
+	if len(unresolved) == 0 {
+		t.Fatal("the fixture has no unresolved entry; the test proves nothing")
+	}
+	at, ok := s.Resolve(unresolved[len(unresolved)-1])
+	if !ok {
+		t.Fatal("unresolved entry not found")
+	}
+	if _, err := Fork(s, at, Header{}); !errors.Is(err, ErrUnresolvedMigration) {
+		t.Errorf("Fork over an unresolved entry = %v", err)
+	}
+	// Forking where the prefix holds only rewritten entries is fine.
+	if _, err := Fork(s, s.Path(at)[0].Base().ID, Header{}); err != nil {
+		t.Errorf("Fork at the root = %v", err)
+	}
+}

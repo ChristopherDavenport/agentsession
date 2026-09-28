@@ -348,7 +348,7 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 		if err != nil {
 			return nil, err
 		}
-		if sess, err = agentsession.Fork(origin, h.Base, sess.Header()); err != nil {
+		if sess, err = agentsession.Fork(origin, h.Base, h); err != nil {
 			return nil, err
 		}
 	}

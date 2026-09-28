@@ -220,14 +220,16 @@ func Trajectories(s *agentsession.Session, prefs ...Preference) iter.Seq2[Trajec
 // leaf, and this is how the document that was exported, the one a
 // judge read and a score names, is built again. The document carries
 // the outcomes appended below entryID that target its path, so the
-// document a score names says how it scored. entryID is an entry's
-// current ID; resolve an ID written before the session was migrated
-// with [agentsession.Session.Resolve] first.
+// document a score names says how it scored. entryID may be the ID an
+// entry had before its file was migrated, as a report written then
+// names it, and is resolved with [agentsession.Session.Resolve]; the
+// document is always built at, and named by, the entry's current ID.
 func At(s *agentsession.Session, entryID string, prefs ...Preference) (Trajectory, error) {
-	if _, ok := s.Entry(entryID); !ok {
+	id, ok := s.Resolve(entryID)
+	if !ok {
 		return Trajectory{}, fmt.Errorf("export: %w: %s", agentsession.ErrNoEntry, entryID)
 	}
-	return newTree(s).at(entryID, prefs)
+	return newTree(s).at(id, prefs)
 }
 
 // tree holds what every trajectory of one session shares: the header,

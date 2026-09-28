@@ -1,13 +1,16 @@
 package agentsession
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/agentsession/internal/jsonx"
 	"github.com/ChristopherDavenport/openresponses"
 )
@@ -445,8 +448,11 @@ type CustomEntry struct {
 	// CallID names the function call the record belongs to, when the
 	// writer knows it: a record a tool writes while it runs. A record's
 	// position cannot say which call of a batch in flight it belongs to;
-	// this can. A reader may use it and must not require it.
-	CallID string `json:"call_id,omitempty"`
+	// this can. A reader may use it and must not require it. A call_id
+	// member that is not a non-empty string, which a file from before
+	// the member was defined may hold, is kept as written in Unknown and
+	// CallID is empty.
+	CallID string `json:"-"`
 }
 
 // EntryType returns "custom".
@@ -1072,8 +1078,16 @@ func (e *LinkEntry) decodeMembers(data []byte, all map[string]json.RawMessage) e
 
 // MarshalJSON emits the entry as one JSON object.
 func (e *CustomEntry) MarshalJSON() ([]byte, error) {
-	type plain CustomEntry
-	return marshalEntry(TypeCustom, &e.EntryBase, (*plain)(e))
+	if e.CallID != "" {
+		if _, dup := e.Unknown["call_id"]; dup {
+			return nil, errors.New("agentsession: custom entry has call_id both typed and unknown")
+		}
+	}
+	return marshalEntry(TypeCustom, &e.EntryBase, struct {
+		NS     string          `json:"ns"`
+		Data   json.RawMessage `json:"data,omitempty"`
+		CallID string          `json:"call_id,omitempty"`
+	}{e.NS, e.Data, e.CallID})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -1087,7 +1101,46 @@ func (e *CustomEntry) UnmarshalJSON(data []byte) error {
 
 func (e *CustomEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain CustomEntry
-	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), customKeys)
+	e.CallID = ""
+	if err := unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), customKeys); err != nil {
+		return err
+	}
+	promote(&e.EntryBase, "call_id", &e.CallID)
+	return nil
+}
+
+// promote moves the unknown member key into *dst when it decodes into
+// dst's type and encodes back to the same canonical JSON, and leaves it
+// unknown otherwise. It is for members a minor version added: a file
+// from before the member was defined may spell it any way at all, and
+// a member this package cannot hold exactly is kept as written, so the
+// entry's hash still verifies and a rewrite loses nothing. A zero value
+// is left unknown too, since the typed field would omit it.
+func promote[T any](base *EntryBase, key string, dst *T) {
+	raw, ok := base.Unknown[key]
+	if !ok {
+		return
+	}
+	var v T
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&v) != nil || reflect.ValueOf(v).IsZero() {
+		return
+	}
+	back, err := jsonx.MarshalNoEscape(v)
+	if err != nil {
+		return
+	}
+	a, errA := jcs.Transform(raw)
+	b, errB := jcs.Transform(back)
+	if errA != nil || errB != nil || !bytes.Equal(a, b) {
+		return
+	}
+	*dst = v
+	delete(base.Unknown, key)
+	if len(base.Unknown) == 0 {
+		base.Unknown = nil
+	}
 }
 
 var (

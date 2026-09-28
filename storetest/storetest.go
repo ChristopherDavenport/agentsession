@@ -36,6 +36,7 @@ func Run(t *testing.T, opts Options) {
 	t.Run("Continue", func(t *testing.T) { testContinue(t, opts) })
 	t.Run("Delete", func(t *testing.T) { testDelete(t, opts) })
 	t.Run("Fork", func(t *testing.T) { testFork(t, opts) })
+	t.Run("ForkPrefix", func(t *testing.T) { testForkPrefix(t, opts) })
 	if opts.Reopen != nil {
 		t.Run("Persistence", func(t *testing.T) { testPersistence(t, opts) })
 		t.Run("DurableLeaf", func(t *testing.T) { testDurableLeaf(t, opts) })
@@ -286,6 +287,61 @@ func testFork(t *testing.T, opts Options) {
 	}
 	if _, err := st2.Append(ctx, origin, agentsession.NewItemEntry(openresponses.UserText("origin goes on"))); err != nil {
 		t.Errorf("append to the origin after forking it: %v", err)
+	}
+}
+
+// testForkPrefix: a fork takes its origin's payload profile, since the
+// prefix was written under it, and Create refuses a prefix that could
+// not stand as a file of its own: one converging an entry of the origin
+// off the path, which the fork would not hold.
+func testForkPrefix(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	const payload = "openresponses/2020-01-01"
+	if _, err := st.Create(ctx, agentsession.Header{ID: "o", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	app := func(e agentsession.Entry) string {
+		t.Helper()
+		id, err := st.Append(ctx, "o", e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	app(&agentsession.ConfigEntry{Model: "m"})
+	u := app(agentsession.NewItemEntry(openresponses.UserText("q")))
+	a := app(agentsession.NewItemEntry(openresponses.AssistantText("a")))
+	b := agentsession.NewItemEntry(openresponses.AssistantText("b"))
+	b.Parent = u
+	bID := app(b)
+	j := agentsession.NewItemEntry(openresponses.UserText("join"))
+	j.Parent = bID
+	j.Parents = []agentsession.EntryRef{{Entry: a}}
+	jID := app(j)
+
+	f, err := st.Create(ctx, agentsession.Header{ID: "f", ParentSession: "o", Base: bID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Header().Payload; got != payload {
+		t.Errorf("fork payload = %s, want the origin's %s", got, payload)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "g", ParentSession: "o", Base: jID}); !errors.Is(err, agentsession.ErrBadConvergence) {
+		t.Errorf("Create at an entry converging one off its path = %v, want ErrBadConvergence", err)
+	}
+	if _, err := st.Open(ctx, "g"); !errors.Is(err, agentsession.ErrNoSession) {
+		t.Errorf("a refused Create left g: Open = %v", err)
+	}
+	if opts.Reopen == nil {
+		return
+	}
+	again, err := opts.Reopen(t, st).Open(ctx, "f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := again.Header().Payload; got != payload {
+		t.Errorf("fork payload read back = %s", got)
 	}
 }
 

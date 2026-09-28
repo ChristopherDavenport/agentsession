@@ -1757,3 +1757,32 @@ func TestExportCarriesTriggerAndRecordCall(t *testing.T) {
 		}
 	}
 }
+
+// TestAtLegacyID: a report written before its session's file was
+// migrated names entries by their old IDs. At accepts one and builds
+// the document at the entry's current ID, which is what the document
+// is named by.
+func TestAtLegacyID(t *testing.T) {
+	s := loadFixture(t, "basic")
+	var legacy, current string
+	for _, e := range s.Entries() {
+		if b := e.Base(); b.LegacyID != "" {
+			legacy, current = b.LegacyID, b.ID
+		}
+	}
+	if legacy == "" {
+		t.Fatal("the fixture keeps no legacy id; the test proves nothing")
+	}
+	byOld, err := At(s, legacy)
+	if err != nil {
+		t.Fatalf("At(%s) = %v", legacy, err)
+	}
+	byNew, err := At(s, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byOld.LeafID != current {
+		t.Errorf("LeafID = %s, want the current id %s", byOld.LeafID, current)
+	}
+	assertSameJSON(t, encode(t, mustDoc(t, byNew)), encode(t, mustDoc(t, byOld)))
+}

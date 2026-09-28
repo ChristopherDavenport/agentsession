@@ -188,7 +188,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.5","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.6","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -757,8 +757,8 @@ A call's fate was decided outside the tool.
     with no `dispatch` and no `reject` after it on the path.
 
   A call may carry several decisions on the path, in order. An answered
-  `hold` is followed by a `dispatch` or a `reject` on the same call and
-  stays as written; a call still held is what makes a run end
+  `hold` is followed by a `proceed`, a `dispatch` or a `reject` on the
+  same call and stays as written; a call still held is what makes a run end
   `input_required`. There is no separate verdict for an answer. A
   writer SHOULD write `proceed` only when it answers an earlier `hold`
   or carries `args`; otherwise the `dispatch` is the record that the
@@ -1202,9 +1202,12 @@ minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
 it begins at 1.0. A reader of 0.6 reads a 0.5 file as it stands,
-since 0.6 adds only optional members and the hashes do not change, and
-MUST read an earlier 0.x file by migrating it in memory: walk the entries in file order, rewrite each
-`ts` to the one form the envelope table requires, converting a non-UTC
+since 0.6 adds only optional members and the hashes do not change; a
+member 0.6 defines that a 0.5 file holds in another form, which it was
+free to while the name was undefined, is a member the reader does not
+know, and is preserved as one. A reader of 0.6 MUST read an earlier 0.x
+file by migrating it in memory: walk the entries in file order, rewrite
+each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
 compute each entry's hashes with its `parent` and every entry-naming

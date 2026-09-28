@@ -11,7 +11,11 @@ versions may break the API.
   Additive: three optional members and three paragraphs. A 0.5 file
   reads as it stands, with nothing rehashed and no `legacy_id`, and its
   header takes the current format; v0.0.8 refuses a 0.6 file, as a 0.x
-  reader refuses a later minor.
+  reader refuses a later minor. A 0.5 file was free to hold `trigger` or
+  `call_id` in any form while the names were undefined, so the typed
+  field is filled only from a member it holds exactly; any other form,
+  or a `trigger` carrying a member the type does not define, stays in
+  `Unknown` as written, and the entry's hash still verifies.
   - `RunEntry.Trigger`: a run start carries the `Trigger` a `queued`
     entry already had, beside `Ref`, which is unchanged. A due time or
     an attempt goes in the run entry's own unknown members. The ATIF
@@ -37,8 +41,14 @@ versions may break the API.
   `parent_session` names when it holds it and any other otherwise, and
   writes the prefix after the header, as `cas` already did; a base the
   store does not hold (`ErrNoEntry`), a `leaf` label or a media form
-  other than the origin's is refused by `Create`. The origin is read,
-  never claimed or written. `storetest` holds every store to it. The
+  other than the origin's is refused by `Create`, as is a prefix that
+  could not stand as a file of its own: one holding an entry that
+  converges an entry of the origin off the path (`ErrBadConvergence`),
+  or an entry a migration could not rewrite (`ErrUnresolvedMigration`).
+  The fork takes the origin's payload profile. The origin is read,
+  never claimed or written. The jsonl store writes a new session's
+  header and prefix to a temporary file and links it into place, so a
+  crash cannot leave a fork whose prefix was cut short. `storetest` holds every store to it. The
   sqlite store gains an index on `entries(id)`. (#79, #84, #85; the
   sqlite store had the same defect. agentturn#118, `session.Start` on a
   forked header, can now build on it.)
@@ -47,8 +57,10 @@ versions may break the API.
   that owns the base, and refuses a `media` other than the origin's.
 - `Session.Resolve` returns the entry an ID names, or the one whose
   `legacy_id` it is, so a report written before a file was migrated
-  still finds its targets; `export.At` stays strict and the CLI's
-  `-leaf` calls `Resolve`. (#80)
+  still finds its targets. `export.At` and the CLI's `-leaf` accept
+  such an ID, and the document is built at and named by the entry's
+  current ID; `Entry` stays strict, since `Append` checks a parent with
+  it. (#80)
 - `export.At` carries the outcomes below the entry it ends at that
   target its path, in `Trajectory.Outcomes`, so the document a score
   names says how it scored; steps and totals do not count them. (#81)
