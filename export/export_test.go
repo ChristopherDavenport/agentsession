@@ -1517,3 +1517,72 @@ func TestSubagentLeafFromTheRecord(t *testing.T) {
 		}
 	})
 }
+
+// TestKeptWindowConfigIsNotReplayed: a config entry inside the kept
+// window after a compaction is shown but not applied, since the
+// checkpoint stands in for every config entry up to the compaction.
+// The step's model, the agent's model and the price asked for a
+// response that names no model all come from the checkpoint, as the
+// totals already did.
+func TestKeptWindowConfigIsNotReplayed(t *testing.T) {
+	s := agentsession.New(agentsession.Header{})
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-A"})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("one")))
+	first := s.Leaf()
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-B"})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("two")))
+	mustAppend(t, s, &agentsession.ItemEntry{ResponseID: "resp_2", Item: &openresponses.Message{Role: openresponses.RoleAssistant,
+		Content: openresponses.Contents{&openresponses.OutputText{Text: "under B"}}}})
+	mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp_2", Status: openresponses.ResponseStatusCompleted,
+		Usage: &openresponses.Usage{InputTokens: 2, OutputTokens: 2}})
+	mustAppend(t, s, &agentsession.CompactionEntry{FirstKept: first, Summary: openresponses.SystemText("summary"),
+		Config: agentsession.Settings{Model: "model-A"}, Usage: &openresponses.Usage{InputTokens: 5, OutputTokens: 5}})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("three")))
+	mustAppend(t, s, &agentsession.ItemEntry{ResponseID: "resp_9", Item: &openresponses.Message{Role: openresponses.RoleAssistant,
+		Content: openresponses.Contents{&openresponses.OutputText{Text: "under the checkpoint"}}}})
+	mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp_9", Status: openresponses.ResponseStatusCompleted,
+		Usage: &openresponses.Usage{InputTokens: 999, OutputTokens: 9}})
+
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := map[int][]string{}
+	doc, err := ToATIF(tr, Options{Cost: func(model string, u openresponses.Usage) (float64, bool) {
+		asked[u.InputTokens] = append(asked[u.InputTokens], model)
+		return 1, true
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Agent.ModelName != "model-A" {
+		t.Errorf("agent.model_name = %q, want the checkpoint's model-A", doc.Agent.ModelName)
+	}
+	var agents []atif.Step
+	for _, step := range doc.Steps {
+		if step.Source == atif.SourceAgent {
+			agents = append(agents, step)
+		}
+	}
+	if len(agents) != 2 {
+		t.Fatalf("%d agent steps, want the kept window's and the one after the compaction", len(agents))
+	}
+	// The kept-window call ran under model-B, which the path says; the
+	// call after the compaction ran under the checkpoint.
+	if agents[0].ModelName != "model-B" {
+		t.Errorf("kept-window step model_name = %q, want model-B", agents[0].ModelName)
+	}
+	if agents[1].ModelName != "model-A" {
+		t.Errorf("step model_name = %q, want the checkpoint's model-A", agents[1].ModelName)
+	}
+	for _, m := range asked[999] {
+		if m != "model-A" {
+			t.Errorf("resp_9 priced under %q, want model-A", m)
+		}
+	}
+	for _, m := range asked[2] {
+		if m != "model-B" {
+			t.Errorf("resp_2, which ran before the compaction under model-B, priced under %q", m)
+		}
+	}
+}
