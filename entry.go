@@ -442,6 +442,11 @@ type CustomEntry struct {
 	EntryBase `json:"-"`
 	NS        string          `json:"ns"`
 	Data      json.RawMessage `json:"data,omitempty"`
+	// CallID names the function call the record belongs to, when the
+	// writer knows it: a record a tool writes while it runs. A record's
+	// position cannot say which call of a batch in flight it belongs to;
+	// this can. A reader may use it and must not require it.
+	CallID string `json:"call_id,omitempty"`
 }
 
 // EntryType returns "custom".

@@ -1728,3 +1728,32 @@ func TestWindowGroupClosesAtTheBoundary(t *testing.T) {
 		t.Errorf("step after = %s copied=%v, want model-C and not copied", agents[1].ModelName, agents[1].IsCopiedContext)
 	}
 }
+
+// TestExportCarriesTriggerAndRecordCall: a run start's structured
+// trigger and a record's call reach the document, beside what the
+// document already carried under the same run.
+func TestExportCarriesTriggerAndRecordCall(t *testing.T) {
+	s := agentsession.New(agentsession.Header{ID: "trig"})
+	start := agentsession.NewRunStart("r", agentsession.SourceInput, "nightly")
+	start.Trigger = &agentsession.Trigger{Kind: "schedule", Ref: "nightly", Source: "cron"}
+	for _, e := range []agentsession.Entry{
+		&agentsession.ConfigEntry{Model: "m"},
+		start,
+		agentsession.NewItemEntry(openresponses.UserText("go")),
+		&agentsession.CustomEntry{NS: "acme", Data: json.RawMessage(`{"pane":2}`), CallID: "call_1"},
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := encode(t, mustDoc(t, tr))
+	for _, want := range []string{`"trigger": "nightly"`, `"trigger_parts": {`, `"kind": "schedule"`, `"source": "cron"`, `"call_id": "call_1"`} {
+		if !bytes.Contains(doc, []byte(want)) {
+			t.Errorf("document lacks %s:\n%s", want, doc)
+		}
+	}
+}

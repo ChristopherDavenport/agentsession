@@ -307,7 +307,7 @@
     "abandoned_at": "sha256:ba4196c4d873763cc8ba62b394ad7ca57a8d8c95b5b981cd01a12b991d9934ee",
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.5",
+      "format": "agentsession/0.6",
       "leaf": "sha256:c5867edf1c2ad1c0a9c6e2443b641118e4848dff8020f472d0a0f24fcd8555d5",
       "records": [
         "run",

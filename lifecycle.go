@@ -92,6 +92,12 @@ type RunEntry struct {
 	// Ref names the trigger of a start or the cause of an end in the
 	// harness's own terms. Readers treat it as opaque.
 	Ref string `json:"ref,omitempty"`
+	// Trigger, on a start entry, says how the input that started the run
+	// arrived, in parts, beside Ref and changing nothing about it. A
+	// harness's richer facts about the firing, such as when it was due
+	// or which attempt it is, go in members of the run entry this
+	// package does not define, kept in [EntryBase.Unknown].
+	Trigger *Trigger `json:"trigger,omitempty"`
 	// Pending lists, on an end entry, the IDs of the calls left without
 	// an output. It is written even when empty.
 	Pending []string `json:"pending"`
@@ -332,7 +338,8 @@ func (e *RunEntry) MarshalJSON() ([]byte, error) {
 			Reason  string   `json:"reason,omitempty"`
 			Ref     string   `json:"ref,omitempty"`
 			Pending []string `json:"pending,omitempty"`
-		}{e.RunID, e.Phase, e.Source, e.Reason, e.Ref, e.Pending}
+			Trigger *Trigger `json:"trigger,omitempty"`
+		}{e.RunID, e.Phase, e.Source, e.Reason, e.Ref, e.Pending, e.Trigger}
 		return marshalEntry(TypeRun, &e.EntryBase, aux)
 	}
 	pending := e.Pending
@@ -346,7 +353,8 @@ func (e *RunEntry) MarshalJSON() ([]byte, error) {
 		Reason  string   `json:"reason"`
 		Ref     string   `json:"ref,omitempty"`
 		Pending []string `json:"pending"`
-	}{e.RunID, e.Phase, e.Source, e.Reason, e.Ref, pending}
+		Trigger *Trigger `json:"trigger,omitempty"`
+	}{e.RunID, e.Phase, e.Source, e.Reason, e.Ref, pending, e.Trigger}
 	return marshalEntry(TypeRun, &e.EntryBase, aux)
 }
 

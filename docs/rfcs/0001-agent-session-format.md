@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.5
+Status: draft 0.6
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -627,7 +627,8 @@ Why a run started and how it ended. Two entries per run, paired by
 
 ```json
 {"type":"run","id":"…","parent":"…","ts":"…","run_id":"…","phase":"start",
- "source":"input|resume","ref":"…"}
+ "source":"input|resume","ref":"…",
+ "trigger":{"kind":"schedule","ref":"nightly","source":"cron"}}
 {"type":"run","id":"…","parent":"…","ts":"…","run_id":"…","phase":"end",
  "reason":"done|stopped|interrupted|input_required|aborted|error",
  "ref":"…",
@@ -636,7 +637,7 @@ Why a run started and how it ended. Two entries per run, paired by
 
 - `run_id` and `phase` are required on both entries. `source` is
   required on `start`; `reason` and `pending` are required on `end`.
-  `ref` is optional on both.
+  `ref` is optional on both, and `trigger` is optional on `start`.
 - `source` is closed to two path shapes. `resume`: at least one call
   that was on the path with no output when the run began has its
   output at the start of the segment, whether the previous run ended by
@@ -646,7 +647,16 @@ Why a run started and how it ended. Two entries per run, paired by
   adds a message is `resume`. `ref` on `start` names what triggered
   the input (a cron name, a channel message ID). How an input arrived,
   whether a schedule, a channel or another agent, is a harness feature
-  and goes in `ref` or a `custom` entry.
+  and goes in `trigger`, `ref` or a `custom` entry.
+- `trigger` on `start` says how the input that started the run arrived,
+  in the object `queued` defines: `kind`, `ref` and `source`, each
+  opaque. It sits beside `ref` and changes nothing about it; `ref` stays
+  one opaque string. A writer that holds a trigger's parts SHOULD write
+  them here rather than joined into `ref`, since a joined string cannot
+  be split back. Anything richer, such as when a scheduled firing was
+  due or which attempt at it this is, goes in members of the `run`
+  entry this document does not define, which the envelope section says
+  a rewriter preserves.
 - `reason` is closed. Each value is a shape of the run's segment, the
   entries on the path from the `start` entry to the `end` entry, where
   a pending call is a `function_call` on the segment with no
@@ -732,8 +742,13 @@ A call's fate was decided outside the tool.
 
 - `verdict` is closed. Each value says what this decision did, and
   the path shows whether it held:
-  - `proceed`: this decision let the call go to its tool. A `dispatch`
-    for the call follows.
+  - `proceed`: this decision let the call go on toward its tool. A
+    `dispatch` for the call follows when the call reaches its tool; a
+    `reject` after it, or a run end with the call pending, says it did
+    not. That is an approval something else overtook, such as an abort
+    before the call's turn in a serial batch or a refusal by the loop
+    itself, and the `proceed` stays as written, with its `by` and its
+    `args`, since those are what an auditor asks about such a call.
   - `reject`: this decision ended the call. No `dispatch` ever follows,
     and a `function_call_output` for the call follows that carries
     `reason`.
@@ -786,9 +801,9 @@ end.
   came from, `ref` names the thing itself, `source` names the layer
   that took it. All three are in the harness's own terms and a reader
   treats them as opaque. This is where the trigger of an input that
-  joins a run already in flight lives, since the `run` entry's `ref`
-  names what started the run and not what arrived during it: two
-  people steering one run are two triggers.
+  joins a run already in flight lives, since the `run` start's
+  `trigger` and `ref` name what started the run and not what arrived
+  during it: two people steering one run are two triggers.
 - `ref` names the queued input in the harness's own terms, for a
   caller holding a handle to it.
 - A `queued` entry with no `item` entry naming it in `queued_from`,
@@ -844,6 +859,19 @@ define. Anything richer goes in such members too, which the envelope
 section says a rewriter preserves. An `env` entry applies from its
 position on the path until the next one.
 
+A later `env` entry whose `workspace` differs from the one in force
+before it on the path is a **substitution**: from that entry on, the
+tools ran against another file system than the path recorded until
+then, as when a session recorded in a container is resumed on a laptop.
+Two `workspace` members are compared as members, and an absent one
+equals only another absent one; a new `cwd`, `vcs` revision or file
+list in the same workspace is not a substitution. Recording the
+substitution is the point, so a writer writes the entry and nothing
+refuses it. A reader that holds the environment fixed, such as a strict
+replay or an evaluation comparing runs, treats the path from that entry
+on as not verifiable against what came before it, as it treats a call
+whose output it cannot reproduce.
+
 ### `outcome`
 
 A judgement of how the session, or a range of it, went.
@@ -891,9 +919,17 @@ projection has to guess.
 
 ### `custom`
 
-App state that is not in context: `{"type":"custom","ns":"…","data":…}`.
-App state that is in context uses a namespaced `item` with the payload
-profile's extension mechanism instead.
+App state that is not in context:
+`{"type":"custom","ns":"…","data":…,"call_id":"call_…"}`. App state
+that is in context uses a namespaced `item` with the payload profile's
+extension mechanism instead.
+
+`call_id` is optional and names the function call the record belongs
+to, when the writer knows it: a record a tool writes while it runs, or
+one the harness writes about a call. With two calls of one batch in
+flight, a record's position on the path does not say which call it
+belongs to, and `call_id` does. A reader MAY use it to attribute the
+record and MUST NOT require it.
 
 ## Namespaced types
 
@@ -1165,8 +1201,9 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.5 MUST read an earlier 0.x file by
-migrating it in memory: walk the entries in file order, rewrite each
+it begins at 1.0. A reader of 0.6 reads a 0.5 file as it stands,
+since 0.6 adds only optional members and the hashes do not change, and
+MUST read an earlier 0.x file by migrating it in memory: walk the entries in file order, rewrite each
 `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -1186,10 +1223,10 @@ keeping the old name. A reference the reader cannot rewrite — a
 `parents` entry in another session, or an entry named inside a member of
 an extension the reader does not know — keeps its original string and is
 reported as unresolved, and a file holding one MUST NOT be re-emitted as
-0.5. An earlier entry whose body carries a top-level member by one of
+0.5 or later. An earlier entry whose body carries a top-level member by one of
 the envelope's reserved names, which earlier versions allowed, is
 reported as unresolved the same way, and a file holding one MUST NOT be
-re-emitted as 0.5; `content` is the name this will most often be. No two
+re-emitted as 0.5 or later; `content` is the name this will most often be. No two
 migrated entries hash alike, since `legacy_id` was unique in the earlier
 file, so migration never merges.
 
@@ -1230,6 +1267,25 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.5
+
+Additive. Three optional members and three paragraphs, and nothing a
+0.5 file holds changes meaning or hash, so a 0.5 file is a 0.6 file
+with none of the new members.
+
+- A `run` start carries `trigger`, the object `queued` already defined,
+  beside `ref`, so a scheduled or channel-driven run can say how it
+  arrived in parts rather than one joined string.
+- A `custom` entry carries `call_id` naming the call a record belongs
+  to, as `link` does, since a record's position on the path cannot say
+  which of a batch's calls it belongs to.
+- A `proceed` no longer promises a `dispatch`: an approval something
+  else overtook is followed by a `reject` or by nothing, and stays as
+  written.
+- `env` says that a later entry with a different `workspace` is a
+  substitution, and what a reader holding the environment fixed does
+  with it.
 
 ## Changes since 0.4
 
