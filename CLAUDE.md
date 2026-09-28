@@ -189,5 +189,10 @@ into a 0.5 file whose entries keep their readable old id in `legacy_id`;
 tests name entries by that through the `lid` helper. To change a
 fixture, edit its 0.4 source and run `-update`. The negative fixtures
 are built from the generated lines by breaking each in the one way its
-test expects, in the same test. `fork.jsonl` is the one native fixture,
-built in the same place.
+test expects, in the same test. Two fixtures are native, built in the
+same place: `fork.jsonl`, since a fork has no 0.4 form, and
+`normalised.jsonl`, since a source carrying what a writer normalises
+could not be read. The fixtures a nested module's tests read are copied
+under that module's own `testdata` by the same test, so its tests run
+from the published module; `TestNestedModuleFixtures` keeps the copies
+in step.

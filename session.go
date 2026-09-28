@@ -275,7 +275,37 @@ func (s *Session) Commit(e Entry) (Result, error) {
 	return r, nil
 }
 
+// prepare is prepareEntry with the envelope put back on refusal: the
+// parent, timestamp, id and parents it fills in, sorts or clears, and
+// an unknown entry's raw line, belong to the caller until the entry is
+// accepted, so a retry starts from what the caller set and not from
+// where the first attempt would have gone. The body is a different
+// matter: a caller-set id is checked against the normalised line,
+// since that is what the id is the hash of, so an entry refused with
+// ErrBadID keeps its normalised body and the record of the rewrite,
+// and a retry produces the same line.
 func (s *Session) prepare(e Entry) (Result, error) {
+	b := e.Base()
+	parent, ts, id := b.Parent, b.Timestamp, b.ID
+	orig := b.Parents
+	parents := append([]EntryRef(nil), orig...)
+	var raw []byte
+	if u, ok := e.(*UnknownEntry); ok {
+		raw = u.Raw
+	}
+	r, err := s.prepareEntry(e)
+	if err != nil {
+		b.Parent, b.Timestamp, b.ID = parent, ts, id
+		b.Parents = orig
+		copy(orig, parents)
+		if u, ok := e.(*UnknownEntry); ok {
+			u.Raw = raw
+		}
+	}
+	return r, err
+}
+
+func (s *Session) prepareEntry(e Entry) (Result, error) {
 	b := e.Base()
 	for k := range b.Unknown {
 		if isEnvelopeKey(k) {
@@ -315,7 +345,14 @@ func (s *Session) prepare(e Entry) (Result, error) {
 		}
 		u.Raw = raw
 	}
-	if err := s.hashEntry(e); err != nil {
+	// A body a provider produced may fail the I-JSON test the hash
+	// is defined over; the format has the writer normalise it and
+	// record what changed, rather than refuse it.
+	line, err := normaliseEntry(e)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := s.hashEntry(e, line); err != nil {
 		return Result{}, err
 	}
 	if want != "" && want != b.ID {
@@ -378,11 +415,13 @@ func (s *Session) checkParentRule(parent string) error {
 }
 
 // hashEntry computes the entry's content hash and ID from its encoded
-// form and sets them on the envelope.
-func (s *Session) hashEntry(e Entry) error {
-	data, err := MarshalEntry(e)
-	if err != nil {
-		return err
+// form, data when the caller has it and the entry marshalled otherwise and sets them on the envelope.
+func (s *Session) hashEntry(e Entry, data []byte) error {
+	if data == nil {
+		var err error
+		if data, err = MarshalEntry(e); err != nil {
+			return err
+		}
 	}
 	id, content, err := EntryHashes(data)
 	if err != nil {

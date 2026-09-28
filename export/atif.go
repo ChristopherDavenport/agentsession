@@ -123,8 +123,16 @@ type builder struct {
 	callStep     map[string]int // call ID -> step index
 	copied       bool           // inside the kept window after a compaction
 	compactionID string
-	sawEnv       bool
-	currentRun   map[string]any // the open run's record, shared with the step or root that holds it
+	// window is the settings in force inside the kept window after a
+	// compaction, which the checkpoint does not describe: the
+	// checkpoint stands in for every config entry up to the
+	// compaction, so settings holds it and the deltas after, while a
+	// call inside the window ran under what the config entries before
+	// it said. With a Path that is known exactly; without one the
+	// window starts from the checkpoint, the nearest description.
+	window     agentsession.Settings
+	sawEnv     bool
+	currentRun map[string]any // the open run's record, shared with the step or root that holds it
 
 	prompt, completion, cached int
 	cost                       float64
@@ -170,6 +178,7 @@ func (b *builder) costOf(entryID, model string, u openresponses.Usage) (float64,
 type agentGroup struct {
 	responseID string
 	entries    []*agentsession.ItemEntry
+	copied     bool // opened inside the kept window after a compaction
 }
 
 func (b *builder) run() error {
@@ -179,12 +188,17 @@ func (b *builder) run() error {
 			b.settings = c.Config
 			b.compactionID = c.ID
 			b.copied = true
+			b.window = settingsBefore(b.t.Path, c.FirstKept, c.Config)
 		}
 	}
 	// Settings at the first step: the agent's default model and tools.
 	b.setAgentDefaults()
 	for _, e := range entries {
 		if b.compactionID != "" && b.copied && e.Base().Parent == b.compactionID {
+			// The window ends here: a group still open in it, an
+			// output without a response_id say, is closed before the
+			// first entry after the compaction can be taken into it.
+			b.flushGroup(nil)
 			b.copied = false
 		}
 		if err := b.entry(e); err != nil {
@@ -198,17 +212,22 @@ func (b *builder) run() error {
 
 func (b *builder) setAgentDefaults() {
 	// Replay leading config entries so the agent block reflects the
-	// settings the first step ran under.
-	for _, e := range b.t.Context.Entries {
-		switch v := e.(type) {
-		case *agentsession.ConfigEntry:
-			b.settings = b.settings.Apply(v)
-			continue
-		case *agentsession.CompactionEntry, *agentsession.EnvEntry, *agentsession.InfoEntry, *agentsession.LabelEntry, *agentsession.CustomEntry,
-			*agentsession.RunEntry, *agentsession.DispatchEntry, *agentsession.DecisionEntry:
-			continue
+	// settings the first step ran under. After a compaction those are
+	// the checkpoint's: it stands in for every config entry up to the
+	// compaction, the kept window included, so nothing in the window
+	// is applied, which is the context algorithm's rule.
+	if b.compactionID == "" {
+		for _, e := range b.t.Context.Entries {
+			switch v := e.(type) {
+			case *agentsession.ConfigEntry:
+				b.settings = b.settings.Apply(v)
+				continue
+			case *agentsession.EnvEntry, *agentsession.InfoEntry, *agentsession.LabelEntry, *agentsession.CustomEntry,
+				*agentsession.RunEntry, *agentsession.DispatchEntry, *agentsession.DecisionEntry:
+				continue
+			}
+			break
 		}
-		break
 	}
 	b.doc.Agent.ModelName = b.modelName(b.settings.Model)
 	b.doc.Agent.ToolDefinitions = toolDefinitions(b.settings.Tools)
@@ -230,9 +249,17 @@ func (b *builder) entry(e agentsession.Entry) error {
 	case *agentsession.ResponseEntry:
 		b.flushGroup(v)
 	case *agentsession.ConfigEntry:
-		before := b.settings
-		b.settings = b.settings.Apply(v)
-		if change := toolChange(before.Tools, b.settings.Tools); change != nil {
+		// A config entry inside the kept window applies to the window
+		// alone: the checkpoint already holds its effect on what
+		// follows, and applying it there too would price the next
+		// step under a model the totals do not use (#46).
+		target := &b.settings
+		if b.copied {
+			target = &b.window
+		}
+		before := *target
+		*target = target.Apply(v)
+		if change := toolChange(before.Tools, target.Tools); change != nil {
 			b.addPending("tool_changes", change)
 		}
 		b.addPendingList("config_entries", e.Base().ID)
@@ -282,7 +309,7 @@ func (b *builder) entry(e agentsession.Entry) error {
 				ExtraOpenResponses: map[string]any{"item": rawItem(v.Summary)},
 			},
 		}
-		b.foldUsage(v.ID, step.Extra, b.settings.Model, v.Usage)
+		b.foldUsage(v.ID, step.Extra, b.inForce(b.copied).Model, v.Usage)
 		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.LabelEntry:
@@ -355,7 +382,7 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 			b.flushGroup(nil)
 		}
 		if b.group == nil {
-			b.group = &agentGroup{responseID: e.ResponseID}
+			b.group = &agentGroup{responseID: e.ResponseID, copied: b.copied}
 		}
 		if b.group.responseID == "" {
 			b.group.responseID = e.ResponseID
@@ -451,12 +478,12 @@ func (b *builder) flushGroup(resp *agentsession.ResponseEntry) {
 		return
 	}
 	if g == nil {
-		g = &agentGroup{responseID: resp.ResponseID}
+		g = &agentGroup{responseID: resp.ResponseID, copied: b.copied}
 	}
 	if resp != nil && g.responseID != "" && g.responseID != resp.ResponseID {
 		// The group belongs to another call; close it on its own first.
 		b.flushGroupItems(g, nil)
-		g = &agentGroup{responseID: resp.ResponseID}
+		g = &agentGroup{responseID: resp.ResponseID, copied: b.copied}
 	}
 	b.flushGroupItems(g, resp)
 }
@@ -470,10 +497,47 @@ func (b *builder) modelName(model string) string {
 	return model
 }
 
+// inForce is the settings a step at this point ran under: inside the
+// kept window after a compaction the window's, else the context's.
+func (b *builder) inForce(copied bool) agentsession.Settings {
+	if copied {
+		return b.window
+	}
+	return b.settings
+}
+
+// settingsBefore replays the settings over a root-first path up to the
+// entry firstKept, exclusive, with the context algorithm's rule: a
+// config applies and a compaction resets to its checkpoint. It is what
+// a call at the start of the kept window ran under. Without a path, or
+// with one that does not hold the entry, it is fallback.
+func settingsBefore(path []agentsession.Entry, firstKept string, fallback agentsession.Settings) agentsession.Settings {
+	var settings agentsession.Settings
+	for _, e := range path {
+		if e.Base().ID == firstKept {
+			return settings
+		}
+		switch v := e.(type) {
+		case *agentsession.ConfigEntry:
+			settings = settings.Apply(v)
+		case *agentsession.CompactionEntry:
+			settings = v.Config
+		}
+	}
+	return fallback
+}
+
 func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntry) {
-	step := atif.Step{Source: atif.SourceAgent, ModelName: b.modelName(b.settings.Model), LLMCallCount: atif.Ptr(1)}
-	if b.settings.Reasoning.Effort != "" {
-		step.ReasoningEffort = string(b.settings.Reasoning.Effort)
+	settings := b.inForce(g.copied)
+	step := atif.Step{Source: atif.SourceAgent, ModelName: b.modelName(settings.Model), LLMCallCount: atif.Ptr(1)}
+	if g.copied {
+		// Marked from the group, not from where the flush happens: a
+		// group the first entry after the compaction flushes is still
+		// copied context.
+		step.IsCopiedContext = atif.Ptr(true)
+	}
+	if settings.Reasoning.Effort != "" {
+		step.ReasoningEffort = string(settings.Reasoning.Effort)
 	}
 	var (
 		texts     []string
@@ -538,7 +602,7 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 	if resp != nil {
 		anchor = resp
 		or["response"] = responseBody(resp)
-		wire := b.settings.Model
+		wire := settings.Model
 		if resp.Model != "" {
 			wire = resp.Model
 			step.ModelName = b.modelName(resp.Model)
@@ -839,7 +903,8 @@ func (b *builder) pathTotals() int {
 		switch v := e.(type) {
 		case *agentsession.ConfigEntry:
 			// The model in force, for a fold or a response that does
-			// not name its own.
+			// not name its own: the same replay the steps use, so the
+			// two agree.
 			if v.Replace {
 				model = ""
 			}

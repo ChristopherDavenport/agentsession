@@ -1517,3 +1517,191 @@ func TestSubagentLeafFromTheRecord(t *testing.T) {
 		}
 	})
 }
+
+// TestKeptWindowConfigIsNotReplayed: a config entry inside the kept
+// window after a compaction applies to the window alone, since the
+// checkpoint stands in for every config entry up to the compaction.
+// A call after the compaction takes the checkpoint's settings, then
+// later deltas; a call inside the window takes what the config entries
+// before it on the path said; and the price asked for a response that
+// names no model agrees with the totals in both cases.
+func TestKeptWindowConfigIsNotReplayed(t *testing.T) {
+	s := agentsession.New(agentsession.Header{})
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-A", Reasoning: &openresponses.ReasoningConfig{Effort: "low"}})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("one")))
+	first := s.Leaf()
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-B", Reasoning: &openresponses.ReasoningConfig{Effort: "high"}})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("two")))
+	mustAppend(t, s, &agentsession.ItemEntry{ResponseID: "resp_2", Item: &openresponses.Message{Role: openresponses.RoleAssistant,
+		Content: openresponses.Contents{&openresponses.OutputText{Text: "under B"}}}})
+	mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp_2", Status: openresponses.ResponseStatusCompleted,
+		Usage: &openresponses.Usage{InputTokens: 2, OutputTokens: 2}})
+	mustAppend(t, s, &agentsession.CompactionEntry{FirstKept: first, Summary: openresponses.SystemText("summary"),
+		Config: agentsession.Settings{Model: "model-A", Reasoning: openresponses.ReasoningConfig{Effort: "medium"}}, Usage: &openresponses.Usage{InputTokens: 5, OutputTokens: 5}})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("three")))
+	mustAppend(t, s, &agentsession.ItemEntry{ResponseID: "resp_9", Item: &openresponses.Message{Role: openresponses.RoleAssistant,
+		Content: openresponses.Contents{&openresponses.OutputText{Text: "under the checkpoint"}}}})
+	mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp_9", Status: openresponses.ResponseStatusCompleted,
+		Usage: &openresponses.Usage{InputTokens: 999, OutputTokens: 9}})
+
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := map[int][]string{}
+	doc, err := ToATIF(tr, Options{Cost: func(model string, u openresponses.Usage) (float64, bool) {
+		asked[u.InputTokens] = append(asked[u.InputTokens], model)
+		return 1, true
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Agent.ModelName != "model-A" {
+		t.Errorf("agent.model_name = %q, want the checkpoint's model-A", doc.Agent.ModelName)
+	}
+	var agents []atif.Step
+	for _, step := range doc.Steps {
+		if step.Source == atif.SourceAgent {
+			agents = append(agents, step)
+		}
+	}
+	if len(agents) != 2 {
+		t.Fatalf("%d agent steps, want the kept window's and the one after the compaction", len(agents))
+	}
+	// The kept-window call ran under model-B, which the path says; the
+	// call after the compaction ran under the checkpoint.
+	if agents[0].ModelName != "model-B" || agents[0].ReasoningEffort != "high" {
+		t.Errorf("kept-window step = %s/%s, want model-B/high", agents[0].ModelName, agents[0].ReasoningEffort)
+	}
+	if agents[1].ModelName != "model-A" || agents[1].ReasoningEffort != "medium" {
+		t.Errorf("step after the compaction = %s/%s, want the checkpoint's model-A/medium", agents[1].ModelName, agents[1].ReasoningEffort)
+	}
+	for _, m := range asked[999] {
+		if m != "model-A" {
+			t.Errorf("resp_9 priced under %q, want model-A", m)
+		}
+	}
+	for _, m := range asked[2] {
+		if m != "model-B" {
+			t.Errorf("resp_2, which ran before the compaction under model-B, priced under %q", m)
+		}
+	}
+}
+
+// TestItemlessResponseInTheKeptWindow: a response with no output items,
+// a failed or empty call, opens its own group when it arrives, and one
+// inside the kept window takes the window's settings like any other.
+func TestItemlessResponseInTheKeptWindow(t *testing.T) {
+	s := agentsession.New(agentsession.Header{})
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-A"})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("one")))
+	first := s.Leaf()
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-B", Reasoning: &openresponses.ReasoningConfig{Effort: "high"}})
+	mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp_2", Status: openresponses.ResponseStatusFailed,
+		Usage: &openresponses.Usage{InputTokens: 2, OutputTokens: 0}})
+	mustAppend(t, s, &agentsession.CompactionEntry{FirstKept: first, Summary: openresponses.SystemText("summary"),
+		Config: agentsession.Settings{Model: "model-C"}})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("two")))
+	for _, withPath := range []bool{true, false} {
+		tr, err := At(s, s.Leaf())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !withPath {
+			tr.Path = nil
+		}
+		asked := map[string]bool{}
+		doc, err := ToATIF(tr, Options{Cost: func(model string, u openresponses.Usage) (float64, bool) { asked[model] = true; return 1, true }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var agent *atif.Step
+		for i := range doc.Steps {
+			if doc.Steps[i].Source == atif.SourceAgent {
+				agent = &doc.Steps[i]
+			}
+		}
+		if agent == nil {
+			t.Fatalf("path=%v: no agent step", withPath)
+		}
+		if agent.ModelName != "model-B" || agent.ReasoningEffort != "high" {
+			t.Errorf("path=%v: itemless step = %s/%s, want model-B/high", withPath, agent.ModelName, agent.ReasoningEffort)
+		}
+		if asked["model-C"] {
+			t.Errorf("path=%v: the window's response was priced under the checkpoint's model", withPath)
+		}
+	}
+}
+
+// TestCopiedContextFollowsTheGroup: a kept-window group the first entry
+// after the compaction flushes is still copied context, priced under
+// the window's settings and marked as copied.
+func TestCopiedContextFollowsTheGroup(t *testing.T) {
+	s := agentsession.New(agentsession.Header{})
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-A"})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("one")))
+	first := s.Leaf()
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-B"})
+	mustAppend(t, s, &agentsession.ItemEntry{ResponseID: "resp_2", Item: &openresponses.Message{Role: openresponses.RoleAssistant,
+		Content: openresponses.Contents{&openresponses.OutputText{Text: "in the window"}}}})
+	mustAppend(t, s, &agentsession.CompactionEntry{FirstKept: first, Summary: openresponses.SystemText("summary"),
+		Config: agentsession.Settings{Model: "model-C"}})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("two")))
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ToATIF(tr, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range doc.Steps {
+		if step.Source != atif.SourceAgent {
+			continue
+		}
+		if step.ModelName != "model-B" || step.IsCopiedContext == nil || !*step.IsCopiedContext {
+			t.Errorf("window step flushed after the compaction = %s copied=%v, want model-B and copied", step.ModelName, step.IsCopiedContext)
+		}
+	}
+}
+
+// TestWindowGroupClosesAtTheBoundary: a model output in the kept window
+// with no response_id cannot take the first output after the
+// compaction into its group; the window closes where it ends.
+func TestWindowGroupClosesAtTheBoundary(t *testing.T) {
+	s := agentsession.New(agentsession.Header{})
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-A"})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("one")))
+	first := s.Leaf()
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "model-B"})
+	mustAppend(t, s, &agentsession.ItemEntry{Item: &openresponses.Message{Role: openresponses.RoleAssistant,
+		Content: openresponses.Contents{&openresponses.OutputText{Text: "in the window"}}}})
+	mustAppend(t, s, &agentsession.CompactionEntry{FirstKept: first, Summary: openresponses.SystemText("summary"),
+		Config: agentsession.Settings{Model: "model-C"}})
+	mustAppend(t, s, &agentsession.ItemEntry{ResponseID: "resp_3", Item: &openresponses.Message{Role: openresponses.RoleAssistant,
+		Content: openresponses.Contents{&openresponses.OutputText{Text: "after"}}}})
+	mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp_3", Status: openresponses.ResponseStatusCompleted})
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ToATIF(tr, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agents []atif.Step
+	for _, step := range doc.Steps {
+		if step.Source == atif.SourceAgent {
+			agents = append(agents, step)
+		}
+	}
+	if len(agents) != 2 {
+		t.Fatalf("%d agent steps, want the window's and the one after", len(agents))
+	}
+	if agents[0].ModelName != "model-B" || agents[0].IsCopiedContext == nil || !*agents[0].IsCopiedContext {
+		t.Errorf("window step = %s copied=%v, want model-B and copied", agents[0].ModelName, agents[0].IsCopiedContext)
+	}
+	if agents[1].ModelName != "model-C" || agents[1].IsCopiedContext != nil {
+		t.Errorf("step after = %s copied=%v, want model-C and not copied", agents[1].ModelName, agents[1].IsCopiedContext)
+	}
+}

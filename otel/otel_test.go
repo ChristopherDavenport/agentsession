@@ -22,9 +22,14 @@ func recorder() (*tracetest.SpanRecorder, trace.Tracer) {
 	return sr, tp.Tracer("test")
 }
 
+// loadFixture reads a session fixture from this module's own testdata,
+// which holds copies of the root module's generated fixtures so the
+// tests run from the published module as well as from the repository.
+// The root's TestRegenerateFixtures writes the copies and
+// TestNestedModuleFixtures keeps them in step.
 func loadFixture(t *testing.T, name string) *agentsession.Session {
 	t.Helper()
-	f, err := os.Open(filepath.Join("..", "testdata", "sessions", name+".jsonl"))
+	f, err := os.Open(filepath.Join("testdata", "sessions", name+".jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

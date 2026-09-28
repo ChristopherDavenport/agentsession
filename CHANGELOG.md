@@ -49,12 +49,49 @@ versions may break the API.
   migrated entry's legacy id. ATIF documents are named by the leaf's
   digest without its `sha256:` prefix, since a colon is not a legal
   file name everywhere.
-- Not yet done: writer-side normalisation. The format has a writer
-  replace a lone surrogate with U+FFFD and round or stringify an integer
-  outside binary64, recording the change in `normalised`; this library
-  refuses such a body instead. Go's JSON decoder already replaces a lone
-  surrogate on the way in, so the remaining case is a large integer in a
-  passthrough member.
+- **Writer-side normalisation.** `Append` rewrites a body that fails
+  the I-JSON test rather than refusing it, as the format has a writer
+  do: a whole number outside binary64 is rounded and written
+  canonically, a lone surrogate escape becomes U+FFFD, a string that is
+  not valid UTF-8 has each invalid byte replaced, and each change is
+  recorded in the entry's `normalised` with its pointer and original
+  source text, or its bytes in base64 when there was no valid text. The
+  rewrite is what the caller's entry holds afterwards, so what is hashed
+  and written is what a reader sees. A Go string that is not valid
+  UTF-8, which the marshaller would otherwise repair silently, is
+  repaired in place and recorded the same way. `NormaliseJSON` is the
+  same rewrite over arbitrary bytes, for a harness that wants the
+  record of a lone surrogate Go's decoder would otherwise repair
+  silently before the entry exists. A repeated member name and a number
+  that is not finite in binary64 are still refused, as is a
+  `Normalised` element a caller set without a pointer or with both or
+  neither of `Was` and `Raw` (`ErrBadNormalisation`); a caller's list
+  is sorted on append. The `normalised` fixture carries 9007199254740993
+  in three spellings and once in a member the profile types as a
+  number, a lone surrogate with its `was`, and invalid UTF-8 with its
+  `raw`.
+- **The whole-number rule admits the canonical rendering of a double.**
+  The RFC now says so: a whole number is I-JSON when binary64 holds it
+  exactly or when it is the exact value of the canonical rendering of
+  the nearest double. Canonical form is ECMAScript's, which pads the
+  shortest digits with zeros below 10^21, so from 2^53 it writes many
+  representable whole numbers, 2^60 as 1152921504606847000, as a whole
+  number no double holds; under the old rule `Write` produced a line
+  `Read` refused for any of them, and a 64-bit id could not be
+  normalised at all, since its rounding failed the same test. The RFC
+  also now fixes the substitution for invalid UTF-8 at one U+FFFD per
+  maximal subpart (Unicode §3.9), which is what other languages'
+  decoders do, says an out-of-bound integer is rounded wherever the
+  profile does not type the member as a string, and says `was` and
+  `raw` hold a string's quotes.
+- export: a config entry inside the kept window after a compaction
+  applies to the window alone. A step there shows the model and effort
+  the call ran under, taken from the path, and a step after the
+  compaction the checkpoint's then later deltas; the step's price and
+  the path totals now agree for a response that names no model.
+- otel's tests read their fixtures from the module's own `testdata`, so
+  they run from the published module; the copies are generated with the
+  root fixtures and a root test keeps them in step.
 - The session fixtures under `testdata/sessions` are generated from the
   0.4 sources now kept under `testdata/sessions/v0.4`, and carry
   `legacy_id`; see CLAUDE.md.

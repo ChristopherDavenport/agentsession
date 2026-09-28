@@ -153,7 +153,8 @@ func TestCanonicalTS(t *testing.T) {
 }
 
 // TestReservedAndIJSON checks that a body carrying an envelope name, or a
-// member that is not I-JSON, is refused by Append and by Read.
+// member that is not I-JSON and cannot be normalised, is refused by
+// Append and by Read.
 func TestReservedAndIJSON(t *testing.T) {
 	s := New(Header{})
 	e := &InfoEntry{Name: "n"}
@@ -161,10 +162,17 @@ func TestReservedAndIJSON(t *testing.T) {
 	if _, err := s.Append(e); !errors.Is(err, ErrReservedMember) {
 		t.Errorf("Append with a body content = %v", err)
 	}
-	big := &InfoEntry{Name: "n"}
-	big.Unknown = map[string]json.RawMessage{"acme:seed": json.RawMessage(`9007199254740993`)}
-	if _, err := s.Append(big); err == nil || !strings.Contains(err.Error(), "not I-JSON") {
-		t.Errorf("Append with a 2^53+1 = %v", err)
+	// A whole number outside binary64 is normalised, not refused; see
+	// TestAppendNormalises. What a rewrite cannot reach still is.
+	repeated := &InfoEntry{Name: "n"}
+	repeated.Unknown = map[string]json.RawMessage{"acme:seed": json.RawMessage(`{"a":1,"a":2}`)}
+	if _, err := s.Append(repeated); err == nil || !strings.Contains(err.Error(), "not I-JSON") {
+		t.Errorf("Append with a repeated member = %v", err)
+	}
+	huge := &InfoEntry{Name: "n"}
+	huge.Unknown = map[string]json.RawMessage{"acme:seed": json.RawMessage(`1e400`)}
+	if _, err := s.Append(huge); err == nil || !strings.Contains(err.Error(), "not finite") {
+		t.Errorf("Append with 1e400 = %v", err)
 	}
 	ok := &InfoEntry{Name: "n"}
 	ok.Unknown = map[string]json.RawMessage{"acme:seed": json.RawMessage(`9007199254740992`), "acme:f": json.RawMessage(`0.1`)}

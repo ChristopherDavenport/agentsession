@@ -155,7 +155,7 @@ func (s *Session) link(e Entry, m *migration) error {
 			return fmt.Errorf("%w: ts %q is not in the one form the format admits", ErrBadID, b.tsRaw)
 		}
 		want := b.ID
-		if err := s.hashEntry(e); err != nil {
+		if err := s.hashEntry(e, nil); err != nil {
 			return err
 		}
 		if b.ID != want {
@@ -251,7 +251,7 @@ func (m *migration) rewrite(e Entry, s *Session) error {
 		}
 		u.Raw = raw
 	}
-	if err := s.hashEntry(e); err != nil {
+	if err := s.hashEntry(e, nil); err != nil {
 		return err
 	}
 	if u, ok := e.(*UnknownEntry); ok {

@@ -77,7 +77,7 @@ func write(buf *bytes.Buffer, v any) error {
 		for k := range x {
 			keys = append(keys, k)
 		}
-		sort.Slice(keys, func(i, j int) bool { return lessUTF16(keys[i], keys[j]) })
+		sort.Slice(keys, func(i, j int) bool { return LessUTF16(keys[i], keys[j]) })
 		buf.WriteByte('{')
 		for i, k := range keys {
 			if i > 0 {
@@ -96,10 +96,10 @@ func write(buf *bytes.Buffer, v any) error {
 	return nil
 }
 
-// lessUTF16 orders strings by their UTF-16 code units, which is the
+// LessUTF16 orders strings by their UTF-16 code units, which is the
 // member ordering RFC 8785 section 3.2.3 requires. It differs from byte
 // order only for code points above the basic multilingual plane.
-func lessUTF16(a, b string) bool {
+func LessUTF16(a, b string) bool {
 	ua, ub := utf16.Encode([]rune(a)), utf16.Encode([]rune(b))
 	for i := 0; i < len(ua) && i < len(ub); i++ {
 		if ua[i] != ub[i] {
