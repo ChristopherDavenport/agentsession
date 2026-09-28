@@ -20,6 +20,29 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
+// lid returns the id of the fixture entry whose legacy_id is name; the
+// fixtures are generated from 0.4 sources by migration, so every entry
+// carries the readable id its source gave it.
+func lid(t *testing.T, s *agentsession.Session, name string) string {
+	t.Helper()
+	for _, e := range s.Entries() {
+		if e.Base().LegacyID == name {
+			return e.Base().ID
+		}
+	}
+	t.Fatalf("no fixture entry with legacy id %s", name)
+	return ""
+}
+
+// legacyOf returns the legacy id of a fixture entry, for golden file
+// names, which stay readable.
+func legacyOf(s *agentsession.Session, id string) string {
+	if e, ok := s.Entry(id); ok && e.Base().LegacyID != "" {
+		return e.Base().LegacyID
+	}
+	return id
+}
+
 func loadFixture(t *testing.T, name string) *agentsession.Session {
 	t.Helper()
 	f, err := os.Open(filepath.Join("..", "testdata", "sessions", name+".jsonl"))
@@ -105,7 +128,7 @@ func TestATIFGolden(t *testing.T) {
 					t.Errorf("%s: document has unknown members", tr.LeafID)
 				}
 				got := encode(t, doc)
-				checkGolden(t, filepath.Join("..", "testdata", "export", name+"."+tr.LeafID+".json"), got)
+				checkGolden(t, filepath.Join("..", "testdata", "export", name+"."+legacyOf(s, tr.LeafID)+".json"), got)
 
 				// Lossless: the items ride in the extras, byte for byte.
 				items, err := Items(doc)
@@ -154,7 +177,7 @@ func TestBasicMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if doc.SessionID != s.ID() || doc.TrajectoryID != "o0000001" || doc.SchemaVersion != atif.SchemaVersion {
+	if doc.SessionID != s.ID() || doc.TrajectoryID != lid(t, s, "o0000001") || doc.SchemaVersion != atif.SchemaVersion {
 		t.Errorf("root = %+v", doc)
 	}
 	if doc.Agent.Name != "fixture" || doc.Agent.Version != "1" || doc.Agent.ModelName != "gpt-5" || len(doc.Agent.ToolDefinitions) != 1 {
@@ -199,7 +222,7 @@ func TestBasicMapping(t *testing.T) {
 		t.Error("outcome missing from final metrics")
 	}
 	as := doc.Extra[ExtraAgentSession].(map[string]any)
-	if as["cwd"] != "/home/u/proj" || as["leaf"] != "o0000001" || as["format"] != s.Header().Format {
+	if as["cwd"] != "/home/u/proj" || as["leaf"] != lid(t, s, "o0000001") || as["format"] != s.Header().Format {
 		t.Errorf("root agentsession extra = %v", as)
 	}
 	// Without a price source there is no cost.
@@ -272,21 +295,21 @@ func TestPreferencePairs(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("trajectories = %v", got)
 	}
-	abandoned, continued := got["r0000002"], got["n0000001"]
-	if abandoned.AbandonedAt != "r0000001" || len(abandoned.PreferredOver) != 0 || abandoned.Main {
+	abandoned, continued := got[lid(t, s, "r0000002")], got[lid(t, s, "n0000001")]
+	if abandoned.AbandonedAt != lid(t, s, "r0000001") || len(abandoned.PreferredOver) != 0 || abandoned.Main {
 		t.Errorf("abandoned = %+v", abandoned)
 	}
-	if continued.AbandonedAt != "" || !reflect.DeepEqual(continued.PreferredOver, []string{"r0000002"}) || !continued.Main {
+	if continued.AbandonedAt != "" || !reflect.DeepEqual(continued.PreferredOver, []string{lid(t, s, "r0000002")}) || !continued.Main {
 		t.Errorf("continued = %+v", continued)
 	}
-	if continued.Name != "Branching demo" || continued.Labels["r0000001"] != "fork" {
+	if continued.Name != "Branching demo" || continued.Labels[lid(t, s, "r0000001")] != "fork" {
 		t.Errorf("name %q labels %v", continued.Name, continued.Labels)
 	}
 	doc, err := ToATIF(continued, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(doc.Extra[ExtraPreferredOver], []string{"r0000002"}) {
+	if !reflect.DeepEqual(doc.Extra[ExtraPreferredOver], []string{lid(t, s, "r0000002")}) {
 		t.Errorf("preferred_over = %v", doc.Extra[ExtraPreferredOver])
 	}
 	var summary *atif.Step
@@ -295,7 +318,7 @@ func TestPreferencePairs(t *testing.T) {
 			summary = &doc.Steps[i]
 		}
 	}
-	if summary == nil || summary.Source != atif.SourceSystem || summary.Extra[ExtraBranchFrom] != "r0000002" || summary.IsCopiedContext == nil {
+	if summary == nil || summary.Source != atif.SourceSystem || summary.Extra[ExtraBranchFrom] != lid(t, s, "r0000002") || summary.IsCopiedContext == nil {
 		t.Errorf("branch summary step = %+v", summary)
 	}
 	// Labels and info land on the next step or the root.
@@ -310,7 +333,7 @@ func TestPreferencePairs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if doc.Extra[ExtraAbandonedAt] != "r0000001" {
+	if doc.Extra[ExtraAbandonedAt] != lid(t, s, "r0000001") {
 		t.Errorf("abandoned_at = %v", doc.Extra[ExtraAbandonedAt])
 	}
 }
@@ -485,7 +508,23 @@ func readBackWith(t *testing.T, s *agentsession.Session, line string) *agentsess
 	if err := agentsession.Write(&buf, s); err != nil {
 		t.Fatal(err)
 	}
-	buf.WriteString(line + "\n")
+	// The line's id must be its hash for the file to read; whatever id
+	// the caller wrote is a placeholder.
+	id, _, err := agentsession.EntryHashes([]byte(line))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(line), &all); err != nil {
+		t.Fatal(err)
+	}
+	all["id"], _ = json.Marshal(id)
+	fixed, err := json.Marshal(all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf.Write(fixed)
+	buf.WriteString("\n")
 	again, err := agentsession.Read(&buf)
 	if err != nil {
 		t.Fatal(err)
@@ -789,7 +828,8 @@ func mustAppend(t *testing.T, s *agentsession.Session, e agentsession.Entry) {
 func TestPreferences(t *testing.T) {
 	// The branch fixture forks at r0000001: i0000003 leads to leaf
 	// r0000002 and b0000001 to leaf n0000001, the last appended.
-	const fork, sideA, sideB = "r0000001", "i0000003", "b0000001"
+	named := loadFixture(t, "branch")
+	fork, sideA, sideB := lid(t, named, "r0000001"), lid(t, named, "i0000003"), lid(t, named, "b0000001")
 	children := []string{sideA, sideB}
 	tests := []struct {
 		name    string
@@ -805,7 +845,7 @@ func TestPreferences(t *testing.T) {
 		{name: "current leaf", prefs: []Preference{PreferCurrentLeaf}, want: sideB, opinion: sideB},
 		{
 			name:    "current leaf after switching back",
-			prepare: func(t *testing.T, s *agentsession.Session) { mustDo(t, s.Branch("r0000002")) },
+			prepare: func(t *testing.T, s *agentsession.Session) { mustDo(t, s.Branch(lid(t, s, "r0000002"))) },
 			prefs:   []Preference{PreferCurrentLeaf},
 			want:    sideA, opinion: sideA,
 		},
@@ -813,7 +853,7 @@ func TestPreferences(t *testing.T) {
 		{
 			name: "label",
 			prepare: func(t *testing.T, s *agentsession.Session) {
-				_, err := s.Append(agentsession.NewLabelEntry("i0000004", "best"))
+				_, err := s.Append(agentsession.NewLabelEntry(lid(t, s, "i0000004"), "best"))
 				mustDo(t, err)
 			},
 			prefs: []Preference{PreferLabel("best")},
@@ -822,9 +862,9 @@ func TestPreferences(t *testing.T) {
 		{
 			name: "label on both sides",
 			prepare: func(t *testing.T, s *agentsession.Session) {
-				_, err := s.Append(agentsession.NewLabelEntry("i0000004", "best"))
+				_, err := s.Append(agentsession.NewLabelEntry(lid(t, s, "i0000004"), "best"))
 				mustDo(t, err)
-				_, err = s.Append(agentsession.NewLabelEntry("i0000006", "best"))
+				_, err = s.Append(agentsession.NewLabelEntry(lid(t, s, "i0000006"), "best"))
 				mustDo(t, err)
 			},
 			prefs: []Preference{PreferLabel("best")},
@@ -834,9 +874,9 @@ func TestPreferences(t *testing.T) {
 		{
 			name: "score",
 			prepare: func(t *testing.T, s *agentsession.Session) {
-				_, err := s.Append(agentsession.NewOutcomeEntry("test", "r0000002").WithScore(1))
+				_, err := s.Append(agentsession.NewOutcomeEntry("test", lid(t, s, "r0000002")).WithScore(1))
 				mustDo(t, err)
-				_, err = s.Append(agentsession.NewOutcomeEntry("test", "r0000003").WithScore(0.5))
+				_, err = s.Append(agentsession.NewOutcomeEntry("test", lid(t, s, "r0000003")).WithScore(0.5))
 				mustDo(t, err)
 			},
 			prefs: []Preference{PreferScore},
@@ -845,7 +885,7 @@ func TestPreferences(t *testing.T) {
 		{
 			name: "score tie",
 			prepare: func(t *testing.T, s *agentsession.Session) {
-				_, err := s.Append(agentsession.NewOutcomeEntry("test", "r0000002").WithScore(1))
+				_, err := s.Append(agentsession.NewOutcomeEntry("test", lid(t, s, "r0000002")).WithScore(1))
 				mustDo(t, err)
 				_, err = s.Append(agentsession.NewOutcomeEntry("test", "").WithScore(1)) // its own position, side B
 				mustDo(t, err)
@@ -856,7 +896,7 @@ func TestPreferences(t *testing.T) {
 		{
 			name: "first opinion wins",
 			prepare: func(t *testing.T, s *agentsession.Session) {
-				_, err := s.Append(agentsession.NewLabelEntry("i0000004", "best"))
+				_, err := s.Append(agentsession.NewLabelEntry(lid(t, s, "i0000004"), "best"))
 				mustDo(t, err)
 			},
 			prefs: []Preference{PreferScore, PreferLabel("best"), PreferLatest},
@@ -921,7 +961,7 @@ func TestExportKeepsUnknownMembers(t *testing.T) {
 		agentsession.NewEnvEntry("/w"),
 		agentsession.NewRunStart("r", agentsession.SourceInput, ""),
 		agentsession.NewItemEntry(openresponses.UserText("hi")),
-		&agentsession.ItemEntry{EntryBase: agentsession.EntryBase{ID: "fc-entry"}, Item: fc, ResponseID: "resp"},
+		&agentsession.ItemEntry{Item: fc, ResponseID: "resp"},
 		&agentsession.ResponseEntry{ResponseID: "resp", Status: "completed"},
 		agentsession.NewDecision("call_1", "fc-entry", agentsession.VerdictProceed, agentsession.ByPolicy),
 		agentsession.NewDispatch("call_1", "fc-entry"),
@@ -933,12 +973,25 @@ func TestExportKeepsUnknownMembers(t *testing.T) {
 		agentsession.NewLinkEntry(agentsession.RelForkOf, "other"),
 	}
 	var want []string
+	var fcEntry string
 	for i, e := range entries {
 		key := fmt.Sprintf("acme:probe_%s_%d", e.EntryType(), i)
 		val := fmt.Sprintf(`"v%d"`, i)
 		e.Base().Unknown = map[string]json.RawMessage{key: json.RawMessage(val)}
-		if _, err := s.Append(e); err != nil {
+		// The decision and dispatch name the function call's entry,
+		// whose id is its hash and is known only once it is appended.
+		switch v := e.(type) {
+		case *agentsession.DecisionEntry:
+			v.Target = fcEntry
+		case *agentsession.DispatchEntry:
+			v.Target = fcEntry
+		}
+		id, err := s.Append(e)
+		if err != nil {
 			t.Fatalf("%s: %v", e.EntryType(), err)
+		}
+		if item, ok := e.(*agentsession.ItemEntry); ok && item.Item == fc {
+			fcEntry = id
 		}
 		want = append(want, fmt.Sprintf(`%q:%s`, key, val))
 	}

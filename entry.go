@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -75,12 +76,48 @@ type EntryBase struct {
 	// — so [Session.Path] and every context the library builds follow
 	// Parent alone. Session.Append sorts it.
 	Parents []EntryRef
-	// Timestamp is when the entry was written.
+	// Timestamp is when the entry was written. The format admits one
+	// spelling, UTC with at most nine fractional digits, so Append
+	// converts a caller's time to UTC.
 	Timestamp time.Time
-	// Unknown holds envelope members this package does not define,
+	// LegacyID is the id an entry had before its file was migrated to
+	// 0.5, when its id became the envelope hash. It is a body member,
+	// so it is hashed; a projection may emit it beside the new id so
+	// output made from the earlier file still resolves.
+	LegacyID string
+	// Normalised records what a writer changed in the body before
+	// writing so that it passed the I-JSON test: a lone surrogate to
+	// U+FFFD, an integer outside binary64 to a string or to its rounded
+	// value. It is sorted by At as UTF-16 code units.
+	Normalised []Normalisation
+	// Unknown holds body members this package does not define,
 	// preserved so a later minor version's optional fields survive a
 	// rewrite. It is nil when there are none.
 	Unknown map[string]json.RawMessage
+
+	// content is the content hash, computed when the entry was appended
+	// or read; tsRaw is the ts member as the line spelled it.
+	content string
+	tsRaw   string
+}
+
+// ContentHash returns the hash of the entry's body, the members outside
+// the envelope, as computed when the entry was appended or read. It is
+// empty for an entry that has been neither.
+func (b *EntryBase) ContentHash() string { return b.content }
+
+// Normalisation is one change a writer made to a body before writing
+// it, recorded in [EntryBase.Normalised].
+type Normalisation struct {
+	// At is an RFC 6901 JSON Pointer relative to the body.
+	At string `json:"at"`
+	// Was is the member's original JSON source text, escapes included,
+	// so it is I-JSON whatever it describes. It is empty when the
+	// output was not valid UTF-8 and had no JSON text to record.
+	Was string `json:"was,omitempty"`
+	// Raw carries the original bytes, base64 under RFC 4648 §4 with
+	// padding, when Was cannot: output that was not valid UTF-8.
+	Raw string `json:"raw,omitempty"`
 }
 
 // Base returns the envelope.
@@ -106,7 +143,20 @@ type envelope struct {
 	TS      time.Time  `json:"ts"`
 }
 
-var envelopeKeys = []string{"type", "id", "parent", "parents", "ts"}
+// leapSecond matches the seconds field of an RFC 3339 time spelled 60.
+var leapSecond = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:)60((?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2}))$`)
+
+// envelopeKeys are the envelope's names, all reserved: a body MUST NOT
+// carry a top-level member by any of them. content is computed and
+// never written, but a body carrying one would collide with it.
+var envelopeKeys = []string{"type", "id", "parent", "parents", "ts", "content"}
+
+// commonBodyKeys are body members every entry type may carry.
+var commonBodyKeys = []string{"legacy_id", "normalised"}
+
+// ErrReservedMember is returned for a body carrying a top-level member
+// by one of the envelope's names.
+var ErrReservedMember = errors.New("agentsession: body carries a reserved envelope name")
 
 // ItemEntry is one conversation item in the payload profile. It is in
 // model context.
@@ -438,6 +488,25 @@ func (e *UnknownEntry) decodeMembers(data []byte, all map[string]json.RawMessage
 	}
 	e.Parents = env.Parents
 	e.Timestamp = env.TS
+	e.tsRaw = ""
+	if raw, ok := all["ts"]; ok {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			e.tsRaw = s
+		}
+	}
+	e.LegacyID = ""
+	if raw, ok := all["legacy_id"]; ok && !isNull(raw) {
+		if err := json.Unmarshal(raw, &e.LegacyID); err != nil {
+			return fmt.Errorf("legacy_id: %w", err)
+		}
+	}
+	e.Normalised = nil
+	if raw, ok := all["normalised"]; ok && !isNull(raw) {
+		if err := json.Unmarshal(raw, &e.Normalised); err != nil {
+			return fmt.Errorf("normalised: %w", err)
+		}
+	}
 	e.Raw = append(json.RawMessage(nil), data...)
 	return nil
 }
@@ -557,6 +626,9 @@ func splitMembers(data []byte) (map[string]json.RawMessage, error) {
 
 // envelopeFrom reads the common members out of a split line.
 func envelopeFrom(all map[string]json.RawMessage) (envelope, error) {
+	if _, ok := all["content"]; ok {
+		return envelope{}, fmt.Errorf("%w: content", ErrReservedMember)
+	}
 	env := envelope{Type: jsonx.PeekString(all["type"]), ID: jsonx.PeekString(all["id"])}
 	if raw, ok := all["parent"]; ok && !isNull(raw) {
 		var parent string
@@ -572,7 +644,21 @@ func envelopeFrom(all map[string]json.RawMessage) (envelope, error) {
 	}
 	if raw, ok := all["ts"]; ok && !isNull(raw) {
 		if err := json.Unmarshal(raw, &env.TS); err != nil {
-			return env, fmt.Errorf("ts: %w", err)
+			// A second 60, which time.Time cannot hold: the format has a
+			// writer and a migration write it as 59 with the same
+			// fraction. The raw spelling is still checked by a 0.5
+			// reader, so this only lets an earlier file through.
+			var str string
+			if json.Unmarshal(raw, &str) != nil {
+				return env, fmt.Errorf("ts: %w", err)
+			}
+			fixed := leapSecond.ReplaceAllString(str, "${1}59${2}")
+			if fixed == str {
+				return env, fmt.Errorf("ts: %w", err)
+			}
+			if env.TS, err = time.Parse(time.RFC3339Nano, fixed); err != nil {
+				return env, fmt.Errorf("ts: %w", err)
+			}
 		}
 	}
 	return env, nil
@@ -581,7 +667,7 @@ func envelopeFrom(all map[string]json.RawMessage) (envelope, error) {
 // marshalEntry joins the envelope, the type-specific body and the
 // unknown members into one object.
 func marshalEntry(typ string, base *EntryBase, body any) ([]byte, error) {
-	env := envelope{Type: typ, ID: base.ID, Parents: base.Parents, TS: base.Timestamp}
+	env := envelope{Type: typ, ID: base.ID, Parents: base.Parents, TS: base.Timestamp.UTC()}
 	if base.Parent != "" {
 		env.Parent = &base.Parent
 	}
@@ -593,7 +679,28 @@ func marshalEntry(typ string, base *EntryBase, body any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return jsonx.JoinObjects(head, b, base.Unknown), nil
+	return jsonx.JoinObjects(head, b, base.extraMembers()), nil
+}
+
+// extraMembers returns the unknown members with the common body members
+// the base carries added, for marshalling.
+func (b *EntryBase) extraMembers() map[string]json.RawMessage {
+	if b.LegacyID == "" && len(b.Normalised) == 0 {
+		return b.Unknown
+	}
+	out := make(map[string]json.RawMessage, len(b.Unknown)+2)
+	for k, v := range b.Unknown {
+		out[k] = v
+	}
+	if b.LegacyID != "" {
+		raw, _ := json.Marshal(b.LegacyID)
+		out["legacy_id"] = raw
+	}
+	if len(b.Normalised) > 0 {
+		raw, _ := json.Marshal(b.Normalised)
+		out["normalised"] = raw
+	}
+	return out
 }
 
 // unmarshalEntry fills base from the envelope in data, decodes the body
@@ -619,7 +726,26 @@ func fillBase(all map[string]json.RawMessage, base *EntryBase, known map[string]
 	}
 	base.Parents = env.Parents
 	base.Timestamp = env.TS
-	base.Unknown = jsonx.ExtraKeys(all, known, envelopeKeys...)
+	base.tsRaw = ""
+	if raw, ok := all["ts"]; ok {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			base.tsRaw = s
+		}
+	}
+	base.LegacyID = ""
+	if raw, ok := all["legacy_id"]; ok && !isNull(raw) {
+		if err := json.Unmarshal(raw, &base.LegacyID); err != nil {
+			return fmt.Errorf("legacy_id: %w", err)
+		}
+	}
+	base.Normalised = nil
+	if raw, ok := all["normalised"]; ok && !isNull(raw) {
+		if err := json.Unmarshal(raw, &base.Normalised); err != nil {
+			return fmt.Errorf("normalised: %w", err)
+		}
+	}
+	base.Unknown = jsonx.ExtraKeys(all, known, append(append([]string{}, envelopeKeys...), commonBodyKeys...)...)
 	return nil
 }
 

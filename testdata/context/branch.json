@@ -1,5 +1,74 @@
 {
-  "n0000001": {
+  "sha256:0b9d4d6fb06c6ad39d8ebf31be35bde8f499a5fe45d976c556625edb12f7bf9c": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Be brief."
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Q"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "A1",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "follow-up A"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_2",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "A2",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "sha256:29edacce9dbf458831164efdb62dd61ec52152e8a30fecda25b99a5fdaf9b74b",
+      "sha256:c7148fabb18d3d73e9ef655243727d80286d464eda2748efdc1b5e7db6147cd7",
+      "sha256:dc47e900a9713b423c2ea06166d4be1be91959f4e465cd893728e92c2487d139",
+      "sha256:d5fb4724d28690ce84fa6970b57ec286c645d3493939c71e0b2e07509573a0d2",
+      "sha256:9b1fa109a514566a682d2d8041515c505af3a62cff7c02e486720746e49c122e",
+      "sha256:f6283049bf677a32357e2270a0a662d1731f1ee311bb8ef890542efa13189aec",
+      "sha256:0b9d4d6fb06c6ad39d8ebf31be35bde8f499a5fe45d976c556625edb12f7bf9c"
+    ],
+    "item_entries": [
+      "sha256:c7148fabb18d3d73e9ef655243727d80286d464eda2748efdc1b5e7db6147cd7",
+      "sha256:dc47e900a9713b423c2ea06166d4be1be91959f4e465cd893728e92c2487d139",
+      "sha256:9b1fa109a514566a682d2d8041515c505af3a62cff7c02e486720746e49c122e",
+      "sha256:f6283049bf677a32357e2270a0a662d1731f1ee311bb8ef890542efa13189aec"
+    ]
+  },
+  "sha256:1dea6d6be55ab38ba0901a9e6aeadbb4187d5919c9e47a41ef9b262ba3f6e8d2": {
     "settings": {
       "model": "gpt-5",
       "instructions": "Be brief."
@@ -63,94 +132,25 @@
       }
     ],
     "entries": [
-      "c0000001",
-      "i0000001",
-      "i0000002",
-      "r0000001",
-      "b0000001",
-      "i0000005",
-      "i0000006",
-      "r0000003",
-      "l0000001",
-      "l0000002",
-      "l0000003",
-      "n0000001"
+      "sha256:29edacce9dbf458831164efdb62dd61ec52152e8a30fecda25b99a5fdaf9b74b",
+      "sha256:c7148fabb18d3d73e9ef655243727d80286d464eda2748efdc1b5e7db6147cd7",
+      "sha256:dc47e900a9713b423c2ea06166d4be1be91959f4e465cd893728e92c2487d139",
+      "sha256:d5fb4724d28690ce84fa6970b57ec286c645d3493939c71e0b2e07509573a0d2",
+      "sha256:8f8814dad9c878846d3bb523dd2299afad1ef4971b145dac21e9e32d4488380a",
+      "sha256:01b9cf298e2d61bb79d6703d69f2a158e05b4c68462904477ff7bea433f16253",
+      "sha256:8d6c93cf0e4d98e1d2d7b2c132e65b18aa3c8fcbfa23925c1e62fc544d4cbd07",
+      "sha256:d75bf9ea7c69185fc955f189756a67ec42ea077a3637402413db31178d1f7888",
+      "sha256:d905f9a8a79d4abf7d4c2f78dd72c88002565fb803e92f4a425b94142737d268",
+      "sha256:2ad8fda19034488f83e63bf144b729f0c945c167bdee646cf6a932f6edc5727f",
+      "sha256:b8baabf6ebd0a2fe4036e38e4f4466a1124c0936821b0834cda4d4fe7f8f7407",
+      "sha256:1dea6d6be55ab38ba0901a9e6aeadbb4187d5919c9e47a41ef9b262ba3f6e8d2"
     ],
     "item_entries": [
-      "i0000001",
-      "i0000002",
-      "b0000001",
-      "i0000005",
-      "i0000006"
-    ]
-  },
-  "r0000002": {
-    "settings": {
-      "model": "gpt-5",
-      "instructions": "Be brief."
-    },
-    "items": [
-      {
-        "type": "message",
-        "role": "user",
-        "content": [
-          {
-            "type": "input_text",
-            "text": "Q"
-          }
-        ]
-      },
-      {
-        "type": "message",
-        "id": "msg_1",
-        "status": "completed",
-        "role": "assistant",
-        "content": [
-          {
-            "type": "output_text",
-            "text": "A1",
-            "annotations": []
-          }
-        ]
-      },
-      {
-        "type": "message",
-        "role": "user",
-        "content": [
-          {
-            "type": "input_text",
-            "text": "follow-up A"
-          }
-        ]
-      },
-      {
-        "type": "message",
-        "id": "msg_2",
-        "status": "completed",
-        "role": "assistant",
-        "content": [
-          {
-            "type": "output_text",
-            "text": "A2",
-            "annotations": []
-          }
-        ]
-      }
-    ],
-    "entries": [
-      "c0000001",
-      "i0000001",
-      "i0000002",
-      "r0000001",
-      "i0000003",
-      "i0000004",
-      "r0000002"
-    ],
-    "item_entries": [
-      "i0000001",
-      "i0000002",
-      "i0000003",
-      "i0000004"
+      "sha256:c7148fabb18d3d73e9ef655243727d80286d464eda2748efdc1b5e7db6147cd7",
+      "sha256:dc47e900a9713b423c2ea06166d4be1be91959f4e465cd893728e92c2487d139",
+      "sha256:8f8814dad9c878846d3bb523dd2299afad1ef4971b145dac21e9e32d4488380a",
+      "sha256:01b9cf298e2d61bb79d6703d69f2a158e05b4c68462904477ff7bea433f16253",
+      "sha256:8d6c93cf0e4d98e1d2d7b2c132e65b18aa3c8fcbfa23925c1e62fc544d4cbd07"
     ]
   }
 }

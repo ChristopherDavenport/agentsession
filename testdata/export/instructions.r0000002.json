@@ -1,7 +1,7 @@
 {
   "schema_version": "ATIF-v1.8",
   "session_id": "01995b2a-0000-7000-8000-000000000007",
-  "trajectory_id": "r0000002",
+  "trajectory_id": "sha256:28c49598d9ef28f4d6dc435e5308722661bf1a96c13dc18694c7cc3c7d8a3ccd",
   "agent": {
     "name": "fixture",
     "version": "1",
@@ -12,7 +12,6 @@
           "description": "Run a shell command",
           "name": "bash",
           "parameters": {
-            "type": "object",
             "properties": {
               "cmd": {
                 "type": "string"
@@ -20,7 +19,8 @@
             },
             "required": [
               "cmd"
-            ]
+            ],
+            "type": "object"
           }
         },
         "type": "function"
@@ -35,10 +35,10 @@
       "message": "Fix the rounding bug.",
       "extra": {
         "agentsession": {
-          "entry_id": "i0000001"
+          "entry_id": "sha256:7151a5fd29c0e045d1e3b06892e80c6c6543c385d47076cc7780ec1d9de32ecb"
         },
         "config_entries": [
-          "c0000001"
+          "sha256:4329d290fd2d28b9d7c997f4fe95c87383f7ebf8dd6becd69b16e258fdb975b5"
         ],
         "openresponses": {
           "item": {
@@ -73,10 +73,10 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "r0000001"
+          "entry_id": "sha256:013e9c59e559d36067142cf6291b234499e42e9ade3945a98470c41d728643ce"
         },
         "item_entry_ids": [
-          "i0000002"
+          "sha256:88ac12fd98b0945f81345103a1ab343c9d6d928adf85f918d664d5ada047238a"
         ],
         "latency_ms": 400,
         "openresponses": {
@@ -96,8 +96,9 @@
             }
           ],
           "response": {
-            "entry_id": "r0000001",
+            "entry_id": "sha256:013e9c59e559d36067142cf6291b234499e42e9ade3945a98470c41d728643ce",
             "latency_ms": 400,
+            "legacy_id": "r0000001",
             "model": "gpt-5",
             "request_hash": "sha256:dbc04e7cd093cb34296f79abb718fa80341f2ad3f6d300028bdcbd390f737065",
             "response_id": "resp_1",
@@ -125,10 +126,10 @@
       "message": "Thanks.",
       "extra": {
         "agentsession": {
-          "entry_id": "i0000003"
+          "entry_id": "sha256:c72b40e6517fcffd520100956d7a5976143b8f2fc65f8802eb4fe122f0e332c5"
         },
         "config_entries": [
-          "c0000002"
+          "sha256:1449875a8144521984eba1e81bcb0f31b116c4691cb4b8bdefaade1178c2328a"
         ],
         "openresponses": {
           "item": {
@@ -158,10 +159,10 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "r0000002"
+          "entry_id": "sha256:28c49598d9ef28f4d6dc435e5308722661bf1a96c13dc18694c7cc3c7d8a3ccd"
         },
         "item_entry_ids": [
-          "i0000004"
+          "sha256:e498a6735c07702f170cb7844061e42cf688317ba1b7266b56a97d2f3a1c96cb"
         ],
         "latency_ms": 300,
         "openresponses": {
@@ -181,8 +182,9 @@
             }
           ],
           "response": {
-            "entry_id": "r0000002",
+            "entry_id": "sha256:28c49598d9ef28f4d6dc435e5308722661bf1a96c13dc18694c7cc3c7d8a3ccd",
             "latency_ms": 300,
+            "legacy_id": "r0000002",
             "model": "gpt-5",
             "request_hash": "sha256:bc3b8b07ad9d80fbe5b805ded90542c298d122c84c1deb99c8fe22c4cb3fae9f",
             "response_id": "resp_2",
@@ -213,8 +215,8 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.3",
-      "leaf": "r0000002",
+      "format": "agentsession/0.5",
+      "leaf": "sha256:28c49598d9ef28f4d6dc435e5308722661bf1a96c13dc18694c7cc3c7d8a3ccd",
       "main": true
     },
     "openresponses": {

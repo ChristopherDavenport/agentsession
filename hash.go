@@ -5,7 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"time"
 
+	"github.com/ChristopherDavenport/agentsession/internal/ijson"
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/openresponses"
 )
@@ -42,4 +45,111 @@ func HashRequestJSON(data []byte) (string, error) {
 	}
 	sum := sha256.Sum256(canonical)
 	return HashPrefix + hex.EncodeToString(sum[:]), nil
+}
+
+// CanonicalTime renders t in the one form the format admits for ts:
+// UTC, uppercase T and Z, a fractional part only when non-zero, with
+// no trailing zeros and at most nine digits. It is what Go's
+// RFC3339Nano layout produces for a UTC time, so a time.Time round
+// trips unchanged, which is the property the rule was chosen for.
+func CanonicalTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// ParseCanonicalTime parses s and reports whether it is spelled in the
+// canonical form: a spelling the format admits renders back to itself.
+func ParseCanonicalTime(s string) (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, CanonicalTime(t) == s
+}
+
+// EntryHashes computes an entry's two hashes from its encoded form, a
+// JSON object with the envelope members in it: the content hash over the
+// body, the members outside the envelope, and the id over the envelope
+// object — type, parent, parents when present and non-empty, ts, and
+// content holding the content hash. The id member in data, if any, is
+// ignored; ts is taken as the string it is. Both are "sha256:" plus
+// lowercase hex over the canonical bytes.
+func EntryHashes(data []byte) (id, content string, err error) {
+	// The test runs on the line as written: the decoder would repair a
+	// duplicate member, a lone surrogate or invalid UTF-8 on its way to
+	// the structs, and the format says a reader reports them.
+	if err := ijson.Check(data); err != nil {
+		return "", "", fmt.Errorf("agentsession: entry: %w", err)
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return "", "", fmt.Errorf("agentsession: entry: %w", err)
+	}
+	body := make(map[string]json.RawMessage, len(all))
+	for k, v := range all {
+		if !isEnvelopeKey(k) {
+			body[k] = v
+		}
+	}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return "", "", err
+	}
+	if err := ijson.Check(bodyJSON); err != nil {
+		return "", "", fmt.Errorf("agentsession: entry body: %w", err)
+	}
+	content, err = HashRequestJSON(bodyJSON)
+	if err != nil {
+		return "", "", err
+	}
+	env := map[string]json.RawMessage{
+		"type":    all["type"],
+		"parent":  all["parent"],
+		"ts":      all["ts"],
+		"content": json.RawMessage(strconv.Quote(content)),
+	}
+	if env["parent"] == nil {
+		env["parent"] = json.RawMessage("null")
+	}
+	if p, ok := all["parents"]; ok {
+		// Decided on the value, not the spelling: an empty array however
+		// written is omitted, as a conforming writer omits it.
+		var refs []json.RawMessage
+		if json.Unmarshal(p, &refs) == nil && len(refs) > 0 {
+			env["parents"] = p
+		}
+	}
+	envJSON, err := json.Marshal(env)
+	if err != nil {
+		return "", "", err
+	}
+	id, err = HashRequestJSON(envJSON)
+	if err != nil {
+		return "", "", err
+	}
+	return id, content, nil
+}
+
+// ValidHash reports whether s is a hash in the format's notation:
+// "sha256:" followed by exactly 64 lowercase hexadecimal characters.
+// Anything a store puts on a filesystem as a hash is checked with it.
+func ValidHash(s string) bool {
+	if len(s) != len(HashPrefix)+64 || s[:len(HashPrefix)] != HashPrefix {
+		return false
+	}
+	for _, c := range s[len(HashPrefix):] {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// isEnvelopeKey reports whether k is one of the envelope's names, which
+// are reserved: a body MUST NOT carry a top-level member by any of them.
+func isEnvelopeKey(k string) bool {
+	switch k {
+	case "id", "type", "parent", "parents", "ts", "content":
+		return true
+	}
+	return false
 }

@@ -1,5 +1,5 @@
 {
-  "i0000008": {
+  "sha256:6c3d801786ea391c08f334b91a04169df1e0d76c7f1406c1d8b7663e606850d9": {
     "settings": {
       "model": "gpt-5",
       "instructions": "Be brief.",
@@ -9,7 +9,6 @@
           "name": "delegate",
           "description": "Run a task in a subagent",
           "parameters": {
-            "type": "object",
             "properties": {
               "task": {
                 "type": "string"
@@ -17,119 +16,8 @@
             },
             "required": [
               "task"
-            ]
-          }
-        }
-      ]
-    },
-    "items": [
-      {
-        "type": "message",
-        "role": "user",
-        "content": [
-          {
-            "type": "input_text",
-            "text": "Survey both options and report."
-          }
-        ]
-      },
-      {
-        "type": "function_call",
-        "id": "fc_1",
-        "status": "completed",
-        "call_id": "call_a",
-        "name": "delegate",
-        "arguments": "{\"task\":\"option A\"}"
-      },
-      {
-        "type": "function_call",
-        "id": "fc_2",
-        "status": "completed",
-        "call_id": "call_b",
-        "name": "delegate",
-        "arguments": "{\"task\":\"option B\"}"
-      },
-      {
-        "type": "function_call_output",
-        "call_id": "call_a",
-        "output": "Option A: three blockers."
-      },
-      {
-        "type": "function_call_output",
-        "call_id": "call_b",
-        "output": "Option B: one blocker."
-      },
-      {
-        "type": "message",
-        "id": "msg_1",
-        "status": "completed",
-        "role": "assistant",
-        "content": [
-          {
-            "type": "output_text",
-            "text": "Option B has fewer blockers.",
-            "annotations": []
-          }
-        ]
-      },
-      {
-        "type": "message",
-        "role": "user",
-        "content": [
-          {
-            "type": "input_text",
-            "text": "Draft it as a table."
-          }
-        ]
-      }
-    ],
-    "entries": [
-      "c0000001",
-      "u0000001",
-      "i0000001",
-      "i0000002",
-      "i0000003",
-      "r0000001",
-      "k0000001",
-      "k0000002",
-      "p0000001",
-      "p0000002",
-      "i0000004",
-      "i0000005",
-      "i0000006",
-      "r0000002",
-      "u0000002",
-      "i0000008"
-    ],
-    "item_entries": [
-      "i0000001",
-      "i0000002",
-      "i0000003",
-      "i0000004",
-      "i0000005",
-      "i0000006",
-      "i0000008"
-    ]
-  },
-  "i0000009": {
-    "settings": {
-      "model": "gpt-5",
-      "instructions": "Be brief.",
-      "tools": [
-        {
-          "type": "function",
-          "name": "delegate",
-          "description": "Run a task in a subagent",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "task": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "task"
-            ]
+            ],
+            "type": "object"
           }
         }
       ]
@@ -206,33 +94,145 @@
       }
     ],
     "entries": [
-      "c0000001",
-      "u0000001",
-      "i0000001",
-      "i0000002",
-      "i0000003",
-      "r0000001",
-      "k0000001",
-      "k0000002",
-      "p0000001",
-      "p0000002",
-      "i0000004",
-      "i0000005",
-      "i0000006",
-      "r0000002",
-      "u0000002",
-      "i0000007",
-      "i0000009"
+      "sha256:96cf0a2bfec6eacdf7f4ad422c785d37cc49108d760983437521c4f1ec043b63",
+      "sha256:c4b07c33d3316c7349a39b8801da83df2592218ce6064670e11d23083a2872b7",
+      "sha256:8e5a54eb79e95b974639834a08d411a5ff6cd5b3bd8231dbbb265e282d6e7342",
+      "sha256:f9b41be453b152509e9ec496ac653a2d04c32fdbbc62fb9711ac15af0cc85bbc",
+      "sha256:4c678a5f9c2c057f2ac32df036b9c1e79c78a82dcf9c91c8eab1ce960a5f3b53",
+      "sha256:31b9e424257515f3485246cca675d2379afd6943a7bc547851e6b1f1c73c7cd7",
+      "sha256:88e14e23670b32af427cf8bb2f5295fe87fd662c99609d8f3d3e1dd412aab826",
+      "sha256:66fafb31b5f2edbb74542526aa19516b862e4fa7bd5fff0c074228ce6c5594f8",
+      "sha256:d41382b0e44e1607ec5e96c22ccfe571d34423d43761ce376700011a6399104c",
+      "sha256:4a816337bfe0031ad7a9b0dbb182de0c54e627015dd247ded1ad104064dec123",
+      "sha256:5df9e1329b6a60e8002ae0744a9f050d736902510c02935eeedab9147e419b42",
+      "sha256:dea317015143b78f6dc87c586a226b767ed0a649c96e71b5e75c402a9644a899",
+      "sha256:a04bfc29a047ff76c414f7d815370745b59d567920c3eb04e4fe41b5da0f9cf2",
+      "sha256:03902ad5a64a0292895ada6b7bce992592e3a1aaa4802780b49bc61c3f47b450",
+      "sha256:ba4196c4d873763cc8ba62b394ad7ca57a8d8c95b5b981cd01a12b991d9934ee",
+      "sha256:fad779dc714399b198e30a2eec618294a3c733c9f051a9f5c3f7d1ae5bbd520d",
+      "sha256:6c3d801786ea391c08f334b91a04169df1e0d76c7f1406c1d8b7663e606850d9"
     ],
     "item_entries": [
-      "i0000001",
-      "i0000002",
-      "i0000003",
-      "i0000004",
-      "i0000005",
-      "i0000006",
-      "i0000007",
-      "i0000009"
+      "sha256:8e5a54eb79e95b974639834a08d411a5ff6cd5b3bd8231dbbb265e282d6e7342",
+      "sha256:f9b41be453b152509e9ec496ac653a2d04c32fdbbc62fb9711ac15af0cc85bbc",
+      "sha256:4c678a5f9c2c057f2ac32df036b9c1e79c78a82dcf9c91c8eab1ce960a5f3b53",
+      "sha256:5df9e1329b6a60e8002ae0744a9f050d736902510c02935eeedab9147e419b42",
+      "sha256:dea317015143b78f6dc87c586a226b767ed0a649c96e71b5e75c402a9644a899",
+      "sha256:a04bfc29a047ff76c414f7d815370745b59d567920c3eb04e4fe41b5da0f9cf2",
+      "sha256:fad779dc714399b198e30a2eec618294a3c733c9f051a9f5c3f7d1ae5bbd520d",
+      "sha256:6c3d801786ea391c08f334b91a04169df1e0d76c7f1406c1d8b7663e606850d9"
+    ]
+  },
+  "sha256:c5867edf1c2ad1c0a9c6e2443b641118e4848dff8020f472d0a0f24fcd8555d5": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Be brief.",
+      "tools": [
+        {
+          "type": "function",
+          "name": "delegate",
+          "description": "Run a task in a subagent",
+          "parameters": {
+            "properties": {
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "task"
+            ],
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Survey both options and report."
+          }
+        ]
+      },
+      {
+        "type": "function_call",
+        "id": "fc_1",
+        "status": "completed",
+        "call_id": "call_a",
+        "name": "delegate",
+        "arguments": "{\"task\":\"option A\"}"
+      },
+      {
+        "type": "function_call",
+        "id": "fc_2",
+        "status": "completed",
+        "call_id": "call_b",
+        "name": "delegate",
+        "arguments": "{\"task\":\"option B\"}"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_a",
+        "output": "Option A: three blockers."
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_b",
+        "output": "Option B: one blocker."
+      },
+      {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Option B has fewer blockers.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Draft it as a table."
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "sha256:96cf0a2bfec6eacdf7f4ad422c785d37cc49108d760983437521c4f1ec043b63",
+      "sha256:c4b07c33d3316c7349a39b8801da83df2592218ce6064670e11d23083a2872b7",
+      "sha256:8e5a54eb79e95b974639834a08d411a5ff6cd5b3bd8231dbbb265e282d6e7342",
+      "sha256:f9b41be453b152509e9ec496ac653a2d04c32fdbbc62fb9711ac15af0cc85bbc",
+      "sha256:4c678a5f9c2c057f2ac32df036b9c1e79c78a82dcf9c91c8eab1ce960a5f3b53",
+      "sha256:31b9e424257515f3485246cca675d2379afd6943a7bc547851e6b1f1c73c7cd7",
+      "sha256:88e14e23670b32af427cf8bb2f5295fe87fd662c99609d8f3d3e1dd412aab826",
+      "sha256:66fafb31b5f2edbb74542526aa19516b862e4fa7bd5fff0c074228ce6c5594f8",
+      "sha256:d41382b0e44e1607ec5e96c22ccfe571d34423d43761ce376700011a6399104c",
+      "sha256:4a816337bfe0031ad7a9b0dbb182de0c54e627015dd247ded1ad104064dec123",
+      "sha256:5df9e1329b6a60e8002ae0744a9f050d736902510c02935eeedab9147e419b42",
+      "sha256:dea317015143b78f6dc87c586a226b767ed0a649c96e71b5e75c402a9644a899",
+      "sha256:a04bfc29a047ff76c414f7d815370745b59d567920c3eb04e4fe41b5da0f9cf2",
+      "sha256:03902ad5a64a0292895ada6b7bce992592e3a1aaa4802780b49bc61c3f47b450",
+      "sha256:ba4196c4d873763cc8ba62b394ad7ca57a8d8c95b5b981cd01a12b991d9934ee",
+      "sha256:c5867edf1c2ad1c0a9c6e2443b641118e4848dff8020f472d0a0f24fcd8555d5"
+    ],
+    "item_entries": [
+      "sha256:8e5a54eb79e95b974639834a08d411a5ff6cd5b3bd8231dbbb265e282d6e7342",
+      "sha256:f9b41be453b152509e9ec496ac653a2d04c32fdbbc62fb9711ac15af0cc85bbc",
+      "sha256:4c678a5f9c2c057f2ac32df036b9c1e79c78a82dcf9c91c8eab1ce960a5f3b53",
+      "sha256:5df9e1329b6a60e8002ae0744a9f050d736902510c02935eeedab9147e419b42",
+      "sha256:dea317015143b78f6dc87c586a226b767ed0a649c96e71b5e75c402a9644a899",
+      "sha256:a04bfc29a047ff76c414f7d815370745b59d567920c3eb04e4fe41b5da0f9cf2",
+      "sha256:c5867edf1c2ad1c0a9c6e2443b641118e4848dff8020f472d0a0f24fcd8555d5"
     ]
   }
 }

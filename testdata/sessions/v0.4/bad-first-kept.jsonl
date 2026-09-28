@@ -1,0 +1,3 @@
+{"type":"session","format":"agentsession/0.1","id":"01995b2a-0000-7000-8000-00000000000a","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}
+{"type":"item","id":"i0000001","parent":null,"ts":"2026-09-17T16:00:01Z","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}
+{"type":"compaction","id":"k0000001","parent":"i0000001","ts":"2026-09-17T16:00:02Z","first_kept":"zzzz","summary":{"type":"message","role":"system","content":[{"type":"input_text","text":"s"}]},"config":{"model":"gpt-5"}}

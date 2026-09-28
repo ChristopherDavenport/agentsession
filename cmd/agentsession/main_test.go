@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -16,21 +15,53 @@ const fixtures = "../../testdata/sessions"
 
 func TestRun(t *testing.T) {
 	tmp := t.TempDir()
+	// Entry ids are hashes over the bodies, so a fixture is tampered with
+	// by replaying it with a change and letting Append rehash: the file
+	// then reads, and only the request hashes disagree.
 	tampered := filepath.Join(tmp, "tampered.jsonl")
-	data, err := os.ReadFile(filepath.Join(fixtures, "basic.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(tampered, bytes.ReplaceAll(data, []byte(`"request_hash":"sha256:`), []byte(`"request_hash":"sha256:0`)), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	replayFixture(t, "basic", tampered, func(e agentsession.Entry) {
+		if r, ok := e.(*agentsession.ResponseEntry); ok && r.RequestHash != "" {
+			flip := "0"
+			if r.RequestHash[len("sha256:")] == '0' {
+				flip = "1"
+			}
+			r.RequestHash = "sha256:" + flip + r.RequestHash[len("sha256:0"):]
+		}
+	})
 	// A session whose responses recorded no hash. Verify reports each
 	// with ErrNoHash; the CLI counts those apart from the verified and
 	// the failed alike, and does not fail the run over them.
 	unhashed := filepath.Join(tmp, "unhashed.jsonl")
-	stripped := regexp.MustCompile(`,"request_hash":"sha256:[0-9a-f]+"`).ReplaceAll(data, nil)
-	if err := os.WriteFile(unhashed, stripped, 0o600); err != nil {
-		t.Fatal(err)
+	replayFixture(t, "basic", unhashed, func(e agentsession.Entry) {
+		if r, ok := e.(*agentsession.ResponseEntry); ok {
+			r.RequestHash = ""
+		}
+	})
+	// Entries are named in the output by the first twelve hex characters
+	// of their hash; the fixtures carry readable legacy ids, which is how
+	// the expectations name them.
+	sid := func(fixture, legacy string) string {
+		s := loadFixture(t, fixture)
+		if strings.Contains(fixture, string(filepath.Separator)) {
+			s = readPath(t, fixture)
+		}
+		for _, e := range s.Entries() {
+			if e.Base().LegacyID == legacy {
+				return shortID(e.Base().ID)
+			}
+		}
+		t.Fatalf("no entry %s in %s", legacy, fixture)
+		return ""
+	}
+	digest := func(fixture, legacy string) string {
+		s := loadFixture(t, fixture)
+		for _, e := range s.Entries() {
+			if e.Base().LegacyID == legacy {
+				return strings.TrimPrefix(e.Base().ID, agentsession.HashPrefix)
+			}
+		}
+		t.Fatalf("no entry %s in %s", legacy, fixture)
+		return ""
 	}
 	root := filepath.Join(tmp, "root", "proj")
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -61,12 +92,12 @@ func TestRun(t *testing.T) {
 		{name: "show too many", args: []string{"show", "a", "b"}, code: 2, stderr: []string{"expected one session file, got 2"}},
 		{
 			name: "show", args: []string{"show", filepath.Join(fixtures, "branch.jsonl")},
-			stdout: []string{"name     Branching demo", "fork×2 [fork]", "r0000002  i0000004  response", "leaf", "context at n0000001", `system: "An earlier attempt`, `user: "follow-up B"`},
+			stdout: []string{"name     Branching demo", "fork×2 [fork]", sid("branch", "r0000002") + "  " + sid("branch", "i0000004") + "  response", "leaf", "context at " + sid("branch", "n0000001"), `system: "An earlier attempt`, `user: "follow-up B"`},
 			absent: []string{"truncated"},
 		},
 		{
 			name: "show at leaf", args: []string{"show", "-leaf", "r0000002", filepath.Join(fixtures, "branch.jsonl")},
-			stdout: []string{"context at r0000002", `user: "follow-up A"`},
+			stdout: []string{"context at " + sid("branch", "r0000002"), `user: "follow-up A"`},
 			absent: []string{`    4  user: "follow-up B"`},
 		},
 		{name: "show bad leaf", args: []string{"show", filepath.Join(fixtures, "branch.jsonl"), "-leaf", "zz"}, code: 1, stderr: []string{"no such entry"}},
@@ -76,13 +107,13 @@ func TestRun(t *testing.T) {
 		},
 		{
 			name: "show truncated", args: []string{"show", filepath.Join(fixtures, "truncated.jsonl")},
-			stdout: []string{"truncated: line 4"},
+			stdout: []string{"truncated: line 10"},
 		},
-		{name: "verify", args: []string{"verify", filepath.Join(fixtures, "branch.jsonl")}, stdout: []string{"r0000001  ok", "3 verified, 0 without hash, 0 failed"}},
+		{name: "verify", args: []string{"verify", filepath.Join(fixtures, "branch.jsonl")}, stdout: []string{sid("branch", "r0000001") + "  ok", "3 verified, 0 without hash, 0 failed"}},
 		{name: "verify mismatch", args: []string{"verify", tampered}, code: 1, stdout: []string{"MISMATCH", "2 failed"}},
 		{
 			name: "verify without a recorded hash", args: []string{"verify", unhashed},
-			stdout: []string{"r0000001  no hash recorded", "0 verified, 2 without hash, 0 failed"},
+			stdout: []string{sid(unhashed, "r0000001") + "  no hash recorded", "0 verified, 2 without hash, 0 failed"},
 			absent: []string{"ok", "MISMATCH", "ERROR"},
 		},
 		{
@@ -94,18 +125,18 @@ func TestRun(t *testing.T) {
 			// which is where the request that was sent had it.
 			name: "show pinned", args: []string{"show", filepath.Join(fixtures, "pinned.jsonl")},
 			stdout: []string{
-				"first kept i0000004", "2 pinned",
+				"first kept " + sid("pinned", "i0000004"), "2 pinned",
 				`1  system: "Summary: the user said first`,
 				`2  developer: "House rule: never use Box::leak."`,
 				`3  developer: "House rule: always run the linter."`,
 			},
 		},
-		{name: "verify truncated", args: []string{"verify", filepath.Join(fixtures, "truncated.jsonl")}, code: 1, stdout: []string{"truncated: line 4"}},
+		{name: "verify truncated", args: []string{"verify", filepath.Join(fixtures, "truncated.jsonl")}, code: 1, stdout: []string{"truncated: line 10"}},
 		{name: "verify runs", args: []string{"verify", filepath.Join(fixtures, "runs.jsonl")}, stdout: []string{"2 verified, 0 without hash, 0 failed"}, absent: []string{"records to"}},
-		{name: "verify bad records", args: []string{"verify", filepath.Join(fixtures, "bad-records.jsonl")}, code: 1, stdout: []string{"records to i0000003  ERROR", "call call_1 has an output and no dispatch"}},
+		{name: "verify bad records", args: []string{"verify", filepath.Join(fixtures, "bad-records.jsonl")}, code: 1, stdout: []string{"records to " + sid("bad-records", "i0000003") + "  ERROR", "call call_1 has an output and no dispatch"}},
 		{
 			name: "show runs", args: []string{"show", filepath.Join(fixtures, "runs.jsonl")},
-			stdout: []string{"records  run, dispatch, decision", "start run-1 input ref", "hold call_1 by policy", "call_2 to tool", "reject call_3 by policy", "end run-1 input_required pending call_1", "end run-2 done", "eval on r0000002 score 0.9 pass", "container sha256:9f2c1e4b7a0d…"},
+			stdout: []string{"records  run, dispatch, decision", "start run-1 input ref", "hold call_1 by policy", "call_2 to tool", "reject call_3 by policy", "end run-1 input_required pending call_1", "end run-2 done", "eval on " + sid("runs", "r0000002") + " score 0.9 pass", "container sha256:9f2c1e4b7a0d…"},
 		},
 		{
 			name: "show instructions parts", args: []string{"show", filepath.Join(fixtures, "instructions.jsonl")},
@@ -137,7 +168,7 @@ func TestRun(t *testing.T) {
 		},
 		{
 			name: "show custom entries in full", args: []string{"show", "-v", filepath.Join(fixtures, "interleaved.jsonl")},
-			stdout: []string{`agentpolicy {"verdict":"allow","rule":"bash(ls:*)"}`},
+			stdout: []string{`agentpolicy {"rule":"bash(ls:*)","verdict":"allow"}`},
 			absent: []string{"(unknown entry type)"},
 		},
 		{
@@ -153,8 +184,8 @@ func TestRun(t *testing.T) {
 		{name: "export without out", args: []string{"export", filepath.Join(fixtures, "branch.jsonl")}, code: 2, stderr: []string{"-out is required"}},
 		{
 			name: "export", args: []string{"export", filepath.Join(fixtures, "branch.jsonl"), "-out", out, "-secret", "A1", "-redact-home", "-redact-env"},
-			stdout:  []string{filepath.Join(out, "01995b2a-0000-7000-8000-000000000003.json"), "_r0000002.json"},
-			written: []string{filepath.Join(out, "01995b2a-0000-7000-8000-000000000003.json"), filepath.Join(out, "01995b2a-0000-7000-8000-000000000003_r0000002.json")},
+			stdout:  []string{filepath.Join(out, "01995b2a-0000-7000-8000-000000000003.json"), "_" + digest("branch", "r0000002") + ".json"},
+			written: []string{filepath.Join(out, "01995b2a-0000-7000-8000-000000000003.json"), filepath.Join(out, "01995b2a-0000-7000-8000-000000000003_"+digest("branch", "r0000002")+".json")},
 		},
 		{name: "list", args: []string{"list", filepath.Join(tmp, "root")}, stdout: []string{"CREATED", "01995b2a-0000-7000-8000-000000000003  Branching demo", "01995b2a-0000-7000-8000-000000000001", "/home/u/proj"}},
 		{name: "list limit", args: []string{"list", filepath.Join(tmp, "root"), "-limit", "1"}, stdout: []string{"01995b2a-0000-7000-8000-000000000003"}, absent: []string{"01995b2a-0000-7000-8000-000000000001"}},
@@ -284,5 +315,59 @@ func TestDescribeEveryEntryType(t *testing.T) {
 		if !seen[typ] {
 			t.Errorf("no case for the %s entry", typ)
 		}
+	}
+}
+
+// loadFixture reads a session fixture.
+func loadFixture(t *testing.T, name string) *agentsession.Session {
+	t.Helper()
+	if strings.Contains(name, string(filepath.Separator)) {
+		return readPath(t, name)
+	}
+	return readPath(t, filepath.Join(fixtures, name+".jsonl"))
+}
+
+// readPath reads the session file at path.
+func readPath(t *testing.T, path string) *agentsession.Session {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	s, err := agentsession.Read(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// replayFixture writes a copy of a fixture to path, appending each entry
+// afresh after mutate has changed it, so the copy's ids are the hashes
+// of what it carries.
+func replayFixture(t *testing.T, name, path string, mutate func(agentsession.Entry)) {
+	t.Helper()
+	src := loadFixture(t, name)
+	dst := agentsession.New(src.Header())
+	ids := map[string]string{}
+	for _, e := range src.Entries() {
+		old := e.Base().ID
+		mutate(e)
+		e.Base().ID = ""
+		if p := e.Base().Parent; p != "" {
+			e.Base().Parent = ids[p]
+		}
+		id, err := dst.Append(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[old] = id
+	}
+	var buf bytes.Buffer
+	if err := agentsession.Write(&buf, dst); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -82,7 +82,7 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		}
 		return strings.Join(parts, ", ")
 	case *agentsession.CompactionEntry:
-		s := "first kept " + v.FirstKept + "; " + describeItem(v.Summary)
+		s := "first kept " + shortID(v.FirstKept) + "; " + describeItem(v.Summary)
 		if n := len(v.Pinned); n > 0 {
 			s += fmt.Sprintf("; %d pinned", n)
 		}
@@ -91,12 +91,12 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		}
 		return s
 	case *agentsession.BranchSummaryEntry:
-		return "from " + v.From + "; " + describeItem(v.Summary)
+		return "from " + shortID(v.From) + "; " + describeItem(v.Summary)
 	case *agentsession.LabelEntry:
 		if v.Label == nil {
-			return v.Target + " cleared"
+			return shortID(v.Target) + " cleared"
 		}
-		return v.Target + " = " + *v.Label
+		return shortID(v.Target) + " = " + *v.Label
 	case *agentsession.InfoEntry:
 		if v.Name != "" {
 			return "name " + describeText(v.Name)
@@ -127,7 +127,7 @@ func describeEntry(e agentsession.Entry, full bool) string {
 	case *agentsession.OutcomeEntry:
 		parts := []string{v.Kind}
 		if v.Target != "" {
-			parts = append(parts, "on "+v.Target)
+			parts = append(parts, "on "+shortID(v.Target))
 		}
 		if v.Score != nil {
 			parts = append(parts, fmt.Sprintf("score %g", *v.Score))

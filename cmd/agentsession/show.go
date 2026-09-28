@@ -31,6 +31,8 @@ func show(args []string, stdout, stderr io.Writer) error {
 	at := *leaf
 	if at == "" {
 		at = s.Leaf()
+	} else if at, err = resolveEntry(s, at); err != nil {
+		return err
 	}
 	if at == "" {
 		return nil
@@ -72,7 +74,7 @@ func printHeader(w io.Writer, s *agentsession.Session) {
 	if name := s.Name(); name != "" {
 		fmt.Fprintf(tw, "name\t%s\n", name)
 	}
-	fmt.Fprintf(tw, "entries\t%d in %d root(s), %d leaf(s), leaf %s\n", s.Len(), len(s.Roots()), len(s.Leaves()), orDash(s.Leaf()))
+	fmt.Fprintf(tw, "entries\t%d in %d root(s), %d leaf(s), leaf %s\n", s.Len(), len(s.Roots()), len(s.Leaves()), orDash(shortID(s.Leaf())))
 	tw.Flush()
 }
 
@@ -103,7 +105,7 @@ func printEntries(w io.Writer, s *agentsession.Session, full bool) {
 		if len(marks) > 0 {
 			summary += "  " + strings.Join(marks, " ")
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", b.ID, orDash(b.Parent), e.EntryType(), summary)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", shortID(b.ID), orDash(shortID(b.Parent)), e.EntryType(), summary)
 	}
 	tw.Flush()
 }
@@ -113,7 +115,7 @@ func printContext(w io.Writer, s *agentsession.Session, at string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(w, "context at %s: %d item(s) from %d entries\n", at, len(ctx.Items), len(ctx.Entries))
+	fmt.Fprintf(w, "context at %s: %d item(s) from %d entries\n", shortID(at), len(ctx.Items), len(ctx.Entries))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	st := ctx.Settings
 	fmt.Fprintf(tw, "  model\t%s\n", orDash(st.Model))

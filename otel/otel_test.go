@@ -181,7 +181,7 @@ func TestExportRunsFixture(t *testing.T) {
 	if attr(c1, AttrCallState) != "completed" {
 		t.Errorf("call_1 state = %s", attr(c1, AttrCallState))
 	}
-	if _, ok := known["p0000002"]; !ok {
+	if _, ok := known[lid(t, s, "p0000002")]; !ok {
 		t.Error("known spans lack the dispatch entry")
 	}
 }
@@ -310,4 +310,18 @@ func TestBranchLink(t *testing.T) {
 	if !linked {
 		t.Error("no span links the branched-from entry")
 	}
+}
+
+// lid returns the id of the fixture entry whose legacy_id is name; the
+// fixtures are generated from 0.4 sources by migration, so every entry
+// carries the readable id its source gave it.
+func lid(t *testing.T, s *agentsession.Session, name string) string {
+	t.Helper()
+	for _, e := range s.Entries() {
+		if e.Base().LegacyID == name {
+			return e.Base().ID
+		}
+	}
+	t.Fatalf("no fixture entry with legacy id %s", name)
+	return ""
 }

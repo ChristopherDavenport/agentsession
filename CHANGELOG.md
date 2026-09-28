@@ -7,6 +7,131 @@ versions may break the API.
 
 ## Unreleased
 
+- **RFC 0001 draft 0.5 is implemented and the library writes
+  `agentsession/0.5`.** An entry's `id` is now the hash of its envelope
+  — `type`, `parent`, `parents` when non-empty, `ts` and the hash of its
+  body — so `Append` computes it and refuses an id a caller set that
+  does not match (`ErrBadID`), a reader verifies every line and reports
+  one that fails, and `EntryBase.ContentHash` gives the body's own hash.
+  `ts` has one spelling, UTC with at most nine fractional digits, which
+  `Append` converts a caller's time to and `Read` refuses any other
+  form of. Every hashed member must be I-JSON by the exactness rule;
+  `Append` refuses a body that is not, and the envelope's names are
+  reserved in a body (`ErrReservedMember`). `Write` emits canonical
+  lines, since preservation is of members and not bytes. Breaking for
+  any caller that chose entry IDs.
+- **Migration.** A 0.4 or earlier file reads by migrating in memory:
+  every entry is rehashed with its references rewritten, keeps its old
+  id in `EntryBase.LegacyID`, and takes the one `ts` spelling. A file
+  holding an extension entry cannot be written back as 0.5, since the
+  reader cannot rewrite what such an entry names (`Session.Migrated`,
+  `ErrUnresolvedMigration`). A repeated id in a file is one entry,
+  reported by `Session.Repeated`.
+- **Leaf rule.** An append under the leaf makes the entry the leaf; an
+  append elsewhere is a branch and the leaf does not move. A `leaf`
+  label moves the leaf to its target wherever the label sits, when the
+  target is one the leaf may rest on; the leaf never rests on a label,
+  and a label it cannot honour is not in force on resume either.
+  Appending an entry the session already holds is a no-op that returns
+  its id.
+- **Sessions with a base.** `Header.Base` names the entry another
+  session's file this one continues from, `Fork` makes such a session
+  in memory, and its file opens with the prefix; own entries hang from
+  the base or from each other, and `Session.Prefix` tells the two apart.
+  `Header.Redacted` marks a file whose hashes were recomputed over
+  redacted bodies.
+- **Context hash.** `Session.ContextHash` computes RFC 0002's cache key
+  at an entry: incremental over the type and content hash of the
+  entries that carry context, with per-run provenance members removed
+  and a compaction's `first_kept` substituted.
+- The CLI shows entry ids abbreviated to twelve hex characters, as git
+  shows a commit, and `-leaf` resolves a full id, a unique prefix or a
+  migrated entry's legacy id. ATIF documents are named by the leaf's
+  digest without its `sha256:` prefix, since a colon is not a legal
+  file name everywhere.
+- Not yet done: writer-side normalisation. The format has a writer
+  replace a lone surrogate with U+FFFD and round or stringify an integer
+  outside binary64, recording the change in `normalised`; this library
+  refuses such a body instead. Go's JSON decoder already replaces a lone
+  surrogate on the way in, so the remaining case is a large integer in a
+  passthrough member.
+- The session fixtures under `testdata/sessions` are generated from the
+  0.4 sources now kept under `testdata/sessions/v0.4`, and carry
+  `legacy_id`; see CLAUDE.md.
+- **New package `cas`: the content-addressed store of RFC 0002**, on a
+  filesystem, laid out as git lays out a repository. An entry is two
+  objects, its body under the content hash and its envelope under the
+  id, so a body shared by many entries is held once and a fork stores
+  nothing until it appends. A session is a directory with its header, an
+  append-only log of entry hashes, a `HEAD` file and a record or mirror
+  mark. `Append` writes the objects first, idempotently, then one
+  journal record, which is the commit point and is fsynced, then the
+  log line and the head; `Open` replays the journal's tail so a crash
+  between the commit and the indexes loses nothing acknowledged.
+  `Create` with `Header.Base` makes a fork whose prefix is the origin's
+  shared objects. `SetHead` is the compare-and-swap of the head, with
+  `ErrHeadMoved` when it is not where the caller thought; an append
+  elsewhere than the head is a branch that moves nothing, and a `leaf`
+  label moves the head to its target. `Project` writes the RFC 0001 file
+  with a synthetic marker only when the resume rule would miss the head;
+  `Import` reads one as a mirror unless told it is the record, verifies
+  every line, refuses a redacted header and discards the marker; a
+  mirror refuses local writes until `DeclareRecord`. `Sweep` removes
+  what no log or prefix needs, following references down, and leaves a
+  temporary file a writer may be about to rename. `Write` is `Append`
+  reporting what happened, as the format asks: continued, branched,
+  held, leaf moved or leaf not moved. A session ID or a hash that cannot
+  be a path is refused (`ErrBadName`), a synthetic marker appended as an
+  entry is refused (`ErrSynthetic`), and every rename or creation is
+  followed by an fsync of its directory. Several processes share a
+  store on one machine: each session is held by one at a time through
+  `flock`, which the kernel drops when the holder exits, so there is no
+  stale lock to detect; the journal is shared and never truncated by a
+  reader, a record a crash cut short is skipped and the records after
+  it still count, and recovery is per session by the process that holds
+  it. `Sweep` works from the journal, so an acknowledged append whose
+  log line never reached disk is kept, and it spares every object
+  younger than a grace period the caller gives, as git spares a young
+  loose object, so it needs no lock on writers and runs alongside live
+  sessions; an object a new append finds already stored is freshened, as
+  git freshens a loose object, and a fork's prefix is freshened when the
+  fork is made, so neither can be swept between the write and the record
+  that names it. A grace of zero is safe only with no writer active.
+  Lock files live under `locks/` and are never unlinked, so a holder is
+  never left locking an inode a delete removed. A network filesystem is
+  not supported, since `O_APPEND` is not atomic across NFS clients. A session changed behind the store's
+  back, by an append made on it directly or a leaf moved to an entry
+  never committed, is refused (`ErrModified`). An index write that
+  fails after the journal commit does not fail the append, which is
+  durable; the next open repairs the index, and nothing after the commit
+  point turns a durable append into a reported failure. Media blobs are
+  content objects: `PutBlob` stores one under its hash, `Blob` reads it,
+  the sweep follows a content's `sidecar:` references to keep them, and
+  `ProjectDir` writes a sidecar session's blobs beside its file; an
+  append naming a blob the store does not hold is accepted and reported
+  in `Result.Unresolved`. The sweep holds the store's lock per object
+  only, around a second stat and the remove, and a writer's shared lock
+  is taken without blocking and retried until its context ends, so a
+  writer never waits longer than one removal. `Result.Reopen` tells a
+  caller that a durable append could not be applied to its session and
+  it should open the session again. One session whose files cannot be
+  read is reported at its own `Open` and hides no other. It runs the
+  store conformance suite.
+- A 0.x file of a later minor than this reader's is refused, since the
+  0.x series is exempt from the rule that a reader reads every minor of
+  its major. A migration reports a reference it cannot rewrite, into
+  another session or to an id not seen earlier, and such a file is not
+  re-emitted. A `ts` spelled with second 60 in an earlier file migrates
+  as 59 with the same fraction. `ErrDuplicateEntry` is gone; nothing
+  returned it. Exchange between stores, media sidecars and
+  the SQLite relayout are not in this change.
+- `Session.Prepare` and `Session.Commit` split `Append` into the part
+  that computes an entry's hashes and outcome without adding it and the
+  part that adds it, so a store can write and commit before anything is
+  visible in memory. `Read` checks every line as written, before the
+  decoder can repair a repeated member, a lone surrogate or invalid
+  UTF-8; `ValidHash` says what a hash string may be.
+
 - **Breaking for writers.** `Append` now refuses an item entry holding
   an `openresponses.ItemReference`. RFC 0001 gains the **ingress** rule
   — an entry receiving material from outside the session carries it

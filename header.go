@@ -13,7 +13,7 @@ import (
 )
 
 // Format is the session format version this package writes.
-const Format = "agentsession/0.4"
+const Format = "agentsession/0.5"
 
 // FormatMajor is the major version of the format this package reads.
 // Any minor version of it is accepted; files are migrated in memory.
@@ -52,7 +52,18 @@ type Header struct {
 	// SpawnedBy is, for a subsession, the call_id of the parent's
 	// function call that spawned it.
 	SpawnedBy string `json:"spawned_by,omitempty"`
-	Media     string `json:"media,omitempty"`
+	// Base is the hash of the entry this session continues from, in
+	// the session ParentSession names, or empty for a session that
+	// starts fresh. A file with a base opens with the path to it, the
+	// prefix, before any entry the session appended itself, and every
+	// own entry hangs from the base. A base is never a leaf label.
+	Base  string `json:"base,omitempty"`
+	Media string `json:"media,omitempty"`
+	// Redacted is true when bodies were changed after they were written,
+	// as export redaction does. The redactor recomputes every hash and
+	// reference over the redacted bodies, so the file walks and
+	// verifies against itself and not against the original.
+	Redacted bool `json:"redacted,omitempty"`
 
 	// Extra holds header fields this package does not define.
 	Extra map[string]json.RawMessage `json:"-"`
@@ -135,6 +146,12 @@ func (h Header) Validate() error {
 	if major != FormatMajor {
 		return fmt.Errorf("%w: %s", ErrUnsupportedFormat, h.Format)
 	}
+	if minor, _ := func() (int, error) { _, m, e := ParseFormat(h.Format); return m, e }(); major == 0 && minor > FormatMinor {
+		// The 0.x series is exempt from the rule that a reader reads
+		// every minor of its major: a later 0.x may have changed the
+		// envelope, and a reader of 0.x supports the minors it names.
+		return fmt.Errorf("%w: %s is later than this reader's %s", ErrUnsupportedFormat, h.Format, Format)
+	}
 	if h.ID == "" {
 		return errors.New("agentsession: header id is required")
 	}
@@ -187,10 +204,17 @@ func (h *Header) fill(now time.Time) {
 	}
 }
 
+// FormatMinor is the minor version this package writes. A file of an
+// earlier minor is migrated in memory on read: from 0.5 an entry's id
+// is its envelope hash, so every earlier entry is rehashed and keeps
+// its old id in legacy_id.
+const FormatMinor = 5
+
 // migrate brings a header of an earlier minor version up to the current
-// one in memory. Minor versions only add entry types and optional
-// fields, so today there is nothing to rewrite; the hook exists so a
-// later minor version has one place to do it.
+// one in memory. The 0.x series is exempt from the rule that a minor
+// version changes nothing a reader depends on, so a reader of 0.5
+// reads an earlier file by rewriting it; the entries are rewritten by
+// Read, and the header takes the current format.
 func migrate(h *Header) error {
 	major, _, err := ParseFormat(h.Format)
 	if err != nil {
@@ -198,6 +222,9 @@ func migrate(h *Header) error {
 	}
 	if major != FormatMajor {
 		return fmt.Errorf("%w: %s", ErrUnsupportedFormat, h.Format)
+	}
+	if _, minor, _ := ParseFormat(h.Format); minor < FormatMinor {
+		h.Format = Format
 	}
 	return nil
 }

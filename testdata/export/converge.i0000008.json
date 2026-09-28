@@ -1,7 +1,7 @@
 {
   "schema_version": "ATIF-v1.8",
   "session_id": "01995b2a-0000-7000-8000-00000000000c",
-  "trajectory_id": "i0000008",
+  "trajectory_id": "sha256:c5867edf1c2ad1c0a9c6e2443b641118e4848dff8020f472d0a0f24fcd8555d5",
   "agent": {
     "name": "fixture",
     "version": "1",
@@ -12,7 +12,6 @@
           "description": "Run a task in a subagent",
           "name": "delegate",
           "parameters": {
-            "type": "object",
             "properties": {
               "task": {
                 "type": "string"
@@ -20,7 +19,8 @@
             },
             "required": [
               "task"
-            ]
+            ],
+            "type": "object"
           }
         },
         "type": "function"
@@ -35,10 +35,10 @@
       "message": "Survey both options and report.",
       "extra": {
         "agentsession": {
-          "entry_id": "i0000001"
+          "entry_id": "sha256:8e5a54eb79e95b974639834a08d411a5ff6cd5b3bd8231dbbb265e282d6e7342"
         },
         "config_entries": [
-          "c0000001"
+          "sha256:96cf0a2bfec6eacdf7f4ad422c785d37cc49108d760983437521c4f1ec043b63"
         ],
         "openresponses": {
           "item": {
@@ -54,12 +54,12 @@
         },
         "run": [
           {
-            "end_entry_id": "u0000002",
+            "end_entry_id": "sha256:ba4196c4d873763cc8ba62b394ad7ca57a8d8c95b5b981cd01a12b991d9934ee",
             "pending": [],
             "reason": "done",
             "run_id": "run-1",
             "source": "input",
-            "start_entry_id": "u0000001"
+            "start_entry_id": "sha256:c4b07c33d3316c7349a39b8801da83df2592218ce6064670e11d23083a2872b7"
           }
         ],
         "tool_changes": {
@@ -103,7 +103,7 @@
                 "trajectory_path": "01995b2a-0000-7000-8000-0000000000c1.json",
                 "extra": {
                   "child_leaf": "a0000009",
-                  "entry_id": "k0000001"
+                  "entry_id": "sha256:88e14e23670b32af427cf8bb2f5295fe87fd662c99609d8f3d3e1dd412aab826"
                 }
               }
             ],
@@ -127,7 +127,7 @@
                 "trajectory_path": "01995b2a-0000-7000-8000-0000000000c2.json",
                 "extra": {
                   "child_leaf": "b0000006",
-                  "entry_id": "k0000002"
+                  "entry_id": "sha256:66fafb31b5f2edbb74542526aa19516b862e4fa7bd5fff0c074228ce6c5594f8"
                 }
               }
             ],
@@ -151,23 +151,23 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "r0000001"
+          "entry_id": "sha256:31b9e424257515f3485246cca675d2379afd6943a7bc547851e6b1f1c73c7cd7"
         },
         "calls": {
           "call_a": {
             "dispatch": {
-              "entry_id": "p0000001"
+              "entry_id": "sha256:d41382b0e44e1607ec5e96c22ccfe571d34423d43761ce376700011a6399104c"
             }
           },
           "call_b": {
             "dispatch": {
-              "entry_id": "p0000002"
+              "entry_id": "sha256:4a816337bfe0031ad7a9b0dbb182de0c54e627015dd247ded1ad104064dec123"
             }
           }
         },
         "item_entry_ids": [
-          "i0000002",
-          "i0000003"
+          "sha256:f9b41be453b152509e9ec496ac653a2d04c32fdbbc62fb9711ac15af0cc85bbc",
+          "sha256:4c678a5f9c2c057f2ac32df036b9c1e79c78a82dcf9c91c8eab1ce960a5f3b53"
         ],
         "latency_ms": 500,
         "openresponses": {
@@ -190,8 +190,9 @@
             }
           ],
           "response": {
-            "entry_id": "r0000001",
+            "entry_id": "sha256:31b9e424257515f3485246cca675d2379afd6943a7bc547851e6b1f1c73c7cd7",
             "latency_ms": 500,
+            "legacy_id": "r0000001",
             "model": "gpt-5",
             "request_hash": "sha256:aaf6608beeb4a271342889f52f0603608a846922c89b7ac81e28c3c0c29ecb03",
             "response_id": "resp_1",
@@ -226,10 +227,10 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "r0000002"
+          "entry_id": "sha256:03902ad5a64a0292895ada6b7bce992592e3a1aaa4802780b49bc61c3f47b450"
         },
         "item_entry_ids": [
-          "i0000006"
+          "sha256:a04bfc29a047ff76c414f7d815370745b59d567920c3eb04e4fe41b5da0f9cf2"
         ],
         "latency_ms": 300,
         "openresponses": {
@@ -249,8 +250,9 @@
             }
           ],
           "response": {
-            "entry_id": "r0000002",
+            "entry_id": "sha256:03902ad5a64a0292895ada6b7bce992592e3a1aaa4802780b49bc61c3f47b450",
             "latency_ms": 300,
+            "legacy_id": "r0000002",
             "model": "gpt-5",
             "request_hash": "sha256:c3bf7e3e01c3678f29becc7cc026bed7b71d5c45b6e63974ff77608b023a538e",
             "response_id": "resp_2",
@@ -278,7 +280,7 @@
       "message": "Draft it as a table.",
       "extra": {
         "agentsession": {
-          "entry_id": "i0000008"
+          "entry_id": "sha256:c5867edf1c2ad1c0a9c6e2443b641118e4848dff8020f472d0a0f24fcd8555d5"
         },
         "openresponses": {
           "item": {
@@ -302,11 +304,11 @@
     "total_steps": 4
   },
   "extra": {
-    "abandoned_at": "u0000002",
+    "abandoned_at": "sha256:ba4196c4d873763cc8ba62b394ad7ca57a8d8c95b5b981cd01a12b991d9934ee",
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.4",
-      "leaf": "i0000008",
+      "format": "agentsession/0.5",
+      "leaf": "sha256:c5867edf1c2ad1c0a9c6e2443b641118e4848dff8020f472d0a0f24fcd8555d5",
       "records": [
         "run",
         "dispatch",

@@ -558,3 +558,118 @@ func (s *Session) Verify(id string) error {
 	}
 	return nil
 }
+
+// ContextHash computes the context hash at entry id, as RFC 0002
+// defines it: the key a store can compute as it appends and a router can
+// key a provider's cached prefix on. It is defined over the path ending
+// at the entry by the entry's type and not by any later leaf. An item,
+// config, compaction or branch_summary contributes; a response, a record
+// entry and an extension entry do not. The value before any
+// contributing entry is the hash of the canonical null; a
+// non-contributing entry takes its parent's; a contributing entry hashes
+// the three-element array of its parent's context hash, its type and
+// its content hash as the section defines, with the per-run provenance
+// members removed from the body first and a compaction's first_kept
+// replaced by the context hash and type of the entry it names.
+//
+// It excludes ts and parents, it is incremental, and two sessions whose
+// contributing entries are byte-identical share it. It is not
+// request_hash: on a path with no compaction the two identify the same
+// request, and after a fold they part.
+func (s *Session) ContextHash(id string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	path := s.path(id)
+	if path == nil {
+		return "", fmt.Errorf("%w: %s", ErrNoEntry, id)
+	}
+	ctx, err := HashRequestJSON([]byte("null"))
+	if err != nil {
+		return "", err
+	}
+	at := map[string]string{} // context hash at each entry on the path
+	types := map[string]string{}
+	for _, e := range path {
+		b := e.Base()
+		types[b.ID] = e.EntryType()
+		if !contributes(e) {
+			at[b.ID] = ctx
+			continue
+		}
+		content, err := contextContentHash(e, at, types)
+		if err != nil {
+			return "", err
+		}
+		step, err := json.Marshal([]string{ctx, e.EntryType(), content})
+		if err != nil {
+			return "", err
+		}
+		ctx, err = HashRequestJSON(step)
+		if err != nil {
+			return "", err
+		}
+		at[b.ID] = ctx
+	}
+	return ctx, nil
+}
+
+// contributes reports whether an entry enters the context hash: the
+// four types that carry context, by type and not by whether a later
+// leaf's compaction would select them.
+func contributes(e Entry) bool {
+	switch e.EntryType() {
+	case TypeItem, TypeConfig, TypeCompaction, TypeBranchSummary:
+		return true
+	}
+	return false
+}
+
+// contextContentHash is the content hash the context hash uses for one
+// contributing entry: the body with legacy_id and normalised removed
+// for every type, response, source and queued_from removed from an
+// item, from removed from a branch_summary, and a compaction's
+// first_kept replaced by [context hash, type] of the entry it names
+// when that entry is on the path and by null otherwise.
+func contextContentHash(e Entry, at, types map[string]string) (string, error) {
+	data, err := MarshalEntry(e)
+	if err != nil {
+		return "", err
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return "", err
+	}
+	body := make(map[string]json.RawMessage, len(all))
+	for k, v := range all {
+		if isEnvelopeKey(k) {
+			continue
+		}
+		body[k] = v
+	}
+	delete(body, "legacy_id")
+	delete(body, "normalised")
+	switch e.EntryType() {
+	case TypeItem:
+		delete(body, "response")
+		delete(body, "source")
+		delete(body, "queued_from")
+	case TypeBranchSummary:
+		delete(body, "from")
+	case TypeCompaction:
+		var named string
+		if raw, ok := body["first_kept"]; ok {
+			_ = json.Unmarshal(raw, &named)
+		}
+		if ctx, ok := at[named]; ok {
+			sub, _ := json.Marshal([]string{ctx, types[named]})
+			body["first_kept"] = sub
+		} else {
+			body["first_kept"] = json.RawMessage("null")
+		}
+	}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	return HashRequestJSON(bodyJSON)
+}

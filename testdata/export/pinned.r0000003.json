@@ -1,7 +1,7 @@
 {
   "schema_version": "ATIF-v1.8",
   "session_id": "01995b2a-0000-7000-8000-000000000007",
-  "trajectory_id": "r0000003",
+  "trajectory_id": "sha256:cdf62b2f1a34e4de8b0773622e5fca4ac3c9f2f25348e49dbb5cbfb6b7ae12ed",
   "agent": {
     "name": "fixture",
     "version": "1",
@@ -23,13 +23,13 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "entry_id": "k0000001"
+          "entry_id": "sha256:eea1eec9f14c86e12d5992fdb6951cb565e18fd75a9f7184d575d36a8bc5d2d1"
         },
         "context_management": {
           "boundary": "replace",
           "type": "compaction"
         },
-        "first_kept": "i0000004",
+        "first_kept": "sha256:2ba742c12acc3992fa8c29f50cb4738689e76a7e3100b2019d8a0df029b76ee6",
         "openresponses": {
           "item": {
             "type": "message",
@@ -75,7 +75,7 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "entry_id": "i0000004"
+          "entry_id": "sha256:2ba742c12acc3992fa8c29f50cb4738689e76a7e3100b2019d8a0df029b76ee6"
         },
         "openresponses": {
           "item": {
@@ -106,10 +106,10 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "r0000002"
+          "entry_id": "sha256:5d4c40ccb8a67c41d9d04cc2ed24f74faf2cec4f4f946cc37ce7555f781e5756"
         },
         "item_entry_ids": [
-          "i0000005"
+          "sha256:0d7d06d3aeb399dc85e36d8d33e7a58100ee1ff7924459eee04e331be160f4d3"
         ],
         "openresponses": {
           "items": [
@@ -128,7 +128,8 @@
             }
           ],
           "response": {
-            "entry_id": "r0000002",
+            "entry_id": "sha256:5d4c40ccb8a67c41d9d04cc2ed24f74faf2cec4f4f946cc37ce7555f781e5756",
+            "legacy_id": "r0000002",
             "model": "gpt-5",
             "request_hash": "sha256:d74cad5ceea8520e5b66b18ea4d192d2744e0394d5feaf40677ffecd8d8761f0",
             "response_id": "resp_2",
@@ -157,7 +158,7 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "entry_id": "i0000006"
+          "entry_id": "sha256:278e2e4ad632327fdc949eebc3fa2d20f260d212c0d73a22085ba334b70233a5"
         },
         "openresponses": {
           "item": {
@@ -187,10 +188,10 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "r0000003"
+          "entry_id": "sha256:cdf62b2f1a34e4de8b0773622e5fca4ac3c9f2f25348e49dbb5cbfb6b7ae12ed"
         },
         "item_entry_ids": [
-          "i0000007"
+          "sha256:7bc75ea823db6bea95fd3778464a7d38ddd70f689179cec72f4449d1942fe40f"
         ],
         "openresponses": {
           "items": [
@@ -209,7 +210,8 @@
             }
           ],
           "response": {
-            "entry_id": "r0000003",
+            "entry_id": "sha256:cdf62b2f1a34e4de8b0773622e5fca4ac3c9f2f25348e49dbb5cbfb6b7ae12ed",
+            "legacy_id": "r0000003",
             "model": "gpt-5",
             "request_hash": "sha256:a74e3ca98ec37bae6be9a69128c983656c95b5d7467ec87478ce07730b5801a0",
             "response_id": "resp_3",
@@ -241,8 +243,8 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.3",
-      "leaf": "r0000003",
+      "format": "agentsession/0.5",
+      "leaf": "sha256:cdf62b2f1a34e4de8b0773622e5fca4ac3c9f2f25348e49dbb5cbfb6b7ae12ed",
       "main": true
     },
     "openresponses": {

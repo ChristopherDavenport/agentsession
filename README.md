@@ -26,6 +26,12 @@ branched, and what happened afterwards.
 - **Append-only and crash-tolerant.** A session file is always a valid
   prefix of the run; a line cut short by a crash is reported and
   skipped.
+- **Content-addressed.** An entry's `id` is the hash of its envelope
+  over the hash of its body, and `parent` is a hash, so a file verifies
+  itself line by line, a leaf commits to its whole path, and two
+  sessions that share history share the same entries. A session that
+  continues from a point in another names that point as its `base` and
+  opens with the path to it.
 - **Tree-shaped context, DAG-shaped provenance.** Branching creates
   children of an earlier entry in the same file, and a context is built
   by walking one parent. Abandoned branches stay, because they are
@@ -287,6 +293,7 @@ _, err := otel.Export(ctx, tracer, sess, sess.Leaf()) // a stored session, after
 | package | purpose |
 |---|---|
 | `agentsession` | header, entries, tree, context algorithm, request hash, `Store` interface, in-memory store |
+| `cas` | the content-addressed store RFC 0002 describes, laid out like a git repository: bodies and envelopes as objects under their hashes, held once however many sessions share them; a session as a ref with a header, a base, a `HEAD` and a log; a journal as the commit point, replayed on open; a head compare-and-swap; a record or mirror mark; projection to a JSONL file with the synthetic leaf marker, import held to a push's checks, and a sweep that follows references down |
 | `jsonl` | the file store: one JSONL file per session with a sync policy, crash recovery and a per-session lock against a second writing process, reporting a dead holder's lock when it takes one over, or read-only and taking no lock |
 | `sqlite` | a SQLite store, as a nested module so its driver stays out of the library, holding each open session against a second process, or read-only and taking no hold |
 | `otel` | the OpenTelemetry projection, as a nested module: replay a session as spans, or wrap a store so a live run emits them |
