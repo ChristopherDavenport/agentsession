@@ -704,3 +704,15 @@ otherwise have had to make a copy testify to being one.
   envelope layer makes a chain verifiable without its bodies, so a store
   could hold envelopes above a compaction and no contents, as git holds
   a graft. Not needed yet.
+- A base whose prefix converges an entry off the prefix. An entry on the
+  path to the base may name in `parents`, with no `session`, an entry of
+  the origin that is not on that path, such as a branch it merged. The
+  fork's projection opens with the prefix alone, so it names an entry
+  its file does not hold, and RFC 0001's reader refuses the file. The
+  reference implementation refuses such a base at creation, in every
+  store, so that nothing is written a reader cannot read. The
+  alternatives are a reader rule that a prefix entry's `parents`
+  resolves in the origin named by `parent_session`, or a projection that
+  carries the merged entries beside the prefix; either changes what a
+  fork's file holds, and neither is taken until a harness needs to fork
+  below a merge.
