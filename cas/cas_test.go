@@ -955,3 +955,24 @@ func TestUnresolvedBlobReported(t *testing.T) {
 		t.Error("a projection with a missing blob succeeded")
 	}
 }
+
+// TestBlobFreshened: a blob a new append names has its mtime refreshed,
+// so a sweep that gathered it as old sees it young at its second look.
+func TestBlobFreshened(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "b", Media: agentsession.MediaSidecar})
+	blob, _ := st.PutBlob(ctx, []byte("old picture"))
+	cp, _ := st.contentPath(blob)
+	old := time.Now().Add(-48 * time.Hour)
+	os.Chtimes(cp, old, old)
+	r, err := st.Write(ctx, "b", agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputImage{ImageURL: "sidecar:" + blob})))
+	if err != nil || len(r.Unresolved) != 0 {
+		t.Fatalf("append naming a held blob = %v, unresolved %v", err, r.Unresolved)
+	}
+	info, _ := os.Stat(cp)
+	if !info.ModTime().After(time.Now().Add(-time.Minute)) {
+		t.Errorf("blob mtime not refreshed: %v", info.ModTime())
+	}
+}

@@ -1212,14 +1212,20 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 		guard.release()
 		return agentsession.Result{}, err
 	}
-	// A sidecar blob the entry names and the store does not hold is
-	// reported, as the format allows, rather than refused; a projection
-	// of the session will fail until it arrives.
+	// A sidecar blob the entry names is freshened while the lock is held,
+	// as a reused content is, so a sweep that gathered it as old and
+	// unreferenced sees it young at its second look. One the store does
+	// not hold is reported, as the format allows, rather than refused; a
+	// projection of the session will fail until it arrives.
 	if _, body, err := split(e); err == nil {
+		now := time.Now()
 		for _, b := range blobsNamedBy(body) {
-			if cp, err := s.contentPath(b); err != nil {
+			cp, err := s.contentPath(b)
+			if err != nil {
 				r.Unresolved = append(r.Unresolved, b)
-			} else if _, err := os.Stat(cp); err != nil {
+				continue
+			}
+			if err := os.Chtimes(cp, now, now); err != nil {
 				r.Unresolved = append(r.Unresolved, b)
 			}
 		}
@@ -1856,11 +1862,14 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 // holding the store's lock only per object for a second stat and the
 // remove, so a writer never waits longer than one removal; two sweeps
 // may overlap and only race to remove the same object, which is
-// harmless. A grace of zero is safe only when no writer is active
-// anywhere, as git says of pruning with an expiry of now: with one, it
-// sweeps objects written ahead of their records and temporary files
-// mid-write. An hour is a reasonable grace for a live store. Media
-// blobs are contents. It returns how many objects went.
+// harmless. The keep set is a snapshot taken before those locks, so
+// grace must exceed the longest interval any live writer holds between
+// writing an object and committing its record, or an object committed
+// after the snapshot and written before the sweep began is removed. A
+// grace of zero is therefore safe only when no writer is active, as git
+// says of pruning with an expiry of now. An hour is a reasonable grace
+// for a live store. Media blobs are contents. It returns how many
+// objects went.
 func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
