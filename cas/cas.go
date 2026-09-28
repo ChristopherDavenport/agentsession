@@ -522,7 +522,7 @@ func (s *Store) PutBlob(ctx context.Context, data []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	guard, err := lockShared(filepath.Join(s.root, "sweep.lock"))
+	guard, err := lockShared(ctx, filepath.Join(s.root, "sweep.lock"))
 	if err != nil {
 		return "", err
 	}
@@ -895,10 +895,10 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.createLocked(h, MarkRecord)
+	return s.createLocked(ctx, h, MarkRecord)
 }
 
-func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.Session, error) {
+func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark string) (*agentsession.Session, error) {
 	var (
 		sess   *agentsession.Session
 		prefix [][]byte
@@ -982,7 +982,7 @@ func (s *Store) createLocked(h agentsession.Header, mark string) (*agentsession.
 	}
 	// No sweep from here until the header names the prefix. The prefix
 	// is freshened too, so it is young once the lock is dropped.
-	guard, err := lockShared(filepath.Join(s.root, "sweep.lock"))
+	guard, err := lockShared(ctx, filepath.Join(s.root, "sweep.lock"))
 	if err != nil {
 		return fail(err)
 	}
@@ -1204,13 +1204,25 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	}
 	// From the object write through the commit no sweep may run: the
 	// object may be one the sweep would otherwise find old and unnamed.
-	guard, err := lockShared(filepath.Join(s.root, "sweep.lock"))
+	guard, err := lockShared(ctx, filepath.Join(s.root, "sweep.lock"))
 	if err != nil {
 		return agentsession.Result{}, err
 	}
 	if err := s.storeEntry(e); err != nil {
 		guard.release()
 		return agentsession.Result{}, err
+	}
+	// A sidecar blob the entry names and the store does not hold is
+	// reported, as the format allows, rather than refused; a projection
+	// of the session will fail until it arrives.
+	if _, body, err := split(e); err == nil {
+		for _, b := range blobsNamedBy(body) {
+			if cp, err := s.contentPath(b); err != nil {
+				r.Unresolved = append(r.Unresolved, b)
+			} else if _, err := os.Stat(cp); err != nil {
+				r.Unresolved = append(r.Unresolved, b)
+			}
+		}
 	}
 	head := ""
 	switch r.Outcome {
@@ -1262,6 +1274,7 @@ func (s *Store) committedButNotApplied(sessionID string, r agentsession.Result) 
 		delete(s.open, sessionID)
 		h.lock.release()
 	}
+	r.Reopen = true
 	return r, nil
 }
 
@@ -1766,7 +1779,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	guard, err := lockShared(filepath.Join(s.root, "sweep.lock"))
+	guard, err := lockShared(ctx, filepath.Join(s.root, "sweep.lock"))
 	if err != nil {
 		return fail(err)
 	}
@@ -1839,9 +1852,11 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 // an append acknowledged as durable whose log line never reached disk
 // is kept, and it keeps every object younger than grace, as git's
 // collector spares a young loose object, so an object written ahead of
-// its journal record is safe. It therefore needs no lock on writers and
-// runs alongside live sessions; a store-wide lock keeps two sweeps
-// apart. A grace of zero is safe only when no writer is active
+// its journal record is safe. It therefore runs alongside live sessions,
+// holding the store's lock only per object for a second stat and the
+// remove, so a writer never waits longer than one removal; two sweeps
+// may overlap and only race to remove the same object, which is
+// harmless. A grace of zero is safe only when no writer is active
 // anywhere, as git says of pruning with an expiry of now: with one, it
 // sweeps objects written ahead of their records and temporary files
 // mid-write. An hour is a reasonable grace for a live store. Media
@@ -1852,11 +1867,6 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	lk, err := lockFile(filepath.Join(s.root, "sweep.lock"))
-	if err != nil {
-		return 0, err
-	}
-	defer lk.release()
 	states, err := s.replay()
 	if err != nil {
 		return 0, err
@@ -1907,8 +1917,17 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 			}
 		}
 	}
-	swept := 0
+	// Candidates are gathered without the lock; the lock is taken
+	// exclusive per object, around a second stat and the remove, so a
+	// writer waits at most one removal. A writer that freshened the
+	// object in between is seen by the second stat; one that starts
+	// after the remove finds the object gone and writes it again.
 	young := time.Now().Add(-grace)
+	type candidate struct {
+		path string
+		tmp  bool
+	}
+	var candidates []candidate
 	for _, space := range []struct {
 		dir  string
 		keep map[string]bool
@@ -1918,33 +1937,45 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 				return err
 			}
 			info, err := d.Info()
-			if err != nil {
+			if err != nil || info.ModTime().After(young) {
 				return nil
 			}
-			if info.ModTime().After(young) {
-				return nil // young: perhaps written ahead of its record
-			}
 			if strings.HasPrefix(d.Name(), ".tmp-") {
-				return os.Remove(path)
+				candidates = append(candidates, candidate{path: path, tmp: true})
+				return nil
 			}
 			rel, _ := filepath.Rel(space.dir, path)
 			hash := agentsession.HashPrefix + strings.ReplaceAll(rel, string(filepath.Separator), "")
 			if !space.keep[hash] {
-				// Writers hold the lock shared through their commit, so
-				// none is between an object write and its record now; the
-				// second stat is for a writer on a platform without flock.
-				if again, err := os.Stat(path); err != nil || again.ModTime().After(young) {
-					return nil
-				}
-				if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-					return err
-				}
-				swept++
+				candidates = append(candidates, candidate{path: path})
 			}
 			return nil
 		})
 		if err != nil {
+			return 0, err
+		}
+	}
+	swept := 0
+	for _, c := range candidates {
+		if err := ctx.Err(); err != nil {
 			return swept, err
+		}
+		lk, err := lockFile(filepath.Join(s.root, "sweep.lock"))
+		if err != nil {
+			return swept, err
+		}
+		again, err := os.Stat(c.path)
+		if err != nil || again.ModTime().After(young) {
+			lk.release()
+			continue
+		}
+		err = os.Remove(c.path)
+		lk.release()
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return swept, err
+		}
+		if !c.tmp {
+			swept++
 		}
 	}
 	return swept, nil

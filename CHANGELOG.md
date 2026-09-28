@@ -107,9 +107,16 @@ versions may break the API.
   point turns a durable append into a reported failure. Media blobs are
   content objects: `PutBlob` stores one under its hash, `Blob` reads it,
   the sweep follows a content's `sidecar:` references to keep them, and
-  `ProjectDir` writes a sidecar session's blobs beside its file. One
-  session whose files cannot be read is reported at its own `Open` and
-  hides no other. It runs the store conformance suite.
+  `ProjectDir` writes a sidecar session's blobs beside its file; an
+  append naming a blob the store does not hold is accepted and reported
+  in `Result.Unresolved`. The sweep holds the store's lock per object
+  only, around a second stat and the remove, and a writer's shared lock
+  is taken without blocking and retried until its context ends, so a
+  writer never waits longer than one removal. `Result.Reopen` tells a
+  caller that a durable append could not be applied to its session and
+  it should open the session again. One session whose files cannot be
+  read is reported at its own `Open` and hides no other. It runs the
+  store conformance suite.
 - A 0.x file of a later minor than this reader's is refused, since the
   0.x series is exempt from the rule that a reader reads every minor of
   its major. A migration reports a reference it cannot rewrite, into

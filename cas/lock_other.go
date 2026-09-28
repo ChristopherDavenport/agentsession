@@ -3,6 +3,7 @@
 package cas
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -43,6 +44,6 @@ func (l *dirLock) release() error {
 // lockShared on a platform without flock takes nothing: the sweep and a
 // writer are not kept apart there, and the grace period is the only
 // protection. The unix build holds a real shared lock.
-func lockShared(path string) (*dirLock, error) {
-	return &dirLock{}, nil
+func lockShared(ctx context.Context, path string) (*dirLock, error) {
+	return &dirLock{}, ctx.Err()
 }

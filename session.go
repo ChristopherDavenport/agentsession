@@ -228,10 +228,19 @@ func (o Outcome) String() string {
 }
 
 // Result is what Commit reports: the entry's ID and what appending it
-// did.
+// did. A store adds what it alone can know.
 type Result struct {
 	ID      string
 	Outcome Outcome
+	// Unresolved lists references in the entry a store could not
+	// resolve — a sidecar blob it does not hold, a convergence into a
+	// session it does not have — which the format lets a store report
+	// rather than refuse. A session in memory sets nothing here.
+	Unresolved []string
+	// Reopen is set by a store when the append is durable but the
+	// caller's session could not be brought in step with it, so the
+	// caller opens the session again before using it further.
+	Reopen bool
 }
 
 // Prepare does everything Append does short of adding the entry: it

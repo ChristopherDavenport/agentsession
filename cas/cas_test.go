@@ -935,3 +935,23 @@ func TestSweepAgainstWriter(t *testing.T) {
 		t.Errorf("after sweeps against a writer: len %d leaf %s", s.Len(), s.Leaf())
 	}
 }
+
+// TestUnresolvedBlobReported: an append naming a sidecar blob the store
+// does not hold is accepted, as the format allows, and reports it.
+func TestUnresolvedBlobReported(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "u", Media: agentsession.MediaSidecar})
+	missing := agentsession.HashBytes([]byte("never stored"))
+	r, err := st.Write(ctx, "u", agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputImage{ImageURL: "sidecar:" + missing})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Unresolved) != 1 || r.Unresolved[0] != missing {
+		t.Errorf("Unresolved = %v, want the missing blob", r.Unresolved)
+	}
+	if _, err := st.ProjectDir(ctx, t.TempDir(), "u"); err == nil {
+		t.Error("a projection with a missing blob succeeded")
+	}
+}
