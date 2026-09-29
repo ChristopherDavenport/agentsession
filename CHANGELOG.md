@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.9 - 2026-09-28
 
 - **A member nested inside an object the library types is kept and
   hashed as read.** A reader computed an entry's id from its own
