@@ -126,6 +126,23 @@ versions may break the API.
   had their ids checked against their hashes, and fails on a file with
   a header and no entries, and on a store with no sessions, since
   nothing was checked. (#105)
+- **A store raises a session's format when it first appends to it.**
+  A header was written once, at creation, so a 0.7 session v0.0.11
+  had continued still said 0.7, and v0.0.10 read the 0.8 records in
+  it by 0.7 rules, appended what 0.8 forbids, and reported the rest
+  as hash mismatches. Every store now writes `agentsession.Format`
+  into the stored header before this package's first append to a
+  session whose header names an earlier minor, so an older reader
+  refuses the session as a later format. The header is not hashed,
+  so no id moves. cas writes its `header` file; sqlite updates the
+  row in the append's transaction; jsonl rewrites the file once, the
+  raised header and every later byte as it was, synced and renamed
+  into place under the session's lock, and appends to the new file.
+  An open, a read-only store and an append the session already holds
+  change nothing. A header before 0.5 is left alone, since a reader
+  rehashes the entries of such a file and would not under a raised
+  header. RFC 0001 now requires the raise of a writer, and RFC 0002
+  of a store. (#112)
 
 ## v0.0.11 - 2026-09-29
 

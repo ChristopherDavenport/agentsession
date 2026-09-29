@@ -145,6 +145,9 @@ type Store struct {
 	// refused holds the sessions whose last append found another
 	// writer, so later appends fail until the caller reloads.
 	refused map[string]error
+	// stale holds the open sessions whose stored header names an
+	// earlier minor, which the next append raises.
+	stale map[string]bool
 
 	mu   sync.Mutex
 	open map[string]*agentsession.Session
@@ -177,7 +180,7 @@ func Open(path string, opts ...Option) (*Store, error) {
 		return nil, err
 	}
 	host, _ := os.Hostname()
-	s := &Store{w: w, r: r, open: map[string]*agentsession.Session{}, refused: map[string]error{}, pid: os.Getpid(), host: host, token: newToken()}
+	s := &Store{w: w, r: r, open: map[string]*agentsession.Session{}, refused: map[string]error{}, stale: map[string]bool{}, pid: os.Getpid(), host: host, token: newToken()}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -374,6 +377,7 @@ func (s *Store) Close() error {
 	s.mu.Lock()
 	s.open = map[string]*agentsession.Session{}
 	s.refused = map[string]error{}
+	s.stale = map[string]bool{}
 	s.mu.Unlock()
 	return err
 }
@@ -448,6 +452,7 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 		return nil, fmt.Errorf("sqlite: create session: %w", err)
 	}
 	s.open[h.ID] = sess
+	s.stale[h.ID] = raises(h.Format)
 	return sess, nil
 }
 
@@ -491,8 +496,55 @@ func (s *Store) openLocked(ctx context.Context, id string) (*agentsession.Sessio
 	if err != nil {
 		return nil, err
 	}
+	var stored agentsession.Header
+	if err := stored.UnmarshalJSON([]byte(header)); err != nil {
+		return nil, fmt.Errorf("sqlite: session %s: header: %w", id, err)
+	}
 	s.open[id] = sess
+	s.stale[id] = raises(stored.Format)
 	return sess, nil
+}
+
+// hashedMinor is the first minor whose entry ids are envelope hashes.
+const hashedMinor = 5
+
+// raises reports whether a header naming format is raised before this
+// package appends to its session: one of an earlier minor, back to the
+// first whose ids are hashes. A header before that is left as it is,
+// since a reader rewrites the entries of such a session and would read
+// them, under a raised header, as carrying hashes they do not.
+func raises(format string) bool {
+	_, minor, err := agentsession.ParseFormat(format)
+	return err == nil && minor >= hashedMinor && minor < agentsession.FormatMinor
+}
+
+// raiseFormat writes the format this package writes into the session's
+// stored header, inside the transaction of the first append that
+// package makes to a session whose header names an earlier minor, so a
+// reader of that earlier minor refuses the session rather than reading
+// entries it cannot represent. Nothing hashed changes: the header is
+// not an entry.
+func raiseFormat(ctx context.Context, tx *sql.Tx, id string) error {
+	var line string
+	if err := tx.QueryRowContext(ctx, `SELECT header FROM sessions WHERE id = ?`, id).Scan(&line); err != nil {
+		return fmt.Errorf("sqlite: raise the header's format: %w", err)
+	}
+	var h agentsession.Header
+	if err := h.UnmarshalJSON([]byte(line)); err != nil {
+		return fmt.Errorf("sqlite: raise the header's format: %w", err)
+	}
+	if !raises(h.Format) {
+		return nil // another process raised it first
+	}
+	h.Format = agentsession.Format
+	raised, err := h.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET header = ? WHERE id = ?`, string(raised), id); err != nil {
+		return fmt.Errorf("sqlite: raise the header's format: %w", err)
+	}
+	return nil
 }
 
 // load rebuilds a session from its rows without claiming it.
@@ -590,7 +642,8 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 // Append implements agentsession.Store: the entry joins the in-memory
 // tree, then its line is inserted in one immediate transaction. If the
 // insert fails the cached session is dropped so the next Open reloads
-// the database's view.
+// the database's view. The first append to a session whose header names
+// an earlier minor raises the header's format in the same transaction.
 func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Entry) (string, error) {
 	if s.readOnly {
 		return "", agentsession.ErrReadOnly
@@ -601,10 +654,11 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	if err != nil {
 		return "", err
 	}
-	id, err := sess.Append(e)
+	r, err := sess.Commit(e)
 	if err != nil {
 		return "", err
 	}
+	id := r.ID
 	line, err := agentsession.MarshalEntry(e)
 	if err != nil {
 		delete(s.open, sessionID)
@@ -631,6 +685,10 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 			return "", s.refused[sessionID]
 		}
 	}
+	raised := err == nil && s.stale[sessionID] && r.Outcome != agentsession.Held
+	if raised {
+		err = raiseFormat(ctx, tx, sessionID)
+	}
 	if err == nil {
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO entries (session_id, seq, id, parent, type, line) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -655,6 +713,9 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 			return "", s.refused[sessionID]
 		}
 		return "", fmt.Errorf("sqlite: insert entry %s: %w", id, err)
+	}
+	if raised {
+		delete(s.stale, sessionID)
 	}
 	return id, nil
 }
@@ -752,6 +813,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("sqlite: delete session: %w", err)
 	}
 	delete(s.open, id)
+	delete(s.stale, id)
 	n, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("sqlite: delete session: %w", err)
@@ -778,6 +840,7 @@ func (s *Store) releaseLocked(id string) {
 	}
 	delete(s.open, id)
 	delete(s.refused, id)
+	delete(s.stale, id)
 }
 
 // LockHolder reports who holds a session, or nil when it is free. A

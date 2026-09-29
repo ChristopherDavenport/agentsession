@@ -1394,7 +1394,9 @@ own, since what it appends may use what its minor adds. A reader of the
 earlier minor then refuses the file as a later one, which tells its
 operator what to do, rather than reading entries it cannot represent
 and reporting them as altered. Nothing hashed moves: the header is not
-an entry. A file never lowers its `format`.
+an entry. A file never lowers its `format`. A file earlier than 0.5 is
+outside the rule, since a reader rehashes its entries by the minor its
+header names and a raised header would have them read as hashed.
 
 Adding an optional member to the envelope is a minor change. Changing
 what an existing member means, or what the context algorithm does with
