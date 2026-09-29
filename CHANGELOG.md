@@ -5,6 +5,21 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+Draft 0.9 is amended in place again.
+
+- **No dispatch follows a call's output.** The output ends the call;
+  a harness that runs the tool again has made a new call. `Append`
+  refuses one with `ErrCallCompleted`, and `VerifyRecords` reports
+  one. v0.0.14 accepted it, and the otel exporter then left a span
+  open.
+- **`source: resume` skips messages before the take-up.** A run is a
+  resume when its first function call output, decision or dispatch
+  takes up a call pending when it began, so a harness that writes the
+  approval a person typed before the output still writes a resume.
+  v0.0.14 counted any item, so that run was an `input`.
+
 ## v0.0.14 - 2026-09-29
 
 Draft 0.9 is amended in place again, from an independent review of
