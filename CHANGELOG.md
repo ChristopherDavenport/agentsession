@@ -7,15 +7,58 @@ versions may break the API.
 
 ## Unreleased
 
+- **A member nested inside an object the library types is kept and
+  hashed as read.** A reader computed an entry's id from its own
+  re-encoding, so a member such as `host` inside `workspace`, which RFC
+  0001 invites, was dropped on rewrite, and a file another writer
+  hashed correctly was refused as corrupt while an edit to such a member
+  went unnoticed. A member the line holds more of than the typed fields
+  encode, a nested member they do not define or a zero value they omit,
+  is now remembered at decode and grafted back onto what the fields hold
+  when the entry is written: onto an object member the caller left in
+  place, and onto an array element that still encodes as it did at
+  read, matched where it was first and otherwise to the one element it
+  still equals, so sorting `parents` keeps each reference's extras and a
+  changed element takes none unless the change makes it equal to one
+  that was removed. Equal elements that differ only in their extras
+  cannot be told apart once one is removed. A null a payload type adds
+  where the line has nothing reads as the same line; another zero value
+  it adds does not, so a function tool written without `description`,
+  which openresponses encodes as `""`, is refused as it was before and
+  cannot carry a nested extra. A key in
+  another case, such as `CWD` beside `cwd`, is a member the format does
+  not define: Go's decoder would read it as the member it resembles, so
+  such a line is decoded again without it and keeps it as unknown. A
+  required member left out or a value the reader does not reproduce is
+  refused as before. The RFC says preservation holds at every depth.
+  `Read` canonicalises the typed encoding once, and a line that equals
+  it, as a canonical line the typed fields hold whole does, is hashed as
+  it stands without being decoded and re-encoded again, so reading is
+  faster than before: about a fifth in the read benchmark. A line with
+  members kept as read takes the slower comparison. (#89)
+- **Who closes a run left open.** A rewind into a run leaves it open on
+  the new path, as a crash leaves one open at the leaf; RFC 0001 now
+  says the writer that continues such a path closes the run before
+  appending anything else, `interrupted` after a rewind and `error`
+  after a cut, and drops the sentence that a branch closes the
+  open run, which held only for a branch to before the run's start. The
+  loop owns the decision; `Branch`, `SummarizeBranch` and `EndRun` say
+  when to write it. (#86; the entry is agentturn's to write, from
+  `Rebase` and from `Resume`, which agentturn#120 tracks.)
+- The member round-trip guard compares values as well as keys, fills
+  slices with two elements, and walks the table `UnmarshalEntry` now
+  decodes through, so a new core type is covered without being listed.
+  (#50)
 - **RFC 0001 draft 0.6; the library writes `agentsession/0.6`.**
   Additive: three optional members and three paragraphs. A 0.5 file
   reads as it stands, with nothing rehashed and no `legacy_id`, and its
   header takes the current format; v0.0.8 refuses a 0.6 file, as a 0.x
   reader refuses a later minor. A 0.5 file was free to hold `trigger` or
   `call_id` in any form while the names were undefined, so the typed
-  field is filled only from a member it holds exactly; any other form,
-  or a `trigger` carrying a member the type does not define, stays in
-  `Unknown` as written, and the entry's hash still verifies.
+  field is filled only from a member that decodes into it; any other
+  form stays in `Unknown` as written, and what the field cannot hold of
+  a member it does take is written back as read (see #89 below), so the
+  entry's hash still verifies.
   - `RunEntry.Trigger`: a run start carries the `Trigger` a `queued`
     entry already had, beside `Ref`, which is unchanged. A due time or
     an attempt goes in the run entry's own unknown members. The ATIF

@@ -174,7 +174,8 @@ func (s *Session) path(id string) []Entry {
 }
 
 // Branch moves the leaf to id, so the next append becomes a child of
-// that entry.
+// that entry. When id is inside a run, the run is open on the new path;
+// see [Session.EndRun] for who closes it.
 func (s *Session) Branch(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -906,7 +907,10 @@ func compactionFrom(ctx Context, first int, summary openresponses.Item) (*Compac
 // SummarizeBranch builds the branch summary that carries context from
 // the abandoned leaf from to the current leaf, where the new branch
 // continues. Move the leaf with Branch first, then append the result
-// through the store; its parent is set on append.
+// through the store; its parent is set on append. When the new leaf is
+// inside a run, that run is open on the new path and the writer closes
+// it first: append [Session.EndRun] with ReasonInterrupted before the
+// summary, so the path does not read as a run a crash cut off.
 func (s *Session) SummarizeBranch(from string, summary openresponses.Item) (*BranchSummaryEntry, error) {
 	if summary == nil {
 		return nil, errors.New("agentsession: branch summary needs a summary item")

@@ -100,7 +100,7 @@ type RunEntry struct {
 	// member this type cannot hold exactly, one with a member it does
 	// not define or one written before the member was, is kept there as
 	// written and Trigger is nil.
-	Trigger *Trigger `json:"-"`
+	Trigger *Trigger `json:"-" member:"trigger"`
 	// Pending lists, on an end entry, the IDs of the calls left without
 	// an output. It is written even when empty.
 	Pending []string `json:"pending"`
@@ -372,7 +372,7 @@ func (e *RunEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *RunEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -400,7 +400,7 @@ func (e *DispatchEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *DispatchEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -426,7 +426,7 @@ func (e *DecisionEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *DecisionEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
@@ -453,7 +453,7 @@ func (e *QueuedEntry) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return e.decodeMembers(data, all)
+	return finishDecode(e, data, all)
 }
 
 func (e *QueuedEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {

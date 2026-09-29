@@ -328,6 +328,13 @@ func (s *Session) OpenRun(leaf string) (*Run, error) {
 // its pending list is the calls on the segment with no output. reason
 // is one of the Reason constants and ref may be "". The entry is not
 // appended.
+//
+// A writer that continues a path on which a run is open that it is not
+// running owns that run and closes it before appending anything else,
+// as the format has it: after [Session.Branch] into a run, with
+// ReasonInterrupted and a ref naming the rewind; on resuming a run a
+// crash cut off, with ReasonError and a ref naming the cut.
+// [Session.OpenRun] at the leaf says whether there is one.
 func (s *Session) EndRun(reason, ref string) (*RunEntry, error) {
 	run, err := s.OpenRun(s.Leaf())
 	if err != nil {
@@ -335,6 +342,9 @@ func (s *Session) EndRun(reason, ref string) (*RunEntry, error) {
 	}
 	if run == nil {
 		return nil, errors.New("agentsession: no open run at the leaf")
+	}
+	if reason == "" {
+		return nil, errors.New("agentsession: a run end needs a reason")
 	}
 	return NewRunEnd(run.RunID(), reason, ref, run.Pending()), nil
 }

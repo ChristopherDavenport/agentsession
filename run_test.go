@@ -471,3 +471,81 @@ func TestHeaderRecords(t *testing.T) {
 		t.Error("empty header promises a record")
 	}
 }
+
+// TestCloseARunLeftOpen: a rewind to an entry inside a run leaves the
+// run open on the new path, and a crash leaves one open at the leaf.
+// The writer that continues either path closes it first, and the path
+// then reads as it happened.
+func TestCloseARunLeftOpen(t *testing.T) {
+	t.Run("rewind", func(t *testing.T) {
+		s := New(Header{Records: AllRecords})
+		for _, e := range seg(t, "start user calls:a resp dispatch:a out:a") {
+			b := e.Base()
+			b.ID, b.Parent = "", ""
+			if _, err := s.Append(e); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mark := s.Leaf()
+		if _, err := s.Append(NewItemEntry(openresponses.AssistantText("done"))); err != nil {
+			t.Fatal(err)
+		}
+		end, err := s.EndRun(ReasonDone, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(end); err != nil {
+			t.Fatal(err)
+		}
+		abandoned := s.Leaf()
+		if err := s.Branch(mark); err != nil {
+			t.Fatal(err)
+		}
+		if r, _ := s.OpenRun(s.Leaf()); r == nil {
+			t.Fatal("the run reads as closed at the mark; the test proves nothing")
+		}
+		closeIt, err := s.EndRun(ReasonInterrupted, "branch")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(closeIt); err != nil {
+			t.Fatal(err)
+		}
+		sum, err := s.SummarizeBranch(abandoned, openresponses.UserText("tried done"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(sum); err != nil {
+			t.Fatal(err)
+		}
+		if r, _ := s.OpenRun(s.Leaf()); r != nil {
+			t.Errorf("run %s still open after the rewind closed it", r.RunID())
+		}
+		if err := s.VerifyRecords(s.Leaf()); err != nil {
+			t.Errorf("VerifyRecords = %v", err)
+		}
+	})
+	t.Run("resume after a cut", func(t *testing.T) {
+		s := New(Header{Records: AllRecords})
+		for _, e := range seg(t, "start user calls:a resp dispatch:a") {
+			b := e.Base()
+			b.ID, b.Parent = "", ""
+			if _, err := s.Append(e); err != nil {
+				t.Fatal(err)
+			}
+		}
+		end, err := s.EndRun(ReasonError, "cut_off")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(end.Pending) != 1 {
+			t.Errorf("end pending %v, want the call in flight", end.Pending)
+		}
+		if _, err := s.Append(end); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.VerifyRecords(s.Leaf()); err != nil {
+			t.Errorf("VerifyRecords = %v", err)
+		}
+	})
+}

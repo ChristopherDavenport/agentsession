@@ -356,7 +356,12 @@ record entry off an earlier entry as a sibling.
 A member of a core entry that this document does not define MUST be
 preserved by any tool that rewrites the file and MUST be ignored by a
 reader that does not know it. That is where a harness keeps detail
-richer than a core member allows.
+richer than a core member allows. The rule holds at every depth: a
+member this document does not define inside an object it does, such as
+a `host` inside `workspace`, is preserved the same way, and like every
+member it is hashed as the line holds it. A reader MUST NOT compute an
+entry's hashes from its own model of the entry when that model cannot
+hold everything the line does.
 
 A record entry named in the header's `records` is written whenever its
 event occurs, so a reader MAY take its absence on a path as the event
@@ -698,12 +703,26 @@ Why a run started and how it ended. Two entries per run, paired by
 - `pending` lists the pending calls' IDs so a resume can read them
   without walking the segment. The segment is authoritative here too.
 - Items and responses of the run follow its `start` entry on the path.
-  Runs do not nest: an input that arrives while a run is open joins
-  that run. A branch closes the open run without an `end` entry, since
-  the new leaf is not on its segment; the next append on the new
-  branch begins a run. When the header names `run` in `records`, no
-  writer holds the file open and the leaf is on the run's segment, a
-  run with no `end` entry was cut off; that is the crash signal.
+  Runs do not nest: an input that arrives while a writer is running a
+  run joins that run. A branch to an entry before a run's `start`
+  leaves that run off the new path, so the run needs no `end` there,
+  and the next run on the new branch begins with its own `start`.
+  When the header names `run` in `records`, no writer holds the file
+  open and the leaf is on the run's segment, a run with no `end` entry
+  was cut off; that is the crash signal.
+- A branch to an entry inside a run, such as a rewind to a checkpoint
+  the run made, leaves that run open on the new path, since its `end`,
+  if it has one, is on the branch left behind. The two shapes are one
+  case: a path on which a run is open that no writer is running. The
+  writer that continues such a path owns that run and closes it before
+  it appends anything else: it appends the run's `end` at the leaf,
+  with `interrupted` and a `ref` naming the rewind when it branched
+  into the run, and with `error` and a `ref` naming the cut when it
+  resumes a run that was cut off, since a harness that stopped without
+  recording why has failed. Both are written values and stand over the
+  segment. The record
+  then says what happened on that path, and no later reader takes a
+  rewind for a crash or a resumed session for one still running.
 
 ### `dispatch`
 
@@ -1289,6 +1308,14 @@ with none of the new members.
 - `env` says that a later entry with a different `workspace` is a
   substitution, and what a reader holding the environment fixed does
   with it.
+- The preservation rule says it holds inside the objects this document
+  defines as well as at an entry's top level, and that a member is
+  hashed as the line holds it.
+- `run` says who closes a run left open on a path no writer is
+  running: the writer that continues the path, before anything else,
+  with `interrupted` after a rewind into the run and `error` after a
+  crash. The old sentence that a branch closes the open
+  run held only for a branch to before the run's `start`.
 
 ## Changes since 0.4
 

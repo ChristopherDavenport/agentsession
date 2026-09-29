@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -478,8 +479,8 @@ func TestResolveLegacyID(t *testing.T) {
 // custom entry were unknown members before 0.6, so a 0.5 file may spell
 // them any way at all, and a 0.6 writer may put a member this package
 // does not define inside trigger. Each such line reads, verifies and
-// writes back as it was; the typed field is filled only when it holds
-// the member exactly.
+// writes back as it was; the typed field is filled whenever the member
+// decodes into it, and what it cannot hold is kept as read.
 func TestAddedMembersReadAsWritten(t *testing.T) {
 	head := `{"type":"session","format":"agentsession/0.5","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}`
 	tests := []struct {
@@ -487,8 +488,8 @@ func TestAddedMembersReadAsWritten(t *testing.T) {
 		typed      bool
 	}{
 		{"trigger as a string", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":"cron:nightly"`, false},
-		{"trigger with a member not defined", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":"schedule","due":"2026-09-17T03:00:00Z"}`, false},
-		{"trigger with an empty member", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":""}`, false},
+		{"trigger with a member not defined", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":"schedule","due":"2026-09-17T03:00:00Z"}`, true},
+		{"trigger with an empty member", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":""}`, true},
 		{"trigger null", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":null`, false},
 		{"trigger exact", `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":"schedule","ref":"nightly"}`, true},
 		{"call_id an object", `"type":"custom","ns":"acme","call_id":{"n":1}`, false},
@@ -556,4 +557,292 @@ func TestForkRefusesUnresolvedPrefix(t *testing.T) {
 	if _, err := Fork(s, s.Path(at)[0].Base().ID, Header{}); err != nil {
 		t.Errorf("Fork at the root = %v", err)
 	}
+}
+
+// TestNestedMembersReadAsWritten: a member nested inside an object this
+// package types, which the format has a reader preserve, is hashed as
+// the line holds it and written back as read. A file another writer
+// hashed correctly reads; one whose nested member was edited without
+// its id does not; and a caller that changes the typed field has
+// changed the member.
+func TestNestedMembersReadAsWritten(t *testing.T) {
+	head := `{"type":"session","format":"agentsession/0.6","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}`
+	hashed := func(body string) string {
+		t.Helper()
+		line := `{` + body + `,"parent":null,"ts":"2026-09-17T16:00:01Z"}`
+		id, _, err := EntryHashes([]byte(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return `{"id":"` + id + `",` + line[1:]
+	}
+	for name, body := range map[string]string{
+		"workspace host": `"type":"env","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7"}`,
+		"queued trigger": `"type":"queued","mode":"steer","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},"trigger":{"kind":"human","seat":2}`,
+		"parents":        `"type":"info","name":"n","parents":[{"session":"other","entry":"x","note":"keep-me"}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			line := hashed(body)
+			s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
+			if err != nil {
+				t.Fatalf("Read of a correctly hashed line: %v", err)
+			}
+			var buf bytes.Buffer
+			if err := Write(&buf, s); err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+			var want, got map[string]any
+			json.Unmarshal([]byte(line), &want)
+			json.Unmarshal([]byte(lines[1]), &got)
+			if !reflect.DeepEqual(want, got) {
+				t.Errorf("rewrite changed the line\nread  %s\nwrote %s", line, lines[1])
+			}
+			// The same entry appended to another session hashes the same.
+			e := s.Entries()[0]
+			other := New(Header{})
+			if id, err := other.Append(e); err != nil || id != e.Base().ID {
+				t.Errorf("re-append = %s, %v; want %s", id, err, e.Base().ID)
+			}
+		})
+	}
+	t.Run("tampered nested member", func(t *testing.T) {
+		line := strings.Replace(hashed(`"type":"env","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7"}`), "build-7", "build-8", 1)
+		if _, err := Read(strings.NewReader(head + "\n" + line + "\n")); !errors.Is(err, ErrBadID) {
+			t.Errorf("Read of an edited nested member = %v, want ErrBadID", err)
+		}
+	})
+	// A key in another case is a member the format does not define:
+	// Go's decoder would match it to the member it resembles, and a
+	// conforming reader ignores it, so it is kept and not read.
+	for name, tt := range map[string]struct {
+		body  string
+		check func(Entry) bool
+	}{
+		"reason in another case": {`"type":"run","run_id":"r","phase":"end","reason":"done","Reason":"aborted","pending":[]`,
+			func(e Entry) bool { return e.(*RunEntry).Reason == ReasonDone }},
+		"cwd in another case": {`"type":"env","CWD":"/etc"`,
+			func(e Entry) bool { return e.(*EnvEntry).CWD == "" }},
+		"kind in another case": {`"type":"env","cwd":"/w","workspace":{"kind":"local","KIND":"container"}`,
+			func(e Entry) bool { return e.(*EnvEntry).Workspace.Kind == WorkspaceLocal }},
+		"folded key first": {`"type":"env","cwd":"/w","workspace":{"KIND":"container","kind":"local"}`,
+			func(e Entry) bool { return e.(*EnvEntry).Workspace.Kind == WorkspaceLocal }},
+	} {
+		t.Run("folded: "+name, func(t *testing.T) {
+			line := hashed(tt.body)
+			s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			e := s.Entries()[0]
+			if !tt.check(e) {
+				t.Errorf("read the folded key as the member: %+v", e)
+			}
+			var buf bytes.Buffer
+			if err := Write(&buf, s); err != nil {
+				t.Fatal(err)
+			}
+			again, err := Read(&buf)
+			if err != nil {
+				t.Fatalf("read back: %v", err)
+			}
+			if _, ok := again.Entry(e.Base().ID); !ok {
+				t.Error("rewrite changed the id")
+			}
+		})
+	}
+	// What the reader does not read as written stays refused.
+	for name, body := range map[string]string{
+		"run end without pending":   `"type":"run","run_id":"r","phase":"end","reason":"done"`,
+		"label without target":      `"type":"label","label":"x"`,
+		"compaction, no first_kept": `"type":"compaction","summary":{"type":"message","role":"user","content":[{"type":"input_text","text":"s"}]}`,
+	} {
+		t.Run("refused: "+name, func(t *testing.T) {
+			if _, err := Read(strings.NewReader(head + "\n" + hashed(body) + "\n")); err == nil {
+				t.Error("Read accepted a line the reader does not read as written")
+			}
+		})
+	}
+	t.Run("a trigger in another case stays unknown", func(t *testing.T) {
+		s, err := Read(strings.NewReader(head + "\n" + hashed(`"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"KIND":"schedule"}`) + "\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := s.Entries()[0].(*RunEntry); r.Trigger != nil {
+			t.Errorf("Trigger = %+v, want nil: no conforming reader sees a kind", r.Trigger)
+		}
+	})
+	t.Run("a caller's change keeps what it did not touch", func(t *testing.T) {
+		line := hashed(`"type":"env","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7"}`)
+		s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := s.Entries()[0].(*EnvEntry)
+		changed := *env
+		changed.Workspace = &Workspace{Kind: WorkspaceLocal}
+		changed.CWD = "/elsewhere"
+		data, err := MarshalEntry(&changed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The caller's kind and the reader's host: the change is the
+		// caller's, and the host is a member no field of this package
+		// holds, which a rewriter preserves.
+		if !strings.Contains(string(data), `"host":"build-7"`) || !strings.Contains(string(data), `"kind":"local"`) || strings.Contains(string(data), "sha256:ab") {
+			t.Errorf("changed workspace written as %s", data)
+		}
+	})
+}
+
+// TestMigrationKeepsNestedMembers: a 0.4 entry is rewritten and rehashed
+// on read, and a member nested in an object this package types survives
+// that as it survives a 0.5 read.
+func TestMigrationKeepsNestedMembers(t *testing.T) {
+	in := `{"type":"session","format":"agentsession/0.4","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}
+{"type":"env","id":"e1","parent":null,"ts":"2026-09-17T16:00:01Z","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7"}}
+{"type":"info","id":"e2","parent":"e1","ts":"2026-09-17T16:00:02Z","name":"n"}
+{"type":"info","id":"e3","parent":"e2","ts":"2026-09-17T16:00:03Z","name":"m","parents":[{"entry":"e1","note":"keep-me"}]}
+`
+	s, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"host":"build-7"`) || !strings.Contains(buf.String(), `"legacy_id":"e1"`) || !strings.Contains(buf.String(), `"note":"keep-me"`) {
+		t.Errorf("migration lost the nested member or the legacy id:\n%s", buf.String())
+	}
+	if _, err := Read(&buf); err != nil {
+		t.Errorf("migrated file reads back: %v", err)
+	}
+}
+
+// TestKeptArrayExtrasFollowTheirElement: an extra member of an array
+// element belongs to that element. When Append sorts parents it stays
+// on the reference it described, and a reference the caller replaces
+// does not inherit it.
+func TestKeptArrayExtrasFollowTheirElement(t *testing.T) {
+	in := `{"type":"session","format":"agentsession/0.4","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}
+{"type":"info","id":"e0","parent":null,"ts":"2026-09-17T16:00:00Z","name":"a"}
+{"type":"info","id":"e1","parent":"e0","ts":"2026-09-17T16:00:01Z","name":"b"}
+{"type":"info","id":"e3","parent":"e1","ts":"2026-09-17T16:00:02Z","name":"c"}
+{"type":"info","id":"e2","parent":"e3","ts":"2026-09-17T16:00:03Z","name":"n","parents":[{"entry":"e1","note":"keep-me"},{"entry":"e0"}]}
+`
+	s, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e1, _ := s.Resolve("e1")
+	e0, _ := s.Resolve("e0")
+	orig := s.Entries()[3].(*InfoEntry)
+	noteOn := func(data []byte) string {
+		t.Helper()
+		var line struct {
+			Parents []map[string]any `json:"parents"`
+		}
+		if err := json.Unmarshal(data, &line); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range line.Parents {
+			if p["note"] == "keep-me" {
+				return p["entry"].(string)
+			}
+		}
+		return ""
+	}
+	// Append sorts parents: the note stays on e1.
+	c := *orig
+	c.ID, c.Name = "", "changed"
+	if _, err := s.Append(&c); err != nil {
+		t.Fatal(err)
+	}
+	data, err := MarshalEntry(&c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := noteOn(data); got != e1 {
+		t.Errorf("after sorting the note is on %s, want e1 %s:\n%s", got, e1, data)
+	}
+	// A replaced reference is the caller's: it takes no note.
+	r := *orig
+	r.ID = ""
+	r.Parents = []EntryRef{{Entry: e0}, {Session: "other", Entry: "x"}}
+	data, err = MarshalEntry(&r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := noteOn(data); got != "" {
+		t.Errorf("a replaced reference inherited the note, on %s:\n%s", got, data)
+	}
+}
+
+// TestThirdReviewShapes: the shapes a third review of #89 found. A
+// folded key beside the member it resembles is read as a conforming
+// reader reads it, at the top level and nested, even where the decoder
+// then leaves the member empty; a null a third-party type adds where the
+// line has nothing is the same line; and a changed array element does
+// not take another element's extras.
+func TestThirdReviewShapes(t *testing.T) {
+	head := `{"type":"session","format":"agentsession/0.6","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}`
+	read := func(t *testing.T, body string) Entry {
+		t.Helper()
+		line := `{` + body + `,"parent":null,"ts":"2026-09-17T16:00:01Z"}`
+		id, _, err := EntryHashes([]byte(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		line = `{"id":"` + id + `",` + line[1:]
+		s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
+		if err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+		var buf bytes.Buffer
+		if err := Write(&buf, s); err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+		var want, got map[string]any
+		json.Unmarshal([]byte(line), &want)
+		json.Unmarshal([]byte(lines[1]), &got)
+		if !reflect.DeepEqual(want, got) {
+			t.Errorf("rewrite changed the line\nread  %s\nwrote %s", line, lines[1])
+		}
+		return s.Entries()[0]
+	}
+	t.Run("nested folded key after the member", func(t *testing.T) {
+		e := read(t, `"type":"env","cwd":"/w","workspace":{"kind":"container","ref":"x","REF":""}`).(*EnvEntry)
+		if e.Workspace.Ref != "x" {
+			t.Errorf("Ref = %q, want x", e.Workspace.Ref)
+		}
+	})
+	t.Run("folded key after the member in a trigger", func(t *testing.T) {
+		e := read(t, `"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"kind":"k","ref":"r","REF":""}`).(*RunEntry)
+		if e.Trigger == nil || e.Trigger.Ref != "r" {
+			t.Errorf("Trigger = %+v, want ref r", e.Trigger)
+		}
+	})
+	t.Run("top-level folded key after the member", func(t *testing.T) {
+		e := read(t, `"type":"env","cwd":"/w","CWD":""`).(*EnvEntry)
+		if e.CWD != "/w" {
+			t.Errorf("CWD = %q, want /w", e.CWD)
+		}
+	})
+	t.Run("a null the payload type adds", func(t *testing.T) {
+		read(t, `"type":"config","model":"m","reasoning":{"effort":"low","zz":1}`)
+	})
+	t.Run("a changed element keeps its own extras", func(t *testing.T) {
+		raw := []any{map[string]any{"p": "a", "x": json.Number("1")}, map[string]any{"p": "b", "x": json.Number("2")}}
+		seen := []any{map[string]any{"p": "a"}, map[string]any{"p": "b"}}
+		cur := []any{map[string]any{"p": "b"}, map[string]any{"p": "b"}}
+		got := overlay(cur, raw, seen).([]any)
+		if x := got[1].(map[string]any)["x"]; x != json.Number("2") {
+			t.Errorf("the unchanged element lost its extra: %v", got)
+		}
+		if _, ok := got[0].(map[string]any)["x"]; ok {
+			t.Errorf("the changed element took an extra: %v", got)
+		}
+	})
 }
