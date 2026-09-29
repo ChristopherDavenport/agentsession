@@ -15,6 +15,17 @@ versions may break the API.
   against the columns the store gives it, names the table, its columns
   and the wanted ones, and applies the schema and its migrations in one
   transaction, so a refusal leaves the file as it found it. (#116)
+- **The OpenTelemetry env event carries every workspace member and
+  marks a substitution.** It copied `workspace.host` and
+  `workspace.instance` by name, so a substitution through any other
+  member, such as the node a pool rescheduled a sandbox onto, left two
+  env events that read the same while the session and a strict replay
+  said the file system changed. Every string member of `workspace` is
+  now `workspace.<member>`, by key after `workspace.kind` and
+  `workspace.ref`, and an env event whose workspace is not
+  `SameWorkspace` with the one in force before it carries
+  `agentsession.substitution=true`, from `Export` and from `Wrap`
+  alike; a first env entry is not a substitution. (#117)
 
 ## v0.0.11 - 2026-09-29
 

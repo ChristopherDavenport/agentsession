@@ -17,12 +17,18 @@
 // <name>" for a call, and the gen_ai.* attributes are used for what
 // they cover. Everything the format adds beyond that is under
 // agentsession.*.
+//
+// An env entry is an event on the session span carrying cwd and each
+// string member of its workspace as workspace.<member>, and
+// [AttrSubstitution] when its workspace is not the one in force before
+// it.
 package otel
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -84,6 +90,10 @@ const (
 	AttrOutcomePass    = "agentsession.outcome.pass"
 	AttrLinkRel        = "agentsession.link.rel"
 	AttrLinkSession    = "agentsession.link.session"
+	// AttrSubstitution marks an env event whose workspace is not the
+	// one in force before it on the path, which RFC 0001 calls a
+	// substitution. A first env entry is not one.
+	AttrSubstitution = "agentsession.substitution"
 
 	AttrOperation     = "gen_ai.operation.name"
 	AttrRequestModel  = "gen_ai.request.model"
@@ -277,6 +287,10 @@ type tracker struct {
 	calls         map[string]*callState
 	order         []string // call IDs in the order seen
 	branchLink    *trace.Link
+	// workspace is the workspace in force, once envSeen says an env
+	// entry has put one in force.
+	workspace *agentsession.Workspace
+	envSeen   bool
 }
 
 type callState struct {
@@ -374,6 +388,8 @@ func (t *tracker) prime(path []agentsession.Entry) {
 			if v.Model != "" {
 				t.model = v.Model
 			}
+		case *agentsession.EnvEntry:
+			t.workspace, t.envSeen = v.Workspace, true
 		case *agentsession.CompactionEntry:
 			if v.Config.Model != "" {
 				t.model = v.Config.Model
@@ -483,20 +499,11 @@ func (t *tracker) entry(e agentsession.Entry) {
 		if v.CWD != "" {
 			attrs = append(attrs, attribute.String("cwd", v.CWD))
 		}
-		if v.Workspace != nil {
-			attrs = append(attrs, attribute.String("workspace.kind", v.Workspace.Kind))
-			if v.Workspace.Ref != "" {
-				attrs = append(attrs, attribute.String("workspace.ref", v.Workspace.Ref))
-			}
-			// The members that tell one file system from another, which
-			// RFC 0001 puts inside workspace, when they are strings.
-			for _, key := range []string{"host", "instance"} {
-				var s string
-				if json.Unmarshal(v.Workspace.Unknown[key], &s) == nil && s != "" {
-					attrs = append(attrs, attribute.String("workspace."+key, s))
-				}
-			}
+		attrs = append(attrs, workspaceAttrs(v.Workspace)...)
+		if t.envSeen && !agentsession.SameWorkspace(t.workspace, v.Workspace) {
+			attrs = append(attrs, attribute.Bool(AttrSubstitution, true))
 		}
+		t.workspace, t.envSeen = v.Workspace, true
 		t.session.AddEvent(EventEnv, trace.WithTimestamp(ts), trace.WithAttributes(attrs...))
 	case *agentsession.OutcomeEntry:
 		attrs := []attribute.KeyValue{attribute.String(AttrEntryID, v.ID), attribute.String(AttrOutcomeKind, v.Kind)}
@@ -824,6 +831,32 @@ func (t *tracker) withBranchLink(opts []trace.SpanStartOption) []trace.SpanStart
 		t.branchLink = nil
 	}
 	return opts
+}
+
+// workspaceAttrs is a workspace as workspace.<member> attributes: kind,
+// ref, then every other member that is a non-empty string, by key, so
+// whatever tells one file system from another, which RFC 0001 puts
+// inside workspace, reaches the trace.
+func workspaceAttrs(w *agentsession.Workspace) []attribute.KeyValue {
+	if w == nil {
+		return nil
+	}
+	attrs := []attribute.KeyValue{attribute.String("workspace.kind", w.Kind)}
+	if w.Ref != "" {
+		attrs = append(attrs, attribute.String("workspace.ref", w.Ref))
+	}
+	keys := make([]string, 0, len(w.Unknown))
+	for key := range w.Unknown {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		var s string
+		if json.Unmarshal(w.Unknown[key], &s) == nil && s != "" {
+			attrs = append(attrs, attribute.String("workspace."+key, s))
+		}
+	}
+	return attrs
 }
 
 func usageAttrs(u *openresponses.Usage) []attribute.KeyValue {

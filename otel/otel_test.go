@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -97,15 +98,15 @@ func eventAttr(s sdktrace.ReadOnlySpan, event, key string) []string {
 	return out
 }
 
-// TestExportWorkspaceMembers: the host and instance a workspace holds
-// reach the env event beside its kind and ref, so a trace shows which
-// container a session ran in.
+// TestExportWorkspaceMembers: every string member a workspace holds
+// reaches the env event beside its kind and ref, so a trace shows which
+// container a session ran in, and on which node.
 func TestExportWorkspaceMembers(t *testing.T) {
 	sr, tracer := recorder()
 	s := agentsession.New(agentsession.Header{})
 	env := &agentsession.EnvEntry{CWD: "/w"}
 	w := env.SetWorkspace(agentsession.WorkspaceContainer, "sha256:ab")
-	for key, value := range map[string]any{"host": "build-7", "instance": "ctr-1", "zone": 3} {
+	for key, value := range map[string]any{"host": "build-7", "instance": "ctr-1", "node": "n-4", "zone": 3} {
 		if err := w.SetMember(key, value); err != nil {
 			t.Fatal(err)
 		}
@@ -120,13 +121,122 @@ func TestExportWorkspaceMembers(t *testing.T) {
 	if len(session) != 1 {
 		t.Fatalf("session spans = %d", len(session))
 	}
-	for key, want := range map[string]string{"workspace.kind": "container", "workspace.ref": "sha256:ab", "workspace.host": "build-7", "workspace.instance": "ctr-1"} {
+	for key, want := range map[string]string{"workspace.kind": "container", "workspace.ref": "sha256:ab", "workspace.host": "build-7", "workspace.instance": "ctr-1", "workspace.node": "n-4"} {
 		if got := eventAttr(session[0], EventEnv, key); len(got) != 1 || got[0] != want {
 			t.Errorf("%s = %v, want %s", key, got, want)
 		}
 	}
 	if got := eventAttr(session[0], EventEnv, "workspace.zone"); got != nil {
-		t.Errorf("workspace.zone = %v; only host and instance are exported", got)
+		t.Errorf("workspace.zone = %v; only string members are exported", got)
+	}
+	if got := eventAttr(session[0], EventEnv, AttrSubstitution); got != nil {
+		t.Errorf("a first env entry is marked a substitution: %v", got)
+	}
+}
+
+// nodeEnv is an env entry in a container that differs from another
+// only by the node it ran on.
+func nodeEnv(t *testing.T, node string) *agentsession.EnvEntry {
+	t.Helper()
+	env := &agentsession.EnvEntry{CWD: "/w"}
+	w := env.SetWorkspace(agentsession.WorkspaceContainer, "sha256:ab")
+	for key, value := range map[string]string{"host": "build-7", "instance": "ctr-1", "node": node} {
+		if err := w.SetMember(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return env
+}
+
+// substitutions is, for each env event on the session span in order,
+// whether it is marked a substitution, and its workspace.node.
+func substitutions(s sdktrace.ReadOnlySpan) (marked []bool, nodes []string) {
+	for _, ev := range s.Events() {
+		if ev.Name != EventEnv {
+			continue
+		}
+		sub, node := false, ""
+		for _, kv := range ev.Attributes {
+			switch string(kv.Key) {
+			case AttrSubstitution:
+				sub = kv.Value.AsBool()
+			case "workspace.node":
+				node = kv.Value.AsString()
+			}
+		}
+		marked, nodes = append(marked, sub), append(nodes, node)
+	}
+	return marked, nodes
+}
+
+// TestExportSubstitution: a second env entry whose workspace differs
+// from the first only by a member the format does not define is a
+// substitution, and its event says so; the first is not one, and an
+// env entry repeating the workspace in force is not either.
+func TestExportSubstitution(t *testing.T) {
+	sr, tracer := recorder()
+	s := agentsession.New(agentsession.Header{})
+	for _, node := range []string{"n-1", "n-2", "n-2"} {
+		if _, err := s.Append(nodeEnv(t, node)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	session := spans(sr.Ended()).named(SpanSession)
+	if len(session) != 1 {
+		t.Fatalf("session spans = %d", len(session))
+	}
+	marked, nodes := substitutions(session[0])
+	if !slices.Equal(marked, []bool{false, true, false}) || !slices.Equal(nodes, []string{"n-1", "n-2", "n-2"}) {
+		t.Errorf("env events: substitution %v, node %v", marked, nodes)
+	}
+}
+
+// TestStoreSubstitution: the Store decorator marks the substitution as
+// Export does, including against a workspace a resumed session put in
+// force before this process opened it.
+func TestStoreSubstitution(t *testing.T) {
+	ctx := context.Background()
+	sr, tracer := recorder()
+	mem := agentsession.NewMemoryStore()
+	st := Wrap(mem, tracer)
+	sess, err := st.Create(ctx, agentsession.Header{ID: "live"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID()
+	for _, node := range []string{"n-1", "n-2"} {
+		if _, err := st.Append(ctx, id, nodeEnv(t, node)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st.Close(id)
+	session := spans(sr.Ended()).named(SpanSession)
+	if len(session) != 1 {
+		t.Fatalf("session spans = %d", len(session))
+	}
+	if marked, nodes := substitutions(session[0]); !slices.Equal(marked, []bool{false, true}) || !slices.Equal(nodes, []string{"n-1", "n-2"}) {
+		t.Errorf("env events: substitution %v, node %v", marked, nodes)
+	}
+
+	st2 := Wrap(mem, tracer)
+	if _, err := st2.Open(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range []string{"n-2", "n-3"} {
+		if _, err := st2.Append(ctx, id, nodeEnv(t, node)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st2.CloseAll()
+	resumed := spans(sr.Ended()).named(SpanSession).withAttr(AttrResumed, "true")
+	if len(resumed) != 1 {
+		t.Fatalf("resumed session spans = %d", len(resumed))
+	}
+	if marked, _ := substitutions(resumed[0]); !slices.Equal(marked, []bool{false, true}) {
+		t.Errorf("resumed env events: substitution %v", marked)
 	}
 }
 
