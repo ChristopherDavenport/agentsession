@@ -767,10 +767,13 @@ Why a run started and how it ended. Two entries per run, paired by
   valid still, and the envelope section says a rewriter preserves
   both.
 - `reason` is closed. Each value is a shape of the run's segment, the
-  entries on the path from the `start` entry to the `end` entry, where
-  a pending call is a `function_call` on the segment with no
-  `function_call_output` on it. Five values are computable, tested in
-  this order with the first match winning:
+  entries on the path from the `start` entry to the `end` entry. A
+  run's calls are the `function_call`s on the segment and those on the
+  path before it that the segment holds a `decision`, a `dispatch` or
+  a `function_call_output` for, since the run took them up; a pending
+  call is one of the run's calls with no `function_call_output` on
+  the path. Five values are computable, tested in this order with the
+  first match winning:
   1. `error`: the last `response` on the segment carries a non-null
      `error`.
   2. `input_required`: at least one pending call is held, as `decision`
@@ -798,6 +801,13 @@ Why a run started and how it ended. Two entries per run, paired by
   reading as `stopped`, because the path still holds an unanswered
   call, and `aborted` is the value that says so.
 
+  A call an earlier run made is one of this run's calls once the
+  segment holds a decision, dispatch or output for it, and not before.
+  A resume that asks its policy about a call an earlier run left, and
+  holds it, ends `input_required` before any model call, since the
+  held call is its own; a run that leaves such a call untouched does
+  not own it, and its end does not list it.
+
   Two values record what the segment cannot show and are written, not
   computed: `error` when the harness failed at any point, which `ref`
   names, and `interrupted` when a person or the host told the harness
@@ -805,8 +815,9 @@ Why a run started and how it ended. Two entries per run, paired by
   Every segment matches exactly one computable value on its path; a
   reader MAY recompute it, and when the written value is computable and the two
   disagree the segment is authoritative.
-- `pending` lists the pending calls' IDs so a resume can read them
-  without walking the segment. The segment is authoritative here too.
+- `pending` lists the pending calls' IDs, those an earlier run made
+  among them, so a resume can read them without walking the segment.
+  The segment is authoritative here too.
 - Items and responses of the run follow its `start` entry on the path.
   Runs do not nest: an input that arrives while a writer is running a
   run joins that run. A branch to an entry before a run's `start`
@@ -904,7 +915,11 @@ A call's fate was decided outside the tool.
     `args`, since those are what an auditor asks about such a call.
   - `reject`: this decision ended the call. No `dispatch` ever follows,
     and a `function_call_output` for the call follows that carries
-    `reason`.
+    `reason`. A `reject` with no output after it is a call the harness
+    refused and has not yet written the output of, since the record
+    stopped between the two; the harness that continues the path
+    writes that output and nothing else for the call. It did not run
+    and does not run.
   - `hold`: this decision neither let the call go nor ended it. The
     call waits. A call is held while its latest decision is a `hold`
     with no `dispatch` after it on the path; a later decision answers
@@ -1499,11 +1514,13 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.8
 
-Additive. One element and a paragraph in the `config` section, and a
-writer's rule in Versioning. No hash changes, and a 0.8 file is a 0.9
-file with no `keep` in its omitted lists. An element of an omitted
-list with no `id`, which a 0.9 reader reads as a `keep`, was not a 0.8
-omitted part, which always had its `id`.
+One element and a paragraph in the `config` section, a writer's rule
+in Versioning, and which calls are a run's. No hash changes, and a 0.8
+file is a 0.9 file with no `keep` in its omitted lists, unless a run
+in it took up a call an earlier run made and left it without an
+output. An element of an omitted list with no `id`, which a 0.9 reader
+reads as a `keep`, was not a 0.8 omitted part, which always had its
+`id`.
 
 - A writer that appends to a file whose header names an earlier minor
   raises the header's `format` first. Under 0.8 a header kept the
@@ -1519,6 +1536,16 @@ omitted part, which always had its `id`.
   moving across the budget rewrote a list of 475 parts, 37 KB and 12%
   more than the joined string the parts were adopted to replace. With
   a `keep` it costs about 100 bytes.
+- A run's pending calls include the calls of earlier runs it took up
+  by a decision, dispatch or output on its segment. Under 0.8 a
+  pending call was a `function_call` on the segment, so a resume that
+  held a call an earlier run left, before any model call, had no
+  pending call and read `aborted`, and its `pending` list could not
+  name the call it was waiting on.
+- A `reject` with no output after it is a call owed its refusal and
+  nothing else, as an `answer` with no output is owed its answer.
+  0.8 said no `dispatch` follows a `reject` but not what a reader
+  makes of a record that stopped between the two.
 
 ## Changes since 0.7
 

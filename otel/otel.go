@@ -325,6 +325,8 @@ func (t *tracker) pendingState(c *callState) agentsession.CallState {
 	switch {
 	case c.answered:
 		return agentsession.CallAnswered
+	case c.rejected:
+		return agentsession.CallRejected
 	case c.held:
 		return agentsession.CallHeld
 	case c.dispatched:

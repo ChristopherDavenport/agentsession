@@ -5,6 +5,26 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **A run's calls include the earlier calls it took up.** RFC 0001
+  draft 0.9 is amended in place: a run's calls are those on its
+  segment and those an earlier run made that the segment holds a
+  decision, dispatch or output for, and its pending calls are those of
+  them with no output on the path. `Run.Calls`, `Run.Pending`,
+  `EndRun` and `ComputeReason` read them so. A resume whose policy
+  holds a call a crash left never started, before any model call, now
+  ends `input_required` with that call in `pending`; it read `aborted`
+  with an empty list, and a writer that wrote `input_required` failed
+  `VerifyRecords`. A call an earlier run left and this run does not
+  touch is still not its call.
+- **`CallRejected`.** A call whose `reject` is on the path and whose
+  refusal output is not, since the record stopped between the two,
+  reads as `CallRejected` rather than `CallNeverStarted`: it is owed
+  that output and nothing else, and must not be run. The RFC says so
+  beside the same rule for `answer`. The otel exporter reports the
+  state for a rejected call a run end left pending.
+
 ## v0.0.12 - 2026-09-29
 
 - **RFC 0001 draft 0.9; the library writes `agentsession/0.9`.** One

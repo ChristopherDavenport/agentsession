@@ -127,6 +127,16 @@ func TestComputeReasonLastRun(t *testing.T) {
 		{"resume that answers nothing", "start user calls:a resp hold:a end:input_required start:resume user", ReasonAborted},
 		{"resume that calls the model again", "start user calls:a resp hold:a end:input_required start:resume proceed:a dispatch:a out:a resp", ReasonDone},
 		{"a call an earlier run left pending", "start user calls:a resp dispatch:a end:aborted start:resume user calls:b resp dispatch:b out:b", ReasonAborted},
+
+		// A call an earlier run made is the run's once it decides about
+		// it: a resume whose policy defers a call the crash left never
+		// started waits on that call, before any model call.
+		{"resume that holds a call a crash left", "start user calls:a resp end:error start:resume hold:a", ReasonInputRequired},
+		{"resume that holds again", "start user calls:a resp hold:a end:input_required start:resume hold:a", ReasonInputRequired},
+		{"resume that holds one and leaves one", "start user calls:a,b resp end:error start:resume hold:a", ReasonInputRequired},
+		{"resume that holds one and runs one", "start user calls:a,b resp end:error start:resume hold:a dispatch:b", ReasonAborted},
+		{"resume that holds one and answers one", "start user calls:a,b resp end:error start:resume hold:a dispatch:b out:b", ReasonInputRequired},
+		{"resume cut off after a reject", "start user calls:a resp end:error start:resume reject:a", ReasonAborted},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -194,6 +204,30 @@ func TestComputeReasonCallsOutsideTheSegment(t *testing.T) {
 	}
 }
 
+// TestRunPendingTakesUpEarlierCalls: a run's pending list names the
+// calls of an earlier run it decided about and left without an output,
+// and only those.
+func TestRunPendingTakesUpEarlierCalls(t *testing.T) {
+	path := seg(t, "start user calls:a,b,c resp end:error start:resume hold:a dispatch:c out:c")
+	runs := Runs(path)
+	last := runs[len(runs)-1]
+	var ids []string
+	for _, c := range last.Calls() {
+		ids = append(ids, c.ID())
+	}
+	if got := strings.Join(ids, ","); got != "a,c" {
+		t.Errorf("Calls = %s, want a,c: the run took up a and c and left b alone", got)
+	}
+	if got := strings.Join(last.Pending(), ","); got != "a" {
+		t.Errorf("Pending = %s, want a", got)
+	}
+	// A hand-built run with no path reads its segment alone.
+	bare := &Run{Start: last.Start, Segment: last.Segment}
+	if got := len(bare.Calls()); got != 0 {
+		t.Errorf("Calls without a path = %d, want 0", got)
+	}
+}
+
 func TestCallState(t *testing.T) {
 	promised := Header{Records: AllRecords}
 	silent := Header{}
@@ -215,6 +249,12 @@ func TestCallState(t *testing.T) {
 		// happened to it.
 		{"approved, overtaken", "calls:a resp hold:a proceed:a", promised, CallNeverStarted},
 		{"approved, then refused", "calls:a resp proceed:a reject:a out:a", promised, CallCompleted},
+		// A reject whose refusal the record stopped before is owed
+		// that output and nothing else; it never reads as a call a
+		// harness may still run.
+		{"rejected, output not written", "calls:a resp reject:a", promised, CallRejected},
+		{"held, rejected, output not written", "calls:a resp hold:a reject:a", promised, CallRejected},
+		{"rejected without promise", "calls:a resp reject:a", silent, CallRejected},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

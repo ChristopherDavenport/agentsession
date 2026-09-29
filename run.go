@@ -167,6 +167,12 @@ const (
 	// The harness that continues the path writes the output and
 	// nothing else for the call; no dispatch may follow.
 	CallAnswered
+	// CallRejected: a reject decision ended the call and its refusal
+	// output is not on the path yet, since the record stopped between
+	// the two. The call did not run and does not: the harness that
+	// continues the path writes the output, carrying the reject's
+	// reason, and nothing else for the call.
+	CallRejected
 )
 
 // String names the state.
@@ -184,6 +190,8 @@ func (s CallState) String() string {
 		return "unknown"
 	case CallAnswered:
 		return "answered"
+	case CallRejected:
+		return "rejected"
 	}
 	return fmt.Sprintf("CallState(%d)", int(s))
 }
@@ -198,6 +206,8 @@ func (c *Call) State(h Header) CallState {
 		return CallCompleted
 	case c.Answered():
 		return CallAnswered
+	case c.Rejected():
+		return CallRejected
 	case c.Held():
 		return CallHeld
 	case c.Dispatch != nil:
@@ -361,11 +371,48 @@ type Run struct {
 // RunID returns the run's ID.
 func (r *Run) RunID() string { return r.Start.RunID }
 
-// Calls returns the calls on the segment; see [Calls].
-func (r *Run) Calls() []*Call { return Calls(r.Segment) }
+// Calls returns the run's calls: those on its segment, and those an
+// earlier run made that the segment holds a decision, a dispatch or an
+// output for, since the run took them up. Each carries what the path
+// holds for it; see [Calls].
+func (r *Run) Calls() []*Call { return runCalls(r.Path, r.Segment) }
 
-// Pending returns the IDs of the calls on the segment with no output
-// on it.
+// runCalls returns the calls of the run whose segment ends the path:
+// the calls on the path that the segment holds the function call of,
+// or a decision, dispatch or output for. A nil path means the segment
+// stands for the path.
+func runCalls(path, segment []Entry) []*Call {
+	if path == nil {
+		path = segment
+	}
+	touched := map[string]bool{}
+	for _, e := range segment {
+		switch v := e.(type) {
+		case *ItemEntry:
+			switch it := v.Item.(type) {
+			case *openresponses.FunctionCall:
+				touched[it.CallID] = true
+			case *openresponses.FunctionCallOutput:
+				touched[it.CallID] = true
+			}
+		case *DecisionEntry:
+			touched[v.CallID] = true
+		case *DispatchEntry:
+			touched[v.CallID] = true
+		}
+	}
+	var out []*Call
+	for _, c := range Calls(path) {
+		if touched[c.ID()] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Pending returns the IDs of the run's calls with no output on the
+// path, a call an earlier run made and this one took up among them;
+// see [Run.Calls].
 func (r *Run) Pending() []string {
 	var out []string
 	for _, c := range r.Calls() {
@@ -430,9 +477,8 @@ func (s *Session) OpenRun(leaf string) (*Run, error) {
 }
 
 // EndRun builds the end entry for the run open at the current leaf:
-// its pending list is the calls on the segment with no output. reason
-// is one of the Reason constants and ref may be "". The entry is not
-// appended.
+// its pending list is [Run.Pending]. reason is one of the Reason
+// constants and ref may be "". The entry is not appended.
 //
 // A writer that continues a path on which a run is open that it is not
 // running owns that run and closes it before appending anything else,
@@ -463,6 +509,11 @@ func (s *Session) EndRun(reason, ref string) (*RunEntry, error) {
 // carries an error; both are values a writer adds where the segment
 // cannot show them.
 //
+// A pending call is one of the run's calls, as [Run.Calls] has them,
+// with no output: a call an earlier run made counts once the segment
+// holds a decision, dispatch or output for it, so a resume that holds
+// such a call before any model call ends input_required.
+//
 // The stopped step reads the path because a run that answers a call
 // and ends without calling the model again, which is what a resume
 // whose tool asks to terminate and a refusal both are, holds no
@@ -476,7 +527,7 @@ func ComputeReason(path, segment []Entry) string {
 	if last != nil && last.Error != nil {
 		return ReasonError
 	}
-	calls := Calls(segment)
+	calls := runCalls(path, segment)
 	onPath := Calls(path)
 	held, dispatched, pending := false, false, false
 	for _, c := range calls {
@@ -577,8 +628,8 @@ var ErrReasonMismatch = errors.New("agentsession: run end disagrees with its seg
 
 // Verify checks the run's end entry against its segment. A written
 // error or interrupted stands over any segment; any other reason must
-// match [ComputeReason], and the pending list must match the calls on
-// the segment without an output. A run without an end verifies
+// match [ComputeReason], and the pending list must match
+// [Run.Pending]. A run without an end verifies
 // trivially.
 func (r *Run) Verify() error {
 	if r.End == nil {
