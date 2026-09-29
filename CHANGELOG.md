@@ -94,6 +94,14 @@ versions may break the API.
   a bad line of a file cas assembled, once for each session sharing
   it. `Store.Verify` walks the store as git fsck does: journal records,
   loose objects, packs, every entry held and every session. (#114)
+- **Appending an entry the session holds is a no-op in every store.**
+  RFC 0002 makes a second append of the same type, content and parent
+  at the same `ts` one entry, reported as such. jsonl wrote its line
+  again, so every reader then reported a repeated id, and sqlite failed
+  the append on the database's uniqueness rule, so a writer retrying an
+  append whose acknowledgement it lost got an error for one that had
+  succeeded. Both now return the entry's id and write nothing, as cas
+  did, and the store conformance suite holds every store to it. (#119)
 - **`sqlite.Open` refuses another program's table of its names.** A
   file holding a foreign `entries` table, such as the one
   agentmemory/sqlite v0.0.5 wrote, failed with `no such column: id`

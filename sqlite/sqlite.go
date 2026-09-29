@@ -658,6 +658,11 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	if err != nil {
 		return "", err
 	}
+	if r.Outcome == agentsession.Held {
+		// The session holds the entry already: a no-op, as RFC 0002 has
+		// it, where inserting its row again would fail the append.
+		return r.ID, nil
+	}
 	id := r.ID
 	line, err := agentsession.MarshalEntry(e)
 	if err != nil {
@@ -685,7 +690,7 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 			return "", s.refused[sessionID]
 		}
 	}
-	raised := err == nil && s.stale[sessionID] && r.Outcome != agentsession.Held
+	raised := err == nil && s.stale[sessionID]
 	if raised {
 		err = raiseFormat(ctx, tx, sessionID)
 	}
