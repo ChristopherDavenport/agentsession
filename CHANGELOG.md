@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.13 - 2026-09-29
 
 - **A run's calls include the earlier calls it took up.** RFC 0001
   draft 0.9 is amended in place: a run's calls are those on its
