@@ -7,6 +7,32 @@ versions may break the API.
 
 ## Unreleased
 
+- **RFC 0001 draft 0.9; the library writes `agentsession/0.9`.** One
+  element and a paragraph in the `config` section. A 0.5 to 0.8 file
+  reads as it stands, with nothing rehashed; v0.0.11 refuses a 0.9
+  file, as a 0.x reader refuses a later minor.
+  `testdata/sessions/v0.8/replay.jsonl` keeps the 0.8 fixture as
+  v0.0.11 released it, and a test reads it. 0.8 kept the omitted
+  list in force until a config changed it, but a config that changed
+  it wrote all of it: under a memory at its budget every save of a new
+  fact and every forget moves a part across the budget, and one part
+  moved rewrote 475, 37 KB and 12% more than the joined string.
+  `instructions_omitted` now takes the `{"keep":n}` element
+  `instructions_parts` took in 0.7, counted by the same cursor over
+  the list in force, and the same save is 93 bytes. `OmittedPart.Keep`,
+  taken only from a positive integer written as digits, and
+  `OmittedPart.ID` is now `omitempty`. `Settings.OmittedDelta` returns
+  the member that takes the list in force to a new one: nil when
+  nothing moved, `[]` to clear, and otherwise every run of unchanged
+  parts in order as a keep. The context resolves each keep against the
+  list before its entry, so `Settings.InstructionsOmitted` and a
+  compaction's checkpoint hold the list whole; a keep that cannot be
+  satisfied stays in the list as written, which
+  `OmittedPart.Unresolved` reports. `Append` refuses a keep carrying
+  other members, a list with a keep that names an id twice, and a keep
+  in a replace, which discards the list it counts over. `describe`
+  prints a keep as `+n`, and `show` an unresolved one. The writer half,
+  writing keep runs, is agentturn/session's. (#115)
 - **`sqlite.Open` refuses another program's table of its names.** A
   file holding a foreign `entries` table, such as the one
   agentmemory/sqlite v0.0.5 wrote, failed with `no such column: id`

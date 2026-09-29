@@ -62,6 +62,10 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		if n := len(v.InstructionsOmitted); n > 0 {
 			ids := make([]string, 0, n)
 			for _, o := range v.InstructionsOmitted {
+				if o.ID == "" && o.Keep > 0 {
+					ids = append(ids, fmt.Sprintf("+%d", o.Keep))
+					continue
+				}
 				ids = append(ids, o.ID+" ("+o.Reason+")")
 			}
 			parts = append(parts, fmt.Sprintf("omitted %s", strings.Join(ids, ", ")))

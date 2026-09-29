@@ -137,6 +137,16 @@ func printContext(w io.Writer, s *agentsession.Session, at string) error {
 	if omitted := ctx.InstructionsOmitted(); len(omitted) > 0 {
 		names := make([]string, 0, len(omitted))
 		for _, o := range omitted {
+			if o.Unresolved() {
+				// A keep the path could not satisfy, or an element
+				// naming nothing.
+				name := "- unresolved"
+				if o.Keep > 0 {
+					name = fmt.Sprintf("keep %d unresolved", o.Keep)
+				}
+				names = append(names, name)
+				continue
+			}
 			names = append(names, fmt.Sprintf("%s %dB (%s)", o.ID, o.Size, o.Reason))
 		}
 		fmt.Fprintf(tw, "  omitted\t%s\n", strings.Join(names, ", "))

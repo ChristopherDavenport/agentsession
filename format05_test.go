@@ -477,7 +477,8 @@ func TestResolveLegacyID(t *testing.T) {
 
 // TestAddedMembersReadAsWritten: trigger on a run start and call_id on a
 // custom entry were unknown members before 0.6, and attempts on a
-// response and keep on an instructions part before 0.7, so an earlier
+// response and keep on an instructions part before 0.7, and keep on an
+// omitted part before 0.9, so an earlier
 // file may spell them any way at all, and a 0.6 writer may put a member
 // this package does not define inside trigger. Each such line reads, verifies and
 // writes back as it was; the typed field is filled whenever the member
@@ -509,6 +510,14 @@ func TestAddedMembersReadAsWritten(t *testing.T) {
 		{"keep an object", `"type":"config","instructions_parts":[{"id":"a","text":"one"},{"keep":{"n":3}}]`, false},
 		{"keep null", `"type":"config","instructions_parts":[{"id":"a","text":"one"},{"keep":null}]`, false},
 		{"keep exact", `"type":"config","instructions_parts":[{"id":"a","text":"one"},{"keep":3}]`, true},
+		{"omitted keep a string", `"type":"config","instructions_omitted":[{"id":"a"},{"keep":"3"}]`, false},
+		{"omitted keep a fraction", `"type":"config","instructions_omitted":[{"id":"a"},{"keep":2.5}]`, false},
+		{"omitted keep zero", `"type":"config","instructions_omitted":[{"id":"a"},{"keep":0}]`, false},
+		{"omitted keep negative", `"type":"config","instructions_omitted":[{"id":"a"},{"keep":-2}]`, false},
+		{"omitted keep too large", `"type":"config","instructions_omitted":[{"id":"a"},{"keep":99999999999}]`, false},
+		{"omitted keep an object", `"type":"config","instructions_omitted":[{"id":"a"},{"keep":{"n":3}}]`, false},
+		{"omitted keep null", `"type":"config","instructions_omitted":[{"id":"a"},{"keep":null}]`, false},
+		{"omitted keep exact", `"type":"config","instructions_omitted":[{"id":"a"},{"keep":3}]`, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -540,8 +549,14 @@ func TestAddedMembersReadAsWritten(t *testing.T) {
 					t.Errorf("Attempts typed = %d", v.Attempts)
 				}
 			case *ConfigEntry:
-				if (v.InstructionsParts[1].Keep != 0) != tt.typed {
-					t.Errorf("Keep typed = %d", v.InstructionsParts[1].Keep)
+				keep := 0
+				if len(v.InstructionsParts) > 1 {
+					keep = v.InstructionsParts[1].Keep
+				} else if len(v.InstructionsOmitted) > 1 {
+					keep = v.InstructionsOmitted[1].Keep
+				}
+				if (keep != 0) != tt.typed {
+					t.Errorf("Keep typed = %d", keep)
 				}
 			}
 			var buf bytes.Buffer

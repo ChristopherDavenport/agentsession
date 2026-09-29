@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -205,6 +206,18 @@ func TestRegenerateFixtures(t *testing.T) {
 		t.Fatal(err)
 	}
 	gen["replay"] = strings.Split(strings.TrimSuffix(rbuf.String(), "\n"), "\n")
+
+	// omitted: the 0.9 conformance vectors, appended natively. A memory
+	// at its budget whose omitted list names runs of the list in force
+	// by keep as facts are saved and forgotten, beside a replace and a
+	// compaction's checkpoint that write it whole.
+	var obuf bytes.Buffer
+	if err := Write(&obuf, omittedFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("testdata", "sessions", "omitted.jsonl"), obuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	for module, names := range nestedFixtures {
 		dir := filepath.Join(module, "testdata", "sessions")
@@ -709,6 +722,275 @@ func TestFrozen07Fixture(t *testing.T) {
 			if err := old.Verify(r.ID); err != nil {
 				t.Errorf("%s: %v", r.ResponseID, err)
 			}
+		}
+	}
+}
+
+// memoryFact is the nth fact of the omitted fixture's memory: shown as
+// an instructions part, or left out as an omitted part.
+func memoryFact(n int) (InstructionPart, OmittedPart) {
+	id := fmt.Sprintf("memory/user/n-%04d", n)
+	text := fmt.Sprintf("fact %04d: the user said something worth keeping", n)
+	return InstructionPart{ID: id, Source: "agentmemory", Text: text}, OmittedPart{ID: id, Reason: "budget", Size: len(text), Source: "agentmemory"}
+}
+
+// omittedFixture builds the session omitted.jsonl holds: a memory of
+// sixteen facts under a budget that shows four. A save that sorts into
+// the shown facts pushes one out, written as that part and a keep; a
+// forget of an omitted fact is a keep, the part after it, and a keep,
+// in a config carrying no setting; a model switch replaces the
+// settings and writes the list whole; a compaction's checkpoint
+// carries it whole; and a save after the fold keeps a run of the
+// checkpoint's list. Every response carries the hash of the request
+// its context rebuilds, which the omitted list does not reach.
+func omittedFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-09-29T13:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000014", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must := func(e Entry) string {
+		t.Helper()
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatalf("append %T: %v", e, err)
+		}
+		return id
+	}
+	product := InstructionPart{ID: "product", Source: "product", Text: "You are a helpful assistant with a memory."}
+	var shownFacts, omittedFacts []int
+	for n := 0; n < 16; n++ {
+		if n < 4 {
+			shownFacts = append(shownFacts, n)
+		} else {
+			omittedFacts = append(omittedFacts, n)
+		}
+	}
+	render := func() ([]InstructionPart, []OmittedPart) {
+		parts := []InstructionPart{product}
+		for _, n := range shownFacts {
+			p, _ := memoryFact(n)
+			parts = append(parts, p)
+		}
+		var omitted []OmittedPart
+		for _, n := range omittedFacts {
+			_, o := memoryFact(n)
+			omitted = append(omitted, o)
+		}
+		return parts, omitted
+	}
+	turn := func(model string, replace bool, user string) {
+		t.Helper()
+		parts, omitted := render()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg *ConfigEntry
+		if replace {
+			// A replace discards the list in force, so it carries the
+			// list whole.
+			if cfg, err = ConfigFromRequestParts(openresponses.Request{Model: model, Instructions: JoinInstructions(parts)}, parts...); err != nil {
+				t.Fatal(err)
+			}
+			cfg.InstructionsOmitted = omitted
+		} else {
+			cfg = ctx.Settings.InstructionsDelta(parts)
+			if d := ctx.Settings.OmittedDelta(omitted); d != nil {
+				if cfg == nil {
+					cfg = &ConfigEntry{}
+				}
+				cfg.InstructionsOmitted = d
+			}
+		}
+		if cfg != nil {
+			must(cfg)
+		}
+		must(NewItemEntry(openresponses.UserText(user)))
+		if ctx, err = s.Context(); err != nil {
+			t.Fatal(err)
+		}
+		req, err := ctx.Request()
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash, err := RequestHash(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := fmt.Sprintf("resp_%d", s.Len())
+		answer := NewItemEntry(&openresponses.Message{ID: "msg_" + id, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: "Noted.", Annotations: []openresponses.Annotation{}}}})
+		answer.ResponseID = id
+		must(answer)
+		must(&ResponseEntry{ResponseID: id, Model: model, Status: openresponses.ResponseStatusCompleted, RequestHash: hash})
+	}
+	turn("gpt-5", true, "Hello again.")
+	// A save that sorts into the shown facts pushes fact 3 out, to the
+	// head of the omitted list: that part and a keep of twelve.
+	shownFacts = []int{0, 1, 2, 16}
+	omittedFacts = append([]int{3}, omittedFacts...)
+	turn("gpt-5", false, "I moved to Bristol.")
+	// A forget of omitted fact 9: nothing shown moves, so the config
+	// carries the omitted list alone.
+	omittedFacts = []int{3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15}
+	turn("gpt-5", false, "Forget fact nine.")
+	// A model switch replaces the settings, and writes the list whole.
+	turn("gpt-5-mini", true, "Switch to the smaller model.")
+	comp, err := s.CompactKeeping(1, openresponses.UserText("The user moved to Bristol and switched models."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(comp)
+	// After the fold a save pushes fact 2 out: a keep of the
+	// checkpoint's list.
+	shownFacts = []int{0, 1, 16, 17}
+	omittedFacts = append([]int{2}, omittedFacts...)
+	turn("gpt-5-mini", false, "My sister is called Ada.")
+	return s
+}
+
+// TestOmittedFixture reads the 0.9 conformance fixture: every request
+// hash verifies, the omitted list in force after each config is the
+// one the writer rendered, a delta writes runs of the list in force as
+// keeps, and a replace and the checkpoint write it whole.
+func TestOmittedFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", "omitted.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"format":"agentsession/0.9"`, `{"keep":12}`, `[{"keep":6},{"id":"memory/user/n-0010"`, `{"keep":5}]`} {
+		if !bytes.Contains(raw, []byte(want)) {
+			t.Errorf("the fixture lacks %s", want)
+		}
+	}
+	s := loadFixture(t, "omitted")
+	verified := 0
+	var configs []*ConfigEntry
+	var comp *CompactionEntry
+	for _, e := range s.Entries() {
+		switch v := e.(type) {
+		case *ResponseEntry:
+			if err := s.Verify(v.ID); err != nil {
+				t.Errorf("%s: %v", v.ResponseID, err)
+			}
+			verified++
+		case *ConfigEntry:
+			configs = append(configs, v)
+		case *CompactionEntry:
+			comp = v
+		}
+	}
+	if verified != 5 || len(configs) != 5 || comp == nil {
+		t.Fatalf("%d responses verified, %d configs, compaction %v", verified, len(configs), comp != nil)
+	}
+	facts := func(ns ...int) string {
+		ids := make([]string, 0, len(ns))
+		for _, n := range ns {
+			_, o := memoryFact(n)
+			ids = append(ids, o.ID)
+		}
+		return strings.Join(ids, ",")
+	}
+	seq := func(from, to int) []int {
+		var out []int
+		for n := from; n <= to; n++ {
+			out = append(out, n)
+		}
+		return out
+	}
+	after9 := []int{3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15}
+	for i, want := range []string{
+		facts(seq(4, 15)...),
+		facts(seq(3, 15)...),
+		facts(after9...),
+		facts(after9...),
+		facts(append([]int{2}, after9...)...),
+	} {
+		ctx, err := s.ContextAt(configs[i].ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, o := range ctx.InstructionsOmitted() {
+			if o.Unresolved() {
+				t.Errorf("config %d: an unresolved element in force", i)
+			}
+			if _, full := memoryFact(0); o.Reason != full.Reason || o.Source != full.Source || o.Size == 0 {
+				t.Errorf("config %d: %s lost a member: %+v", i, o.ID, o)
+			}
+			got = append(got, o.ID)
+		}
+		if strings.Join(got, ",") != want {
+			t.Errorf("config %d: omitted in force %v, want %s", i, got, want)
+		}
+	}
+	whole := func(what string, list []OmittedPart) {
+		t.Helper()
+		for _, o := range list {
+			if o.Keep != 0 || o.ID == "" {
+				t.Errorf("%s carries %+v, want the list whole", what, o)
+			}
+		}
+	}
+	if !configs[3].Replace {
+		t.Error("the fourth config is not a replace")
+	}
+	whole("the replace", configs[3].InstructionsOmitted)
+	whole("the checkpoint", comp.Config.InstructionsOmitted)
+	if len(configs[2].InstructionsParts) != 0 || configs[2].Model != "" {
+		t.Errorf("the forget's config carries settings: %+v", configs[2])
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, omittedFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf.Bytes(), raw) {
+		t.Error("omitted.jsonl is not what omittedFixture builds; run go test -update")
+	}
+}
+
+// TestFrozen08Fixture reads replay.jsonl as v0.0.11 generated it, a
+// file labelled agentsession/0.8, kept as released rather than
+// regenerated: a 0.8 file reads as it stands, every entry keeps its id,
+// the ids are those the 0.9 fixture holds, every request hash verifies
+// and the omitted list in force is the one the 0.9 fixture reads.
+func TestFrozen08Fixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", "v0.8", "replay.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"format":"agentsession/0.8"`)) {
+		t.Fatal("the frozen fixture is not a 0.8 file")
+	}
+	old, err := Read(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated, _ := old.Migrated(); migrated {
+		t.Error("a 0.8 file was migrated")
+	}
+	current := loadFixture(t, "replay")
+	oe, ce := old.Entries(), current.Entries()
+	if len(oe) != len(ce) {
+		t.Fatalf("%d entries, the 0.9 fixture has %d", len(oe), len(ce))
+	}
+	for i := range oe {
+		id := oe[i].Base().ID
+		if id != ce[i].Base().ID {
+			t.Errorf("entry %d: id %s, the 0.9 fixture has %s", i, id, ce[i].Base().ID)
+			continue
+		}
+		if r, ok := oe[i].(*ResponseEntry); ok {
+			if err := old.Verify(r.ID); err != nil {
+				t.Errorf("%s: %v", r.ResponseID, err)
+			}
+		}
+		octx, err1 := old.ContextAt(id)
+		cctx, err2 := current.ContextAt(id)
+		if err1 != nil || err2 != nil {
+			t.Fatalf("entry %d: %v, %v", i, err1, err2)
+		}
+		if !slices.Equal(octx.InstructionsOmitted(), cctx.InstructionsOmitted()) {
+			t.Errorf("entry %d: omitted %v, the 0.9 fixture reads %v", i, octx.InstructionsOmitted(), cctx.InstructionsOmitted())
 		}
 	}
 }

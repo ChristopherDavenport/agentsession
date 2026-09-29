@@ -794,10 +794,47 @@ func validateConfig(c *ConfigEntry) error {
 		// reader cannot rebuild.
 		return errors.New("agentsession: a replacing config must carry the text of every instructions part, or the instructions string beside them")
 	}
+	return validateOmitted(c)
+}
+
+// validateOmitted checks a config delta's omitted parts: each is named
+// or is a keep and nothing else, a list with a keep names each id once,
+// and a replace, which discards the list a keep counts over, has none.
+// Whether a keep stays within the list in force depends on the path,
+// and nothing reaches the request to check it, so it is left to the
+// writer; [Settings.OmittedDelta] computes one that does.
+func validateOmitted(c *ConfigEntry) error {
+	keeps := false
 	for _, o := range c.InstructionsOmitted {
+		if o.Keep < 0 {
+			return errors.New("agentsession: an omitted instructions keep is negative")
+		}
+		if o.Keep > 0 {
+			if o.ID != "" || o.Reason != "" || o.Size != 0 || o.Source != "" {
+				return errors.New("agentsession: an omitted instructions keep carries other members")
+			}
+			keeps = true
+			continue
+		}
 		if o.ID == "" {
 			return errors.New("agentsession: an omitted instructions part has no id")
 		}
+	}
+	if !keeps {
+		return nil
+	}
+	if c.Replace {
+		return errors.New("agentsession: a replacing config must write the omitted instructions parts whole, since the replace discards the list a keep counts over")
+	}
+	seen := make(map[string]bool, len(c.InstructionsOmitted))
+	for _, o := range c.InstructionsOmitted {
+		if o.ID == "" {
+			continue
+		}
+		if seen[o.ID] {
+			return fmt.Errorf("agentsession: omitted instructions part %q is named twice beside a keep", o.ID)
+		}
+		seen[o.ID] = true
 	}
 	return nil
 }
