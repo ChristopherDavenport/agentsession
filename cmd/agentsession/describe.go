@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -36,6 +37,9 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		}
 		if v.RequestHash != "" {
 			parts = append(parts, "hash "+shorten(v.RequestHash, 19))
+		}
+		if v.Attempts > 1 {
+			parts = append(parts, fmt.Sprintf("%d attempts", v.Attempts))
 		}
 		if v.Error != nil {
 			parts = append(parts, "error "+describeText(v.Error.Message))
@@ -121,7 +125,14 @@ func describeEntry(e agentsession.Entry, full bool) string {
 			parts = append(parts, fmt.Sprintf("%d tool(s)", len(v.Tools)))
 		}
 		if v.Workspace != nil {
-			parts = append(parts, strings.TrimSpace(v.Workspace.Kind+" "+shorten(v.Workspace.Ref, 20)))
+			w := strings.TrimSpace(v.Workspace.Kind + " " + shorten(v.Workspace.Ref, 20))
+			for _, key := range []string{"host", "instance"} {
+				var s string
+				if json.Unmarshal(v.Workspace.Unknown[key], &s) == nil && s != "" {
+					w += " " + key + " " + shorten(s, 20)
+				}
+			}
+			parts = append(parts, w)
 		}
 		return strings.Join(parts, ", ")
 	case *agentsession.OutcomeEntry:
@@ -213,11 +224,14 @@ func describeData(data []byte, full bool) string {
 
 // describeParts renders a config entry's instruction parts: the ID of
 // every part in order, with the size of the ones that carry their
-// text and "=" for the ones a delta names by hash alone.
+// text, "=" for the ones a delta names by hash alone, and "+n" for a
+// run of n parts a delta keeps as they are.
 func describeParts(parts []agentsession.InstructionPart) string {
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
 		switch {
+		case p.ID == "" && p.Keep > 0:
+			out = append(out, fmt.Sprintf("+%d", p.Keep))
 		case p.Text == "" && p.Hash != "":
 			out = append(out, p.ID+"=")
 		default:

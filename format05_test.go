@@ -476,9 +476,10 @@ func TestResolveLegacyID(t *testing.T) {
 }
 
 // TestAddedMembersReadAsWritten: trigger on a run start and call_id on a
-// custom entry were unknown members before 0.6, so a 0.5 file may spell
-// them any way at all, and a 0.6 writer may put a member this package
-// does not define inside trigger. Each such line reads, verifies and
+// custom entry were unknown members before 0.6, and attempts on a
+// response and keep on an instructions part before 0.7, so an earlier
+// file may spell them any way at all, and a 0.6 writer may put a member
+// this package does not define inside trigger. Each such line reads, verifies and
 // writes back as it was; the typed field is filled whenever the member
 // decodes into it, and what it cannot hold is kept as read.
 func TestAddedMembersReadAsWritten(t *testing.T) {
@@ -495,6 +496,19 @@ func TestAddedMembersReadAsWritten(t *testing.T) {
 		{"call_id an object", `"type":"custom","ns":"acme","call_id":{"n":1}`, false},
 		{"call_id empty", `"type":"custom","ns":"acme","call_id":""`, false},
 		{"call_id exact", `"type":"custom","ns":"acme","call_id":"call_1"`, true},
+		{"attempts a string", `"type":"response","response_id":"r","status":"completed","attempts":"2"`, false},
+		{"attempts a fraction", `"type":"response","response_id":"r","status":"completed","attempts":2.5`, false},
+		{"attempts zero", `"type":"response","response_id":"r","status":"completed","attempts":0`, false},
+		{"attempts negative", `"type":"response","response_id":"r","status":"completed","attempts":-1`, false},
+		{"attempts exact", `"type":"response","response_id":"r","status":"completed","attempts":3`, true},
+		{"keep a string", `"type":"config","instructions_parts":[{"id":"a","text":"one"},{"keep":"3"}]`, false},
+		{"keep a fraction", `"type":"config","instructions_parts":[{"id":"a","text":"one"},{"keep":3.0}]`, false},
+		{"keep zero", `"type":"config","instructions_parts":[{"id":"a","text":"one"},{"keep":0}]`, false},
+		{"keep negative", `"type":"config","instructions_parts":[{"id":"a","text":"one"},{"keep":-2}]`, false},
+		{"keep too large", `"type":"config","instructions_parts":[{"id":"a","text":"one"},{"keep":99999999999}]`, false},
+		{"keep an object", `"type":"config","instructions_parts":[{"id":"a","text":"one"},{"keep":{"n":3}}]`, false},
+		{"keep null", `"type":"config","instructions_parts":[{"id":"a","text":"one"},{"keep":null}]`, false},
+		{"keep exact", `"type":"config","instructions_parts":[{"id":"a","text":"one"},{"keep":3}]`, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -520,6 +534,14 @@ func TestAddedMembersReadAsWritten(t *testing.T) {
 			case *CustomEntry:
 				if (v.CallID != "") != tt.typed {
 					t.Errorf("CallID typed = %q", v.CallID)
+				}
+			case *ResponseEntry:
+				if (v.Attempts != 0) != tt.typed {
+					t.Errorf("Attempts typed = %d", v.Attempts)
+				}
+			case *ConfigEntry:
+				if (v.InstructionsParts[1].Keep != 0) != tt.typed {
+					t.Errorf("Keep typed = %d", v.InstructionsParts[1].Keep)
 				}
 			}
 			var buf bytes.Buffer
@@ -673,24 +695,49 @@ func TestNestedMembersReadAsWritten(t *testing.T) {
 		}
 	})
 	t.Run("a caller's change keeps what it did not touch", func(t *testing.T) {
-		line := hashed(`"type":"env","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7"}`)
+		line := hashed(`"type":"env","cwd":"/w","vcs":{"system":"git","revision":"ab","branch":"main"}`)
 		s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		env := s.Entries()[0].(*EnvEntry)
 		changed := *env
-		changed.Workspace = &Workspace{Kind: WorkspaceLocal}
+		changed.VCS = &VCS{System: "git", Revision: "cd"}
 		changed.CWD = "/elsewhere"
 		data, err := MarshalEntry(&changed)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The caller's kind and the reader's host: the change is the
-		// caller's, and the host is a member no field of this package
-		// holds, which a rewriter preserves.
-		if !strings.Contains(string(data), `"host":"build-7"`) || !strings.Contains(string(data), `"kind":"local"`) || strings.Contains(string(data), "sha256:ab") {
-			t.Errorf("changed workspace written as %s", data)
+		// The caller's revision and the reader's branch: the change is
+		// the caller's, and the branch is a member no field of this
+		// package holds, which a rewriter preserves.
+		if !strings.Contains(string(data), `"branch":"main"`) || !strings.Contains(string(data), `"revision":"cd"`) || strings.Contains(string(data), `"ab"`) {
+			t.Errorf("changed vcs written as %s", data)
+		}
+	})
+	t.Run("a workspace's own members are held by the workspace", func(t *testing.T) {
+		line := hashed(`"type":"env","cwd":"/w","workspace":{"kind":"container","ref":"sha256:ab","host":"build-7","Kind":"x"}`)
+		s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := s.Entries()[0].(*EnvEntry).Workspace
+		if w.Kind != WorkspaceContainer || string(w.Unknown["host"]) != `"build-7"` || string(w.Unknown["Kind"]) != `"x"` {
+			t.Errorf("workspace = %+v", w)
+		}
+		var buf bytes.Buffer
+		if err := Write(&buf, s); err != nil {
+			t.Fatal(err)
+		}
+		again, err := Read(&buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := again.Entry(s.Entries()[0].Base().ID); !ok {
+			t.Errorf("rewrite changed the entry's id")
+		}
+		if !SameWorkspace(w, again.Entries()[0].(*EnvEntry).Workspace) {
+			t.Errorf("rewrite changed the workspace")
 		}
 	})
 }

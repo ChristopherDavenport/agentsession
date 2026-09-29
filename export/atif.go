@@ -536,7 +536,13 @@ func settingsBefore(path []agentsession.Entry, firstKept string, fallback agents
 
 func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntry) {
 	settings := b.inForce(g.copied)
-	step := atif.Step{Source: atif.SourceAgent, ModelName: b.modelName(settings.Model), LLMCallCount: atif.Ptr(1)}
+	// A response that took retries says so in attempts, which is what
+	// llm_call_count counts; without a response entry there was one call.
+	calls := 1
+	if resp != nil {
+		calls = resp.Calls()
+	}
+	step := atif.Step{Source: atif.SourceAgent, ModelName: b.modelName(settings.Model), LLMCallCount: atif.Ptr(calls)}
 	if g.copied {
 		// Marked from the group, not from where the flush happens: a
 		// group the first entry after the compaction flushes is still

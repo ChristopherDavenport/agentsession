@@ -1758,6 +1758,49 @@ func TestExportCarriesTriggerAndRecordCall(t *testing.T) {
 	}
 }
 
+// TestLLMCallCountFromAttempts: a response that took retries records
+// attempts, and its step's llm_call_count is that count rather than one,
+// so a latency-per-call analysis reads a flaky provider as flaky (#93).
+// A response without it made one call.
+func TestLLMCallCountFromAttempts(t *testing.T) {
+	s := agentsession.New(agentsession.Header{ID: "retries"})
+	answer := func(id, text string, attempts int) []agentsession.Entry {
+		item := agentsession.NewItemEntry(&openresponses.Message{ID: "msg_" + id, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: text, Annotations: []openresponses.Annotation{}}}})
+		item.ResponseID = id
+		return []agentsession.Entry{item, &agentsession.ResponseEntry{ResponseID: id, Status: "completed", Attempts: attempts}}
+	}
+	entries := []agentsession.Entry{&agentsession.ConfigEntry{Model: "m"}, agentsession.NewItemEntry(openresponses.UserText("one"))}
+	entries = append(entries, answer("resp_1", "first", 3)...)
+	entries = append(entries, agentsession.NewItemEntry(openresponses.UserText("two")))
+	entries = append(entries, answer("resp_2", "second", 0)...)
+	for _, e := range entries {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var buf bytes.Buffer
+	if err := agentsession.Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	back, err := agentsession.Read(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr, err := At(back, back.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []int
+	for _, step := range mustDoc(t, tr).Steps {
+		if step.Source == atif.SourceAgent {
+			got = append(got, *step.LLMCallCount)
+		}
+	}
+	if !reflect.DeepEqual(got, []int{3, 1}) {
+		t.Errorf("llm_call_count = %v, want [3 1]", got)
+	}
+}
+
 // TestAtLegacyID: a report written before its session's file was
 // migrated names entries by their old IDs. At accepts one and builds
 // the document at the entry's current ID, which is what the document

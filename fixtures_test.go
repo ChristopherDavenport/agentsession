@@ -3,6 +3,7 @@ package agentsession
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -179,6 +180,18 @@ func TestRegenerateFixtures(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// parts: the 0.7 conformance vectors, appended natively since no
+	// earlier source can hold them. A memory of many short facts whose
+	// deltas keep runs of parts, a response that took retries, and a
+	// workspace holding its host and instance.
+	var pbuf bytes.Buffer
+	if err := Write(&pbuf, partsFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("testdata", "sessions", "parts.jsonl"), pbuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	for module, names := range nestedFixtures {
 		dir := filepath.Join(module, "testdata", "sessions")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -241,4 +254,111 @@ func TestRegenerateFixtures(t *testing.T) {
 	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
 	lines[2], lines[3] = lines[3], lines[2]
 	write("bad-parents", lines)
+}
+
+// partsFixture builds the session parts.jsonl holds: three turns over a
+// memory of twelve facts, the second patching one and the third
+// removing one and adding another, each response carrying the hash of
+// the request its context rebuilds.
+func partsFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-09-29T10:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000012", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	env := &EnvEntry{CWD: "/home/u/proj"}
+	w := env.SetWorkspace(WorkspaceContainer, "sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0")
+	if err := w.SetMember("host", "build-7"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetMember("instance", "ctr-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(env); err != nil {
+		t.Fatal(err)
+	}
+	parts := memoryParts(12)
+	turn := func(parts []InstructionPart, user string, attempts int) {
+		t.Helper()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := ctx.Settings.InstructionsDelta(parts)
+		if len(ctx.Settings.InstructionsParts) == 0 {
+			if cfg, err = ConfigFromRequestParts(openresponses.Request{Model: "gpt-5", Instructions: JoinInstructions(parts)}, parts...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if cfg != nil {
+			if _, err := s.Append(cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := s.Append(NewItemEntry(openresponses.UserText(user))); err != nil {
+			t.Fatal(err)
+		}
+		if ctx, err = s.Context(); err != nil {
+			t.Fatal(err)
+		}
+		req, err := ctx.Request()
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash, err := RequestHash(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := fmt.Sprintf("resp_%d", s.Len())
+		answer := NewItemEntry(&openresponses.Message{ID: "msg_" + id, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: "Noted.", Annotations: []openresponses.Annotation{}}}})
+		answer.ResponseID = id
+		if _, err := s.Append(answer); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(&ResponseEntry{ResponseID: id, Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: hash, Attempts: attempts}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	turn(parts, "Remember the deploy window.", 0)
+	parts = edit(parts, "m6", parts[6].Text+" (corrected)")
+	turn(parts, "Correct fact six.", 2)
+	parts = append(append(append([]InstructionPart(nil), parts[:3]...), InstructionPart{ID: "m12", Source: "agentmemory", Text: "fact 012: the deploy window is Tuesday"}), parts[4:]...)
+	turn(parts, "Forget fact three.", 0)
+	return s
+}
+
+// TestPartsFixture reads the 0.7 conformance fixture: every request
+// hash verifies through deltas that keep runs, the response that took
+// retries says how many calls it took, and the workspace holds its host
+// and instance.
+func TestPartsFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", "parts.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`{"keep":6}`, `"attempts":2`, `"host":"build-7"`, `"instance":"ctr-1"`} {
+		if !bytes.Contains(raw, []byte(want)) {
+			t.Errorf("the fixture lacks %s", want)
+		}
+	}
+	s := loadFixture(t, "parts")
+	verified, calls := 0, 0
+	for _, e := range s.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			if err := s.Verify(r.ID); err != nil {
+				t.Errorf("%s: %v", r.ResponseID, err)
+			}
+			verified++
+			calls += r.Calls()
+		}
+	}
+	if verified != 3 || calls != 4 {
+		t.Errorf("%d responses verified over %d calls, want 3 over 4", verified, calls)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, partsFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf.Bytes(), raw) {
+		t.Error("parts.jsonl is not what partsFixture builds; run go test -update")
+	}
 }

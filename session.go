@@ -724,15 +724,26 @@ func validateEntry(e Entry) error {
 }
 
 // validateConfig checks the instructions parts of a config delta: a
-// part is named, named once, and when every part carries its text the
-// instructions string beside them is their join, which is the rule a
-// reader replays. A delta decoded from a file is not checked, since a
-// reader preserves what it is given; this is what a writer is held
-// to.
+// part is named, named once, or is a keep and nothing else, and when
+// every part carries its text the instructions string beside them is
+// their join, which is the rule a reader replays. A delta decoded from
+// a file is not checked, since a reader preserves what it is given;
+// this is what a writer is held to. Whether a keep stays within the
+// parts in force depends on the path, and is left to the request hash.
 func validateConfig(c *ConfigEntry) error {
 	seen := make(map[string]bool, len(c.InstructionsParts))
 	full := true
 	for _, p := range c.InstructionsParts {
+		if p.Keep < 0 {
+			return errors.New("agentsession: an instructions keep is negative")
+		}
+		if p.Keep > 0 {
+			if p.ID != "" || p.Text != "" || p.Source != "" || p.Hash != "" {
+				return errors.New("agentsession: an instructions keep carries other members")
+			}
+			full = false
+			continue
+		}
 		if p.ID == "" {
 			return errors.New("agentsession: an instructions part has no id")
 		}
