@@ -171,12 +171,7 @@ func Open(path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("sqlite: open reader: %w", err)
 	}
 	r.SetMaxOpenConns(4 * runtime.NumCPU())
-	if _, err := w.Exec(schema); err != nil {
-		w.Close()
-		r.Close()
-		return nil, fmt.Errorf("sqlite: apply schema: %w", err)
-	}
-	if err := migrate(w); err != nil {
+	if err := applySchema(w); err != nil {
 		w.Close()
 		r.Close()
 		return nil, err
@@ -189,23 +184,68 @@ func Open(path string, opts ...Option) (*Store, error) {
 	return s, nil
 }
 
+// ownColumns names, for each table the store creates, the columns its
+// first release gave it. A table of that name missing any of them is
+// not one an agentsession release wrote; later columns are left to
+// migrate.
+var ownColumns = []struct {
+	table string
+	cols  []string
+}{
+	{"sessions", []string{"id", "created_at", "updated_at", "cwd", "parent_session", "header"}},
+	{"entries", []string{"session_id", "seq", "id", "parent", "type", "line"}},
+	{"holders", []string{"session_id", "pid", "host", "token", "since", "heartbeat"}},
+}
+
+// applySchema checks the tables already in the database, creates the
+// missing ones and migrates the rest, in one transaction, so a database
+// holding another program's table of one of the store's names is
+// refused with nothing written.
+func applySchema(w *sql.DB) error {
+	tx, err := w.Begin()
+	if err != nil {
+		return fmt.Errorf("sqlite: apply schema: %w", err)
+	}
+	defer tx.Rollback()
+	for _, t := range ownColumns {
+		have, order, err := columns(tx, t.table)
+		if err != nil {
+			return err
+		}
+		if len(have) == 0 {
+			continue
+		}
+		for _, c := range t.cols {
+			if !have[c] {
+				return fmt.Errorf("sqlite: table %s has columns (%s), want (%s): the database holds another program's table of that name",
+					t.table, strings.Join(order, ", "), strings.Join(t.cols, ", "))
+			}
+		}
+	}
+	if _, err := tx.Exec(schema); err != nil {
+		return fmt.Errorf("sqlite: apply schema: %w", err)
+	}
+	if err := migrate(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: apply schema: %w", err)
+	}
+	return nil
+}
+
 // migrate brings a database created by an earlier release up to the
 // current schema. CREATE TABLE IF NOT EXISTS leaves an existing table
 // alone, so columns added later are added here and filled from the
 // stored entries.
-func migrate(w *sql.DB) error {
-	cols, err := columns(w, "sessions")
+func migrate(tx *sql.Tx) error {
+	cols, _, err := columns(tx, "sessions")
 	if err != nil {
 		return err
 	}
 	if cols["name"] && cols["superseded_by"] {
 		return nil
 	}
-	tx, err := w.Begin()
-	if err != nil {
-		return fmt.Errorf("sqlite: migrate: %w", err)
-	}
-	defer tx.Rollback()
 	if !cols["name"] {
 		if _, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("sqlite: migrate: add name: %w", err)
@@ -241,7 +281,7 @@ func migrate(w *sql.DB) error {
 		}
 	}
 	if cols["name"] {
-		return tx.Commit()
+		return nil
 	}
 	rows, err := tx.Query(`SELECT session_id, line FROM entries WHERE type = ? ORDER BY session_id, seq`, agentsession.TypeInfo)
 	if err != nil {
@@ -267,9 +307,6 @@ func migrate(w *sql.DB) error {
 			return fmt.Errorf("sqlite: migrate: set name: %w", err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sqlite: migrate: %w", err)
-	}
 	return nil
 }
 
@@ -285,22 +322,28 @@ func continuedIn(line string) string {
 	return probe.Session
 }
 
-// columns returns the column names of a table.
-func columns(db *sql.DB, table string) (map[string]bool, error) {
-	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+// columns returns the column names of a table, as a set and in table
+// order; both are empty when the table does not exist.
+func columns(tx *sql.Tx, table string) (map[string]bool, []string, error) {
+	rows, err := tx.Query(`SELECT name FROM pragma_table_info(?) ORDER BY cid`, table)
 	if err != nil {
-		return nil, fmt.Errorf("sqlite: columns of %s: %w", table, err)
+		return nil, nil, fmt.Errorf("sqlite: columns of %s: %w", table, err)
 	}
 	defer rows.Close()
-	out := map[string]bool{}
+	set := map[string]bool{}
+	var order []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return nil, fmt.Errorf("sqlite: columns of %s: %w", table, err)
+			return nil, nil, fmt.Errorf("sqlite: columns of %s: %w", table, err)
 		}
-		out[name] = true
+		set[name] = true
+		order = append(order, name)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("sqlite: columns of %s: %w", table, err)
+	}
+	return set, order, nil
 }
 
 // infoName returns the name an info entry line sets, or "".

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -224,6 +225,63 @@ CREATE TABLE entries (
 			}
 			if sum.Header.ID == "named" && sum.Name != "Newer" {
 				t.Errorf("round %d: name after append = %q", round, sum.Name)
+			}
+		}
+		st.Close()
+	}
+}
+
+// TestForeignTable opens a database holding another program's entries
+// table and expects a refusal naming the table and its columns, with
+// none of the store's tables or indexes left behind. The same file
+// without that table then opens.
+func TestForeignTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE entries (scope TEXT, name TEXT, content TEXT, meta TEXT, hash TEXT, updated TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = sqlite.Open(path)
+	if err == nil {
+		t.Fatal("Open succeeded over a foreign entries table")
+	}
+	for _, want := range []string{"table entries", "(scope, name, content, meta, hash, updated)", "(session_id, seq, id, parent, type, line)", "another program"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+	rows, err := db.Query(`SELECT name FROM sqlite_schema WHERE name <> 'entries' ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		left = append(left, name)
+	}
+	rows.Close()
+	if len(left) != 0 {
+		t.Errorf("refused Open left %v behind", left)
+	}
+
+	if _, err := db.Exec(`DROP TABLE entries`); err != nil {
+		t.Fatal(err)
+	}
+	for round := 0; round < 2; round++ { // the second open finds its own tables
+		st, err := sqlite.Open(path)
+		if err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+		if round == 0 {
+			if _, err := st.Create(context.Background(), agentsession.Header{ID: "s1"}); err != nil {
+				t.Fatal(err)
 			}
 		}
 		st.Close()

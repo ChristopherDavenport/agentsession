@@ -5,6 +5,17 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **`sqlite.Open` refuses another program's table of its names.** A
+  file holding a foreign `entries` table, such as the one
+  agentmemory/sqlite v0.0.5 wrote, failed with `no such column: id`
+  and kept the `sessions` table and indexes created before it. `Open`
+  now checks each existing `sessions`, `entries` and `holders` table
+  against the columns the store gives it, names the table, its columns
+  and the wanted ones, and applies the schema and its migrations in one
+  transaction, so a refusal leaves the file as it found it. (#116)
+
 ## v0.0.11 - 2026-09-29
 
 - **RFC 0001 draft 0.8; the library writes `agentsession/0.8`.** One
