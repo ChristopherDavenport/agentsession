@@ -6,12 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // A pack holds many objects in one file, as git's packfiles do, so a
@@ -65,8 +67,14 @@ type pack struct {
 	name string // pack-<hex>, without extension
 	path string // the .pack file
 	idx  []byte // the index records, sorted
-	f    *os.File
+
+	mu sync.RWMutex // held shared by a read, exclusive by close
+	f  *os.File
 }
+
+// errPackClosed is a read from a pack dropped from the list since it
+// was located; the reader looks again.
+var errPackClosed = errors.New("cas: pack closed")
 
 func digestOf(hash string) ([]byte, error) {
 	d, err := hex.DecodeString(strings.TrimPrefix(hash, "sha256:"))
@@ -97,6 +105,11 @@ func (p *pack) find(sp space, digest []byte) (int64, int64, bool) {
 
 // read returns an object's bytes from the pack.
 func (p *pack) read(off, length int64) ([]byte, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.f == nil {
+		return nil, errPackClosed
+	}
 	buf := make([]byte, length)
 	if _, err := p.f.ReadAt(buf, off); err != nil {
 		return nil, err
@@ -119,6 +132,8 @@ func (p *pack) each(fn func(sp space, hash string, off, length int64) error) err
 }
 
 func (p *pack) close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.f == nil {
 		return nil
 	}

@@ -249,7 +249,7 @@ func decodeLine(line []byte) ([]journalRecord, error) {
 			end = starts[n+1]
 		}
 		seg := line[st:end]
-		rec, _, err := decodeRecord(seg)
+		rec, torn, err := decodeRecord(seg)
 		if err != nil && len(seg) > 1 {
 			// A record followed by one damaged byte where its newline was:
 			// read, and reported.
@@ -262,7 +262,7 @@ func decodeLine(line []byte) ([]journalRecord, error) {
 			}
 		}
 		if err != nil {
-			if n+1 < len(starts) && len(recs) == 0 && !bytes.Contains(seg, []byte(crcMember)) {
+			if n+1 < len(starts) && len(recs) == 0 && torn {
 				continue // torn bytes a later record landed after
 			}
 			if damage == nil {

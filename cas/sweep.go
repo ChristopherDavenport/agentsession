@@ -309,6 +309,7 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		}
 	}
 	old := s.objs.packList()
+	scanned := map[string]time.Time{} // each old pack's time when read
 	dropped := 0
 	type rescue struct {
 		sp    space
@@ -322,6 +323,7 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		if err != nil {
 			continue
 		}
+		scanned[p.name] = info.ModTime()
 		err = p.each(func(sp space, hash string, off, length int64) error {
 			if inNew[sp][hash] {
 				return nil
@@ -350,12 +352,12 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	if err := s.objs.reloadPacks(true); err != nil {
 		return 0, err
 	}
-	writeLoose := func(sp space, hash string, data []byte, mtime time.Time) error {
+	writeLoose := func(sp space, hash string, data []byte, mtime time.Time, replace bool) error {
 		path, err := s.objs.loosePath(sp, hash)
 		if err != nil {
 			return err
 		}
-		if _, err := os.Stat(path); err == nil {
+		if _, err := os.Stat(path); err == nil && !replace {
 			return nil
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -372,7 +374,7 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	// A young unneeded object of a replaced pack goes back loose, with
 	// the pack's age, so it keeps its grace and still expires.
 	for _, r := range youngOrphans {
-		if err := writeLoose(r.sp, r.hash, r.data, r.mtime); err != nil {
+		if err := writeLoose(r.sp, r.hash, r.data, r.mtime, false); err != nil {
 			return 0, err
 		}
 	}
@@ -401,34 +403,34 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 			if inNew[pair.sp][hash] {
 				continue
 			}
-			keep.entries[hash] = keep.entries[hash] || pair.sp == spaceEntries
-			if pair.sp == spaceContents {
-				keep.contents[hash] = true
-			}
 			if lp, err := s.objs.loosePath(pair.sp, hash); err == nil {
-				if _, err := os.Stat(lp); err == nil {
+				if cur, err := os.ReadFile(lp); err == nil && hashBytes(cur) == hash {
 					continue
 				}
 			}
-			// Only in a replaced pack: written back loose before it goes.
-			data, err := s.objs.read(pair.sp, hash)
-			if err != nil {
+			// Only in a replaced pack, or loose and corrupt: written back
+			// loose, from the pack, before it goes.
+			data, err := s.objs.readPacked(pair.sp, hash)
+			if errors.Is(err, os.ErrNotExist) {
 				continue // not held at all; nothing to rescue
 			}
-			if err := writeLoose(pair.sp, hash, data, time.Time{}); err != nil {
+			if err == nil {
+				err = writeLoose(pair.sp, hash, data, time.Time{}, true)
+			}
+			if err != nil {
 				lk.release()
-				return 0, err
+				return 0, fmt.Errorf("cas: sweep: %w", err)
 			}
 		}
 	}
-	// A pack a writer freshened since the sweep began holds an object
+	// A pack a writer freshened since the sweep read it holds an object
 	// that writer found there and needed, perhaps a blob no record names
 	// yet: what the new pack lacks goes back loose, young.
 	for _, p := range old {
 		if p.name == newPack {
 			continue
 		}
-		if info, err := os.Stat(p.path); err != nil || !info.ModTime().After(started) {
+		if info, err := os.Stat(p.path); err != nil || info.ModTime().Equal(scanned[p.name]) {
 			continue
 		}
 		err := p.each(func(sp space, hash string, off, length int64) error {
@@ -439,7 +441,7 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 			if err != nil || hashBytes(data) != hash {
 				return nil
 			}
-			return writeLoose(sp, hash, data, time.Time{})
+			return writeLoose(sp, hash, data, time.Time{}, false)
 		})
 		if err != nil {
 			lk.release()

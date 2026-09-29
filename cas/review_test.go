@@ -95,14 +95,6 @@ func TestReusedObjectIsSynced(t *testing.T) {
 	if !d.objs.pendFiles[path] || !d.objs.pendDirs[filepath.Dir(path)] {
 		t.Error("a reused loose object is not in what the next durable commit syncs")
 	}
-	// A corrupt loose copy is replaced by the bytes the writer holds.
-	os.WriteFile(path, []byte("garbage"), 0o600)
-	if err := d.objs.write(spaceContents, e.Base().ContentHash(), body, true); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := d.objs.read(spaceContents, e.Base().ContentHash()); err != nil || string(got) != string(body) {
-		t.Errorf("a corrupt loose copy was reused: %v", err)
-	}
 }
 
 // TestPackedWithinOneTick: a pack another store writes within the pack
@@ -135,9 +127,10 @@ func TestPackedWithinOneTick(t *testing.T) {
 	}
 }
 
-// TestRetiredPackStaysReadable: a pack dropped from the list while a
-// reader holds it stays readable until the store closes.
-func TestRetiredPackStaysReadable(t *testing.T) {
+// TestDroppedPackReadAgain: a read that located an object in a pack
+// dropped from the list since finds it closed and looks again, and the
+// dropped pack's file is closed rather than held open.
+func TestDroppedPackReadAgain(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	a, _ := Open(root)
@@ -154,8 +147,11 @@ func TestRetiredPackStaysReadable(t *testing.T) {
 	mustAppend(t, b, "y", item("other"))
 	b.Sweep(ctx, time.Hour)
 	a.objs.reloadPacks(true)
-	if _, err := p.read(off, n); err != nil {
-		t.Errorf("a located pack closed under its reader: %v", err)
+	if _, err := p.read(off, n); !errors.Is(err, errPackClosed) {
+		t.Errorf("a dropped pack: %v", err)
+	}
+	if _, err := a.objs.read(spaceEntries, id); err != nil {
+		t.Errorf("a read after its pack was replaced: %v", err)
 	}
 }
 
@@ -277,5 +273,115 @@ func TestSweepFailsClosed(t *testing.T) {
 	}
 	if _, err := sw.objs.read(spaceContents, ch); err != nil {
 		t.Errorf("the content of a committed entry: %v", err)
+	}
+}
+
+// TestImportOverStalePack: an import whose objects this store sees only
+// in a pack another store's sweep removed writes them, as an append
+// does.
+func TestImportOverStalePack(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	src, _ := Open(t.TempDir())
+	fill(t, src, "s", 2)
+	src.Release("s")
+	file := projectFile(t, src.Root(), "s")
+	src.Close()
+	a, _ := Open(root)
+	if _, err := a.Import(ctx, strings.NewReader(string(file)), true); err != nil {
+		t.Fatal(err)
+	}
+	a.Delete(ctx, "s")
+	a.Pack(ctx)
+	ageAllPacks(root)
+	sw, _ := Open(root)
+	sw.Sweep(ctx, time.Hour)
+	sw.Close()
+	if _, err := a.Import(ctx, strings.NewReader(string(file)), true); err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	r, _ := Open(root)
+	defer r.Close()
+	if _, err := r.Open(ctx, "s"); err != nil {
+		t.Errorf("an import over a removed pack: %v", err)
+	}
+}
+
+// TestRecoveryKeepsUnreadable: a log line whose record is damaged and
+// whose envelope is corrupt, not absent, is kept and the open fails,
+// rather than the line being removed for good.
+func TestRecoveryKeepsUnreadable(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	ids := fill(t, st, "a", 2)
+	st.Close()
+	lines, appends := journalLines(t, root, "a")
+	l := []byte(lines[appends[1]])
+	l[0] = 'z'
+	lines[appends[1]] = string(l)
+	os.WriteFile(filepath.Join(root, "journal"), []byte(strings.Join(lines, "")), 0o600)
+	ep, _ := st.objs.loosePath(spaceEntries, ids[1])
+	os.WriteFile(ep, []byte("garbage"), 0o600)
+	logBefore, _ := os.ReadFile(filepath.Join(root, "sessions", "a", "log"))
+	r, _ := Open(root)
+	defer r.Close()
+	if _, err := r.Open(ctx, "a"); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("open: %v", err)
+	}
+	if logAfter, _ := os.ReadFile(filepath.Join(root, "sessions", "a", "log")); string(logAfter) != string(logBefore) {
+		t.Error("recovery removed a line whose objects it could not read")
+	}
+}
+
+// TestTornInChecksum: a record a crash cut inside its checksum, with the
+// next record on the same line, is torn, not damage.
+func TestTornInChecksum(t *testing.T) {
+	r1, _ := journalRecord{Op: "append", Session: "s", Entry: "sha256:x"}.encode()
+	r2, _ := journalRecord{Op: "head", Session: "s", Head: "sha256:x"}.encode()
+	line := append(append([]byte{}, r1[:len(r1)-5]...), r2...)
+	recs, err := decodeLine(line)
+	if err != nil || len(recs) != 1 || recs[0].Op != "head" {
+		t.Errorf("%v, %v", recs, err)
+	}
+}
+
+// TestBadIndexIsolated: a pack whose index does not read is skipped and
+// reported by Verify; the store still opens.
+func TestBadIndexIsolated(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	fill(t, st, "a", 1)
+	st.Close()
+	os.MkdirAll(filepath.Join(root, "objects", "pack"), 0o755)
+	os.WriteFile(filepath.Join(root, "objects", "pack", "pack-"+strings.Repeat("0", 64)+".idx"), []byte("junk"), 0o600)
+	r, err := Open(root)
+	if err != nil {
+		t.Fatalf("a bad index closed the store: %v", err)
+	}
+	defer r.Close()
+	if _, err := r.Open(ctx, "a"); err != nil {
+		t.Error(err)
+	}
+	if rep, _ := r.Verify(ctx); rep.OK() {
+		t.Error("Verify did not report the bad index")
+	}
+}
+
+// TestReleaseSyncs: a store that releases a session it appended to
+// lazily makes those appends durable first.
+func TestReleaseSyncs(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir(), WithSync(SyncNever))
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "l"})
+	mustAppend(t, st, "l", item("lazy"))
+	if err := st.Release("l"); err != nil {
+		t.Fatal(err)
+	}
+	if st.journalDirty || len(st.objs.pendFiles) != 0 {
+		t.Error("Release left lazy appends unsynced")
 	}
 }

@@ -69,6 +69,11 @@ func (s *Store) Verify(ctx context.Context) (Report, error) {
 	if err := s.objs.reloadPacks(true); err != nil {
 		add(Problem{Kind: "corrupt", Err: err})
 	}
+	s.objs.mu.Lock()
+	for _, err := range s.objs.bad {
+		add(Problem{Kind: "corrupt", Err: err})
+	}
+	s.objs.mu.Unlock()
 	for _, p := range s.objs.packList() {
 		if err := ctx.Err(); err != nil {
 			return rep, err

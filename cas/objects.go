@@ -33,11 +33,9 @@ type objects struct {
 	mu       sync.Mutex
 	packs    []*pack
 	packStat time.Time // the pack directory's mtime when the list was read
-	// retired holds packs dropped from the list, still open: a reader
-	// may hold one, and reads from it stay valid, since a pack's bytes
-	// never change and an unlinked file stays readable. They close with
-	// the store.
-	retired []*pack
+	// bad records packs whose index does not read, reported by Verify
+	// and skipped, so one damaged index does not close the store.
+	bad map[string]error
 
 	// Written but not yet fsynced, under a lazy sync policy: files and
 	// the directories they were renamed into.
@@ -111,13 +109,20 @@ func (o *objects) reloadPacks(force bool) error {
 			if errors.Is(err, os.ErrNotExist) {
 				continue // removed by a sweep as this was reading
 			}
-			return err
+			if o.bad == nil {
+				o.bad = map[string]error{}
+			}
+			o.bad[name] = err
+			continue
 		}
+		delete(o.bad, name)
 		next = append(next, p)
 	}
+	// A pack dropped from the list is closed once no read is in it; a
+	// read that located it then finds it closed and looks again.
 	for name, p := range have {
 		if !seen[name] {
-			o.retired = append(o.retired, p)
+			p.close()
 		}
 	}
 	sort.Slice(next, func(i, j int) bool { return next[i].name < next[j].name })
@@ -182,12 +187,15 @@ func (o *objects) read(sp space, hash string) ([]byte, error) {
 		if loose != "" {
 			data, err = os.ReadFile(loose)
 			where = o.rel(loose)
-			if errors.Is(err, os.ErrNotExist) && attempt == 0 {
+			if errors.Is(err, os.ErrNotExist) && attempt < 3 {
 				continue // packed and removed between the stat and the read
 			}
 		} else {
 			data, err = p.read(off, length)
 			where = o.rel(p.path)
+			if errors.Is(err, errPackClosed) && attempt < 3 {
+				continue // dropped since it was located; look again
+			}
 		}
 		if err != nil {
 			return nil, fmt.Errorf("cas: %s %s: %w", sp, hash, err)
@@ -197,12 +205,6 @@ func (o *objects) read(sp space, hash string) ([]byte, error) {
 		}
 		return data, nil
 	}
-}
-
-// has reports whether the database holds the object, loose or packed.
-func (o *objects) has(sp space, hash string) bool {
-	_, _, _, _, err := o.locate(sp, hash, true)
-	return err == nil
 }
 
 // size returns an object's stored length.
@@ -225,40 +227,38 @@ func (o *objects) size(sp space, hash string) (int64, bool) {
 // already holds is not written again but freshened, as git freshens an
 // object it finds it already has, since the sweep spares what is young
 // and this write is what makes the object needed again: a loose copy
-// has its time touched, and is checked against its name and rewritten
-// if it fails; a packed one has its pack's time touched, and one whose
-// pack a sweep has removed is written loose. With durable set a new
-// file is fsynced before it is renamed into place; otherwise it is
-// remembered for the next flush. A loose copy found in place is
-// remembered too, since another writer may have left it unsynced, and
-// every directory's fsync is left to the flush, which the durable
-// commit that names the object does first, so the directories a commit
-// touched are synced once each however many objects it wrote.
+// has its time touched, a packed one its pack's, and one whose pack a
+// sweep has removed is written loose. A loose copy's bytes are not
+// read; Verify is what checks them. With durable set a new file is
+// fsynced before it is renamed into place; otherwise it is remembered
+// for the next flush. A loose copy found in place is remembered too,
+// since another writer may have left it unsynced, and every
+// directory's fsync is left to the flush, which the durable commit that
+// names the object does first, so the directories a commit touched are
+// synced once each however many objects it wrote.
 func (o *objects) write(sp space, hash string, data []byte, durable bool) error {
 	path, err := o.loosePath(sp, hash)
 	if err != nil {
 		return err
 	}
 	dir := filepath.Dir(path)
-	now := time.Now()
-	if cur, err := os.ReadFile(path); err == nil && hashBytes(cur) == hash {
+	if _, err := os.Stat(path); err == nil {
+		now := time.Now()
 		if err := os.Chtimes(path, now, now); err == nil {
 			return o.remember(path, dir)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		// Packed and removed since the read; look in the packs.
-	} else if err == nil {
-		// A corrupt loose copy: replaced below by the bytes it names.
-	} else {
-		if _, lp, _, _, lerr := o.locate(sp, hash, false); lerr == nil && lp != nil {
-			if err := os.Chtimes(lp.path, now, now); err == nil {
-				return nil // a pack is written durably
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-			// The pack was removed by a sweep; write the object loose.
+		// Packed and removed since the stat; look in the packs.
+	}
+	if _, lp, _, _, lerr := o.locate(sp, hash, false); lerr == nil && lp != nil {
+		now := time.Now()
+		if err := os.Chtimes(lp.path, now, now); err == nil {
+			return nil // a pack is written durably
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
+		// The pack was removed by a sweep; write the object loose.
 	}
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -275,6 +275,46 @@ func (o *objects) write(sp space, hash string, data []byte, durable bool) error 
 		return o.remember(path, dir)
 	}
 	return o.syncOrDefer(dir, true, false)
+}
+
+// freshen is write for an object known only by its name: it reads the
+// object, from a pack a sweep removed if this store still holds it
+// open, and writes or freshens it.
+func (o *objects) freshen(sp space, hash string) error {
+	data, err := o.read(sp, hash)
+	if err != nil {
+		return err
+	}
+	return o.write(sp, hash, data, true)
+}
+
+// readPacked reads an object from the packs alone, checked against its
+// name.
+func (o *objects) readPacked(sp space, hash string) ([]byte, error) {
+	d, err := digestOf(hash)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range o.packList() {
+		if off, length, ok := p.find(sp, d); ok {
+			data, err := p.read(off, length)
+			if err != nil {
+				return nil, err
+			}
+			if hashBytes(data) != hash {
+				return nil, fmt.Errorf("%w: %s object %s (%s)", ErrCorrupt, sp, hash, o.rel(p.path))
+			}
+			return data, nil
+		}
+	}
+	return nil, os.ErrNotExist
+}
+
+// hasQuick is has without the forced reload: for a writer deciding
+// whether to send an object, where a duplicate is harmless.
+func (o *objects) hasQuick(sp space, hash string) bool {
+	_, _, _, _, err := o.locate(sp, hash, false)
+	return err == nil
 }
 
 // remember adds a file and its directory to what the next flush syncs.
@@ -338,10 +378,7 @@ func (o *objects) close() {
 	for _, p := range o.packs {
 		p.close()
 	}
-	for _, p := range o.retired {
-		p.close()
-	}
-	o.packs, o.retired = nil, nil
+	o.packs = nil
 }
 
 // eachLoose calls fn for every loose object of a space, and for every

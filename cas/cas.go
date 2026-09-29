@@ -82,7 +82,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/internal/ijson"
@@ -450,13 +449,15 @@ func (s *Store) storeEntry(e agentsession.Entry, durable bool) (int64, error) {
 // every small transfer would leave the store many packs to search.
 const unpackLimit = 100
 
-// packEntries writes the objects of entries the database lacks, as one
-// pack the way git takes in a fetch, or loose when there are fewer than
-// unpackLimit, and returns each entry's size. Loose ones are left for
-// the commit that names them to flush.
+// packEntries stores the objects of entries and blobs a transfer
+// brings: what the database lacks as one pack, the way git takes in a
+// fetch, or loose when that is fewer than unpackLimit objects; and
+// what it holds already through write, which freshens it, writes it
+// loose if a sweep removed it, and has the commit that names it sync
+// it. It returns each entry's size.
 func (s *Store) packEntries(entries []agentsession.Entry, blobs map[string][]byte) (map[string]int64, error) {
 	sizes := map[string]int64{}
-	var objs []packObject
+	var all []packObject
 	for _, e := range entries {
 		env, body, err := split(e)
 		if err != nil {
@@ -464,31 +465,33 @@ func (s *Store) packEntries(entries []agentsession.Entry, blobs map[string][]byt
 		}
 		id, ch := e.Base().ID, e.Base().ContentHash()
 		sizes[id] = int64(len(env) + len(body))
-		if !s.objs.has(spaceContents, ch) {
-			objs = append(objs, packObject{spaceContents, ch, body})
-		}
-		if !s.objs.has(spaceEntries, id) {
-			objs = append(objs, packObject{spaceEntries, id, env})
-		}
+		all = append(all, packObject{spaceContents, ch, body}, packObject{spaceEntries, id, env})
 	}
 	for h, data := range blobs {
-		if !s.objs.has(spaceContents, h) {
-			objs = append(objs, packObject{spaceContents, h, data})
+		all = append(all, packObject{spaceContents, h, data})
+	}
+	var missing, held []packObject
+	for _, o := range all {
+		if s.objs.hasQuick(o.sp, o.hash) {
+			held = append(held, o)
+		} else {
+			missing = append(missing, o)
 		}
 	}
-	if len(objs) < unpackLimit {
-		for _, o := range objs {
-			if err := s.objs.write(o.sp, o.hash, o.data, true); err != nil {
-				return nil, fmt.Errorf("cas: store: %w", err)
-			}
+	if len(missing) >= unpackLimit {
+		if _, err := writePack(s.objs.packDir(), missing); err != nil {
+			return nil, fmt.Errorf("cas: pack: %w", err)
 		}
-		return sizes, nil
+		if err := s.objs.reloadPacks(true); err != nil {
+			return nil, err
+		}
+	} else {
+		held = all
 	}
-	if _, err := writePack(s.objs.packDir(), objs); err != nil {
-		return nil, fmt.Errorf("cas: pack: %w", err)
-	}
-	if err := s.objs.reloadPacks(true); err != nil {
-		return nil, err
+	for _, o := range held {
+		if err := s.objs.write(o.sp, o.hash, o.data, true); err != nil {
+			return nil, fmt.Errorf("cas: store: %w", err)
+		}
 	}
 	return sizes, nil
 }
@@ -550,10 +553,24 @@ func (s *Store) contentOf(id string) (string, error) {
 	return c, nil
 }
 
-// present reports whether both of an entry's objects are held.
-func (s *Store) present(id string) bool {
+// present reports whether both of an entry's objects are held. Only an
+// object that is not there makes it false; any other failure to read
+// one is returned, since recovery must not take an unreadable object
+// for a lost one and remove what names it.
+func (s *Store) present(id string) (bool, error) {
 	c, err := s.contentOf(id)
-	return err == nil && s.objs.has(spaceContents, c)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := s.objs.read(spaceContents, c); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // loadLine reads an entry's two objects, each checked against its name,
@@ -761,10 +778,16 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 		}
 		switch r.Op {
 		case "append":
-			if r.Lazy && r.Entry != "" && !s.present(r.Entry) {
-				cut = true
-				lost[r.Entry] = true
-				continue
+			if r.Lazy && r.Entry != "" {
+				ok, err := s.present(r.Entry)
+				if err != nil {
+					return v, fmt.Errorf("cas: session %s: %w", id, err)
+				}
+				if !ok {
+					cut = true
+					lost[r.Entry] = true
+					continue
+				}
 			}
 			if r.Entry != "" && !seen[r.Entry] {
 				seen[r.Entry] = true
@@ -790,7 +813,11 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 			continue
 		}
 		if !seen[e] {
-			if !s.present(e) {
+			ok, err := s.present(e)
+			if err != nil {
+				return v, fmt.Errorf("cas: session %s: %w", id, err)
+			}
+			if !ok {
 				// A log line that reached the disk ahead of a lazy record
 				// and objects the crash took: an append that was lost.
 				lost[e] = true
@@ -1446,20 +1473,14 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	}
 	// A sidecar blob the entry names is freshened while the lock is held,
 	// as a reused content is, so a sweep that gathered it as old and
-	// unreferenced sees it young at its second look; a packed one is kept
-	// through the entry the sweep's last step reads from the journal.
+	// unreferenced sees it young at its second look, and one whose pack a
+	// sweep removed from under this store is written back.
 	// One the store does not hold is reported, as the format allows,
 	// rather than refused; a projection of the session will fail until
 	// it arrives.
 	if _, body, err := split(e); err == nil {
-		now := time.Now()
 		for _, b := range blobsNamedBy(body) {
-			cp, err := s.objs.loosePath(spaceContents, b)
-			if err != nil {
-				r.Unresolved = append(r.Unresolved, b)
-				continue
-			}
-			if err := os.Chtimes(cp, now, now); err != nil && !s.objs.has(spaceContents, b) {
+			if err := s.objs.freshen(spaceContents, b); err != nil {
 				r.Unresolved = append(r.Unresolved, b)
 			}
 		}
@@ -1846,7 +1867,10 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// Release closes a session this process holds, freeing its lock.
+// Release closes a session this process holds, freeing its lock. Lazy
+// appends are made durable first: the next holder's durable commit
+// syncs the journal, and must not make this store's lazy records
+// durable ahead of their objects.
 func (s *Store) Release(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1854,8 +1878,15 @@ func (s *Store) Release(id string) error {
 	if !ok {
 		return nil
 	}
+	var err error
+	if !s.readOnly {
+		err = s.syncJournal()
+	}
 	delete(s.open, id)
-	return h.lock.release()
+	if rerr := h.lock.release(); err == nil {
+		err = rerr
+	}
+	return err
 }
 
 // Sync makes every append this store acknowledged lazily durable. The
