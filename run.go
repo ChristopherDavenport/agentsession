@@ -39,10 +39,14 @@ type Call struct {
 	// dispatchedArgs are the arguments the last dispatch handed the
 	// tool.
 	dispatchedArgs string
-	// afterAnswer is the first decision that follows an answer, and
-	// answerAfterOutput the first answer that follows the output; the
-	// format forbids both.
-	afterAnswer, answerAfterOutput *DecisionEntry
+	// repeats reports that an earlier call on the path has the call's
+	// ID, which the format forbids.
+	repeats bool
+	// afterAnswer and afterReject are the first decisions that follow
+	// an answer and a reject, answerAfterOutput the first answer that
+	// follows the output, and rejectAfterDispatch the first reject that
+	// follows a dispatch; the format forbids all four.
+	afterAnswer, afterReject, answerAfterOutput, rejectAfterDispatch *DecisionEntry
 }
 
 // ID returns the call ID.
@@ -167,6 +171,12 @@ const (
 	// The harness that continues the path writes the output and
 	// nothing else for the call; no dispatch may follow.
 	CallAnswered
+	// CallRejected: a reject decision ended the call and its refusal
+	// output is not on the path yet, since the record stopped between
+	// the two. The call did not run and does not: the harness that
+	// continues the path writes the output, carrying the reject's
+	// reason, and nothing else for the call.
+	CallRejected
 )
 
 // String names the state.
@@ -184,6 +194,8 @@ func (s CallState) String() string {
 		return "unknown"
 	case CallAnswered:
 		return "answered"
+	case CallRejected:
+		return "rejected"
 	}
 	return fmt.Sprintf("CallState(%d)", int(s))
 }
@@ -198,6 +210,8 @@ func (c *Call) State(h Header) CallState {
 		return CallCompleted
 	case c.Answered():
 		return CallAnswered
+	case c.Rejected():
+		return CallRejected
 	case c.Held():
 		return CallHeld
 	case c.Dispatch != nil:
@@ -220,10 +234,13 @@ func Calls(path []Entry) []*Call {
 		case *ItemEntry:
 			switch it := v.Item.(type) {
 			case *openresponses.FunctionCall:
-				if _, seen := byID[it.CallID]; seen {
-					continue
-				}
+				// The format forbids a call ID repeated on a path; in a
+				// file that repeats one, what follows names the latest
+				// call with it.
 				c := &Call{Entry: v, Call: it}
+				if _, seen := byID[it.CallID]; seen {
+					c.repeats = true
+				}
 				byID[it.CallID] = c
 				out = append(out, c)
 			case *openresponses.FunctionCallOutput:
@@ -235,6 +252,12 @@ func Calls(path []Entry) []*Call {
 			if c, ok := byID[v.CallID]; ok {
 				if c.afterAnswer == nil && c.Answered() {
 					c.afterAnswer = v
+				}
+				if c.afterReject == nil && c.Rejected() {
+					c.afterReject = v
+				}
+				if c.rejectAfterDispatch == nil && v.Verdict == VerdictReject && c.Dispatch != nil {
+					c.rejectAfterDispatch = v
 				}
 				if c.answerAfterOutput == nil && v.Verdict == VerdictAnswer && c.Output != nil {
 					c.answerAfterOutput = v
@@ -268,6 +291,17 @@ func (c *Call) endingDecision() *DecisionEntry {
 	for _, d := range c.Decisions {
 		if d.Verdict == VerdictReject || d.Verdict == VerdictAnswer {
 			return d
+		}
+	}
+	return nil
+}
+
+// lastCall returns the last of the calls with the call ID, which is the
+// one a decision, dispatch or output appended now names, or nil.
+func lastCall(calls []*Call, callID string) *Call {
+	for i := len(calls) - 1; i >= 0; i-- {
+		if calls[i].ID() == callID {
+			return calls[i]
 		}
 	}
 	return nil
@@ -361,11 +395,53 @@ type Run struct {
 // RunID returns the run's ID.
 func (r *Run) RunID() string { return r.Start.RunID }
 
-// Calls returns the calls on the segment; see [Calls].
-func (r *Run) Calls() []*Call { return Calls(r.Segment) }
+// Calls returns the run's calls: those on its segment, and those made
+// before it that the segment holds a decision, a dispatch or an output
+// for, since the run took them up. An earlier call carries what the
+// path holds for it, and a call on the segment what the segment holds;
+// see [Calls].
+func (r *Run) Calls() []*Call { return runCalls(r.Path, r.Segment) }
 
-// Pending returns the IDs of the calls on the segment with no output
-// on it.
+// runCalls returns the calls of the run whose segment ends the path:
+// the calls on the segment, then those before it on the path that the
+// segment holds a decision, dispatch or output for. A call on the
+// segment is read from the segment, so its decisions and output are
+// its own even when an earlier call on the path has its call ID. A nil
+// path means the segment stands for the path.
+func runCalls(path, segment []Entry) []*Call {
+	own := Calls(segment)
+	if path == nil {
+		return own
+	}
+	onSegment := map[string]bool{}
+	for _, c := range own {
+		onSegment[c.ID()] = true
+	}
+	touched := map[string]bool{}
+	for _, e := range segment {
+		switch v := e.(type) {
+		case *ItemEntry:
+			if it, ok := v.Item.(*openresponses.FunctionCallOutput); ok {
+				touched[it.CallID] = true
+			}
+		case *DecisionEntry:
+			touched[v.CallID] = true
+		case *DispatchEntry:
+			touched[v.CallID] = true
+		}
+	}
+	var out []*Call
+	for _, c := range Calls(path) {
+		if touched[c.ID()] && !onSegment[c.ID()] {
+			out = append(out, c)
+		}
+	}
+	return append(out, own...)
+}
+
+// Pending returns the IDs of the run's calls with no output on the
+// path, a call made before the segment that the run took up among them;
+// see [Run.Calls].
 func (r *Run) Pending() []string {
 	var out []string
 	for _, c := range r.Calls() {
@@ -430,9 +506,8 @@ func (s *Session) OpenRun(leaf string) (*Run, error) {
 }
 
 // EndRun builds the end entry for the run open at the current leaf:
-// its pending list is the calls on the segment with no output. reason
-// is one of the Reason constants and ref may be "". The entry is not
-// appended.
+// its pending list is [Run.Pending]. reason is one of the Reason
+// constants and ref may be "". The entry is not appended.
 //
 // A writer that continues a path on which a run is open that it is not
 // running owns that run and closes it before appending anything else,
@@ -463,6 +538,11 @@ func (s *Session) EndRun(reason, ref string) (*RunEntry, error) {
 // carries an error; both are values a writer adds where the segment
 // cannot show them.
 //
+// A pending call is one of the run's calls, as [Run.Calls] has them,
+// with no output: a call made before the segment counts once the
+// segment holds a decision, dispatch or output for it, so a resume
+// that holds such a call before any model call ends input_required.
+//
 // The stopped step reads the path because a run that answers a call
 // and ends without calling the model again, which is what a resume
 // whose tool asks to terminate and a refusal both are, holds no
@@ -476,7 +556,7 @@ func ComputeReason(path, segment []Entry) string {
 	if last != nil && last.Error != nil {
 		return ReasonError
 	}
-	calls := Calls(segment)
+	calls := runCalls(path, segment)
 	onPath := Calls(path)
 	held, dispatched, pending := false, false, false
 	for _, c := range calls {
@@ -577,8 +657,8 @@ var ErrReasonMismatch = errors.New("agentsession: run end disagrees with its seg
 
 // Verify checks the run's end entry against its segment. A written
 // error or interrupted stands over any segment; any other reason must
-// match [ComputeReason], and the pending list must match the calls on
-// the segment without an output. A run without an end verifies
+// match [ComputeReason], and the pending list must match
+// [Run.Pending]. A run without an end verifies
 // trivially.
 func (r *Run) Verify() error {
 	if r.End == nil {
@@ -599,9 +679,20 @@ func (r *Run) Verify() error {
 	return nil
 }
 
-// ErrCallRejected is returned when a dispatch is appended for a call
-// that a decision on the path already rejected.
+// ErrCallRejected is returned when a dispatch or a decision is
+// appended for a call that a decision on the path already rejected:
+// what follows a reject is the call's refusal output and nothing else.
 var ErrCallRejected = errors.New("agentsession: call was rejected")
+
+// ErrCallIDRepeated is returned when a function call is appended whose
+// call ID an earlier function call on the path has: a call ID names one
+// call on a path.
+var ErrCallIDRepeated = errors.New("agentsession: call ID repeated on the path")
+
+// ErrRejectDispatched is returned when a reject is appended for a call
+// that has a dispatch on the path: a reject says the call did not run,
+// and one that may have run is ended by an answer.
+var ErrRejectDispatched = errors.New("agentsession: reject for a call that was dispatched")
 
 // ErrCallAnswered is returned when a dispatch or a decision is
 // appended for a call that an answer decision on the path already
@@ -626,16 +717,24 @@ var ErrAnswerNotDispatched = errors.New("agentsession: answer for a call the rec
 var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 
 // VerifyRecords checks the record entries on the path to leaf against
-// the format's rules: every run end agrees with its segment, no
-// dispatch follows a reject or an answer on the same call, no decision
-// follows an answer and no answer follows an output, and, when the
-// header names dispatch in records, no answer ends a call with no
-// dispatch and every call that ran has a dispatch. It returns the
-// first problem found.
+// the format's rules: no call ID repeats, every run end agrees with
+// its segment, no dispatch or decision follows a reject or an answer
+// on the same call, no answer follows an output and no reject a
+// dispatch, and, when the header names dispatch in records, no answer
+// ends a call with no dispatch and every call that ran has a dispatch.
+// It returns the first problem found.
 func (s *Session) VerifyRecords(leaf string) error {
 	path := s.Path(leaf)
 	if path == nil {
 		return fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
+	}
+	calls := Calls(path)
+	// A repeated call ID is checked first: every other rule reads the
+	// calls by their IDs.
+	for _, c := range calls {
+		if c.repeats {
+			return fmt.Errorf("%w: %s at %s", ErrCallIDRepeated, c.ID(), c.Entry.ID)
+		}
 	}
 	for _, r := range Runs(path) {
 		if err := r.Verify(); err != nil {
@@ -643,7 +742,7 @@ func (s *Session) VerifyRecords(leaf string) error {
 		}
 	}
 	h := s.Header()
-	for _, c := range Calls(path) {
+	for _, c := range calls {
 		if c.ended != nil {
 			if c.ended.Verdict == VerdictAnswer {
 				return fmt.Errorf("%w: dispatch %s follows an answer to call %s", ErrCallAnswered, c.endedBy.ID, c.ID())
@@ -652,6 +751,12 @@ func (s *Session) VerifyRecords(leaf string) error {
 		}
 		if c.afterAnswer != nil {
 			return fmt.Errorf("%w: decision %s follows an answer to call %s", ErrCallAnswered, c.afterAnswer.ID, c.ID())
+		}
+		if c.afterReject != nil {
+			return fmt.Errorf("%w: decision %s follows a reject of call %s", ErrCallRejected, c.afterReject.ID, c.ID())
+		}
+		if c.rejectAfterDispatch != nil {
+			return fmt.Errorf("%w: reject %s follows a dispatch of call %s", ErrRejectDispatched, c.rejectAfterDispatch.ID, c.ID())
 		}
 		if c.answerAfterOutput != nil {
 			return fmt.Errorf("%w: answer %s follows the output of call %s", ErrCallCompleted, c.answerAfterOutput.ID, c.ID())

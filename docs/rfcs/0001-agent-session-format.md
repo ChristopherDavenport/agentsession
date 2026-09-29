@@ -70,8 +70,9 @@ session worth training on.
   request the model received, byte for byte where the payload allows.
 - **Resumable.** For every call without an output, a reader can tell
   from the path whether it was never started, was in flight when the
-  record stopped, or is waiting on an answer, in any file whose header
-  says the writer records dispatches and decisions.
+  record stopped, is waiting on an answer, or was rejected or answered
+  and is owed only its output, in any file whose header says the
+  writer records dispatches and decisions.
 - **Append-only.** A writer only ever appends lines, save for raising
   the header's `format`, which Versioning describes. A crashed session
   is a valid prefix.
@@ -451,6 +452,15 @@ One conversation item in the payload profile.
 - `source` MAY carry the trigger of an item a person or another system
   sent, in the shape `queued` defines, and `queued_from` MAY name the
   `queued` entry the item was accepted as.
+- A `function_call`'s `call_id` MUST differ from that of every other
+  `function_call` on the path, since a `function_call_output`, a run
+  end's `pending` list and a projection name the call by it alone. A
+  writer whose provider repeats an ID, or gives none, writes one of
+  its own, such as the native ID with a suffix, and SHOULD keep the
+  native one in a member of the `item` entry this document does not
+  define, beside `item` rather than in it. A reader of a file that
+  repeats one takes a `function_call_output`, `decision` or `dispatch`
+  to name the latest `function_call` before it with that `call_id`.
 
 ### `response`
 
@@ -743,16 +753,18 @@ Why a run started and how it ended. Two entries per run, paired by
 - `run_id` and `phase` are required on both entries. `source` is
   required on `start`; `reason` and `pending` are required on `end`.
   `ref` is optional on both, and `trigger` is optional on `start`.
-- `source` is closed to two path shapes. `resume`: at least one call
-  that was on the path with no output when the run began has its
-  output at the start of the segment, whether the previous run ended by
-  leaving it pending or was cut off. `input`: otherwise, including a
-  run that answers nothing and adds nothing, such as a retry after an
-  error, which `ref` names. A run that both answers a pending call and
-  adds a message is `resume`. `ref` on `start` names what triggered
-  the input (a cron name, a channel message ID). How an input arrived,
-  whether a schedule, a channel or another agent, is a harness feature
-  and goes in `trigger`, `ref` or a `custom` entry.
+- `source` is closed to two path shapes. `resume`: the segment takes
+  up at least one call that was on the path with no output when the
+  run began, with its output or a `decision` or `dispatch` for it,
+  whether the previous run ended by leaving it pending or was cut off.
+  A resume that holds such a call again, or rejects it, is one, and so
+  is a run that both takes up such a call and adds a message, in
+  either order. `input`: otherwise, including a run that answers
+  nothing and adds nothing, such as a retry after an error, which
+  `ref` names. `ref` on `start` names what triggered the input (a cron
+  name, a channel message ID). How an input arrived, whether a
+  schedule, a channel or another agent, is a harness feature and goes
+  in `trigger`, `ref` or a `custom` entry.
 - `trigger` on `start` says how the input that started the run arrived,
   in the object `queued` defines: `kind`, `ref` and `source`, each
   opaque. It sits beside `ref` and changes nothing about it; `ref` stays
@@ -767,10 +779,13 @@ Why a run started and how it ended. Two entries per run, paired by
   valid still, and the envelope section says a rewriter preserves
   both.
 - `reason` is closed. Each value is a shape of the run's segment, the
-  entries on the path from the `start` entry to the `end` entry, where
-  a pending call is a `function_call` on the segment with no
-  `function_call_output` on it. Five values are computable, tested in
-  this order with the first match winning:
+  entries on the path from the `start` entry to the `end` entry. A
+  run's calls are the `function_call`s on the segment and those on the
+  path before it that the segment holds a `decision`, a `dispatch` or
+  a `function_call_output` for, since the run took them up; a pending
+  call is one of the run's calls with no `function_call_output` on
+  the path. Five values are computable, tested in this order with the
+  first match winning:
   1. `error`: the last `response` on the segment carries a non-null
      `error`.
   2. `input_required`: at least one pending call is held, as `decision`
@@ -798,15 +813,28 @@ Why a run started and how it ended. Two entries per run, paired by
   reading as `stopped`, because the path still holds an unanswered
   call, and `aborted` is the value that says so.
 
+  A call made before the segment is one of the run's calls once the
+  segment holds a decision, dispatch or output for it, and not before.
+  A resume that asks its policy about a call an earlier run left, and
+  holds it, ends `input_required` before any model call, since the run
+  took the held call up. A run that leaves such a call untouched has
+  not taken it up and its end does not list it, though the call still
+  keeps the run from reading as `stopped`.
+
   Two values record what the segment cannot show and are written, not
   computed: `error` when the harness failed at any point, which `ref`
   names, and `interrupted` when a person or the host told the harness
   to stop. A written `error` or `interrupted` stands over any segment.
   Every segment matches exactly one computable value on its path; a
-  reader MAY recompute it, and when the written value is computable and the two
-  disagree the segment is authoritative.
-- `pending` lists the pending calls' IDs so a resume can read them
-  without walking the segment. The segment is authoritative here too.
+  reader MAY recompute it, and when the written value is computable
+  and the two disagree the segment is authoritative.
+- `pending` lists the pending calls' IDs, those made before the
+  segment among them, so a resume can read them without walking the
+  segment. The segment is authoritative here too. It lists the run's
+  calls only: a call an earlier run left that this run did not take
+  up is pending on the path and not in the list, and a resume that
+  takes up every call left without an output reads them from the
+  path.
 - Items and responses of the run follow its `start` entry on the path.
   Runs do not nest: an input that arrives while a writer is running a
   run joins that run. A branch to an entry before a run's `start`
@@ -897,14 +925,21 @@ A call's fate was decided outside the tool.
   the path shows whether it held:
   - `proceed`: this decision let the call go on toward its tool. A
     `dispatch` for the call follows when the call reaches its tool; a
-    `reject` after it, or a run end with the call pending, says it did
-    not. That is an approval something else overtook, such as an abort
-    before the call's turn in a serial batch or a refusal by the loop
-    itself, and the `proceed` stays as written, with its `by` and its
-    `args`, since those are what an auditor asks about such a call.
-  - `reject`: this decision ended the call. No `dispatch` ever follows,
-    and a `function_call_output` for the call follows that carries
-    `reason`.
+    `reject` after it, an `answer` after it for a call that may have
+    run, or a run end with the call pending, says it did not. That is
+    an approval something else overtook, such as an abort before the
+    call's turn in a serial batch or a refusal by the loop itself, and
+    the `proceed` stays as written, with its `by` and its `args`, since
+    those are what an auditor asks about such a call.
+  - `reject`: this decision ended a call that did not run. No
+    `dispatch` and no other `decision` ever follow, and a
+    `function_call_output` for the call follows that carries `reason`.
+    A writer writes `reject` only for a call with no `dispatch` on the
+    path; one that may have run is ended by `answer`. A `reject` with
+    no output after it is a call the harness refused and has not yet
+    written the output of, since the record stopped between the two;
+    the harness that continues the path writes that output and
+    nothing else for the call.
   - `hold`: this decision neither let the call go nor ended it. The
     call waits. A call is held while its latest decision is a `hold`
     with no `dispatch` after it on the path; a later decision answers
@@ -913,8 +948,9 @@ A call's fate was decided outside the tool.
   - `answer`: this decision ended a call that may already have run,
     with an output the harness wrote rather than one its tool
     returned. It is the answer to a call in flight when the record
-    stopped, or to one the file cannot say about, that the harness
-    does not hand to its tool again, such as a call whose tool cannot
+    stopped, to one held after its `dispatch`, or to one the file
+    cannot say about, that the harness does not hand to its tool
+    again, such as a call whose tool cannot
     say that a second run is safe and whose outcome is therefore
     unknown. No `dispatch` and no other `decision` follow it, and a
     `function_call_output` for the call follows; `by` says who
@@ -923,19 +959,23 @@ A call's fate was decided outside the tool.
     on it or, in a file whose header does not name `dispatch` in
     `records`, without one. A call
     the record shows never started did not run, and a writer that ends
-    one without running it writes `reject`.
+    one without running it writes `reject`. A call whose tool ran and
+    whose result the harness then withheld, such as one a hook blocked
+    after the tool returned, is ended by `answer`, never by `reject`.
 
   A call may carry several decisions on the path, in order. An answered
   `hold` is followed by a `proceed`, a `dispatch`, a `reject` or an
-  `answer` on the same call and stays as written; a call still held is
-  what makes a run end `input_required`. The decision that answers a
-  `hold` says by its verdict what the answer did. A
-  writer SHOULD write `proceed` only when it answers an earlier `hold`
-  or carries `args`, or lets a call that may have run go to its tool
-  again; otherwise the `dispatch` is the record that the call
-  proceeded. With these, a reader tells a call that ran once, one
-  dispatch and its output, from one that ran twice, two, and from
-  one answered without running again, a `dispatch` and an `answer`.
+  `answer` on the same call and stays as written, a `reject` only when
+  no `dispatch` came before it and an `answer` only when one did or
+  the file does not record dispatches; a call still held is what makes
+  a run end `input_required`. The decision that answers a `hold` says
+  by its verdict what the answer did. A writer SHOULD write `proceed`
+  only when it answers an earlier `hold` or carries `args`, or lets a
+  call that may have run go to its tool again; otherwise the
+  `dispatch` is the record that the call proceeded. With these, a
+  reader tells a call that ran once, one dispatch and its output, from
+  one that ran twice, two, and from one answered without running
+  again, a `dispatch` and an `answer`.
 - `call_id`, `target` and `verdict` are required. `reason` is required
   when `verdict` is `reject`, since it is what the model saw as the
   output and what tells a rejected call from a tool failure; otherwise
@@ -1476,7 +1516,9 @@ across a budget, beside a `replace` and a compaction's checkpoint that
 write it whole, the recomputed `reason` for
 every `run` end, and
 negative cases for a broken parent link, a truncated last line, an
-unknown type, a `dispatch` that follows a `reject` or an `answer`, and a header naming
+unknown type, a `dispatch` that follows a `reject` or an `answer`, a
+decision that follows a `reject`, a `reject` that follows a
+`dispatch`, a repeated `call_id`, and a header naming
 `dispatch` beside a call that has an output and no `dispatch`.
 Converters for pi, Claude Code and Codex are part of the initial
 proposal so the format arrives with three existing corpora behind it.
@@ -1499,11 +1541,17 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.8
 
-Additive. One element and a paragraph in the `config` section, and a
-writer's rule in Versioning. No hash changes, and a 0.8 file is a 0.9
-file with no `keep` in its omitted lists. An element of an omitted
-list with no `id`, which a 0.9 reader reads as a `keep`, was not a 0.8
-omitted part, which always had its `id`.
+One element and a paragraph in the `config` section, a writer's rule
+in Versioning, which calls are a run's, and what may follow a
+`reject`. No hash changes, and a 0.8 file is a 0.9 file with no
+`keep` in its omitted lists, save for the run, `reject` and `call_id`
+rules below. An element of an omitted list with no
+`id`, which a 0.9 reader reads as a `keep`, was not a 0.8 omitted
+part, which always had its `id`. A 0.8 run end whose run took up a
+call made before its segment and left it without an output may carry
+a `reason` or `pending` list that 0.9 recomputes differently, and a
+0.8 file may hold a decision after a `reject`, a `reject` after a
+`dispatch` or a repeated `call_id`, which 0.9 forbids.
 
 - A writer that appends to a file whose header names an earlier minor
   raises the header's `format` first. Under 0.8 a header kept the
@@ -1519,6 +1567,26 @@ omitted part, which always had its `id`.
   moving across the budget rewrote a list of 475 parts, 37 KB and 12%
   more than the joined string the parts were adopted to replace. With
   a `keep` it costs about 100 bytes.
+- A run's pending calls include the calls of earlier runs it took up
+  by a decision, dispatch or output on its segment. Under 0.8 a
+  pending call was a `function_call` on the segment, so a resume that
+  held a call an earlier run left, before any model call, had no
+  pending call and read `aborted`, and its `pending` list could not
+  name the call it was waiting on. `resume` follows: a run whose
+  segment takes up such a call by a decision or dispatch is one,
+  where 0.8 asked for its output.
+- A `reject` with no output after it is a call owed its refusal and
+  nothing else, as an `answer` with no output is owed its answer, and
+  no decision follows a `reject`, as none follows an `answer`. A
+  `reject` is for a call with no `dispatch`; one that may have run is
+  ended by `answer`. 0.8 said no `dispatch` follows a `reject` but not
+  what a reader makes of a record that stopped between the two, and a
+  `hold` after a `reject` read as a call waiting on an answer.
+- A `call_id` names one `function_call` on a path. 0.8 did not say,
+  and a provider that repeats IDs, or a converter that numbers calls
+  per turn, left a later call's output matched to an earlier call. A
+  reader of such a file matches what follows to the latest call with
+  the ID.
 
 ## Changes since 0.7
 

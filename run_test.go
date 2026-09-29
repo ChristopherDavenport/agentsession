@@ -127,6 +127,16 @@ func TestComputeReasonLastRun(t *testing.T) {
 		{"resume that answers nothing", "start user calls:a resp hold:a end:input_required start:resume user", ReasonAborted},
 		{"resume that calls the model again", "start user calls:a resp hold:a end:input_required start:resume proceed:a dispatch:a out:a resp", ReasonDone},
 		{"a call an earlier run left pending", "start user calls:a resp dispatch:a end:aborted start:resume user calls:b resp dispatch:b out:b", ReasonAborted},
+
+		// A call an earlier run made is the run's once it decides about
+		// it: a resume whose policy defers a call the crash left never
+		// started waits on that call, before any model call.
+		{"resume that holds a call a crash left", "start user calls:a resp end:error start:resume hold:a", ReasonInputRequired},
+		{"resume that holds again", "start user calls:a resp hold:a end:input_required start:resume hold:a", ReasonInputRequired},
+		{"resume that holds one and leaves one", "start user calls:a,b resp end:error start:resume hold:a", ReasonInputRequired},
+		{"resume that holds one and runs one", "start user calls:a,b resp end:error start:resume hold:a dispatch:b", ReasonAborted},
+		{"resume that holds one and answers one", "start user calls:a,b resp end:error start:resume hold:a dispatch:b out:b", ReasonInputRequired},
+		{"resume cut off after a reject", "start user calls:a resp end:error start:resume reject:a", ReasonAborted},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -194,6 +204,30 @@ func TestComputeReasonCallsOutsideTheSegment(t *testing.T) {
 	}
 }
 
+// TestRunPendingTakesUpEarlierCalls: a run's pending list names the
+// calls of an earlier run it decided about and left without an output,
+// and only those.
+func TestRunPendingTakesUpEarlierCalls(t *testing.T) {
+	path := seg(t, "start user calls:a,b,c resp end:error start:resume hold:a dispatch:c out:c")
+	runs := Runs(path)
+	last := runs[len(runs)-1]
+	var ids []string
+	for _, c := range last.Calls() {
+		ids = append(ids, c.ID())
+	}
+	if got := strings.Join(ids, ","); got != "a,c" {
+		t.Errorf("Calls = %s, want a,c: the run took up a and c and left b alone", got)
+	}
+	if got := strings.Join(last.Pending(), ","); got != "a" {
+		t.Errorf("Pending = %s, want a", got)
+	}
+	// A hand-built run with no path reads its segment alone.
+	bare := &Run{Start: last.Start, Segment: last.Segment}
+	if got := len(bare.Calls()); got != 0 {
+		t.Errorf("Calls without a path = %d, want 0", got)
+	}
+}
+
 func TestCallState(t *testing.T) {
 	promised := Header{Records: AllRecords}
 	silent := Header{}
@@ -215,6 +249,12 @@ func TestCallState(t *testing.T) {
 		// happened to it.
 		{"approved, overtaken", "calls:a resp hold:a proceed:a", promised, CallNeverStarted},
 		{"approved, then refused", "calls:a resp proceed:a reject:a out:a", promised, CallCompleted},
+		// A reject whose refusal the record stopped before is owed
+		// that output and nothing else; it never reads as a call a
+		// harness may still run.
+		{"rejected, output not written", "calls:a resp reject:a", promised, CallRejected},
+		{"held, rejected, output not written", "calls:a resp hold:a reject:a", promised, CallRejected},
+		{"rejected without promise", "calls:a resp reject:a", silent, CallRejected},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -226,6 +266,54 @@ func TestCallState(t *testing.T) {
 				t.Errorf("State = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestCallsRepeatedID: a call ID names one call on a path, so Append
+// refuses a function call that repeats one and VerifyRecords reports
+// one in a file another writer produced. In such a file what follows
+// the repeat names the latest call with the ID, so the later call's
+// hold is its own and the earlier call keeps its output.
+func TestCallsRepeatedID(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	fc := func() *ItemEntry {
+		return &ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "a", Name: "tool", Arguments: "{}"}}
+	}
+	if _, err := s.Append(fc()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewItemEntry(openresponses.NewFunctionCallOutput("a", "ok"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(fc()); !errors.Is(err, ErrCallIDRepeated) {
+		t.Errorf("a repeated call ID: Append = %v, want ErrCallIDRepeated", err)
+	}
+
+	call := `"type":"item","item":{"type":"function_call","id":"fc","call_id":"a","name":"tool","arguments":"{}"}`
+	output := `"type":"item","item":{"type":"function_call_output","call_id":"a","output":"ok"}`
+	again := `"type":"item","item":{"type":"function_call","id":"fc2","call_id":"a","name":"tool","arguments":"{}"}`
+	_, ids := hashedLines(t, Format, call, output, again)
+	hold := `"type":"decision","call_id":"a","target":"` + ids[2] + `","verdict":"hold"`
+	in, _ := hashedLines(t, Format, call, output, again, hold)
+	read, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := read.VerifyRecords(read.Leaf()); !errors.Is(err, ErrCallIDRepeated) {
+		t.Errorf("VerifyRecords = %v, want ErrCallIDRepeated", err)
+	}
+	calls, err := read.Calls(read.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("%d calls, want 2", len(calls))
+	}
+	if calls[0].Pending() || len(calls[0].Decisions) != 0 {
+		t.Errorf("first call: pending %v, %d decisions; want its output and none", calls[0].Pending(), len(calls[0].Decisions))
+	}
+	if !calls[1].Held() || !calls[1].Pending() {
+		t.Errorf("second call: held %v, pending %v; want held and pending", calls[1].Held(), calls[1].Pending())
 	}
 }
 
