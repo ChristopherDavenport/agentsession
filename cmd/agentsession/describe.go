@@ -65,6 +65,8 @@ func describeEntry(e agentsession.Entry, full bool) string {
 				ids = append(ids, o.ID+" ("+o.Reason+")")
 			}
 			parts = append(parts, fmt.Sprintf("omitted %s", strings.Join(ids, ", ")))
+		} else if v.InstructionsOmitted != nil {
+			parts = append(parts, "omitted cleared")
 		}
 		if v.Reasoning != nil {
 			parts = append(parts, "reasoning")
@@ -175,6 +177,9 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		}
 		return strings.Join(parts, " ")
 	case *agentsession.DispatchEntry:
+		if v.IdempotencyKey != "" {
+			return v.CallID + " to tool, key " + describeText(v.IdempotencyKey)
+		}
 		return v.CallID + " to tool"
 	case *agentsession.DecisionEntry:
 		parts := []string{v.Verdict, v.CallID}

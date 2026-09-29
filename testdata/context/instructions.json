@@ -20,6 +20,20 @@
           "source": "agentmemory"
         }
       ],
+      "instructions_omitted": [
+        {
+          "id": "service/AGENTS.md",
+          "reason": "budget",
+          "size": 4096,
+          "source": "agentsmd"
+        },
+        {
+          "id": "memory/2026-08",
+          "reason": "stale",
+          "size": 812,
+          "source": "agentmemory"
+        }
+      ],
       "tools": [
         {
           "type": "function",

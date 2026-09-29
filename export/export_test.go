@@ -1829,3 +1829,45 @@ func TestAtLegacyID(t *testing.T) {
 	}
 	assertSameJSON(t, encode(t, mustDoc(t, byNew)), encode(t, mustDoc(t, byOld)))
 }
+
+// TestDispatchesAndAnswer: a call run again after a crash keeps its
+// first dispatch under "dispatch" and lists both hand-offs, each with
+// its key, under "dispatches", so the count survives the projection; a
+// call answered without running again carries its answer among its
+// decisions and one dispatch (#99, #100).
+func TestDispatchesAndAnswer(t *testing.T) {
+	s := loadFixture(t, "replay")
+	var at string
+	for _, e := range s.Entries() {
+		if r, ok := e.(*agentsession.RunEntry); ok && r.IsEnd() && r.RunID == "run-2" {
+			at = r.ID
+		}
+	}
+	tr, err := At(s, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls map[string]struct {
+		Dispatch   map[string]any   `json:"dispatch"`
+		Dispatches []map[string]any `json:"dispatches"`
+		Decisions  []map[string]any `json:"decisions"`
+	}
+	for _, step := range mustDoc(t, tr).Steps {
+		if raw, ok := step.Extra[ExtraCalls]; ok {
+			data, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &calls); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	deploy, notify := calls["call_deploy"], calls["call_notify"]
+	if len(deploy.Dispatches) != 2 || deploy.Dispatch["entry_id"] != deploy.Dispatches[0]["entry_id"] || deploy.Dispatches[1]["idempotency_key"] != "idem-deploy-1" {
+		t.Errorf("call_deploy = %+v", deploy)
+	}
+	if notify.Dispatch == nil || notify.Dispatches != nil || len(notify.Decisions) != 1 || notify.Decisions[0]["verdict"] != agentsession.VerdictAnswer || notify.Decisions[0]["by"] != agentsession.ByPolicy {
+		t.Errorf("call_notify = %+v", notify)
+	}
+}

@@ -98,7 +98,7 @@ func TestQueuedDrain(t *testing.T) {
 	if _, err := s.Append(item); err != nil {
 		t.Fatal(err)
 	}
-	if item.QueuedFrom != q.ID || item.Source == nil || *item.Source != *q.Trigger {
+	if item.QueuedFrom != q.ID || !item.Source.Equal(q.Trigger) {
 		t.Errorf("drained item = %+v", item)
 	}
 	if item.Source == q.Trigger {

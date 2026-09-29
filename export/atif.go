@@ -65,7 +65,9 @@ const (
 	// because a reader needs an order where several land in one place.
 	ExtraRun = "run"
 	// ExtraCalls carries, keyed by call ID in the extra of the agent
-	// step that produced the call, the call's decisions and dispatch.
+	// step that produced the call, the call's decisions and its first
+	// dispatch, and, for a call handed to its tool more than once,
+	// every dispatch in path order under "dispatches".
 	ExtraCalls = "calls"
 	// ExtraQueued carries, as a list, the inputs a harness accepted
 	// before it could append them: the item, the mode and the trigger
@@ -348,8 +350,25 @@ func (b *builder) entry(e agentsession.Entry) error {
 	case *agentsession.RunEntry:
 		b.runEntry(v)
 	case *agentsession.DispatchEntry:
-		rec := copyUnknown(map[string]any{"entry_id": v.ID}, v.Unknown)
-		b.callExtra(v.CallID)["dispatch"] = rec
+		rec := map[string]any{"entry_id": v.ID}
+		if v.IdempotencyKey != "" {
+			rec["idempotency_key"] = v.IdempotencyKey
+		}
+		copyUnknown(rec, v.Unknown)
+		// The first hand-off stays under "dispatch", as a call handed
+		// over once has always been written; a call run again lists
+		// every hand-off, so the count survives the projection.
+		call := b.callExtra(v.CallID)
+		list, _ := call["dispatches"].([]any)
+		first, again := call["dispatch"]
+		switch {
+		case !again:
+			call["dispatch"] = rec
+		case len(list) == 0:
+			call["dispatches"] = []any{first, rec}
+		default:
+			call["dispatches"] = append(list, rec)
+		}
 	case *agentsession.DecisionEntry:
 		rec := map[string]any{"entry_id": v.ID, "verdict": v.Verdict}
 		if v.By != "" {

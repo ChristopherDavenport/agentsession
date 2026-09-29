@@ -257,9 +257,11 @@ type ConfigEntry struct {
 	InstructionsParts []InstructionPart `json:"instructions_parts,omitempty"`
 	// InstructionsOmitted records the parts the writer considered and
 	// left out, so a session says what the model was not given as well
-	// as what it was. It is not settings: nothing in it reaches the
-	// request, and it applies to this entry alone.
-	InstructionsOmitted []OmittedPart       `json:"instructions_omitted,omitempty"`
+	// as what it was. Nothing in it reaches the request, but it stays
+	// in force until a later config entry carries it: nil leaves the
+	// list in force as it was, and an empty, non-nil list, written as
+	// [], clears it. A writer sets it only when the list changed.
+	InstructionsOmitted []OmittedPart       `json:"instructions_omitted,omitzero"`
 	ToolsAdded          openresponses.Tools `json:"tools_added,omitempty"`
 	ToolsRemoved        []string            `json:"tools_removed,omitempty"`
 	// Extra carries request members beyond the named ones, such as
@@ -1806,18 +1808,7 @@ func promoteIf[T any](base *EntryBase, key string, dst *T, valid func(T) bool) {
 		return
 	}
 	var v T
-	if json.Unmarshal(raw, &v) != nil || reflect.ValueOf(v).IsZero() || valid != nil && !valid(v) {
-		return
-	}
-	// The decoder matches keys in any case; the typed field is taken only
-	// when the member holds what it encodes, exactly keyed, and more.
-	back, err := jsonx.MarshalNoEscape(v)
-	if err != nil {
-		return
-	}
-	rv, err1 := parseValue(raw)
-	sv, err2 := parseValue(back)
-	if same, _ := extrasOnly(rv, sv); err1 != nil || err2 != nil || !same {
+	if !holdsExactly(raw, &v) || reflect.ValueOf(v).IsZero() || valid != nil && !valid(v) {
 		return
 	}
 	*dst = v
@@ -1825,6 +1816,23 @@ func promoteIf[T any](base *EntryBase, key string, dst *T, valid func(T) bool) {
 	if len(base.Unknown) == 0 {
 		base.Unknown = nil
 	}
+}
+
+// holdsExactly decodes raw into v and reports whether v holds what raw
+// does: the decoder matches keys in any case, so a value is taken only
+// when raw holds what it encodes, exactly keyed, and more.
+func holdsExactly[T any](raw json.RawMessage, v *T) bool {
+	if json.Unmarshal(raw, v) != nil {
+		return false
+	}
+	back, err := jsonx.MarshalNoEscape(*v)
+	if err != nil {
+		return false
+	}
+	rv, err1 := parseValue(raw)
+	sv, err2 := parseValue(back)
+	same, _ := extrasOnly(rv, sv)
+	return err1 == nil && err2 == nil && same
 }
 
 var (

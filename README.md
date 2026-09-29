@@ -263,7 +263,7 @@ agentsession list ~/.agent/sessions -current   # leave out sessions continued in
 ```
 
 `verify` exits 1 on a mismatch, a truncated final line, a run end that
-disagrees with its segment, a dispatch after a reject, or a call that
+disagrees with its segment, a dispatch after a reject or an answer, or a call that
 ran without the dispatch the header promised. `export`
 writes one ATIF document per leaf and embeds a linked subsession when
 its file is beside the exported one or in the same store.

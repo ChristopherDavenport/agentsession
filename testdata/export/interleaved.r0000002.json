@@ -260,7 +260,7 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.7",
+      "format": "agentsession/0.8",
       "leaf": "sha256:34b29c015cbacf1005e56cfe7292e3ac3bf57a31d3ba99bf9deeb9373af0faff",
       "main": true
     },

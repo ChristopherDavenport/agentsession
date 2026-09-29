@@ -2,6 +2,7 @@ package otel
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -362,4 +363,138 @@ func lid(t *testing.T, s *agentsession.Session, name string) string {
 	}
 	t.Fatalf("no fixture entry with legacy id %s", name)
 	return ""
+}
+
+// TestExportReplay: a call run again after a crash has a tool span for
+// each hand-off: the first ends in flight with the run the crash cut
+// off, and the second, in the next run, links to it. A call answered
+// without running again ends its hand-off with that run too, and the
+// answer's span, linked to it, ends answered (#99, #100).
+func TestExportReplay(t *testing.T) {
+	sr, tracer := recorder()
+	s := loadFixture(t, "replay")
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	all := spans(sr.Ended())
+	cut := all.named(SpanRun).withAttr(AttrRunReason, agentsession.ReasonError)
+	if len(cut) != 1 {
+		t.Fatalf("cut runs = %d", len(cut))
+	}
+	deploy := all.named(OpTool + " deploy")
+	if len(deploy) != 2 {
+		t.Fatalf("deploy spans = %d, want one per hand-off", len(deploy))
+	}
+	first, again := deploy.withAttr(AttrDispatch, "1"), deploy.withAttr(AttrDispatch, "2")
+	if len(first) != 1 || len(again) != 1 {
+		t.Fatalf("deploy spans by hand-off: %d and %d", len(first), len(again))
+	}
+	if attr(first[0], AttrCallState) != agentsession.CallInFlight.String() || first[0].Status().Code != codes.Error || !first[0].EndTime().Equal(cut[0].EndTime()) {
+		t.Errorf("first hand-off state %s, status %v, ends %s, run ends %s", attr(first[0], AttrCallState), first[0].Status(), first[0].EndTime(), cut[0].EndTime())
+	}
+	if !linksTo(again[0], first[0]) || attr(again[0], AttrCallState) != agentsession.CallCompleted.String() {
+		t.Errorf("second hand-off state %s, linked %v", attr(again[0], AttrCallState), linksTo(again[0], first[0]))
+	}
+	notify := all.named(OpTool + " notify")
+	handoff, answered := notify.withAttr(AttrCallState, agentsession.CallInFlight.String()), notify.withAttr(AttrCallState, agentsession.CallAnswered.String())
+	if len(notify) != 2 || len(handoff) != 1 || len(answered) != 1 || !linksTo(answered[0], handoff[0]) || len(eventAttr(answered[0], EventDecision, AttrVerdict)) != 1 {
+		t.Errorf("notify spans = %d: hand-off %d, answered %d", len(notify), len(handoff), len(answered))
+	}
+}
+
+// TestHeldAfterProceedIsNot: a hold answered by a proceed and a
+// dispatch does not leave the call reading held.
+func TestHeldAfterProceedIsNot(t *testing.T) {
+	sr, tracer := recorder()
+	s := agentsession.New(agentsession.Header{ID: "held", Records: agentsession.AllRecords})
+	fc := &agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "deploy", Arguments: "{}"}}
+	target, err := s.Append(fc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []agentsession.Entry{
+		agentsession.NewDecision("c", target, agentsession.VerdictHold, agentsession.ByPolicy),
+		agentsession.NewDecision("c", target, agentsession.VerdictProceed, agentsession.ByHuman),
+		agentsession.NewDispatch("c", target),
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	tool := spans(sr.Ended()).named(OpTool + " deploy")
+	if len(tool) != 1 || attr(tool[0], AttrCallState) != agentsession.CallInFlight.String() {
+		t.Errorf("tool spans = %d, state %s", len(tool), attr(tool[0], AttrCallState))
+	}
+}
+
+// TestStateAfterTheRunEnd: a hand-off its run left pending ends with
+// the run in the state the path reads, answered rather than in flight
+// for an answer owed its output, and a decision after the run end that
+// changes that state reaches a span of its own at finish, which starts
+// no earlier than its run.
+func TestStateAfterTheRunEnd(t *testing.T) {
+	build := func(t *testing.T, after ...func(target string) agentsession.Entry) *agentsession.Session {
+		t.Helper()
+		s := agentsession.New(agentsession.Header{ID: "later", Records: agentsession.AllRecords})
+		if _, err := s.Append(agentsession.NewRunStart("r1", agentsession.SourceInput, "")); err != nil {
+			t.Fatal(err)
+		}
+		target, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "deploy", Arguments: "{}"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(agentsession.NewDispatch("c", target)); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range after {
+			if _, err := s.Append(f(target)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return s
+	}
+	end := func(reason string) func(string) agentsession.Entry {
+		return func(string) agentsession.Entry { return agentsession.NewRunEnd("r1", reason, "", []string{"c"}) }
+	}
+	decide := func(verdict string) func(string) agentsession.Entry {
+		return func(target string) agentsession.Entry {
+			return agentsession.NewDecision("c", target, verdict, agentsession.ByPolicy).WithReason("after the crash")
+		}
+	}
+	start2 := func(string) agentsession.Entry {
+		return agentsession.NewRunStart("r2", agentsession.SourceInput, "")
+	}
+	for name, tt := range map[string]struct {
+		after  []func(string) agentsession.Entry
+		states []string
+	}{
+		"answered, output owed": {[]func(string) agentsession.Entry{decide(agentsession.VerdictAnswer), end(agentsession.ReasonAborted)}, []string{"answered"}},
+		"held after the run":    {[]func(string) agentsession.Entry{end(agentsession.ReasonError), start2, decide(agentsession.VerdictHold)}, []string{"in_flight", "held"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sr, tracer := recorder()
+			s := build(t, tt.after...)
+			if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+				t.Fatal(err)
+			}
+			tool := spans(sr.Ended()).named(OpTool + " deploy")
+			var states []string
+			for _, sp := range tool {
+				states = append(states, attr(sp, AttrCallState))
+				if attr(sp, AttrCallState) == "answered" && sp.Status().Code == codes.Error {
+					t.Error("an answered call's span reads as an error")
+				}
+			}
+			if fmt.Sprint(states) != fmt.Sprint(tt.states) {
+				t.Errorf("tool span states = %v, want %v", states, tt.states)
+			}
+			runs := spans(sr.Ended()).named(SpanRun)
+			if len(tool) == 2 && tool[1].StartTime().Before(runs[len(runs)-1].StartTime()) {
+				t.Error("the later span starts before its run")
+			}
+		})
+	}
 }
