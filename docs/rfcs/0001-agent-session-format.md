@@ -70,8 +70,9 @@ session worth training on.
   request the model received, byte for byte where the payload allows.
 - **Resumable.** For every call without an output, a reader can tell
   from the path whether it was never started, was in flight when the
-  record stopped, or is waiting on an answer, in any file whose header
-  says the writer records dispatches and decisions.
+  record stopped, is waiting on an answer, or was rejected or answered
+  and is owed only its output, in any file whose header says the
+  writer records dispatches and decisions.
 - **Append-only.** A writer only ever appends lines, save for raising
   the header's `format`, which Versioning describes. A crashed session
   is a valid prefix.
@@ -743,18 +744,18 @@ Why a run started and how it ended. Two entries per run, paired by
 - `run_id` and `phase` are required on both entries. `source` is
   required on `start`; `reason` and `pending` are required on `end`.
   `ref` is optional on both, and `trigger` is optional on `start`.
-- `source` is closed to two path shapes. `resume`: the segment starts
-  by taking up at least one call that was on the path with no output
-  when the run began, with its output or a `decision` or `dispatch`
-  for it, whether the previous run ended by leaving it pending or was
-  cut off. A resume that holds such a call again, or rejects it, is
-  one. `input`: otherwise, including a run that answers nothing and
-  adds nothing, such as a retry after an error, which `ref` names. A
-  run that both takes up a pending call and adds a message is
-  `resume`. `ref` on `start` names what triggered
-  the input (a cron name, a channel message ID). How an input arrived,
-  whether a schedule, a channel or another agent, is a harness feature
-  and goes in `trigger`, `ref` or a `custom` entry.
+- `source` is closed to two path shapes. `resume`: the segment takes
+  up at least one call that was on the path with no output when the
+  run began, with its output or a `decision` or `dispatch` for it,
+  whether the previous run ended by leaving it pending or was cut off.
+  A resume that holds such a call again, or rejects it, is one, and so
+  is a run that both takes up such a call and adds a message, in
+  either order. `input`: otherwise, including a run that answers
+  nothing and adds nothing, such as a retry after an error, which
+  `ref` names. `ref` on `start` names what triggered the input (a cron
+  name, a channel message ID). How an input arrived, whether a
+  schedule, a channel or another agent, is a harness feature and goes
+  in `trigger`, `ref` or a `custom` entry.
 - `trigger` on `start` says how the input that started the run arrived,
   in the object `queued` defines: `kind`, `ref` and `source`, each
   opaque. It sits beside `ref` and changes nothing about it; `ref` stays
@@ -823,7 +824,8 @@ Why a run started and how it ended. Two entries per run, paired by
   segment. The segment is authoritative here too. It lists the run's
   calls only: a call an earlier run left that this run did not take
   up is pending on the path and not in the list, and a resume that
-  answers every call left without an output reads them from the path.
+  takes up every call left without an output reads them from the
+  path.
 - Items and responses of the run follow its `start` entry on the path.
   Runs do not nest: an input that arrives while a writer is running a
   run joins that run. A branch to an entry before a run's `start`
@@ -914,11 +916,12 @@ A call's fate was decided outside the tool.
   the path shows whether it held:
   - `proceed`: this decision let the call go on toward its tool. A
     `dispatch` for the call follows when the call reaches its tool; a
-    `reject` after it, or a run end with the call pending, says it did
-    not. That is an approval something else overtook, such as an abort
-    before the call's turn in a serial batch or a refusal by the loop
-    itself, and the `proceed` stays as written, with its `by` and its
-    `args`, since those are what an auditor asks about such a call.
+    `reject` after it, an `answer` after it for a call that may have
+    run, or a run end with the call pending, says it did not. That is
+    an approval something else overtook, such as an abort before the
+    call's turn in a serial batch or a refusal by the loop itself, and
+    the `proceed` stays as written, with its `by` and its `args`, since
+    those are what an auditor asks about such a call.
   - `reject`: this decision ended a call that did not run. No
     `dispatch` and no other `decision` ever follow, and a
     `function_call_output` for the call follows that carries `reason`.
@@ -936,8 +939,9 @@ A call's fate was decided outside the tool.
   - `answer`: this decision ended a call that may already have run,
     with an output the harness wrote rather than one its tool
     returned. It is the answer to a call in flight when the record
-    stopped, or to one the file cannot say about, that the harness
-    does not hand to its tool again, such as a call whose tool cannot
+    stopped, to one held after its `dispatch`, or to one the file
+    cannot say about, that the harness does not hand to its tool
+    again, such as a call whose tool cannot
     say that a second run is safe and whose outcome is therefore
     unknown. No `dispatch` and no other `decision` follow it, and a
     `function_call_output` for the call follows; `by` says who
@@ -946,19 +950,23 @@ A call's fate was decided outside the tool.
     on it or, in a file whose header does not name `dispatch` in
     `records`, without one. A call
     the record shows never started did not run, and a writer that ends
-    one without running it writes `reject`.
+    one without running it writes `reject`. A call whose tool ran and
+    whose result the harness then withheld, such as one a hook blocked
+    after the tool returned, is ended by `answer`, never by `reject`.
 
   A call may carry several decisions on the path, in order. An answered
   `hold` is followed by a `proceed`, a `dispatch`, a `reject` or an
-  `answer` on the same call and stays as written; a call still held is
-  what makes a run end `input_required`. The decision that answers a
-  `hold` says by its verdict what the answer did. A
-  writer SHOULD write `proceed` only when it answers an earlier `hold`
-  or carries `args`, or lets a call that may have run go to its tool
-  again; otherwise the `dispatch` is the record that the call
-  proceeded. With these, a reader tells a call that ran once, one
-  dispatch and its output, from one that ran twice, two, and from
-  one answered without running again, a `dispatch` and an `answer`.
+  `answer` on the same call and stays as written, a `reject` only when
+  no `dispatch` came before it and an `answer` only when one did or
+  the file does not record dispatches; a call still held is what makes
+  a run end `input_required`. The decision that answers a `hold` says
+  by its verdict what the answer did. A writer SHOULD write `proceed`
+  only when it answers an earlier `hold` or carries `args`, or lets a
+  call that may have run go to its tool again; otherwise the
+  `dispatch` is the record that the call proceeded. With these, a
+  reader tells a call that ran once, one dispatch and its output, from
+  one that ran twice, two, and from one answered without running
+  again, a `dispatch` and an `answer`.
 - `call_id`, `target` and `verdict` are required. `reason` is required
   when `verdict` is `reject`, since it is what the model saw as the
   output and what tells a rejected call from a tool failure; otherwise
@@ -1499,7 +1507,9 @@ across a budget, beside a `replace` and a compaction's checkpoint that
 write it whole, the recomputed `reason` for
 every `run` end, and
 negative cases for a broken parent link, a truncated last line, an
-unknown type, a `dispatch` that follows a `reject` or an `answer`, and a header naming
+unknown type, a `dispatch` that follows a `reject` or an `answer`, a
+decision that follows a `reject`, a `reject` that follows a
+`dispatch`, and a header naming
 `dispatch` beside a call that has an output and no `dispatch`.
 Converters for pi, Claude Code and Codex are part of the initial
 proposal so the format arrives with three existing corpora behind it.
@@ -1525,7 +1535,8 @@ dispatches and decisions, environment, outcome and cross-session links.
 One element and a paragraph in the `config` section, a writer's rule
 in Versioning, which calls are a run's, and what may follow a
 `reject`. No hash changes, and a 0.8 file is a 0.9 file with no
-`keep` in its omitted lists. An element of an omitted list with no
+`keep` in its omitted lists, save for the run and `reject` rules
+below. An element of an omitted list with no
 `id`, which a 0.9 reader reads as a `keep`, was not a 0.8 omitted
 part, which always had its `id`. A 0.8 run end whose run took up a
 call made before its segment and left it without an output may carry
@@ -1553,7 +1564,7 @@ a `reason` or `pending` list that 0.9 recomputes differently, and a
   held a call an earlier run left, before any model call, had no
   pending call and read `aborted`, and its `pending` list could not
   name the call it was waiting on. `resume` follows: a run whose
-  segment starts with a decision or dispatch for such a call is one,
+  segment takes up such a call by a decision or dispatch is one,
   where 0.8 asked for its output.
 - A `reject` with no output after it is a call owed its refusal and
   nothing else, as an `answer` with no output is owed its answer, and

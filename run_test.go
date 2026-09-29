@@ -142,6 +142,8 @@ func TestComputeReasonLastRun(t *testing.T) {
 		// own, and its missing output is read from the segment, not
 		// taken from the earlier call's.
 		{"a call id repeated in a later run", "start user calls:a resp dispatch:a out:a resp end:done start user calls:a resp", ReasonAborted},
+		{"a repeated call id rejected", "start user calls:a resp dispatch:a out:a resp end:done start user calls:a resp reject:a", ReasonAborted},
+		{"a repeated call id held", "start user calls:a resp reject:a out:a resp end:done start user calls:a resp hold:a", ReasonInputRequired},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -271,6 +273,23 @@ func TestCallState(t *testing.T) {
 				t.Errorf("State = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestCallsRepeatedID: a function call that repeats the call ID of an
+// earlier call with its output is a call of its own, and what follows
+// it is its own; a repeat before the earlier call's output is the same
+// call written again.
+func TestCallsRepeatedID(t *testing.T) {
+	calls := Calls(seg(t, "calls:a resp dispatch:a out:a resp calls:a resp hold:a"))
+	if len(calls) != 2 {
+		t.Fatalf("%d calls, want 2", len(calls))
+	}
+	if calls[0].Pending() || len(calls[0].Decisions) != 0 {
+		t.Errorf("first call: pending %v, %d decisions; want its output and none", calls[0].Pending(), len(calls[0].Decisions))
+	}
+	if !calls[1].Held() || calls[1].Dispatch != nil {
+		t.Errorf("second call: held %v, dispatch %v; want held and none", calls[1].Held(), calls[1].Dispatch)
 	}
 }
 

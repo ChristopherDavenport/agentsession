@@ -19,8 +19,8 @@ versions may break the API.
   `VerifyRecords`. A call an earlier run left and this run does not
   touch is still not its call, and is not in its `pending` list:
   `Session.PendingCalls` reads every call the path left open. `source`
-  follows: a run whose segment starts with a decision or dispatch for
-  such a call is a `resume`, where the RFC asked for its output.
+  follows: a run whose segment takes up such a call by a decision or
+  dispatch is a `resume`, where the RFC asked for its output.
 - **`CallRejected`.** A call whose `reject` is on the path and whose
   refusal output is not, since the record stopped between the two,
   reads as `CallRejected` rather than the state its dispatches implied,
@@ -35,6 +35,11 @@ versions may break the API.
   `answer`. `VerifyRecords` reports both in a file another writer
   produced. A `hold` after a `reject` read as a call waiting on an
   answer. This also refuses an `answer` after a `reject` (#103).
+- **A repeated call ID names the later call once the earlier has its
+  output.** `Calls` folded every repeat into the first call, so a
+  later call's decisions, dispatch and output landed on the earlier
+  one; `Append` checks the latest call with the ID. Whether a call ID
+  may repeat on a path at all is #121.
 - **0.9 is amended in place.** A 0.9 file v0.0.12 wrote may fail
   `VerifyRecords` under these rules: a run end whose run took up a call
   made before its segment and left it without an output, a decision

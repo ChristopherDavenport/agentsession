@@ -231,7 +231,10 @@ func Calls(path []Entry) []*Call {
 		case *ItemEntry:
 			switch it := v.Item.(type) {
 			case *openresponses.FunctionCall:
-				if _, seen := byID[it.CallID]; seen {
+				// A call ID a later call repeats names the later call
+				// once the earlier has its output; before that the
+				// repeat is the same call written again.
+				if c, seen := byID[it.CallID]; seen && c.Output == nil {
 					continue
 				}
 				c := &Call{Entry: v, Call: it}
@@ -285,6 +288,17 @@ func (c *Call) endingDecision() *DecisionEntry {
 	for _, d := range c.Decisions {
 		if d.Verdict == VerdictReject || d.Verdict == VerdictAnswer {
 			return d
+		}
+	}
+	return nil
+}
+
+// lastCall returns the last of the calls with the call ID, which is the
+// one a decision, dispatch or output appended now names, or nil.
+func lastCall(calls []*Call, callID string) *Call {
+	for i := len(calls) - 1; i >= 0; i-- {
+		if calls[i].ID() == callID {
+			return calls[i]
 		}
 	}
 	return nil
