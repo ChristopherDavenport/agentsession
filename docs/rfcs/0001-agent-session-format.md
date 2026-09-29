@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.7
+Status: draft 0.8
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -188,7 +188,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.7","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.8","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -582,11 +582,25 @@ readers treat it as opaque.
 `instructions_omitted` records the parts the writer considered and
 left out, each with its `id`, a `reason` in the writer's own terms,
 the `size` in bytes it would have added, and optionally a `source`.
-It is not settings: nothing in it reaches the request, it does not
-replay, and it applies to the entry that carries it. It is where a
+It is where a
 walk that dropped an instruction file for a budget, or a memory the
 render left out, is recorded, so a session says what the model was not
 given as well as what it was.
+
+Nothing in the list reaches the request, and the `request_hash` does
+not cover it, but it stays in force as settings do, so a writer whose
+omissions do not change between turns writes them once:
+
+- The list in force is the one the last `config` entry on the path
+  that carries the member wrote, whole: a later entry with the member
+  replaces the list, it does not add to it.
+- A delta without the member leaves the list as it was. A delta with
+  `replace: true` and without the member clears it with the rest of
+  the settings, and `[]` clears it explicitly.
+- A `config` entry MAY carry the member and no setting, when what was
+  left out changed and nothing in force did.
+- A compaction's `config` checkpoint carries the list in force, below,
+  and the list after the compaction starts from it.
 
 ### `compaction`
 
@@ -634,12 +648,15 @@ Replaces earlier context with a summary.
 
   ```json
   {"model":"…","instructions":"…","instructions_parts":[…],
+   "instructions_omitted":[…],
    "reasoning":{…},"text":{…},"tools":[…],"extra":{…}}
   ```
 
   `instructions_parts`, when the checkpoint carries it, is the full
   list of parts in force, each with its text, not a delta, and
-  `instructions` is their join. `tools` is the full list of tool
+  `instructions` is their join. `instructions_omitted` is the list of
+  omitted parts in force, and a checkpoint without it has none in
+  force. `tools` is the full list of tool
   definitions in force at the compaction, in the order the context
   algorithm would send them, not a delta; there are no `tools_added`, `tools_removed` or `replace`
   members. `extra` is the merged map of passthrough request members
@@ -695,9 +712,13 @@ Why a run started and how it ended. Two entries per run, paired by
   one opaque string. A writer that holds a trigger's parts SHOULD write
   them here rather than joined into `ref`, since a joined string cannot
   be split back. Anything richer, such as when a scheduled firing was
-  due or which attempt at it this is, goes in members of the `run`
-  entry this document does not define, which the envelope section says
-  a rewriter preserves.
+  due or which attempt at it this is, SHOULD go in members of
+  `trigger` this document does not define, as `queued` says, so the
+  one object carries the firing from the `queued` entry to the `item`
+  that drains it and the `run` it starts. Such facts written in
+  members of the `run` entry itself, where 0.6 and 0.7 put them, are
+  valid still, and the envelope section says a rewriter preserves
+  both.
 - `reason` is closed. Each value is a shape of the run's segment, the
   entries on the path from the `start` entry to the `end` entry, where
   a pending call is a `function_call` on the segment with no
@@ -766,7 +787,7 @@ A call was handed to its tool.
 
 ```json
 {"type":"dispatch","id":"…","parent":"…","ts":"…",
- "call_id":"call_…","target":"entry-id"}
+ "call_id":"call_…","target":"entry-id","idempotency_key":"…"}
 ```
 
 `call_id` and `target` are required; `target` is the `item` entry
@@ -776,13 +797,29 @@ stopped, and its side effect may have happened. When the header names
 `dispatch` in `records`, a call with neither was never started;
 otherwise the file does not say whether it ran. A writer that names
 `dispatch` MUST write it, durably, before the tool runs, and no writer
-may write it for a call that was rejected. A `dispatch` with no
+may write it for a call that was rejected or answered. A `dispatch` with no
 `decision` before it on the path means no decision was recorded for
 the call, which under the rule in `decision` is the shape of a routine
 approval as much as of no decider at all; a writer that records no
 decisions produces a valid file. A call cancelled after its `dispatch`
-carries no decision: its `function_call_output`, or the absence of
-one, is the record.
+while the harness was running it carries no decision: its
+`function_call_output`, or the absence of one, is the record. A call
+answered after the record stopped, without being handed to its tool
+again, carries an `answer` decision, below.
+
+- `idempotency_key` is optional: the key the harness gave the tool for
+  this hand-off, in the harness's own terms, so that a tool that makes
+  a second run safe by its key is handed the same key after a crash.
+  The record holds it because the key has to outlive the process that
+  minted it. A call run again carries the key of its first `dispatch`.
+- Each `dispatch` for a call is one hand-off to its tool, in path
+  order. A second `dispatch` for the same call means the harness ran it
+  again: after a restart, a call that was in flight when the record
+  stopped and that its tool says is safe to run twice. It is written as
+  durably as the first, so a crash during the re-run is told from the
+  first crash, and a reader counts the times the tool may have run by
+  counting them. A call with several dispatches and no output was in
+  flight at its last one.
 
 ### `decision`
 
@@ -791,7 +828,7 @@ A call's fate was decided outside the tool.
 ```json
 {"type":"decision","id":"…","parent":"…","ts":"…",
  "call_id":"call_…","target":"entry-id",
- "verdict":"proceed|reject|hold","by":"human|policy|agent",
+ "verdict":"proceed|reject|hold|answer","by":"human|policy|agent",
  "reason":"…","args":{…}}
 ```
 
@@ -810,14 +847,31 @@ A call's fate was decided outside the tool.
   - `hold`: this decision neither let the call go nor ended it. The
     call waits. A call is held while its latest decision is a `hold`
     with no `dispatch` and no `reject` after it on the path.
+  - `answer`: this decision ended a call that may already have run,
+    with an output the harness wrote rather than one its tool
+    returned. It is the answer to a call in flight when the record
+    stopped, or to one the file cannot say about, that the harness
+    does not hand to its tool again, such as a call whose tool cannot
+    say that a second run is safe and whose outcome is therefore
+    unknown. No `dispatch` follows, and a `function_call_output` for
+    the call follows; `by` says who answered and `reason` why. A
+    writer writes `answer` only for a call with a `dispatch` on the
+    path or, in a file whose header does not name `dispatch` in
+    `records`, one with neither a `dispatch` nor an output. A call
+    the record shows never started did not run, and a writer that ends
+    one without running it writes `reject`.
 
   A call may carry several decisions on the path, in order. An answered
-  `hold` is followed by a `proceed`, a `dispatch` or a `reject` on the
-  same call and stays as written; a call still held is what makes a run end
-  `input_required`. There is no separate verdict for an answer. A
+  `hold` is followed by a `proceed`, a `dispatch`, a `reject` or an
+  `answer` on the same call and stays as written; a call still held is
+  what makes a run end `input_required`. The decision that answers a
+  `hold` says by its verdict what the answer did. A
   writer SHOULD write `proceed` only when it answers an earlier `hold`
-  or carries `args`; otherwise the `dispatch` is the record that the
-  call proceeded.
+  or carries `args`, or lets a call that may have run go to its tool
+  again; otherwise the `dispatch` is the record that the call
+  proceeded. With these, a reader tells a call that ran once, one
+  dispatch and its output, from one that ran twice, two, and from
+  one answered without running again, a `dispatch` and an `answer`.
 - `call_id`, `target` and `verdict` are required. `reason` is required
   when `verdict` is `reject`, since it is what the model saw as the
   output and what tells a rejected call from a tool failure; otherwise
@@ -827,7 +881,8 @@ A call's fate was decided outside the tool.
 - `args`, when present, are the arguments the tool ran with when a
   decision rewrote them. The `function_call` item stays as the model
   produced it, so the request hash still verifies; the change is
-  recorded beside the call, never inside it.
+  recorded beside the call, never inside it. `args` on an `answer`
+  names nothing, since no tool ran with them.
 
 A `decision` is a lifecycle fact and carries no score. A judgement of
 how something went is an `outcome`.
@@ -859,6 +914,14 @@ end.
   joins a run already in flight lives, since the `run` start's
   `trigger` and `ref` name what started the run and not what arrived
   during it: two people steering one run are two triggers.
+- Members of `trigger` beyond `kind`, `ref` and `source` are the
+  harness's, for what it knows about the arrival beyond those three:
+  when a scheduled firing was due and which attempt at it this is, so
+  a 03:00 slot that fires at 09:00 behind a busy run keeps its slot.
+  A reader keeps them as written, as the envelope section says of any
+  member this document does not define, and wherever a `trigger`
+  object appears, on a `run` start or as an `item`'s `source`, the
+  same holds.
 - `ref` names the queued input in the harness's own terms, for a
   caller holding a handle to it.
 - A `queued` entry with no `item` entry naming it in `queued_from`,
@@ -871,8 +934,9 @@ end.
   one as nothing having been queued.
 
 The `item` entry that drains a queued input carries two optional
-members: `source`, the trigger the queued entry held, and
-`queued_from`, the ID of that entry. `source` on an `item` is not
+members: `source`, the trigger the queued entry held, the whole
+object with any members of its own, and `queued_from`, the ID of that
+entry. `source` on an `item` is not
 restricted to a drained input: any item a person or another system
 sent rather than the model or the loop may carry it.
 
@@ -1069,7 +1133,8 @@ list as follows.
    honouring `replace`. A `config` that carries `instructions_parts`
    resolves them against the parts in force, as that member defines,
    and the settings' instructions are the resolved parts joined with
-   one blank line.
+   one blank line. The list of omitted parts in force replays beside
+   them, as `instructions_omitted` defines, and reaches no request.
 3. Find the last `compaction` on the path, if any. If found:
    settings start from its `config` checkpoint and then replay any
    `config` after it; the item list starts with its `summary`, then its
@@ -1216,8 +1281,11 @@ a **list** in either place, in the runs' own order: a run that
 produces no step, which is what a refusal on resume is, would
 otherwise be replaced by the next run's record, and a reader needs a
 rule for which record is which when several land in one place. A
-call's decisions and dispatch travel under `calls`, keyed by call ID,
-in the `extra` of the agent step that produced the call; a queued
+call's decisions and its first dispatch travel under `calls`, keyed by
+call ID, in the `extra` of the agent step that produced the call, and
+a call handed to its tool more than once carries every dispatch there
+too, in path order, as the list `dispatches`, so the count survives
+the projection; a queued
 input travels as a list under `queued`, and the step of the item that
 drained one carries its trigger under `source`; a fold's usage
 travels under `usage` in its system step's `extra`, and a fold's
@@ -1248,6 +1316,9 @@ Spans emitted for a session carry `session.id` and the entry ID of the
 entry they correspond to. Tool spans link to the inference span whose
 output contained the call; each inference span links to the previous
 turn's; the first span after a branch links to the branched-from entry.
+A tool span covers one hand-off, so a call with several `dispatch`
+entries has a span for each, and each after the first links to the one
+before it.
 
 ## Versioning
 
@@ -1265,13 +1336,12 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.7 reads a 0.5 or 0.6 file as it
-stands, since 0.6 and 0.7 add only optional members and the hashes do
-not change; a member a later minor defines that an earlier file holds
+it begins at 1.0. A reader of 0.8 reads a 0.5, 0.6 or 0.7 file as it
+stands, since 0.6, 0.7 and 0.8 add only optional members and the
+hashes do not change; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.7 MUST read an earlier 0.x
-file by migrating it in memory: walk the entries in file order, rewrite
+of 0.8 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -1316,9 +1386,14 @@ UTF-8 replaced with its `raw`, 2^60 written as its canonical rendering
 found in its origin, an instructions delta naming runs of parts by
 `keep` beside the parts it rebuilds, a `response` with `attempts`, an
 `env` whose `workspace` holds a host and an instance and a later one
-that substitutes another instance, the recomputed `reason` for every `run` end, and
+that substitutes another instance, a call dispatched twice under one
+`idempotency_key` beside a call answered after a crash, a list of
+omitted parts in force across a delta, carried by a compaction's
+checkpoint and cleared by `[]`, a queued `trigger` with members of its
+own drained into an `item`'s `source`, the recomputed `reason` for
+every `run` end, and
 negative cases for a broken parent link, a truncated last line, an
-unknown type, a `dispatch` that follows a `reject`, and a header naming
+unknown type, a `dispatch` that follows a `reject` or an `answer`, and a header naming
 `dispatch` beside a call that has an output and no `dispatch`.
 Converters for pi, Claude Code and Codex are part of the initial
 proposal so the format arrives with three existing corpora behind it.
@@ -1338,6 +1413,45 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.7
+
+Additive but for one rule. One optional member, one verdict, and
+paragraphs in the `config`, `dispatch`, `run` and `queued` sections.
+No hash changes, and a 0.7 file is a 0.8 file with none of the new
+members, with one exception: `instructions_omitted`, which 0.7 said
+applied to the entry that carried it, is in force in 0.8 until a later
+`config` changes it, so a 0.7 file whose writer relied on its absence
+to say that nothing was left out reads the last list it wrote as still
+in force, and a 0.7 compaction, whose checkpoint has no list, clears
+it. Nothing in the list reaches a request, so no context and no
+`request_hash` changes with it, and the reference library already read
+the last non-empty list among a context's entries as the one in force.
+
+- `instructions_omitted` stays in force as settings do: a delta
+  without it leaves it, `[]` or a `replace` without it clears it, and
+  a compaction's checkpoint carries it. Under 0.7 a writer with a
+  memory larger than its budget repeated every omitted part on every
+  delta, and 474 of them cost 37 KB a turn, more than the joined
+  string the parts were meant to beat.
+- A `dispatch` carries `idempotency_key`, the key the harness gave the
+  tool, so a tool that makes a second run safe by its key gets the same
+  one after a crash; a key that lives only in memory does not survive
+  the crash it is for.
+- Each `dispatch` for a call is one hand-off to its tool, and a second
+  one means the call ran again. 0.7 accepted a second and said nothing
+  of it, and readers kept one. The ATIF projection lists every one, and
+  a tool span covers one hand-off.
+- A `decision` with the verdict `answer` ends a call that may already
+  have run with an output the harness wrote rather than one its tool
+  returned, and says who gave it and why. 0.7 had no verdict for it:
+  `proceed` says the call went on toward its tool, which it did not,
+  and `reject` says no `dispatch` came before, which is false.
+- Members of a `trigger` beyond `kind`, `ref` and `source` are the
+  harness's, kept as written wherever the object appears, so a queued
+  firing keeps when it was due and which attempt it is. 0.6 put those
+  facts in members of the `run` entry, which a queued input has no
+  place for; they are valid there still.
 
 ## Changes since 0.6
 
