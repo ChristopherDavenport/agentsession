@@ -32,9 +32,10 @@ versions may break the API.
   required member left out or a value the reader does not reproduce is
   refused as before. The RFC says preservation holds at every depth.
   `Read` canonicalises the typed encoding once, and a line that equals
-  it, as every conforming writer's does, is hashed as it stands without
-  being decoded and re-encoded again, so reading is faster than before:
-  about a fifth in the read benchmark. (#89)
+  it, as a canonical line the typed fields hold whole does, is hashed as
+  it stands without being decoded and re-encoded again, so reading is
+  faster than before: about a fifth in the read benchmark. A line with
+  members kept as read takes the slower comparison. (#89)
 - **Who closes a run left open.** A rewind into a run leaves it open on
   the new path, as a crash leaves one open at the leaf; RFC 0001 now
   says the writer that continues such a path closes the run before
