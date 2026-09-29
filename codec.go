@@ -87,7 +87,7 @@ func Read(r io.Reader) (*Session, error) {
 			s = New(h)
 			s.migrated = m != nil
 		} else {
-			e, form, err := decodeLine(data)
+			e, form, canonical, err := decodeLine(data)
 			if err != nil {
 				// Only a last line that is not JSON is a truncated line,
 				// which a crash mid-append leaves behind. A last line
@@ -105,7 +105,7 @@ func Read(r io.Reader) (*Session, error) {
 				s.truncated = &TruncatedLine{Line: line, Data: append([]byte(nil), data...), Err: err}
 				break
 			}
-			if err := s.link(e, m, form); err != nil {
+			if err := s.link(e, m, form, canonical); err != nil {
 				return nil, fmt.Errorf("agentsession: line %d: %w", line, err)
 			}
 		}
@@ -143,8 +143,9 @@ type migration struct {
 // once and reported.
 //
 // form is the entry's typed encoding as read, which a 0.5 line is
-// hashed from rather than encoded again; nil encodes it.
-func (s *Session) link(e Entry, m *migration, form []byte) error {
+// hashed from rather than encoded again; nil encodes it. canonical says
+// form is canonical and equal to the line, so it is hashed as it stands.
+func (s *Session) link(e Entry, m *migration, form []byte, canonical bool) error {
 	b := e.Base()
 	if m != nil {
 		if err := m.rewrite(e, s); err != nil {
@@ -158,14 +159,22 @@ func (s *Session) link(e Entry, m *migration, form []byte) error {
 			return fmt.Errorf("%w: ts %q is not in the one form the format admits", ErrBadID, b.tsRaw)
 		}
 		want := b.ID
-		if form != nil && len(b.kept) > 0 {
-			var err error
-			if form, err = restoreKept(form, b.kept); err != nil {
+		if canonical {
+			id, content, err := entryHashesCanonical(form)
+			if err != nil {
 				return err
 			}
-		}
-		if err := s.hashEntry(e, form); err != nil {
-			return err
+			b.ID, b.content = id, content
+		} else {
+			if form != nil && len(b.kept) > 0 {
+				var err error
+				if form, err = restoreKept(form, b.kept); err != nil {
+					return err
+				}
+			}
+			if err := s.hashEntry(e, form); err != nil {
+				return err
+			}
 		}
 		if b.ID != want {
 			return fmt.Errorf("%w: line says %s, hashes to %s", ErrBadID, want, b.ID)

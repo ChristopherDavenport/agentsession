@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -91,5 +92,52 @@ func TestHashRequestJSONIsCanonical(t *testing.T) {
 	}
 	if _, err := HashRequestJSON([]byte(`{"model":`)); err == nil {
 		t.Error("malformed request hashed")
+	}
+}
+
+// TestEntryHashesCanonical: the fast path Read takes for a canonical
+// line gives the hashes EntryHashes gives, for every entry line of every
+// fixture and for lines built to trip a slicer: brackets and quotes
+// inside strings, escaped keys, and parents spelled empty or null.
+func TestEntryHashesCanonical(t *testing.T) {
+	var lines [][]byte
+	paths, err := filepath.Glob(filepath.Join("testdata", "sessions", "*.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+			if i > 0 && json.Valid(line) {
+				lines = append(lines, line)
+			}
+		}
+	}
+	lines = append(lines,
+		[]byte(`{"type":"custom","ns":"a","data":{"s":"}]\"{[","k\"ey":[1,{"x":"]"}]},"parent":null,"ts":"2026-09-17T16:00:01Z"}`),
+		[]byte(`{"type":"info","name":"n","parents":[],"parent":"sha256:00","ts":"2026-09-17T16:00:01Z"}`),
+		[]byte(`{"type":"info","name":"n","parents":null,"parent":"sha256:00","ts":"2026-09-17T16:00:01Z"}`),
+		[]byte(`{"type":"info","name":"é😀","parents":[{"entry":"sha256:01"}],"parent":"sha256:00","ts":"2026-09-17T16:00:01Z"}`),
+		[]byte(`{"type":"info","parent":null,"ts":"2026-09-17T16:00:01Z"}`),
+	)
+	if len(lines) < 50 {
+		t.Fatalf("only %d lines; the test proves little", len(lines))
+	}
+	for _, line := range lines {
+		wantID, wantContent, err := EntryHashes(line)
+		if err != nil {
+			continue // a negative fixture's line
+		}
+		c, err := jcs.Transform(line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, content, err := entryHashesCanonical(c)
+		if err != nil || id != wantID || content != wantContent {
+			t.Errorf("canonical hashes %s %s %v, want %s %s\nline %s", id, content, err, wantID, wantContent, line)
+		}
 	}
 }

@@ -563,65 +563,67 @@ func MarshalEntry(e Entry) ([]byte, error) {
 // UnmarshalEntry decodes one line, dispatching on its type. Types this
 // package does not define decode to [*UnknownEntry].
 func UnmarshalEntry(data []byte) (Entry, error) {
-	e, _, err := decodeLine(data)
+	e, _, _, err := decodeLine(data)
 	return e, err
 }
 
 // decodeLine is UnmarshalEntry that also returns the entry's typed
 // encoding as read, before kept members are restored, which Read
-// hashes rather than encoding the entry a second time. It is nil for an
+// hashes rather than encoding the entry a second time; canonical says
+// it is already canonical and equal to the line. It is nil for an
 // extension entry.
-func decodeLine(data []byte) (Entry, []byte, error) {
+func decodeLine(data []byte) (e Entry, form []byte, canonical bool, err error) {
 	// The line is split into its members once; the envelope, the
 	// unknown-member check and, for item entries, the body all read
 	// from the split, so a large line is not parsed again for each.
 	all, err := splitMembers(data)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	env, err := envelopeFrom(all)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	if env.Type == "" {
-		return nil, nil, errors.New("agentsession: entry has no type")
+		return nil, nil, false, errors.New("agentsession: entry has no type")
 	}
 	if env.ID == "" {
-		return nil, nil, fmt.Errorf("agentsession: %s entry has no id", env.Type)
+		return nil, nil, false, fmt.Errorf("agentsession: %s entry has no id", env.Type)
 	}
 	if env.TS.IsZero() {
-		return nil, nil, fmt.Errorf("agentsession: entry %s has no ts", env.ID)
+		return nil, nil, false, fmt.Errorf("agentsession: entry %s has no ts", env.ID)
 	}
-	var e memberDecoder = &UnknownEntry{}
+	var d memberDecoder = &UnknownEntry{}
 	if mk, ok := coreEntries[env.Type]; ok {
-		e = mk()
+		d = mk()
 	}
-	form, err := decodeForm(e, data, all)
+	form, canonical, err = decodeForm(d, data, all)
 	if err != nil {
-		return nil, nil, fmt.Errorf("agentsession: entry %s (%s): %w", env.ID, env.Type, err)
+		return nil, nil, false, fmt.Errorf("agentsession: entry %s (%s): %w", env.ID, env.Type, err)
 	}
-	return e, form, nil
+	return d, form, canonical, nil
 }
 
 // finishDecode decodes a split line into e and, for a core entry,
 // remembers what its typed fields could not hold.
 func finishDecode(e memberDecoder, data []byte, all map[string]json.RawMessage) error {
-	_, err := decodeForm(e, data, all)
+	_, _, err := decodeForm(e, data, all)
 	return err
 }
 
 // decodeForm is finishDecode returning the typed encoding keepAsRead
-// compared the line with, nil for an extension entry.
-func decodeForm(e memberDecoder, data []byte, all map[string]json.RawMessage) ([]byte, error) {
+// compared the line with, nil for an extension entry, and whether that
+// encoding is canonical and the line's own bytes.
+func decodeForm(e memberDecoder, data []byte, all map[string]json.RawMessage) ([]byte, bool, error) {
 	if err := e.decodeMembers(data, all); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if _, unknown := e.(*UnknownEntry); unknown {
-		return nil, nil // written back from its raw line
+		return nil, false, nil // written back from its raw line
 	}
-	form, typed, suspect, err := keepAsRead(e, all)
+	form, typed, suspect, canonical, err := keepAsRead(e, data, all)
 	if err != nil || len(suspect) == 0 {
-		return form, err
+		return form, canonical, err
 	}
 	// A member did not reproduce, or held more than the fields encode.
 	// Where that is Go's decoder matching a key in another case to a
@@ -629,12 +631,12 @@ func decodeForm(e memberDecoder, data []byte, all map[string]json.RawMessage) ([
 	// such keys.
 	clean, folded, changed := unfold(all, typed, suspect, definedMembers(e))
 	if !changed {
-		return form, nil
+		return form, false, nil
 	}
 	rv := reflect.ValueOf(e).Elem()
 	rv.Set(reflect.Zero(rv.Type()))
 	if err := e.decodeMembers(jsonx.JoinObjects([]byte("{}"), []byte("{}"), clean), clean); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(folded) > 0 {
 		b := e.Base()
@@ -645,8 +647,8 @@ func decodeForm(e memberDecoder, data []byte, all map[string]json.RawMessage) ([
 			b.Unknown[k] = v
 		}
 	}
-	form, _, _, err = keepAsRead(e, all)
-	return form, err
+	form, _, _, canonical, err = keepAsRead(e, data, all)
+	return form, canonical, err
 }
 
 // definedMembers returns the member names an entry's type defines: its
@@ -713,18 +715,25 @@ var untracked = map[string]bool{"id": true, "type": true, "parent": true, "ts": 
 // out or a decoder fault, and it stays refused, since its hash is then
 // computed from what the reader understood. suspect names every member
 // that did not reproduce exactly, remembered or not.
-func keepAsRead(e Entry, all map[string]json.RawMessage) ([]byte, map[string]json.RawMessage, map[string]bool, error) {
+//
+// A conforming writer's line is canonical, so the typed encoding
+// canonicalised once is usually the line's own bytes, and then there is
+// nothing to compare member by member: keepAsRead returns that canonical
+// encoding with canonical set, which Read hashes as it stands.
+func keepAsRead(e Entry, data []byte, all map[string]json.RawMessage) (form []byte, typed map[string]json.RawMessage, suspect map[string]bool, canonical bool, err error) {
 	b := e.Base()
 	b.kept = nil
-	form, err := jsonx.MarshalNoEscape(e)
+	form, err = jsonx.MarshalNoEscape(e)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, false, err
 	}
-	typed, err := splitMembers(form)
+	if c, err := jcs.Transform(form); err == nil && bytes.Equal(c, data) {
+		return c, nil, nil, true, nil
+	}
+	typed, err = splitMembers(form)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, false, err
 	}
-	var suspect map[string]bool
 	mark := func(key string) {
 		if suspect == nil {
 			suspect = map[string]bool{}
@@ -740,8 +749,6 @@ func keepAsRead(e Entry, all map[string]json.RawMessage) ([]byte, map[string]jso
 			continue
 		}
 		if ok {
-			// A conforming writer's line is canonical, so the typed
-			// encoding canonicalised is usually the line's own bytes.
 			if c, err := jcs.Transform(seen); err == nil && bytes.Equal(raw, c) {
 				continue
 			}
@@ -774,7 +781,7 @@ func keepAsRead(e Entry, all map[string]json.RawMessage) ([]byte, map[string]jso
 			b.keep(key, nil, seen)
 		}
 	}
-	return form, typed, suspect, nil
+	return form, typed, suspect, false, nil
 }
 
 // foldKey is key under simple case folding, which is how Go's decoder
