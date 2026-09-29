@@ -1355,8 +1355,9 @@ minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
 it begins at 1.0. A reader of 0.8 reads a 0.5, 0.6 or 0.7 file as it
-stands, since 0.6, 0.7 and 0.8 add only optional members and the
-hashes do not change; a member a later minor defines that an earlier file holds
+stands, since 0.6, 0.7 and 0.8 add optional members and the hashes do
+not change, save for the few rules each minor's changes below say read
+an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
 of 0.8 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
@@ -1437,22 +1438,22 @@ dispatches and decisions, environment, outcome and cross-session links.
 Additive but for two rules. One optional member, one verdict, and
 paragraphs in the `config`, `dispatch`, `decision`, `run` and `queued`
 sections. No hash changes, and a 0.7 file is a 0.8 file with none of
-the new members, with two exceptions:
-
-- `instructions_omitted`, which 0.7 said applied to the entry that
-  carried it, is in force in 0.8 until a later `config` changes it, so
-  a 0.7 file whose writer relied on its absence to say that nothing
-  was left out reads the last list it wrote as still in force, and a
-  0.7 compaction, whose checkpoint has no list, clears it. Nothing in
-  the list reaches a request, so no context and no `request_hash`
-  changes with it, and the reference library already read the last
-  non-empty list among a context's entries as the one in force.
-- A run whose pending call is held after its `dispatch` ends
-  `input_required`. 0.7 held such a call too, but its `input_required`
-  step asked that no pending call have a `dispatch` at all, so that
-  segment read `aborted`; in 0.8 the step asks that none be in flight,
-  and a held call is not. The call still reads as one that may have
-  run.
+the new members, with two exceptions. First, `instructions_omitted`,
+which 0.7 said applied to the entry that carried it, is in force in
+0.8 until a later `config` changes it, so a 0.7 file whose writer
+relied on its absence to say that nothing was left out reads the last
+list it wrote as still in force, and a 0.7 compaction, whose
+checkpoint has no list, clears it. Nothing in the list reaches a
+request, so no context and no `request_hash` changes with it, and the
+reference library already read the last non-empty list among a
+context's entries as the one in force. Second, a run whose pending
+call is held after its `dispatch` ends `input_required`. 0.7 held such
+a call too, but its `input_required` step asked that no pending call
+have a `dispatch` at all, so that segment read `aborted`; in 0.8 the
+step asks that none be in flight, and a held call is not. The call
+still reads as one that may have run, and a 0.7 `run` end that wrote
+`aborted` for that segment no longer agrees with the `reason` a 0.8
+reader recomputes.
 
 - `instructions_omitted` stays in force as settings do: a delta
   without it leaves it, `[]` or a `replace` without it clears it, and

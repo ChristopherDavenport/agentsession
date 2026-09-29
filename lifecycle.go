@@ -150,8 +150,10 @@ type DispatchEntry struct {
 	CallID    string `json:"call_id"`
 	Target    string `json:"target"`
 	// IdempotencyKey is the key the harness gave the tool for this
-	// hand-off. A call run again carries the key of its first dispatch,
-	// which [Call.IdempotencyKey] returns. An idempotency_key member
+	// hand-off. A dispatch that repeats an earlier hand-off carries that
+	// hand-off's key, and a new key is a new operation; the last
+	// dispatch's key is what [Call.IdempotencyKey] returns. An
+	// idempotency_key member
 	// that is not a non-empty string, which a file from before the
 	// member was defined may hold, is kept as written in Unknown and
 	// IdempotencyKey is empty.
