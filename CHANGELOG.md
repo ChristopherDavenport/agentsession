@@ -33,6 +33,65 @@ versions may break the API.
   in a replace, which discards the list it counts over. `describe`
   prints a keep as `+n`, and `show` an unresolved one. The writer half,
   writing keep runs, is agentturn/session's. (#115)
+- **cas packs its objects, as git does.** Each envelope and body was a
+  file of its own, so a store of 220-byte objects took several times
+  its bytes on disk. `Store.Pack` moves loose objects into one
+  immutable pack with a sorted index, named by its checksum, and
+  `Sweep` is now git's gc: it repacks everything the store holds into
+  one pack and drops what nothing needs, sparing a young unneeded
+  object by writing it back loose with its pack's age. `Import` and an
+  exchange write what they bring as a pack. `Summary.Size` is the
+  bytes of the session's own objects, carried in the log, where it was
+  the size of the log. (#106)
+- **cas has a read-only open.** `WithReadOnly` takes no session lock,
+  recovers in memory and refuses every write with
+  `agentsession.ErrReadOnly`, so an operator can read, project and
+  verify a session a harness holds, and a read of an idle one no
+  longer locks the harness out of it. (#107)
+- **The cas journal is checksummed, and recovery only adds.** A
+  flipped byte in a journal record was skipped as a torn write, and
+  recovery then rewrote the intact log without that append, or left a
+  session that would not open. Each record now ends in a CRC-32C, and
+  a whole line that does not read is reported as damage; a crash cuts
+  a record short only at the journal's end. A log holding entries the
+  journal lacks keeps them, and the head does not move back past them.
+  Records written by v0.0.11 have no checksum and read as before.
+  (#108)
+- **A cas sweep waits for writers rather than stopping, and does not
+  block its own process.** It stopped with `ErrSessionLocked` at the
+  first object a writer in another process held, and held the store's
+  mutex for its whole run. It now builds its keep set and pack without
+  either, waits for writers until its context ends, and holds the
+  sweep lock only for a short last step that rescues anything
+  committed since it looked. A second sweep or pack gets
+  `ErrSweepRunning`. (#109)
+- **cas appends cost fewer fsyncs, and a writer may choose when to
+  pay them.** HEAD, the log and the mark are indexes the journal
+  rebuilds, now written without an fsync, and a commit syncs each
+  directory it touched once: a durable append is five fsyncs where it
+  was seven. `WithSync` takes jsonl's policies, `SyncEveryAppend`,
+  `SyncOnResponse` and `SyncNever`, with `Store.Sync`; a lazy append's
+  record says so, the next durable commit flushes its objects first,
+  and after a crash a lazy append whose objects were lost is gone with
+  what followed it, not damage. `Result.Durable` says which an append
+  got. (#110)
+- **cas List and Delete after a crash.** List no longer yields an
+  error for a directory a crash left without a header, nor lists a
+  session the journal deleted, and Delete succeeds once its record is
+  committed, leaving the directory to recovery. (#111)
+- **cas push and fetch.** `Store.Push` and `Store.Fetch` carry a
+  session's closure between two stores as RFC 0002's exchange section
+  describes: admission parent first as one pack, the log merged as a
+  set, the head moved by compare-and-swap or force on a push and only
+  forward on a mirror's fetch, a push only from the record, and a
+  handover that makes the receiver the record before the sender a
+  mirror. A mirror can now follow its record. (#113)
+- **cas names a corrupt object, and verifies a whole store.** Every
+  object read is checked against its name, and one that fails is
+  reported as `ErrCorrupt` with its hash and path, where it surfaced as
+  a bad line of a file cas assembled, once for each session sharing
+  it. `Store.Verify` walks the store as git fsck does: journal records,
+  loose objects, packs, every entry held and every session. (#114)
 - **`sqlite.Open` refuses another program's table of its names.** A
   file holding a foreign `entries` table, such as the one
   agentmemory/sqlite v0.0.5 wrote, failed with `no such column: id`
