@@ -208,10 +208,8 @@ func applyInstructionParts(prev, delta []InstructionPart) []InstructionPart {
 	return out
 }
 
-// unresolvedParts reports whether any part still carries the hash it
-// was named by or the keep it was taken by, which is what
-// [applyInstructionParts] leaves behind for parts whose text is not on
-// the path.
+// unresolvedParts reports whether any part is one the path could not
+// rebuild: see [InstructionPart.Unresolved].
 func unresolvedParts(parts []InstructionPart) bool {
 	for _, p := range parts {
 		if p.Unresolved() {
@@ -261,7 +259,9 @@ func (s Settings) InstructionsDelta(parts []InstructionPart) *ConfigEntry {
 		// so a part whose source moved, cleared above all, carries its
 		// text even when the text did not change: neither form can say
 		// "this part has no source now".
-		if !ok || s.InstructionsParts[j].Text != p.Text || s.InstructionsParts[j].Source != p.Source {
+		// A part in force the path could not rebuild is written out, so
+		// the delta resolves it rather than keeping what is missing.
+		if !ok || s.InstructionsParts[j].Unresolved() || s.InstructionsParts[j].Text != p.Text || s.InstructionsParts[j].Source != p.Source {
 			flush()
 			out = append(out, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source})
 			if ok {

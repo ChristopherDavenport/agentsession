@@ -338,8 +338,8 @@ func (w *Workspace) UnmarshalJSON(data []byte) error {
 // SameWorkspace reports whether two workspace members are the same
 // under the format's substitution rule: compared member by member in
 // their canonical form, the ones the format does not define included,
-// and an absent one equal only to another absent one. An empty Kind or
-// Ref is an absent member, since neither is written. An env entry whose workspace is not the same as
+// and an absent one equal only to another absent one. An empty kind or
+// ref is the same as an absent one, as the format says. An env entry whose workspace is not the same as
 // the one in force before it on the path is a substitution.
 func SameWorkspace(a, b *Workspace) bool {
 	if a == nil || b == nil {

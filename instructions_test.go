@@ -886,3 +886,30 @@ func TestCompactionLeavesUnresolvedPartsOut(t *testing.T) {
 		t.Errorf("checkpoint = %+v", c.Config)
 	}
 }
+
+// TestInstructionsTextAndHash: a part in force that carries its text
+// beside a hash, as a checkpoint written elsewhere may, is resolved;
+// and a delta over a part in force that is not writes its text, so the
+// next delta resolves it. (Second review of #94.)
+func TestInstructionsTextAndHash(t *testing.T) {
+	a := InstructionPart{ID: "a", Text: "A", Hash: HashText("A")}
+	settings := Settings{InstructionsParts: []InstructionPart{a}}
+	for _, parts := range [][]InstructionPart{
+		{{ID: "a", Hash: HashText("A")}, {ID: "b", Text: "B"}},
+		{{Keep: 1}, {ID: "b", Text: "B"}},
+	} {
+		got := settings.Apply(&ConfigEntry{InstructionsParts: parts})
+		if unresolvedParts(got.InstructionsParts) || got.Instructions != "A\n\nB" {
+			t.Errorf("%+v: instructions %q", parts, got.Instructions)
+		}
+	}
+	lost := Settings{}.Apply(&ConfigEntry{InstructionsParts: []InstructionPart{{ID: "a", Hash: HashText("")}, {ID: "b", Text: "B"}}})
+	next := []InstructionPart{{ID: "a"}, {ID: "b", Text: "B"}}
+	delta := lost.InstructionsDelta(next)
+	if delta == nil {
+		t.Fatal("no delta over an unresolved part")
+	}
+	if got := lost.Apply(delta); unresolvedParts(got.InstructionsParts) || got.Instructions != JoinInstructions(next) {
+		t.Errorf("parts %+v", got.InstructionsParts)
+	}
+}

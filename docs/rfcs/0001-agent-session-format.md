@@ -925,8 +925,9 @@ then, as when a session recorded in a container is resumed on a laptop.
 Two `workspace` members are compared member by member in their
 canonical form, as the entry hash writes them, every member this
 document does not define included, and an absent one equals only
-another absent one; a new `cwd`, `vcs` revision or file
-list in the same workspace is not a substitution. Recording the
+another absent one, an empty `kind` or `ref` being absent; a new
+`cwd`, `vcs` revision or file list in the same workspace is not a
+substitution. Recording the
 substitution is the point, so a writer writes the entry and nothing
 refuses it. A reader that holds the environment fixed, such as a strict
 replay or an evaluation comparing runs, treats the path from that entry
@@ -1340,9 +1341,13 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.6
 
-Additive. Two optional members and one paragraph, and nothing a
-conforming 0.6 file holds changes meaning or hash, so a 0.6 file is a
-0.7 file with none of the new members. An element of a delta with no
+Additive but for one rule. Two optional members, and paragraphs in
+the instruction parts and `env` sections. No hash changes, and a 0.6
+file is a 0.7 file with none of the new members, with one exception: a
+part with an `id` and neither `text` nor `hash`, which 0.6 said had no
+text a reader could rebuild, is empty text in 0.7, because that is how
+a writer that omits an empty string, the reference library among
+them, wrote an empty part under 0.6. An element of a delta with no
 `id`, which a 0.7 reader may read as a `keep`, was not a 0.6 part.
 
 - A `response` carries `attempts`, the calls the model took to produce
@@ -1354,9 +1359,9 @@ conforming 0.6 file holds changes meaning or hash, so a 0.6 file is a
   composition of many small parts, a memory of a few hundred facts,
   costs that part and not an id and a hash for every other. A part
   named by `hash` leaves its `source` off, as it already kept the one
-  it had. The same paragraph says what 0.6 left open: a part with an
-  `id` and neither `text` nor `hash` has empty text, a `source` on a
-  part named by `hash` is its source, and a `hash` naming a part the
+  it had. The section also says that a part with an `id` and neither
+  `text` nor `hash` has empty text, as above, that a `source` on a part
+  named by `hash` is its source, and that a `hash` naming a part the
   path could not rebuild does not rebuild it either.
 - `env` says the members that tell one file system from another, a
   host or an instance, go inside `workspace`, so the substitution rule,

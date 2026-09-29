@@ -34,7 +34,9 @@ versions may break the API.
   compaction, parts the path could not rebuild, which the checkpoint
   now leaves out so that its `instructions` stand alone. A part with an
   id and neither text nor hash is empty text, as the writer spells
-  one, and moves the cursor like any other part named. `Append`
+  one, and moves the cursor like any other part named; 0.6 called such
+  a part unresolved, which the library never did. A delta over a part
+  in force that is unresolved writes that part's text. `Append`
   refuses a keep that carries any other member, and a replacing config
   with a keep and no string. `InstructionPart.ID` is now `omitempty`,
   since a keep has none, and `InstructionPart.Unresolved` says whether
@@ -45,9 +47,10 @@ versions may break the API.
   `ResponseEntry.Attempts` records the calls a response took when the
   failed ones were retried without an entry of their own, `Calls`
   reads it with absent as one, the ATIF step carries it, and `show`
-  prints it. `Append` refuses a negative count. The format carries the count rather than the exporter
-  counting another project's custom entries; agentturn's half is to
-  write it from its retry loop (agentturn#117). (#93)
+  prints it. `Append` refuses a negative count. The format carries the
+  count rather than the exporter counting another project's custom
+  entries; agentturn's half is to write it from its retry loop
+  (agentturn#117). (#93)
 - **A workspace holds its own host and instance.** The library told a
   writer to put a container's host beside `workspace`, where the
   substitution rule does not look, so a move to another host or a

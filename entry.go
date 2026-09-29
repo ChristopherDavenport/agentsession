@@ -277,7 +277,8 @@ type ConfigEntry struct {
 type InstructionPart struct {
 	// ID is the part's stable name, chosen by the harness: the same
 	// string across the session, so a delta can name a part it does
-	// not repeat. It is empty on a keep, and nowhere else.
+	// not repeat. It is empty on a keep, and on a part in force that
+	// an element naming nothing left unresolved.
 	ID string `json:"id,omitempty"`
 	// Text is the part's text. On a delta it is absent for a part
 	// whose text is unchanged, which carries Hash instead.
@@ -308,7 +309,7 @@ type InstructionPart struct {
 // text: it was named by a hash or a keep the path could not resolve,
 // or by an element that names nothing.
 func (p InstructionPart) Unresolved() bool {
-	return p.Hash != "" || p.Keep > 0 || p.unresolved
+	return p.Text == "" && p.Hash != "" || p.ID == "" && p.Keep > 0 || p.unresolved
 }
 
 // UnmarshalJSON decodes the part, taking keep only when it is a

@@ -1030,8 +1030,9 @@ func Fork(origin *Session, at string, h Header) (*Session, error) {
 
 // checkpoint is the settings a compaction carries. Its parts must each
 // carry their text, with the instructions their join, so parts the path
-// could not rebuild are left out and the instructions string, which is
-// the record of what was sent, stands alone.
+// could not rebuild are left out and the instructions string stands
+// alone: the string a delta carried beside them when it did, and
+// otherwise the join the request was built from.
 func checkpoint(settings Settings) Settings {
 	if unresolvedParts(settings.InstructionsParts) {
 		settings.InstructionsParts = nil
