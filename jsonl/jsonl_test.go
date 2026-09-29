@@ -633,3 +633,160 @@ func TestLockedSentinelIsShared(t *testing.T) {
 		t.Error("ErrNoSession matches ErrSessionLocked")
 	}
 }
+
+// TestRaiseFormat edits a session's header to name an earlier minor and
+// expects the first append to rewrite it to the format this package
+// writes, keeping every byte after it, while a read-only open, an open
+// alone and a session already current leave the file alone.
+func TestRaiseFormat(t *testing.T) {
+	ctx := context.Background()
+	for _, policy := range []jsonl.SyncPolicy{jsonl.SyncEveryAppend, jsonl.SyncNever} {
+		root := t.TempDir()
+		st, err := jsonl.Open(root, jsonl.WithSync(policy))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := st.Create(ctx, agentsession.Header{ID: "old", CWD: "/p"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(ctx, s.ID(), &agentsession.ConfigEntry{Model: "m"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(ctx, s.ID(), agentsession.NewItemEntry(openresponses.UserText("hello"))); err != nil {
+			t.Fatal(err)
+		}
+		path, _ := st.Path(s.ID())
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		header, rest, _ := strings.Cut(string(data), "\n")
+		current := `"format":"` + agentsession.Format + `"`
+		if !strings.Contains(header, current) {
+			t.Fatalf("header %s does not name %s", header, agentsession.Format)
+		}
+		header = strings.Replace(header, current, `"format":"agentsession/0.7"`, 1)
+		old := header + "\n" + rest
+		if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		ro, err := jsonl.Open(root, jsonl.WithReadOnly())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ro.Open(ctx, "old"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ro.Append(ctx, "old", &agentsession.InfoEntry{Name: "n"}); !errors.Is(err, agentsession.ErrReadOnly) {
+			t.Errorf("read-only Append = %v, want ErrReadOnly", err)
+		}
+		ro.Close()
+		if got, _ := os.ReadFile(path); string(got) != old {
+			t.Fatalf("a read-only open changed the file:\n%s", got)
+		}
+
+		st2, err := jsonl.Open(root, jsonl.WithSync(policy))
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := st2.Open(ctx, "old")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := os.ReadFile(path); string(got) != old {
+			t.Fatalf("an open changed the file:\n%s", got)
+		}
+		if _, err := st2.Append(ctx, again.ID(), agentsession.NewItemEntry(openresponses.UserText("again"))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st2.Append(ctx, again.ID(), &agentsession.InfoEntry{Name: "after"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st2.Close(); err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotHeader, gotRest, _ := strings.Cut(string(got), "\n")
+		if gotHeader != strings.Replace(header, `"format":"agentsession/0.7"`, current, 1) {
+			t.Errorf("header after the append = %s, want the stored one raised to %s", gotHeader, agentsession.Format)
+		}
+		if !strings.HasPrefix(gotRest, rest) {
+			t.Errorf("the entries before the append changed:\n%s\nwant a continuation of\n%s", gotRest, rest)
+		}
+		read, err := agentsession.Read(strings.NewReader(string(got)))
+		if err != nil {
+			t.Fatalf("Read of the raised file: %v", err)
+		}
+		if read.Len() != 4 || read.Header().Format != agentsession.Format {
+			t.Errorf("raised file: %d entries, format %s", read.Len(), read.Header().Format)
+		}
+		var buf strings.Builder
+		if err := agentsession.Write(&buf, read); err != nil {
+			t.Fatal(err)
+		}
+		back, err := agentsession.Read(strings.NewReader(buf.String()))
+		if err != nil {
+			t.Fatalf("Read of the written session: %v", err)
+		}
+		for i, e := range read.Entries() {
+			if back.Entries()[i].Base().ID != e.Base().ID {
+				t.Errorf("entry %d: %s after a round trip, want %s", i, back.Entries()[i].Base().ID, e.Base().ID)
+			}
+		}
+		if leftover, _ := filepath.Glob(path + ".*tmp"); len(leftover) > 0 {
+			t.Errorf("temporary files left: %v", leftover)
+		}
+	}
+}
+
+// TestRaiseFormatLeavesCurrent expects no rewrite of a session whose
+// header already names the format this package writes.
+func TestRaiseFormatLeavesCurrent(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, err := jsonl.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := st.Create(ctx, agentsession.Header{ID: "new", CWD: "/p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _ := st.Path(s.ID())
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, s.ID(), &agentsession.ConfigEntry{Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st2, err := jsonl.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	if _, err := st2.Open(ctx, "new"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st2.Append(ctx, "new", agentsession.NewItemEntry(openresponses.UserText("hi"))); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Error("a session already current was rewritten")
+	}
+}

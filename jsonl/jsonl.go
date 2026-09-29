@@ -106,6 +106,9 @@ type handle struct {
 	session *agentsession.Session
 	file    *os.File
 	path    string
+	// diskFormat is the format the file's header line names, which the
+	// session's own header does not tell once Read has migrated it.
+	diskFormat string
 }
 
 // Open returns a store over root, creating the directory if needed.
@@ -263,7 +266,7 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 		releaseLock(path)
 		return nil, fmt.Errorf("jsonl: open %s for append: %w", path, err)
 	}
-	s.open[h.ID] = &handle{session: sess, file: f, path: path}
+	s.open[h.ID] = &handle{session: sess, file: f, path: path, diskFormat: h.Format}
 	return sess, nil
 }
 
@@ -399,10 +402,15 @@ func loadHandle(path, id string, readOnly bool) (*handle, error) {
 	if sess.ID() != id {
 		return nil, fmt.Errorf("jsonl: %s holds session %s, not %s", path, sess.ID(), id)
 	}
+	line, _, _ := bytes.Cut(data, []byte{'\n'})
+	var stored agentsession.Header
+	if err := stored.UnmarshalJSON(bytes.TrimRight(line, "\r")); err != nil {
+		return nil, fmt.Errorf("jsonl: %s: header: %w", path, err)
+	}
 	if readOnly {
 		// No append, so no lock and no trimming of a broken tail: the
 		// truncated line is reported and the file is left as it is.
-		return &handle{session: sess, path: path}, nil
+		return &handle{session: sess, path: path, diskFormat: stored.Format}, nil
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -418,11 +426,13 @@ func loadHandle(path, id string, readOnly bool) (*handle, error) {
 			return nil, fmt.Errorf("jsonl: drop truncated line of %s: %w", path, err)
 		}
 	}
-	return &handle{session: sess, file: f, path: path}, nil
+	return &handle{session: sess, file: f, path: path, diskFormat: stored.Format}, nil
 }
 
 // Append implements agentsession.Store: the entry joins the in-memory
 // tree, then its line is written and synced according to the policy.
+// The first append to a session whose header names an earlier minor
+// raises the header's format first.
 func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Entry) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -435,6 +445,19 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	h, err := s.openLocked(sessionID)
 	if err != nil {
 		return "", err
+	}
+	if raises(h.diskFormat) {
+		// The entry is prepared first, so that one the session refuses
+		// or already holds leaves the file as it was.
+		r, err := h.session.Prepare(e)
+		if err != nil {
+			return "", err
+		}
+		if r.Outcome != agentsession.Held {
+			if err := s.raiseFormat(sessionID, h); err != nil {
+				return "", err
+			}
+		}
 	}
 	id, err := h.session.Append(e)
 	if err != nil {
@@ -449,6 +472,95 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 		}
 	}
 	return id, nil
+}
+
+// hashedMinor is the first minor whose entry ids are envelope hashes.
+const hashedMinor = 5
+
+// raises reports whether a header naming format is raised before this
+// package appends to its session: one of an earlier minor, back to the
+// first whose ids are hashes. A header before that is left as it is,
+// since a reader rewrites the entries of such a file and would read
+// them, under a raised header, as carrying hashes they do not.
+func raises(format string) bool {
+	_, minor, err := agentsession.ParseFormat(format)
+	return err == nil && minor >= hashedMinor && minor < agentsession.FormatMinor
+}
+
+// raiseFormat writes the format this package writes into the session's
+// header before the first append that package makes to a session whose
+// header names an earlier minor, so a reader of that earlier minor
+// refuses the session rather than reading entries it cannot represent.
+// Nothing hashed changes: the header is not an entry.
+//
+// The header is the file's first line, so the file is rewritten once:
+// the raised header and every byte after it as it stands go to a file
+// beside it, which is synced and renamed over it, and appends continue
+// on the new file. A crash before the rename leaves the file as it was.
+// The caller holds the session's lock.
+func (s *Store) raiseFormat(id string, h *handle) error {
+	fail := func(err error) error {
+		return fmt.Errorf("jsonl: raise the header's format of %s: %w", h.path, err)
+	}
+	data, err := os.ReadFile(h.path)
+	if err != nil {
+		return fail(err)
+	}
+	line, rest, _ := bytes.Cut(data, []byte{'\n'})
+	var hdr agentsession.Header
+	if err := hdr.UnmarshalJSON(bytes.TrimRight(line, "\r")); err != nil {
+		return fail(err)
+	}
+	hdr.Format = agentsession.Format
+	info, err := os.Stat(h.path)
+	if err != nil {
+		return fail(err)
+	}
+	// A temporary file left by an earlier crash is ours to replace,
+	// since the lock is held.
+	tmp := h.path + ".tmp"
+	os.Remove(tmp)
+	t, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_APPEND, info.Mode().Perm())
+	if err != nil {
+		return fail(err)
+	}
+	w := bufio.NewWriter(t)
+	err = writeLine(w, hdr)
+	if err == nil {
+		_, err = w.Write(rest)
+	}
+	if err == nil {
+		err = w.Flush()
+	}
+	if err == nil {
+		err = t.Sync()
+	}
+	if err != nil {
+		t.Close()
+		os.Remove(tmp)
+		return fail(err)
+	}
+	// The old file is closed before the rename, which some systems
+	// refuse over a file held open, and opened again if it fails.
+	h.file.Close()
+	if err := os.Rename(tmp, h.path); err != nil {
+		t.Close()
+		os.Remove(tmp)
+		f, oerr := os.OpenFile(h.path, os.O_WRONLY|os.O_APPEND, 0o600)
+		if oerr != nil {
+			// Nothing is left to append through: forget the session so
+			// the next open starts over.
+			delete(s.open, id)
+			releaseLock(h.path)
+			return fail(errors.Join(err, oerr))
+		}
+		h.file = f
+		return fail(err)
+	}
+	syncDir(filepath.Dir(h.path))
+	h.file = t
+	h.diskFormat = agentsession.Format
+	return nil
 }
 
 func (s *Store) shouldSync(hdr agentsession.Header, e agentsession.Entry) bool {

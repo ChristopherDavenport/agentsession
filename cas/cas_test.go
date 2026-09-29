@@ -336,7 +336,7 @@ func TestRefusals(t *testing.T) {
 	if _, err := scratch.Append(ghost); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.storeEntry(ghost); err != nil {
+	if _, err := st.storeEntry(ghost, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Create(ctx, agentsession.Header{ID: "f3", Base: ghost.ID}); !errors.Is(err, agentsession.ErrNoEntry) {
@@ -499,7 +499,7 @@ func TestCrashWindows(t *testing.T) {
 	if _, err := scratch.Append(orphan); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.storeEntry(orphan); err != nil {
+	if _, err := st.storeEntry(orphan, true); err != nil {
 		t.Fatal(err)
 	}
 	st2, _ := Open(st.Root())
@@ -700,7 +700,7 @@ func TestCrashDuringDelete(t *testing.T) {
 	st.Close()
 	// The delete record lands, the directory does not go.
 	st2, _ := Open(st.Root())
-	if err := st2.commit(journalRecord{Op: "delete", Session: "x"}); err != nil {
+	if err := st2.commit(true, journalRecord{Op: "delete", Session: "x"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st2.Open(ctx, "x"); !errors.Is(err, agentsession.ErrNoSession) {
@@ -791,7 +791,7 @@ func TestSweepGrace(t *testing.T) {
 	ghost := agentsession.NewItemEntry(openresponses.UserText("ahead of its record"))
 	scratch := agentsession.New(agentsession.Header{})
 	scratch.Append(ghost)
-	if err := st.storeEntry(ghost); err != nil {
+	if _, err := st.storeEntry(ghost, true); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := st.Sweep(ctx, time.Hour); n != 0 {
@@ -964,7 +964,7 @@ func TestBlobFreshened(t *testing.T) {
 	defer st.Close()
 	st.Create(ctx, agentsession.Header{ID: "b", Media: agentsession.MediaSidecar})
 	blob, _ := st.PutBlob(ctx, []byte("old picture"))
-	cp, _ := st.contentPath(blob)
+	cp, _ := st.objs.loosePath(spaceContents, blob)
 	old := time.Now().Add(-48 * time.Hour)
 	os.Chtimes(cp, old, old)
 	r, err := st.Write(ctx, "b", agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputImage{ImageURL: "sidecar:" + blob})))

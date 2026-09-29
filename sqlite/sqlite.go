@@ -145,6 +145,9 @@ type Store struct {
 	// refused holds the sessions whose last append found another
 	// writer, so later appends fail until the caller reloads.
 	refused map[string]error
+	// stale holds the open sessions whose stored header names an
+	// earlier minor, which the next append raises.
+	stale map[string]bool
 
 	mu   sync.Mutex
 	open map[string]*agentsession.Session
@@ -171,41 +174,81 @@ func Open(path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("sqlite: open reader: %w", err)
 	}
 	r.SetMaxOpenConns(4 * runtime.NumCPU())
-	if _, err := w.Exec(schema); err != nil {
-		w.Close()
-		r.Close()
-		return nil, fmt.Errorf("sqlite: apply schema: %w", err)
-	}
-	if err := migrate(w); err != nil {
+	if err := applySchema(w); err != nil {
 		w.Close()
 		r.Close()
 		return nil, err
 	}
 	host, _ := os.Hostname()
-	s := &Store{w: w, r: r, open: map[string]*agentsession.Session{}, refused: map[string]error{}, pid: os.Getpid(), host: host, token: newToken()}
+	s := &Store{w: w, r: r, open: map[string]*agentsession.Session{}, refused: map[string]error{}, stale: map[string]bool{}, pid: os.Getpid(), host: host, token: newToken()}
 	for _, opt := range opts {
 		opt(s)
 	}
 	return s, nil
 }
 
+// ownColumns names, for each table the store creates, the columns its
+// first release gave it. A table of that name missing any of them is
+// not one an agentsession release wrote; later columns are left to
+// migrate.
+var ownColumns = []struct {
+	table string
+	cols  []string
+}{
+	{"sessions", []string{"id", "created_at", "updated_at", "cwd", "parent_session", "header"}},
+	{"entries", []string{"session_id", "seq", "id", "parent", "type", "line"}},
+	{"holders", []string{"session_id", "pid", "host", "token", "since", "heartbeat"}},
+}
+
+// applySchema checks the tables already in the database, creates the
+// missing ones and migrates the rest, in one transaction, so a database
+// holding another program's table of one of the store's names is
+// refused with nothing written.
+func applySchema(w *sql.DB) error {
+	tx, err := w.Begin()
+	if err != nil {
+		return fmt.Errorf("sqlite: apply schema: %w", err)
+	}
+	defer tx.Rollback()
+	for _, t := range ownColumns {
+		have, order, err := columns(tx, t.table)
+		if err != nil {
+			return err
+		}
+		if len(have) == 0 {
+			continue
+		}
+		for _, c := range t.cols {
+			if !have[c] {
+				return fmt.Errorf("sqlite: table %s has columns (%s), want (%s): the database holds another program's table of that name",
+					t.table, strings.Join(order, ", "), strings.Join(t.cols, ", "))
+			}
+		}
+	}
+	if _, err := tx.Exec(schema); err != nil {
+		return fmt.Errorf("sqlite: apply schema: %w", err)
+	}
+	if err := migrate(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: apply schema: %w", err)
+	}
+	return nil
+}
+
 // migrate brings a database created by an earlier release up to the
 // current schema. CREATE TABLE IF NOT EXISTS leaves an existing table
 // alone, so columns added later are added here and filled from the
 // stored entries.
-func migrate(w *sql.DB) error {
-	cols, err := columns(w, "sessions")
+func migrate(tx *sql.Tx) error {
+	cols, _, err := columns(tx, "sessions")
 	if err != nil {
 		return err
 	}
 	if cols["name"] && cols["superseded_by"] {
 		return nil
 	}
-	tx, err := w.Begin()
-	if err != nil {
-		return fmt.Errorf("sqlite: migrate: %w", err)
-	}
-	defer tx.Rollback()
 	if !cols["name"] {
 		if _, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("sqlite: migrate: add name: %w", err)
@@ -241,7 +284,7 @@ func migrate(w *sql.DB) error {
 		}
 	}
 	if cols["name"] {
-		return tx.Commit()
+		return nil
 	}
 	rows, err := tx.Query(`SELECT session_id, line FROM entries WHERE type = ? ORDER BY session_id, seq`, agentsession.TypeInfo)
 	if err != nil {
@@ -267,9 +310,6 @@ func migrate(w *sql.DB) error {
 			return fmt.Errorf("sqlite: migrate: set name: %w", err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sqlite: migrate: %w", err)
-	}
 	return nil
 }
 
@@ -285,22 +325,28 @@ func continuedIn(line string) string {
 	return probe.Session
 }
 
-// columns returns the column names of a table.
-func columns(db *sql.DB, table string) (map[string]bool, error) {
-	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+// columns returns the column names of a table, as a set and in table
+// order; both are empty when the table does not exist.
+func columns(tx *sql.Tx, table string) (map[string]bool, []string, error) {
+	rows, err := tx.Query(`SELECT name FROM pragma_table_info(?) ORDER BY cid`, table)
 	if err != nil {
-		return nil, fmt.Errorf("sqlite: columns of %s: %w", table, err)
+		return nil, nil, fmt.Errorf("sqlite: columns of %s: %w", table, err)
 	}
 	defer rows.Close()
-	out := map[string]bool{}
+	set := map[string]bool{}
+	var order []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return nil, fmt.Errorf("sqlite: columns of %s: %w", table, err)
+			return nil, nil, fmt.Errorf("sqlite: columns of %s: %w", table, err)
 		}
-		out[name] = true
+		set[name] = true
+		order = append(order, name)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("sqlite: columns of %s: %w", table, err)
+	}
+	return set, order, nil
 }
 
 // infoName returns the name an info entry line sets, or "".
@@ -331,6 +377,7 @@ func (s *Store) Close() error {
 	s.mu.Lock()
 	s.open = map[string]*agentsession.Session{}
 	s.refused = map[string]error{}
+	s.stale = map[string]bool{}
 	s.mu.Unlock()
 	return err
 }
@@ -405,6 +452,7 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 		return nil, fmt.Errorf("sqlite: create session: %w", err)
 	}
 	s.open[h.ID] = sess
+	s.stale[h.ID] = raises(h.Format)
 	return sess, nil
 }
 
@@ -448,8 +496,55 @@ func (s *Store) openLocked(ctx context.Context, id string) (*agentsession.Sessio
 	if err != nil {
 		return nil, err
 	}
+	var stored agentsession.Header
+	if err := stored.UnmarshalJSON([]byte(header)); err != nil {
+		return nil, fmt.Errorf("sqlite: session %s: header: %w", id, err)
+	}
 	s.open[id] = sess
+	s.stale[id] = raises(stored.Format)
 	return sess, nil
+}
+
+// hashedMinor is the first minor whose entry ids are envelope hashes.
+const hashedMinor = 5
+
+// raises reports whether a header naming format is raised before this
+// package appends to its session: one of an earlier minor, back to the
+// first whose ids are hashes. A header before that is left as it is,
+// since a reader rewrites the entries of such a session and would read
+// them, under a raised header, as carrying hashes they do not.
+func raises(format string) bool {
+	_, minor, err := agentsession.ParseFormat(format)
+	return err == nil && minor >= hashedMinor && minor < agentsession.FormatMinor
+}
+
+// raiseFormat writes the format this package writes into the session's
+// stored header, inside the transaction of the first append that
+// package makes to a session whose header names an earlier minor, so a
+// reader of that earlier minor refuses the session rather than reading
+// entries it cannot represent. Nothing hashed changes: the header is
+// not an entry.
+func raiseFormat(ctx context.Context, tx *sql.Tx, id string) error {
+	var line string
+	if err := tx.QueryRowContext(ctx, `SELECT header FROM sessions WHERE id = ?`, id).Scan(&line); err != nil {
+		return fmt.Errorf("sqlite: raise the header's format: %w", err)
+	}
+	var h agentsession.Header
+	if err := h.UnmarshalJSON([]byte(line)); err != nil {
+		return fmt.Errorf("sqlite: raise the header's format: %w", err)
+	}
+	if !raises(h.Format) {
+		return nil // another process raised it first
+	}
+	h.Format = agentsession.Format
+	raised, err := h.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET header = ? WHERE id = ?`, string(raised), id); err != nil {
+		return fmt.Errorf("sqlite: raise the header's format: %w", err)
+	}
+	return nil
 }
 
 // load rebuilds a session from its rows without claiming it.
@@ -547,7 +642,8 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 // Append implements agentsession.Store: the entry joins the in-memory
 // tree, then its line is inserted in one immediate transaction. If the
 // insert fails the cached session is dropped so the next Open reloads
-// the database's view.
+// the database's view. The first append to a session whose header names
+// an earlier minor raises the header's format in the same transaction.
 func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Entry) (string, error) {
 	if s.readOnly {
 		return "", agentsession.ErrReadOnly
@@ -558,10 +654,11 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	if err != nil {
 		return "", err
 	}
-	id, err := sess.Append(e)
+	r, err := sess.Commit(e)
 	if err != nil {
 		return "", err
 	}
+	id := r.ID
 	line, err := agentsession.MarshalEntry(e)
 	if err != nil {
 		delete(s.open, sessionID)
@@ -588,6 +685,10 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 			return "", s.refused[sessionID]
 		}
 	}
+	raised := err == nil && s.stale[sessionID] && r.Outcome != agentsession.Held
+	if raised {
+		err = raiseFormat(ctx, tx, sessionID)
+	}
 	if err == nil {
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO entries (session_id, seq, id, parent, type, line) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -612,6 +713,9 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 			return "", s.refused[sessionID]
 		}
 		return "", fmt.Errorf("sqlite: insert entry %s: %w", id, err)
+	}
+	if raised {
+		delete(s.stale, sessionID)
 	}
 	return id, nil
 }
@@ -709,6 +813,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("sqlite: delete session: %w", err)
 	}
 	delete(s.open, id)
+	delete(s.stale, id)
 	n, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("sqlite: delete session: %w", err)
@@ -735,6 +840,7 @@ func (s *Store) releaseLocked(id string) {
 	}
 	delete(s.open, id)
 	delete(s.refused, id)
+	delete(s.stale, id)
 }
 
 // LockHolder reports who holds a session, or nil when it is free. A

@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.8
+Status: draft 0.9
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -72,7 +72,8 @@ session worth training on.
   from the path whether it was never started, was in flight when the
   record stopped, or is waiting on an answer, in any file whose header
   says the writer records dispatches and decisions.
-- **Append-only.** A writer only ever appends lines. A crashed session
+- **Append-only.** A writer only ever appends lines, save for raising
+  the header's `format`, which Versioning describes. A crashed session
   is a valid prefix.
 - **Content-addressed.** An entry's ID is the hash of its envelope
   over the hash of its body, and its parent link is a hash, so a file
@@ -188,7 +189,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.8","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.9","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -198,7 +199,7 @@ RFC 2119.
 | field | req | meaning |
 |---|---|---|
 | `type` | MUST | the string `session` |
-| `format` | MUST | `agentsession/<major>.<minor>` |
+| `format` | MUST | `agentsession/<major>.<minor>`; raised by a later writer, never lowered, as Versioning says |
 | `id` | MUST | globally unique; UUIDv7 RECOMMENDED. For a subsession, a UUIDv5 under the nil namespace over `<parent session id>/<call_id>` is RECOMMENDED, so a reader can compute the child's ID from the parent's `link` or `function_call` alone. A retry of the call is another session, derived the same way over `<parent session id>/<call_id>/<n>` for the n-th attempt after the first |
 | `created_at` | MUST | RFC 3339 |
 | `payload` | MUST | payload profile; `openresponses/<spec-date>` is the only profile this RFC defines |
@@ -489,7 +490,8 @@ A delta to request settings. The first entry on any root SHOULD be a
  "model":"…","instructions":"…","reasoning":{…},"text":{…},
  "instructions_parts":[{"keep":2},{"id":"agentsmd","text":"…","source":"agentsmd"},
                        {"id":"memory","hash":"sha256:…"}],
- "instructions_omitted":[{"id":"service/AGENTS.md","reason":"budget","size":4096,"source":"agentsmd"}],
+ "instructions_omitted":[{"id":"service/AGENTS.md","reason":"budget","size":4096,"source":"agentsmd"},
+                         {"keep":3}],
  "tools_added":[…],"tools_removed":["name"],"extra":{…},"replace":false}
 ```
 
@@ -592,8 +594,10 @@ not cover it, but it stays in force as settings do, so a writer whose
 omissions do not change between turns writes them once:
 
 - The list in force is the one the last `config` entry on the path
-  that carries the member wrote, whole: a later entry with the member
-  replaces the list, it does not add to it.
+  that carries the member wrote: a later entry with the member
+  replaces the list, it does not add to it. The member stands for
+  every part omitted as of the entry, in order, and no other, though
+  it MAY name runs of them by `keep`, below.
 - A delta without the member leaves the list as it was. A delta with
   `replace: true` and without the member clears it with the rest of
   the settings, and `[]` clears it explicitly.
@@ -602,6 +606,48 @@ omissions do not change between turns writes them once:
 - A `null` member is an absent one: it leaves the list as it was.
 - A compaction's `config` checkpoint carries the list in force, below,
   and the list after the compaction starts from it.
+
+A list in force changes by a part or two at a time, as a memory at its
+budget does whenever a fact is saved or forgotten, so a delta MAY name
+a run of parts that stay omitted, unchanged, by position, as a delta
+of instruction parts does:
+
+- `{"keep":n}`, an element with no `id` and a positive integer
+  `keep`, stands for the next n parts of the list in force before the
+  entry, each unchanged, `reason`, `size` and `source` alike. "Next"
+  is counted from a cursor into that list by the rule
+  `instructions_parts` uses: the cursor starts at its first part; an
+  element naming a part in force by `id` moves it to just after that
+  part, wherever that is, the first such part when the list in force
+  names the `id` twice; a `keep` moves it n parts on, whether or not
+  it resolves; an element naming an `id` not in force leaves it where
+  it is. An element that names a part carries all of it, since an
+  omitted part has no hash form. A save that pushes one fact out of a
+  memory ahead of 474 already omitted is then
+  `[{"id":"memory/user/n-0125","reason":"budget","size":20,"source":"agentmemory"},{"keep":474}]`.
+- A list with a `keep` MUST name each `id` once, and a writer MUST NOT
+  write a `keep` over a list in force that names an `id` twice; it
+  writes that list whole. A writer MUST NOT write a `keep` that runs
+  past the end of the list in force, or one that takes a part another
+  element of the same list names, and MUST NOT write any other member
+  beside `keep`, which a reader ignores. A `keep` member on an element
+  that carries an `id` is a member this document does not define there.
+- A `keep` that runs past the end of the list in force or takes a
+  part the list names elsewhere, which a reader finds by reading the
+  whole list first, and an element with neither an `id` nor a
+  positive integer `keep`, name no part a reader can rebuild. A reader
+  keeps such an element in the list in force where it stands, as it
+  keeps an instruction part it cannot resolve, and a later `keep` that
+  takes it takes it as it is. Unlike a `keep` among the instruction
+  parts, nothing checks one here: the list reaches no request, so no
+  `request_hash` covers it.
+- `replace: true` discards the list in force with the rest of the
+  settings, so a `keep` in the same entry resolves against nothing,
+  and a writer MUST NOT write one there: a replace writes the list
+  whole. A compaction's checkpoint is not a delta, and writes the list
+  whole too; an element in force that named no part is written as it
+  stands, and a reader of a checkpoint takes each element as it is,
+  resolving no `keep` in it.
 
 ### `compaction`
 
@@ -656,8 +702,8 @@ Replaces earlier context with a summary.
   `instructions_parts`, when the checkpoint carries it, is the full
   list of parts in force, each with its text, not a delta, and
   `instructions` is their join. `instructions_omitted` is the list of
-  omitted parts in force, and a checkpoint without it has none in
-  force. `tools` is the full list of tool
+  omitted parts in force, every part written out and no `keep`, and a
+  checkpoint without it has none in force. `tools` is the full list of tool
   definitions in force at the compaction, in the order the context
   algorithm would send them, not a delta; there are no `tools_added`, `tools_removed` or `replace`
   members. `extra` is the merged map of passthrough request members
@@ -1118,7 +1164,7 @@ elsewhere. Media referenced by an item MAY be a sidecar, as the file
 section says; a sidecar is part of the session rather than outside it.
 An `instructions_parts` entry named by `hash` alone, or taken by a
 `keep`, resolves against the parts already on this path, which is the
-same file.
+same file, and so does an omitted part taken by a `keep`.
 
 One thing the payload profile permits, this format does not. An `item`
 entry MUST NOT carry an `item_reference`. It names an item in the
@@ -1152,7 +1198,8 @@ list as follows.
    resolves them against the parts in force, as that member defines,
    and the settings' instructions are the resolved parts joined with
    one blank line. The list of omitted parts in force replays beside
-   them, as `instructions_omitted` defines, and reaches no request.
+   them, as `instructions_omitted` defines, each `keep` in it resolved
+   against the list in force before its entry, and reaches no request.
 3. Find the last `compaction` on the path, if any. If found:
    settings start from its `config` checkpoint and then replay any
    `config` after it; the item list starts with its `summary`, then its
@@ -1343,7 +1390,21 @@ before it.
 `format` is `agentsession/<major>.<minor>`. A minor version adds entry types or
 optional fields. A major version changes the envelope, the header, or
 the context algorithm. Readers MUST accept any minor version of a major
-they support. Files are migrated in memory, never rewritten in place.
+they support. A reader migrates a file in memory and never rewrites it.
+
+A writer that appends to a file whose header names an earlier minor than
+the one it writes MUST first raise the header's `format` to its own,
+since what it appends may use what its minor adds. A 0.x reader of the
+earlier minor, which refuses a 0.x minor it does not name, then refuses
+the file as a later one, which tells its operator what to do, rather
+than misreading the entries it cannot represent. The raise MUST NOT
+leave the file without a whole header at any point a crash could stop
+it, so it is written as a new file renamed over the old, or overwritten
+in place only at the same length. Nothing hashed moves: the header is
+not an entry. A file never lowers its `format`. Appending to a file
+earlier than 0.5 is out of scope: no writer of such files remains, a
+reader migrates one only to read it, and a raised header would have
+its entries read as hashed.
 
 Adding an optional member to the envelope is a minor change. Changing
 what an existing member means, or what the context algorithm does with
@@ -1354,13 +1415,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.8 reads a 0.5, 0.6 or 0.7 file as it
-stands, since 0.6, 0.7 and 0.8 add optional members and the hashes do
-not change, save for the few rules each minor's changes below say read
+it begins at 1.0. A reader of 0.9 reads a 0.5, 0.6, 0.7 or 0.8 file
+as it stands, since 0.6 to 0.9 add optional members and elements and
+the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.8 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.9 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -1409,7 +1470,10 @@ that substitutes another instance, a call dispatched twice under one
 `idempotency_key` beside a call answered after a crash, a list of
 omitted parts in force across a delta, carried by a compaction's
 checkpoint and cleared by `[]`, a queued `trigger` with members of its
-own drained into an `item`'s `source`, the recomputed `reason` for
+own drained into an `item`'s `source`, a list of omitted parts naming
+runs of the list in force by `keep` across deltas that move a part
+across a budget, beside a `replace` and a compaction's checkpoint that
+write it whole, the recomputed `reason` for
 every `run` end, and
 negative cases for a broken parent link, a truncated last line, an
 unknown type, a `dispatch` that follows a `reject` or an `answer`, and a header naming
@@ -1432,6 +1496,29 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.8
+
+Additive. One element and a paragraph in the `config` section, and a
+writer's rule in Versioning. No hash changes, and a 0.8 file is a 0.9
+file with no `keep` in its omitted lists. An element of an omitted
+list with no `id`, which a 0.9 reader reads as a `keep`, was not a 0.8
+omitted part, which always had its `id`.
+
+- A writer that appends to a file whose header names an earlier minor
+  raises the header's `format` first. Under 0.8 a header kept the
+  minor the file was created under, so a reader of that minor read
+  entries a later writer had appended by its own rules.
+- `instructions_omitted` takes the `{"keep":n}` element
+  `instructions_parts` took in 0.7, counted by the same cursor over
+  the list in force: naming a part moves the cursor past it, and a
+  `keep` takes the next n parts in force unchanged. A `replace` and a
+  compaction's checkpoint write the list whole. Under 0.8 a list that
+  changed was written whole, and under a memory at its budget it
+  changes on every save of a new fact and every forget: one part
+  moving across the budget rewrote a list of 475 parts, 37 KB and 12%
+  more than the joined string the parts were adopted to replace. With
+  a `keep` it costs about 100 bytes.
 
 ## Changes since 0.7
 

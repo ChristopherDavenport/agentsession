@@ -247,8 +247,12 @@ strips the raw items for a document a judge will read.
 ## Inspecting from a shell
 
 `cmd/agentsession` reads session files without taking their lock, and
-`list` opens the store with `jsonl.WithReadOnly`, so every command is
-safe to run beside a harness that is writing.
+opens a store with `jsonl.WithReadOnly` or `cas.WithReadOnly`, so every
+command is safe to run beside a harness that is writing. Where a command
+takes a file it also takes a cas store's root and a session id, and
+reads the session as the file it projects to; a path inside a cas
+session's directory, its one-line `header` file included, is read as
+that session.
 
 ```
 go install github.com/ChristopherDavenport/agentsession/cmd/agentsession@latest
@@ -260,9 +264,13 @@ agentsession verify session.jsonl          # rebuild every request and check its
 agentsession export session.jsonl -out dir -secret "$OPENAI_API_KEY" -redact-home
 agentsession list ~/.agent/sessions        # a jsonl store's sessions, newest first
 agentsession list ~/.agent/sessions -current   # leave out sessions continued in a successor
+agentsession list ~/.agent/cas             # a cas store's sessions, the same columns
+agentsession show ~/.agent/cas ID          # any command, on a session a cas store holds
+agentsession verify ~/.agent/cas           # the whole store, as git fsck: journal, objects, sessions
 ```
 
-`verify` exits 1 on a mismatch, a truncated final line, a run end that
+`verify` exits 1 on a file with a header and no entries, since nothing
+was checked, and on a mismatch, a truncated final line, a run end that
 disagrees with its segment, a dispatch after a reject or an answer, or a call that
 ran without the dispatch the header promised. `export`
 writes one ATIF document per leaf and embeds a linked subsession when
@@ -293,14 +301,14 @@ _, err := otel.Export(ctx, tracer, sess, sess.Leaf()) // a stored session, after
 | package | purpose |
 |---|---|
 | `agentsession` | header, entries, tree, context algorithm, request hash, `Store` interface, in-memory store |
-| `cas` | the content-addressed store RFC 0002 describes, laid out like a git repository: bodies and envelopes as objects under their hashes, held once however many sessions share them; a session as a ref with a header, a base, a `HEAD` and a log; a journal as the commit point, replayed on open; a head compare-and-swap; a record or mirror mark; projection to a JSONL file with the synthetic leaf marker, import held to a push's checks, and a sweep that follows references down |
+| `cas` | the content-addressed store RFC 0002 describes, laid out like a git repository: bodies and envelopes as objects under their hashes, held once however many sessions share them; a session as a ref with a header, a base, a `HEAD` and a log; a journal as the commit point, replayed on open; a head compare-and-swap; a record or mirror mark; projection to a JSONL file with the synthetic leaf marker, import held to a push's checks, push and fetch between stores, packs and a sweep that repacks as git's gc does, a sync policy, a read-only open, and a verify that walks the store as git fsck does |
 | `jsonl` | the file store: one JSONL file per session with a sync policy, crash recovery and a per-session lock against a second writing process, reporting a dead holder's lock when it takes one over, or read-only and taking no lock |
 | `sqlite` | a SQLite store, as a nested module so its driver stays out of the library, holding each open session against a second process, or read-only and taking no hold |
 | `otel` | the OpenTelemetry projection, as a nested module: replay a session as spans, or wrap a store so a live run emits them |
 | `atif` | Go types for ATIF v1.8 with unknown-member passthrough and validation |
 | `export` | trajectories, ATIF conversion, redactors, writer |
 | `storetest` | the conformance suite every store runs |
-| `cmd/agentsession` | the command: show, verify, export and list session files |
+| `cmd/agentsession` | the command: show, verify, export and list session files and the sessions of a jsonl or cas store |
 
 ## Interoperating
 

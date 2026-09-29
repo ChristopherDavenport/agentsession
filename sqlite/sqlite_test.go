@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -227,5 +228,187 @@ CREATE TABLE entries (
 			}
 		}
 		st.Close()
+	}
+}
+
+// TestForeignTable opens a database holding another program's entries
+// table and expects a refusal naming the table and its columns, with
+// none of the store's tables or indexes left behind. The same file
+// without that table then opens.
+func TestForeignTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE entries (scope TEXT, name TEXT, content TEXT, meta TEXT, hash TEXT, updated TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = sqlite.Open(path)
+	if err == nil {
+		t.Fatal("Open succeeded over a foreign entries table")
+	}
+	for _, want := range []string{"table entries", "(scope, name, content, meta, hash, updated)", "(session_id, seq, id, parent, type, line)", "another program"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+	rows, err := db.Query(`SELECT name FROM sqlite_schema WHERE name <> 'entries' ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		left = append(left, name)
+	}
+	rows.Close()
+	if len(left) != 0 {
+		t.Errorf("refused Open left %v behind", left)
+	}
+
+	if _, err := db.Exec(`DROP TABLE entries`); err != nil {
+		t.Fatal(err)
+	}
+	for round := 0; round < 2; round++ { // the second open finds its own tables
+		st, err := sqlite.Open(path)
+		if err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+		if round == 0 {
+			if _, err := st.Create(context.Background(), agentsession.Header{ID: "s1"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		st.Close()
+	}
+}
+
+// TestRaiseFormat edits a session's stored header to name an earlier
+// minor and expects the first append to raise it to the format this
+// package writes, while a read-only open, an open alone and a session
+// already current leave the row alone.
+func TestRaiseFormat(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	st, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"old", "new"} {
+		s, err := st.Create(ctx, agentsession.Header{ID: id, CWD: "/p"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(ctx, s.ID(), &agentsession.ConfigEntry{Model: "m"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(ctx, s.ID(), agentsession.NewItemEntry(openresponses.UserText("hello"))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	header := func(id string) string {
+		t.Helper()
+		var h string
+		if err := db.QueryRow(`SELECT header FROM sessions WHERE id = ?`, id).Scan(&h); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	current := `"format":"` + agentsession.Format + `"`
+	stored := header("old")
+	if !strings.Contains(stored, current) {
+		t.Fatalf("header %s does not name %s", stored, agentsession.Format)
+	}
+	earlier := strings.Replace(stored, current, `"format":"agentsession/0.7"`, 1)
+	if _, err := db.Exec(`UPDATE sessions SET header = ? WHERE id = ?`, earlier, "old"); err != nil {
+		t.Fatal(err)
+	}
+	fresh := header("new")
+
+	ro, err := sqlite.Open(path, sqlite.WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ro.Open(ctx, "old"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ro.Append(ctx, "old", &agentsession.InfoEntry{Name: "n"}); !errors.Is(err, agentsession.ErrReadOnly) {
+		t.Errorf("read-only Append = %v, want ErrReadOnly", err)
+	}
+	ro.Close()
+	if got := header("old"); got != earlier {
+		t.Fatalf("a read-only open changed the header to %s", got)
+	}
+
+	st2, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"old", "new"} {
+		if _, err := st2.Open(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := header("old"); got != earlier {
+		t.Fatalf("an open changed the header to %s", got)
+	}
+	for _, id := range []string{"old", "new"} {
+		if _, err := st2.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("again"))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st2.Append(ctx, id, &agentsession.InfoEntry{Name: "after"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := header("old"); got != stored {
+		t.Errorf("header after the append = %s, want %s", got, stored)
+	}
+	if got := header("new"); got != fresh {
+		t.Errorf("a current header changed to %s", got)
+	}
+
+	st3, err := sqlite.Open(path, sqlite.WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st3.Close()
+	sess, err := st3.Open(ctx, "old")
+	if err != nil {
+		t.Fatalf("Open of the raised session: %v", err)
+	}
+	if sess.Len() != 4 {
+		t.Errorf("raised session holds %d entries, want 4", sess.Len())
+	}
+	var buf strings.Builder
+	if err := agentsession.Write(&buf, sess); err != nil {
+		t.Fatal(err)
+	}
+	back, err := agentsession.Read(strings.NewReader(buf.String()))
+	if err != nil {
+		t.Fatalf("Read of the written session: %v", err)
+	}
+	if back.Header().Format != agentsession.Format {
+		t.Errorf("round trip format %s", back.Header().Format)
+	}
+	for i, e := range sess.Entries() {
+		if back.Entries()[i].Base().ID != e.Base().ID {
+			t.Errorf("entry %d: %s after a round trip, want %s", i, back.Entries()[i].Base().ID, e.Base().ID)
+		}
 	}
 }

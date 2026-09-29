@@ -174,7 +174,8 @@ its content. Identical bodies in a thousand sessions are one content
 object with a thousand envelopes naming it.
 
 Below the hash, an object's bytes are the store's to lay out: chunked,
-compressed, or deduplicated by any means, so long as the store serves
+compressed, packed with other objects into one file as git packs loose
+objects, or deduplicated by any means, so long as the store serves
 them by hash unchanged. Deduplication of large payloads is a storage
 concern and not a format one, and this document does not push a
 reference into the payload profile, which has no shape for one.
@@ -204,6 +205,16 @@ A session is created with a header and optionally a base.
   diverged from and the prefix is exactly the path to it.
 - A session MAY have several roots only when it has no base. A session
   with a base has one prefix and everything it appends hangs from it.
+- A session's header is written at creation and changes afterwards only
+  in `format`. A store MUST raise the header's `format` to the minor of
+  a writer that appends to the session, when that minor is later than
+  the header's, durably and before the append's commit point, as RFC
+  0001 requires of a writer of a file; so a reader of an earlier minor
+  refuses a session a later one has continued, rather than reading
+  entries it cannot represent. A raise that outlives an append a crash
+  took is harmless. A store never lowers it, and a fork's header names
+  a format no earlier than that of the session whose own entries
+  include its base, since its prefix was written under that one.
 
 A fork is a session created with a base. Nothing is copied: the fork's
 prefix is the origin's entries, stored once. The header's `base` says
@@ -222,6 +233,14 @@ it at no cost.
 
 Append is the one write that adds to a session, and it is atomic.
 
+- An append carries the `format` its writer writes, the version of
+  RFC 0001 under which it built the entry. A store MUST refuse an
+  append whose `format` names a major or a 0.x minor it does not read,
+  and one whose minor is earlier than the session's header names,
+  since that writer could not have read the session it appends to; a
+  later one raises the header, as the sessions section says. A store
+  that is itself the writer, as a library's store is, carries its own
+  `format` and has nothing to check but the header.
 - The store MUST hold the parent, per the entry rules, and the parent
   MUST satisfy the session's parent rule above.
 - The store MUST store the entry and MUST append its hash to the
@@ -269,7 +288,8 @@ The head is a session's resume point, and it is a ref.
 - Resume reads the head. There is no inference from log order and no
   marker to find. The head is what RFC 0001's leaf label was standing in
   for. The label exists only because an append-only file with a
-  write-once header has nowhere else to record a head move; it survives
+  header that changes only in `format` has nowhere else to record a
+  head move; it survives
   as the projection's marker and as a head move a file-bound writer may
   still append, and a writer built against a store uses the
   compare-and-swap instead.
@@ -344,6 +364,20 @@ replays the journal tail against the objects, the logs and the heads.
 Each session's log is then a projection of the journal, and the
 journal's order is the total order the ordering section describes, of
 which a session's log is a filter.
+
+A store that builds the journal keeps it so its damage cannot pass for a
+crash, since the journal is the one record recovery trusts. A record
+carries a checksum; a crash cuts short only the record being written, at
+the journal's end, so a record written whole that fails its checksum is
+damage, reported rather than skipped. The log and the head are never
+made durable ahead of the record that names their change. Recovery only
+adds: a log that holds an entry its journal lacks keeps it, since only
+damage or a journal restored from before the log can cause that, and the
+head does not move back past it. An append acknowledged before it was
+durable is marked so in its record, and its objects are made durable
+before the next durable commit, of any session; after a crash, such a
+record whose objects are missing is an append the crash took, with what
+the session appended after it, and not damage.
 
 A store built on a database that has its own write-ahead log gets
 atomicity and recovery from the database. Durability it must still ask
@@ -482,9 +516,11 @@ apply here, where holding the session already is the usual case.
   with the pushed base as its head, or no head when there is no base,
   and then admits the own entries. A receiver that holds a session with
   that ID MUST refuse the push unless the pushed header equals the held
-  one, since a header is written once at creation and two sessions alike
-  only in ID are not one session; their union would be no session at
-  all.
+  one apart from `format`, since a header is fixed at creation but for
+  its `format`, and two sessions alike only in ID are not one session;
+  their union would be no session at all. The receiver keeps the later
+  of the two formats, as the sessions section requires of an append, and
+  refuses a push whose header names a minor it does not read.
 - **The log merges as a set.** The receiver takes the union of the two
   logs and assigns its own sequence in the order it admits entries,
   admitting a parent before its child so that the merged log projects as

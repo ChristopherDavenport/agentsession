@@ -2,54 +2,77 @@
 // laid out on a filesystem the way git lays out a repository:
 //
 //	<root>/
-//	  objects/contents/<2 hex>/<62 hex>   a body, canonical bytes, held once
-//	  objects/entries/<2 hex>/<62 hex>    an envelope: type, parent, parents, ts, content
+//	  objects/contents/<2 hex>/<62 hex>   a loose body, canonical bytes, held once
+//	  objects/entries/<2 hex>/<62 hex>    a loose envelope: type, parent, parents, ts, content
+//	  objects/pack/pack-<hex>.{pack,idx}  objects packed together, with their index
 //	  sessions/<session id>/
-//	    header                            the header line, written once
-//	    log                               one entry hash per line, in append order
+//	    header                            the header line
+//	    log                               one entry hash and its size per line, in append order
 //	    HEAD                              the head's hash, or empty
 //	    record                            "record" or "mirror"
 //	  locks/<session id>                  the lock of the process holding the session
-//	  sweep.lock                          the lock of a running sweep
+//	  sweep.lock                          held shared by writers, exclusive by a sweep's last step
+//	  gc.lock                             the lock of a running sweep or pack
 //	  journal                             one line per commit: the commit point
 //
 // An entry is stored as two objects, its body under the content hash
 // and its envelope under the id, so a body shared by many entries is
 // held once and a chain of envelopes verifies without its bodies. A
 // session is a ref: a header, a base, a head, and a log of the entries
-// it appended.
+// it appended. Every object is checked against its name when it is
+// read, and one that fails is reported as corrupt by name and place.
+//
+// Objects are written loose, one file each, and packed later, as git
+// does: [Store.Pack] moves loose objects into a pack, and [Store.Sweep]
+// repacks everything the store holds into one pack and removes what
+// nothing needs. A store of small entries otherwise pays a filesystem
+// block for every envelope and every body.
 //
 // Every write follows one order. The objects go first, idempotently,
 // since their bytes are their names. Then one journal record is
-// appended and fsynced: that is the commit point, and nothing is
-// visible before it, in memory or on disk. Then the log line and the
-// head, which are indexes; Open replays the journal against them, in
-// journal order, so a crash after the commit point leaves no
-// acknowledged append missing and a crash before it leaves nothing
-// behind. Every rename and creation is followed by an fsync of its
-// directory, so a durable journal record never points at a file the
-// power loss took.
+// appended, which carries a checksum: that is the commit point, and
+// nothing is visible before it, in memory or on disk. Then the log line
+// and the head, which are indexes, written without an fsync; Open
+// replays the journal against them, in journal order, so a crash after
+// the commit point leaves no acknowledged append missing and a crash
+// before it leaves nothing behind. Recovery only adds: a log holding an
+// entry the journal lacks keeps it, since only damage to the journal
+// can cause that, and the damage is reported by [Store.Verify].
+//
+// Under the default sync policy an append is durable when it returns:
+// its objects and their directories are fsynced before the record, and
+// the record after. [WithSync] lets a writer acknowledge some appends
+// before they are durable, as RFC 0002 allows, and [agentsession.Result]
+// says which each append got. A lazy append's objects and record are
+// fsynced by this store's next durable commit, objects first. Another
+// process's durable commit fsyncs the shared journal too, and may make
+// a lazy record durable ahead of its objects; the record says it was
+// lazy, so after a crash one whose objects did not survive, or were
+// left empty, is an append that was lost, with what its session
+// appended after it. A store that recovers a session holding lazy
+// appends another process never synced syncs their objects and
+// journals that it did, before it appends anything durable after them.
 //
 // Several processes may share a store on one machine. Each session is
 // held by one process at a time through a lock the kernel drops when
 // the process exits (flock on unix), which RFC 0002 permits: a store
 // may take writers in turn provided it never re-parents an accepted
-// append. The journal is shared: a record is one line written in one
-// call with O_APPEND, so records from different processes do not
-// interleave, and the journal is never truncated by a reader; a record
-// a crash cut short is skipped and the records after it still count.
-// Recovery is per session, done by the process that holds the
-// session's lock when it opens it, so no process rewrites the indexes
-// of a session another process has open. The sweep needs no lock on
-// writers: it keeps everything the journal names and every object
-// younger than a grace period, as git's collector spares a young loose
-// object, so an object written ahead of its record is safe. A store on
-// a network filesystem is not supported: O_APPEND is not atomic across
-// NFS clients, so records could interleave.
+// append. [WithReadOnly] takes no session lock, so a session another
+// process holds can be read, projected and verified while it writes.
+// The journal is shared: a record is one line written in one call with
+// O_APPEND, so records from different processes do not interleave, and
+// the journal is never truncated by a reader; a record a crash cut short
+// is skipped and the records after it still count. Recovery is per
+// session, done by the process that holds the session's lock when it
+// opens it, so no process rewrites the indexes of a session another
+// process has open. The sweep keeps everything the journal names and
+// every loose object younger than a grace period, as git's collector
+// spares a young loose object, so an object written ahead of its record
+// is safe. A store on a network filesystem is not supported: O_APPEND is
+// not atomic across NFS clients, so records could interleave.
 package cas
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -61,13 +84,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/internal/ijson"
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // Marks a session carries: whether this store may advance it.
@@ -95,8 +119,12 @@ var ErrBadName = errors.New("cas: not a usable name")
 var ErrSynthetic = errors.New("cas: a synthetic leaf marker is the projection's, not the session's")
 
 // ErrSessionLocked is [agentsession.ErrSessionLocked]: another process
-// holds the session, or, from Sweep, another sweep is running.
+// holds the session.
 var ErrSessionLocked = agentsession.ErrSessionLocked
+
+// ErrSweepRunning is returned by Sweep and Pack when another sweep or
+// pack is running on the store.
+var ErrSweepRunning = errors.New("cas: a sweep or pack is already running on this store")
 
 // ErrModified is returned when a session the store handed out was
 // changed behind its back — an entry appended on it directly, or its
@@ -104,9 +132,58 @@ var ErrSessionLocked = agentsession.ErrSessionLocked
 // record and the session disagree and nothing can be built on it.
 var ErrModified = errors.New("cas: session was modified outside the store")
 
+func errReadOnly() error { return agentsession.ErrReadOnly }
+
+// SyncPolicy says when an append is durable before it returns.
+type SyncPolicy int
+
+const (
+	// SyncEveryAppend makes every append durable before it returns. It
+	// is the default.
+	SyncEveryAppend SyncPolicy = iota
+	// SyncOnResponse makes durable a response entry and a function call
+	// output, which RFC 0002 asks a writer to, a compaction and a branch
+	// summary, which are as expensive to lose, and any entry whose type
+	// the header names in records, which RFC 0001 requires to be durable
+	// before the side effect it precedes. Each durable append also makes
+	// durable every lazy append before it.
+	SyncOnResponse
+	// SyncNever leaves every append lazy: durable at the next call to
+	// [Store.Sync] or [Store.Close], or when the operating system writes
+	// it back.
+	SyncNever
+)
+
+// Option configures a Store.
+type Option func(*Store)
+
+// WithSync sets the sync policy.
+func WithSync(p SyncPolicy) Option {
+	return func(s *Store) { s.policy = p }
+}
+
+// WithReadOnly opens the store for reading: Open takes no lock on a
+// session, so a session another process is writing can be read,
+// projected, exported and verified while it writes, and nothing is
+// written, the store's directories and the indexes a crash left stale
+// included; recovery is done in memory. Create, Append, Write, SetHead,
+// Delete, Import, DeclareRecord, Sweep, Pack, PutBlob, Sync and the
+// receiving side of an exchange return [agentsession.ErrReadOnly].
+//
+// An open session is cached as it is in a writing store, so a session
+// read while another process appends to it shows what it held when it
+// was opened; call [Store.Release] and open it again to see the rest.
+func WithReadOnly() Option {
+	return func(s *Store) { s.readOnly = true }
+}
+
 // Store is a content-addressed store rooted at a directory.
 type Store struct {
-	root string
+	root     string
+	readOnly bool
+	policy   SyncPolicy
+	objs     *objects
+
 	mu   sync.Mutex
 	open map[string]*handle
 	// owners maps each committed own entry to the sessions whose logs
@@ -119,31 +196,59 @@ type Store struct {
 	// faulty records sessions the index could not read, with why, so
 	// one fault is reported at that session's Open and hides no other.
 	faulty map[string]error
+	// journalDirty is set while a lazy commit's record is unsynced.
+	journalDirty bool
 }
 
 type handle struct {
-	session *agentsession.Session
-	dir     string
-	lock    *dirLock
-	mark    string
-	head    string // the head as the HEAD file has it
-	count   int    // entries the store has committed into the session
+	session    *agentsession.Session
+	dir        string
+	lock       *dirLock
+	mark       string
+	head       string // the head as the HEAD file has it
+	count      int    // entries the store has committed into the session
+	diskFormat string // the format the header file names
 }
 
 // Open opens or creates the store at root, and replays the journal
 // against the logs and heads so a crash between the commit point and
-// the indexes leaves no acknowledged append missing.
-func Open(root string) (*Store, error) {
-	for _, d := range []string{filepath.Join(root, "objects", "contents"), filepath.Join(root, "objects", "entries"), filepath.Join(root, "sessions"), filepath.Join(root, "locks")} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return nil, fmt.Errorf("cas: %w", err)
+// the indexes leaves no acknowledged append missing. A read-only store
+// must exist already.
+func Open(root string, opts ...Option) (*Store, error) {
+	s := &Store{root: root, objs: newObjects(root), open: map[string]*handle{}, owners: map[string]map[string]bool{}, prefix: map[string]bool{}, faulty: map[string]error{}}
+	for _, o := range opts {
+		o(s)
+	}
+	dirs := []string{filepath.Join(root, "objects", "contents"), filepath.Join(root, "objects", "entries"), filepath.Join(root, "sessions"), filepath.Join(root, "locks")}
+	if s.readOnly {
+		if info, err := os.Stat(filepath.Join(root, "sessions")); err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("cas: %s is not a store", root)
+		}
+	} else {
+		for _, d := range dirs {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				return nil, fmt.Errorf("cas: %w", err)
+			}
 		}
 	}
-	s := &Store{root: root, open: map[string]*handle{}, owners: map[string]map[string]bool{}, prefix: map[string]bool{}, faulty: map[string]error{}}
+	if err := s.objs.reloadPacks(true); err != nil {
+		return nil, fmt.Errorf("cas: packs: %w", err)
+	}
 	if err := s.index(); err != nil {
 		return nil, err
 	}
 	return s, nil
+}
+
+// IsStore reports whether dir looks like the root of a store: it holds
+// the sessions and objects directories.
+func IsStore(dir string) bool {
+	for _, d := range []string{"sessions", "objects"} {
+		if info, err := os.Stat(filepath.Join(dir, d)); err != nil || !info.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 // Root returns the store's directory.
@@ -183,9 +288,20 @@ func mediaOf(h agentsession.Header) string {
 
 // lockSession takes a session's lock. Lock files live under locks/ and
 // are never unlinked, so a holder cannot be left locking an inode that a
-// delete or a failed create removed from under it.
+// delete or a failed create removed from under it. A read-only store
+// takes none.
 func (s *Store) lockSession(id string) (*dirLock, error) {
+	if s.readOnly {
+		return nil, nil
+	}
 	return lockFile(filepath.Join(s.root, "locks", id))
+}
+
+// writeGuard holds the sweep's lock shared, from an object write
+// through the commit that names it, so a sweep's last step never runs
+// between the two.
+func (s *Store) writeGuard(ctx context.Context) (*dirLock, error) {
+	return lockShared(ctx, filepath.Join(s.root, "sweep.lock"))
 }
 
 func objectPath(dir, hash string) (string, error) {
@@ -196,15 +312,7 @@ func objectPath(dir, hash string) (string, error) {
 	return filepath.Join(dir, hex[:2], hex[2:]), nil
 }
 
-func (s *Store) contentPath(hash string) (string, error) {
-	return objectPath(filepath.Join(s.root, "objects", "contents"), hash)
-}
-
-func (s *Store) entryPath(hash string) (string, error) {
-	return objectPath(filepath.Join(s.root, "objects", "entries"), hash)
-}
-
-// --- durable file writes ---
+// --- file writes ---
 
 // syncDir fsyncs a directory, so a rename or a creation in it survives
 // a power loss once the call returns.
@@ -217,49 +325,20 @@ func syncDir(dir string) error {
 	return d.Sync()
 }
 
-// writeObject stores data under path, idempotently: an object already
-// present is left as it is, since its bytes are its name. The write
-// goes to a temporary file, is fsynced, renamed into place, and the
-// directory is fsynced, so a reader never sees a partial object and a
-// durable journal record never names an object that did not survive.
-func writeObject(path string, data []byte) error {
-	if _, err := os.Stat(path); err == nil {
-		// Freshen it, as git does a loose object it finds it already has:
-		// the sweep spares a young object, and this write is what makes
-		// the object needed again, perhaps before its record lands.
-		now := time.Now()
-		if err := os.Chtimes(path, now, now); err != nil {
-			return err
-		}
-		return nil
-	}
-	if _, err := os.Stat(filepath.Dir(path)); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
-		}
-		if err := syncDir(filepath.Dir(filepath.Dir(path))); err != nil {
-			return err
-		}
-	}
-	if err := writeAtomic(path, data); err != nil {
-		if _, serr := os.Stat(path); serr == nil {
-			return nil // another writer stored the same object
-		}
-		return err
-	}
-	return nil
-}
-
-// writeAtomic replaces the file at path with data through a temporary
-// file, an fsync, a rename and an fsync of the directory.
-func writeAtomic(path string, data []byte) error {
+// writeFile replaces the file at path with data through a temporary
+// file and a rename, so a reader never sees it partial, fsyncing the
+// file before the rename when durable is set. The directory is the
+// caller's to sync.
+func writeFile(path string, data []byte, durable bool) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
 		return err
 	}
 	_, werr := tmp.Write(data)
-	if serr := tmp.Sync(); werr == nil {
-		werr = serr
+	if durable {
+		if serr := tmp.Sync(); werr == nil {
+			werr = serr
+		}
 	}
 	if cerr := tmp.Close(); werr == nil {
 		werr = cerr
@@ -272,7 +351,22 @@ func writeAtomic(path string, data []byte) error {
 		os.Remove(tmp.Name())
 		return err
 	}
+	return nil
+}
+
+// writeAtomic replaces the file at path with data durably: through a
+// temporary file, an fsync, a rename and an fsync of the directory.
+func writeAtomic(path string, data []byte) error {
+	if err := writeFile(path, data, true); err != nil {
+		return err
+	}
 	return syncDir(filepath.Dir(path))
+}
+
+// writeIndex replaces an index file, which the journal rebuilds after a
+// crash, without an fsync: a crash leaves the old one or the new one.
+func writeIndex(path string, data []byte) error {
+	return writeFile(path, data, false)
 }
 
 // --- objects ---
@@ -339,71 +433,110 @@ func join(id string, env, body []byte) ([]byte, error) {
 	return json.Marshal(b)
 }
 
-// storeEntry writes an entry's two objects.
-func (s *Store) storeEntry(e agentsession.Entry) error {
+// storeEntry writes an entry's two objects loose and returns their
+// combined size.
+func (s *Store) storeEntry(e agentsession.Entry, durable bool) (int64, error) {
 	env, body, err := split(e)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	cp, err := s.contentPath(e.Base().ContentHash())
-	if err != nil {
-		return err
+	if err := s.objs.write(spaceContents, e.Base().ContentHash(), body, durable); err != nil {
+		return 0, fmt.Errorf("cas: store content: %w", err)
 	}
-	ep, err := s.entryPath(e.Base().ID)
-	if err != nil {
-		return err
+	if err := s.objs.write(spaceEntries, e.Base().ID, env, durable); err != nil {
+		return 0, fmt.Errorf("cas: store entry: %w", err)
 	}
-	if err := writeObject(cp, body); err != nil {
-		return fmt.Errorf("cas: store content: %w", err)
-	}
-	if err := writeObject(ep, env); err != nil {
-		return fmt.Errorf("cas: store entry: %w", err)
-	}
-	return nil
+	return int64(len(env) + len(body)), nil
 }
 
-// freshenPath touches the objects on the path to id, so a fork's prefix
-// is young to the sweep until the fork's header lands.
+// unpackLimit is how many objects a transfer brings before they arrive
+// as a pack rather than loose, as git's fetch.unpackLimit is: a pack for
+// every small transfer would leave the store many packs to search.
+const unpackLimit = 100
+
+// packEntries stores the objects of entries and blobs a transfer
+// brings: what the database lacks as one pack, the way git takes in a
+// fetch, or loose when that is fewer than unpackLimit objects; and
+// what it holds already through write, which freshens it, writes it
+// loose if a sweep removed it, and has the commit that names it sync
+// it. It returns each entry's size.
+func (s *Store) packEntries(entries []agentsession.Entry, blobs map[string][]byte) (map[string]int64, error) {
+	sizes := map[string]int64{}
+	var all []packObject
+	for _, e := range entries {
+		env, body, err := split(e)
+		if err != nil {
+			return nil, err
+		}
+		id, ch := e.Base().ID, e.Base().ContentHash()
+		sizes[id] = int64(len(env) + len(body))
+		all = append(all, packObject{spaceContents, ch, body}, packObject{spaceEntries, id, env})
+	}
+	for h, data := range blobs {
+		all = append(all, packObject{spaceContents, h, data})
+	}
+	var missing, held []packObject
+	for _, o := range all {
+		if s.objs.hasQuick(o.sp, o.hash) {
+			held = append(held, o)
+		} else {
+			missing = append(missing, o)
+		}
+	}
+	if len(missing) >= unpackLimit {
+		if _, err := writePack(s.objs.packDir(), missing); err != nil {
+			return nil, fmt.Errorf("cas: pack: %w", err)
+		}
+		if err := s.objs.reloadPacks(true); err != nil {
+			return nil, err
+		}
+	} else {
+		held = all
+	}
+	for _, o := range held {
+		if err := s.objs.write(o.sp, o.hash, o.data, true); err != nil {
+			return nil, fmt.Errorf("cas: store: %w", err)
+		}
+	}
+	return sizes, nil
+}
+
+// freshenPath freshens the objects on the path to id, as a write of
+// each would, so a fork's prefix is young to the sweep until the fork's
+// header lands, and an object a sweep removed from under this store's
+// view is written back loose.
 func (s *Store) freshenPath(id string) error {
-	now := time.Now()
 	for id != "" {
-		ep, err := s.entryPath(id)
+		env, err := s.objs.read(spaceEntries, id)
 		if err != nil {
 			return err
 		}
-		if err := os.Chtimes(ep, now, now); err != nil {
+		if err := s.objs.write(spaceEntries, id, env, true); err != nil {
 			return err
 		}
-		e, err := s.envelope(id)
+		c, ok := envelopeContent(env)
+		if !ok {
+			return fmt.Errorf("%w: entry %s names no content", ErrCorrupt, id)
+		}
+		body, err := s.objs.read(spaceContents, c)
 		if err != nil {
 			return err
 		}
-		var c string
-		if json.Unmarshal(e["content"], &c) == nil {
-			if cp, err := s.contentPath(c); err == nil {
-				if err := os.Chtimes(cp, now, now); err != nil {
-					return err
-				}
-			}
-		}
-		var parent *string
-		if err := json.Unmarshal(e["parent"], &parent); err != nil || parent == nil {
+		if err := s.objs.write(spaceContents, c, body, true); err != nil {
 			return err
 		}
-		id = *parent
+		if id, err = s.parentOf(id); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // envelope reads an entry's envelope object.
 func (s *Store) envelope(id string) (map[string]json.RawMessage, error) {
-	ep, err := s.entryPath(id)
+	env, err := s.objs.read(spaceEntries, id)
 	if err != nil {
 		return nil, err
-	}
-	env, err := os.ReadFile(ep)
-	if err != nil {
-		return nil, fmt.Errorf("cas: entry %s: %w", id, err)
 	}
 	var e map[string]json.RawMessage
 	if err := json.Unmarshal(env, &e); err != nil {
@@ -412,16 +545,45 @@ func (s *Store) envelope(id string) (map[string]json.RawMessage, error) {
 	return e, nil
 }
 
-// loadLine reads an entry's two objects and rebuilds its line, checked
-// as written.
+// contentOf returns the content hash an entry's envelope names.
+func (s *Store) contentOf(id string) (string, error) {
+	e, err := s.envelope(id)
+	if err != nil {
+		return "", err
+	}
+	var c string
+	if err := json.Unmarshal(e["content"], &c); err != nil {
+		return "", fmt.Errorf("cas: entry %s: content: %w", id, err)
+	}
+	return c, nil
+}
+
+// present reports whether both of an entry's objects are held. Only an
+// object that is not there makes it false; any other failure to read
+// one is returned, since recovery must not take an unreadable object
+// for a lost one and remove what names it.
+func (s *Store) present(id string) (bool, error) {
+	c, err := s.contentOf(id)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := s.objs.read(spaceContents, c); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// loadLine reads an entry's two objects, each checked against its name,
+// and rebuilds its line.
 func (s *Store) loadLine(id string) ([]byte, error) {
-	ep, err := s.entryPath(id)
+	env, err := s.objs.read(spaceEntries, id)
 	if err != nil {
 		return nil, err
-	}
-	env, err := os.ReadFile(ep)
-	if err != nil {
-		return nil, fmt.Errorf("cas: entry %s: %w", id, err)
 	}
 	var e struct {
 		Content string `json:"content"`
@@ -429,13 +591,12 @@ func (s *Store) loadLine(id string) ([]byte, error) {
 	if err := json.Unmarshal(env, &e); err != nil {
 		return nil, fmt.Errorf("cas: entry %s: %w", id, err)
 	}
-	cp, err := s.contentPath(e.Content)
-	if err != nil {
-		return nil, err
+	if !agentsession.ValidHash(e.Content) {
+		return nil, fmt.Errorf("%w: entry %s names content %q", ErrCorrupt, id, e.Content)
 	}
-	body, err := os.ReadFile(cp)
+	body, err := s.objs.read(spaceContents, e.Content)
 	if err != nil {
-		return nil, fmt.Errorf("cas: content %s of entry %s: %w", e.Content, id, err)
+		return nil, fmt.Errorf("%w (the content of entry %s)", err, id)
 	}
 	if err := ijson.Check(env); err != nil {
 		return nil, fmt.Errorf("cas: entry %s: %w", id, err)
@@ -509,25 +670,27 @@ func (s *Store) anyOwner(entry string) (string, bool) {
 // 0001 gives an item that names a blob beside the file.
 var sidecarRef = regexp.MustCompile(`sidecar:sha256:[0-9a-f]{64}`)
 
-// PutBlob stores a media blob under its hash and returns the hash. An
-// item names it with a sidecar: URL carrying the hash, and a projection
-// of a sidecar session writes it beside the file as the file named by
-// the hex digest. A blob is a content object, held once.
+// PutBlob stores a media blob under its hash, durably, and returns the
+// hash. An item names it with a sidecar: URL carrying the hash, and a
+// projection of a sidecar session writes it beside the file as the file
+// named by the hex digest. A blob is a content object, held once.
 func (s *Store) PutBlob(ctx context.Context, data []byte) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	hash := agentsession.HashBytes(data)
-	cp, err := s.contentPath(hash)
-	if err != nil {
-		return "", err
+	if s.readOnly {
+		return "", errReadOnly()
 	}
-	guard, err := lockShared(ctx, filepath.Join(s.root, "sweep.lock"))
+	hash := hashBytes(data)
+	guard, err := s.writeGuard(ctx)
 	if err != nil {
 		return "", err
 	}
 	defer guard.release()
-	if err := writeObject(cp, data); err != nil {
+	if err := s.objs.write(spaceContents, hash, data, true); err != nil {
+		return "", fmt.Errorf("cas: store blob: %w", err)
+	}
+	if err := s.objs.flush(); err != nil {
 		return "", fmt.Errorf("cas: store blob: %w", err)
 	}
 	return hash, nil
@@ -538,16 +701,9 @@ func (s *Store) Blob(ctx context.Context, hash string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	cp, err := s.contentPath(hash)
-	if err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(cp)
+	data, err := s.objs.read(spaceContents, hash)
 	if err != nil {
 		return nil, fmt.Errorf("cas: blob %s: %w", hash, err)
-	}
-	if agentsession.HashBytes(data) != hash {
-		return nil, fmt.Errorf("cas: blob %s: bytes do not hash to their name", hash)
 	}
 	return data, nil
 }
@@ -562,196 +718,290 @@ func blobsNamedBy(content []byte) []string {
 	return out
 }
 
-// --- the journal ---
+// --- recovery ---
 
-// journalRecord is one line of the journal: one commit.
-type journalRecord struct {
-	Op      string `json:"op"` // create, append, head, delete
-	Session string `json:"session"`
-	Entry   string `json:"entry,omitempty"`
-	Head    string `json:"head,omitempty"`
-	Seq     int    `json:"seq,omitempty"`
-}
-
-// commit appends the journal record and fsyncs it: the commit point.
-func (s *Store) commit(rec journalRecord) error {
-	path := filepath.Join(s.root, "journal")
-	_, existed := os.Stat(path)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-	if err != nil {
-		return fmt.Errorf("cas: journal: %w", err)
-	}
-	data, err := json.Marshal(rec)
-	if err != nil {
-		f.Close()
-		return err
-	}
-	if _, err := f.Write(append(data, '\n')); err != nil {
-		f.Close()
-		return fmt.Errorf("cas: journal: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return fmt.Errorf("cas: journal: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if existed != nil {
-		return syncDir(s.root)
-	}
-	return nil
-}
-
-// sessionState is what the journal says about one session.
-type sessionState struct {
-	entries []string // own entries in journal order, each once
-	seen    map[string]bool
+// view is one session as the journal and its indexes together say.
+type view struct {
+	exists  bool
+	deleted bool
+	log     []string
+	sizes   map[string]int64
 	head    string
-	hasHead bool
-	deleted bool // the last thing the journal says is that it was deleted
+	mark    string
+	// damaged is set when the log holds entries the journal lacks, which
+	// only damage to the journal, or a journal restored from before the
+	// log, can cause. The log is kept.
+	damaged bool
+
+	// adopt lists the entries of lazy records the journal has not yet
+	// said are durable: a writing store that recovers the session syncs
+	// their objects and says so, since a durable append it makes next
+	// must not be cut with them by a later crash.
+	adopt []string
+
+	logChanged, headChanged, markChanged bool
 }
 
-// replay reads the journal and returns each session's state as the
-// records say, in order, with a create or delete record clearing what
-// came before it. A line that does not parse — a record a crashed
-// process cut short — is skipped, and if another process's record
-// landed on the same line after the torn bytes, that record is found
-// and counted. Nothing is ever truncated: the journal is shared, and a
-// record another process fsynced is not this process's to remove.
-func (s *Store) replay() (map[string]*sessionState, error) {
-	f, err := os.Open(filepath.Join(s.root, "journal"))
-	if errors.Is(err, os.ErrNotExist) {
-		return map[string]*sessionState{}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("cas: journal: %w", err)
-	}
-	defer f.Close()
-	states := map[string]*sessionState{}
-	br := bufio.NewReaderSize(f, 1<<20)
-	for {
-		line, err := br.ReadBytes('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return nil, fmt.Errorf("cas: journal: %w", err)
-		}
-		if len(line) == 0 {
-			break
-		}
-		var rec journalRecord
-		if json.Unmarshal(line, &rec) != nil {
-			// Torn bytes; a whole record may follow them on this line.
-			if k := bytes.LastIndex(line, []byte(`{"op":"`)); k > 0 {
-				if json.Unmarshal(line[k:], &rec) != nil {
-					continue
-				}
-			} else {
-				continue
-			}
-		}
-		st := states[rec.Session]
-		if st == nil {
-			st = &sessionState{seen: map[string]bool{}}
-			states[rec.Session] = st
-		}
-		switch rec.Op {
-		case "delete":
-			states[rec.Session] = &sessionState{seen: map[string]bool{}, deleted: true}
-		case "create":
-			// The boundary a session starts from: whatever the journal
-			// said about this ID before belongs to a session that is gone.
-			states[rec.Session] = &sessionState{seen: map[string]bool{}}
-		case "append":
-			if rec.Entry != "" && !st.seen[rec.Entry] {
-				st.entries = append(st.entries, rec.Entry)
-				st.seen[rec.Entry] = true
-			}
-			if rec.Head != "" {
-				st.head, st.hasHead = rec.Head, true
-			}
-		case "head":
-			st.head, st.hasHead = rec.Head, true
-		}
-		if errors.Is(err, io.EOF) {
-			break
-		}
-	}
-	return states, nil
-}
-
-// recoverSession makes one session's indexes say what the journal says,
-// under that session's lock: the journal is what a crash cannot take,
-// the log and the head are what it can leave behind. A session the
-// journal says was deleted has its directory removed. It reports
-// whether the session exists.
-func (s *Store) recoverSession(id, dir string) (bool, error) {
-	states, err := s.replay()
-	if err != nil {
-		return false, err
-	}
-	st := states[id]
-	if st == nil {
-		_, err := os.Stat(filepath.Join(dir, "header"))
-		return err == nil, nil
-	}
-	if st.deleted {
-		if err := os.RemoveAll(dir); err != nil {
-			return false, err
-		}
-		return false, nil
+// reconcile works out one session's state from the journal scan and the
+// session's files, without writing anything. Recovery only adds: the
+// log keeps every entry it holds, in its order, and gains what the
+// journal says it lacks; the head is the journal's unless the journal
+// is behind the log; a lazy append whose objects a crash took is lost,
+// with everything the session appended after it, since a durable append
+// would have made those objects durable first.
+func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
+	var v view
+	st := scan.states[id]
+	if st != nil && st.deleted {
+		v.deleted = true
+		return v, nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, "header")); err != nil {
-		return false, nil // never finished creating
+		return v, nil // never finished creating
 	}
-	have, err := readLog(dir)
+	v.exists = true
+	have, sizes, err := readLog(dir)
 	if err != nil {
-		return false, err
+		return v, err
 	}
-	if !equalStrings(have, st.entries) {
-		var buf bytes.Buffer
-		for _, h := range st.entries {
-			buf.WriteString(h + "\n")
-		}
-		if err := writeAtomic(filepath.Join(dir, "log"), buf.Bytes()); err != nil {
-			return false, err
+	fileHead, err := readHead(dir)
+	if err != nil {
+		return v, err
+	}
+	fileMark := readMark(dir)
+	v.sizes = sizes
+	if st == nil {
+		v.log, v.head, v.mark = have, fileHead, fileMark
+		return v, nil
+	}
+	// The journal's own view, cut at the first lazy append that was lost.
+	var jEntries []string
+	seen := map[string]bool{}
+	lost := map[string]bool{}
+	jHead, hasJHead := "", false
+	cut := false
+	// A sync record says every lazy record before it is durable.
+	synced := -1
+	for i, r := range st.recs {
+		if r.Op == "sync" {
+			synced = i
 		}
 	}
-	if st.hasHead {
-		cur, _ := readHead(dir)
-		if cur != st.head {
-			if err := writeHead(dir, st.head); err != nil {
-				return false, err
+	for i, r := range st.recs {
+		if cut {
+			if r.Op == "append" && r.Entry != "" {
+				lost[r.Entry] = true
 			}
+			continue
+		}
+		switch r.Op {
+		case "append":
+			if r.Lazy && r.Entry != "" && i > synced {
+				ok, err := s.present(r.Entry)
+				if errors.Is(err, ErrCorrupt) {
+					ok, err = false, nil // a lazy object a crash left torn
+				}
+				if err != nil {
+					return v, fmt.Errorf("cas: session %s: %w", id, err)
+				}
+				if !ok {
+					cut = true
+					lost[r.Entry] = true
+					continue
+				}
+				v.adopt = append(v.adopt, r.Entry)
+			}
+			if r.Entry != "" && !seen[r.Entry] {
+				seen[r.Entry] = true
+				jEntries = append(jEntries, r.Entry)
+				if r.Size > 0 {
+					v.sizes[r.Entry] = r.Size
+				}
+			}
+			if r.Head != "" {
+				jHead, hasJHead = r.Head, true
+			}
+		case "head":
+			jHead, hasJHead = r.Head, true
 		}
 	}
-	return true, nil
+	for _, e := range jEntries {
+		delete(lost, e) // appended again after the loss, and kept
+	}
+	inLog := map[string]bool{}
+	for _, e := range have {
+		if lost[e] {
+			v.logChanged = true
+			continue
+		}
+		if !seen[e] {
+			ok, err := s.present(e)
+			if errors.Is(err, ErrCorrupt) && s.emptyLoose(e) {
+				// Written with a lazy record the crash took, and left empty
+				// by it, as a file renamed before it was synced can be. A
+				// corrupt object with bytes in it is damage, and fails.
+				ok, err = false, nil
+			}
+			if err != nil {
+				return v, fmt.Errorf("cas: session %s: %w", id, err)
+			}
+			if !ok {
+				// A log line that reached the disk ahead of a lazy record
+				// and objects the crash took: an append that was lost.
+				lost[e] = true
+				v.logChanged = true
+				continue
+			}
+			v.damaged = true
+		}
+		inLog[e] = true
+		v.log = append(v.log, e)
+	}
+	for _, e := range jEntries {
+		if !inLog[e] {
+			v.log = append(v.log, e)
+			v.logChanged = true
+		}
+	}
+	base := st.base
+	if base == "" {
+		if hdr, err := readHeader(dir); err == nil {
+			base = hdr.Base
+		}
+	}
+	v.head = fileHead
+	if hasJHead && !(v.damaged && headIn(fileHead, v.log, base)) {
+		v.head = jHead
+	}
+	if lost[v.head] {
+		v.head = jHead
+	}
+	if v.head == "" && !hasJHead {
+		v.head = base // a fork's first head, whose HEAD a crash took
+	}
+	v.headChanged = v.head != fileHead
+	v.mark = fileMark
+	if m := st.mark(); m != "" {
+		v.mark = m
+	}
+	v.markChanged = v.mark != fileMark
+	return v, nil
 }
 
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
+func headIn(head string, log []string, base string) bool {
+	if head == "" {
 		return false
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+	if head == base {
+		return true
+	}
+	for _, e := range log {
+		if e == head {
+			return true
 		}
 	}
-	return true
+	return false
+}
+
+// recoverSession makes one session's indexes say what reconcile says,
+// under that session's lock. A session the journal says was deleted has
+// its directory removed. A read-only store writes nothing.
+func (s *Store) recoverSession(id, dir string) (view, error) {
+	scan, err := s.replay()
+	if err != nil {
+		return view{}, err
+	}
+	v, err := s.reconcile(id, dir, scan)
+	if err != nil || s.readOnly {
+		return v, err
+	}
+	if v.deleted {
+		if err := os.RemoveAll(dir); err != nil {
+			return v, err
+		}
+		return v, nil
+	}
+	if !v.exists {
+		return v, nil
+	}
+	if v.logChanged {
+		var buf bytes.Buffer
+		for _, h := range v.log {
+			writeLogLine(&buf, h, v.sizes[h])
+		}
+		if err := writeIndex(filepath.Join(dir, "log"), buf.Bytes()); err != nil {
+			return v, err
+		}
+	}
+	if v.headChanged {
+		if err := writeHead(dir, v.head); err != nil {
+			return v, err
+		}
+	}
+	if v.markChanged {
+		if err := writeIndex(filepath.Join(dir, "record"), []byte(v.mark+"\n")); err != nil {
+			return v, err
+		}
+	}
+	if len(v.adopt) > 0 {
+		if err := s.adopt(id, v.adopt); err != nil {
+			return v, err
+		}
+	}
+	return v, nil
+}
+
+// emptyLoose reports whether one of an entry's loose objects is empty.
+func (s *Store) emptyLoose(id string) bool {
+	check := func(sp space, hash string) bool {
+		p, err := s.objs.loosePath(sp, hash)
+		if err != nil {
+			return false
+		}
+		info, err := os.Stat(p)
+		return err == nil && info.Size() == 0
+	}
+	if check(spaceEntries, id) {
+		return true
+	}
+	c, err := s.contentOf(id)
+	return err == nil && check(spaceContents, c)
+}
+
+// adopt makes durable the objects of lazy appends a session holds that
+// the journal does not yet say are durable, as the holder recovering it,
+// and commits a sync record saying so. A process that wrote them and
+// crashed synced nothing; without this, the next durable append made
+// here could be cut with them by a later crash.
+func (s *Store) adopt(id string, entries []string) error {
+	for _, e := range entries {
+		if err := s.objs.freshen(spaceEntries, e); err != nil {
+			return fmt.Errorf("cas: session %s: %w", id, err)
+		}
+		c, err := s.contentOf(e)
+		if err != nil {
+			return fmt.Errorf("cas: session %s: %w", id, err)
+		}
+		if err := s.objs.freshen(spaceContents, c); err != nil {
+			return fmt.Errorf("cas: session %s: %w", id, err)
+		}
+	}
+	return s.commit(true, journalRecord{Op: "sync", Session: id})
 }
 
 // index builds what the store holds from the journal, the logs and the
 // bases. The journal counts as well as the logs, since a log may lag an
 // acknowledged append until its session is next opened.
 func (s *Store) index() error {
-	states, err := s.replay()
+	scan, err := s.replay()
 	if err != nil {
 		return err
 	}
-	for id, st := range states {
+	for id, st := range scan.states {
 		if st.deleted {
 			continue
 		}
-		for _, e := range st.entries {
+		for _, e := range st.entries() {
 			s.own(e, id)
 		}
 	}
@@ -763,8 +1013,11 @@ func (s *Store) index() error {
 		if !d.IsDir() || !validSessionID(d.Name()) {
 			continue
 		}
+		if st := scan.states[d.Name()]; st != nil && st.deleted {
+			continue
+		}
 		dir := filepath.Join(s.root, "sessions", d.Name())
-		hashes, err := readLog(dir)
+		hashes, _, err := readLog(dir)
 		if err != nil {
 			s.faulty[d.Name()] = err
 			continue
@@ -802,33 +1055,52 @@ func (s *Store) markPrefix(base string) error {
 
 // --- per-session files ---
 
-func readLog(dir string) ([]string, error) {
+// readLog reads a session's log: each line an entry hash, followed by
+// the entry's size in bytes when the line was written with one.
+func readLog(dir string) ([]string, map[string]int64, error) {
+	sizes := map[string]int64{}
 	data, err := os.ReadFile(filepath.Join(dir, "log"))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, sizes, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("cas: log: %w", err)
+		return nil, nil, fmt.Errorf("cas: log: %w", err)
 	}
 	var out []string
 	for _, l := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		if l != "" {
-			out = append(out, l)
+		hash, size, _ := strings.Cut(l, " ")
+		if hash == "" {
+			continue
+		}
+		out = append(out, hash)
+		if n, err := strconv.ParseInt(size, 10, 64); err == nil {
+			sizes[hash] = n
 		}
 	}
-	return out, nil
+	return out, sizes, nil
 }
 
-func appendLog(dir string, hashes ...string) error {
+func writeLogLine(buf *bytes.Buffer, hash string, size int64) {
+	buf.WriteString(hash)
+	if size > 0 {
+		buf.WriteByte(' ')
+		buf.WriteString(strconv.FormatInt(size, 10))
+	}
+	buf.WriteByte('\n')
+}
+
+func appendLog(dir string, hashes []string, sizes map[string]int64) error {
+	var buf bytes.Buffer
+	for _, h := range hashes {
+		writeLogLine(&buf, h, sizes[h])
+	}
 	f, err := os.OpenFile(filepath.Join(dir, "log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("cas: log: %w", err)
 	}
 	defer f.Close()
-	for _, h := range hashes {
-		if _, err := f.WriteString(h + "\n"); err != nil {
-			return fmt.Errorf("cas: log: %w", err)
-		}
+	if _, err := f.Write(buf.Bytes()); err != nil {
+		return fmt.Errorf("cas: log: %w", err)
 	}
 	return nil
 }
@@ -844,8 +1116,10 @@ func readHead(dir string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+// writeHead writes the HEAD index. It is not fsynced: the journal has
+// every head move, and recovery writes a HEAD a crash left stale.
 func writeHead(dir, head string) error {
-	return writeAtomic(filepath.Join(dir, "HEAD"), []byte(head+"\n"))
+	return writeIndex(filepath.Join(dir, "HEAD"), []byte(head+"\n"))
 }
 
 // readMark reads the mark; a session without one is a mirror, so that
@@ -870,6 +1144,7 @@ func readHeader(dir string) (agentsession.Header, error) {
 	return h, nil
 }
 
+// writeHeader writes the header durably: it is not in the journal.
 func writeHeader(dir string, h agentsession.Header) error {
 	hdr, err := json.Marshal(h)
 	if err != nil {
@@ -879,6 +1154,28 @@ func writeHeader(dir string, h agentsession.Header) error {
 		return err
 	}
 	return writeAtomic(filepath.Join(dir, "header"), append(hdr, '\n'))
+}
+
+// raiseFormat writes the format this package writes into the session's
+// header before the first append that package makes to a session whose
+// header names an earlier minor, as RFC 0002 requires, so a reader of
+// that earlier minor refuses the session rather than reading entries it
+// cannot represent. Nothing hashed changes: the header is not an entry.
+func (s *Store) raiseFormat(h *handle) error {
+	_, minor, err := agentsession.ParseFormat(h.diskFormat)
+	if err == nil && minor >= agentsession.FormatMinor {
+		return nil
+	}
+	hdr, err := readHeader(h.dir)
+	if err != nil {
+		return err
+	}
+	hdr.Format = agentsession.Format
+	if err := writeHeader(h.dir, hdr); err != nil {
+		return fmt.Errorf("cas: raise the header's format: %w", err)
+	}
+	h.diskFormat = agentsession.Format
+	return nil
 }
 
 // --- Store ---
@@ -892,6 +1189,9 @@ func writeHeader(dir string, h agentsession.Header) error {
 func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if s.readOnly {
+		return nil, errReadOnly()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -925,6 +1225,11 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 			}
 			if dir, err := s.sessionDir(owner); err == nil {
 				if oh, err := readHeader(dir); err == nil {
+					// The fork's header takes this package's format, which
+					// must be no earlier than the origin's.
+					if laterFormat(oh.Format, agentsession.Format) {
+						return nil, fmt.Errorf("%w: the origin is %s, later than this writer's %s", agentsession.ErrUnsupportedFormat, oh.Format, agentsession.Format)
+					}
 					if h.Media != "" && mediaOf(h) != mediaOf(oh) {
 						return nil, errors.New("cas: a fork's media must equal its origin's")
 					}
@@ -959,9 +1264,9 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		lk.release()
 		return nil, err
 	}
-	if exists, err := s.recoverSession(h.ID, dir); err != nil {
+	if v, err := s.recoverSession(h.ID, dir); err != nil {
 		return fail(err)
-	} else if exists {
+	} else if v.exists {
 		return fail(fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID))
 	}
 	fail = func(err error) (*agentsession.Session, error) {
@@ -980,9 +1285,11 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 	} else {
 		sess = tmp
 	}
-	// No sweep from here until the header names the prefix. The prefix
-	// is freshened too, so it is young once the lock is dropped.
-	guard, err := lockShared(ctx, filepath.Join(s.root, "sweep.lock"))
+	// No sweep's last step from here until the header names the prefix.
+	// The prefix is freshened too, so it is young once the lock is
+	// dropped, and the create record names the base, so a sweep that
+	// read the headers before this one landed keeps it.
+	guard, err := s.writeGuard(ctx)
 	if err != nil {
 		return fail(err)
 	}
@@ -995,10 +1302,10 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 	// The create record is the boundary: whatever the journal said about
 	// this ID before belongs to a session that is gone. The header is
 	// written last, so a directory without one was never finished.
-	if err := s.commit(journalRecord{Op: "create", Session: h.ID}); err != nil {
+	if err := s.commit(true, journalRecord{Op: "create", Session: h.ID, Base: h.Base}, journalRecord{Op: "mark", Session: h.ID, Mark: mark}); err != nil {
 		return fail(err)
 	}
-	if err := writeAtomic(filepath.Join(dir, "record"), []byte(mark+"\n")); err != nil {
+	if err := writeIndex(filepath.Join(dir, "record"), []byte(mark+"\n")); err != nil {
 		return fail(err)
 	}
 	if h.Base != "" {
@@ -1017,7 +1324,7 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 			return fail(err)
 		}
 	}
-	s.open[h.ID] = &handle{session: sess, dir: dir, lock: lk, mark: mark, head: h.Base, count: sess.Len()}
+	s.open[h.ID] = &handle{session: sess, dir: dir, lock: lk, mark: mark, head: h.Base, count: sess.Len(), diskFormat: h.Format}
 	return sess, nil
 }
 
@@ -1112,47 +1419,40 @@ func (s *Store) openLocked(id string) (*handle, error) {
 		lk.release()
 		return nil, err
 	}
-	exists, err := s.recoverSession(id, dir)
+	v, err := s.recoverSession(id, dir)
 	if err != nil {
 		return fail(err)
 	}
-	if !exists {
+	if !v.exists {
 		return fail(fmt.Errorf("%w: %s", agentsession.ErrNoSession, id))
 	}
 	hdr, err := readHeader(dir)
 	if err != nil {
 		return fail(err)
 	}
+	diskFormat := hdr.Format
 	var prefix [][]byte
 	if hdr.Base != "" {
 		if prefix, err = s.pathLines(hdr.Base); err != nil {
 			return fail(err)
 		}
 	}
-	hashes, err := readLog(dir)
-	if err != nil {
-		return fail(err)
-	}
-	own := make([][]byte, 0, len(hashes))
-	for _, h := range hashes {
+	own := make([][]byte, 0, len(v.log))
+	for _, h := range v.log {
 		line, err := s.loadLine(h)
 		if err != nil {
-			return fail(err)
+			return fail(fmt.Errorf("cas: session %s: %w", id, err))
 		}
 		own = append(own, line)
 	}
-	head, err := readHead(dir)
+	sess, err := s.assemble(hdr, prefix, own, v.head)
 	if err != nil {
 		return fail(err)
 	}
-	sess, err := s.assemble(hdr, prefix, own, head)
-	if err != nil {
-		return fail(err)
-	}
-	for _, h := range hashes {
+	for _, h := range v.log {
 		s.own(h, id) // another process may have appended since the index was built
 	}
-	h := &handle{session: sess, dir: dir, lock: lk, mark: readMark(dir), head: head, count: sess.Len()}
+	h := &handle{session: sess, dir: dir, lock: lk, mark: v.mark, head: v.head, count: sess.Len(), diskFormat: diskFormat}
 	s.open[id] = h
 	return h, nil
 }
@@ -1163,18 +1463,42 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	return r.ID, err
 }
 
+// durableFor says whether the policy makes this append durable.
+func (s *Store) durableFor(hdr agentsession.Header, e agentsession.Entry) bool {
+	switch s.policy {
+	case SyncEveryAppend:
+		return true
+	case SyncOnResponse:
+		switch v := e.(type) {
+		case *agentsession.ResponseEntry, *agentsession.CompactionEntry, *agentsession.BranchSummaryEntry:
+			return true
+		case *agentsession.ItemEntry:
+			_, ok := v.Item.(*openresponses.FunctionCallOutput)
+			return ok
+		}
+		return hdr.HasRecord(e.EntryType())
+	}
+	return false
+}
+
 // Write appends an entry and reports what happened, as the format asks
 // a store to: whether the entry continued the head, branched, was
-// already held, or as a leaf label moved the head or could not. The
-// order is the store's one order: the entry is prepared, its objects
-// are written, the journal record is committed, the log and the head
-// follow, and only then is the entry visible in the session. A session
-// held as a mirror is refused, as is a leaf label carrying `synthetic`.
-// A head moved in memory through Session.Branch since the last commit
-// is journaled first, so a head move never bypasses the journal.
+// already held, or as a leaf label moved the head or could not, and
+// whether the append was durable when it returned. The order is the
+// store's one order: the entry is prepared, its objects are written,
+// the journal record is committed, the log and the head follow, and
+// only then is the entry visible in the session. A session held as a
+// mirror is refused, as is a leaf label carrying `synthetic`. A head
+// moved in memory through Session.Branch since the last commit is
+// journaled first, so a head move never bypasses the journal. The first
+// append to a session whose header names an earlier minor raises the
+// header's format first.
 func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entry) (agentsession.Result, error) {
 	if err := ctx.Err(); err != nil {
 		return agentsession.Result{}, err
+	}
+	if s.readOnly {
+		return agentsession.Result{}, errReadOnly()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1202,30 +1526,32 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	if r.Outcome == agentsession.Held {
 		return r, nil
 	}
-	// From the object write through the commit no sweep may run: the
-	// object may be one the sweep would otherwise find old and unnamed.
-	guard, err := lockShared(ctx, filepath.Join(s.root, "sweep.lock"))
+	if err := s.raiseFormat(h); err != nil {
+		return agentsession.Result{}, err
+	}
+	durable := s.durableFor(h.session.Header(), e)
+	// From the object write through the commit no sweep's last step may
+	// run: the object may be one the sweep would otherwise find old and
+	// unnamed.
+	guard, err := s.writeGuard(ctx)
 	if err != nil {
 		return agentsession.Result{}, err
 	}
-	if err := s.storeEntry(e); err != nil {
+	size, err := s.storeEntry(e, durable)
+	if err != nil {
 		guard.release()
 		return agentsession.Result{}, err
 	}
 	// A sidecar blob the entry names is freshened while the lock is held,
 	// as a reused content is, so a sweep that gathered it as old and
-	// unreferenced sees it young at its second look. One the store does
-	// not hold is reported, as the format allows, rather than refused; a
-	// projection of the session will fail until it arrives.
+	// unreferenced sees it young at its second look, and one whose pack a
+	// sweep removed from under this store is written back.
+	// One the store does not hold is reported, as the format allows,
+	// rather than refused; a projection of the session will fail until
+	// it arrives.
 	if _, body, err := split(e); err == nil {
-		now := time.Now()
 		for _, b := range blobsNamedBy(body) {
-			cp, err := s.contentPath(b)
-			if err != nil {
-				r.Unresolved = append(r.Unresolved, b)
-				continue
-			}
-			if err := os.Chtimes(cp, now, now); err != nil {
+			if err := s.objs.freshen(spaceContents, b); err != nil {
 				r.Unresolved = append(r.Unresolved, b)
 			}
 		}
@@ -1237,15 +1563,16 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	case agentsession.LeafMoved:
 		head = e.(*agentsession.LabelEntry).Target
 	}
-	err = s.commit(journalRecord{Op: "append", Session: sessionID, Entry: r.ID, Head: head, Seq: h.session.Len() + 1})
+	err = s.commit(durable, journalRecord{Op: "append", Session: sessionID, Entry: r.ID, Head: head, Seq: h.session.Len() + 1, Size: size})
 	guard.release()
 	if err != nil {
 		return agentsession.Result{}, err
 	}
-	// The append is durable from here. The log and the head are
+	r.Durable = durable
+	// The append is committed from here. The log and the head are
 	// indexes the next open rebuilds from the journal, so a failure to
 	// write them is not a failed append and is not reported as one.
-	_ = appendLog(h.dir, r.ID)
+	_ = appendLog(h.dir, []string{r.ID}, map[string]int64{r.ID: size})
 	if head != "" {
 		_ = writeHead(h.dir, head)
 		h.head = head
@@ -1270,10 +1597,10 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 }
 
 // committedButNotApplied is what Write returns when the journal record is
-// durable and the in-memory session could not be brought in step: the
+// committed and the in-memory session could not be brought in step: the
 // append happened, so it is reported as a success, and the handle is
 // dropped so the next Open rebuilds the session from what the store
-// holds. Nothing after the commit point may turn a durable append into
+// holds. Nothing after the commit point may turn a committed append into
 // a reported failure.
 func (s *Store) committedButNotApplied(sessionID string, r agentsession.Result) (agentsession.Result, error) {
 	if h, ok := s.open[sessionID]; ok {
@@ -1326,7 +1653,7 @@ func (s *Store) syncHead(h *handle, sessionID string) error {
 	} else if h.session.Header().Base != "" {
 		return fmt.Errorf("%w: a session with a base has a head", agentsession.ErrNoEntry)
 	}
-	if err := s.commit(journalRecord{Op: "head", Session: sessionID, Head: leaf, Seq: h.session.Len()}); err != nil {
+	if err := s.commit(true, journalRecord{Op: "head", Session: sessionID, Head: leaf, Seq: h.session.Len()}); err != nil {
 		return err
 	}
 	_ = writeHead(h.dir, leaf) // an index; the journal has it
@@ -1338,10 +1665,13 @@ func (s *Store) syncHead(h *handle, sessionID string) error {
 // returns ErrHeadMoved when the head is not expected. "" is a valid
 // expected value for a session with no head. The target must be the
 // base or an own entry and not a leaf label; a mirror is refused. The
-// journal record is committed before the head moves anywhere.
+// journal record is committed, durably, before the head moves anywhere.
 func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if s.readOnly {
+		return errReadOnly()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1361,13 +1691,18 @@ func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) err
 	if err := s.mayRestOn(h.session, to); err != nil {
 		return err
 	}
-	if err := s.commit(journalRecord{Op: "head", Session: sessionID, Head: to, Seq: h.session.Len()}); err != nil {
+	return s.moveHead(h, sessionID, to)
+}
+
+// moveHead commits a head move and applies it.
+func (s *Store) moveHead(h *handle, sessionID, to string) error {
+	if err := s.commit(true, journalRecord{Op: "head", Session: sessionID, Head: to, Seq: h.session.Len()}); err != nil {
 		return err
 	}
 	_ = writeHead(h.dir, to) // an index; the journal has it
 	h.head = to
 	if err := h.session.Branch(to); err != nil {
-		// Durable; the session is rebuilt on the next Open.
+		// Committed; the session is rebuilt on the next Open.
 		delete(s.open, sessionID)
 		h.lock.release()
 	}
@@ -1409,21 +1744,33 @@ func (s *Store) Mark(ctx context.Context, sessionID string) (string, error) {
 	return h.mark, nil
 }
 
+// setMark commits a mark and applies it.
+func (s *Store) setMark(h *handle, sessionID, mark string) error {
+	if err := s.commit(true, journalRecord{Op: "mark", Session: sessionID, Mark: mark}); err != nil {
+		return err
+	}
+	_ = writeIndex(filepath.Join(h.dir, "record"), []byte(mark+"\n")) // an index; the journal has it
+	h.mark = mark
+	return nil
+}
+
 // DeclareRecord makes this store the record for a session it holds as
 // a mirror: what a mirror does when the record deleted the session
 // without handing it over, or an importer does for a file it knows to
 // be the only copy.
 func (s *Store) DeclareRecord(ctx context.Context, sessionID string) error {
+	if s.readOnly {
+		return errReadOnly()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.openLocked(sessionID)
 	if err != nil {
 		return err
 	}
-	if err := writeAtomic(filepath.Join(h.dir, "record"), []byte(MarkRecord+"\n")); err != nil {
+	if err := s.setMark(h, sessionID, MarkRecord); err != nil {
 		return err
 	}
-	h.mark = MarkRecord
 	// A head moved in memory while the session was a mirror bypassed
 	// the compare-and-swap; the record's head is the HEAD file's.
 	if h.head != "" {
@@ -1435,7 +1782,11 @@ func (s *Store) DeclareRecord(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// List implements agentsession.Store.
+// List implements agentsession.Store. A directory a crash left without
+// a header, and a session the journal says was deleted, are not
+// sessions and are not listed. Summary.Size is the bytes of the
+// session's own entries, envelopes and contents, as stored; a content
+// several entries share counts once for each.
 func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[agentsession.Summary, error] {
 	return func(yield func(agentsession.Summary, error) bool) {
 		if err := ctx.Err(); err != nil {
@@ -1447,13 +1798,27 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 			yield(agentsession.Summary{}, fmt.Errorf("cas: %w", err))
 			return
 		}
+		scan, err := s.replay()
+		if err != nil {
+			yield(agentsession.Summary{}, err)
+			return
+		}
 		var out []agentsession.Summary
 		var errs []error
 		for _, d := range dirs {
 			if !d.IsDir() || !validSessionID(d.Name()) {
 				continue
 			}
-			sum, err := s.summarize(d.Name(), f.WithNames || f.Current)
+			dir := filepath.Join(s.root, "sessions", d.Name())
+			v, err := s.reconcile(d.Name(), dir, scan)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("cas: %s: %w", d.Name(), err))
+				continue
+			}
+			if !v.exists {
+				continue
+			}
+			sum, err := s.summarize(d.Name(), dir, v, f.WithNames || f.Current)
 			if err != nil {
 				errs = append(errs, err)
 				continue
@@ -1479,26 +1844,35 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 	}
 }
 
-func (s *Store) summarize(id string, withMeta bool) (agentsession.Summary, error) {
-	dir := filepath.Join(s.root, "sessions", id)
+func (s *Store) summarize(id, dir string, v view, withMeta bool) (agentsession.Summary, error) {
 	h, err := readHeader(dir)
 	if err != nil {
 		return agentsession.Summary{}, fmt.Errorf("cas: %s: %w", id, err)
 	}
 	sum := agentsession.Summary{Header: h, Path: dir}
 	if info, err := os.Stat(filepath.Join(dir, "log")); err == nil {
-		sum.Size = info.Size()
 		sum.Modified = info.ModTime()
 	}
-	if withMeta {
-		hashes, err := readLog(dir)
-		if err != nil {
-			return sum, err
+	for _, hash := range v.log {
+		if n, ok := v.sizes[hash]; ok {
+			sum.Size += n
+			continue
 		}
-		for _, hash := range hashes {
+		// A line written before the log carried sizes.
+		if n, ok := s.objs.size(spaceEntries, hash); ok {
+			sum.Size += n
+		}
+		if c, err := s.contentOf(hash); err == nil {
+			if n, ok := s.objs.size(spaceContents, c); ok {
+				sum.Size += n
+			}
+		}
+	}
+	if withMeta {
+		for _, hash := range v.log {
 			line, err := s.loadLine(hash)
 			if err != nil {
-				return sum, err
+				return sum, fmt.Errorf("cas: %s: %w", id, err)
 			}
 			e, err := agentsession.UnmarshalEntry(line)
 			if err != nil {
@@ -1522,10 +1896,15 @@ func (s *Store) summarize(id string, withMeta bool) (agentsession.Summary, error
 // Delete implements agentsession.Store: it commits a delete record, so
 // a later session under the same ID starts from nothing, then removes
 // the session's ref, header and log. Objects stay; what no log and no
-// prefix needs is swept by Sweep.
+// prefix needs is swept by Sweep. Once the record is committed the
+// delete has happened: a failure to remove the directory is left to
+// the next recovery of that ID and is not reported.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if s.readOnly {
+		return errReadOnly()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1544,7 +1923,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	defer lk.release()
-	if err := s.commit(journalRecord{Op: "delete", Session: id}); err != nil {
+	if err := s.commit(true, journalRecord{Op: "delete", Session: id}); err != nil {
 		return err
 	}
 	for h, set := range s.owners {
@@ -1553,13 +1932,16 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 			delete(s.owners, h)
 		}
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		return err
+	if err := os.RemoveAll(dir); err == nil {
+		_ = syncDir(filepath.Join(s.root, "sessions"))
 	}
-	return syncDir(filepath.Join(s.root, "sessions"))
+	return nil
 }
 
-// Release closes a session this process holds, freeing its lock.
+// Release closes a session this process holds, freeing its lock. Lazy
+// appends are made durable first: the next holder's durable commit
+// syncs the journal, and must not make this store's lazy records
+// durable ahead of their objects.
 func (s *Store) Release(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1567,21 +1949,47 @@ func (s *Store) Release(id string) error {
 	if !ok {
 		return nil
 	}
+	var err error
+	if !s.readOnly {
+		err = s.syncJournal()
+	}
 	delete(s.open, id)
-	return h.lock.release()
+	if rerr := h.lock.release(); err == nil {
+		err = rerr
+	}
+	return err
 }
 
-// Close releases every session this store holds.
+// Sync makes every append this store acknowledged lazily durable. The
+// journal is store-wide, so it covers every session.
+func (s *Store) Sync(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.readOnly {
+		return errReadOnly()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.syncJournal()
+}
+
+// Close makes lazy appends durable and releases every session this
+// store holds.
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var first error
+	if !s.readOnly {
+		first = s.syncJournal()
+	}
 	for id, h := range s.open {
 		if err := h.lock.release(); err != nil && first == nil {
 			first = err
 		}
 		delete(s.open, id)
 	}
+	s.objs.close()
 	return first
 }
 
@@ -1693,12 +2101,16 @@ func project(w io.Writer, sess *agentsession.Session, head string) error {
 // from the base or another own entry, and the media matches that of a
 // held session whose own entries include the base. A trailing synthetic
 // marker names the head and is discarded; prefix entries become objects
-// and join no log; own entries join the log in file order, each
-// committed to the journal before the log. A session the store already
-// holds is refused.
+// and join no log; own entries join the log in file order. The objects
+// arrive as one pack and the records as one commit. A session the store
+// already holds is refused; one store takes a session from another by
+// exchange, [Store.Fetch] and [Store.Push].
 func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if s.readOnly {
+		return nil, errReadOnly()
 	}
 	sess, err := agentsession.Read(r)
 	if err != nil {
@@ -1724,7 +2136,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
 	entries := sess.Entries()
-	var own []agentsession.Entry
+	var own, stored []agentsession.Entry
 	for i, e := range entries {
 		if l, ok := e.(*agentsession.LabelEntry); ok && isSynthetic(l) {
 			if i == len(entries)-1 && l.Label != nil && *l.Label == agentsession.LeafLabel {
@@ -1732,6 +2144,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 			}
 			return nil, fmt.Errorf("%w: at line %d", ErrSynthetic, i+2)
 		}
+		stored = append(stored, e)
 		if sess.Prefix(e.Base().ID) {
 			continue
 		}
@@ -1752,18 +2165,32 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 			}
 		}
 	}
-	head := sess.Leaf()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("cas: %w", err)
+	mark := MarkMirror
+	if asRecord {
+		mark = MarkRecord
 	}
+	hd, err := s.admitNew(ctx, dir, h, mark, stored, own, nil, sess.Leaf())
+	if err != nil {
+		return nil, err
+	}
+	return hd.session, nil
+}
+
+// admitNew takes in a session the store lacks: its objects as one pack,
+// then one commit of its create record, its mark, an append record per
+// own entry in order and its head, then the indexes and the header
+// last. A failure after the create record commits a delete, so the ID
+// is free again and nothing half-admitted counts. It returns the
+// session as the store holds it, rebuilt from the objects and the log.
+func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header, mark string, stored, own []agentsession.Entry, blobs map[string][]byte, head string) (*handle, error) {
 	lk, err := s.lockSession(h.ID)
 	if err != nil {
 		return nil, err
 	}
-	if exists, err := s.recoverSession(h.ID, dir); err != nil {
+	if v, err := s.recoverSession(h.ID, dir); err != nil {
 		lk.release()
 		return nil, err
-	} else if exists {
+	} else if v.exists {
 		lk.release()
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
@@ -1771,57 +2198,47 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		lk.release()
 		return nil, fmt.Errorf("cas: %w", err)
 	}
-	// The prefix objects are written below, which makes them young to
-	// the sweep; a fork made by Create freshens them instead.
-	// The create record is the boundary; a failure after it commits a
-	// delete, so the ID is free again and nothing half-imported counts.
-	if err := s.commit(journalRecord{Op: "create", Session: h.ID}); err != nil {
+	guard, err := s.writeGuard(ctx)
+	if err != nil {
 		lk.release()
 		return nil, err
 	}
-	fail := func(err error) (*agentsession.Session, error) {
-		s.commit(journalRecord{Op: "delete", Session: h.ID})
+	defer guard.release()
+	created := false
+	fail := func(err error) (*handle, error) {
+		if created {
+			s.commit(true, journalRecord{Op: "delete", Session: h.ID})
+		}
 		lk.release()
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	guard, err := lockShared(ctx, filepath.Join(s.root, "sweep.lock"))
+	sizes, err := s.packEntries(stored, blobs)
 	if err != nil {
 		return fail(err)
 	}
-	defer guard.release()
-	for _, e := range entries {
-		if l, ok := e.(*agentsession.LabelEntry); ok && isSynthetic(l) {
-			continue
-		}
-		if err := s.storeEntry(e); err != nil {
-			return fail(err)
-		}
-	}
-	mark := MarkMirror
-	if asRecord {
-		mark = MarkRecord
-	}
-	if err := writeAtomic(filepath.Join(dir, "record"), []byte(mark+"\n")); err != nil {
-		return fail(err)
-	}
+	recs := []journalRecord{{Op: "create", Session: h.ID, Base: h.Base}, {Op: "mark", Session: h.ID, Mark: mark}}
+	hashes := make([]string, 0, len(own))
 	for i, e := range own {
-		if err := s.commit(journalRecord{Op: "append", Session: h.ID, Entry: e.Base().ID, Seq: i + 1}); err != nil {
-			return fail(err)
-		}
+		id := e.Base().ID
+		hashes = append(hashes, id)
+		recs = append(recs, journalRecord{Op: "append", Session: h.ID, Entry: id, Seq: i + 1, Size: sizes[id]})
 	}
 	if head != "" {
-		if err := s.commit(journalRecord{Op: "head", Session: h.ID, Head: head, Seq: len(own)}); err != nil {
-			return fail(err)
-		}
+		recs = append(recs, journalRecord{Op: "head", Session: h.ID, Head: head, Seq: len(own)})
 	}
-	hashes := make([]string, 0, len(own))
-	for _, e := range own {
-		hashes = append(hashes, e.Base().ID)
-		s.own(e.Base().ID, h.ID)
+	if err := s.commit(true, recs...); err != nil {
+		return fail(err)
+	}
+	created = true
+	if err := writeIndex(filepath.Join(dir, "record"), []byte(mark+"\n")); err != nil {
+		return fail(err)
+	}
+	for _, id := range hashes {
+		s.own(id, h.ID)
 	}
 	if len(hashes) > 0 {
-		if err := appendLog(dir, hashes...); err != nil {
+		if err := appendLog(dir, hashes, sizes); err != nil {
 			return fail(err)
 		}
 	}
@@ -1842,152 +2259,8 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	if err := syncDir(filepath.Join(s.root, "sessions")); err != nil {
 		return fail(err)
 	}
-	// What the store returns is what it holds: the session rebuilt from
-	// the objects and the log, marker gone, head from HEAD.
 	lk.release()
-	hd, err := s.openLocked(h.ID)
-	if err != nil {
-		return nil, err
-	}
-	return hd.session, nil
-}
-
-// Sweep removes objects nothing needs, following references down: an
-// envelope is kept while the journal, a log or a prefix names it, a
-// content while a kept envelope names it. It works from the journal, so
-// an append acknowledged as durable whose log line never reached disk
-// is kept, and it keeps every object younger than grace, as git's
-// collector spares a young loose object, so an object written ahead of
-// its journal record is safe. It therefore runs alongside live sessions,
-// holding the store's lock only per object for a second stat and the
-// remove, so a writer never waits longer than one removal; two sweeps
-// may overlap and only race to remove the same object, which is
-// harmless. The keep set is a snapshot taken before those locks, so
-// grace must exceed the longest interval any live writer holds between
-// writing an object and committing its record, or an object committed
-// after the snapshot and written before the sweep began is removed. A
-// grace of zero is therefore safe only when no writer is active, as git
-// says of pruning with an expiry of now. An hour is a reasonable grace
-// for a live store. Media blobs are contents. It returns how many
-// objects went.
-func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
-	if err := ctx.Err(); err != nil {
-		return 0, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	states, err := s.replay()
-	if err != nil {
-		return 0, err
-	}
-	keepEntry := map[string]bool{}
-	for _, st := range states {
-		if st.deleted {
-			continue
-		}
-		for _, e := range st.entries {
-			keepEntry[e] = true
-		}
-		if st.head != "" {
-			keepEntry[st.head] = true
-		}
-	}
-	s.owners = map[string]map[string]bool{}
-	s.prefix = map[string]bool{}
-	if err := s.index(); err != nil {
-		return 0, err
-	}
-	for id := range s.owners {
-		keepEntry[id] = true
-	}
-	for id := range s.prefix {
-		keepEntry[id] = true
-	}
-	// A fork being created has its prefix freshened before its header
-	// lands, so those objects are young and spared.
-	keepContent := map[string]bool{}
-	for id := range keepEntry {
-		e, err := s.envelope(id)
-		if err != nil {
-			continue
-		}
-		var c string
-		if json.Unmarshal(e["content"], &c) != nil {
-			continue
-		}
-		keepContent[c] = true
-		// A media blob is retained while a retained content names it
-		// through a sidecar URL: references followed all the way down.
-		if cp, err := s.contentPath(c); err == nil {
-			if body, err := os.ReadFile(cp); err == nil {
-				for _, b := range blobsNamedBy(body) {
-					keepContent[b] = true
-				}
-			}
-		}
-	}
-	// Candidates are gathered without the lock; the lock is taken
-	// exclusive per object, around a second stat and the remove, so a
-	// writer waits at most one removal. A writer that freshened the
-	// object in between is seen by the second stat; one that starts
-	// after the remove finds the object gone and writes it again.
-	young := time.Now().Add(-grace)
-	type candidate struct {
-		path string
-		tmp  bool
-	}
-	var candidates []candidate
-	for _, space := range []struct {
-		dir  string
-		keep map[string]bool
-	}{{filepath.Join(s.root, "objects", "entries"), keepEntry}, {filepath.Join(s.root, "objects", "contents"), keepContent}} {
-		err := filepath.WalkDir(space.dir, func(path string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return err
-			}
-			info, err := d.Info()
-			if err != nil || info.ModTime().After(young) {
-				return nil
-			}
-			if strings.HasPrefix(d.Name(), ".tmp-") {
-				candidates = append(candidates, candidate{path: path, tmp: true})
-				return nil
-			}
-			rel, _ := filepath.Rel(space.dir, path)
-			hash := agentsession.HashPrefix + strings.ReplaceAll(rel, string(filepath.Separator), "")
-			if !space.keep[hash] {
-				candidates = append(candidates, candidate{path: path})
-			}
-			return nil
-		})
-		if err != nil {
-			return 0, err
-		}
-	}
-	swept := 0
-	for _, c := range candidates {
-		if err := ctx.Err(); err != nil {
-			return swept, err
-		}
-		lk, err := lockFile(filepath.Join(s.root, "sweep.lock"))
-		if err != nil {
-			return swept, err
-		}
-		again, err := os.Stat(c.path)
-		if err != nil || again.ModTime().After(young) {
-			lk.release()
-			continue
-		}
-		err = os.Remove(c.path)
-		lk.release()
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return swept, err
-		}
-		if !c.tmp {
-			swept++
-		}
-	}
-	return swept, nil
+	return s.openLocked(h.ID)
 }
 
 var _ agentsession.Store = (*Store)(nil)

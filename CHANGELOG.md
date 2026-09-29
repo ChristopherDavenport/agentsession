@@ -5,6 +5,148 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **RFC 0001 draft 0.9; the library writes `agentsession/0.9`.** One
+  element and a paragraph in the `config` section. A 0.5 to 0.8 file
+  reads as it stands, with nothing rehashed; v0.0.11 refuses a 0.9
+  file, as a 0.x reader refuses a later minor.
+  `testdata/sessions/v0.8/replay.jsonl` keeps the 0.8 fixture as
+  v0.0.11 released it, and a test reads it. 0.8 kept the omitted
+  list in force until a config changed it, but a config that changed
+  it wrote all of it: under a memory at its budget every save of a new
+  fact and every forget moves a part across the budget, and one part
+  moved rewrote 475, 37 KB and 12% more than the joined string.
+  `instructions_omitted` now takes the `{"keep":n}` element
+  `instructions_parts` took in 0.7, counted by the same cursor over
+  the list in force, and the same save is 93 bytes. `OmittedPart.Keep`,
+  taken only from a positive integer written as digits, and
+  `OmittedPart.ID` is now `omitempty`. `Settings.OmittedDelta` returns
+  the member that takes the list in force to a new one: nil when
+  nothing moved, `[]` to clear, and otherwise every run of unchanged
+  parts in order as a keep. The context resolves each keep against the
+  list before its entry, so `Settings.InstructionsOmitted` and a
+  compaction's checkpoint hold the list whole; a keep that cannot be
+  satisfied stays in the list as written, which
+  `OmittedPart.Unresolved` reports. `Append` refuses a keep carrying
+  other members, a list with a keep that names an id twice, and a keep
+  in a replace, which discards the list it counts over. `describe`
+  prints a keep as `+n`, and `show` an unresolved one. The writer half,
+  writing keep runs, is agentturn/session's. (#115)
+- **cas packs its objects, as git does.** Each envelope and body was a
+  file of its own, so a store of 220-byte objects took several times
+  its bytes on disk. `Store.Pack` moves loose objects into one
+  immutable pack with a sorted index, named by its checksum, and
+  `Sweep` is now git's gc: it repacks everything the store holds into
+  one pack and drops what nothing needs, sparing a young unneeded
+  object by writing it back loose with its pack's age. `Import` and an
+  exchange write what they bring as a pack. `Summary.Size` is the
+  bytes of the session's own objects, carried in the log, where it was
+  the size of the log. (#106)
+- **cas has a read-only open.** `WithReadOnly` takes no session lock,
+  recovers in memory and refuses every write with
+  `agentsession.ErrReadOnly`, so an operator can read, project and
+  verify a session a harness holds, and a read of an idle one no
+  longer locks the harness out of it. (#107)
+- **The cas journal is checksummed, and recovery only adds.** A
+  flipped byte in a journal record was skipped as a torn write, and
+  recovery then rewrote the intact log without that append, or left a
+  session that would not open. Each record now ends in a CRC-32C, and
+  a whole line that does not read is reported as damage; a crash cuts
+  a record short only at the journal's end. A log holding entries the
+  journal lacks keeps them, and the head does not move back past them.
+  Records written by v0.0.11 have no checksum and read as before.
+  (#108)
+- **A cas sweep waits for writers rather than stopping, and does not
+  block its own process.** It stopped with `ErrSessionLocked` at the
+  first object a writer in another process held, and held the store's
+  mutex for its whole run. It now builds its keep set and pack without
+  either, waits for writers until its context ends, and holds the
+  sweep lock only for a short last step that rescues anything
+  committed since it looked. A second sweep or pack gets
+  `ErrSweepRunning`. (#109)
+- **cas appends cost fewer fsyncs, and a writer may choose when to
+  pay them.** HEAD, the log and the mark are indexes the journal
+  rebuilds, now written without an fsync, and a commit syncs each
+  directory it touched once: a durable append is five fsyncs where it
+  was seven. `WithSync` takes jsonl's policies, `SyncEveryAppend`,
+  `SyncOnResponse` and `SyncNever`, with `Store.Sync`; a lazy append's
+  record says so, the next durable commit flushes its objects first,
+  and after a crash a lazy append whose objects were lost is gone with
+  what followed it, not damage; a store that recovers a session
+  holding another process's unsynced lazy appends syncs them first,
+  and `Release` syncs what this store left. `Result.Durable` says
+  which an append got. (#110)
+- **cas List and Delete after a crash.** List no longer yields an
+  error for a directory a crash left without a header, nor lists a
+  session the journal deleted, and Delete succeeds once its record is
+  committed, leaving the directory to recovery. (#111)
+- **cas push and fetch.** `Store.Push` and `Store.Fetch` carry a
+  session's closure between two stores as RFC 0002's exchange section
+  describes: admission parent first as one pack, the log merged as a
+  set, the head moved by compare-and-swap or force on a push and only
+  forward on a mirror's fetch, a push only from the record, and a
+  handover that makes the receiver the record before the sender a
+  mirror. A mirror can now follow its record. (#113)
+- **cas names a corrupt object, and verifies a whole store.** Every
+  object read is checked against its name, and one that fails is
+  reported as `ErrCorrupt` with its hash and path, where it surfaced as
+  a bad line of a file cas assembled, once for each session sharing
+  it. `Store.Verify` walks the store as git fsck does: journal records,
+  loose objects, packs, every entry held and every session. (#114)
+- **`sqlite.Open` refuses another program's table of its names.** A
+  file holding a foreign `entries` table, such as the one
+  agentmemory/sqlite v0.0.5 wrote, failed with `no such column: id`
+  and kept the `sessions` table and indexes created before it. `Open`
+  now checks each existing `sessions`, `entries` and `holders` table
+  against the columns the store gives it, names the table, its columns
+  and the wanted ones, and applies the schema and its migrations in one
+  transaction, so a refusal leaves the file as it found it. (#116)
+- **The OpenTelemetry env event carries every workspace member and
+  marks a substitution.** It copied `workspace.host` and
+  `workspace.instance` by name, so a substitution through any other
+  member, such as the node a pool rescheduled a sandbox onto, left two
+  env events that read the same while the session and a strict replay
+  said the file system changed. Every string member of `workspace` is
+  now `workspace.<member>`, by key after `workspace.kind` and
+  `workspace.ref`, and an env event whose workspace is not
+  `SameWorkspace` with the one in force before it carries
+  `agentsession.substitution=true`, from `Export` and from `Wrap`
+  alike; a first env entry is not a substitution. (#117)
+- **The CLI reads a cas store, and `verify` of nothing fails.** It
+  took only a file and a jsonl root, and a cas session's directory
+  holds `header`, a valid session file with no entries: `verify` of it
+  printed `0 verified, 0 without hash, 0 failed` and exited 0 for a
+  session whose entries it never read. `list <cas-root>` now lists a
+  cas store, and `show`, `verify` and `export` take `<cas-root> <id>`,
+  open the store with `cas.WithReadOnly`, so beside a writer holding
+  the session's lock, and read the session as the file `Project`
+  writes, so the output is what that file gives. A path inside
+  `sessions/<id>` is read as that session through the store, with a
+  note on stderr. `verify <cas-root>` runs `Store.Verify` and prints
+  each problem and a count. `verify` says how many entries it read and
+  had their ids checked against their hashes, and fails on a file with
+  a header and no entries, and on a store with no sessions, since
+  nothing was checked. (#105)
+- **A store raises a session's format when it first appends to it.**
+  A header was written once, at creation, so a 0.7 session v0.0.11
+  had continued still said 0.7, and v0.0.10 read the 0.8 records in
+  it by 0.7 rules, appended what 0.8 forbids, and reported the rest
+  as hash mismatches. Every store now writes `agentsession.Format`
+  into the stored header before this package's first append to a
+  session whose header names an earlier minor, so an older reader
+  refuses the session as a later format. The header is not hashed,
+  so no id moves. cas writes its `header` file; sqlite updates the
+  row in the append's transaction; jsonl rewrites the file once, the
+  raised header and every later byte as it was, synced and renamed
+  into place under the session's lock, and appends to the new file.
+  An open, a read-only store and an append the session already holds
+  change nothing. jsonl and sqlite leave a header before 0.5 alone,
+  since a reader rehashes the entries of such a file and would not
+  under a raised header; RFC 0001 puts appending to one out of scope,
+  and cas never holds one, since an import migrates it. RFC 0001 now requires the raise of a writer, and RFC 0002
+  of a store. (#112)
+
 ## v0.0.11 - 2026-09-29
 
 - **RFC 0001 draft 0.8; the library writes `agentsession/0.8`.** One

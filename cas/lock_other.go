@@ -47,3 +47,9 @@ func (l *dirLock) release() error {
 func lockShared(ctx context.Context, path string) (*dirLock, error) {
 	return &dirLock{}, ctx.Err()
 }
+
+// lockExclusive on a platform without flock takes nothing, for the same
+// reason.
+func lockExclusive(ctx context.Context, path string) (*dirLock, error) {
+	return &dirLock{}, ctx.Err()
+}

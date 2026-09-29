@@ -13,7 +13,7 @@ import (
 )
 
 // Format is the session format version this package writes.
-const Format = "agentsession/0.8"
+const Format = "agentsession/0.9"
 
 // FormatMajor is the major version of the format this package reads.
 // Any minor version of it is accepted; files are migrated in memory.
@@ -216,12 +216,14 @@ func (h *Header) fill(now time.Time) {
 // FormatMinor is the minor version this package writes. A file of an
 // earlier minor is migrated in memory on read: from 0.5 an entry's id
 // is its envelope hash, so every earlier entry is rehashed and keeps
-// its old id in legacy_id. A 0.5, 0.6 or 0.7 file reads as it stands,
-// since 0.6, 0.7 and 0.8 only add optional members, but for two rules
-// 0.8 reads differently: instructions_omitted stays in force until a
-// later config changes it, and a run whose pending call is held after
-// its dispatch ends input_required, not aborted.
-const FormatMinor = 8
+// its old id in legacy_id. A 0.5, 0.6, 0.7 or 0.8 file reads as it
+// stands, since 0.6 to 0.9 only add optional members and elements, but
+// for two rules 0.8 reads differently: instructions_omitted stays in
+// force until a later config changes it, and a run whose pending call
+// is held after its dispatch ends input_required, not aborted. 0.9
+// lets instructions_omitted name a run of the list in force by keep,
+// which no 0.8 omitted part could be.
+const FormatMinor = 9
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.
 // A file below it is rehashed on read.

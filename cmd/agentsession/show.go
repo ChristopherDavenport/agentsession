@@ -11,18 +11,21 @@ import (
 )
 
 func show(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("show", "<file> [-leaf id] [-v]", stderr)
+	fs := newFlags("show", "<file> | <cas-root> <id> [-leaf id] [-v]", stderr)
 	leaf := fs.String("leaf", "", "entry whose context to print; the current leaf by default")
 	full := fs.Bool("v", false, "print the data of custom and extension entries instead of its size")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
-	path, err := onePath(fs, positional, "session file")
+	src, err := sessionSource(fs, positional, stderr)
 	if err != nil {
 		return err
 	}
-	s, err := readSession(path)
+	if err := requireSession(fs, src, "show"); err != nil {
+		return err
+	}
+	s, err := readSource(src)
 	if err != nil {
 		return err
 	}
@@ -137,6 +140,16 @@ func printContext(w io.Writer, s *agentsession.Session, at string) error {
 	if omitted := ctx.InstructionsOmitted(); len(omitted) > 0 {
 		names := make([]string, 0, len(omitted))
 		for _, o := range omitted {
+			if o.Unresolved() {
+				// A keep the path could not satisfy, or an element
+				// naming nothing.
+				name := "- unresolved"
+				if o.Keep > 0 {
+					name = fmt.Sprintf("keep %d unresolved", o.Keep)
+				}
+				names = append(names, name)
+				continue
+			}
 			names = append(names, fmt.Sprintf("%s %dB (%s)", o.ID, o.Size, o.Reason))
 		}
 		fmt.Fprintf(tw, "  omitted\t%s\n", strings.Join(names, ", "))

@@ -28,7 +28,10 @@ type Settings struct {
 	InstructionsParts []InstructionPart `json:"instructions_parts,omitempty"`
 	// InstructionsOmitted are the parts left out of the instructions
 	// that are in force: the list the last config entry carrying one
-	// wrote, cleared by an empty list or a replace without one. It
+	// wrote, each keep in it resolved against the list before it,
+	// cleared by an empty list or a replace without one. A keep the
+	// path could not satisfy stays in the list as written: see
+	// [OmittedPart.Unresolved]. It
 	// reaches no request, so [Settings.Request] leaves it out and the
 	// request hash does not cover it; a compaction checkpoint carries
 	// it so the list survives the fold. A checkpoint member that does
@@ -97,8 +100,13 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 	}
 	if c.InstructionsOmitted != nil {
 		// The entry carries the member, so it replaces the list in
-		// force; an empty one clears it.
-		out.InstructionsOmitted = cloneOmitted(c.InstructionsOmitted)
+		// force; an empty one clears it. Its keeps count over the list
+		// before it, which a replace discards.
+		prev := s.InstructionsOmitted
+		if c.Replace {
+			prev = nil
+		}
+		out.InstructionsOmitted = cloneOmitted(applyOmitted(prev, c.InstructionsOmitted))
 	}
 	if c.Model != "" {
 		out.Model = c.Model
@@ -249,6 +257,128 @@ func applyInstructionParts(prev, delta []InstructionPart) []InstructionPart {
 		}
 		out = append(out, next)
 	}
+	return out
+}
+
+// applyOmitted resolves a delta's omitted list against the list in
+// force by the cursor applyInstructionParts counts keeps from: an
+// element naming a part in force moves it to just after that part, a
+// keep takes the next parts in force as they are and moves it past
+// them, and a new id leaves it alone. A keep that runs past the list
+// in force or takes a part the delta names elsewhere is kept as it was
+// written, and so is an element with neither an id nor a keep, so a
+// reader can see that a part is missing. An element that names a part
+// carries all of it.
+func applyOmitted(prev, delta []OmittedPart) []OmittedPart {
+	at := make(map[string]int, len(prev))
+	for i, p := range prev {
+		if _, dup := at[p.ID]; p.ID != "" && !dup {
+			at[p.ID] = i
+		}
+	}
+	named := make(map[string]bool, len(delta))
+	for _, p := range delta {
+		if p.ID != "" {
+			named[p.ID] = true
+		}
+	}
+	out := make([]OmittedPart, 0, len(delta))
+	cursor := 0
+	for _, p := range delta {
+		switch {
+		case p.ID == "" && p.Keep > 0:
+			run := prev[min(cursor, len(prev)):min(cursor+p.Keep, len(prev))]
+			ok := len(run) == p.Keep
+			for _, q := range run {
+				ok = ok && !named[q.ID]
+			}
+			cursor += p.Keep
+			if !ok {
+				out = append(out, OmittedPart{Keep: p.Keep})
+				continue
+			}
+			// A part kept as it is stays unresolved if it was.
+			out = append(out, run...)
+		case p.ID == "":
+			// Neither a part nor a keep: kept as written.
+			out = append(out, p)
+		default:
+			if i, ok := at[p.ID]; ok {
+				cursor = i + 1
+			}
+			p.Keep = 0 // a keep beside an id means nothing
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// OmittedDelta returns the instructions_omitted member that takes the
+// omitted parts in force in these settings to omitted, for
+// [ConfigEntry.InstructionsOmitted]: nil when omitted is the list in
+// force, so a writer that renders its omissions every turn writes
+// nothing when nothing moved; an empty, non-nil list, written as [],
+// when omitted is empty and a list is in force; and otherwise omitted
+// with every run of parts in force, unchanged and in the order they
+// are in force, named by a keep, so a part moving across a budget
+// costs that part and not the whole list. A part that changed, is new
+// or is out of that order is written whole. omitted names each ID
+// once; when it does not, or the list in force names an ID twice,
+// omitted is returned whole.
+//
+// A delta with Replace set discards the list in force, so its keeps
+// would resolve against nothing: such a delta carries omitted itself.
+func (s Settings) OmittedDelta(omitted []OmittedPart) []OmittedPart {
+	prev := s.InstructionsOmitted
+	if slices.Equal(prev, omitted) {
+		return nil
+	}
+	if len(omitted) == 0 {
+		return []OmittedPart{}
+	}
+	at := make(map[string]int, len(prev))
+	whole := false
+	for i, p := range prev {
+		if p.ID == "" {
+			continue // an element naming nothing is never kept by a delta
+		}
+		if _, dup := at[p.ID]; dup {
+			whole = true
+		}
+		at[p.ID] = i
+	}
+	seen := make(map[string]bool, len(omitted))
+	for _, p := range omitted {
+		if p.ID == "" || p.Keep != 0 || seen[p.ID] {
+			whole = true
+		}
+		seen[p.ID] = true
+	}
+	if whole {
+		return append([]OmittedPart{}, omitted...)
+	}
+	out := make([]OmittedPart, 0, len(omitted))
+	cursor, run := 0, 0
+	flush := func() {
+		if run > 0 {
+			out = append(out, OmittedPart{Keep: run})
+			cursor += run
+			run = 0
+		}
+	}
+	for _, p := range omitted {
+		j, ok := at[p.ID]
+		if ok && prev[j] == p && j == cursor+run {
+			run++
+			continue
+		}
+		flush()
+		out = append(out, p)
+		if ok {
+			cursor = j + 1
+		}
+	}
+	flush()
 	return out
 }
 

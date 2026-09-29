@@ -1,16 +1,21 @@
 // Command agentsession inspects, verifies, exports and lists Agent
-// Session Format files from a shell.
+// Session Format files, and the sessions of a cas store, from a shell.
 //
-//	agentsession show <file> [-leaf id] [-v]
-//	agentsession verify <file>
-//	agentsession export <file> -out dir [-redact-home] [-redact-env] [-secret VALUE]...
+//	agentsession show <file> | <cas-root> <id> [-leaf id] [-v]
+//	agentsession verify <file> | <cas-root> [id]
+//	agentsession export <file> | <cas-root> <id> -out dir [-redact-home] [-redact-env] [-secret VALUE]...
 //	agentsession list <root> [-cwd path] [-parent id] [-limit n]
 //
 // Every command opens what it reads read-only. show, verify and
-// export read a file directly and never take its lock; list opens a
-// jsonl store root read-only and prints its sessions, newest first.
-// All four are safe to run beside a harness that is writing, which is
-// when an operator most wants them.
+// export read a file directly and never take its lock; given a cas
+// store and a session id, they open the store read-only and read the
+// session as the file its projection is. A path inside a cas store's
+// sessions/<id> directory, its one-line header file included, is read
+// as that session through the store. verify of a cas root with no id
+// checks the whole store as git fsck does. list opens a jsonl or cas
+// store root read-only and prints its sessions, newest first. All four
+// are safe to run beside a harness that is writing, which is when an
+// operator most wants them.
 package main
 
 import (
@@ -27,10 +32,15 @@ import (
 const usage = `usage: agentsession <command> [flags] <arguments>
 
 commands:
-  show    <file> [-leaf id] [-v]   print the entries and the context at a leaf
-  verify  <file>                   check every recorded request hash
-  export  <file> -out dir          write ATIF documents for every leaf
-  list    <root>                   list the sessions of a jsonl store
+  show    <session> [-leaf id] [-v]  print the entries and the context at a leaf
+  verify  <session>                  check every entry hash and recorded request hash
+  verify  <cas-root>                 check a whole cas store: journal, objects, sessions
+  export  <session> -out dir         write ATIF documents for every leaf
+  list    <root>                     list the sessions of a jsonl or cas store
+
+A <session> is a session file, or a cas store's root and a session id:
+"agentsession show ~/.agent/cas 01995b2a-...". Every command reads
+without taking a lock.
 
 Run "agentsession <command> -h" for a command's flags.
 `

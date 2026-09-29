@@ -13,7 +13,7 @@ import (
 )
 
 func exportCmd(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("export", "<file> -out dir [-redact-home] [-redact-env] [-secret VALUE]...", stderr)
+	fs := newFlags("export", "<file> | <cas-root> <id> -out dir [-redact-home] [-redact-env] [-secret VALUE]...", stderr)
 	out := fs.String("out", "", "directory to write the ATIF documents into (required)")
 	redactHome := fs.Bool("redact-home", false, "replace the home directory in paths and text")
 	redactEnv := fs.Bool("redact-env", false, "drop environment snapshots from the documents")
@@ -24,15 +24,18 @@ func exportCmd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	path, err := onePath(fs, positional, "session file")
+	src, err := sessionSource(fs, positional, stderr)
 	if err != nil {
+		return err
+	}
+	if err := requireSession(fs, src, "export"); err != nil {
 		return err
 	}
 	if *out == "" {
 		fs.Usage()
 		return fmt.Errorf("%w: -out is required", errUsage)
 	}
-	s, err := readSession(path)
+	s, err := readSource(src)
 	if err != nil {
 		return err
 	}
@@ -41,7 +44,11 @@ func exportCmd(args []string, stdout, stderr io.Writer) error {
 		fs.Usage()
 		return err
 	}
-	opts := export.Options{Subsessions: siblingResolver(path), Preferences: prefs}
+	resolve := siblingResolver(src.path)
+	if src.id != "" {
+		resolve = casResolver(src.path)
+	}
+	opts := export.Options{Subsessions: resolve, Preferences: prefs}
 	if len(secrets) > 0 {
 		opts.Redactors = append(opts.Redactors, export.Secrets(secrets...))
 	}

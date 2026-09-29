@@ -18,7 +18,7 @@ import (
 // namespaced items, unknown members on known entries and unknown header
 // fields, all of which the format requires a reader to preserve.
 func TestRoundTripFixtures(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge", "fork", "normalised", "parts"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge", "fork", "normalised", "parts", "replay", "omitted"} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join("testdata", "sessions", name+".jsonl")
 			want, err := os.ReadFile(path)
@@ -185,14 +185,14 @@ func TestReadErrors(t *testing.T) {
 // rewrite; the rewrite is canonical, so members are compared and not
 // bytes.
 func TestReadMinorVersion(t *testing.T) {
-	later := `{"type":"session","format":"agentsession/0.9","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}` + "\n"
+	later := `{"type":"session","format":"agentsession/0.10","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}` + "\n"
 	if _, err := Read(strings.NewReader(later)); !errors.Is(err, ErrUnsupportedFormat) {
 		t.Errorf("Read of a later 0.x minor = %v, want ErrUnsupportedFormat", err)
 	}
-	// 0.6, 0.7 and 0.8 only add optional members, so a 0.5, 0.6 or 0.7
-	// file reads as it stands: nothing is rehashed and the header takes
-	// the current format.
-	for _, minor := range []string{"0.5", "0.6", "0.7"} {
+	// 0.6 to 0.9 only add optional members and elements, so a 0.5, 0.6,
+	// 0.7 or 0.8 file reads as it stands: nothing is rehashed and the
+	// header takes the current format.
+	for _, minor := range []string{"0.5", "0.6", "0.7", "0.8"} {
 		earlier := `{"type":"session","format":"agentsession/` + minor + `","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}` + "\n"
 		if s, err := Read(strings.NewReader(earlier)); err != nil {
 			t.Errorf("Read of %s = %v", minor, err)
@@ -200,7 +200,7 @@ func TestReadMinorVersion(t *testing.T) {
 			t.Errorf("%s read as migrated %v, format %s", minor, migrated, s.Header().Format)
 		}
 	}
-	in := `{"type":"session","format":"agentsession/0.8","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24","future_field":{"a":1}}` + "\n"
+	in := `{"type":"session","format":"agentsession/0.9","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24","future_field":{"a":1}}` + "\n"
 	s, err := Read(strings.NewReader(in))
 	if err != nil {
 		t.Fatal(err)
