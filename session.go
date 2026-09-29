@@ -37,6 +37,9 @@ type Session struct {
 	// the file stands alone. Own entries hang from the base or from
 	// each other.
 	prefix map[string]bool
+	// callIDs holds the call ID of every function call the session
+	// holds, on any branch: a call ID names one call in a session.
+	callIDs map[string]bool
 	// repeated lists the IDs Read met a second time, each treated as
 	// the same entry; unresolved lists the entries a migration could
 	// not rewrite, which keeps a migrated file from being re-emitted.
@@ -55,6 +58,7 @@ func New(h Header) *Session {
 	h.fill(s.now())
 	s.header = h
 	s.byID = map[string]Entry{}
+	s.callIDs = map[string]bool{}
 	s.children = map[string][]string{}
 	return s
 }
@@ -311,8 +315,9 @@ func (s *Session) Commit(e Entry) (Result, error) {
 // accepted, so a retry starts from what the caller set and not from
 // where the first attempt would have gone. The body is a different
 // matter: a caller-set id is checked against the normalised line,
-// since that is what the id is the hash of, so an entry refused with
-// ErrBadID keeps its normalised body and the record of the rewrite,
+// since that is what the id is the hash of, and the call rules are
+// checked after the hash, so an entry refused with ErrBadID or by a
+// call rule keeps its normalised body and the record of the rewrite,
 // and a retry produces the same line.
 func (s *Session) prepare(e Entry) (Result, error) {
 	b := e.Base()
@@ -356,47 +361,6 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 	if err := s.checkParents(b); err != nil {
 		return Result{}, err
 	}
-	if it, ok := e.(*ItemEntry); ok {
-		// A call ID names one call on a path: an output, a pending list
-		// and a projection name the call by it.
-		if fc, ok := it.Item.(*openresponses.FunctionCall); ok && lastCall(Calls(s.path(b.Parent)), fc.CallID) != nil {
-			return Result{}, fmt.Errorf("%w: %s", ErrCallIDRepeated, fc.CallID)
-		}
-	}
-	if d, ok := e.(*DecisionEntry); ok {
-		// What follows an answer or a reject is the call's output and
-		// nothing else. An answer is for a call that may have run and
-		// has no output; with dispatches promised, one with none never
-		// started. A reject is for a call that did not run, so none
-		// with a dispatch.
-		if c := lastCall(Calls(s.path(b.Parent)), d.CallID); c != nil {
-			switch {
-			case c.Answered():
-				return Result{}, fmt.Errorf("%w: %s", ErrCallAnswered, d.CallID)
-			case c.Rejected():
-				return Result{}, fmt.Errorf("%w: %s", ErrCallRejected, d.CallID)
-			case d.Verdict == VerdictReject && c.Dispatch != nil:
-				return Result{}, fmt.Errorf("%w: %s", ErrRejectDispatched, d.CallID)
-			case d.Verdict != VerdictAnswer:
-			case c.Output != nil:
-				return Result{}, fmt.Errorf("%w: %s", ErrCallCompleted, d.CallID)
-			case c.Dispatch == nil && s.header.HasRecord(TypeDispatch):
-				return Result{}, fmt.Errorf("%w: %s", ErrAnswerNotDispatched, d.CallID)
-			}
-		}
-	}
-	if d, ok := e.(*DispatchEntry); ok {
-		// The format forbids a dispatch for a call a decision rejected
-		// or answered.
-		if c := lastCall(Calls(s.path(b.Parent)), d.CallID); c != nil {
-			if c.Rejected() {
-				return Result{}, fmt.Errorf("%w: %s", ErrCallRejected, d.CallID)
-			}
-			if c.Answered() {
-				return Result{}, fmt.Errorf("%w: %s", ErrCallAnswered, d.CallID)
-			}
-		}
-	}
 	want := b.ID
 	b.ID = ""
 	if u, ok := e.(*UnknownEntry); ok {
@@ -433,8 +397,116 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 		r.Outcome = Held
 		return r, nil
 	}
+	// The call rules come after the held check, so appending again an
+	// entry the session holds stays a no-op whatever followed it.
+	if err := s.checkCallRules(e, b.Parent); err != nil {
+		return Result{}, err
+	}
 	r.Outcome = s.outcomeFor(e)
 	return r, nil
+}
+
+// checkCallRules applies the format's rules on calls to an entry about
+// to be appended under parent. A call ID names one function call in
+// the session. A decision or dispatch names its call by target, whose
+// call ID must agree. What follows an answer or a reject is the call's
+// output and nothing else. An answer is for a call that may have run
+// and has no output; with dispatches promised, one with none never
+// started. A reject is for a call that did not run and has no output,
+// so none with a dispatch.
+func (s *Session) checkCallRules(e Entry, parent string) error {
+	switch v := e.(type) {
+	case *ItemEntry:
+		fc, ok := v.Item.(*openresponses.FunctionCall)
+		switch {
+		case !ok:
+		case fc.CallID == "":
+			return errors.New("agentsession: a function call needs a call_id")
+		case s.callIDs[fc.CallID]:
+			return fmt.Errorf("%w: %s", ErrCallIDRepeated, fc.CallID)
+		}
+	case *DecisionEntry:
+		c, err := s.targetCall(parent, v.CallID, v.Target)
+		if err != nil {
+			return err
+		}
+		switch {
+		case c.Answered():
+			return fmt.Errorf("%w: %s", ErrCallAnswered, v.CallID)
+		case c.Rejected():
+			return fmt.Errorf("%w: %s", ErrCallRejected, v.CallID)
+		case v.Verdict == VerdictReject && c.Dispatch != nil:
+			return fmt.Errorf("%w: %s", ErrRejectDispatched, v.CallID)
+		case v.Verdict != VerdictAnswer && v.Verdict != VerdictReject:
+		case c.Output != nil:
+			return fmt.Errorf("%w: %s", ErrCallCompleted, v.CallID)
+		case v.Verdict == VerdictAnswer && c.Dispatch == nil && s.header.HasRecord(TypeDispatch):
+			return fmt.Errorf("%w: %s", ErrAnswerNotDispatched, v.CallID)
+		}
+	case *DispatchEntry:
+		c, err := s.targetCall(parent, v.CallID, v.Target)
+		if err != nil {
+			return err
+		}
+		if c.Rejected() {
+			return fmt.Errorf("%w: %s", ErrCallRejected, v.CallID)
+		}
+		if c.Answered() {
+			return fmt.Errorf("%w: %s", ErrCallAnswered, v.CallID)
+		}
+	}
+	return nil
+}
+
+// targetCall returns the call on the path to parent whose function call
+// entry is target, refusing a target that names none or whose call ID
+// is not callID.
+func (s *Session) targetCall(parent, callID, target string) (*Call, error) {
+	// Only the entries that name the call, or a call with its ID, bear
+	// on it; reading those alone keeps an append from reading every
+	// call on a long path.
+	// A decision or dispatch belongs to the call its target names, and
+	// falls back to its call ID only when the target is no function
+	// call on the path, as Calls binds it.
+	var about []Entry
+	calls := map[string]bool{}
+	mine := func(callID2, target2 string) bool {
+		return target2 == target || (callID2 == callID && !calls[target2])
+	}
+	for _, e := range s.path(parent) {
+		switch v := e.(type) {
+		case *ItemEntry:
+			switch it := v.Item.(type) {
+			case *openresponses.FunctionCall:
+				calls[v.ID] = true
+				if v.ID == target || it.CallID == callID {
+					about = append(about, e)
+				}
+			case *openresponses.FunctionCallOutput:
+				if it.CallID == callID {
+					about = append(about, e)
+				}
+			}
+		case *DecisionEntry:
+			if mine(v.CallID, v.Target) {
+				about = append(about, e)
+			}
+		case *DispatchEntry:
+			if mine(v.CallID, v.Target) {
+				about = append(about, e)
+			}
+		}
+	}
+	for _, c := range Calls(about) {
+		if c.Entry.ID != target {
+			continue
+		}
+		if c.ID() != callID {
+			return nil, fmt.Errorf("%w: %s names call %s, not %s", ErrBadTarget, target, c.ID(), callID)
+		}
+		return c, nil
+	}
+	return nil, fmt.Errorf("%w: %s is no function call on the path for %s", ErrBadTarget, target, callID)
 }
 
 // outcomeFor says what moveLeafFor will do with e once added.
@@ -857,6 +929,11 @@ func (s *Session) add(e Entry) {
 	s.entries = append(s.entries, e)
 	s.byID[b.ID] = e
 	s.children[b.Parent] = append(s.children[b.Parent], b.ID)
+	if it, ok := e.(*ItemEntry); ok {
+		if fc, ok := it.Item.(*openresponses.FunctionCall); ok {
+			s.callIDs[fc.CallID] = true
+		}
+	}
 }
 
 // Truncated reports the final line of the file this session was read

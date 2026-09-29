@@ -76,6 +76,28 @@ func TestRun(t *testing.T) {
 		}
 	}
 	out := filepath.Join(tmp, "out")
+	// A 0.9 file that repeats a call ID, a rule 0.9 gained after its
+	// first writer shipped.
+	repeated := filepath.Join(tmp, "repeated.jsonl")
+	{
+		lines := []string{`{"type":"session","format":"agentsession/0.9","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}`}
+		parent := "null"
+		for _, body := range []string{
+			`"type":"item","item":{"type":"function_call","id":"f1","call_id":"x","name":"t","arguments":"{}"}`,
+			`"type":"item","item":{"type":"function_call","id":"f2","call_id":"x","name":"t","arguments":"{}"}`,
+		} {
+			l := `{` + body + `,"parent":` + parent + `,"ts":"2026-09-17T16:00:01Z"}`
+			id, _, err := agentsession.EntryHashes([]byte(l))
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, `{"id":"`+id+`",`+l[1:])
+			parent = `"` + id + `"`
+		}
+		if err := os.WriteFile(repeated, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	tests := []struct {
 		name    string
@@ -133,6 +155,7 @@ func TestRun(t *testing.T) {
 				`3  developer: "House rule: always run the linter."`,
 			},
 		},
+		{name: "verify a 0.9 file an early writer may have written", args: []string{"verify", repeated}, code: 1, stdout: []string{"call ID repeated", "note: draft 0.9 gained these rules"}},
 		{name: "verify truncated", args: []string{"verify", filepath.Join(fixtures, "truncated.jsonl")}, code: 1, stdout: []string{"truncated: line 10"}},
 		{name: "verify runs", args: []string{"verify", filepath.Join(fixtures, "runs.jsonl")}, stdout: []string{"2 verified, 0 without hash, 0 failed"}, absent: []string{"records to"}},
 		{name: "verify bad records", args: []string{"verify", filepath.Join(fixtures, "bad-records.jsonl")}, code: 1, stdout: []string{"records to " + sid("bad-records", "i0000003") + "  ERROR", "call call_1 has an output and no dispatch"}},
@@ -444,6 +467,28 @@ func TestCAS(t *testing.T) {
 	}
 	sessionDir := filepath.Join(root, "sessions", id)
 	out := filepath.Join(tmp, "out")
+	// A 0.9 file that repeats a call ID, a rule 0.9 gained after its
+	// first writer shipped.
+	repeated := filepath.Join(tmp, "repeated.jsonl")
+	{
+		lines := []string{`{"type":"session","format":"agentsession/0.9","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}`}
+		parent := "null"
+		for _, body := range []string{
+			`"type":"item","item":{"type":"function_call","id":"f1","call_id":"x","name":"t","arguments":"{}"}`,
+			`"type":"item","item":{"type":"function_call","id":"f2","call_id":"x","name":"t","arguments":"{}"}`,
+		} {
+			l := `{` + body + `,"parent":` + parent + `,"ts":"2026-09-17T16:00:01Z"}`
+			id, _, err := agentsession.EntryHashes([]byte(l))
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, `{"id":"`+id+`",`+l[1:])
+			parent = `"` + id + `"`
+		}
+		if err := os.WriteFile(repeated, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	tests := []struct {
 		name    string

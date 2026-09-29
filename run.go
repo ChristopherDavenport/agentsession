@@ -39,14 +39,11 @@ type Call struct {
 	// dispatchedArgs are the arguments the last dispatch handed the
 	// tool.
 	dispatchedArgs string
-	// repeats reports that an earlier call on the path has the call's
-	// ID, which the format forbids.
-	repeats bool
 	// afterAnswer and afterReject are the first decisions that follow
-	// an answer and a reject, answerAfterOutput the first answer that
-	// follows the output, and rejectAfterDispatch the first reject that
-	// follows a dispatch; the format forbids all four.
-	afterAnswer, afterReject, answerAfterOutput, rejectAfterDispatch *DecisionEntry
+	// an answer and a reject, endAfterOutput the first answer or reject
+	// that follows the output, and rejectAfterDispatch the first reject
+	// that follows a dispatch; the format forbids all four.
+	afterAnswer, afterReject, endAfterOutput, rejectAfterDispatch *DecisionEntry
 }
 
 // ID returns the call ID.
@@ -224,24 +221,34 @@ func (c *Call) State(h Header) CallState {
 
 // Calls collects the function calls on a root-first path, in the order
 // their items appear, with the decisions, dispatch and output the path
-// holds for each. A decision, dispatch or output whose call is not on
-// the path is ignored.
+// holds for each. A decision or dispatch belongs to the call its
+// target names, an output to the latest call before it with its call
+// ID, as the format has it; one whose call is not on the path is
+// ignored.
 func Calls(path []Entry) []*Call {
 	var out []*Call
+	// byID is the latest call with each call ID, byEntry the call each
+	// function call entry holds. A decision or dispatch names its call
+	// by target; one whose target is no call on the path, which the
+	// format forbids, falls back to its call ID.
 	byID := map[string]*Call{}
+	byEntry := map[string]*Call{}
+	bind := func(callID, target string) *Call {
+		if c, ok := byEntry[target]; ok {
+			return c
+		}
+		return byID[callID]
+	}
 	for _, e := range path {
 		switch v := e.(type) {
 		case *ItemEntry:
 			switch it := v.Item.(type) {
 			case *openresponses.FunctionCall:
-				// The format forbids a call ID repeated on a path; in a
-				// file that repeats one, what follows names the latest
-				// call with it.
+				// The format forbids a repeated call ID; in a file that
+				// repeats one, an output names the latest call with it.
 				c := &Call{Entry: v, Call: it}
-				if _, seen := byID[it.CallID]; seen {
-					c.repeats = true
-				}
 				byID[it.CallID] = c
+				byEntry[v.ID] = c
 				out = append(out, c)
 			case *openresponses.FunctionCallOutput:
 				if c, ok := byID[it.CallID]; ok && c.Output == nil {
@@ -249,7 +256,7 @@ func Calls(path []Entry) []*Call {
 				}
 			}
 		case *DecisionEntry:
-			if c, ok := byID[v.CallID]; ok {
+			if c := bind(v.CallID, v.Target); c != nil {
 				if c.afterAnswer == nil && c.Answered() {
 					c.afterAnswer = v
 				}
@@ -259,14 +266,14 @@ func Calls(path []Entry) []*Call {
 				if c.rejectAfterDispatch == nil && v.Verdict == VerdictReject && c.Dispatch != nil {
 					c.rejectAfterDispatch = v
 				}
-				if c.answerAfterOutput == nil && v.Verdict == VerdictAnswer && c.Output != nil {
-					c.answerAfterOutput = v
+				if c.endAfterOutput == nil && (v.Verdict == VerdictAnswer || v.Verdict == VerdictReject) && c.Output != nil {
+					c.endAfterOutput = v
 				}
 				c.Decisions = append(c.Decisions, v)
 				c.sinceDecision = false
 			}
 		case *DispatchEntry:
-			if c, ok := byID[v.CallID]; ok {
+			if c := bind(v.CallID, v.Target); c != nil {
 				if c.Dispatch == nil {
 					c.Dispatch = v
 				}
@@ -291,17 +298,6 @@ func (c *Call) endingDecision() *DecisionEntry {
 	for _, d := range c.Decisions {
 		if d.Verdict == VerdictReject || d.Verdict == VerdictAnswer {
 			return d
-		}
-	}
-	return nil
-}
-
-// lastCall returns the last of the calls with the call ID, which is the
-// one a decision, dispatch or output appended now names, or nil.
-func lastCall(calls []*Call, callID string) *Call {
-	for i := len(calls) - 1; i >= 0; i-- {
-		if calls[i].ID() == callID {
-			return calls[i]
 		}
 	}
 	return nil
@@ -397,46 +393,50 @@ func (r *Run) RunID() string { return r.Start.RunID }
 
 // Calls returns the run's calls: those on its segment, and those made
 // before it that the segment holds a decision, a dispatch or an output
-// for, since the run took them up. An earlier call carries what the
-// path holds for it, and a call on the segment what the segment holds;
-// see [Calls].
+// for, since the run took them up. Each carries what the path holds
+// for it; see [Calls].
 func (r *Run) Calls() []*Call { return runCalls(r.Path, r.Segment) }
 
 // runCalls returns the calls of the run whose segment ends the path:
-// the calls on the segment, then those before it on the path that the
-// segment holds a decision, dispatch or output for. A call on the
-// segment is read from the segment, so its decisions and output are
-// its own even when an earlier call on the path has its call ID. A nil
-// path means the segment stands for the path.
+// the calls on the path whose function call, or a decision, dispatch
+// or output bound to them, is on the segment. A nil path means the
+// segment stands for the path.
 func runCalls(path, segment []Entry) []*Call {
-	own := Calls(segment)
 	if path == nil {
-		return own
+		path = segment
 	}
-	onSegment := map[string]bool{}
-	for _, c := range own {
-		onSegment[c.ID()] = true
-	}
-	touched := map[string]bool{}
+	in := map[string]bool{}
 	for _, e := range segment {
-		switch v := e.(type) {
-		case *ItemEntry:
-			if it, ok := v.Item.(*openresponses.FunctionCallOutput); ok {
-				touched[it.CallID] = true
-			}
-		case *DecisionEntry:
-			touched[v.CallID] = true
-		case *DispatchEntry:
-			touched[v.CallID] = true
+		if id := e.Base().ID; id != "" {
+			in[id] = true
 		}
 	}
 	var out []*Call
 	for _, c := range Calls(path) {
-		if touched[c.ID()] && !onSegment[c.ID()] {
+		if c.takenUpIn(in) {
 			out = append(out, c)
 		}
 	}
-	return append(out, own...)
+	return out
+}
+
+// takenUpIn reports whether the call's function call, or a decision,
+// dispatch or output bound to it, is one of the entries.
+func (c *Call) takenUpIn(in map[string]bool) bool {
+	if in[c.Entry.ID] || (c.Output != nil && in[c.Output.ID]) {
+		return true
+	}
+	for _, d := range c.Decisions {
+		if in[d.ID] {
+			return true
+		}
+	}
+	for _, d := range c.Dispatches {
+		if in[d.ID] {
+			return true
+		}
+	}
+	return false
 }
 
 // Pending returns the IDs of the run's calls with no output on the
@@ -684,10 +684,17 @@ func (r *Run) Verify() error {
 // what follows a reject is the call's refusal output and nothing else.
 var ErrCallRejected = errors.New("agentsession: call was rejected")
 
+// ErrBadTarget is returned when a decision or dispatch is appended
+// whose target is not the entry of a function call on the path with
+// the decision's call ID: a target names the call, and its call ID
+// must agree.
+var ErrBadTarget = errors.New("agentsession: target does not name the call")
+
 // ErrCallIDRepeated is returned when a function call is appended whose
-// call ID an earlier function call on the path has: a call ID names one
-// call on a path.
-var ErrCallIDRepeated = errors.New("agentsession: call ID repeated on the path")
+// call ID another function call in the session has, on any branch, and
+// by [Session.VerifyRecords] for a session that holds two: a call ID
+// names one call in a session.
+var ErrCallIDRepeated = errors.New("agentsession: call ID repeated")
 
 // ErrRejectDispatched is returned when a reject is appended for a call
 // that has a dispatch on the path: a reject says the call did not run,
@@ -717,7 +724,8 @@ var ErrAnswerNotDispatched = errors.New("agentsession: answer for a call the rec
 var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 
 // VerifyRecords checks the record entries on the path to leaf against
-// the format's rules: no call ID repeats, every run end agrees with
+// the format's rules: no call ID repeats in the session, every
+// decision and dispatch names its call by target, every run end agrees with
 // its segment, no dispatch or decision follows a reject or an answer
 // on the same call, no answer follows an output and no reject a
 // dispatch, and, when the header names dispatch in records, no answer
@@ -728,14 +736,17 @@ func (s *Session) VerifyRecords(leaf string) error {
 	if path == nil {
 		return fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
 	}
-	calls := Calls(path)
-	// A repeated call ID is checked first: every other rule reads the
-	// calls by their IDs.
-	for _, c := range calls {
-		if c.repeats {
-			return fmt.Errorf("%w: %s at %s", ErrCallIDRepeated, c.ID(), c.Entry.ID)
-		}
+	// Call identity is checked first, since every other rule reads the
+	// calls by it: a call ID names one call in the session, on any
+	// branch, and a decision or dispatch names by target a function
+	// call before it on the path with its call ID.
+	if err := s.verifyCallIDs(); err != nil {
+		return err
 	}
+	if err := verifyTargets(path); err != nil {
+		return err
+	}
+	calls := Calls(path)
 	for _, r := range Runs(path) {
 		if err := r.Verify(); err != nil {
 			return err
@@ -758,14 +769,69 @@ func (s *Session) VerifyRecords(leaf string) error {
 		if c.rejectAfterDispatch != nil {
 			return fmt.Errorf("%w: reject %s follows a dispatch of call %s", ErrRejectDispatched, c.rejectAfterDispatch.ID, c.ID())
 		}
-		if c.answerAfterOutput != nil {
-			return fmt.Errorf("%w: answer %s follows the output of call %s", ErrCallCompleted, c.answerAfterOutput.ID, c.ID())
+		if c.endAfterOutput != nil {
+			return fmt.Errorf("%w: %s %s follows the output of call %s", ErrCallCompleted, c.endAfterOutput.Verdict, c.endAfterOutput.ID, c.ID())
 		}
 		if h.HasRecord(TypeDispatch) && c.Answered() && c.Dispatch == nil {
 			return fmt.Errorf("%w: call %s", ErrAnswerNotDispatched, c.ID())
 		}
 		if h.HasRecord(TypeDispatch) && c.Output != nil && c.Dispatch == nil && !c.Rejected() {
 			return fmt.Errorf("%w: call %s has an output and no dispatch", ErrRecordMissing, c.ID())
+		}
+	}
+	return nil
+}
+
+// verifyCallIDs reports a call ID two function calls in the session
+// share, on any branch.
+func (s *Session) verifyCallIDs() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	seen := map[string]string{}
+	for _, e := range s.entries {
+		it, ok := e.(*ItemEntry)
+		if !ok {
+			continue
+		}
+		if fc, ok := it.Item.(*openresponses.FunctionCall); ok {
+			if first, dup := seen[fc.CallID]; dup {
+				return fmt.Errorf("%w: %s at %s and %s", ErrCallIDRepeated, fc.CallID, first, it.ID)
+			}
+			seen[fc.CallID] = it.ID
+		}
+	}
+	return nil
+}
+
+// verifyTargets reports a decision or dispatch on the path whose target
+// is not a function call before it on the path, or names one with
+// another call ID.
+func verifyTargets(path []Entry) error {
+	calls := map[string]string{}
+	check := func(e Entry, callID, target string) error {
+		got, ok := calls[target]
+		if !ok {
+			return fmt.Errorf("%w: %s %s names %s, no function call before it on the path", ErrBadTarget, e.EntryType(), e.Base().ID, target)
+		}
+		if got != callID {
+			return fmt.Errorf("%w: %s %s for call %s names the entry of call %s", ErrBadTarget, e.EntryType(), e.Base().ID, callID, got)
+		}
+		return nil
+	}
+	for _, e := range path {
+		switch v := e.(type) {
+		case *ItemEntry:
+			if fc, ok := v.Item.(*openresponses.FunctionCall); ok {
+				calls[v.ID] = fc.CallID
+			}
+		case *DecisionEntry:
+			if err := check(v, v.CallID, v.Target); err != nil {
+				return err
+			}
+		case *DispatchEntry:
+			if err := check(v, v.CallID, v.Target); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

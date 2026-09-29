@@ -3,6 +3,7 @@ package export
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -214,5 +215,72 @@ func TestItemsFrom(t *testing.T) {
 	}
 	if fc := items[1].(*openresponses.FunctionCall); fc.Arguments != "raw" {
 		t.Errorf("arguments = %q", fc.Arguments)
+	}
+}
+
+// TestItemsFromRepeatedCallIDs: a document that numbers its calls per
+// turn repeats a tool call ID across steps, which ATIF allows and a
+// session does not. Each repeat gets an ID of its own, its results
+// follow it, and the items append to a session.
+func TestItemsFromRepeatedCallIDs(t *testing.T) {
+	step := func(id int) atif.Step {
+		return atif.Step{StepID: id, Source: atif.SourceAgent, Message: atif.Text(""),
+			ToolCalls:   []atif.ToolCall{{ToolCallID: "call_0", FunctionName: "f", Arguments: map[string]any{}}},
+			Observation: &atif.Observation{Results: []atif.ObservationResult{{SourceCallID: "call_0", Content: atif.Text(strconv.Itoa(id))}}}}
+	}
+	doc := &atif.Trajectory{SchemaVersion: atif.SchemaVersion, Agent: atif.Agent{Name: "x", Version: "1"}, Steps: []atif.Step{
+		{StepID: 1, Source: atif.SourceUser, Message: atif.Text("go")}, step(2), step(3), step(4),
+	}}
+	if err := doc.Validate(); err != nil {
+		t.Fatalf("the document is valid ATIF: %v", err)
+	}
+	items, err := ItemsFrom(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range items {
+		switch v := it.(type) {
+		case *openresponses.FunctionCall:
+			got = append(got, v.CallID)
+		case *openresponses.FunctionCallOutput:
+			got = append(got, v.CallID+"="+v.Output.String())
+		}
+	}
+	if want := "call_0 call_0=2 call_0_2 call_0_2=3 call_0_3 call_0_3=4"; strings.Join(got, " ") != want {
+		t.Errorf("calls and outputs = %s, want %s", strings.Join(got, " "), want)
+	}
+	s := agentsession.New(agentsession.Header{})
+	for _, it := range items {
+		if _, err := s.Append(agentsession.NewItemEntry(it)); err != nil {
+			t.Fatalf("append %s: %v", it.ItemType(), err)
+		}
+	}
+}
+
+// TestItemsFromRepeatedWithinAStep: two calls in one step that share a
+// tool call ID take the step's results in order.
+func TestItemsFromRepeatedWithinAStep(t *testing.T) {
+	doc := &atif.Trajectory{SchemaVersion: atif.SchemaVersion, Agent: atif.Agent{Name: "x", Version: "1"}, Steps: []atif.Step{
+		{StepID: 1, Source: atif.SourceUser, Message: atif.Text("go")},
+		{StepID: 2, Source: atif.SourceAgent, Message: atif.Text(""),
+			ToolCalls:   []atif.ToolCall{{ToolCallID: "c", FunctionName: "f", Arguments: map[string]any{}}, {ToolCallID: "c", FunctionName: "g", Arguments: map[string]any{}}},
+			Observation: &atif.Observation{Results: []atif.ObservationResult{{SourceCallID: "c", Content: atif.Text("1")}, {SourceCallID: "c", Content: atif.Text("2")}}}},
+	}}
+	items, err := ItemsFrom(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range items {
+		switch v := it.(type) {
+		case *openresponses.FunctionCall:
+			got = append(got, v.CallID+":"+v.Name)
+		case *openresponses.FunctionCallOutput:
+			got = append(got, v.CallID+"="+v.Output.String())
+		}
+	}
+	if want := "c:f c_2:g c=1 c_2=2"; strings.Join(got, " ") != want {
+		t.Errorf("calls and outputs = %s, want %s", strings.Join(got, " "), want)
 	}
 }

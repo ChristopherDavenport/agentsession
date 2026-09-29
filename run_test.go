@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/openresponses"
 )
@@ -20,6 +21,9 @@ func seg(t *testing.T, script string) []Entry {
 	t.Helper()
 	s := New(Header{Records: AllRecords})
 	var pendingCalls []string
+	// target is the entry each call's function call was appended as,
+	// which its decisions and dispatches name.
+	target := map[string]string{}
 	n, runs, responses := 0, 0, 0
 	runID := func() string { return fmt.Sprintf("run-%d", runs) }
 	respID := func() string { return fmt.Sprintf("resp-%d", responses) }
@@ -43,9 +47,11 @@ func seg(t *testing.T, script string) []Entry {
 			pendingCalls = strings.Split(arg, ",")
 			for _, c := range pendingCalls {
 				fc := &openresponses.FunctionCall{ID: "fc_" + c, CallID: c, Name: "tool", Arguments: "{}"}
-				if _, err := s.Append(&ItemEntry{Item: fc, ResponseID: respID()}); err != nil {
+				id, err := s.Append(&ItemEntry{Item: fc, ResponseID: respID()})
+				if err != nil {
 					t.Fatal(err)
 				}
+				target[c] = id
 			}
 			continue
 		case "resp":
@@ -59,13 +65,13 @@ func seg(t *testing.T, script string) []Entry {
 			}
 			e = r
 		case "hold", "proceed", "reject":
-			d := NewDecision(arg, "fc_"+arg, kind, ByPolicy)
+			d := NewDecision(arg, target[arg], kind, ByPolicy)
 			if kind == "reject" {
 				d.WithReason("no")
 			}
 			e = d
 		case "dispatch":
-			e = NewDispatch(arg, "fc_"+arg)
+			e = NewDispatch(arg, target[arg])
 		case "out":
 			e = NewItemEntry(openresponses.NewFunctionCallOutput(arg, "ok"))
 		default:
@@ -327,7 +333,7 @@ func TestCallArgs(t *testing.T) {
 	if got := calls[0].Args(); got != `{"x":1}` {
 		t.Errorf("Args = %s", got)
 	}
-	if _, err := s.Append(NewDecision("a", "fc_a", VerdictProceed, ByHuman).WithArgs([]byte(`{"x":2}`))); err != nil {
+	if _, err := s.Append(NewDecision("a", calls[0].Entry.ID, VerdictProceed, ByHuman).WithArgs([]byte(`{"x":2}`))); err != nil {
 		t.Fatal(err)
 	}
 	calls = Calls(s.Path(s.Leaf()))
@@ -390,13 +396,7 @@ func TestRunsAcrossBranch(t *testing.T) {
 
 func TestEndRunPending(t *testing.T) {
 	s := New(Header{Records: AllRecords})
-	for _, e := range seg(t, "start user calls:a,b resp hold:a dispatch:b out:b") {
-		b := e.Base()
-		b.ID, b.Parent, b.Timestamp = "", "", fixedTime
-		if _, err := s.Append(e); err != nil {
-			t.Fatal(err)
-		}
-	}
+	reappend(t, s, seg(t, "start user calls:a,b resp hold:a dispatch:b out:b"), fixedTime)
 	end, err := s.EndRun(ReasonInputRequired, "")
 	if err != nil {
 		t.Fatal(err)
@@ -469,16 +469,41 @@ func TestVerifyRecords(t *testing.T) {
 	})
 }
 
-func TestDispatchAfterReject(t *testing.T) {
-	s := New(Header{})
-	for _, e := range seg(t, "user calls:a resp reject:a") {
+// reappend appends the entries of another session's path to s, each
+// under the leaf and at ts when it is not zero, with the targets of
+// decisions and dispatches moved to the entries' new IDs.
+func reappend(t *testing.T, s *Session, path []Entry, ts time.Time) {
+	t.Helper()
+	moved := map[string]string{}
+	for _, e := range path {
 		b := e.Base()
+		old := b.ID
 		b.ID, b.Parent = "", ""
-		if _, err := s.Append(e); err != nil {
+		if !ts.IsZero() {
+			b.Timestamp = ts
+		}
+		switch v := e.(type) {
+		case *DecisionEntry:
+			v.Target = moved[v.Target]
+		case *DispatchEntry:
+			v.Target = moved[v.Target]
+		}
+		id, err := s.Append(e)
+		if err != nil {
 			t.Fatal(err)
 		}
+		moved[old] = id
 	}
-	if _, err := s.Append(NewDispatch("a", "fc_a")); !errors.Is(err, ErrCallRejected) {
+}
+
+func TestDispatchAfterReject(t *testing.T) {
+	s := New(Header{})
+	reappend(t, s, seg(t, "user calls:a resp reject:a"), time.Time{})
+	calls, err := s.Calls(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewDispatch("a", calls[0].Entry.ID)); !errors.Is(err, ErrCallRejected) {
 		t.Errorf("Append dispatch after reject = %v, want ErrCallRejected", err)
 	}
 }
