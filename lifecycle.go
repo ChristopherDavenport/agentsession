@@ -267,7 +267,7 @@ func (e *QueuedEntry) Drain() *ItemEntry {
 // format's substitution rule compares workspace alone: see
 // [SameWorkspace].
 type Workspace struct {
-	Kind string `json:"kind"`
+	Kind string `json:"kind,omitempty"`
 	Ref  string `json:"ref,omitempty"`
 	// Unknown holds the members of workspace the format does not
 	// define, such as host or instance, encoded inline beside kind and
@@ -336,9 +336,10 @@ func (w *Workspace) UnmarshalJSON(data []byte) error {
 }
 
 // SameWorkspace reports whether two workspace members are the same
-// under the format's substitution rule: compared as members, the ones
-// the format does not define included, and an absent one equal only to
-// another absent one. An env entry whose workspace is not the same as
+// under the format's substitution rule: compared member by member in
+// their canonical form, the ones the format does not define included,
+// and an absent one equal only to another absent one. An empty Kind or
+// Ref is an absent member, since neither is written. An env entry whose workspace is not the same as
 // the one in force before it on the path is a substitution.
 func SameWorkspace(a, b *Workspace) bool {
 	if a == nil || b == nil {

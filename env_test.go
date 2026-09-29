@@ -226,3 +226,20 @@ func TestSameWorkspace(t *testing.T) {
 		t.Error("SetMember took a member the format defines")
 	}
 }
+
+// TestWorkspaceWithoutKind: kind is written only when set, so a
+// workspace without one reads and writes back as it was.
+func TestWorkspaceWithoutKind(t *testing.T) {
+	for _, w := range []string{`{}`, `{"ref":"x"}`, `{"Kind":"container"}`} {
+		line := `{"type":"env","parent":null,"ts":"2026-09-17T16:00:01Z","workspace":` + w + `}`
+		id, _, err := EntryHashes([]byte(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		line = `{"id":"` + id + `",` + line[1:]
+		head := `{"type":"session","format":"agentsession/0.6","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}`
+		if _, err := Read(strings.NewReader(head + "\n" + line + "\n")); err != nil {
+			t.Errorf("%s: %v", w, err)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -801,5 +802,87 @@ func TestInstructionsPartsThroughCompaction(t *testing.T) {
 	}
 	if again.Settings.Instructions != ctx.Settings.Instructions {
 		t.Errorf("the instructions changed on a round trip")
+	}
+}
+
+// TestInstructionsUnresolvedStaysUnresolved: a part the path could not
+// rebuild stays so when a later delta keeps it or names it by hash, so
+// the string beside that delta still stands; an element that names
+// nothing is unresolved; and a part named with neither text nor hash
+// has empty text, which is how a writer spells one. (Review of #94.)
+func TestInstructionsUnresolvedStaysUnresolved(t *testing.T) {
+	lost := Settings{}.Apply(&ConfigEntry{InstructionsParts: []InstructionPart{{ID: "a", Hash: HashText("lost")}, {ID: "b", Text: "B"}}})
+	if !unresolvedParts(lost.InstructionsParts) {
+		t.Fatal("the hash resolved against nothing")
+	}
+	whole := "lost\n\nB2"
+	for name, parts := range map[string][]InstructionPart{
+		"kept":             {{Keep: 1}, {ID: "b", Text: "B2"}},
+		"named by hash":    {{ID: "a", Hash: HashText("lost")}, {ID: "b", Text: "B2"}},
+		"a keep of a keep": {{Keep: 1}, {ID: "b", Text: "B2"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			from := lost
+			if name == "a keep of a keep" {
+				from = Settings{}.Apply(&ConfigEntry{InstructionsParts: []InstructionPart{{Keep: 3}, {ID: "b", Text: "B"}}})
+			}
+			got := from.Apply(&ConfigEntry{Instructions: &whole, InstructionsParts: parts})
+			if !unresolvedParts(got.InstructionsParts) || got.Instructions != whole {
+				t.Errorf("instructions %q, parts %+v", got.Instructions, got.InstructionsParts)
+			}
+		})
+	}
+	t.Run("an element that names nothing", func(t *testing.T) {
+		for _, line := range []string{`{"keep":0}`, `{"keep":99999999999}`, `{}`} {
+			var p InstructionPart
+			if err := json.Unmarshal([]byte(line), &p); err != nil {
+				t.Fatal(err)
+			}
+			s := "S"
+			got := Settings{}.Apply(&ConfigEntry{Instructions: &s, InstructionsParts: []InstructionPart{p}})
+			if got.Instructions != "S" {
+				t.Errorf("%s: instructions %q, want the string beside it", line, got.Instructions)
+			}
+		}
+	})
+	t.Run("an empty part", func(t *testing.T) {
+		base := []InstructionPart{{ID: "a", Text: "A"}, {ID: "b", Text: "B"}, {ID: "c", Text: "C"}}
+		settings := Settings{}.Apply(&ConfigEntry{InstructionsParts: base})
+		next := []InstructionPart{{ID: "a", Text: "A"}, {ID: "e"}, {ID: "b", Text: "B"}, {ID: "c", Text: "C"}}
+		got := settings.Apply(settings.InstructionsDelta(next))
+		if unresolvedParts(got.InstructionsParts) || got.Instructions != JoinInstructions(next) {
+			t.Errorf("parts %+v", got.InstructionsParts)
+		}
+		// Naming a part in force with neither moves the cursor past it.
+		got = settings.Apply(&ConfigEntry{InstructionsParts: []InstructionPart{{ID: "b"}, {Keep: 1}}})
+		if len(got.InstructionsParts) != 2 || got.InstructionsParts[1].ID != "c" {
+			t.Errorf("parts %+v", got.InstructionsParts)
+		}
+	})
+}
+
+// TestCompactionLeavesUnresolvedPartsOut: a checkpoint's parts each
+// carry their text, so parts the path could not rebuild are not
+// carried, and the string that was sent stands.
+func TestCompactionLeavesUnresolvedPartsOut(t *testing.T) {
+	s := New(Header{})
+	whole := "X"
+	for _, e := range []Entry{
+		&ConfigEntry{InstructionsParts: []InstructionPart{{ID: "a", Text: "A"}}},
+		&ConfigEntry{Instructions: &whole, InstructionsParts: []InstructionPart{{Keep: 3}}},
+		NewItemEntry(openresponses.UserText("one")),
+		NewItemEntry(openresponses.UserText("two")),
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := s.Entries()[2].Base().ID
+	c, err := s.Compact(first, openresponses.UserText("summary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Config.InstructionsParts != nil || c.Config.Instructions != "X" {
+		t.Errorf("checkpoint = %+v", c.Config)
 	}
 }

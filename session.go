@@ -690,6 +690,10 @@ func validateEntry(e Entry) error {
 	switch v := e.(type) {
 	case nil:
 		return errors.New("agentsession: nil entry")
+	case *ResponseEntry:
+		if v.Attempts < 0 {
+			return errors.New("agentsession: response attempts is negative")
+		}
 	case *ItemEntry:
 		if v.Item == nil {
 			return errors.New("agentsession: item entry has no item")
@@ -843,7 +847,7 @@ func (s *Session) Compact(firstKept string, summary openresponses.Item) (*Compac
 	if !onPath {
 		return nil, fmt.Errorf("%w: first_kept %s is not on the path to %s", ErrNoEntry, firstKept, leaf)
 	}
-	return &CompactionEntry{FirstKept: firstKept, Summary: summary, Config: ctx.Settings}, nil
+	return &CompactionEntry{FirstKept: firstKept, Summary: summary, Config: checkpoint(ctx.Settings)}, nil
 }
 
 // CompactFrom is [Session.Compact] for a caller that split the request
@@ -912,7 +916,7 @@ func compactionFrom(ctx Context, first int, summary openresponses.Item) (*Compac
 		}
 		return nil, fmt.Errorf("agentsession: item %d is %s of compaction %s, which a later compaction replaces rather than keeps", first, what, e.Base().ID)
 	}
-	return &CompactionEntry{FirstKept: e.Base().ID, Summary: summary, Config: ctx.Settings}, nil
+	return &CompactionEntry{FirstKept: e.Base().ID, Summary: summary, Config: checkpoint(ctx.Settings)}, nil
 }
 
 // SummarizeBranch builds the branch summary that carries context from
@@ -1022,4 +1026,15 @@ func Fork(origin *Session, at string, h Header) (*Session, error) {
 	}
 	s.leaf = at
 	return s, nil
+}
+
+// checkpoint is the settings a compaction carries. Its parts must each
+// carry their text, with the instructions their join, so parts the path
+// could not rebuild are left out and the instructions string, which is
+// the record of what was sent, stands alone.
+func checkpoint(settings Settings) Settings {
+	if unresolvedParts(settings.InstructionsParts) {
+		settings.InstructionsParts = nil
+	}
+	return settings
 }

@@ -21,23 +21,31 @@ versions may break the API.
   memory grew. `InstructionsDelta` now writes `{"keep":n}` for each run
   of parts that are unchanged and in the order they are in force, and
   leaves `source` off a part it names by hash, which the reader already
-  inherited. The same patch is 443 bytes. `keep` counts from a cursor
+  inherited. The same patch is 427 bytes. `keep` counts from a cursor
   into the parts in force: naming a part in force moves the cursor to
   just after it, so a removal is a keep, the next part by hash and a
   keep, and an insertion is a keep, the new part and a keep. A keep
   that runs past the parts in force, or takes a part the delta names
   elsewhere, resolves as an unknown hash does: the `instructions`
   string beside it stands, and without one the request hash does not
-  verify. `Append` refuses a keep that carries any other member, and a
-  replacing config with a keep and no string. `InstructionPart.ID` is
-  now `omitempty`, since a keep has none. (#94)
+  verify. So does a hash or keep over a part the path itself could not
+  rebuild, which v0.0.9 turned into empty text, ignoring the string
+  beside it; an element with neither an id nor a keep; and, in a
+  compaction, parts the path could not rebuild, which the checkpoint
+  now leaves out so that its `instructions` stand alone. A part with an
+  id and neither text nor hash is empty text, as the writer spells
+  one, and moves the cursor like any other part named. `Append`
+  refuses a keep that carries any other member, and a replacing config
+  with a keep and no string. `InstructionPart.ID` is now `omitempty`,
+  since a keep has none, and `InstructionPart.Unresolved` says whether
+  a part in force has text the path could rebuild. (#94)
 - **`attempts` on a response, and `llm_call_count` from it.** The
   exporter wrote `llm_call_count: 1` on every step, so a benchmark
   against a rate-limited provider read it as slow rather than flaky.
   `ResponseEntry.Attempts` records the calls a response took when the
   failed ones were retried without an entry of their own, `Calls`
   reads it with absent as one, the ATIF step carries it, and `show`
-  prints it. The format carries the count rather than the exporter
+  prints it. `Append` refuses a negative count. The format carries the count rather than the exporter
   counting another project's custom entries; agentturn's half is to
   write it from its retry loop (agentturn#117). (#93)
 - **A workspace holds its own host and instance.** The library told a
@@ -48,11 +56,15 @@ versions may break the API.
   `SetMember` to set one; `SetWorkspace` returns the workspace it
   sets. `SameWorkspace` applies the substitution rule, every member
   compared. RFC 0001 says the members that tell one file system from
-  another go inside `workspace`. A key in another case, such as `Kind`,
-  is a member of its own rather than read as `kind`. (#95)
+  another go inside `workspace`, and that members are compared in
+  their canonical form. A key in another case, such as `Kind`, is a
+  member of its own rather than read as `kind`, and `kind` is written
+  only when set, so a workspace without one, which v0.0.9 refused on
+  read, reads as written. (#95)
 - `testdata/sessions/parts.jsonl` is the 0.7 conformance fixture:
   deltas that keep runs, a response that took retries, and a workspace
-  with its host and instance, every request hash verified.
+  with its host and instance followed by a restart onto another
+  instance, every request hash verified.
 
 ## v0.0.9 - 2026-09-28
 

@@ -531,18 +531,22 @@ readers treat it as opaque.
   the format's notation, `sha256:` and lowercase hexadecimal, and its
   text is the one the path already has for that id. A part the list
   leaves out is removed. A list names each `id` once. Order is
-  therefore explicit in every delta.
+  therefore explicit in every delta. A part with an `id` and neither
+  `text` nor `hash` has empty text, which is how a writer that omits
+  an empty string writes one.
 - A part named by `hash` alone also keeps the `source` it had on the
   path, since the hash form has no way to say that a part has none
-  now, so a writer leaves `source` off it; one a 0.6 writer repeated
-  there is that same source. A writer that clears or changes a part's
-  `source` writes the part's `text` with it.
+  now, so a writer leaves `source` off it. A `source` present on such a
+  part, as a 0.6 writer repeated it, is the part's source. A writer
+  that clears or changes a part's `source` writes the part's `text`
+  with it.
 - A run of unchanged parts MAY be named by position instead:
-  `{"keep":n}`, a positive integer and no other member, stands for the
+  `{"keep":n}`, an element with no `id` and a positive integer `keep`,
+  stands for the
   next n parts in force before the entry, each unchanged, `text` and
   `source` alike. "Next" is counted from a cursor into that list. The
   cursor starts at its first part; an element naming a part in force
-  by `id`, with `text` or `hash`, moves it to just after that part,
+  by `id` moves it to just after that part,
   wherever that is; a `keep` moves it past the n parts it takes; an
   element naming an `id` not in force leaves it where it is. A change
   to the 61st of 126 parts is then
@@ -552,14 +556,15 @@ readers treat it as opaque.
   and nothing beyond its run's element when it is not. A writer MUST
   NOT write a `keep` that runs past the end of the list in force, or
   one that takes a part another element of the same list names, and
-  MUST NOT put `keep` on an element that carries an `id`; a `keep`
-  member on such an element is a member this document does not define
-  there. Unlike a `hash`, a `keep` names no text, so nothing but the
-  `request_hash` checks it.
-- A part that carries neither `text` nor a `hash` this path can
-  resolve, and a `keep` that runs past the end of the list in force or
-  takes a part the list names elsewhere, has no text a reader can
-  rebuild. When the same entry
+  MUST NOT write any other member beside `keep`, which a reader
+  ignores. A `keep` member on an element that carries an `id` is a
+  member this document does not define there. Unlike a `hash`, a
+  `keep` names no text, so nothing but the `request_hash` checks it.
+- A part named by a `hash` this path cannot resolve, a `keep` that
+  runs past the end of the list in force or takes a part the list
+  names elsewhere, a `hash` or `keep` naming a part the path itself
+  could not rebuild, and an element with neither an `id` nor a
+  positive `keep`, have no text a reader can rebuild. When the same entry
   carries `instructions`, that string stands: it is the only record of
   what the model was sent, and a reader takes it over the join of
   parts it cannot resolve. Without it the instructions cannot be
@@ -917,7 +922,8 @@ A later `env` entry whose `workspace` differs from the one in force
 before it on the path is a **substitution**: from that entry on, the
 tools ran against another file system than the path recorded until
 then, as when a session recorded in a container is resumed on a laptop.
-Two `workspace` members are compared as members, every member this
+Two `workspace` members are compared member by member in their
+canonical form, as the entry hash writes them, every member this
 document does not define included, and an absent one equals only
 another absent one; a new `cwd`, `vcs` revision or file
 list in the same workspace is not a substitution. Recording the
@@ -1027,8 +1033,9 @@ stated as a rule a writer can be held to.
 Two things sit outside the rule, because neither is material from
 elsewhere. Media referenced by an item MAY be a sidecar, as the file
 section says; a sidecar is part of the session rather than outside it.
-An `instructions_parts` entry named by `hash` alone resolves against
-the parts already on this path, which is the same file.
+An `instructions_parts` entry named by `hash` alone, or taken by a
+`keep`, resolves against the parts already on this path, which is the
+same file.
 
 One thing the payload profile permits, this format does not. An `item`
 entry MUST NOT carry an `item_reference`. It names an item in the
@@ -1192,7 +1199,7 @@ One ATIF document per root-to-leaf path. `session_id` is the header ID;
 accompanying session plan and is normative for the Open Responses
 profile: user and system items to steps, one `response` with its items
 to one agent step with `tool_calls`, `reasoning_content` and `metrics`,
-its `llm_call_count` the response's `attempts`,
+its `llm_call_count` the response's `attempts`, 1 when absent,
 function call outputs to observations by `source_call_id`, compaction
 and branch summaries as copied-context system steps, `link` entries to
 `subagent_trajectories`. Where the output entry carries `parents`, the
@@ -1306,7 +1313,9 @@ lone surrogate normalised with its `was`, output that was not valid
 UTF-8 replaced with its `raw`, 2^60 written as its canonical rendering
 1152921504606847000 and read back, a forked fixture whose `base` is
 found in its origin, an instructions delta naming runs of parts by
-`keep` beside the parts it rebuilds, the recomputed `reason` for every `run` end, and
+`keep` beside the parts it rebuilds, a `response` with `attempts`, an
+`env` whose `workspace` holds a host and an instance and a later one
+that substitutes another instance, the recomputed `reason` for every `run` end, and
 negative cases for a broken parent link, a truncated last line, an
 unknown type, a `dispatch` that follows a `reject`, and a header naming
 `dispatch` beside a call that has an output and no `dispatch`.
@@ -1331,9 +1340,10 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.6
 
-Additive. Two optional members and one paragraph, and nothing a 0.6
-file holds changes meaning or hash, so a 0.6 file is a 0.7 file with
-none of the new members.
+Additive. Two optional members and one paragraph, and nothing a
+conforming 0.6 file holds changes meaning or hash, so a 0.6 file is a
+0.7 file with none of the new members. An element of a delta with no
+`id`, which a 0.7 reader may read as a `keep`, was not a 0.6 part.
 
 - A `response` carries `attempts`, the calls the model took to produce
   it when the failed ones were retried without an entry of their own,
@@ -1344,7 +1354,10 @@ none of the new members.
   composition of many small parts, a memory of a few hundred facts,
   costs that part and not an id and a hash for every other. A part
   named by `hash` leaves its `source` off, as it already kept the one
-  it had.
+  it had. The same paragraph says what 0.6 left open: a part with an
+  `id` and neither `text` nor `hash` has empty text, a `source` on a
+  part named by `hash` is its source, and a `hash` naming a part the
+  path could not rebuild does not rebuild it either.
 - `env` says the members that tell one file system from another, a
   host or an instance, go inside `workspace`, so the substitution rule,
   which compares `workspace` alone, covers them; the 0.6 text left

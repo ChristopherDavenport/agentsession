@@ -144,7 +144,11 @@ func JoinInstructions(parts []InstructionPart) string {
 //
 // A keep counts from a cursor into the parts in force: an element
 // naming a part in force moves it to just after that part, a keep
-// moves it past the parts it takes, and a new id leaves it alone.
+// moves it past the parts it takes, and a new id leaves it alone. A
+// part named with neither text nor hash has empty text, which is how
+// a writer spells one. An element with neither an id nor a keep, or a
+// hash or keep over a part the path itself could not rebuild, leaves
+// the part unresolved.
 func applyInstructionParts(prev, delta []InstructionPart) []InstructionPart {
 	byID := make(map[string]InstructionPart, len(prev))
 	at := make(map[string]int, len(prev))
@@ -172,9 +176,13 @@ func applyInstructionParts(prev, delta []InstructionPart) []InstructionPart {
 				out = append(out, InstructionPart{Keep: p.Keep})
 				continue
 			}
-			for _, q := range run {
-				out = append(out, InstructionPart{ID: q.ID, Text: q.Text, Source: q.Source})
-			}
+			// A part kept as it is stays unresolved if it was.
+			out = append(out, run...)
+			continue
+		}
+		if p.ID == "" {
+			// Neither a part nor a keep: nothing to rebuild.
+			out = append(out, InstructionPart{Keep: p.Keep, unresolved: true})
 			continue
 		}
 		if i, ok := at[p.ID]; ok {
@@ -184,12 +192,14 @@ func applyInstructionParts(prev, delta []InstructionPart) []InstructionPart {
 		if p.Text == "" && p.Hash != "" {
 			old, ok := byID[p.ID]
 			switch {
-			case ok:
+			case ok && !old.Unresolved():
 				next.Text = old.Text
 				if next.Source == "" {
 					next.Source = old.Source
 				}
 			default:
+				// Not on the path, or on it without its text: the hash
+				// resolves against nothing.
 				next.Hash = p.Hash
 			}
 		}
@@ -204,7 +214,7 @@ func applyInstructionParts(prev, delta []InstructionPart) []InstructionPart {
 // the path.
 func unresolvedParts(parts []InstructionPart) bool {
 	for _, p := range parts {
-		if p.Hash != "" || p.Keep > 0 {
+		if p.Unresolved() {
 			return true
 		}
 	}

@@ -297,6 +297,18 @@ type InstructionPart struct {
 	// may hold, is kept as written and Keep is zero; on an element that
 	// names an ID it means nothing.
 	Keep int `json:"keep,omitempty"`
+
+	// unresolved marks a part in force whose text the path could not
+	// rebuild and that carries neither the Hash nor the Keep that says
+	// so: an element with no ID and no keep.
+	unresolved bool
+}
+
+// Unresolved reports whether the path could not rebuild the part's
+// text: it was named by a hash or a keep the path could not resolve,
+// or by an element that names nothing.
+func (p InstructionPart) Unresolved() bool {
+	return p.Hash != "" || p.Keep > 0 || p.unresolved
 }
 
 // UnmarshalJSON decodes the part, taking keep only when it is a

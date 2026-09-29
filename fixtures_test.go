@@ -321,6 +321,19 @@ func partsFixture(t *testing.T) *Session {
 	turn(parts, "Remember the deploy window.", 0)
 	parts = edit(parts, "m6", parts[6].Text+" (corrected)")
 	turn(parts, "Correct fact six.", 2)
+	// The container restarted from the same image: another instance,
+	// so a substitution.
+	restarted := &EnvEntry{CWD: "/home/u/proj"}
+	w = restarted.SetWorkspace(WorkspaceContainer, env.Workspace.Ref)
+	if err := w.SetMember("host", "build-7"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetMember("instance", "ctr-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(restarted); err != nil {
+		t.Fatal(err)
+	}
 	parts = append(append(append([]InstructionPart(nil), parts[:3]...), InstructionPart{ID: "m12", Source: "agentmemory", Text: "fact 012: the deploy window is Tuesday"}), parts[4:]...)
 	turn(parts, "Forget fact three.", 0)
 	return s
@@ -329,7 +342,7 @@ func partsFixture(t *testing.T) *Session {
 // TestPartsFixture reads the 0.7 conformance fixture: every request
 // hash verifies through deltas that keep runs, the response that took
 // retries says how many calls it took, and the workspace holds its host
-// and instance.
+// and instance, so the restart onto another instance is a substitution.
 func TestPartsFixture(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", "parts.jsonl"))
 	if err != nil {
@@ -353,6 +366,15 @@ func TestPartsFixture(t *testing.T) {
 	}
 	if verified != 3 || calls != 4 {
 		t.Errorf("%d responses verified over %d calls, want 3 over 4", verified, calls)
+	}
+	var envs []*EnvEntry
+	for _, e := range s.Entries() {
+		if v, ok := e.(*EnvEntry); ok {
+			envs = append(envs, v)
+		}
+	}
+	if len(envs) != 2 || SameWorkspace(envs[0].Workspace, envs[1].Workspace) {
+		t.Errorf("%d env entries; the restart is not a substitution", len(envs))
 	}
 	var buf bytes.Buffer
 	if err := Write(&buf, partsFixture(t)); err != nil {
