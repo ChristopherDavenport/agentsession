@@ -175,6 +175,9 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		}
 		return strings.Join(parts, " ")
 	case *agentsession.DispatchEntry:
+		if v.IdempotencyKey != "" {
+			return v.CallID + " to tool, key " + describeText(v.IdempotencyKey)
+		}
 		return v.CallID + " to tool"
 	case *agentsession.DecisionEntry:
 		parts := []string{v.Verdict, v.CallID}

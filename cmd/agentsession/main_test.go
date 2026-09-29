@@ -265,6 +265,8 @@ func TestDescribeEveryEntryType(t *testing.T) {
 		{entry: agentsession.NewRunStart("run-1", agentsession.SourceInput, "cron:x"), want: "start run-1 input"},
 		{entry: agentsession.NewRunEnd("run-1", agentsession.ReasonStopped, "max_turns", nil), want: "end run-1 stopped"},
 		{entry: agentsession.NewDispatch("call_1", "i2"), want: "call_1 to tool"},
+		{entry: agentsession.NewDispatch("call_1", "i2").WithIdempotencyKey("k-1"), want: `call_1 to tool, key "k-1"`},
+		{entry: agentsession.NewDecision("call_1", "i2", agentsession.VerdictAnswer, agentsession.ByPolicy), want: "answer call_1 by policy"},
 		{entry: agentsession.NewDecision("call_1", "i2", agentsession.VerdictHold, agentsession.ByPolicy), want: "hold call_1 by policy"},
 		{entry: agentsession.NewQueued(openresponses.UserText("steer"), agentsession.ModeSteer).WithTrigger("human", "slack:1", "gateway"), want: `steer user: "steer" from human slack:1 via gateway`},
 		{entry: agentsession.NewLabelEntry("i1", label), want: "i1 = checkpoint"},

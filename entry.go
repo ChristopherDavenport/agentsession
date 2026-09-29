@@ -257,9 +257,11 @@ type ConfigEntry struct {
 	InstructionsParts []InstructionPart `json:"instructions_parts,omitempty"`
 	// InstructionsOmitted records the parts the writer considered and
 	// left out, so a session says what the model was not given as well
-	// as what it was. It is not settings: nothing in it reaches the
-	// request, and it applies to this entry alone.
-	InstructionsOmitted []OmittedPart       `json:"instructions_omitted,omitempty"`
+	// as what it was. Nothing in it reaches the request, but it stays
+	// in force until a later config entry carries it: nil leaves the
+	// list in force as it was, and an empty, non-nil list, written as
+	// [], clears it. A writer sets it only when the list changed.
+	InstructionsOmitted []OmittedPart       `json:"instructions_omitted,omitzero"`
 	ToolsAdded          openresponses.Tools `json:"tools_added,omitempty"`
 	ToolsRemoved        []string            `json:"tools_removed,omitempty"`
 	// Extra carries request members beyond the named ones, such as

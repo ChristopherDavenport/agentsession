@@ -363,3 +363,37 @@ func lid(t *testing.T, s *agentsession.Session, name string) string {
 	t.Fatalf("no fixture entry with legacy id %s", name)
 	return ""
 }
+
+// TestExportReplay: a call run again after a crash has a tool span for
+// each hand-off, the first ending in flight where the second begins and
+// the second linked to it; a call answered without running again ends
+// with the answered state (#99, #100).
+func TestExportReplay(t *testing.T) {
+	sr, tracer := recorder()
+	s := loadFixture(t, "replay")
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	all := spans(sr.Ended())
+	deploy := all.named(OpTool + " deploy")
+	if len(deploy) != 2 {
+		t.Fatalf("deploy spans = %d, want one per hand-off", len(deploy))
+	}
+	first, again := deploy.withAttr(AttrDispatch, "1"), deploy.withAttr(AttrDispatch, "2")
+	if len(first) != 1 || len(again) != 1 {
+		t.Fatalf("deploy spans by hand-off: %d and %d", len(first), len(again))
+	}
+	if attr(first[0], AttrCallState) != agentsession.CallInFlight.String() || first[0].Status().Code != codes.Error {
+		t.Errorf("first hand-off state %s, status %v", attr(first[0], AttrCallState), first[0].Status())
+	}
+	if !first[0].EndTime().Equal(again[0].StartTime()) || !linksTo(again[0], first[0]) {
+		t.Error("the second hand-off does not start where the first ends, linked to it")
+	}
+	if attr(again[0], AttrCallState) != agentsession.CallCompleted.String() {
+		t.Errorf("second hand-off state %s", attr(again[0], AttrCallState))
+	}
+	notify := all.named(OpTool + " notify")
+	if len(notify) != 1 || attr(notify[0], AttrCallState) != "answered" || len(eventAttr(notify[0], EventDecision, AttrVerdict)) != 1 {
+		t.Errorf("notify spans = %d, state %s", len(notify), attr(notify[0], AttrCallState))
+	}
+}

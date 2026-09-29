@@ -352,10 +352,17 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 		return Result{}, err
 	}
 	if d, ok := e.(*DispatchEntry); ok {
-		// The format forbids a dispatch for a call a decision rejected.
+		// The format forbids a dispatch for a call a decision rejected
+		// or answered.
 		for _, c := range Calls(s.path(b.Parent)) {
-			if c.ID() == d.CallID && c.Rejected() {
+			if c.ID() != d.CallID {
+				continue
+			}
+			if c.Rejected() {
 				return Result{}, fmt.Errorf("%w: %s", ErrCallRejected, d.CallID)
+			}
+			if c.Answered() {
+				return Result{}, fmt.Errorf("%w: %s", ErrCallAnswered, d.CallID)
 			}
 		}
 	}

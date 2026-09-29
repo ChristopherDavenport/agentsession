@@ -685,13 +685,14 @@ func TestNestedMembersReadAsWritten(t *testing.T) {
 			}
 		})
 	}
-	t.Run("a trigger in another case stays unknown", func(t *testing.T) {
+	t.Run("a key in another case is a trigger member of its own", func(t *testing.T) {
 		s, err := Read(strings.NewReader(head + "\n" + hashed(`"type":"run","run_id":"r","phase":"start","source":"input","trigger":{"KIND":"schedule"}`) + "\n"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r := s.Entries()[0].(*RunEntry); r.Trigger != nil {
-			t.Errorf("Trigger = %+v, want nil: no conforming reader sees a kind", r.Trigger)
+		r := s.Entries()[0].(*RunEntry)
+		if r.Trigger == nil || r.Trigger.Kind != "" || string(r.Trigger.Unknown["KIND"]) != `"schedule"` {
+			t.Errorf("Trigger = %+v, want KIND a member of its own: no conforming reader sees a kind", r.Trigger)
 		}
 	})
 	t.Run("a caller's change keeps what it did not touch", func(t *testing.T) {

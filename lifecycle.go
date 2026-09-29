@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/agentsession/internal/jsonx"
@@ -57,11 +58,18 @@ const (
 
 // Verdicts a [DecisionEntry] may carry, each defined by what follows
 // the decision on the path: a dispatch, an output carrying the reason,
-// or nothing.
+// nothing, or an output the harness wrote for a call that may already
+// have run.
 const (
 	VerdictProceed = "proceed"
 	VerdictReject  = "reject"
 	VerdictHold    = "hold"
+	// VerdictAnswer ends a call that may already have run, one in
+	// flight when the record stopped or one the file cannot say about,
+	// with an output the harness wrote rather than one its tool
+	// returned: the call is not handed to its tool again. By says who
+	// answered and Reason why.
+	VerdictAnswer = "answer"
 )
 
 // Deciders a [DecisionEntry] may name.
@@ -97,11 +105,11 @@ type RunEntry struct {
 	// Trigger, on a start entry, says how the input that started the run
 	// arrived, in parts, beside Ref and changing nothing about it. A
 	// harness's richer facts about the firing, such as when it was due
-	// or which attempt it is, go in members of the run entry this
-	// package does not define, kept in [EntryBase.Unknown]. A trigger
-	// member this type cannot hold exactly, one with a member it does
-	// not define or one written before the member was, is kept there as
-	// written and Trigger is nil.
+	// or which attempt it is, go in [Trigger.Unknown]; members of the
+	// run entry this package does not define, where format 0.6 put
+	// them, are kept in [EntryBase.Unknown]. A trigger member this type
+	// cannot hold exactly, one written before the member was defined,
+	// is kept there as written and Trigger is nil.
 	Trigger *Trigger `json:"-" member:"trigger"`
 	// Pending lists, on an end entry, the IDs of the calls left without
 	// an output. It is written even when empty.
@@ -135,11 +143,19 @@ func NewRunEnd(runID, reason, ref string, pending []string) *RunEntry {
 // DispatchEntry records that a call was handed to its tool. Target is
 // the item entry holding the function call. A writer that names
 // "dispatch" in the header's records writes it, durably, before the
-// tool runs.
+// tool runs. Each dispatch for a call is one hand-off, so a call run
+// again after a restart has a second.
 type DispatchEntry struct {
 	EntryBase `json:"-"`
 	CallID    string `json:"call_id"`
 	Target    string `json:"target"`
+	// IdempotencyKey is the key the harness gave the tool for this
+	// hand-off. A call run again carries the key of its first dispatch,
+	// which [Call.IdempotencyKey] returns. An idempotency_key member
+	// that is not a non-empty string, which a file from before the
+	// member was defined may hold, is kept as written in Unknown and
+	// IdempotencyKey is empty.
+	IdempotencyKey string `json:"-" member:"idempotency_key"`
 }
 
 // EntryType returns "dispatch".
@@ -151,12 +167,20 @@ func NewDispatch(callID, target string) *DispatchEntry {
 	return &DispatchEntry{CallID: callID, Target: target}
 }
 
+// WithIdempotencyKey records the key the tool is handed and returns
+// the entry, for chaining.
+func (e *DispatchEntry) WithIdempotencyKey(key string) *DispatchEntry {
+	e.IdempotencyKey = key
+	return e
+}
+
 // DecisionEntry records that a call's fate was decided outside the
 // tool. Target is the item entry holding the function call. Reason is
 // required when Verdict is [VerdictReject], since it is what the model
 // saw as the output. Args, when present, are the arguments the tool
 // ran with after the decision rewrote them; the function call item
-// stays as the model produced it.
+// stays as the model produced it. An answer, [VerdictAnswer], ran
+// nothing, so Args on one names nothing.
 type DecisionEntry struct {
 	EntryBase `json:"-"`
 	CallID    string          `json:"call_id"`
@@ -200,6 +224,102 @@ type Trigger struct {
 	Kind   string `json:"kind,omitempty"`
 	Ref    string `json:"ref,omitempty"`
 	Source string `json:"source,omitempty"`
+	// Unknown holds the members of the trigger the format does not
+	// define, the harness's own facts about the arrival such as when a
+	// scheduled firing was due and which attempt it is, encoded inline
+	// beside kind, ref and source. It is nil when there are none.
+	Unknown map[string]json.RawMessage `json:"-"`
+}
+
+// triggerKeys are the members of a trigger the format defines.
+var triggerKeys = []string{"kind", "ref", "source"}
+
+// SetMember sets a member of the trigger the format does not define,
+// such as when a scheduled firing was due or which attempt it is.
+func (t *Trigger) SetMember(key string, v any) error {
+	if slices.Contains(triggerKeys, key) {
+		return fmt.Errorf("agentsession: trigger member %q is defined; set the field", key)
+	}
+	data, err := jsonx.MarshalNoEscape(v)
+	if err != nil {
+		return fmt.Errorf("agentsession: trigger member %q: %w", key, err)
+	}
+	if t.Unknown == nil {
+		t.Unknown = make(map[string]json.RawMessage)
+	}
+	t.Unknown[key] = data
+	return nil
+}
+
+// Clone returns a copy of the trigger that shares no map with it, or
+// nil for nil.
+func (t *Trigger) Clone() *Trigger {
+	if t == nil {
+		return nil
+	}
+	out := *t
+	out.Unknown = cloneRaw(t.Unknown)
+	return &out
+}
+
+// Equal reports whether two triggers are the same: kind, ref, source
+// and every member the format does not define, compared in canonical
+// form, so the order and spacing a line gave them do not count. Two
+// nil triggers are equal. A Trigger holds a map, so == does not
+// compile on it.
+func (t *Trigger) Equal(u *Trigger) bool {
+	if t == nil || u == nil {
+		return t == u
+	}
+	ct, err1 := canonicalJSON(t)
+	cu, err2 := canonicalJSON(u)
+	return err1 == nil && err2 == nil && bytes.Equal(ct, cu)
+}
+
+// MarshalJSON emits kind, ref, source and the unknown members as one
+// object.
+func (t Trigger) MarshalJSON() ([]byte, error) {
+	for key := range t.Unknown {
+		if slices.Contains(triggerKeys, key) {
+			return nil, fmt.Errorf("agentsession: trigger has %s both typed and unknown", key)
+		}
+	}
+	type plain Trigger
+	b, err := jsonx.MarshalNoEscape(plain(t))
+	if err != nil {
+		return nil, err
+	}
+	return jsonx.JoinObjects(b, nil, t.Unknown), nil
+}
+
+// UnmarshalJSON takes kind, ref and source, spelled exactly, and keeps
+// every other member in Unknown.
+func (t *Trigger) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	*t = Trigger{}
+	for key, raw := range all {
+		var err error
+		switch key {
+		case "kind":
+			err = json.Unmarshal(raw, &t.Kind)
+		case "ref":
+			err = json.Unmarshal(raw, &t.Ref)
+		case "source":
+			err = json.Unmarshal(raw, &t.Source)
+		default:
+			if t.Unknown == nil {
+				t.Unknown = make(map[string]json.RawMessage)
+			}
+			t.Unknown[key] = raw
+		}
+		if err != nil {
+			return fmt.Errorf("trigger %s: %w", key, err)
+		}
+	}
+	return nil
 }
 
 // QueuedEntry records an input a harness accepted before it could be
@@ -247,15 +367,11 @@ func (e *QueuedEntry) WithTrigger(kind, ref, source string) *QueuedEntry {
 // conversation: the item, the trigger as its source and QueuedFrom
 // naming this entry, so the record says why the item is there. The
 // entry must already have an ID, which it has once it is appended.
-// The trigger is copied, so the two entries do not share one once
-// both are appended and neither may be modified.
+// The trigger is copied whole, the members the format does not define
+// included, so the two entries do not share one once both are appended
+// and neither may be modified.
 func (e *QueuedEntry) Drain() *ItemEntry {
-	out := &ItemEntry{Item: e.Item, QueuedFrom: e.ID}
-	if e.Trigger != nil {
-		trigger := *e.Trigger
-		out.Source = &trigger
-	}
-	return out
+	return &ItemEntry{Item: e.Item, QueuedFrom: e.ID, Source: e.Trigger.Clone()}
 }
 
 // Workspace says which file system an env entry's cwd is a path in.
@@ -350,8 +466,12 @@ func SameWorkspace(a, b *Workspace) bool {
 	return err1 == nil && err2 == nil && bytes.Equal(ca, cb)
 }
 
-func canonicalWorkspace(w *Workspace) ([]byte, error) {
-	data, err := w.MarshalJSON()
+func canonicalWorkspace(w *Workspace) ([]byte, error) { return canonicalJSON(w) }
+
+// canonicalJSON is v's encoding in the canonical form the entry hash
+// writes.
+func canonicalJSON(v json.Marshaler) ([]byte, error) {
+	data, err := v.MarshalJSON()
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +603,15 @@ func (e *DispatchEntry) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	type plain DispatchEntry
-	return marshalEntry(TypeDispatch, &e.EntryBase, (*plain)(e))
+	if e.IdempotencyKey != "" {
+		if _, dup := e.Unknown["idempotency_key"]; dup {
+			return nil, errors.New("agentsession: dispatch entry has idempotency_key both typed and unknown")
+		}
+	}
+	return marshalEntry(TypeDispatch, &e.EntryBase, struct {
+		*plain
+		IdempotencyKey string `json:"idempotency_key,omitempty"`
+	}{(*plain)(e), e.IdempotencyKey})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -497,9 +625,11 @@ func (e *DispatchEntry) UnmarshalJSON(data []byte) error {
 
 func (e *DispatchEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain DispatchEntry
+	e.IdempotencyKey = ""
 	if err := unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), dispatchKeys); err != nil {
 		return err
 	}
+	promote(&e.EntryBase, "idempotency_key", &e.IdempotencyKey)
 	return validateLifecycle(e)
 }
 

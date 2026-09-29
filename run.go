@@ -9,7 +9,7 @@ import (
 )
 
 // Call is one function call on a path and everything that happened to
-// it there: the decisions made about it, its dispatch and its output.
+// it there: the decisions made about it, its dispatches and its output.
 type Call struct {
 	// Entry is the item entry holding the function call.
 	Entry *ItemEntry
@@ -17,13 +17,25 @@ type Call struct {
 	Call *openresponses.FunctionCall
 	// Decisions are the decisions on the call, in path order.
 	Decisions []*DecisionEntry
-	// Dispatch is the dispatch entry, or nil when none is on the path.
+	// Dispatch is the first dispatch entry, or nil when none is on the
+	// path.
 	Dispatch *DispatchEntry
+	// Dispatches are the dispatch entries, in path order: one for each
+	// time the call was handed to its tool, so a call run again after a
+	// restart has two. Dispatch is the first of them.
+	Dispatches []*DispatchEntry
 	// Output is the item entry holding the function call output, or nil
 	// when the call is pending.
 	Output *ItemEntry
 
-	dispatchAfterReject bool
+	// ended is the decision that ended the call, a reject or an answer,
+	// that a dispatch follows on the path, which the format forbids.
+	ended *DecisionEntry
+	// endedBy is the dispatch that follows it.
+	endedBy *DispatchEntry
+	// sinceDecision reports whether a dispatch follows the latest
+	// decision.
+	sinceDecision bool
 }
 
 // ID returns the call ID.
@@ -33,20 +45,39 @@ func (c *Call) ID() string { return c.Call.CallID }
 func (c *Call) Pending() bool { return c.Output == nil }
 
 // Held reports whether the call is waiting on an answer: its latest
-// decision is a hold and no dispatch follows it.
+// decision is a hold and no dispatch follows it. A hold after a
+// dispatch, a call that may have run and waits on someone to say
+// whether it runs again, is held.
 func (c *Call) Held() bool {
-	return c.Dispatch == nil && len(c.Decisions) > 0 && c.Decisions[len(c.Decisions)-1].Verdict == VerdictHold
+	return !c.sinceDecision && len(c.Decisions) > 0 && c.Decisions[len(c.Decisions)-1].Verdict == VerdictHold
 }
 
 // Rejected reports whether a decision ended the call without running
 // it.
-func (c *Call) Rejected() bool {
+func (c *Call) Rejected() bool { return c.hasVerdict(VerdictReject) }
+
+// Answered reports whether a decision ended the call with an output the
+// harness wrote rather than one its tool returned: a call that may have
+// run, answered without being handed to its tool again.
+func (c *Call) Answered() bool { return c.hasVerdict(VerdictAnswer) }
+
+func (c *Call) hasVerdict(verdict string) bool {
 	for _, d := range c.Decisions {
-		if d.Verdict == VerdictReject {
+		if d.Verdict == verdict {
 			return true
 		}
 	}
 	return false
+}
+
+// IdempotencyKey returns the key the call's first dispatch handed its
+// tool, which a call run again carries, or "" when it has no dispatch
+// or the dispatch no key.
+func (c *Call) IdempotencyKey() string {
+	if c.Dispatch == nil {
+		return ""
+	}
+	return c.Dispatch.IdempotencyKey
 }
 
 // From returns the predecessors the call's output converges: for a
@@ -157,15 +188,36 @@ func Calls(path []Entry) []*Call {
 		case *DecisionEntry:
 			if c, ok := byID[v.CallID]; ok {
 				c.Decisions = append(c.Decisions, v)
+				c.sinceDecision = false
 			}
 		case *DispatchEntry:
-			if c, ok := byID[v.CallID]; ok && c.Dispatch == nil {
-				c.Dispatch = v
-				c.dispatchAfterReject = c.Rejected()
+			if c, ok := byID[v.CallID]; ok {
+				if c.Dispatch == nil {
+					c.Dispatch = v
+				}
+				c.Dispatches = append(c.Dispatches, v)
+				c.sinceDecision = true
+				if c.ended == nil {
+					c.ended = c.endingDecision()
+					if c.ended != nil {
+						c.endedBy = v
+					}
+				}
 			}
 		}
 	}
 	return out
+}
+
+// endingDecision returns the first decision that ended the call, a
+// reject or an answer, or nil.
+func (c *Call) endingDecision() *DecisionEntry {
+	for _, d := range c.Decisions {
+		if d.Verdict == VerdictReject || d.Verdict == VerdictAnswer {
+			return d
+		}
+	}
+	return nil
 }
 
 // Calls returns the calls on the path to leaf; see [Calls].
@@ -498,6 +550,10 @@ func (r *Run) Verify() error {
 // that a decision on the path already rejected.
 var ErrCallRejected = errors.New("agentsession: call was rejected")
 
+// ErrCallAnswered is returned when a dispatch is appended for a call
+// that an answer decision on the path already ended.
+var ErrCallAnswered = errors.New("agentsession: call was answered")
+
 // ErrRecordMissing is returned by [Session.VerifyRecords] when the
 // header promises a record entry type and the path lacks one where the
 // event plainly happened.
@@ -505,7 +561,7 @@ var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 
 // VerifyRecords checks the record entries on the path to leaf against
 // the format's rules: every run end agrees with its segment, no
-// dispatch follows a reject on the same call, and, when the header
+// dispatch follows a reject or an answer on the same call, and, when the header
 // names dispatch in records, every call that ran has a dispatch. It
 // returns the first problem found.
 func (s *Session) VerifyRecords(leaf string) error {
@@ -520,8 +576,11 @@ func (s *Session) VerifyRecords(leaf string) error {
 	}
 	h := s.Header()
 	for _, c := range Calls(path) {
-		if c.dispatchAfterReject {
-			return fmt.Errorf("%w: dispatch %s follows a reject of call %s", ErrCallRejected, c.Dispatch.ID, c.ID())
+		if c.ended != nil {
+			if c.ended.Verdict == VerdictAnswer {
+				return fmt.Errorf("%w: dispatch %s follows an answer to call %s", ErrCallAnswered, c.endedBy.ID, c.ID())
+			}
+			return fmt.Errorf("%w: dispatch %s follows a reject of call %s", ErrCallRejected, c.endedBy.ID, c.ID())
 		}
 		if h.HasRecord(TypeDispatch) && c.Output != nil && c.Dispatch == nil && !c.Rejected() {
 			return fmt.Errorf("%w: call %s has an output and no dispatch", ErrRecordMissing, c.ID())

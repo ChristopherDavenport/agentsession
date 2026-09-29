@@ -38,6 +38,9 @@ func Continue(ctx context.Context, store Store, id string, summary openresponses
 	if err != nil {
 		return nil, err
 	}
+	// The parts left out stay in force across the rollover, as they do
+	// across a compaction.
+	cfg.InstructionsOmitted = cloneOmitted(cx.Settings.InstructionsOmitted)
 	h := old.Header()
 	next, err := store.Create(ctx, Header{
 		Harness:       h.Harness,

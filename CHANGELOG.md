@@ -5,6 +5,66 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **RFC 0001 draft 0.8; the library writes `agentsession/0.8`.** One
+  optional member, one verdict, and paragraphs in four sections. A
+  0.5, 0.6 or 0.7 file reads as it stands, with nothing rehashed;
+  v0.0.10 refuses a 0.8 file, as a 0.x reader refuses a later minor.
+  One rule reads a 0.7 file differently, stated in the RFC: the
+  omitted instruction parts stay in force past the entry that wrote
+  them. No request and no hash moves with it.
+- **Omitted instruction parts stay in force.** The RFC said
+  `instructions_omitted` applied to the entry that carried it, so a
+  writer with a memory larger than its budget repeated every omitted
+  part on every delta: 474 of them cost 37 KB a memory write, more
+  than the joined string the parts were meant to beat. The list is
+  now in force until a later config carries the member: a delta
+  without it leaves it, `[]` or a `replace` without it clears it, and
+  a compaction's checkpoint carries it. `Settings.InstructionsOmitted`
+  holds the list in force, `Context.InstructionsOmitted` returns it,
+  and a compaction and `Continue` carry it over. `ConfigEntry`'s field
+  is now `omitzero`, so an empty, non-nil list is written as `[]`. A
+  checkpoint member that is not a list of parts is kept as written.
+  (#97)
+- **A dispatch carries its idempotency key.** `DispatchEntry.IdempotencyKey`,
+  promoted only from a non-empty string, and `WithIdempotencyKey`; a
+  call run again carries its first dispatch's key, which
+  `Call.IdempotencyKey` returns. The key has to outlive the process
+  that minted it, and a harness that wrote it as a member of its own
+  could not be read by another. `describe` prints it. (#98)
+- **A second dispatch is a second hand-off.** `Call.Dispatches` holds
+  every dispatch in path order, with `Dispatch` still the first. The
+  ATIF projection keeps the first under `dispatch` and, for a call
+  handed over more than once, lists every one under `dispatches`,
+  where it used to overwrite the first with the last. otel opens a
+  tool span per hand-off, carrying `agentsession.call.dispatch`, the
+  hand-off's number: a span still open when the call is handed over
+  again ends in flight, and the next links to it. `Call.Held` reads a
+  hold after a dispatch as holding the call, as the RFC defines it,
+  where it used to read any call with a dispatch as not held. (#99)
+- **`answer`, a verdict for a call answered without running again.**
+  `VerdictAnswer` ends a call that may already have run with an output
+  the harness wrote, and its `by` and `reason` say who answered and
+  why; neither `proceed` nor `reject` could say it honestly, so who
+  answered an ambiguous call after a crash went unrecorded.
+  `Call.Answered` reports one; `Append` refuses a dispatch after one
+  with `ErrCallAnswered`, and `VerifyRecords` reports a file that
+  holds one. otel ends the call's span with the state `answered`.
+  (#100)
+- **A trigger keeps its own members.** `Trigger.Unknown`, encoded
+  inline beside kind, ref and source, with `SetMember`, `Clone` and
+  `Equal`, so a queued firing keeps when it was due and which attempt
+  it is, and `Drain` copies them to the item. A run start's trigger
+  with members of its own is now typed rather than kept whole in the
+  entry's unknown members. `Trigger` holds a map, so `==` on it no
+  longer compiles; use `Equal`. (#101)
+- `testdata/sessions/replay.jsonl` is the 0.8 conformance fixture: a
+  crash with two calls in flight, one run again under its key and one
+  answered, omitted parts in force across a delta and a compaction and
+  cleared by `[]`, and a queued firing drained with its own members,
+  every run end and request hash verified.
+
 ## v0.0.10 - 2026-09-29
 
 - **RFC 0001 draft 0.7; the library writes `agentsession/0.7`.**

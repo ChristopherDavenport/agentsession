@@ -25,11 +25,39 @@ type Settings struct {
 	// so a reader that does not care about the composition reads the
 	// string as before. It is empty for a path that set the
 	// instructions as one string.
-	InstructionsParts []InstructionPart   `json:"instructions_parts,omitempty"`
-	Tools             openresponses.Tools `json:"tools,omitempty"`
+	InstructionsParts []InstructionPart `json:"instructions_parts,omitempty"`
+	// InstructionsOmitted are the parts left out of the instructions
+	// that are in force: the list the last config entry carrying one
+	// wrote, cleared by an empty list or a replace without one. It
+	// reaches no request, so [Settings.Request] leaves it out and the
+	// request hash does not cover it; a compaction checkpoint carries
+	// it so the list survives the fold. A checkpoint member that does
+	// not decode as a list of parts, which a file from before 0.8 may
+	// hold, is kept as written and InstructionsOmitted is nil.
+	InstructionsOmitted []OmittedPart       `json:"instructions_omitted,omitempty"`
+	Tools               openresponses.Tools `json:"tools,omitempty"`
 	// Extra carries request members beyond the named ones, keyed by
 	// their wire name.
 	Extra map[string]json.RawMessage `json:"extra,omitempty"`
+}
+
+// UnmarshalJSON decodes a checkpoint, taking instructions_omitted only
+// when it is a list of parts.
+func (s *Settings) UnmarshalJSON(data []byte) error {
+	type plain Settings
+	var aux struct {
+		plain
+		Omitted json.RawMessage `json:"instructions_omitted"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*s = Settings(aux.plain)
+	var omitted []OmittedPart
+	if len(aux.Omitted) > 0 && json.Unmarshal(aux.Omitted, &omitted) == nil && len(omitted) > 0 {
+		s.InstructionsOmitted = omitted
+	}
+	return nil
 }
 
 // ExtraValue decodes the passthrough member key into v. It reports
@@ -55,6 +83,12 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 		out.Tools = append(openresponses.Tools(nil), s.Tools...)
 		out.Extra = cloneRaw(s.Extra)
 		out.InstructionsParts = cloneParts(s.InstructionsParts)
+		out.InstructionsOmitted = cloneOmitted(s.InstructionsOmitted)
+	}
+	if c.InstructionsOmitted != nil {
+		// The entry carries the member, so it replaces the list in
+		// force; an empty one clears it.
+		out.InstructionsOmitted = cloneOmitted(c.InstructionsOmitted)
 	}
 	if c.Model != "" {
 		out.Model = c.Model
@@ -354,6 +388,14 @@ func cloneParts(parts []InstructionPart) []InstructionPart {
 	return append([]InstructionPart(nil), parts...)
 }
 
+// cloneOmitted copies the omitted parts, nil for none.
+func cloneOmitted(parts []OmittedPart) []OmittedPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	return append([]OmittedPart(nil), parts...)
+}
+
 func cloneRaw(m map[string]json.RawMessage) map[string]json.RawMessage {
 	if m == nil {
 		return nil
@@ -395,18 +437,12 @@ func (c Context) Request() (openresponses.Request, error) {
 	return c.Settings.Request(c.Items)
 }
 
-// InstructionsOmitted returns the parts the last config entry of the
-// context considered for the instructions and left out. It is not
-// settings, so it does not replay and a compaction checkpoint does
-// not carry it: it is the most recent record of what the model was
-// not given, from the entries the context holds.
+// InstructionsOmitted returns the parts left out of the instructions
+// in force: [Settings.InstructionsOmitted]. The list stays in force
+// until a later config entry carries the member, so a writer writes it
+// only when it changed, and a compaction checkpoint carries it.
 func (c Context) InstructionsOmitted() []OmittedPart {
-	for i := len(c.Entries) - 1; i >= 0; i-- {
-		if cfg, ok := c.Entries[i].(*ConfigEntry); ok && len(cfg.InstructionsOmitted) > 0 {
-			return cfg.InstructionsOmitted
-		}
-	}
-	return nil
+	return c.Settings.InstructionsOmitted
 }
 
 // BuildContext runs the context algorithm over a root-first path. Only
@@ -436,6 +472,7 @@ func BuildContext(path []Entry) (Context, error) {
 		}
 		settings = comp.Config
 		settings.InstructionsParts = cloneParts(comp.Config.InstructionsParts)
+		settings.InstructionsOmitted = cloneOmitted(comp.Config.InstructionsOmitted)
 		ctx.Entries = append(ctx.Entries, comp)
 		ctx.Items = append(ctx.Items, comp.Summary)
 		ctx.ItemEntries = append(ctx.ItemEntries, comp)
