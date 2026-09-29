@@ -25,55 +25,81 @@ func (k keepSet) has(sp space, hash string) bool {
 }
 
 // keepEntry adds an entry, its content and the blobs its content names,
-// following references down as RFC 0002's retention does.
-func (s *Store) keepEntry(k keepSet, id string) {
+// following references down as RFC 0002's retention does. An object
+// that is not there needs nothing kept; any other failure to read one
+// fails the sweep, since what it would name cannot be known and a sweep
+// that guessed would remove it.
+func (s *Store) keepEntry(k keepSet, id string) error {
 	if k.entries[id] {
-		return
+		return nil
 	}
 	k.entries[id] = true
-	c, err := s.contentOf(id)
+	env, err := s.objs.read(spaceEntries, id)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		return
+		return err
+	}
+	c, ok := envelopeContent(env)
+	if !ok {
+		return fmt.Errorf("%w: entry %s names no content", ErrCorrupt, id)
 	}
 	k.contents[c] = true
-	if body, err := s.objs.read(spaceContents, c); err == nil {
-		for _, b := range blobsNamedBy(body) {
-			k.contents[b] = true
-		}
+	body, err := s.objs.read(spaceContents, c)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
 	}
+	if err != nil {
+		return err
+	}
+	for _, b := range blobsNamedBy(body) {
+		k.contents[b] = true
+	}
+	return nil
 }
 
 // keepPath adds the path to base.
-func (s *Store) keepPath(k keepSet, base string) {
+func (s *Store) keepPath(k keepSet, base string) error {
 	for id := base; id != "" && !k.entries[id]; {
-		s.keepEntry(k, id)
+		if err := s.keepEntry(k, id); err != nil {
+			return err
+		}
 		parent, err := s.parentOf(id)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
-			return
+			return err
 		}
 		id = parent
 	}
+	return nil
 }
 
 // keepFromScan adds what the journal records name: every session's own
 // entries and head, and the base of every session created in it.
-func (s *Store) keepFromScan(k keepSet, scan *journalScan) {
+func (s *Store) keepFromScan(k keepSet, scan *journalScan) error {
 	for _, st := range scan.states {
 		if st.deleted {
 			continue
 		}
 		if st.base != "" {
-			s.keepPath(k, st.base)
+			if err := s.keepPath(k, st.base); err != nil {
+				return err
+			}
 		}
 		for _, r := range st.recs {
-			if r.Entry != "" {
-				s.keepEntry(k, r.Entry)
-			}
-			if r.Head != "" {
-				s.keepEntry(k, r.Head)
+			for _, id := range []string{r.Entry, r.Head} {
+				if id != "" {
+					if err := s.keepEntry(k, id); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}
+	return nil
 }
 
 // keepAll computes what the store holds: what the journal names, what
@@ -86,7 +112,9 @@ func (s *Store) keepAll() (keepSet, int64, error) {
 	if err != nil {
 		return k, 0, err
 	}
-	s.keepFromScan(k, scan)
+	if err := s.keepFromScan(k, scan); err != nil {
+		return k, 0, fmt.Errorf("cas: sweep: %w", err)
+	}
 	dirs, err := os.ReadDir(filepath.Join(s.root, "sessions"))
 	if err != nil {
 		return k, 0, fmt.Errorf("cas: %w", err)
@@ -103,14 +131,18 @@ func (s *Store) keepAll() (keepSet, int64, error) {
 		if err != nil {
 			return k, 0, fmt.Errorf("cas: session %s: %w", d.Name(), err)
 		}
-		for _, h := range hashes {
-			s.keepEntry(k, h)
-		}
 		if head, err := readHead(dir); err == nil && head != "" {
-			s.keepEntry(k, head)
+			hashes = append(hashes, head)
+		}
+		for _, h := range hashes {
+			if err := s.keepEntry(k, h); err != nil {
+				return k, 0, fmt.Errorf("cas: sweep: %w", err)
+			}
 		}
 		if h, err := readHeader(dir); err == nil && h.Base != "" {
-			s.keepPath(k, h.Base)
+			if err := s.keepPath(k, h.Base); err != nil {
+				return k, 0, fmt.Errorf("cas: sweep: %w", err)
+			}
 		}
 	}
 	return k, scan.end, nil
@@ -228,11 +260,12 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	if err := s.objs.reloadPacks(true); err != nil {
 		return 0, err
 	}
+	started := time.Now()
 	keep, offset, err := s.keepAll()
 	if err != nil {
 		return 0, err
 	}
-	young := time.Now().Add(-grace)
+	young := started.Add(-grace)
 
 	// What the new pack takes: every kept object, loose or packed.
 	var objs []packObject
@@ -356,7 +389,10 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		return 0, err
 	}
 	since := keepSet{entries: map[string]bool{}, contents: map[string]bool{}}
-	s.keepFromScan(since, scan)
+	if err := s.keepFromScan(since, scan); err != nil {
+		lk.release()
+		return 0, fmt.Errorf("cas: sweep: %w", err)
+	}
 	for _, pair := range []struct {
 		sp  space
 		set map[string]bool
@@ -383,6 +419,31 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 				lk.release()
 				return 0, err
 			}
+		}
+	}
+	// A pack a writer freshened since the sweep began holds an object
+	// that writer found there and needed, perhaps a blob no record names
+	// yet: what the new pack lacks goes back loose, young.
+	for _, p := range old {
+		if p.name == newPack {
+			continue
+		}
+		if info, err := os.Stat(p.path); err != nil || !info.ModTime().After(started) {
+			continue
+		}
+		err := p.each(func(sp space, hash string, off, length int64) error {
+			if inNew[sp][hash] {
+				return nil
+			}
+			data, err := p.read(off, length)
+			if err != nil || hashBytes(data) != hash {
+				return nil
+			}
+			return writeLoose(sp, hash, data, time.Time{})
+		})
+		if err != nil {
+			lk.release()
+			return 0, err
 		}
 	}
 	for _, p := range old {

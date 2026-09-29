@@ -40,6 +40,8 @@ type journalRecord struct {
 	// lazy record whose objects are missing is an append that was lost,
 	// not damage.
 	Lazy bool `json:"lazy,omitempty"`
+
+	checked bool // it carried a checksum that matched
 }
 
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
@@ -85,6 +87,7 @@ func decodeRecord(seg []byte) (rec journalRecord, torn bool, err error) {
 	if err := json.Unmarshal(seg, &rec); err != nil {
 		return rec, false, err
 	}
+	rec.checked = bytes.Contains(seg, []byte(crcMember))
 	if rec.Op == "" || rec.Session == "" {
 		return rec, false, errors.New("record names no operation or session")
 	}
@@ -183,42 +186,30 @@ func (s *Store) replayFrom(from int64) (*journalScan, error) {
 			break
 		}
 		if line[len(line)-1] != '\n' {
-			// A record still being written, or one a crash cut short at
-			// the end of the file: not yet a line.
+			// The journal's end without a newline: a record still being
+			// written, one a crash cut short, or a whole record whose
+			// newline was damaged. Only whole records that pass their
+			// checksum count, and nothing is reported: the rest may be a
+			// write in flight.
+			if recs, _ := decodeLine(line); len(recs) > 0 {
+				for _, rec := range recs {
+					if rec.checked {
+						scan.apply(rec)
+					}
+				}
+			}
 			break
 		}
 		lineNo++
 		start := off
 		off += int64(len(line))
 		scan.end = off
-		rec, _, derr := decodeRecord(line)
+		recs, derr := decodeLine(line)
 		if derr != nil {
-			// Torn bytes; a whole record may follow them on this line.
-			if k := bytes.LastIndex(line, []byte(`{"op":"`)); k > 0 {
-				rec, _, derr = decodeRecord(line[k:])
-			}
-		}
-		if derr != nil {
-			// A crash cuts a record short only at the end of the file,
-			// and the next record written lands on the same line, so a
-			// whole line holding no record that reads is damage.
 			scan.damage = append(scan.damage, JournalDamage{Line: lineNo, Offset: start, Err: derr})
-			continue
 		}
-		st := scan.states[rec.Session]
-		if st == nil {
-			st = &sessionState{}
-			scan.states[rec.Session] = st
-		}
-		switch rec.Op {
-		case "delete":
-			scan.states[rec.Session] = &sessionState{deleted: true}
-		case "create":
-			// The boundary a session starts from: whatever the journal
-			// said about this ID before belongs to a session that is gone.
-			scan.states[rec.Session] = &sessionState{created: true, base: rec.Base}
-		default:
-			st.recs = append(st.recs, rec)
+		for _, rec := range recs {
+			scan.apply(rec)
 		}
 	}
 	if from > 0 {
@@ -228,6 +219,82 @@ func (s *Store) replayFrom(from int64) (*journalScan, error) {
 		}
 	}
 	return scan, nil
+}
+
+// decodeLine reads the records of one journal line. A line normally
+// holds one. A crash cuts a record short only at the journal's end, and
+// the next record appended lands on the same line after the torn bytes,
+// so bytes ahead of the first whole record are skipped as torn. Every
+// other piece that does not read is damage: a record whose newline was
+// damaged into another byte is read with the record it ran into, and a
+// whole line holding no record that reads is reported.
+func decodeLine(line []byte) ([]journalRecord, error) {
+	var starts []int
+	for i := 0; ; {
+		k := bytes.Index(line[i:], []byte(`{"op":"`))
+		if k < 0 {
+			break
+		}
+		starts = append(starts, i+k)
+		i += k + 1
+	}
+	if len(starts) == 0 {
+		return nil, errors.New("no record")
+	}
+	var recs []journalRecord
+	var damage error
+	for n, st := range starts {
+		end := len(line)
+		if n+1 < len(starts) {
+			end = starts[n+1]
+		}
+		seg := line[st:end]
+		rec, _, err := decodeRecord(seg)
+		if err != nil && len(seg) > 1 {
+			// A record followed by one damaged byte where its newline was:
+			// read, and reported.
+			if r2, _, err2 := decodeRecord(seg[:len(seg)-1]); err2 == nil {
+				recs = append(recs, r2)
+				if damage == nil {
+					damage = errors.New("a record's newline is damaged")
+				}
+				continue
+			}
+		}
+		if err != nil {
+			if n+1 < len(starts) && len(recs) == 0 && !bytes.Contains(seg, []byte(crcMember)) {
+				continue // torn bytes a later record landed after
+			}
+			if damage == nil {
+				damage = err
+			}
+			continue
+		}
+		recs = append(recs, rec)
+	}
+	if starts[0] > 0 && len(recs) == 0 && damage == nil {
+		damage = errors.New("no record")
+	}
+	return recs, damage
+}
+
+// apply takes one record into the scan.
+func (scan *journalScan) apply(rec journalRecord) {
+	st := scan.states[rec.Session]
+	if st == nil {
+		st = &sessionState{}
+		scan.states[rec.Session] = st
+	}
+	switch rec.Op {
+	case "delete":
+		scan.states[rec.Session] = &sessionState{deleted: true}
+	case "create":
+		// The boundary a session starts from: whatever the journal
+		// said about this ID before belongs to a session that is gone.
+		scan.states[rec.Session] = &sessionState{created: true, base: rec.Base}
+	default:
+		st.recs = append(st.recs, rec)
+	}
 }
 
 // commit appends one or more journal records in one write. With durable

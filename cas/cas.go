@@ -445,8 +445,15 @@ func (s *Store) storeEntry(e agentsession.Entry, durable bool) (int64, error) {
 	return int64(len(env) + len(body)), nil
 }
 
-// packEntries writes the objects of entries the database lacks as one
-// pack, the way git takes in a fetch, and returns each entry's size.
+// unpackLimit is how many objects a transfer brings before they arrive
+// as a pack rather than loose, as git's fetch.unpackLimit is: a pack for
+// every small transfer would leave the store many packs to search.
+const unpackLimit = 100
+
+// packEntries writes the objects of entries the database lacks, as one
+// pack the way git takes in a fetch, or loose when there are fewer than
+// unpackLimit, and returns each entry's size. Loose ones are left for
+// the commit that names them to flush.
 func (s *Store) packEntries(entries []agentsession.Entry, blobs map[string][]byte) (map[string]int64, error) {
 	sizes := map[string]int64{}
 	var objs []packObject
@@ -469,6 +476,14 @@ func (s *Store) packEntries(entries []agentsession.Entry, blobs map[string][]byt
 			objs = append(objs, packObject{spaceContents, h, data})
 		}
 	}
+	if len(objs) < unpackLimit {
+		for _, o := range objs {
+			if err := s.objs.write(o.sp, o.hash, o.data, true); err != nil {
+				return nil, fmt.Errorf("cas: store: %w", err)
+			}
+		}
+		return sizes, nil
+	}
 	if _, err := writePack(s.objs.packDir(), objs); err != nil {
 		return nil, fmt.Errorf("cas: pack: %w", err)
 	}
@@ -478,41 +493,33 @@ func (s *Store) packEntries(entries []agentsession.Entry, blobs map[string][]byt
 	return sizes, nil
 }
 
-// freshenPath touches the loose objects on the path to id, so a fork's
-// prefix is young to the sweep until the fork's header lands. A packed
-// object has no age of its own; the sweep keeps it through the base the
-// create record carries.
+// freshenPath freshens the objects on the path to id, as a write of
+// each would, so a fork's prefix is young to the sweep until the fork's
+// header lands, and an object a sweep removed from under this store's
+// view is written back loose.
 func (s *Store) freshenPath(id string) error {
-	now := time.Now()
-	touch := func(sp space, hash string) error {
-		p, err := s.objs.loosePath(sp, hash)
-		if err != nil {
-			return err
-		}
-		if err := os.Chtimes(p, now, now); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		return nil
-	}
 	for id != "" {
-		if err := touch(spaceEntries, id); err != nil {
-			return err
-		}
-		e, err := s.envelope(id)
+		env, err := s.objs.read(spaceEntries, id)
 		if err != nil {
 			return err
 		}
-		var c string
-		if json.Unmarshal(e["content"], &c) == nil && agentsession.ValidHash(c) {
-			if err := touch(spaceContents, c); err != nil {
-				return err
-			}
-		}
-		var parent *string
-		if err := json.Unmarshal(e["parent"], &parent); err != nil || parent == nil {
+		if err := s.objs.write(spaceEntries, id, env, true); err != nil {
 			return err
 		}
-		id = *parent
+		c, ok := envelopeContent(env)
+		if !ok {
+			return fmt.Errorf("%w: entry %s names no content", ErrCorrupt, id)
+		}
+		body, err := s.objs.read(spaceContents, c)
+		if err != nil {
+			return err
+		}
+		if err := s.objs.write(spaceContents, c, body, true); err != nil {
+			return err
+		}
+		if id, err = s.parentOf(id); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -782,11 +789,18 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 			v.logChanged = true
 			continue
 		}
-		inLog[e] = true
-		v.log = append(v.log, e)
 		if !seen[e] {
+			if !s.present(e) {
+				// A log line that reached the disk ahead of a lazy record
+				// and objects the crash took: an append that was lost.
+				lost[e] = true
+				v.logChanged = true
+				continue
+			}
 			v.damaged = true
 		}
+		inLog[e] = true
+		v.log = append(v.log, e)
 	}
 	for _, e := range jEntries {
 		if !inLog[e] {

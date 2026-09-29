@@ -226,9 +226,6 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	h, err := s.openLocked(id)
 	if errors.Is(err, agentsession.ErrNoSession) {
 		mark := MarkMirror
-		if o.handover {
-			mark = MarkRecord
-		}
 		// A fresh session's head is its base, or none: the value a push's
 		// compare-and-swap is held to.
 		fresh := b.header.Base
@@ -242,6 +239,12 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 			head, x.HeadMoved, x.Forced = b.head, true, true
 		default:
 			x.Why = fmt.Sprintf("the receiver's head is %s, not the expected %s", orNone(fresh), orNone(o.expected))
+		}
+		if o.handover {
+			if b.head != head {
+				return Exchange{}, fmt.Errorf("%w: a handover whose head does not move is refused: %s", ErrHeadMoved, x.Why)
+			}
+			mark = MarkRecord
 		}
 		stored := append(append([]agentsession.Entry(nil), b.prefix...), b.own...)
 		if _, err := s.admitNew(ctx, dir, b.header, mark, stored, b.own, b.blobs, head); err != nil {
@@ -289,6 +292,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 		fresh = append(fresh, e)
 	}
 	x := Exchange{Admitted: len(fresh), Head: h.head}
+	failedHandover := false
 	newHead := h.head
 	switch {
 	case b.head == h.head:
@@ -302,6 +306,12 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 		newHead, x.HeadMoved = b.head, true
 	default:
 		x.Why = "the fetched head does not descend from this store's; the source is stale or the record moved back"
+	}
+	if o.handover && newHead != b.head {
+		// The compare-and-swap is what reveals two records; a handover
+		// that fails it changes no mark, and its entries still land.
+		o.handover = false
+		failedHandover = true
 	}
 	if x.HeadMoved {
 		target, ok := all[newHead]
@@ -363,6 +373,9 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	h.lock.release()
 	if _, err := s.openLocked(id); err != nil {
 		return x, fmt.Errorf("cas: exchange committed, and the session could not be reopened: %w", err)
+	}
+	if failedHandover {
+		return x, fmt.Errorf("%w: the entries landed and no mark changed: %s", ErrHeadMoved, x.Why)
 	}
 	return x, nil
 }

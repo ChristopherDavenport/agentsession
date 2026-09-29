@@ -39,6 +39,7 @@ func TestJournalRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.checked = true
 	if got, _, err := decodeRecord(line); err != nil || got != r {
 		t.Fatalf("round trip: %+v, %v", got, err)
 	}

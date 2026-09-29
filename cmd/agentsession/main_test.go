@@ -397,6 +397,10 @@ func casStore(t *testing.T, root string, names ...string) {
 			t.Fatal(err)
 		}
 	}
+	// Packed, so the commands read through a pack as well as loose.
+	if _, err := st.Pack(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
