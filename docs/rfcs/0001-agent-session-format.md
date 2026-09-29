@@ -452,21 +452,26 @@ One conversation item in the payload profile.
 - `source` MAY carry the trigger of an item a person or another system
   sent, in the shape `queued` defines, and `queued_from` MAY name the
   `queued` entry the item was accepted as.
-- A `function_call`'s `call_id` MUST NOT be empty and MUST differ
-  from that of every other `function_call` in the session, on any
-  branch: a `function_call_output`, a `link`, a `custom` entry, a run
-  end's `pending` list and a projection name the call by it alone, and
-  a subsession's ID is derived from it. A writer whose provider
-  repeats an ID, or gives none, writes one of its own, such as the
-  native ID with a suffix, and SHOULD keep the native one in a member
-  of the `item` entry this document does not define, beside `item`
-  rather than in it. It sends the provider the ID it records, so the
-  request the path rebuilds is the request sent; a writer whose
-  provider will not take it omits `request_hash` from every `response`
-  while the call is in the context. A reader of a file that repeats
-  one takes a `function_call_output`, `link` or `custom` entry to name
-  the latest `function_call` before it on the path with that
-  `call_id`; a `decision` or `dispatch` names its call by `target`.
+- A `function_call`'s `call_id` MUST NOT be empty and MUST differ from
+  that of every other `function_call` in the session, on any branch: a
+  `function_call_output`, a `link`, a `custom` entry, a run end's
+  `pending` list and a projection name the call by it alone, and a
+  subsession's ID is derived from it. A writer whose provider repeats an
+  ID, or gives none, or whose call ID another branch of the session
+  already holds, writes one of its own, such as the native ID with a
+  suffix, drawn from letters, digits, `_` and `-` so every provider
+  takes it, and SHOULD keep the native one in a member of the `item`
+  entry this document does not define, beside `item` rather than in it.
+  It sends the provider the ID it records, so the request the path
+  rebuilds is the request sent; a writer whose provider will not take it
+  omits `request_hash` from every `response` while the call is in the
+  context. A reader of a file that repeats one takes a
+  `function_call_output`, `link` or `custom` entry to name the latest
+  `function_call` before it on the path with that `call_id`; a
+  `decision` or `dispatch` names its call by `target`, and one whose
+  `target` names no `function_call` before it on the path, which this
+  document forbids, a reader MAY take to name the latest call with its
+  `call_id`, reporting the entry.
 
 ### `response`
 
@@ -1522,17 +1527,15 @@ checkpoint and cleared by `[]`, a queued `trigger` with members of its
 own drained into an `item`'s `source`, a list of omitted parts naming
 runs of the list in force by `keep` across deltas that move a part
 across a budget, beside a `replace` and a compaction's checkpoint that
-write it whole, the recomputed `reason` for
-every `run` end, and
-negative cases, each built from a generated fixture's lines by
-breaking it in one way, for a broken parent link, a truncated last
-line, an unknown type, a `dispatch` that follows a `reject` or an
-`answer`, a decision that follows a `reject`, a `reject` that follows
-a `dispatch` or an output, a `target` naming another call, a repeated
-`call_id`, and a header naming `dispatch` beside a call that has an
-output and no `dispatch`.
-Converters for pi, Claude Code and Codex are part of the initial
-proposal so the format arrives with three existing corpora behind it.
+write it whole, the recomputed `reason` for every `run` end, and
+negative cases, each a file broken in one way, for a broken parent link,
+a truncated last line, an unknown type, a `dispatch` that follows a
+`reject` or an `answer`, a decision that follows a `reject`, a `reject`
+that follows a `dispatch` or an output, a `target` naming another call,
+a repeated `call_id`, and a header naming `dispatch` beside a call that
+has an output and no `dispatch`. Converters for pi, Claude Code and
+Codex are part of the initial proposal so the format arrives with three
+existing corpora behind it.
 
 ## Prior art
 
@@ -1565,12 +1568,13 @@ hold a decision after a `reject`, a `reject` after a `dispatch` or an
 output, a `target` that names another call, or a repeated or empty
 `call_id`, which 0.9 forbids.
 
-These rules were added to 0.9 after the library first wrote it, in
-the same draft, while 0.9 had been public for less than a day and had
-no readers. A 0.9 file the first 0.9 writer produced may break them,
-and nothing in the file says which rules it was written under; a
-reader that finds one broken in a 0.9 file SHOULD say it may come from
-that writer rather than call the file corrupt.
+These rules were added to 0.9 after the reference library first wrote
+it, in the same draft, while 0.9 had been public for less than a day.
+A 0.9 file an earlier writer of this draft produced, or a file such a
+writer appended to and raised to 0.9, may break them, and nothing in
+the file says which rules it was written under; a reader that finds
+one broken in a 0.9 file SHOULD say it may come from such a writer
+rather than call the file corrupt.
 
 - A writer that appends to a file whose header names an earlier minor
   raises the header's `format` first. Under 0.8 a header kept the

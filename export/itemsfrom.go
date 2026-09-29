@@ -31,18 +31,21 @@ import (
 // is_copied_context flag does not survive.
 //
 // A call ID names one call in a session, and ATIF lets a document
-// repeat a tool call ID across steps, as a producer that numbers calls
-// per turn does. A tool call whose ID an earlier step used, or that has
-// none, gets one of its own, the native ID followed by "#" and a
-// number ("call" when it has none), and the observation results after
-// it that name the native ID name the new one, up to the next agent
-// step. The native ID is kept only in that prefix.
+// repeat a tool call ID, across steps as a producer that numbers calls
+// per turn does, or within one. A tool call whose ID an earlier call
+// used, or that has none, gets one of its own: the native ID followed
+// by "_" and a number ("call" when it has none), which a provider that
+// limits call IDs to letters, digits, "_" and "-" still takes. The
+// observation results that name a native ID take the step's calls with
+// it in order, the last taking any results left over; ATIF puts a
+// result in the step of its call, so the renames hold until the next
+// agent step. The native ID survives only as the new one's prefix.
 func ItemsFrom(doc *atif.Trajectory) (openresponses.Items, error) {
 	var items openresponses.Items
 	seen := map[string]bool{}
-	// ids maps a native call ID to the one the current agent step's
-	// call was given.
-	ids := map[string]string{}
+	// ids maps a native call ID to the IDs the current agent step's
+	// calls with it were given, in order, for its results to take.
+	ids := map[string][]string{}
 	callID := func(native string) string {
 		base := native
 		if base == "" {
@@ -50,18 +53,24 @@ func ItemsFrom(doc *atif.Trajectory) (openresponses.Items, error) {
 		}
 		id := native
 		for n := 2; id == "" || seen[id]; n++ {
-			id = fmt.Sprintf("%s#%d", base, n)
+			id = fmt.Sprintf("%s_%d", base, n)
 		}
 		seen[id] = true
-		ids[native] = id
+		ids[native] = append(ids[native], id)
 		return id
 	}
 	outputs := func(o *atif.Observation) openresponses.Items {
 		out := outputsOf(o)
 		for _, it := range out {
-			if fo, ok := it.(*openresponses.FunctionCallOutput); ok {
-				if id, ok := ids[fo.CallID]; ok {
-					fo.CallID = id
+			fo, ok := it.(*openresponses.FunctionCallOutput)
+			if !ok {
+				continue
+			}
+			native := fo.CallID
+			if q := ids[native]; len(q) > 0 {
+				fo.CallID = q[0]
+				if len(q) > 1 {
+					ids[native] = q[1:]
 				}
 			}
 		}

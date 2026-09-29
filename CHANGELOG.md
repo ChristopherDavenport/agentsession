@@ -14,16 +14,22 @@ v0.0.13.
   never empty.** A subsession's ID is derived from it, so two branches
   reusing one derived the same child. `Append` checks a set of the
   session's call IDs rather than reading the path, and refuses a
-  function call with no `call_id`. The RFC adds that a writer that
+  function call with no `call_id`; `VerifyRecords` reports a call ID
+  two branches share. A writer whose provider gives the same ID again
+  on a new branch writes one of its own. Replicas that each append a
+  branch with the same call ID are not yet reconciled: the store that
+  receives both holds a session `VerifyRecords` reports. The RFC adds that a writer that
   makes up its own IDs sends them to the provider, or omits
   `request_hash`, since the request the path rebuilds must be the one
   sent.
 - **A decision or dispatch names its call by `target`**, and its
   `call_id` must be that call's. `Append` refuses one whose target is
   no function call on the path or names another call, with the new
-  `ErrBadTarget`, and `VerifyRecords` reports one. `Calls`, and so
-  every reader of calls, binds a decision or dispatch to the call its
-  target names, and an output to the latest call with its ID.
+  `ErrBadTarget`, and `VerifyRecords` reports one, and one whose
+  target names nothing. `Calls`, and so every reader of calls, binds a
+  decision or dispatch to the call its target names, falling back to
+  the latest call with its ID when the target names no call, and an
+  output to the latest call with its ID.
 - **A `reject` is for a call with no output.** `Append` refused an
   `answer` after the output and took a `reject`, which also hid a
   missing dispatch from `VerifyRecords`; it now refuses both with
@@ -39,19 +45,28 @@ v0.0.13.
   followed it; the call rules ran before the held check and refused
   one.
 - **Appending is faster on long paths.** A decision or dispatch reads
-  only the entries about its call, and a function call checks a set:
-  5,000 calls with a dispatch and an output each append in 3.6s, from
-  about 8s in v0.0.13 and 5.7s in v0.0.12.
+  only the entries about its call, and a function call checks a set.
+  Each append still walks the path, so appending a long session costs
+  the square of its length, with a smaller constant: 5,000 calls with
+  a dispatch and an output each took a third of v0.0.13's time on one
+  machine.
 - **otel binds as the library does.** In a file that repeats a call
   ID the exporter matched the output to the first call and emitted no
-  span for the later one.
+  span for the later one. A dispatch or decision after a call's output
+  no longer starts a span that never ends.
 - **`export.ItemsFrom` gives a repeated or missing tool call ID one of
-  its own** (`call_0#2`), and the observation results after it follow,
-  so a valid ATIF document that numbers calls per turn appends.
+  its own** (`call_0_2`, in the alphabet every provider takes), and the
+  step's observation results take its calls in order, so a valid ATIF
+  document that numbers calls per turn, or repeats one in a step,
+  appends.
 - **`agentsession verify` notes when a 0.9 file breaks a rule 0.9
-  gained after v0.0.12**, which may mean that writer produced it
-  rather than that it is corrupt. The RFC asks a reader to say the
-  same.
+  gained after v0.0.12 and v0.0.13**, which may mean one of them wrote
+  or appended to it rather than that it is corrupt. The RFC asks a
+  reader to say the same.
+- **Appending again a held entry with no `call_id`**, which an
+  earlier writer could produce, is a no-op, and a reject after both a
+  dispatch and an output is refused as `ErrRejectDispatched` by both
+  `Append` and `VerifyRecords`.
 
 ## v0.0.13 - 2026-09-29
 

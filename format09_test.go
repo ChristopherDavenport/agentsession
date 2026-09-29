@@ -535,3 +535,121 @@ func TestRunCallsByBinding(t *testing.T) {
 		t.Errorf("Pending = %v, want none", p)
 	}
 }
+
+// TestVerifyCallIdentity: VerifyRecords reports what Append refuses
+// about call identity, in a file another writer produced: a decision
+// or dispatch naming no function call, and a call ID two branches
+// share.
+func TestVerifyCallIdentity(t *testing.T) {
+	call := `"type":"item","item":{"type":"function_call","id":"fa","call_id":"a","name":"t","arguments":"{}"}`
+	for name, tt := range map[string][]string{
+		"a decision naming nothing": {call, `"type":"decision","call_id":"z","target":"sha256:00","verdict":"hold"`},
+		"a dispatch naming nothing": {call, `"type":"dispatch","call_id":"z","target":"sha256:00"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in, _ := hashedLines(t, Format, tt...)
+			read, err := Read(strings.NewReader(in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := read.VerifyRecords(read.Leaf()); !errors.Is(err, ErrBadTarget) {
+				t.Errorf("VerifyRecords = %v, want ErrBadTarget", err)
+			}
+		})
+	}
+
+	// Two branches from one user item, each with call a.
+	user := `"type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`
+	in, ids := hashedLines(t, Format, user, call)
+	other := `{"type":"item","item":{"type":"function_call","id":"fb","call_id":"a","name":"u","arguments":"{}"},"parent":"` + ids[0] + `","ts":"2026-09-17T16:00:09Z"}`
+	id, _, err := EntryHashes([]byte(other))
+	if err != nil {
+		t.Fatal(err)
+	}
+	in += `{"id":"` + id + `",` + other[1:] + "\n"
+	read, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leaf := range read.Leaves() {
+		if err := read.VerifyRecords(leaf); !errors.Is(err, ErrCallIDRepeated) {
+			t.Errorf("VerifyRecords(%s) = %v, want ErrCallIDRepeated", leaf, err)
+		}
+	}
+}
+
+// TestTargetCallMatchesCalls: in a file whose decision names another
+// call's entry, Append reads the call as Calls binds it, by target.
+func TestTargetCallMatchesCalls(t *testing.T) {
+	a := `"type":"item","item":{"type":"function_call","id":"fa","call_id":"a","name":"t","arguments":"{}"}`
+	b := `"type":"item","item":{"type":"function_call","id":"fb","call_id":"b","name":"t","arguments":"{}"}`
+	_, ids := hashedLines(t, Format, a, b)
+	reject := `"type":"decision","call_id":"a","target":"` + ids[1] + `","verdict":"reject","reason":"no"`
+	in, _ := hashedLines(t, Format, a, b, reject)
+	read, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls, err := read.Calls(read.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls[0].Rejected() || !calls[1].Rejected() {
+		t.Fatalf("Calls: a rejected %v, b rejected %v; want b", calls[0].Rejected(), calls[1].Rejected())
+	}
+	if _, err := read.Append(NewDispatch("a", ids[0])); err != nil {
+		t.Errorf("dispatch of a, which Calls reads as not rejected: %v", err)
+	}
+}
+
+// TestHeldReappendEmptyCallID: a store replaying an entry an earlier
+// writer wrote with no call_id finds it held rather than refused.
+func TestHeldReappendEmptyCallID(t *testing.T) {
+	user := `"type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`
+	call := `"type":"item","item":{"type":"function_call","id":"f","call_id":"","name":"t","arguments":"{}"}`
+	in, ids := hashedLines(t, Format, user, call)
+	read, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, ok := read.Entry(ids[1])
+	if !ok {
+		t.Fatal("no entry")
+	}
+	again := &ItemEntry{Item: held.(*ItemEntry).Item}
+	again.Parent, again.Timestamp = ids[0], held.Base().Timestamp
+	if r, err := read.Commit(again); err != nil || r.Outcome != Held {
+		t.Errorf("Commit = %v, %v; want held", r.Outcome, err)
+	}
+}
+
+// TestRejectAfterDispatchAndOutput: Append and VerifyRecords report a
+// reject after both a dispatch and an output the same way.
+func TestRejectAfterDispatchAndOutput(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	target, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "t", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []Entry{NewDispatch("c", target), NewItemEntry(openresponses.NewFunctionCallOutput("c", "ok"))} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Append(NewDecision("c", target, VerdictReject, ByPolicy).WithReason("no")); !errors.Is(err, ErrRejectDispatched) {
+		t.Errorf("Append = %v, want ErrRejectDispatched", err)
+	}
+	call := `"type":"item","item":{"type":"function_call","id":"fc","call_id":"c","name":"t","arguments":"{}"}`
+	_, ids := hashedLines(t, Format, call)
+	in, _ := hashedLines(t, Format, call,
+		`"type":"dispatch","call_id":"c","target":"`+ids[0]+`"`,
+		`"type":"item","item":{"type":"function_call_output","call_id":"c","output":"ok"}`,
+		`"type":"decision","call_id":"c","target":"`+ids[0]+`","verdict":"reject","reason":"no"`)
+	read, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := read.VerifyRecords(read.Leaf()); !errors.Is(err, ErrRejectDispatched) {
+		t.Errorf("VerifyRecords = %v, want ErrRejectDispatched", err)
+	}
+}

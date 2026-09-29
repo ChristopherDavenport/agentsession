@@ -315,8 +315,9 @@ func (s *Session) Commit(e Entry) (Result, error) {
 // accepted, so a retry starts from what the caller set and not from
 // where the first attempt would have gone. The body is a different
 // matter: a caller-set id is checked against the normalised line,
-// since that is what the id is the hash of, so an entry refused with
-// ErrBadID keeps its normalised body and the record of the rewrite,
+// since that is what the id is the hash of, and the call rules are
+// checked after the hash, so an entry refused with ErrBadID or by a
+// call rule keeps its normalised body and the record of the rewrite,
 // and a retry produces the same line.
 func (s *Session) prepare(e Entry) (Result, error) {
 	b := e.Base()
@@ -416,7 +417,12 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 func (s *Session) checkCallRules(e Entry, parent string) error {
 	switch v := e.(type) {
 	case *ItemEntry:
-		if fc, ok := v.Item.(*openresponses.FunctionCall); ok && s.callIDs[fc.CallID] {
+		fc, ok := v.Item.(*openresponses.FunctionCall)
+		switch {
+		case !ok:
+		case fc.CallID == "":
+			return errors.New("agentsession: a function call needs a call_id")
+		case s.callIDs[fc.CallID]:
 			return fmt.Errorf("%w: %s", ErrCallIDRepeated, fc.CallID)
 		}
 	case *DecisionEntry:
@@ -429,11 +435,11 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 			return fmt.Errorf("%w: %s", ErrCallAnswered, v.CallID)
 		case c.Rejected():
 			return fmt.Errorf("%w: %s", ErrCallRejected, v.CallID)
+		case v.Verdict == VerdictReject && c.Dispatch != nil:
+			return fmt.Errorf("%w: %s", ErrRejectDispatched, v.CallID)
 		case v.Verdict != VerdictAnswer && v.Verdict != VerdictReject:
 		case c.Output != nil:
 			return fmt.Errorf("%w: %s", ErrCallCompleted, v.CallID)
-		case v.Verdict == VerdictReject && c.Dispatch != nil:
-			return fmt.Errorf("%w: %s", ErrRejectDispatched, v.CallID)
 		case v.Verdict == VerdictAnswer && c.Dispatch == nil && s.header.HasRecord(TypeDispatch):
 			return fmt.Errorf("%w: %s", ErrAnswerNotDispatched, v.CallID)
 		}
@@ -459,12 +465,20 @@ func (s *Session) targetCall(parent, callID, target string) (*Call, error) {
 	// Only the entries that name the call, or a call with its ID, bear
 	// on it; reading those alone keeps an append from reading every
 	// call on a long path.
+	// A decision or dispatch belongs to the call its target names, and
+	// falls back to its call ID only when the target is no function
+	// call on the path, as Calls binds it.
 	var about []Entry
+	calls := map[string]bool{}
+	mine := func(callID2, target2 string) bool {
+		return target2 == target || (callID2 == callID && !calls[target2])
+	}
 	for _, e := range s.path(parent) {
 		switch v := e.(type) {
 		case *ItemEntry:
 			switch it := v.Item.(type) {
 			case *openresponses.FunctionCall:
+				calls[v.ID] = true
 				if v.ID == target || it.CallID == callID {
 					about = append(about, e)
 				}
@@ -474,11 +488,11 @@ func (s *Session) targetCall(parent, callID, target string) (*Call, error) {
 				}
 			}
 		case *DecisionEntry:
-			if v.Target == target || v.CallID == callID {
+			if mine(v.CallID, v.Target) {
 				about = append(about, e)
 			}
 		case *DispatchEntry:
-			if v.Target == target || v.CallID == callID {
+			if mine(v.CallID, v.Target) {
 				about = append(about, e)
 			}
 		}
@@ -793,9 +807,6 @@ func validateEntry(e Entry) error {
 	case *ItemEntry:
 		if v.Item == nil {
 			return errors.New("agentsession: item entry has no item")
-		}
-		if fc, ok := v.Item.(*openresponses.FunctionCall); ok && fc.CallID == "" {
-			return errors.New("agentsession: a function call needs a call_id")
 		}
 		if _, ok := v.Item.(*openresponses.ItemReference); ok {
 			// The format's ingress rule: an entry carries what the

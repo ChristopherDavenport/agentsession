@@ -96,3 +96,23 @@ func TestRejectedPending(t *testing.T) {
 		t.Errorf("span state %q, want %q", got, agentsession.CallRejected)
 	}
 }
+
+// TestDispatchAfterOutputEndsEverySpan: a dispatch after a call's
+// output changes nothing the path reads for it, and every span the
+// exporter starts ends.
+func TestDispatchAfterOutputEndsEverySpan(t *testing.T) {
+	dispatch := func(ids []string) string { return `"type":"dispatch","call_id":"x","target":"` + ids[0] + `"` }
+	s := hashedFile(t,
+		body(`"type":"item","item":{"type":"function_call","id":"fc1","call_id":"x","name":"alpha","arguments":"{}"}`),
+		dispatch,
+		body(`"type":"item","item":{"type":"function_call_output","call_id":"x","output":"ok"}`),
+		dispatch,
+	)
+	sr, tr := recorder()
+	if _, err := Export(context.Background(), tr, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	if started, ended := len(sr.Started()), len(sr.Ended()); started != ended {
+		t.Errorf("%d spans started, %d ended", started, ended)
+	}
+}

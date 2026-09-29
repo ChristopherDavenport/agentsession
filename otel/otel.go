@@ -438,12 +438,18 @@ func (t *tracker) register(e *agentsession.ItemEntry, fc *openresponses.Function
 }
 
 // callFor returns the call a decision or dispatch names: the one whose
-// function call entry is target, else the latest with the call ID.
+// function call entry is target, else the latest with the call ID. It
+// is nil for a call that has its output, whose span has ended: nothing
+// after the output changes what the path reads for it.
 func (t *tracker) callFor(callID, target string) *callState {
-	if c, ok := t.byEntry[target]; ok {
-		return c
+	c, ok := t.byEntry[target]
+	if !ok {
+		c = t.calls[callID]
 	}
-	return t.calls[callID]
+	if c == nil || c.output || c.gone {
+		return nil
+	}
+	return c
 }
 
 // forget drops a call whose span has ended for good.
