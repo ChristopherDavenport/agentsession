@@ -242,3 +242,28 @@ func TestPushCarriesBlobs(t *testing.T) {
 		t.Errorf("blob at the receiver: %q, %v", data, err)
 	}
 }
+
+// TestLaterFormatRefused: a fork of an origin, and an exchange of a
+// session, whose header names a minor this package does not read.
+func TestLaterFormatRefused(t *testing.T) {
+	ctx := context.Background()
+	a, b := twoStores(t)
+	ids := fill(t, a, "s", 1)
+	bun, err := a.bundleOf(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bun.header.Format = "agentsession/0.99"
+	if _, err := b.receive(ctx, bun, receiveOptions{}); !errors.Is(err, agentsession.ErrUnsupportedFormat) {
+		t.Errorf("a later format received: %v", err)
+	}
+	a.Release("s")
+	h, _ := readHeader(a.Root() + "/sessions/s")
+	h.Format = "agentsession/0.99"
+	if err := writeHeader(a.Root()+"/sessions/s", h); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Create(ctx, agentsession.Header{ID: "f", Base: ids[0]}); !errors.Is(err, agentsession.ErrUnsupportedFormat) {
+		t.Errorf("a fork of a later-format origin: %v", err)
+	}
+}

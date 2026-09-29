@@ -1113,6 +1113,11 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 			}
 			if dir, err := s.sessionDir(owner); err == nil {
 				if oh, err := readHeader(dir); err == nil {
+					// The fork's header takes this package's format, which
+					// must be no earlier than the origin's.
+					if laterFormat(oh.Format, agentsession.Format) {
+						return nil, fmt.Errorf("%w: the origin is %s, later than this writer's %s", agentsession.ErrUnsupportedFormat, oh.Format, agentsession.Format)
+					}
 					if h.Media != "" && mediaOf(h) != mediaOf(oh) {
 						return nil, errors.New("cas: a fork's media must equal its origin's")
 					}

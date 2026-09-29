@@ -72,7 +72,8 @@ session worth training on.
   from the path whether it was never started, was in flight when the
   record stopped, or is waiting on an answer, in any file whose header
   says the writer records dispatches and decisions.
-- **Append-only.** A writer only ever appends lines. A crashed session
+- **Append-only.** A writer only ever appends lines, save for raising
+  the header's `format`, which Versioning describes. A crashed session
   is a valid prefix.
 - **Content-addressed.** An entry's ID is the hash of its envelope
   over the hash of its body, and its parent link is a hash, so a file
@@ -198,7 +199,7 @@ RFC 2119.
 | field | req | meaning |
 |---|---|---|
 | `type` | MUST | the string `session` |
-| `format` | MUST | `agentsession/<major>.<minor>` |
+| `format` | MUST | `agentsession/<major>.<minor>`; raised by a later writer, never lowered, as Versioning says |
 | `id` | MUST | globally unique; UUIDv7 RECOMMENDED. For a subsession, a UUIDv5 under the nil namespace over `<parent session id>/<call_id>` is RECOMMENDED, so a reader can compute the child's ID from the parent's `link` or `function_call` alone. A retry of the call is another session, derived the same way over `<parent session id>/<call_id>/<n>` for the n-th attempt after the first |
 | `created_at` | MUST | RFC 3339 |
 | `payload` | MUST | payload profile; `openresponses/<spec-date>` is the only profile this RFC defines |
@@ -595,7 +596,7 @@ omissions do not change between turns writes them once:
 - The list in force is the one the last `config` entry on the path
   that carries the member wrote: a later entry with the member
   replaces the list, it does not add to it. The member stands for
-  every part omitted after the entry, in order, and no other, though
+  every part omitted as of the entry, in order, and no other, though
   it MAY name runs of them by `keep`, below.
 - A delta without the member leaves the list as it was. A delta with
   `replace: true` and without the member clears it with the rest of
@@ -617,23 +618,24 @@ of instruction parts does:
   is counted from a cursor into that list by the rule
   `instructions_parts` uses: the cursor starts at its first part; an
   element naming a part in force by `id` moves it to just after that
-  part, wherever that is; a `keep` moves it past the n parts it
-  takes; an element naming an `id` not in force leaves it where it
-  is. An element that names a part carries all of it, since an
+  part, wherever that is, the first such part when the list in force
+  names the `id` twice; a `keep` moves it n parts on, whether or not
+  it resolves; an element naming an `id` not in force leaves it where
+  it is. An element that names a part carries all of it, since an
   omitted part has no hash form. A save that pushes one fact out of a
   memory ahead of 474 already omitted is then
   `[{"id":"memory/user/n-0125","reason":"budget","size":20,"source":"agentmemory"},{"keep":474}]`.
-- A list with a `keep` names each `id` once, and a writer writes a
-  `keep` only over a list in force that does the same; one whose list
-  in force names an `id` twice writes the list without a `keep`. A
-  writer MUST NOT write a `keep` that runs past the end of the list in
-  force, or one that takes a part another element of the same list
-  names, and MUST NOT write any other member beside `keep`, which a
-  reader ignores. A `keep` member on an element that carries an `id`
-  is a member this document does not define there.
+- A list with a `keep` MUST name each `id` once, and a writer MUST NOT
+  write a `keep` over a list in force that names an `id` twice; it
+  writes that list whole. A writer MUST NOT write a `keep` that runs
+  past the end of the list in force, or one that takes a part another
+  element of the same list names, and MUST NOT write any other member
+  beside `keep`, which a reader ignores. A `keep` member on an element
+  that carries an `id` is a member this document does not define there.
 - A `keep` that runs past the end of the list in force or takes a
-  part the list names elsewhere, and an element with neither an `id`
-  nor a positive `keep`, name no part a reader can rebuild. A reader
+  part the list names elsewhere, which a reader finds by reading the
+  whole list first, and an element with neither an `id` nor a
+  positive integer `keep`, name no part a reader can rebuild. A reader
   keeps such an element in the list in force where it stands, as it
   keeps an instruction part it cannot resolve, and a later `keep` that
   takes it takes it as it is. Unlike a `keep` among the instruction
@@ -643,7 +645,9 @@ of instruction parts does:
   settings, so a `keep` in the same entry resolves against nothing,
   and a writer MUST NOT write one there: a replace writes the list
   whole. A compaction's checkpoint is not a delta, and writes the list
-  whole too.
+  whole too; an element in force that named no part is written as it
+  stands, and a reader of a checkpoint takes each element as it is,
+  resolving no `keep` in it.
 
 ### `compaction`
 
@@ -1388,15 +1392,18 @@ optional fields. A major version changes the envelope, the header, or
 the context algorithm. Readers MUST accept any minor version of a major
 they support. A reader migrates a file in memory and never rewrites it.
 
-A writer that appends to a file whose header names an earlier minor
-than the one it writes MUST first raise the header's `format` to its
-own, since what it appends may use what its minor adds. A reader of the
-earlier minor then refuses the file as a later one, which tells its
-operator what to do, rather than reading entries it cannot represent
-and reporting them as altered. Nothing hashed moves: the header is not
-an entry. A file never lowers its `format`. A file earlier than 0.5 is
-outside the rule, since a reader rehashes its entries by the minor its
-header names and a raised header would have them read as hashed.
+A writer that appends to a file whose header names an earlier minor than
+the one it writes MUST first raise the header's `format` to its own,
+since what it appends may use what its minor adds. A 0.x reader of the
+earlier minor, which refuses a 0.x minor it does not name, then refuses
+the file as a later one, which tells its operator what to do, rather
+than misreading the entries it cannot represent. The raise MUST NOT
+leave the file without a whole header at any point a crash could stop
+it, so it is written as a new file renamed over the old, or overwritten
+in place only at the same length. Nothing hashed moves: the header is
+not an entry. A file never lowers its `format`. A file earlier than 0.5
+is outside the rule, since a reader rehashes its entries by the minor
+its header names and a raised header would have them read as hashed.
 
 Adding an optional member to the envelope is a minor change. Changing
 what an existing member means, or what the context algorithm does with
@@ -1491,12 +1498,16 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.8
 
-Additive. One element and a paragraph in the `config` section. No
-hash changes, and a 0.8 file is a 0.9 file with no `keep` in its
-omitted lists. An element of an omitted list with no `id`, which a
-0.9 reader may read as a `keep`, was not a 0.8 omitted part, which
-always had its `id`.
+Additive. One element and a paragraph in the `config` section, and a
+writer's rule in Versioning. No hash changes, and a 0.8 file is a 0.9
+file with no `keep` in its omitted lists. An element of an omitted
+list with no `id`, which a 0.9 reader reads as a `keep`, was not a 0.8
+omitted part, which always had its `id`.
 
+- A writer that appends to a file whose header names an earlier minor
+  raises the header's `format` first. Under 0.8 a header kept the
+  minor the file was created under, so a reader of that minor read
+  entries a later writer had appended by its own rules.
 - `instructions_omitted` takes the `{"keep":n}` element
   `instructions_parts` took in 0.7, counted by the same cursor over
   the list in force: naming a part moves the cursor past it, and a

@@ -209,6 +209,9 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if o.push && b.mark != MarkRecord {
 		return Exchange{}, ErrNotRecord
 	}
+	if laterFormat(b.header.Format, agentsession.Format) {
+		return Exchange{}, fmt.Errorf("%w: %s is later than this store's %s", agentsession.ErrUnsupportedFormat, b.header.Format, agentsession.Format)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := b.header.ID
