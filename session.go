@@ -266,6 +266,11 @@ type Result struct {
 	// caller's session could not be brought in step with it, so the
 	// caller opens the session again before using it further.
 	Reopen bool
+	// Durable is set by a store that says whether it acknowledged the
+	// append once it was durable, as RFC 0002 asks of a store that
+	// may acknowledge one before. A session in memory, and a store
+	// that does not report it, leaves it false.
+	Durable bool
 }
 
 // Prepare does everything Append does short of adding the entry: it
