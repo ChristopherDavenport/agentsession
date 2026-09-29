@@ -312,11 +312,7 @@ func TestSummarySize(t *testing.T) {
 		t.Errorf("Size after packing %d, want %d", got, want)
 	}
 	// A log of bare hashes, as v0.0.11 wrote it.
-	var bare []string
-	for _, id := range ids {
-		bare = append(bare, id)
-	}
-	os.WriteFile(filepath.Join(st.Root(), "sessions", "z", "log"), []byte(strings.Join(bare, "\n")+"\n"), 0o600)
+	os.WriteFile(filepath.Join(st.Root(), "sessions", "z", "log"), []byte(strings.Join(ids, "\n")+"\n"), 0o600)
 	if got := size(); got != want {
 		t.Errorf("Size from a log without sizes %d, want %d", got, want)
 	}

@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -89,7 +91,7 @@ func TestRun(t *testing.T) {
 		{name: "help", args: []string{"help"}, stdout: []string{"usage: agentsession"}},
 		{name: "command help", args: []string{"show", "-h"}, stderr: []string{"usage: agentsession show"}},
 		{name: "show missing file", args: []string{"show", filepath.Join(tmp, "nope.jsonl")}, code: 1, stderr: []string{"no such file"}},
-		{name: "show too many", args: []string{"show", "a", "b"}, code: 2, stderr: []string{"expected one session file, got 2"}},
+		{name: "show too many", args: []string{"show", "a", "b"}, code: 2, stderr: []string{"a is not a cas store"}},
 		{
 			name: "show", args: []string{"show", filepath.Join(fixtures, "branch.jsonl")},
 			stdout: []string{"name     Branching demo", "fork×2 [fork]", sid("branch", "r0000002") + "  " + sid("branch", "i0000004") + "  response", "leaf", "context at " + sid("branch", "n0000001"), `system: "An earlier attempt`, `user: "follow-up B"`},
@@ -373,5 +375,179 @@ func replayFixture(t *testing.T, name, path string, mutate func(agentsession.Ent
 	}
 	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// casStore imports the named fixtures into a new cas store and closes
+// it, so nothing is held when the test's commands run.
+func casStore(t *testing.T, root string, names ...string) {
+	t.Helper()
+	st, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		f, err := os.Open(filepath.Join(fixtures, name+".jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = st.Import(context.Background(), f, true)
+		f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCAS: every command reads a session a cas store holds, through
+// the store and without its lock, and reports on it as it would on the
+// file the session projects to. A path inside a session's directory is
+// the session, not the one-line header file found there (#105).
+func TestCAS(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "cas")
+	casStore(t, root, "basic", "branch")
+	const id = "01995b2a-0000-7000-8000-000000000003" // branch
+
+	// A writer holds the session open, and its lock, while every
+	// command below runs.
+	writer, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.Open(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	projected, err := writer.ProjectDir(ctx, filepath.Join(tmp, "projected"), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	empty := filepath.Join(tmp, "empty-store")
+	casStore(t, empty)
+	headerOnly := filepath.Join(tmp, "header-only.jsonl")
+	src, err := os.ReadFile(filepath.Join(fixtures, "basic.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(headerOnly, src[:bytes.IndexByte(src, '\n')+1], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(root, "sessions", id)
+	out := filepath.Join(tmp, "out")
+
+	tests := []struct {
+		name    string
+		args    []string
+		code    int
+		stdout  []string // substrings that must appear
+		absent  []string // substrings that must not appear on stdout
+		stderr  []string
+		written []string // files that must exist afterwards
+	}{
+		{name: "list", args: []string{"list", root}, stdout: []string{"CREATED", id + "  Branching demo", "01995b2a-0000-7000-8000-000000000001", sessionDir}},
+		{name: "list limit", args: []string{"list", root, "-limit", "1"}, stdout: []string{id}, absent: []string{"01995b2a-0000-7000-8000-000000000001"}},
+		{name: "show", args: []string{"show", root, id}, stdout: []string{"name     Branching demo", "fork×2 [fork]"}},
+		{name: "show at leaf", args: []string{"show", root, id, "-leaf", "r0000002"}, stdout: []string{`user: "follow-up A"`}},
+		{
+			name: "show the session directory", args: []string{"show", sessionDir},
+			stdout: []string{"name     Branching demo"}, stderr: []string{"reading session " + id + " through the store"},
+		},
+		{name: "show a store", args: []string{"show", root}, code: 2, stderr: []string{"is a cas store; name a session: agentsession show " + root + " <id>"}},
+		{name: "show no session", args: []string{"show", root, "nope"}, code: 1, stderr: []string{"no such session"}},
+		{name: "show an id after a file", args: []string{"show", projected, id}, code: 2, stderr: []string{"is not a cas store"}},
+		{name: "verify", args: []string{"verify", root, id}, stdout: []string{"entries read, each id checked against its hash", "3 verified, 0 without hash, 0 failed"}},
+		{
+			name: "verify the header file", args: []string{"verify", filepath.Join(sessionDir, "header")},
+			stdout: []string{"3 verified, 0 without hash, 0 failed"}, stderr: []string{"reading session " + id + " through the store"},
+		},
+		{name: "verify the store", args: []string{"verify", root}, stdout: []string{"2 sessions,", "0 problems"}},
+		{name: "verify an empty store", args: []string{"verify", empty}, code: 1, stdout: []string{"nothing to verify: " + empty + " holds no sessions"}},
+		{name: "verify a header alone", args: []string{"verify", headerOnly}, code: 1, stdout: []string{"nothing to verify: " + headerOnly + " holds a header and no entries"}, absent: []string{"0 failed"}},
+		{name: "export a store", args: []string{"export", root, "-out", out}, code: 2, stderr: []string{"name a session"}},
+		{
+			name: "export", args: []string{"export", root, id, "-out", out},
+			stdout: []string{filepath.Join(out, id+".json")}, written: []string{filepath.Join(out, id+".json")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run(tt.args, &stdout, &stderr); code != tt.code {
+				t.Errorf("exit %d, want %d\nstdout:\n%s\nstderr:\n%s", code, tt.code, stdout.String(), stderr.String())
+			}
+			for _, want := range tt.stdout {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("stdout lacks %q:\n%s", want, stdout.String())
+				}
+			}
+			for _, absent := range tt.absent {
+				if strings.Contains(stdout.String(), absent) {
+					t.Errorf("stdout has %q:\n%s", absent, stdout.String())
+				}
+			}
+			for _, want := range tt.stderr {
+				if !strings.Contains(stderr.String(), want) {
+					t.Errorf("stderr lacks %q:\n%s", want, stderr.String())
+				}
+			}
+			for _, path := range tt.written {
+				if _, err := os.Stat(path); err != nil {
+					t.Errorf("not written: %v", err)
+				}
+			}
+		})
+	}
+
+	// Read through the store, a session reports exactly as the file it
+	// projects to does.
+	for _, cmd := range []string{"show", "verify"} {
+		var fromStore, fromFile, stderr bytes.Buffer
+		if code := run([]string{cmd, root, id}, &fromStore, &stderr); code != 0 {
+			t.Fatalf("%s from the store: exit %d: %s", cmd, code, stderr.String())
+		}
+		if code := run([]string{cmd, projected}, &fromFile, &stderr); code != 0 {
+			t.Fatalf("%s of the projection: exit %d: %s", cmd, code, stderr.String())
+		}
+		if fromStore.String() != fromFile.String() {
+			t.Errorf("%s differs between the store and its projection:\n%s\nvs\n%s", cmd, fromStore.String(), fromFile.String())
+		}
+	}
+}
+
+// TestCASVerifyFindsDamage: verify of a cas root reports what the
+// store's own walk finds, and fails on it.
+func TestCASVerifyFindsDamage(t *testing.T) {
+	root := t.TempDir()
+	casStore(t, root, "basic")
+	var packs []string
+	err := filepath.WalkDir(filepath.Join(root, "objects"), func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".pack") {
+			packs = append(packs, p)
+		}
+		return err
+	})
+	if err != nil || len(packs) == 0 {
+		t.Fatalf("no pack to damage: %v", err)
+	}
+	data, err := os.ReadFile(packs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)/2] ^= 0xff
+	if err := os.WriteFile(packs[0], data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"verify", root}, &stdout, &stderr); code != 1 {
+		t.Errorf("exit %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "corrupt") {
+		t.Errorf("stdout names no corrupt object:\n%s", stdout.String())
 	}
 }

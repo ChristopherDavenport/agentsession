@@ -247,8 +247,12 @@ strips the raw items for a document a judge will read.
 ## Inspecting from a shell
 
 `cmd/agentsession` reads session files without taking their lock, and
-`list` opens the store with `jsonl.WithReadOnly`, so every command is
-safe to run beside a harness that is writing.
+opens a store with `jsonl.WithReadOnly` or `cas.WithReadOnly`, so every
+command is safe to run beside a harness that is writing. Where a command
+takes a file it also takes a cas store's root and a session id, and
+reads the session as the file it projects to; a path inside a cas
+session's directory, its one-line `header` file included, is read as
+that session.
 
 ```
 go install github.com/ChristopherDavenport/agentsession/cmd/agentsession@latest
@@ -260,9 +264,13 @@ agentsession verify session.jsonl          # rebuild every request and check its
 agentsession export session.jsonl -out dir -secret "$OPENAI_API_KEY" -redact-home
 agentsession list ~/.agent/sessions        # a jsonl store's sessions, newest first
 agentsession list ~/.agent/sessions -current   # leave out sessions continued in a successor
+agentsession list ~/.agent/cas             # a cas store's sessions, the same columns
+agentsession show ~/.agent/cas ID          # any command, on a session a cas store holds
+agentsession verify ~/.agent/cas           # the whole store, as git fsck: journal, objects, sessions
 ```
 
-`verify` exits 1 on a mismatch, a truncated final line, a run end that
+`verify` exits 1 on a file with a header and no entries, since nothing
+was checked, and on a mismatch, a truncated final line, a run end that
 disagrees with its segment, a dispatch after a reject or an answer, or a call that
 ran without the dispatch the header promised. `export`
 writes one ATIF document per leaf and embeds a linked subsession when
@@ -300,7 +308,7 @@ _, err := otel.Export(ctx, tracer, sess, sess.Leaf()) // a stored session, after
 | `atif` | Go types for ATIF v1.8 with unknown-member passthrough and validation |
 | `export` | trajectories, ATIF conversion, redactors, writer |
 | `storetest` | the conformance suite every store runs |
-| `cmd/agentsession` | the command: show, verify, export and list session files |
+| `cmd/agentsession` | the command: show, verify, export and list session files and the sessions of a jsonl or cas store |
 
 ## Interoperating
 

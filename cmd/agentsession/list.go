@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"iter"
 	"os"
 	"text/tabwriter"
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/agentsession/jsonl"
 )
 
@@ -34,7 +36,15 @@ func list(args []string, stdout, stderr io.Writer) error {
 	}
 	// Read-only: a listing takes no session's lock, so it says what
 	// is there while an agent writes.
-	st, err := jsonl.Open(root, jsonl.WithReadOnly())
+	var st interface {
+		List(context.Context, agentsession.ListFilter) iter.Seq2[agentsession.Summary, error]
+		Close() error
+	}
+	if cas.IsStore(root) {
+		st, err = cas.Open(root, cas.WithReadOnly())
+	} else {
+		st, err = jsonl.Open(root, jsonl.WithReadOnly())
+	}
 	if err != nil {
 		return err
 	}

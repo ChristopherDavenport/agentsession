@@ -11,18 +11,21 @@ import (
 )
 
 func show(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("show", "<file> [-leaf id] [-v]", stderr)
+	fs := newFlags("show", "<file> | <cas-root> <id> [-leaf id] [-v]", stderr)
 	leaf := fs.String("leaf", "", "entry whose context to print; the current leaf by default")
 	full := fs.Bool("v", false, "print the data of custom and extension entries instead of its size")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
-	path, err := onePath(fs, positional, "session file")
+	src, err := sessionSource(fs, positional, stderr)
 	if err != nil {
 		return err
 	}
-	s, err := readSession(path)
+	if err := requireSession(fs, src, "show"); err != nil {
+		return err
+	}
+	s, err := readSource(src)
 	if err != nil {
 		return err
 	}

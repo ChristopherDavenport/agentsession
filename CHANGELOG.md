@@ -52,6 +52,21 @@ versions may break the API.
   `SameWorkspace` with the one in force before it carries
   `agentsession.substitution=true`, from `Export` and from `Wrap`
   alike; a first env entry is not a substitution. (#117)
+- **The CLI reads a cas store, and `verify` of nothing fails.** It
+  took only a file and a jsonl root, and a cas session's directory
+  holds `header`, a valid session file with no entries: `verify` of it
+  printed `0 verified, 0 without hash, 0 failed` and exited 0 for a
+  session whose entries it never read. `list <cas-root>` now lists a
+  cas store, and `show`, `verify` and `export` take `<cas-root> <id>`,
+  open the store with `cas.WithReadOnly`, so beside a writer holding
+  the session's lock, and read the session as the file `Project`
+  writes, so the output is what that file gives. A path inside
+  `sessions/<id>` is read as that session through the store, with a
+  note on stderr. `verify <cas-root>` runs `Store.Verify` and prints
+  each problem and a count. `verify` says how many entries it read and
+  had their ids checked against their hashes, and fails on a file with
+  a header and no entries, and on a store with no sessions, since
+  nothing was checked. (#105)
 
 ## v0.0.11 - 2026-09-29
 
