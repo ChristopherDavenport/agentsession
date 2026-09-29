@@ -128,17 +128,6 @@ func (st *sessionState) entries() []string {
 	return out
 }
 
-// head returns the last head the records set.
-func (st *sessionState) head() (string, bool) {
-	head, ok := "", false
-	for _, r := range st.recs {
-		if (r.Op == "append" && r.Head != "") || r.Op == "head" {
-			head, ok = r.Head, true
-		}
-	}
-	return head, ok
-}
-
 // mark returns the last mark the records set.
 func (st *sessionState) mark() string {
 	m := ""

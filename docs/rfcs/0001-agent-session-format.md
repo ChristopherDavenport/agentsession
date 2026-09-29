@@ -1386,7 +1386,15 @@ before it.
 `format` is `agentsession/<major>.<minor>`. A minor version adds entry types or
 optional fields. A major version changes the envelope, the header, or
 the context algorithm. Readers MUST accept any minor version of a major
-they support. Files are migrated in memory, never rewritten in place.
+they support. A reader migrates a file in memory and never rewrites it.
+
+A writer that appends to a file whose header names an earlier minor
+than the one it writes MUST first raise the header's `format` to its
+own, since what it appends may use what its minor adds. A reader of the
+earlier minor then refuses the file as a later one, which tells its
+operator what to do, rather than reading entries it cannot represent
+and reporting them as altered. Nothing hashed moves: the header is not
+an entry. A file never lowers its `format`.
 
 Adding an optional member to the envelope is a minor change. Changing
 what an existing member means, or what the context algorithm does with

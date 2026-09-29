@@ -174,7 +174,8 @@ its content. Identical bodies in a thousand sessions are one content
 object with a thousand envelopes naming it.
 
 Below the hash, an object's bytes are the store's to lay out: chunked,
-compressed, or deduplicated by any means, so long as the store serves
+compressed, packed with other objects into one file as git packs loose
+objects, or deduplicated by any means, so long as the store serves
 them by hash unchanged. Deduplication of large payloads is a storage
 concern and not a format one, and this document does not push a
 reference into the payload profile, which has no shape for one.
@@ -204,6 +205,13 @@ A session is created with a header and optionally a base.
   diverged from and the prefix is exactly the path to it.
 - A session MAY have several roots only when it has no base. A session
   with a base has one prefix and everything it appends hangs from it.
+- A session's header is written at creation and changes afterwards only
+  in `format`. A store MUST raise the header's `format` to the minor of
+  a writer that appends to the session, when that minor is later than
+  the header's, before the append's commit point, as RFC 0001 requires
+  of a writer of a file; so a reader of an earlier minor refuses a
+  session a later one has continued, rather than reading entries it
+  cannot represent. A store never lowers it.
 
 A fork is a session created with a base. Nothing is copied: the fork's
 prefix is the origin's entries, stored once. The header's `base` says
@@ -345,6 +353,19 @@ Each session's log is then a projection of the journal, and the
 journal's order is the total order the ordering section describes, of
 which a session's log is a filter.
 
+The journal is the one file recovery trusts, so its damage must not
+pass for a crash. A record carries a checksum; a crash cuts short only
+the record being written, at the journal's end, so a record written
+whole that fails its checksum is damage, reported rather than skipped.
+Recovery only adds: a log that holds an entry its journal lacks keeps
+it, since only damage or a journal restored from before the log can
+cause that, and the head does not move back past it. An append
+acknowledged before it was durable is marked so in its record, and its
+objects are made durable no later than the next durable commit and
+ahead of it; after a crash, such a record whose objects are missing is
+an append the crash took, with what the session appended after it, and
+not damage.
+
 A store built on a database that has its own write-ahead log gets
 atomicity and recovery from the database. Durability it must still ask
 for: SQLite's WAL commit at `synchronous=NORMAL`, which the reference
@@ -482,9 +503,10 @@ apply here, where holding the session already is the usual case.
   with the pushed base as its head, or no head when there is no base,
   and then admits the own entries. A receiver that holds a session with
   that ID MUST refuse the push unless the pushed header equals the held
-  one, since a header is written once at creation and two sessions alike
-  only in ID are not one session; their union would be no session at
-  all.
+  one apart from `format`, since a header is written once at creation
+  and two sessions alike only in ID are not one session; their union
+  would be no session at all. The receiver keeps the later of the two
+  formats, as the sessions section requires of an append.
 - **The log merges as a set.** The receiver takes the union of the two
   logs and assigns its own sequence in the order it admits entries,
   admitting a parent before its child so that the merged log projects as
