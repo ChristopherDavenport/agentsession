@@ -12,7 +12,7 @@ MODULE := $(shell GOWORK=off $(GO) list -m)
 # replace pointing at the tree — see replaces below, and CLAUDE.md for
 # why the two go together. ./... from the root covers only the root
 # module, so every target loops over them.
-SUBMODULES = sqlite otel
+SUBMODULES = sqlite otel spanner
 
 .PHONY: build deps replaces test vet fmt tidy tidy-check lint vuln check \
 	release-guard release release-commit clean

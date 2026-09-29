@@ -5,6 +5,25 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **`spanner`: the RFC 0002 store over Cloud Spanner**, a new nested
+  module released at the repository's version like `sqlite` and
+  `otel`. It runs the RFC's reference schema (`spanner.DDL`): contents
+  and envelopes held once by hash, a session row with its header, base,
+  head and record mark, and a log and a prefix interleaved in it. An
+  append is one read-write transaction, which is the commit point, and
+  is durable when it returns. No process holds a session: several
+  append to one at once, serialised on the session row, and a writer
+  whose parent is no longer the head is recorded as a branch and told
+  so. A `Session` it hands out takes in other writers' entries whenever
+  it goes through the store. It has the `cas` store's `Write`, `SetHead`,
+  `DeclareRecord`, `Project`, `ProjectDir`, `Import`, `PutBlob`, `Blob`
+  and `Sweep`; a sweep runs beside live writers with no lock, since each
+  removal re-checks inside its transaction and conflicts with any
+  append that needs the object. The tests run against the Spanner
+  emulator, which CI starts as a service.
+
 ## v0.0.11 - 2026-09-29
 
 - **RFC 0001 draft 0.8; the library writes `agentsession/0.8`.** One
