@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.11 - 2026-09-29
 
 - **RFC 0001 draft 0.8; the library writes `agentsession/0.8`.** One
   optional member, one verdict, and paragraphs in four sections. A
