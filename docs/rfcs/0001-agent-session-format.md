@@ -743,13 +743,15 @@ Why a run started and how it ended. Two entries per run, paired by
 - `run_id` and `phase` are required on both entries. `source` is
   required on `start`; `reason` and `pending` are required on `end`.
   `ref` is optional on both, and `trigger` is optional on `start`.
-- `source` is closed to two path shapes. `resume`: at least one call
-  that was on the path with no output when the run began has its
-  output at the start of the segment, whether the previous run ended by
-  leaving it pending or was cut off. `input`: otherwise, including a
-  run that answers nothing and adds nothing, such as a retry after an
-  error, which `ref` names. A run that both answers a pending call and
-  adds a message is `resume`. `ref` on `start` names what triggered
+- `source` is closed to two path shapes. `resume`: the segment starts
+  by taking up at least one call that was on the path with no output
+  when the run began, with its output or a `decision` or `dispatch`
+  for it, whether the previous run ended by leaving it pending or was
+  cut off. A resume that holds such a call again, or rejects it, is
+  one. `input`: otherwise, including a run that answers nothing and
+  adds nothing, such as a retry after an error, which `ref` names. A
+  run that both takes up a pending call and adds a message is
+  `resume`. `ref` on `start` names what triggered
   the input (a cron name, a channel message ID). How an input arrived,
   whether a schedule, a channel or another agent, is a harness feature
   and goes in `trigger`, `ref` or a `custom` entry.
@@ -1541,7 +1543,9 @@ reads as a `keep`, was not a 0.8 omitted part, which always had its
   pending call was a `function_call` on the segment, so a resume that
   held a call an earlier run left, before any model call, had no
   pending call and read `aborted`, and its `pending` list could not
-  name the call it was waiting on.
+  name the call it was waiting on. `resume` follows: a run whose
+  segment starts with a decision or dispatch for such a call is one,
+  where 0.8 asked for its output.
 - A `reject` with no output after it is a call owed its refusal and
   nothing else, as an `answer` with no output is owed its answer.
   0.8 said no `dispatch` follows a `reject` but not what a reader

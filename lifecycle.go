@@ -35,8 +35,9 @@ const (
 )
 
 // Sources of a run, on its start entry. Both are shapes of the path:
-// a resume answers a call that was pending when the run began; an
-// input is everything else, a retry after an error included.
+// a resume starts by taking up a call that was pending when the run
+// began, with its output or a decision or dispatch for it; an input is
+// everything else, a retry after an error included.
 const (
 	SourceInput  = "input"
 	SourceResume = "resume"
