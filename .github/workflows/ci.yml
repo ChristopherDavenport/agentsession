@@ -17,6 +17,16 @@ jobs:
       matrix:
         # 1.25 is the floor declared in go.mod; stable is the current release.
         go: ["1.25.x", "stable"]
+    # The spanner module's tests run against the emulator, and fail
+    # rather than skip when CI is set and it is missing.
+    services:
+      spanner:
+        image: gcr.io/cloud-spanner-emulator/emulator
+        ports:
+          - 9010:9010
+          - 9020:9020
+    env:
+      SPANNER_EMULATOR_HOST: localhost:9010
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -26,6 +36,7 @@ jobs:
             go.sum
             sqlite/go.sum
             otel/go.sum
+            spanner/go.sum
       - name: Build
         run: make build
       - name: Root module depends on openresponses and the standard library only
@@ -49,6 +60,7 @@ jobs:
             go.sum
             sqlite/go.sum
             otel/go.sum
+            spanner/go.sum
       - name: Check formatting
         run: make fmt
       - name: Check go.mod and go.sum are tidy in every module

@@ -5,13 +5,14 @@ where a mistake is permanent; read it before touching a tag.
 
 ## Layout
 
-Three Go modules in one repository, joined by `go.work`:
+Four Go modules in one repository, joined by `go.work`:
 
 | Path     | Module path              | Published |
 | -------- | ------------------------ | --------- |
 | `.`      | `…/agentsession`         | yes       |
 | `sqlite` | `…/agentsession/sqlite`  | yes       |
 | `otel`   | `…/agentsession/otel`    | yes       |
+| `spanner`| `…/agentsession/spanner` | yes       |
 
 The root module depends on `openresponses` and the standard library
 alone; `make deps` enforces it. Anything needing another dependency —
@@ -133,7 +134,7 @@ confirm tidy did not move them, commits, then guards and tags the root,
 guards and tags each nested module, and runs:
 
 ```sh
-git push origin --atomic HEAD v0.1.0 sqlite/v0.1.0 otel/v0.1.0
+git push origin --atomic HEAD v0.1.0 sqlite/v0.1.0 otel/v0.1.0 spanner/v0.1.0
 ```
 
 `--atomic` lands every ref in a single transaction, so no window exists
@@ -162,7 +163,7 @@ effect once the new version is published.
 
 ## What `go.work` is and is not for
 
-`go.work` joins the three modules so editors and `go build ./...` in any
+`go.work` joins the four modules so editors and `go build ./...` in any
 directory see the tree. It is *not* what makes the release work — the
 `replace` directives are, because `go mod tidy` ignores the workspace
 entirely. If you find yourself reaching for `go.work` to fix a module

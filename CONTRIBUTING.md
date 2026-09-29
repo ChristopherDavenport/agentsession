@@ -29,9 +29,12 @@ make check        # gofmt, tidy, vet, deps, replaces, staticcheck, govulncheck, 
 The individual targets are `fmt`, `tidy-check`, `vet`, `deps`, `replaces`,
 `lint`, `vuln`, `test` and `tidy`.
 
-The repository has three modules, joined by `go.work`: the library at
-the root, and `sqlite` and `otel`, nested so their drivers stay out of
-the library's dependency graph. The Makefile targets cover all of them;
+The repository has four modules, joined by `go.work`: the library at
+the root, and `sqlite`, `otel` and `spanner`, nested so their drivers
+stay out of the library's dependency graph. The `spanner` tests need the
+Cloud Spanner emulator (`gcloud emulators spanner start`, then
+`SPANNER_EMULATOR_HOST=localhost:9010`); without it they skip locally
+and fail in CI. The Makefile targets cover all of them;
 a bare `go test ./...` at the root does not, even in workspace mode.
 `deps` fails if the root module imports anything beyond `openresponses`
 and the standard library; anything that needs another dependency is a
@@ -94,8 +97,8 @@ make release VERSION=v0.1.0
 points every nested module's first-party requires at `v0.1.0`, dates the
 changelog, runs `make tidy` and `make check`, reads the requires back to
 confirm tidy did not move them, commits, then guards and tags the root,
-guards and tags `sqlite/v0.1.0` and `otel/v0.1.0`, and pushes the branch
-and all three tags with `git push origin --atomic`.
+guards and tags `sqlite/v0.1.0`, `otel/v0.1.0` and `spanner/v0.1.0`, and
+pushes the branch and all four tags with `git push origin --atomic`.
 
 `make release-guard TAG=<tag>` is what stands between a mistake and a
 permanent one. It refuses a dirty tree, a tag that already exists, a
