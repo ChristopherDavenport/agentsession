@@ -378,3 +378,160 @@ func TestNothingFollowsAReject(t *testing.T) {
 		})
 	}
 }
+
+// TestRejectAfterOutput: a reject, like an answer, is for a call with
+// no output. One after the output would also hide a missing dispatch,
+// since a rejected call needs none.
+func TestRejectAfterOutput(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	target, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "notify", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewItemEntry(openresponses.NewFunctionCallOutput("c", "sent"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewDecision("c", target, VerdictReject, ByPolicy).WithReason("no")); !errors.Is(err, ErrCallCompleted) {
+		t.Errorf("reject after the output: Append = %v, want ErrCallCompleted", err)
+	}
+	call := `"type":"item","item":{"type":"function_call","id":"fc","call_id":"c","name":"notify","arguments":"{}"}`
+	_, ids := hashedLines(t, Format, call)
+	output := `"type":"item","item":{"type":"function_call_output","call_id":"c","output":"x"}`
+	reject := `"type":"decision","call_id":"c","target":"` + ids[0] + `","verdict":"reject","reason":"no"`
+	in, _ := hashedLines(t, Format, call, output, reject)
+	read, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := read.VerifyRecords(read.Leaf()); !errors.Is(err, ErrCallCompleted) {
+		t.Errorf("VerifyRecords = %v, want ErrCallCompleted", err)
+	}
+}
+
+// TestTargetNamesTheCall: a decision or dispatch names its call by
+// target, the function call's entry, and its call ID must agree.
+func TestTargetNamesTheCall(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	a, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fa", CallID: "a", Name: "t", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fb", CallID: "b", Name: "t", Arguments: "{}"}}); err != nil {
+		t.Fatal(err)
+	}
+	for name, e := range map[string]Entry{
+		"a decision naming another call's entry": NewDecision("b", a, VerdictHold, ByPolicy),
+		"a dispatch naming another call's entry": NewDispatch("b", a),
+		"a decision for a call not on the path":  NewDecision("z", "sha256:0", VerdictHold, ByPolicy),
+		"a dispatch naming no entry":             NewDispatch("a", "sha256:0"),
+	} {
+		if _, err := s.Append(e); !errors.Is(err, ErrBadTarget) {
+			t.Errorf("%s: Append = %v, want ErrBadTarget", name, err)
+		}
+	}
+	if _, err := s.Append(NewDispatch("a", a)); err != nil {
+		t.Errorf("a dispatch naming its call: %v", err)
+	}
+
+	call := `"type":"item","item":{"type":"function_call","id":"fa","call_id":"a","name":"t","arguments":"{}"}`
+	other := `"type":"item","item":{"type":"function_call","id":"fb","call_id":"b","name":"t","arguments":"{}"}`
+	_, ids := hashedLines(t, Format, call, other)
+	hold := `"type":"decision","call_id":"b","target":"` + ids[0] + `","verdict":"hold"`
+	in, _ := hashedLines(t, Format, call, other, hold)
+	read, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := read.VerifyRecords(read.Leaf()); !errors.Is(err, ErrBadTarget) {
+		t.Errorf("VerifyRecords = %v, want ErrBadTarget", err)
+	}
+	// The target binds: the hold is call a's, though it says b.
+	calls, err := read.Calls(read.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !calls[0].Held() || calls[1].Held() {
+		t.Errorf("held: a %v, b %v; want the target's call held", calls[0].Held(), calls[1].Held())
+	}
+}
+
+// TestCallIDPerSession: a call ID names one call in a session, on any
+// branch, since a subsession's ID is derived from it; and a function
+// call needs one.
+func TestCallIDPerSession(t *testing.T) {
+	s := New(Header{})
+	root, err := s.Append(NewItemEntry(openresponses.UserText("hi")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc := func() *ItemEntry {
+		return &ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "a", Name: "t", Arguments: "{}"}}
+	}
+	if _, err := s.Append(fc()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Branch(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(fc()); !errors.Is(err, ErrCallIDRepeated) {
+		t.Errorf("the call ID on another branch: Append = %v, want ErrCallIDRepeated", err)
+	}
+	if _, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", Name: "t", Arguments: "{}"}}); err == nil {
+		t.Error("a function call with no call_id was accepted")
+	}
+}
+
+// TestHeldReappendAfterCallRules: appending again an entry the session
+// holds is a no-op, whatever followed it on the path.
+func TestHeldReappendAfterCallRules(t *testing.T) {
+	s := New(Header{})
+	if _, err := s.Append(NewItemEntry(openresponses.UserText("hi"))); err != nil {
+		t.Fatal(err)
+	}
+	target, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "a", Name: "t", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold := NewDecision("a", target, VerdictHold, ByPolicy)
+	if _, err := s.Append(hold); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewDecision("a", target, VerdictReject, ByHuman).WithReason("no")); err != nil {
+		t.Fatal(err)
+	}
+	again := *hold
+	if r, err := s.Commit(&again); err != nil || r.Outcome != Held {
+		t.Errorf("the hold again: %v, %v; want held", r.Outcome, err)
+	}
+	fc := &ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "a", Name: "t", Arguments: "{}"}}
+	fc.Parent, fc.Timestamp = s.byID[target].Base().Parent, s.byID[target].Base().Timestamp
+	if r, err := s.Commit(fc); err != nil || r.Outcome != Held {
+		t.Errorf("the call again: %v, %v; want held", r.Outcome, err)
+	}
+}
+
+// TestRunCallsByBinding: in a file that repeats a call ID, what a run
+// takes up is the call its entries bind to, so the superseded call is
+// not the run's.
+func TestRunCallsByBinding(t *testing.T) {
+	first := `"type":"item","item":{"type":"function_call","id":"f1","call_id":"x","name":"t","arguments":"{}"}`
+	second := `"type":"item","item":{"type":"function_call","id":"f2","call_id":"x","name":"t","arguments":"{}"}`
+	start := `"type":"run","run_id":"r","phase":"start","source":"resume"`
+	output := `"type":"item","item":{"type":"function_call_output","call_id":"x","output":"ok"}`
+	in, _ := hashedLines(t, Format, first, second, start, output)
+	read, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := read.Runs(read.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := runs[0].Calls()
+	if len(calls) != 1 || calls[0].Call.ID != "f2" {
+		t.Errorf("run calls = %v, want the second call alone", calls)
+	}
+	if p := runs[0].Pending(); len(p) != 0 {
+		t.Errorf("Pending = %v, want none", p)
+	}
+}

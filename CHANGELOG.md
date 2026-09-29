@@ -5,6 +5,54 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+Draft 0.9 is amended in place again, from an independent review of
+v0.0.13.
+
+- **A call ID names one call in a session, on any branch, and is
+  never empty.** A subsession's ID is derived from it, so two branches
+  reusing one derived the same child. `Append` checks a set of the
+  session's call IDs rather than reading the path, and refuses a
+  function call with no `call_id`. The RFC adds that a writer that
+  makes up its own IDs sends them to the provider, or omits
+  `request_hash`, since the request the path rebuilds must be the one
+  sent.
+- **A decision or dispatch names its call by `target`**, and its
+  `call_id` must be that call's. `Append` refuses one whose target is
+  no function call on the path or names another call, with the new
+  `ErrBadTarget`, and `VerifyRecords` reports one. `Calls`, and so
+  every reader of calls, binds a decision or dispatch to the call its
+  target names, and an output to the latest call with its ID.
+- **A `reject` is for a call with no output.** `Append` refused an
+  `answer` after the output and took a `reject`, which also hid a
+  missing dispatch from `VerifyRecords`; it now refuses both with
+  `ErrCallCompleted`, and `VerifyRecords` reports both.
+- **`source: resume` is the run's opening shape**: its first item,
+  decision or dispatch takes up a pending call. v0.0.13 let an entry
+  anywhere in the segment decide it, which the writer of `start` could
+  not know.
+- **A run's calls are found by binding**, so in a file that repeats a
+  call ID a run that answers the later call no longer lists the earlier
+  one as pending.
+- **Appending an entry the session holds is a no-op again** whatever
+  followed it; the call rules ran before the held check and refused
+  one.
+- **Appending is faster on long paths.** A decision or dispatch reads
+  only the entries about its call, and a function call checks a set:
+  5,000 calls with a dispatch and an output each append in 3.6s, from
+  about 8s in v0.0.13 and 5.7s in v0.0.12.
+- **otel binds as the library does.** In a file that repeats a call
+  ID the exporter matched the output to the first call and emitted no
+  span for the later one.
+- **`export.ItemsFrom` gives a repeated or missing tool call ID one of
+  its own** (`call_0#2`), and the observation results after it follow,
+  so a valid ATIF document that numbers calls per turn appends.
+- **`agentsession verify` notes when a 0.9 file breaks a rule 0.9
+  gained after v0.0.12**, which may mean that writer produced it
+  rather than that it is corrupt. The RFC asks a reader to say the
+  same.
+
 ## v0.0.13 - 2026-09-29
 
 - **A run's calls include the earlier calls it took up.** RFC 0001
@@ -23,11 +71,11 @@ versions may break the API.
   dispatch is a `resume`, where the RFC asked for its output.
 - **`CallRejected`.** A call whose `reject` is on the path and whose
   refusal output is not, since the record stopped between the two,
-  reads as `CallRejected` rather than the state its dispatches implied,
-  usually `CallNeverStarted`: it is owed that output and nothing else,
-  and must not be run. The RFC says so beside the same rule for
-  `answer`. The otel exporter reports the state for a rejected call a
-  run end left pending.
+  reads as `CallRejected` rather than `CallNeverStarted`, or
+  `CallUnknown` in a file that does not record dispatches: it is owed
+  that output and nothing else, and must not be run. The RFC says so
+  beside the same rule for `answer`. The otel exporter reports the
+  state for a rejected call the record left without its output.
 - **Nothing but its output follows a `reject`, and a `reject` follows
   no `dispatch`.** `Append` refuses a decision after a `reject` with
   `ErrCallRejected`, and a `reject` for a dispatched call with the new

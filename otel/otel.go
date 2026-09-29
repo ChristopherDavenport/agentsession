@@ -284,9 +284,14 @@ type tracker struct {
 	inference     map[string]trace.SpanContext // by response ID
 	firstItemTS   map[string]time.Time         // first output item per response ID
 	spans         map[string]trace.SpanContext // by entry ID
-	calls         map[string]*callState
-	order         []string // call IDs in the order seen
-	branchLink    *trace.Link
+	// calls is the latest call with each call ID and byEntry the call
+	// each function call entry holds: a decision or dispatch names its
+	// call by target, an output or link by call ID, and in a file that
+	// repeats a call ID that names the latest call with it.
+	calls      map[string]*callState
+	byEntry    map[string]*callState
+	order      []*callState // in the order seen
+	branchLink *trace.Link
 	// workspace is the workspace in force, once envSeen says an env
 	// entry has put one in force.
 	workspace *agentsession.Workspace
@@ -311,6 +316,8 @@ type callState struct {
 	// another only when a later decision changed what the path reads.
 	closed      bool
 	closedState agentsession.CallState
+	// gone reports that the call's last span has ended for good.
+	gone bool
 }
 
 // Links a tool span carries to an earlier span of the same call: the
@@ -358,6 +365,7 @@ func newTracker(ctx context.Context, tracer trace.Tracer, h agentsession.Header,
 		firstItemTS: map[string]time.Time{},
 		spans:       map[string]trace.SpanContext{},
 		calls:       map[string]*callState{},
+		byEntry:     map[string]*callState{},
 	}
 	attrs := []attribute.KeyValue{
 		attribute.String(AttrSessionID, h.ID),
@@ -406,11 +414,11 @@ func (t *tracker) prime(path []agentsession.Entry) {
 				}
 			}
 		case *agentsession.DecisionEntry:
-			if c, ok := t.calls[v.CallID]; ok {
+			if c := t.callFor(v.CallID, v.Target); c != nil {
 				t.noteDecision(c, v)
 			}
 		case *agentsession.DispatchEntry:
-			if c, ok := t.calls[v.CallID]; ok {
+			if c := t.callFor(v.CallID, v.Target); c != nil {
 				c.dispatched, c.held = true, false
 				c.dispatches++
 				c.lastDispatch = v.ID
@@ -420,11 +428,30 @@ func (t *tracker) prime(path []agentsession.Entry) {
 }
 
 func (t *tracker) register(e *agentsession.ItemEntry, fc *openresponses.FunctionCall) {
-	if _, ok := t.calls[fc.CallID]; ok {
+	if _, ok := t.byEntry[e.ID]; ok {
 		return
 	}
-	t.calls[fc.CallID] = &callState{name: fc.Name, callID: fc.CallID, entryID: e.ID, responseID: e.ResponseID, seen: e.Timestamp}
-	t.order = append(t.order, fc.CallID)
+	c := &callState{name: fc.Name, callID: fc.CallID, entryID: e.ID, responseID: e.ResponseID, seen: e.Timestamp}
+	t.calls[fc.CallID] = c
+	t.byEntry[e.ID] = c
+	t.order = append(t.order, c)
+}
+
+// callFor returns the call a decision or dispatch names: the one whose
+// function call entry is target, else the latest with the call ID.
+func (t *tracker) callFor(callID, target string) *callState {
+	if c, ok := t.byEntry[target]; ok {
+		return c
+	}
+	return t.calls[callID]
+}
+
+// forget drops a call whose span has ended for good.
+func (t *tracker) forget(c *callState) {
+	c.gone = true
+	if t.calls[c.callID] == c {
+		delete(t.calls, c.callID)
+	}
 }
 
 func (t *tracker) noteDecision(c *callState, d *agentsession.DecisionEntry) {
@@ -583,9 +610,8 @@ func (t *tracker) endRun(r *agentsession.RunEntry, ts time.Time) {
 	// A hand-off the run left without an output ends with the run, in
 	// the state the path reads for it; a later hand-off or output of the
 	// call opens a span of its own.
-	for _, id := range t.order {
-		c, ok := t.calls[id]
-		if !ok || c.span == nil || c.output {
+	for _, c := range t.order {
+		if c.gone || c.span == nil || c.output {
 			continue
 		}
 		state := t.pendingState(c)
@@ -650,8 +676,8 @@ func (t *tracker) response(r *agentsession.ResponseEntry, ts time.Time) {
 }
 
 func (t *tracker) decision(d *agentsession.DecisionEntry, ts time.Time) {
-	c, ok := t.calls[d.CallID]
-	if !ok {
+	c := t.callFor(d.CallID, d.Target)
+	if c == nil {
 		return
 	}
 	t.noteDecision(c, d)
@@ -682,8 +708,8 @@ func (t *tracker) decision(d *agentsession.DecisionEntry, ts time.Time) {
 // which Store does on Open, never saw that process's spans, so its
 // first hand-off links to none; Export with WithKnownSpans can.
 func (t *tracker) dispatch(d *agentsession.DispatchEntry, ts time.Time) {
-	c, ok := t.calls[d.CallID]
-	if !ok {
+	c := t.callFor(d.CallID, d.Target)
+	if c == nil {
 		return
 	}
 	c.dispatched, c.held = true, false
@@ -772,21 +798,20 @@ func (t *tracker) output(callID string, e *agentsession.ItemEntry, ts time.Time)
 	c.span.SetAttributes(attribute.String(AttrCallState, state))
 	t.spans[e.ID] = c.span.SpanContext()
 	c.span.End(trace.WithTimestamp(ts))
-	delete(t.calls, callID)
+	t.forget(c)
 }
 
 // finish ends everything still open at ts: pending calls with the
 // state the format reads for them, the open run, and the session.
 func (t *tracker) finish(ts time.Time) {
-	for _, id := range t.order {
-		c, ok := t.calls[id]
-		if !ok || c.output {
+	for _, c := range t.order {
+		if c.gone || c.output {
 			continue
 		}
 		state := t.pendingState(c)
 		if c.closed && state == c.closedState && len(c.events) == 0 {
 			// The span a run end closed already says it.
-			delete(t.calls, id)
+			t.forget(c)
 			continue
 		}
 		if c.span == nil {
@@ -806,7 +831,7 @@ func (t *tracker) finish(ts time.Time) {
 			c.span.SetStatus(codes.Error, "no output before the record stopped")
 		}
 		c.span.End(trace.WithTimestamp(ts))
-		delete(t.calls, id)
+		t.forget(c)
 	}
 	if t.run != nil {
 		t.run.End(trace.WithTimestamp(ts))

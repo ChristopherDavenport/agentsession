@@ -2,6 +2,7 @@ package export
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentsession/atif"
@@ -28,8 +29,44 @@ import (
 // text survives), and audio parts (a text placeholder). A copied
 // context step is a system message like any other; the document's
 // is_copied_context flag does not survive.
+//
+// A call ID names one call in a session, and ATIF lets a document
+// repeat a tool call ID across steps, as a producer that numbers calls
+// per turn does. A tool call whose ID an earlier step used, or that has
+// none, gets one of its own, the native ID followed by "#" and a
+// number ("call" when it has none), and the observation results after
+// it that name the native ID name the new one, up to the next agent
+// step. The native ID is kept only in that prefix.
 func ItemsFrom(doc *atif.Trajectory) (openresponses.Items, error) {
 	var items openresponses.Items
+	seen := map[string]bool{}
+	// ids maps a native call ID to the one the current agent step's
+	// call was given.
+	ids := map[string]string{}
+	callID := func(native string) string {
+		base := native
+		if base == "" {
+			base = "call"
+		}
+		id := native
+		for n := 2; id == "" || seen[id]; n++ {
+			id = fmt.Sprintf("%s#%d", base, n)
+		}
+		seen[id] = true
+		ids[native] = id
+		return id
+	}
+	outputs := func(o *atif.Observation) openresponses.Items {
+		out := outputsOf(o)
+		for _, it := range out {
+			if fo, ok := it.(*openresponses.FunctionCallOutput); ok {
+				if id, ok := ids[fo.CallID]; ok {
+					fo.CallID = id
+				}
+			}
+		}
+		return out
+	}
 	for _, s := range doc.Steps {
 		switch s.Source {
 		case atif.SourceUser:
@@ -38,8 +75,9 @@ func ItemsFrom(doc *atif.Trajectory) (openresponses.Items, error) {
 			if !s.Message.IsZero() || s.Observation == nil {
 				items = append(items, &openresponses.Message{Role: openresponses.RoleSystem, Content: inputParts(s.Message)})
 			}
-			items = append(items, outputsOf(s.Observation)...)
+			items = append(items, outputs(s.Observation)...)
 		case atif.SourceAgent:
+			clear(ids)
 			if s.ReasoningContent != "" {
 				items = append(items, &openresponses.ReasoningItem{Summary: openresponses.Contents{&openresponses.SummaryText{Text: s.ReasoningContent}}})
 			}
@@ -48,12 +86,12 @@ func ItemsFrom(doc *atif.Trajectory) (openresponses.Items, error) {
 			}
 			for _, tc := range s.ToolCalls {
 				items = append(items, &openresponses.FunctionCall{
-					CallID:    tc.ToolCallID,
+					CallID:    callID(tc.ToolCallID),
 					Name:      tc.FunctionName,
 					Arguments: argumentsText(tc.Arguments),
 				})
 			}
-			items = append(items, outputsOf(s.Observation)...)
+			items = append(items, outputs(s.Observation)...)
 		}
 	}
 	return items, nil
