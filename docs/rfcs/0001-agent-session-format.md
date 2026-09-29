@@ -764,20 +764,19 @@ Why a run started and how it ended. Two entries per run, paired by
 - `run_id` and `phase` are required on both entries. `source` is
   required on `start`; `reason` and `pending` are required on `end`.
   `ref` is optional on both, and `trigger` is optional on `start`.
-- `source` is closed to two path shapes. `resume`: the segment's
-  first `item`, `decision` or `dispatch` after `start` takes up a call
-  that was on the path with no output when the run began, as its
-  output or a decision or dispatch for it, whether the previous run
-  ended by leaving it pending or was cut off. A resume that holds such
-  a call again, or rejects it, is one, and a message the run adds
-  after it does not change that. The shape is what the writer knows
-  when it writes `start`: it started the run to take up a call.
-  `input`: otherwise, including a run that answers nothing and adds
-  nothing, such as a retry after an error, which `ref` names. `ref` on
-  `start` names what triggered the input (a cron name, a channel message
-  ID). How an input arrived, whether a schedule, a channel or another
-  agent, is a harness feature and goes in `trigger`, `ref` or a `custom`
-  entry.
+- `source` is closed to two path shapes. `resume`: the segment's first
+  `function_call_output`, `decision` or `dispatch` after `start` takes
+  up a call that was on the path with no output when the run began,
+  whether the previous run ended by leaving it pending or was cut off. A
+  resume that holds such a call again, or rejects it, is one, and a
+  message the run adds before or after it, such as the approval a person
+  typed, does not change that. The shape is what the writer knows when
+  it writes `start`: it started the run to take up a call. `input`:
+  otherwise, including a run that answers nothing and adds nothing, such
+  as a retry after an error, which `ref` names. `ref` on `start` names
+  what triggered the input (a cron name, a channel message ID). How an
+  input arrived, whether a schedule, a channel or another agent, is a
+  harness feature and goes in `trigger`, `ref` or a `custom` entry.
 - `trigger` on `start` says how the input that started the run arrived,
   in the object `queued` defines: `kind`, `ref` and `source`, each
   opaque. It sits beside `ref` and changes nothing about it; `ref` stays
@@ -896,14 +895,16 @@ call. When the header names `dispatch` in `records`, a call with neither
 was never started; otherwise the file does not say whether it ran. A
 writer that names `dispatch` MUST write it, durably, before the tool
 runs, and no writer may write it for a call that was rejected or
-answered. A `dispatch` with no `decision` before it on the path means no
-decision was recorded for the call, which under the rule in `decision`
-is the shape of a routine approval as much as of no decider at all; a
-writer that records no decisions produces a valid file. A call cancelled
-after its `dispatch` while the harness was running it carries no
-decision: its `function_call_output`, or the absence of one, is the
-record. A call answered after the record stopped, without being handed
-to its tool again, carries an `answer` decision, below.
+answered or that has its output: the output ends the call, and a harness
+that runs the tool again for it has made a new call. A `dispatch` with
+no `decision` before it on the path means no decision was recorded for
+the call, which under the rule in `decision` is the shape of a routine
+approval as much as of no decider at all; a writer that records no
+decisions produces a valid file. A call cancelled after its `dispatch`
+while the harness was running it carries no decision: its
+`function_call_output`, or the absence of one, is the record. A call
+answered after the record stopped, without being handed to its tool
+again, carries an `answer` decision, below.
 
 - `idempotency_key` is optional: the key the harness gave the tool for
   this hand-off, in the harness's own terms, so that a tool that makes
@@ -1530,12 +1531,12 @@ across a budget, beside a `replace` and a compaction's checkpoint that
 write it whole, the recomputed `reason` for every `run` end, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a `dispatch` that follows a
-`reject` or an `answer`, a decision that follows a `reject`, a `reject`
-that follows a `dispatch` or an output, a `target` naming another call,
-a repeated `call_id`, and a header naming `dispatch` beside a call that
-has an output and no `dispatch`. Converters for pi, Claude Code and
-Codex are part of the initial proposal so the format arrives with three
-existing corpora behind it.
+`reject`, an `answer` or the call's output, a decision that follows a
+`reject`, a `reject` that follows a `dispatch` or an output, a `target`
+naming another call, a repeated `call_id`, and a header naming
+`dispatch` beside a call that has an output and no `dispatch`.
+Converters for pi, Claude Code and Codex are part of the initial
+proposal so the format arrives with three existing corpora behind it.
 
 ## Prior art
 
@@ -1555,17 +1556,17 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.8
 
-One element and a paragraph in the `config` section, a writer's rule
-in Versioning, which calls are a run's, and what may follow a
-`reject`. No hash changes, and a 0.8 file is a 0.9 file with no
-`keep` in its omitted lists, save for the run, `reject`, `target` and
-`call_id` rules below. An element of an omitted list with no `id`,
-which a 0.9 reader reads as a `keep`, was not a 0.8 omitted part,
-which always had its `id`. A 0.8 run end whose run took up a call made
-before its segment and left it without an output may carry a `reason`
-or `pending` list that 0.9 recomputes differently, and a 0.8 file may
-hold a decision after a `reject`, a `reject` after a `dispatch` or an
-output, a `target` that names another call, or a repeated or empty
+One element and a paragraph in the `config` section, a writer's rule in
+Versioning, which calls are a run's, and what may follow a `reject`. No
+hash changes, and a 0.8 file is a 0.9 file with no `keep` in its omitted
+lists, save for the run, `reject`, `target` and `call_id` rules below.
+An element of an omitted list with no `id`, which a 0.9 reader reads as
+a `keep`, was not a 0.8 omitted part, which always had its `id`. A 0.8
+run end whose run took up a call made before its segment and left it
+without an output may carry a `reason` or `pending` list that 0.9
+recomputes differently, and a 0.8 file may hold a decision after a
+`reject`, a `reject` after a `dispatch` or an output, a `dispatch` after
+an output, a `target` that names another call, or a repeated or empty
 `call_id`, which 0.9 forbids.
 
 These rules were added to 0.9 after the reference library first wrote
@@ -1595,9 +1596,10 @@ rather than call the file corrupt.
   pending call was a `function_call` on the segment, so a resume that
   held a call an earlier run left, before any model call, had no
   pending call and read `aborted`, and its `pending` list could not
-  name the call it was waiting on. `resume` follows: a run whose
-  segment opens by taking up such a call with a decision or dispatch
-  is one, where 0.8 asked for its output.
+  name the call it was waiting on. `resume` follows: a run whose first
+  output, decision or dispatch takes up such a call is one, messages
+  before it aside, where 0.8 asked for its output at the start of the
+  segment.
 - A `reject` with no output after it is a call owed its refusal and
   nothing else, as an `answer` with no output is owed its answer, and
   no decision follows a `reject`, as none follows an `answer`. A
@@ -1615,6 +1617,9 @@ rather than call the file corrupt.
 - A `decision` or `dispatch` names its call by `target`, and its
   `call_id` MUST be that call's. 0.8 required both and said nothing
   of a pair that disagreed.
+- No `dispatch` follows a call's output. 0.8 did not say; a harness
+  that runs a tool again after its output has made a new call, with a
+  new `function_call` and `call_id`.
 
 ## Changes since 0.7
 

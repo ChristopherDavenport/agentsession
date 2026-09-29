@@ -653,3 +653,32 @@ func TestRejectAfterDispatchAndOutput(t *testing.T) {
 		t.Errorf("VerifyRecords = %v, want ErrRejectDispatched", err)
 	}
 }
+
+// TestDispatchAfterOutput: the output ends a call, so no dispatch
+// follows it; a harness that runs the tool again has made a new call.
+func TestDispatchAfterOutput(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	target, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "t", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []Entry{NewDispatch("c", target), NewItemEntry(openresponses.NewFunctionCallOutput("c", "ok"))} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Append(NewDispatch("c", target)); !errors.Is(err, ErrCallCompleted) {
+		t.Errorf("dispatch after the output: Append = %v, want ErrCallCompleted", err)
+	}
+	call := `"type":"item","item":{"type":"function_call","id":"fc","call_id":"c","name":"t","arguments":"{}"}`
+	_, ids := hashedLines(t, Format, call)
+	dispatch := `"type":"dispatch","call_id":"c","target":"` + ids[0] + `"`
+	in, _ := hashedLines(t, Format, call, dispatch, `"type":"item","item":{"type":"function_call_output","call_id":"c","output":"ok"}`, dispatch)
+	read, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := read.VerifyRecords(read.Leaf()); !errors.Is(err, ErrCallCompleted) {
+		t.Errorf("VerifyRecords = %v, want ErrCallCompleted", err)
+	}
+}

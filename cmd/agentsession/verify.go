@@ -73,7 +73,7 @@ func verify(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	if early {
-		fmt.Fprintln(stdout, "note: draft 0.9 gained these rules after v0.0.12 and v0.0.13 wrote it; a 0.9 file one of them wrote, or appended to, may break them without being corrupt")
+		fmt.Fprintln(stdout, "note: draft 0.9 gained these rules after v0.0.12, v0.0.13 and v0.0.14 wrote it; a 0.9 file one of them wrote, or appended to, may break them without being corrupt")
 	}
 	if t := s.Truncated(); t != nil {
 		problem = true
@@ -86,9 +86,9 @@ func verify(args []string, stdout, stderr io.Writer) error {
 }
 
 // amended09 reports whether err breaks a rule draft 0.9 gained after
-// v0.0.12 and v0.0.13 wrote it, in a file whose header says 0.9: such
-// a file may be one of theirs, or one they appended to, rather than
-// corrupt.
+// v0.0.12, v0.0.13 and v0.0.14 wrote it, in a file whose header says
+// 0.9: such a file may be one of theirs, or one they appended to,
+// rather than corrupt.
 func amended09(h agentsession.Header, err error) bool {
 	if h.Format != "agentsession/0.9" {
 		return false

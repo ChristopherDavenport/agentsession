@@ -413,7 +413,8 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 // output and nothing else. An answer is for a call that may have run
 // and has no output; with dispatches promised, one with none never
 // started. A reject is for a call that did not run and has no output,
-// so none with a dispatch.
+// so none with a dispatch. No dispatch follows the output, which ends
+// the call.
 func (s *Session) checkCallRules(e Entry, parent string) error {
 	switch v := e.(type) {
 	case *ItemEntry:
@@ -453,6 +454,9 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		}
 		if c.Answered() {
 			return fmt.Errorf("%w: %s", ErrCallAnswered, v.CallID)
+		}
+		if c.Output != nil {
+			return fmt.Errorf("%w: %s", ErrCallCompleted, v.CallID)
 		}
 	}
 	return nil
