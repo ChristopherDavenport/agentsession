@@ -137,13 +137,6 @@ func TestComputeReasonLastRun(t *testing.T) {
 		{"resume that holds one and runs one", "start user calls:a,b resp end:error start:resume hold:a dispatch:b", ReasonAborted},
 		{"resume that holds one and answers one", "start user calls:a,b resp end:error start:resume hold:a dispatch:b out:b", ReasonInputRequired},
 		{"resume cut off after a reject", "start user calls:a resp end:error start:resume reject:a", ReasonAborted},
-
-		// A call ID a later call repeats: the later call is the run's
-		// own, and its missing output is read from the segment, not
-		// taken from the earlier call's.
-		{"a call id repeated in a later run", "start user calls:a resp dispatch:a out:a resp end:done start user calls:a resp", ReasonAborted},
-		{"a repeated call id rejected", "start user calls:a resp dispatch:a out:a resp end:done start user calls:a resp reject:a", ReasonAborted},
-		{"a repeated call id held", "start user calls:a resp reject:a out:a resp end:done start user calls:a resp hold:a", ReasonInputRequired},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -276,20 +269,51 @@ func TestCallState(t *testing.T) {
 	}
 }
 
-// TestCallsRepeatedID: a function call that repeats the call ID of an
-// earlier call with its output is a call of its own, and what follows
-// it is its own; a repeat before the earlier call's output is the same
-// call written again.
+// TestCallsRepeatedID: a call ID names one call on a path, so Append
+// refuses a function call that repeats one and VerifyRecords reports
+// one in a file another writer produced. In such a file what follows
+// the repeat names the latest call with the ID, so the later call's
+// hold is its own and the earlier call keeps its output.
 func TestCallsRepeatedID(t *testing.T) {
-	calls := Calls(seg(t, "calls:a resp dispatch:a out:a resp calls:a resp hold:a"))
+	s := New(Header{Records: AllRecords})
+	fc := func() *ItemEntry {
+		return &ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "a", Name: "tool", Arguments: "{}"}}
+	}
+	if _, err := s.Append(fc()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewItemEntry(openresponses.NewFunctionCallOutput("a", "ok"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(fc()); !errors.Is(err, ErrCallIDRepeated) {
+		t.Errorf("a repeated call ID: Append = %v, want ErrCallIDRepeated", err)
+	}
+
+	call := `"type":"item","item":{"type":"function_call","id":"fc","call_id":"a","name":"tool","arguments":"{}"}`
+	output := `"type":"item","item":{"type":"function_call_output","call_id":"a","output":"ok"}`
+	again := `"type":"item","item":{"type":"function_call","id":"fc2","call_id":"a","name":"tool","arguments":"{}"}`
+	_, ids := hashedLines(t, Format, call, output, again)
+	hold := `"type":"decision","call_id":"a","target":"` + ids[2] + `","verdict":"hold"`
+	in, _ := hashedLines(t, Format, call, output, again, hold)
+	read, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := read.VerifyRecords(read.Leaf()); !errors.Is(err, ErrCallIDRepeated) {
+		t.Errorf("VerifyRecords = %v, want ErrCallIDRepeated", err)
+	}
+	calls, err := read.Calls(read.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(calls) != 2 {
 		t.Fatalf("%d calls, want 2", len(calls))
 	}
 	if calls[0].Pending() || len(calls[0].Decisions) != 0 {
 		t.Errorf("first call: pending %v, %d decisions; want its output and none", calls[0].Pending(), len(calls[0].Decisions))
 	}
-	if !calls[1].Held() || calls[1].Dispatch != nil {
-		t.Errorf("second call: held %v, dispatch %v; want held and none", calls[1].Held(), calls[1].Dispatch)
+	if !calls[1].Held() || !calls[1].Pending() {
+		t.Errorf("second call: held %v, pending %v; want held and pending", calls[1].Held(), calls[1].Pending())
 	}
 }
 

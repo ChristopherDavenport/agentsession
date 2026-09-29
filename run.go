@@ -39,6 +39,9 @@ type Call struct {
 	// dispatchedArgs are the arguments the last dispatch handed the
 	// tool.
 	dispatchedArgs string
+	// repeats reports that an earlier call on the path has the call's
+	// ID, which the format forbids.
+	repeats bool
 	// afterAnswer and afterReject are the first decisions that follow
 	// an answer and a reject, answerAfterOutput the first answer that
 	// follows the output, and rejectAfterDispatch the first reject that
@@ -231,13 +234,13 @@ func Calls(path []Entry) []*Call {
 		case *ItemEntry:
 			switch it := v.Item.(type) {
 			case *openresponses.FunctionCall:
-				// A call ID a later call repeats names the later call
-				// once the earlier has its output; before that the
-				// repeat is the same call written again.
-				if c, seen := byID[it.CallID]; seen && c.Output == nil {
-					continue
-				}
+				// The format forbids a call ID repeated on a path; in a
+				// file that repeats one, what follows names the latest
+				// call with it.
 				c := &Call{Entry: v, Call: it}
+				if _, seen := byID[it.CallID]; seen {
+					c.repeats = true
+				}
 				byID[it.CallID] = c
 				out = append(out, c)
 			case *openresponses.FunctionCallOutput:
@@ -681,6 +684,11 @@ func (r *Run) Verify() error {
 // what follows a reject is the call's refusal output and nothing else.
 var ErrCallRejected = errors.New("agentsession: call was rejected")
 
+// ErrCallIDRepeated is returned when a function call is appended whose
+// call ID an earlier function call on the path has: a call ID names one
+// call on a path.
+var ErrCallIDRepeated = errors.New("agentsession: call ID repeated on the path")
+
 // ErrRejectDispatched is returned when a reject is appended for a call
 // that has a dispatch on the path: a reject says the call did not run,
 // and one that may have run is ended by an answer.
@@ -709,16 +717,24 @@ var ErrAnswerNotDispatched = errors.New("agentsession: answer for a call the rec
 var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 
 // VerifyRecords checks the record entries on the path to leaf against
-// the format's rules: every run end agrees with its segment, no
-// dispatch or decision follows a reject or an answer on the same call,
-// no answer follows an output and no reject a dispatch, and, when the
-// header names dispatch in records, no answer ends a call with no
-// dispatch and every call that ran has a dispatch. It returns the
-// first problem found.
+// the format's rules: no call ID repeats, every run end agrees with
+// its segment, no dispatch or decision follows a reject or an answer
+// on the same call, no answer follows an output and no reject a
+// dispatch, and, when the header names dispatch in records, no answer
+// ends a call with no dispatch and every call that ran has a dispatch.
+// It returns the first problem found.
 func (s *Session) VerifyRecords(leaf string) error {
 	path := s.Path(leaf)
 	if path == nil {
 		return fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
+	}
+	calls := Calls(path)
+	// A repeated call ID is checked first: every other rule reads the
+	// calls by their IDs.
+	for _, c := range calls {
+		if c.repeats {
+			return fmt.Errorf("%w: %s at %s", ErrCallIDRepeated, c.ID(), c.Entry.ID)
+		}
 	}
 	for _, r := range Runs(path) {
 		if err := r.Verify(); err != nil {
@@ -726,7 +742,7 @@ func (s *Session) VerifyRecords(leaf string) error {
 		}
 	}
 	h := s.Header()
-	for _, c := range Calls(path) {
+	for _, c := range calls {
 		if c.ended != nil {
 			if c.ended.Verdict == VerdictAnswer {
 				return fmt.Errorf("%w: dispatch %s follows an answer to call %s", ErrCallAnswered, c.endedBy.ID, c.ID())

@@ -452,6 +452,15 @@ One conversation item in the payload profile.
 - `source` MAY carry the trigger of an item a person or another system
   sent, in the shape `queued` defines, and `queued_from` MAY name the
   `queued` entry the item was accepted as.
+- A `function_call`'s `call_id` MUST differ from that of every other
+  `function_call` on the path, since a `function_call_output`, a run
+  end's `pending` list and a projection name the call by it alone. A
+  writer whose provider repeats an ID, or gives none, writes one of
+  its own, such as the native ID with a suffix, and SHOULD keep the
+  native one in a member of the `item` entry this document does not
+  define, beside `item` rather than in it. A reader of a file that
+  repeats one takes a `function_call_output`, `decision` or `dispatch`
+  to name the latest `function_call` before it with that `call_id`.
 
 ### `response`
 
@@ -1509,7 +1518,7 @@ every `run` end, and
 negative cases for a broken parent link, a truncated last line, an
 unknown type, a `dispatch` that follows a `reject` or an `answer`, a
 decision that follows a `reject`, a `reject` that follows a
-`dispatch`, and a header naming
+`dispatch`, a repeated `call_id`, and a header naming
 `dispatch` beside a call that has an output and no `dispatch`.
 Converters for pi, Claude Code and Codex are part of the initial
 proposal so the format arrives with three existing corpora behind it.
@@ -1535,14 +1544,14 @@ dispatches and decisions, environment, outcome and cross-session links.
 One element and a paragraph in the `config` section, a writer's rule
 in Versioning, which calls are a run's, and what may follow a
 `reject`. No hash changes, and a 0.8 file is a 0.9 file with no
-`keep` in its omitted lists, save for the run and `reject` rules
-below. An element of an omitted list with no
+`keep` in its omitted lists, save for the run, `reject` and `call_id`
+rules below. An element of an omitted list with no
 `id`, which a 0.9 reader reads as a `keep`, was not a 0.8 omitted
 part, which always had its `id`. A 0.8 run end whose run took up a
 call made before its segment and left it without an output may carry
 a `reason` or `pending` list that 0.9 recomputes differently, and a
-0.8 file may hold a decision after a `reject` or a `reject` after a
-`dispatch`, which 0.9 forbids.
+0.8 file may hold a decision after a `reject`, a `reject` after a
+`dispatch` or a repeated `call_id`, which 0.9 forbids.
 
 - A writer that appends to a file whose header names an earlier minor
   raises the header's `format` first. Under 0.8 a header kept the
@@ -1573,6 +1582,11 @@ a `reason` or `pending` list that 0.9 recomputes differently, and a
   ended by `answer`. 0.8 said no `dispatch` follows a `reject` but not
   what a reader makes of a record that stopped between the two, and a
   `hold` after a `reject` read as a call waiting on an answer.
+- A `call_id` names one `function_call` on a path. 0.8 did not say,
+  and a provider that repeats IDs, or a converter that numbers calls
+  per turn, left a later call's output matched to an earlier call. A
+  reader of such a file matches what follows to the latest call with
+  the ID.
 
 ## Changes since 0.7
 

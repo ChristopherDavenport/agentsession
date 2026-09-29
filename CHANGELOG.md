@@ -35,15 +35,19 @@ versions may break the API.
   `answer`. `VerifyRecords` reports both in a file another writer
   produced. A `hold` after a `reject` read as a call waiting on an
   answer. This also refuses an `answer` after a `reject` (#103).
-- **A repeated call ID names the later call once the earlier has its
-  output.** `Calls` folded every repeat into the first call, so a
-  later call's decisions, dispatch and output landed on the earlier
-  one; `Append` checks the latest call with the ID. Whether a call ID
-  may repeat on a path at all is #121.
+- **A call ID names one call on a path.** The RFC now says so: a
+  writer whose provider repeats an ID, or gives none, writes one of its
+  own. `Append` refuses a function call whose call ID is already on the
+  path with the new `ErrCallIDRepeated`, and `VerifyRecords` reports
+  one. In a file that repeats one, `Calls` takes what follows to name
+  the latest call with the ID; it folded every repeat into the first
+  call, so a later call's decisions, dispatch and output landed on the
+  earlier one. (#121)
 - **0.9 is amended in place.** A 0.9 file v0.0.12 wrote may fail
   `VerifyRecords` under these rules: a run end whose run took up a call
   made before its segment and left it without an output, a decision
-  after a `reject`, or a `reject` after a `dispatch`.
+  after a `reject`, a `reject` after a `dispatch`, or a repeated call
+  ID.
 
 ## v0.0.12 - 2026-09-29
 

@@ -356,6 +356,13 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 	if err := s.checkParents(b); err != nil {
 		return Result{}, err
 	}
+	if it, ok := e.(*ItemEntry); ok {
+		// A call ID names one call on a path: an output, a pending list
+		// and a projection name the call by it.
+		if fc, ok := it.Item.(*openresponses.FunctionCall); ok && lastCall(Calls(s.path(b.Parent)), fc.CallID) != nil {
+			return Result{}, fmt.Errorf("%w: %s", ErrCallIDRepeated, fc.CallID)
+		}
+	}
 	if d, ok := e.(*DecisionEntry); ok {
 		// What follows an answer or a reject is the call's output and
 		// nothing else. An answer is for a call that may have run and
