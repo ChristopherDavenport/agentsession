@@ -96,6 +96,39 @@ func eventAttr(s sdktrace.ReadOnlySpan, event, key string) []string {
 	return out
 }
 
+// TestExportWorkspaceMembers: the host and instance a workspace holds
+// reach the env event beside its kind and ref, so a trace shows which
+// container a session ran in.
+func TestExportWorkspaceMembers(t *testing.T) {
+	sr, tracer := recorder()
+	s := agentsession.New(agentsession.Header{})
+	env := &agentsession.EnvEntry{CWD: "/w"}
+	w := env.SetWorkspace(agentsession.WorkspaceContainer, "sha256:ab")
+	for key, value := range map[string]any{"host": "build-7", "instance": "ctr-1", "zone": 3} {
+		if err := w.SetMember(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Append(env); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	session := spans(sr.Ended()).named(SpanSession)
+	if len(session) != 1 {
+		t.Fatalf("session spans = %d", len(session))
+	}
+	for key, want := range map[string]string{"workspace.kind": "container", "workspace.ref": "sha256:ab", "workspace.host": "build-7", "workspace.instance": "ctr-1"} {
+		if got := eventAttr(session[0], EventEnv, key); len(got) != 1 || got[0] != want {
+			t.Errorf("%s = %v, want %s", key, got, want)
+		}
+	}
+	if got := eventAttr(session[0], EventEnv, "workspace.zone"); got != nil {
+		t.Errorf("workspace.zone = %v; only host and instance are exported", got)
+	}
+}
+
 // TestExportRunsFixture replays the runs fixture and checks the shape
 // the RFC's projection promises.
 func TestExportRunsFixture(t *testing.T) {

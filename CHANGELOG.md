@@ -63,7 +63,9 @@ versions may break the API.
   their canonical form. A key in another case, such as `Kind`, is a
   member of its own rather than read as `kind`, and `kind` is written
   only when set, so a workspace without one, which v0.0.9 refused on
-  read, reads as written. (#95)
+  read, reads as written. The OpenTelemetry env event carries
+  `workspace.host` and `workspace.instance` beside `workspace.kind` and
+  `workspace.ref` when the workspace holds them as strings. (#95)
 - `testdata/sessions/parts.jsonl` is the 0.7 conformance fixture:
   deltas that keep runs, a response that took retries, and a workspace
   with its host and instance followed by a restart onto another
