@@ -229,7 +229,9 @@ func (o *objects) size(sp space, hash string) (int64, bool) {
 // and this write is what makes the object needed again: a loose copy
 // has its time touched, a packed one its pack's, and one whose pack a
 // sweep has removed is written loose. A loose copy's bytes are not
-// read; Verify is what checks them. With durable set a new file is
+// read, but its length is checked, so one a crash left short, as a file
+// renamed before it was synced can be, is written again from the bytes
+// this writer holds; Verify is what checks the rest. With durable set a new file is
 // fsynced before it is renamed into place; otherwise it is remembered
 // for the next flush. A loose copy found in place is remembered too,
 // since another writer may have left it unsynced, and every
@@ -242,7 +244,7 @@ func (o *objects) write(sp space, hash string, data []byte, durable bool) error 
 		return err
 	}
 	dir := filepath.Dir(path)
-	if _, err := os.Stat(path); err == nil {
+	if info, err := os.Stat(path); err == nil && info.Size() == int64(len(data)) {
 		now := time.Now()
 		if err := os.Chtimes(path, now, now); err == nil {
 			return o.remember(path, dir)
@@ -250,6 +252,9 @@ func (o *objects) write(sp space, hash string, data []byte, durable bool) error 
 			return err
 		}
 		// Packed and removed since the stat; look in the packs.
+	} else if err == nil {
+		// A loose copy of the wrong length: written again below.
+		goto write
 	}
 	if _, lp, _, _, lerr := o.locate(sp, hash, false); lerr == nil && lp != nil {
 		now := time.Now()
@@ -260,6 +265,7 @@ func (o *objects) write(sp space, hash string, data []byte, durable bool) error 
 		}
 		// The pack was removed by a sweep; write the object loose.
 	}
+write:
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err

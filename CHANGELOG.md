@@ -73,8 +73,10 @@ versions may break the API.
   `SyncOnResponse` and `SyncNever`, with `Store.Sync`; a lazy append's
   record says so, the next durable commit flushes its objects first,
   and after a crash a lazy append whose objects were lost is gone with
-  what followed it, not damage. `Result.Durable` says which an append
-  got. (#110)
+  what followed it, not damage; a store that recovers a session
+  holding another process's unsynced lazy appends syncs them first,
+  and `Release` syncs what this store left. `Result.Durable` says
+  which an append got. (#110)
 - **cas List and Delete after a crash.** List no longer yields an
   error for a directory a crash left without a header, nor lists a
   session the journal deleted, and Delete succeeds once its record is
@@ -139,9 +141,10 @@ versions may break the API.
   raised header and every later byte as it was, synced and renamed
   into place under the session's lock, and appends to the new file.
   An open, a read-only store and an append the session already holds
-  change nothing. A header before 0.5 is left alone, since a reader
-  rehashes the entries of such a file and would not under a raised
-  header. RFC 0001 now requires the raise of a writer, and RFC 0002
+  change nothing. jsonl and sqlite leave a header before 0.5 alone,
+  since a reader rehashes the entries of such a file and would not
+  under a raised header; RFC 0001 puts appending to one out of scope,
+  and cas never holds one, since an import migrates it. RFC 0001 now requires the raise of a writer, and RFC 0002
   of a store. (#112)
 
 ## v0.0.11 - 2026-09-29

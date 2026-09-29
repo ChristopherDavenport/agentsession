@@ -385,3 +385,63 @@ func TestReleaseSyncs(t *testing.T) {
 		t.Error("Release left lazy appends unsynced")
 	}
 }
+
+// TestTornObjectRewritten: a durable append that reuses a loose object a
+// crash left short writes it again from the bytes it holds.
+func TestTornObjectRewritten(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	e := item("body")
+	p, _ := st.objs.loosePath(spaceContents, e.Base().ContentHash())
+	mustAppend(t, st, "s", e)
+	os.WriteFile(p, nil, 0o600) // torn by a crash
+	mustAppend(t, st, "s", item("body"))
+	st.Release("s")
+	if _, err := st.Open(ctx, "s"); err != nil {
+		t.Errorf("a torn object reused: %v", err)
+	}
+}
+
+// TestLazyAdopted: a store that recovers a session holding another
+// process's unsynced lazy appends syncs their objects and journals that
+// it did, so a durable append it makes next is not cut with them; and a
+// lazy record whose object a crash left empty is a lost append.
+func TestLazyAdopted(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	d, _ := Open(root)
+	d.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, d, "s", item("durable zero"))
+	d.Close()
+	a, _ := Open(root, WithSync(SyncNever))
+	e1 := mustAppend(t, a, "s", item("lazy one"))
+	a.open["s"].lock.release() // the process dies; nothing is flushed
+	b, _ := Open(root)
+	defer b.Close()
+	if _, err := b.Open(ctx, "s"); err != nil {
+		t.Fatal(err)
+	}
+	lines, _ := journalLines(t, root, "s")
+	if last := lines[len(lines)-2]; !strings.Contains(last, `"op":"sync"`) {
+		t.Errorf("no sync record after adopting: %s", last)
+	}
+	b.Release("s")
+	// A later lazy append whose envelope a crash left empty.
+	a2, _ := Open(root, WithSync(SyncNever))
+	e2 := mustAppend(t, a2, "s", item("lazy two"))
+	a2.open["s"].lock.release()
+	pe, _ := a2.objs.loosePath(spaceEntries, e2)
+	os.WriteFile(pe, nil, 0o600)
+	c, _ := Open(root)
+	defer c.Close()
+	s, err := c.Open(ctx, "s")
+	if err != nil {
+		t.Fatalf("a torn lazy object: %v", err)
+	}
+	if _, ok := s.Entry(e1); !ok || s.Len() != 2 {
+		t.Errorf("after a torn lazy append: len %d, adopted entry held %v", s.Len(), ok)
+	}
+}

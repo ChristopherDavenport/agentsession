@@ -44,9 +44,14 @@
 // the record after. [WithSync] lets a writer acknowledge some appends
 // before they are durable, as RFC 0002 allows, and [agentsession.Result]
 // says which each append got. A lazy append's objects and record are
-// fsynced by the next durable one, objects first, so a record never
-// reaches the disk ahead of what it names, and after a crash a lazy
-// record whose objects did not survive is an append that was lost.
+// fsynced by this store's next durable commit, objects first. Another
+// process's durable commit fsyncs the shared journal too, and may make
+// a lazy record durable ahead of its objects; the record says it was
+// lazy, so after a crash one whose objects did not survive, or were
+// left empty, is an append that was lost, with what its session
+// appended after it. A store that recovers a session holding lazy
+// appends another process never synced syncs their objects and
+// journals that it did, before it appends anything durable after them.
 //
 // Several processes may share a store on one machine. Each session is
 // held by one process at a time through a lock the kernel drops when
@@ -728,6 +733,12 @@ type view struct {
 	// log, can cause. The log is kept.
 	damaged bool
 
+	// adopt lists the entries of lazy records the journal has not yet
+	// said are durable: a writing store that recovers the session syncs
+	// their objects and says so, since a durable append it makes next
+	// must not be cut with them by a later crash.
+	adopt []string
+
 	logChanged, headChanged, markChanged bool
 }
 
@@ -769,7 +780,14 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 	lost := map[string]bool{}
 	jHead, hasJHead := "", false
 	cut := false
-	for _, r := range st.recs {
+	// A sync record says every lazy record before it is durable.
+	synced := -1
+	for i, r := range st.recs {
+		if r.Op == "sync" {
+			synced = i
+		}
+	}
+	for i, r := range st.recs {
 		if cut {
 			if r.Op == "append" && r.Entry != "" {
 				lost[r.Entry] = true
@@ -778,8 +796,11 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 		}
 		switch r.Op {
 		case "append":
-			if r.Lazy && r.Entry != "" {
+			if r.Lazy && r.Entry != "" && i > synced {
 				ok, err := s.present(r.Entry)
+				if errors.Is(err, ErrCorrupt) {
+					ok, err = false, nil // a lazy object a crash left torn
+				}
 				if err != nil {
 					return v, fmt.Errorf("cas: session %s: %w", id, err)
 				}
@@ -788,6 +809,7 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 					lost[r.Entry] = true
 					continue
 				}
+				v.adopt = append(v.adopt, r.Entry)
 			}
 			if r.Entry != "" && !seen[r.Entry] {
 				seen[r.Entry] = true
@@ -814,6 +836,12 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 		}
 		if !seen[e] {
 			ok, err := s.present(e)
+			if errors.Is(err, ErrCorrupt) && s.emptyLoose(e) {
+				// Written with a lazy record the crash took, and left empty
+				// by it, as a file renamed before it was synced can be. A
+				// corrupt object with bytes in it is damage, and fails.
+				ok, err = false, nil
+			}
 			if err != nil {
 				return v, fmt.Errorf("cas: session %s: %w", id, err)
 			}
@@ -915,7 +943,50 @@ func (s *Store) recoverSession(id, dir string) (view, error) {
 			return v, err
 		}
 	}
+	if len(v.adopt) > 0 {
+		if err := s.adopt(id, v.adopt); err != nil {
+			return v, err
+		}
+	}
 	return v, nil
+}
+
+// emptyLoose reports whether one of an entry's loose objects is empty.
+func (s *Store) emptyLoose(id string) bool {
+	check := func(sp space, hash string) bool {
+		p, err := s.objs.loosePath(sp, hash)
+		if err != nil {
+			return false
+		}
+		info, err := os.Stat(p)
+		return err == nil && info.Size() == 0
+	}
+	if check(spaceEntries, id) {
+		return true
+	}
+	c, err := s.contentOf(id)
+	return err == nil && check(spaceContents, c)
+}
+
+// adopt makes durable the objects of lazy appends a session holds that
+// the journal does not yet say are durable, as the holder recovering it,
+// and commits a sync record saying so. A process that wrote them and
+// crashed synced nothing; without this, the next durable append made
+// here could be cut with them by a later crash.
+func (s *Store) adopt(id string, entries []string) error {
+	for _, e := range entries {
+		if err := s.objs.freshen(spaceEntries, e); err != nil {
+			return fmt.Errorf("cas: session %s: %w", id, err)
+		}
+		c, err := s.contentOf(e)
+		if err != nil {
+			return fmt.Errorf("cas: session %s: %w", id, err)
+		}
+		if err := s.objs.freshen(spaceContents, c); err != nil {
+			return fmt.Errorf("cas: session %s: %w", id, err)
+		}
+	}
+	return s.commit(true, journalRecord{Op: "sync", Session: id})
 }
 
 // index builds what the store holds from the journal, the logs and the
