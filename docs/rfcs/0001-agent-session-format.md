@@ -1401,9 +1401,10 @@ than misreading the entries it cannot represent. The raise MUST NOT
 leave the file without a whole header at any point a crash could stop
 it, so it is written as a new file renamed over the old, or overwritten
 in place only at the same length. Nothing hashed moves: the header is
-not an entry. A file never lowers its `format`. A file earlier than 0.5
-is outside the rule, since a reader rehashes its entries by the minor
-its header names and a raised header would have them read as hashed.
+not an entry. A file never lowers its `format`. Appending to a file
+earlier than 0.5 is out of scope: no writer of such files remains, a
+reader migrates one only to read it, and a raised header would have
+its entries read as hashed.
 
 Adding an optional member to the envelope is a minor change. Changing
 what an existing member means, or what the context algorithm does with

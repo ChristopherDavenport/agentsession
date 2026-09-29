@@ -233,6 +233,14 @@ it at no cost.
 
 Append is the one write that adds to a session, and it is atomic.
 
+- An append carries the `format` its writer writes, the version of
+  RFC 0001 under which it built the entry. A store MUST refuse an
+  append whose `format` names a major or a 0.x minor it does not read,
+  and one whose minor is earlier than the session's header names,
+  since that writer could not have read the session it appends to; a
+  later one raises the header, as the sessions section says. A store
+  that is itself the writer, as a library's store is, carries its own
+  `format` and has nothing to check but the header.
 - The store MUST hold the parent, per the entry rules, and the parent
   MUST satisfy the session's parent rule above.
 - The store MUST store the entry and MUST append its hash to the
