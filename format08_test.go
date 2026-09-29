@@ -464,3 +464,72 @@ func TestAnsweredOwesItsOutput(t *testing.T) {
 		t.Errorf("VerifyRecords = %v, want ErrAnswerNotDispatched", err)
 	}
 }
+
+// TestNothingFollowsAnAnswer: after an answer the call's output is all
+// that may follow, so a decision or a dispatch is refused, and an
+// answer after the output is refused too; VerifyRecords reports each
+// in a file another writer produced.
+func TestNothingFollowsAnAnswer(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	target, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "notify", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []Entry{NewDispatch("c", target), NewDecision("c", target, VerdictAnswer, ByPolicy).WithReason("replay unknown")} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, e := range map[string]Entry{
+		"hold":     NewDecision("c", target, VerdictHold, ByPolicy),
+		"proceed":  NewDecision("c", target, VerdictProceed, ByHuman),
+		"reject":   NewDecision("c", target, VerdictReject, ByHuman).WithReason("no"),
+		"answer":   NewDecision("c", target, VerdictAnswer, ByHuman),
+		"dispatch": NewDispatch("c", target),
+	} {
+		if _, err := s.Append(e); !errors.Is(err, ErrCallAnswered) {
+			t.Errorf("%s after an answer: Append = %v, want ErrCallAnswered", name, err)
+		}
+	}
+	if _, err := s.Append(NewItemEntry(&openresponses.FunctionCallOutput{CallID: "c", Output: openresponses.FunctionCallOutputData{Text: "outcome unknown"}})); err != nil {
+		t.Fatalf("the output after the answer: %v", err)
+	}
+
+	done := New(Header{Records: AllRecords})
+	target, err = done.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "notify", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []Entry{NewDispatch("c", target), NewItemEntry(&openresponses.FunctionCallOutput{CallID: "c", Output: openresponses.FunctionCallOutputData{Text: "sent"}})} {
+		if _, err := done.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := done.Append(NewDecision("c", target, VerdictAnswer, ByPolicy)); !errors.Is(err, ErrCallCompleted) {
+		t.Errorf("answer after the output: Append = %v, want ErrCallCompleted", err)
+	}
+
+	call := `"type":"item","item":{"type":"function_call","id":"fc","call_id":"c","name":"notify","arguments":"{}"}`
+	_, ids := hashedLines(t, Format, call)
+	dispatch := `"type":"dispatch","call_id":"c","target":"` + ids[0] + `"`
+	answer := `"type":"decision","call_id":"c","target":"` + ids[0] + `","verdict":"answer"`
+	output := `"type":"item","item":{"type":"function_call_output","call_id":"c","output":"x"}`
+	for name, tt := range map[string]struct {
+		bodies []string
+		want   error
+	}{
+		"a hold after an answer":    {[]string{call, dispatch, answer, `"type":"decision","call_id":"c","target":"` + ids[0] + `","verdict":"hold"`}, ErrCallAnswered},
+		"an answer after an output": {[]string{call, dispatch, output, answer}, ErrCallCompleted},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in, _ := hashedLines(t, Format, tt.bodies...)
+			read, err := Read(strings.NewReader(in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := read.VerifyRecords(read.Leaf()); !errors.Is(err, tt.want) {
+				t.Errorf("VerifyRecords = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}

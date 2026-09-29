@@ -351,11 +351,21 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 	if err := s.checkParents(b); err != nil {
 		return Result{}, err
 	}
-	if d, ok := e.(*DecisionEntry); ok && d.Verdict == VerdictAnswer && s.header.HasRecord(TypeDispatch) {
-		// An answer is for a call that may have run; with dispatches
-		// promised, one with none never started.
+	if d, ok := e.(*DecisionEntry); ok {
+		// What follows an answer is the call's output and nothing else,
+		// and an answer is for a call that may have run and has no
+		// output; with dispatches promised, one with none never started.
 		for _, c := range Calls(s.path(b.Parent)) {
-			if c.ID() == d.CallID && c.Dispatch == nil {
+			if c.ID() != d.CallID {
+				continue
+			}
+			switch {
+			case c.Answered():
+				return Result{}, fmt.Errorf("%w: %s", ErrCallAnswered, d.CallID)
+			case d.Verdict != VerdictAnswer:
+			case c.Output != nil:
+				return Result{}, fmt.Errorf("%w: %s", ErrCallCompleted, d.CallID)
+			case c.Dispatch == nil && s.header.HasRecord(TypeDispatch):
 				return Result{}, fmt.Errorf("%w: %s", ErrAnswerNotDispatched, d.CallID)
 			}
 		}

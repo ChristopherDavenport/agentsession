@@ -796,8 +796,8 @@ A call was handed to its tool.
 holding the `function_call`. A call with a `dispatch` and no
 `function_call_output` on the path may have run: its side effect may
 have happened. It is **in flight**, handed to its tool when the record
-stopped, unless a `decision` after its last `dispatch` holds it or
-answers it. A `hold` after a `dispatch` holds a call that may have
+stopped, unless the latest `decision` after its last `dispatch` is a
+`hold` or an `answer`. A `hold` after a `dispatch` holds a call that may have
 run, and whoever answers the hold answers that call, as a replay rule
 would: a `proceed` and another `dispatch` run it again, an `answer`
 ends it without running it. An `answer` with no output after it is a
@@ -870,11 +870,12 @@ A call's fate was decided outside the tool.
     stopped, or to one the file cannot say about, that the harness
     does not hand to its tool again, such as a call whose tool cannot
     say that a second run is safe and whose outcome is therefore
-    unknown. No `dispatch` follows, and a `function_call_output` for
-    the call follows; `by` says who answered and `reason` SHOULD say
-    why. A writer writes `answer` only for a call with a `dispatch` on
-    the path or, in a file whose header does not name `dispatch` in
-    `records`, one with neither a `dispatch` nor an output. A call
+    unknown. No `dispatch` and no other `decision` follow it, and a
+    `function_call_output` for the call follows; `by` says who
+    answered and `reason` SHOULD say why. A writer writes `answer`
+    only for a call with no output on the path, and with a `dispatch`
+    on it or, in a file whose header does not name `dispatch` in
+    `records`, without one. A call
     the record shows never started did not run, and a writer that ends
     one without running it writes `reject`.
 
@@ -1458,14 +1459,15 @@ the new members, with two exceptions:
   a compaction's checkpoint carries it. Under 0.7 a writer with a
   memory larger than its budget repeated every omitted part on every
   delta, and 474 of them cost 37 KB a turn, more than the joined
-  string the parts were meant to beat.
+  string the parts were meant to beat. A `null` member is absent.
 - A `dispatch` carries `idempotency_key`, the key the harness gave the
   tool, so a tool that makes a second run safe by its key gets the same
   one after a crash; a key that lives only in memory does not survive
   the crash it is for. A hand-off that repeats another carries its key,
   and a new key is a new operation.
 - `dispatch` defines a call in flight: one with a `dispatch` and no
-  output that no later decision holds or answers. A call held after a
+  output whose latest decision after its last `dispatch` is not a
+  `hold` or an `answer`. A call held after a
   `dispatch` is held and may have run, and one answered with no output
   yet is owed its output.
 - Each `dispatch` for a call is one hand-off to its tool, and a second

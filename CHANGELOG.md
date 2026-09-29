@@ -56,7 +56,12 @@ versions may break the API.
   with the run, in flight, and the next hand-off or the answer links
   to it; a tracker primed from an earlier process never saw that
   process's spans and links to none. A hold answered by a later
-  decision no longer leaves the span reading held.
+  decision no longer leaves the span reading held, and a decision
+  after the run end that changes what the path reads for a pending
+  call reaches a span of its own. A span that records an answer or a
+  later state links to the hand-off as `follows_hand_off`, keeping
+  `dispatched_again` for a hand-off, and starts no earlier than its
+  run.
   `Call.InFlight` reports a call with a dispatch and no output that no
   later decision holds or answers, which is what the RFC now calls in
   flight. `Call.Held` reads a hold after a dispatch as holding the
@@ -71,11 +76,14 @@ versions may break the API.
   `Call.Answered` reports one. An answer whose output the record
   stopped before reads as the new `CallAnswered` state, not in flight:
   the harness that continues writes the output and nothing else.
-  `Append` refuses a dispatch after an answer with `ErrCallAnswered`,
-  and, in a session whose header promises dispatch records, an answer
-  to a call with no dispatch with `ErrAnswerNotDispatched`;
-  `VerifyRecords` reports both in a file. otel ends the call's span
-  with the state `answered`. (#100)
+  Only the output may follow an answer: `Append` refuses a dispatch or
+  any decision after one with `ErrCallAnswered`, an answer to a call
+  that has its output with `ErrCallCompleted`, and, in a session whose
+  header promises dispatch records, an answer to a call with no
+  dispatch with `ErrAnswerNotDispatched`; `VerifyRecords` reports each
+  in a file. otel ends the call's span with the state `answered`, at
+  its run's end too when the output is owed, and not as an error.
+  (#100)
 - **A trigger keeps its own members.** `Trigger.Unknown`, encoded
   inline beside kind, ref and source, with `SetMember`, `Clone` and
   `Equal`, so a queued firing keeps when it was due and which attempt

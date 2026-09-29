@@ -2,6 +2,7 @@ package otel
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -426,5 +427,74 @@ func TestHeldAfterProceedIsNot(t *testing.T) {
 	tool := spans(sr.Ended()).named(OpTool + " deploy")
 	if len(tool) != 1 || attr(tool[0], AttrCallState) != agentsession.CallInFlight.String() {
 		t.Errorf("tool spans = %d, state %s", len(tool), attr(tool[0], AttrCallState))
+	}
+}
+
+// TestStateAfterTheRunEnd: a hand-off its run left pending ends with
+// the run in the state the path reads, answered rather than in flight
+// for an answer owed its output, and a decision after the run end that
+// changes that state reaches a span of its own at finish, which starts
+// no earlier than its run.
+func TestStateAfterTheRunEnd(t *testing.T) {
+	build := func(t *testing.T, after ...func(target string) agentsession.Entry) *agentsession.Session {
+		t.Helper()
+		s := agentsession.New(agentsession.Header{ID: "later", Records: agentsession.AllRecords})
+		if _, err := s.Append(agentsession.NewRunStart("r1", agentsession.SourceInput, "")); err != nil {
+			t.Fatal(err)
+		}
+		target, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "deploy", Arguments: "{}"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(agentsession.NewDispatch("c", target)); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range after {
+			if _, err := s.Append(f(target)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return s
+	}
+	end := func(reason string) func(string) agentsession.Entry {
+		return func(string) agentsession.Entry { return agentsession.NewRunEnd("r1", reason, "", []string{"c"}) }
+	}
+	decide := func(verdict string) func(string) agentsession.Entry {
+		return func(target string) agentsession.Entry {
+			return agentsession.NewDecision("c", target, verdict, agentsession.ByPolicy).WithReason("after the crash")
+		}
+	}
+	start2 := func(string) agentsession.Entry {
+		return agentsession.NewRunStart("r2", agentsession.SourceInput, "")
+	}
+	for name, tt := range map[string]struct {
+		after  []func(string) agentsession.Entry
+		states []string
+	}{
+		"answered, output owed": {[]func(string) agentsession.Entry{decide(agentsession.VerdictAnswer), end(agentsession.ReasonAborted)}, []string{"answered"}},
+		"held after the run":    {[]func(string) agentsession.Entry{end(agentsession.ReasonError), start2, decide(agentsession.VerdictHold)}, []string{"in_flight", "held"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sr, tracer := recorder()
+			s := build(t, tt.after...)
+			if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+				t.Fatal(err)
+			}
+			tool := spans(sr.Ended()).named(OpTool + " deploy")
+			var states []string
+			for _, sp := range tool {
+				states = append(states, attr(sp, AttrCallState))
+				if attr(sp, AttrCallState) == "answered" && sp.Status().Code == codes.Error {
+					t.Error("an answered call's span reads as an error")
+				}
+			}
+			if fmt.Sprint(states) != fmt.Sprint(tt.states) {
+				t.Errorf("tool span states = %v, want %v", states, tt.states)
+			}
+			runs := spans(sr.Ended()).named(SpanRun)
+			if len(tool) == 2 && tool[1].StartTime().Before(runs[len(runs)-1].StartTime()) {
+				t.Error("the later span starts before its run")
+			}
+		})
 	}
 }

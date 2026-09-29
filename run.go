@@ -39,6 +39,10 @@ type Call struct {
 	// dispatchedArgs are the arguments the last dispatch handed the
 	// tool.
 	dispatchedArgs string
+	// afterAnswer is the first decision that follows an answer, and
+	// answerAfterOutput the first answer that follows the output; the
+	// format forbids both.
+	afterAnswer, answerAfterOutput *DecisionEntry
 }
 
 // ID returns the call ID.
@@ -229,6 +233,12 @@ func Calls(path []Entry) []*Call {
 			}
 		case *DecisionEntry:
 			if c, ok := byID[v.CallID]; ok {
+				if c.afterAnswer == nil && c.Answered() {
+					c.afterAnswer = v
+				}
+				if c.answerAfterOutput == nil && v.Verdict == VerdictAnswer && c.Output != nil {
+					c.answerAfterOutput = v
+				}
 				c.Decisions = append(c.Decisions, v)
 				c.sinceDecision = false
 			}
@@ -593,9 +603,15 @@ func (r *Run) Verify() error {
 // that a decision on the path already rejected.
 var ErrCallRejected = errors.New("agentsession: call was rejected")
 
-// ErrCallAnswered is returned when a dispatch is appended for a call
-// that an answer decision on the path already ended.
+// ErrCallAnswered is returned when a dispatch or a decision is
+// appended for a call that an answer decision on the path already
+// ended: what follows an answer is the call's output and nothing else.
 var ErrCallAnswered = errors.New("agentsession: call was answered")
+
+// ErrCallCompleted is returned when an answer is appended for a call
+// whose output is already on the path: an answer is for a call that
+// may have run and has none.
+var ErrCallCompleted = errors.New("agentsession: call has its output")
 
 // ErrAnswerNotDispatched is returned when an answer decision is
 // appended for a call with no dispatch in a session whose header
@@ -611,8 +627,9 @@ var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 
 // VerifyRecords checks the record entries on the path to leaf against
 // the format's rules: every run end agrees with its segment, no
-// dispatch follows a reject or an answer on the same call, and, when
-// the header names dispatch in records, no answer ends a call with no
+// dispatch follows a reject or an answer on the same call, no decision
+// follows an answer and no answer follows an output, and, when the
+// header names dispatch in records, no answer ends a call with no
 // dispatch and every call that ran has a dispatch. It returns the
 // first problem found.
 func (s *Session) VerifyRecords(leaf string) error {
@@ -632,6 +649,12 @@ func (s *Session) VerifyRecords(leaf string) error {
 				return fmt.Errorf("%w: dispatch %s follows an answer to call %s", ErrCallAnswered, c.endedBy.ID, c.ID())
 			}
 			return fmt.Errorf("%w: dispatch %s follows a reject of call %s", ErrCallRejected, c.endedBy.ID, c.ID())
+		}
+		if c.afterAnswer != nil {
+			return fmt.Errorf("%w: decision %s follows an answer to call %s", ErrCallAnswered, c.afterAnswer.ID, c.ID())
+		}
+		if c.answerAfterOutput != nil {
+			return fmt.Errorf("%w: answer %s follows the output of call %s", ErrCallCompleted, c.answerAfterOutput.ID, c.ID())
 		}
 		if h.HasRecord(TypeDispatch) && c.Answered() && c.Dispatch == nil {
 			return fmt.Errorf("%w: call %s", ErrAnswerNotDispatched, c.ID())
