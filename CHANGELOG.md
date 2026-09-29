@@ -9,23 +9,36 @@ versions may break the API.
 
 - **A run's calls include the earlier calls it took up.** RFC 0001
   draft 0.9 is amended in place: a run's calls are those on its
-  segment and those an earlier run made that the segment holds a
-  decision, dispatch or output for, and its pending calls are those of
-  them with no output on the path. `Run.Calls`, `Run.Pending`,
-  `EndRun` and `ComputeReason` read them so. A resume whose policy
-  holds a call a crash left never started, before any model call, now
-  ends `input_required` with that call in `pending`; it read `aborted`
-  with an empty list, and a writer that wrote `input_required` failed
+  segment and those made before it that the segment holds a decision,
+  dispatch or output for, and its pending calls are those of them with
+  no output on the path. `Run.Calls`, `Run.Pending`, `EndRun` and
+  `ComputeReason` read them so. A resume whose policy holds a call a
+  crash left never started, before any model call, now ends
+  `input_required` with that call in `pending`; it read `aborted` with
+  an empty list, and a writer that wrote `input_required` failed
   `VerifyRecords`. A call an earlier run left and this run does not
-  touch is still not its call. `source` follows: a run whose segment
-  starts with a decision or dispatch for such a call is a `resume`,
-  where the RFC asked for its output.
+  touch is still not its call, and is not in its `pending` list:
+  `Session.PendingCalls` reads every call the path left open. `source`
+  follows: a run whose segment starts with a decision or dispatch for
+  such a call is a `resume`, where the RFC asked for its output.
 - **`CallRejected`.** A call whose `reject` is on the path and whose
   refusal output is not, since the record stopped between the two,
-  reads as `CallRejected` rather than `CallNeverStarted`: it is owed
-  that output and nothing else, and must not be run. The RFC says so
-  beside the same rule for `answer`. The otel exporter reports the
-  state for a rejected call a run end left pending.
+  reads as `CallRejected` rather than the state its dispatches implied,
+  usually `CallNeverStarted`: it is owed that output and nothing else,
+  and must not be run. The RFC says so beside the same rule for
+  `answer`. The otel exporter reports the state for a rejected call a
+  run end left pending.
+- **Nothing but its output follows a `reject`, and a `reject` follows
+  no `dispatch`.** `Append` refuses a decision after a `reject` with
+  `ErrCallRejected`, and a `reject` for a dispatched call with the new
+  `ErrRejectDispatched`; a call that may have run is ended by an
+  `answer`. `VerifyRecords` reports both in a file another writer
+  produced. A `hold` after a `reject` read as a call waiting on an
+  answer. This also refuses an `answer` after a `reject` (#103).
+- **0.9 is amended in place.** A 0.9 file v0.0.12 wrote may fail
+  `VerifyRecords` under these rules: a run end whose run took up a call
+  made before its segment and left it without an output, a decision
+  after a `reject`, or a `reject` after a `dispatch`.
 
 ## v0.0.12 - 2026-09-29
 

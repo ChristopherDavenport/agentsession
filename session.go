@@ -357,9 +357,11 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 		return Result{}, err
 	}
 	if d, ok := e.(*DecisionEntry); ok {
-		// What follows an answer is the call's output and nothing else,
-		// and an answer is for a call that may have run and has no
-		// output; with dispatches promised, one with none never started.
+		// What follows an answer or a reject is the call's output and
+		// nothing else. An answer is for a call that may have run and
+		// has no output; with dispatches promised, one with none never
+		// started. A reject is for a call that did not run, so none
+		// with a dispatch.
 		for _, c := range Calls(s.path(b.Parent)) {
 			if c.ID() != d.CallID {
 				continue
@@ -367,6 +369,10 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 			switch {
 			case c.Answered():
 				return Result{}, fmt.Errorf("%w: %s", ErrCallAnswered, d.CallID)
+			case c.Rejected():
+				return Result{}, fmt.Errorf("%w: %s", ErrCallRejected, d.CallID)
+			case d.Verdict == VerdictReject && c.Dispatch != nil:
+				return Result{}, fmt.Errorf("%w: %s", ErrRejectDispatched, d.CallID)
 			case d.Verdict != VerdictAnswer:
 			case c.Output != nil:
 				return Result{}, fmt.Errorf("%w: %s", ErrCallCompleted, d.CallID)

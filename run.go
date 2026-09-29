@@ -39,10 +39,11 @@ type Call struct {
 	// dispatchedArgs are the arguments the last dispatch handed the
 	// tool.
 	dispatchedArgs string
-	// afterAnswer is the first decision that follows an answer, and
-	// answerAfterOutput the first answer that follows the output; the
-	// format forbids both.
-	afterAnswer, answerAfterOutput *DecisionEntry
+	// afterAnswer and afterReject are the first decisions that follow
+	// an answer and a reject, answerAfterOutput the first answer that
+	// follows the output, and rejectAfterDispatch the first reject that
+	// follows a dispatch; the format forbids all four.
+	afterAnswer, afterReject, answerAfterOutput, rejectAfterDispatch *DecisionEntry
 }
 
 // ID returns the call ID.
@@ -246,6 +247,12 @@ func Calls(path []Entry) []*Call {
 				if c.afterAnswer == nil && c.Answered() {
 					c.afterAnswer = v
 				}
+				if c.afterReject == nil && c.Rejected() {
+					c.afterReject = v
+				}
+				if c.rejectAfterDispatch == nil && v.Verdict == VerdictReject && c.Dispatch != nil {
+					c.rejectAfterDispatch = v
+				}
 				if c.answerAfterOutput == nil && v.Verdict == VerdictAnswer && c.Output != nil {
 					c.answerAfterOutput = v
 				}
@@ -371,28 +378,33 @@ type Run struct {
 // RunID returns the run's ID.
 func (r *Run) RunID() string { return r.Start.RunID }
 
-// Calls returns the run's calls: those on its segment, and those an
-// earlier run made that the segment holds a decision, a dispatch or an
-// output for, since the run took them up. Each carries what the path
-// holds for it; see [Calls].
+// Calls returns the run's calls: those on its segment, and those made
+// before it that the segment holds a decision, a dispatch or an output
+// for, since the run took them up. An earlier call carries what the
+// path holds for it, and a call on the segment what the segment holds;
+// see [Calls].
 func (r *Run) Calls() []*Call { return runCalls(r.Path, r.Segment) }
 
 // runCalls returns the calls of the run whose segment ends the path:
-// the calls on the path that the segment holds the function call of,
-// or a decision, dispatch or output for. A nil path means the segment
-// stands for the path.
+// the calls on the segment, then those before it on the path that the
+// segment holds a decision, dispatch or output for. A call on the
+// segment is read from the segment, so its decisions and output are
+// its own even when an earlier call on the path has its call ID. A nil
+// path means the segment stands for the path.
 func runCalls(path, segment []Entry) []*Call {
+	own := Calls(segment)
 	if path == nil {
-		path = segment
+		return own
+	}
+	onSegment := map[string]bool{}
+	for _, c := range own {
+		onSegment[c.ID()] = true
 	}
 	touched := map[string]bool{}
 	for _, e := range segment {
 		switch v := e.(type) {
 		case *ItemEntry:
-			switch it := v.Item.(type) {
-			case *openresponses.FunctionCall:
-				touched[it.CallID] = true
-			case *openresponses.FunctionCallOutput:
+			if it, ok := v.Item.(*openresponses.FunctionCallOutput); ok {
 				touched[it.CallID] = true
 			}
 		case *DecisionEntry:
@@ -403,15 +415,15 @@ func runCalls(path, segment []Entry) []*Call {
 	}
 	var out []*Call
 	for _, c := range Calls(path) {
-		if touched[c.ID()] {
+		if touched[c.ID()] && !onSegment[c.ID()] {
 			out = append(out, c)
 		}
 	}
-	return out
+	return append(out, own...)
 }
 
 // Pending returns the IDs of the run's calls with no output on the
-// path, a call an earlier run made and this one took up among them;
+// path, a call made before the segment that the run took up among them;
 // see [Run.Calls].
 func (r *Run) Pending() []string {
 	var out []string
@@ -510,9 +522,9 @@ func (s *Session) EndRun(reason, ref string) (*RunEntry, error) {
 // cannot show them.
 //
 // A pending call is one of the run's calls, as [Run.Calls] has them,
-// with no output: a call an earlier run made counts once the segment
-// holds a decision, dispatch or output for it, so a resume that holds
-// such a call before any model call ends input_required.
+// with no output: a call made before the segment counts once the
+// segment holds a decision, dispatch or output for it, so a resume
+// that holds such a call before any model call ends input_required.
 //
 // The stopped step reads the path because a run that answers a call
 // and ends without calling the model again, which is what a resume
@@ -650,9 +662,15 @@ func (r *Run) Verify() error {
 	return nil
 }
 
-// ErrCallRejected is returned when a dispatch is appended for a call
-// that a decision on the path already rejected.
+// ErrCallRejected is returned when a dispatch or a decision is
+// appended for a call that a decision on the path already rejected:
+// what follows a reject is the call's refusal output and nothing else.
 var ErrCallRejected = errors.New("agentsession: call was rejected")
+
+// ErrRejectDispatched is returned when a reject is appended for a call
+// that has a dispatch on the path: a reject says the call did not run,
+// and one that may have run is ended by an answer.
+var ErrRejectDispatched = errors.New("agentsession: reject for a call that was dispatched")
 
 // ErrCallAnswered is returned when a dispatch or a decision is
 // appended for a call that an answer decision on the path already
@@ -678,8 +696,8 @@ var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 
 // VerifyRecords checks the record entries on the path to leaf against
 // the format's rules: every run end agrees with its segment, no
-// dispatch follows a reject or an answer on the same call, no decision
-// follows an answer and no answer follows an output, and, when the
+// dispatch or decision follows a reject or an answer on the same call,
+// no answer follows an output and no reject a dispatch, and, when the
 // header names dispatch in records, no answer ends a call with no
 // dispatch and every call that ran has a dispatch. It returns the
 // first problem found.
@@ -703,6 +721,12 @@ func (s *Session) VerifyRecords(leaf string) error {
 		}
 		if c.afterAnswer != nil {
 			return fmt.Errorf("%w: decision %s follows an answer to call %s", ErrCallAnswered, c.afterAnswer.ID, c.ID())
+		}
+		if c.afterReject != nil {
+			return fmt.Errorf("%w: decision %s follows a reject of call %s", ErrCallRejected, c.afterReject.ID, c.ID())
+		}
+		if c.rejectAfterDispatch != nil {
+			return fmt.Errorf("%w: reject %s follows a dispatch of call %s", ErrRejectDispatched, c.rejectAfterDispatch.ID, c.ID())
 		}
 		if c.answerAfterOutput != nil {
 			return fmt.Errorf("%w: answer %s follows the output of call %s", ErrCallCompleted, c.answerAfterOutput.ID, c.ID())

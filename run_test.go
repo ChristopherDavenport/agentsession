@@ -137,6 +137,11 @@ func TestComputeReasonLastRun(t *testing.T) {
 		{"resume that holds one and runs one", "start user calls:a,b resp end:error start:resume hold:a dispatch:b", ReasonAborted},
 		{"resume that holds one and answers one", "start user calls:a,b resp end:error start:resume hold:a dispatch:b out:b", ReasonInputRequired},
 		{"resume cut off after a reject", "start user calls:a resp end:error start:resume reject:a", ReasonAborted},
+
+		// A call ID a later call repeats: the later call is the run's
+		// own, and its missing output is read from the segment, not
+		// taken from the earlier call's.
+		{"a call id repeated in a later run", "start user calls:a resp dispatch:a out:a resp end:done start user calls:a resp", ReasonAborted},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

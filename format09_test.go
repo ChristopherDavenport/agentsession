@@ -3,6 +3,7 @@ package agentsession
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -298,6 +299,81 @@ func TestOmittedKeepRefused(t *testing.T) {
 			}
 			if _, err := s.Append(c); err == nil {
 				t.Error("Append accepted it")
+			}
+		})
+	}
+}
+
+// TestNothingFollowsAReject: what follows a reject is the call's
+// refusal output and nothing else, and a reject is for a call that did
+// not run, so none follows a dispatch. Append refuses each, and
+// VerifyRecords reports each in a file another writer produced.
+func TestNothingFollowsAReject(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	target, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "notify", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewDecision("c", target, VerdictReject, ByHuman).WithReason("no")); err != nil {
+		t.Fatal(err)
+	}
+	calls, err := s.Calls(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := calls[0].State(s.Header()); got != CallRejected {
+		t.Errorf("State = %s, want %s", got, CallRejected)
+	}
+	for name, e := range map[string]Entry{
+		"hold":     NewDecision("c", target, VerdictHold, ByPolicy),
+		"proceed":  NewDecision("c", target, VerdictProceed, ByHuman),
+		"reject":   NewDecision("c", target, VerdictReject, ByHuman).WithReason("no"),
+		"answer":   NewDecision("c", target, VerdictAnswer, ByHuman),
+		"dispatch": NewDispatch("c", target),
+	} {
+		if _, err := s.Append(e); !errors.Is(err, ErrCallRejected) {
+			t.Errorf("%s after a reject: Append = %v, want ErrCallRejected", name, err)
+		}
+	}
+	if _, err := s.Append(NewItemEntry(&openresponses.FunctionCallOutput{CallID: "c", Output: openresponses.FunctionCallOutputData{Text: "no"}})); err != nil {
+		t.Fatalf("the output after the reject: %v", err)
+	}
+
+	ran := New(Header{Records: AllRecords})
+	target, err = ran.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "notify", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ran.Append(NewDispatch("c", target)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ran.Append(NewDecision("c", target, VerdictReject, ByPolicy).WithReason("no")); !errors.Is(err, ErrRejectDispatched) {
+		t.Errorf("reject after a dispatch: Append = %v, want ErrRejectDispatched", err)
+	}
+	if _, err := ran.Append(NewDecision("c", target, VerdictAnswer, ByPolicy).WithReason("replay unknown")); err != nil {
+		t.Errorf("answer after a dispatch: %v", err)
+	}
+
+	call := `"type":"item","item":{"type":"function_call","id":"fc","call_id":"c","name":"notify","arguments":"{}"}`
+	_, ids := hashedLines(t, Format, call)
+	dispatch := `"type":"dispatch","call_id":"c","target":"` + ids[0] + `"`
+	reject := `"type":"decision","call_id":"c","target":"` + ids[0] + `","verdict":"reject","reason":"no"`
+	hold := `"type":"decision","call_id":"c","target":"` + ids[0] + `","verdict":"hold"`
+	for name, tt := range map[string]struct {
+		bodies []string
+		want   error
+	}{
+		"a hold after a reject":     {[]string{call, reject, hold}, ErrCallRejected},
+		"a reject after a dispatch": {[]string{call, dispatch, reject}, ErrRejectDispatched},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in, _ := hashedLines(t, Format, tt.bodies...)
+			read, err := Read(strings.NewReader(in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := read.VerifyRecords(read.Leaf()); !errors.Is(err, tt.want) {
+				t.Errorf("VerifyRecords = %v, want %v", err, tt.want)
 			}
 		})
 	}

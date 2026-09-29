@@ -803,23 +803,27 @@ Why a run started and how it ended. Two entries per run, paired by
   reading as `stopped`, because the path still holds an unanswered
   call, and `aborted` is the value that says so.
 
-  A call an earlier run made is one of this run's calls once the
+  A call made before the segment is one of the run's calls once the
   segment holds a decision, dispatch or output for it, and not before.
   A resume that asks its policy about a call an earlier run left, and
-  holds it, ends `input_required` before any model call, since the
-  held call is its own; a run that leaves such a call untouched does
-  not own it, and its end does not list it.
+  holds it, ends `input_required` before any model call, since the run
+  took the held call up. A run that leaves such a call untouched has
+  not taken it up and its end does not list it, though the call still
+  keeps the run from reading as `stopped`.
 
   Two values record what the segment cannot show and are written, not
   computed: `error` when the harness failed at any point, which `ref`
   names, and `interrupted` when a person or the host told the harness
   to stop. A written `error` or `interrupted` stands over any segment.
   Every segment matches exactly one computable value on its path; a
-  reader MAY recompute it, and when the written value is computable and the two
-  disagree the segment is authoritative.
-- `pending` lists the pending calls' IDs, those an earlier run made
-  among them, so a resume can read them without walking the segment.
-  The segment is authoritative here too.
+  reader MAY recompute it, and when the written value is computable
+  and the two disagree the segment is authoritative.
+- `pending` lists the pending calls' IDs, those made before the
+  segment among them, so a resume can read them without walking the
+  segment. The segment is authoritative here too. It lists the run's
+  calls only: a call an earlier run left that this run did not take
+  up is pending on the path and not in the list, and a resume that
+  answers every call left without an output reads them from the path.
 - Items and responses of the run follow its `start` entry on the path.
   Runs do not nest: an input that arrives while a writer is running a
   run joins that run. A branch to an entry before a run's `start`
@@ -915,13 +919,15 @@ A call's fate was decided outside the tool.
     before the call's turn in a serial batch or a refusal by the loop
     itself, and the `proceed` stays as written, with its `by` and its
     `args`, since those are what an auditor asks about such a call.
-  - `reject`: this decision ended the call. No `dispatch` ever follows,
-    and a `function_call_output` for the call follows that carries
-    `reason`. A `reject` with no output after it is a call the harness
-    refused and has not yet written the output of, since the record
-    stopped between the two; the harness that continues the path
-    writes that output and nothing else for the call. It did not run
-    and does not run.
+  - `reject`: this decision ended a call that did not run. No
+    `dispatch` and no other `decision` ever follow, and a
+    `function_call_output` for the call follows that carries `reason`.
+    A writer writes `reject` only for a call with no `dispatch` on the
+    path; one that may have run is ended by `answer`. A `reject` with
+    no output after it is a call the harness refused and has not yet
+    written the output of, since the record stopped between the two;
+    the harness that continues the path writes that output and
+    nothing else for the call.
   - `hold`: this decision neither let the call go nor ended it. The
     call waits. A call is held while its latest decision is a `hold`
     with no `dispatch` after it on the path; a later decision answers
@@ -1517,12 +1523,15 @@ dispatches and decisions, environment, outcome and cross-session links.
 ## Changes since 0.8
 
 One element and a paragraph in the `config` section, a writer's rule
-in Versioning, and which calls are a run's. No hash changes, and a 0.8
-file is a 0.9 file with no `keep` in its omitted lists, unless a run
-in it took up a call an earlier run made and left it without an
-output. An element of an omitted list with no `id`, which a 0.9 reader
-reads as a `keep`, was not a 0.8 omitted part, which always had its
-`id`.
+in Versioning, which calls are a run's, and what may follow a
+`reject`. No hash changes, and a 0.8 file is a 0.9 file with no
+`keep` in its omitted lists. An element of an omitted list with no
+`id`, which a 0.9 reader reads as a `keep`, was not a 0.8 omitted
+part, which always had its `id`. A 0.8 run end whose run took up a
+call made before its segment and left it without an output may carry
+a `reason` or `pending` list that 0.9 recomputes differently, and a
+0.8 file may hold a decision after a `reject` or a `reject` after a
+`dispatch`, which 0.9 forbids.
 
 - A writer that appends to a file whose header names an earlier minor
   raises the header's `format` first. Under 0.8 a header kept the
@@ -1547,9 +1556,12 @@ reads as a `keep`, was not a 0.8 omitted part, which always had its
   segment starts with a decision or dispatch for such a call is one,
   where 0.8 asked for its output.
 - A `reject` with no output after it is a call owed its refusal and
-  nothing else, as an `answer` with no output is owed its answer.
-  0.8 said no `dispatch` follows a `reject` but not what a reader
-  makes of a record that stopped between the two.
+  nothing else, as an `answer` with no output is owed its answer, and
+  no decision follows a `reject`, as none follows an `answer`. A
+  `reject` is for a call with no `dispatch`; one that may have run is
+  ended by `answer`. 0.8 said no `dispatch` follows a `reject` but not
+  what a reader makes of a record that stopped between the two, and a
+  `hold` after a `reject` read as a call waiting on an answer.
 
 ## Changes since 0.7
 
