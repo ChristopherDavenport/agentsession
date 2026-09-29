@@ -351,6 +351,15 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 	if err := s.checkParents(b); err != nil {
 		return Result{}, err
 	}
+	if d, ok := e.(*DecisionEntry); ok && d.Verdict == VerdictAnswer && s.header.HasRecord(TypeDispatch) {
+		// An answer is for a call that may have run; with dispatches
+		// promised, one with none never started.
+		for _, c := range Calls(s.path(b.Parent)) {
+			if c.ID() == d.CallID && c.Dispatch == nil {
+				return Result{}, fmt.Errorf("%w: %s", ErrAnswerNotDispatched, d.CallID)
+			}
+		}
+	}
 	if d, ok := e.(*DispatchEntry); ok {
 		// The format forbids a dispatch for a call a decision rejected
 		// or answered.

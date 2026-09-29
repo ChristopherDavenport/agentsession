@@ -365,9 +365,10 @@ func lid(t *testing.T, s *agentsession.Session, name string) string {
 }
 
 // TestExportReplay: a call run again after a crash has a tool span for
-// each hand-off, the first ending in flight where the second begins and
-// the second linked to it; a call answered without running again ends
-// with the answered state (#99, #100).
+// each hand-off: the first ends in flight with the run the crash cut
+// off, and the second, in the next run, links to it. A call answered
+// without running again ends its hand-off with that run too, and the
+// answer's span, linked to it, ends answered (#99, #100).
 func TestExportReplay(t *testing.T) {
 	sr, tracer := recorder()
 	s := loadFixture(t, "replay")
@@ -375,6 +376,10 @@ func TestExportReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	all := spans(sr.Ended())
+	cut := all.named(SpanRun).withAttr(AttrRunReason, agentsession.ReasonError)
+	if len(cut) != 1 {
+		t.Fatalf("cut runs = %d", len(cut))
+	}
 	deploy := all.named(OpTool + " deploy")
 	if len(deploy) != 2 {
 		t.Fatalf("deploy spans = %d, want one per hand-off", len(deploy))
@@ -383,17 +388,43 @@ func TestExportReplay(t *testing.T) {
 	if len(first) != 1 || len(again) != 1 {
 		t.Fatalf("deploy spans by hand-off: %d and %d", len(first), len(again))
 	}
-	if attr(first[0], AttrCallState) != agentsession.CallInFlight.String() || first[0].Status().Code != codes.Error {
-		t.Errorf("first hand-off state %s, status %v", attr(first[0], AttrCallState), first[0].Status())
+	if attr(first[0], AttrCallState) != agentsession.CallInFlight.String() || first[0].Status().Code != codes.Error || !first[0].EndTime().Equal(cut[0].EndTime()) {
+		t.Errorf("first hand-off state %s, status %v, ends %s, run ends %s", attr(first[0], AttrCallState), first[0].Status(), first[0].EndTime(), cut[0].EndTime())
 	}
-	if !first[0].EndTime().Equal(again[0].StartTime()) || !linksTo(again[0], first[0]) {
-		t.Error("the second hand-off does not start where the first ends, linked to it")
-	}
-	if attr(again[0], AttrCallState) != agentsession.CallCompleted.String() {
-		t.Errorf("second hand-off state %s", attr(again[0], AttrCallState))
+	if !linksTo(again[0], first[0]) || attr(again[0], AttrCallState) != agentsession.CallCompleted.String() {
+		t.Errorf("second hand-off state %s, linked %v", attr(again[0], AttrCallState), linksTo(again[0], first[0]))
 	}
 	notify := all.named(OpTool + " notify")
-	if len(notify) != 1 || attr(notify[0], AttrCallState) != "answered" || len(eventAttr(notify[0], EventDecision, AttrVerdict)) != 1 {
-		t.Errorf("notify spans = %d, state %s", len(notify), attr(notify[0], AttrCallState))
+	handoff, answered := notify.withAttr(AttrCallState, agentsession.CallInFlight.String()), notify.withAttr(AttrCallState, agentsession.CallAnswered.String())
+	if len(notify) != 2 || len(handoff) != 1 || len(answered) != 1 || !linksTo(answered[0], handoff[0]) || len(eventAttr(answered[0], EventDecision, AttrVerdict)) != 1 {
+		t.Errorf("notify spans = %d: hand-off %d, answered %d", len(notify), len(handoff), len(answered))
+	}
+}
+
+// TestHeldAfterProceedIsNot: a hold answered by a proceed and a
+// dispatch does not leave the call reading held.
+func TestHeldAfterProceedIsNot(t *testing.T) {
+	sr, tracer := recorder()
+	s := agentsession.New(agentsession.Header{ID: "held", Records: agentsession.AllRecords})
+	fc := &agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "deploy", Arguments: "{}"}}
+	target, err := s.Append(fc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []agentsession.Entry{
+		agentsession.NewDecision("c", target, agentsession.VerdictHold, agentsession.ByPolicy),
+		agentsession.NewDecision("c", target, agentsession.VerdictProceed, agentsession.ByHuman),
+		agentsession.NewDispatch("c", target),
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	tool := spans(sr.Ended()).named(OpTool + " deploy")
+	if len(tool) != 1 || attr(tool[0], AttrCallState) != agentsession.CallInFlight.String() {
+		t.Errorf("tool spans = %d, state %s", len(tool), attr(tool[0], AttrCallState))
 	}
 }

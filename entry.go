@@ -1808,18 +1808,7 @@ func promoteIf[T any](base *EntryBase, key string, dst *T, valid func(T) bool) {
 		return
 	}
 	var v T
-	if json.Unmarshal(raw, &v) != nil || reflect.ValueOf(v).IsZero() || valid != nil && !valid(v) {
-		return
-	}
-	// The decoder matches keys in any case; the typed field is taken only
-	// when the member holds what it encodes, exactly keyed, and more.
-	back, err := jsonx.MarshalNoEscape(v)
-	if err != nil {
-		return
-	}
-	rv, err1 := parseValue(raw)
-	sv, err2 := parseValue(back)
-	if same, _ := extrasOnly(rv, sv); err1 != nil || err2 != nil || !same {
+	if !holdsExactly(raw, &v) || reflect.ValueOf(v).IsZero() || valid != nil && !valid(v) {
 		return
 	}
 	*dst = v
@@ -1827,6 +1816,23 @@ func promoteIf[T any](base *EntryBase, key string, dst *T, valid func(T) bool) {
 	if len(base.Unknown) == 0 {
 		base.Unknown = nil
 	}
+}
+
+// holdsExactly decodes raw into v and reports whether v holds what raw
+// does: the decoder matches keys in any case, so a value is taken only
+// when raw holds what it encodes, exactly keyed, and more.
+func holdsExactly[T any](raw json.RawMessage, v *T) bool {
+	if json.Unmarshal(raw, v) != nil {
+		return false
+	}
+	back, err := jsonx.MarshalNoEscape(*v)
+	if err != nil {
+		return false
+	}
+	rv, err1 := parseValue(raw)
+	sv, err2 := parseValue(back)
+	same, _ := extrasOnly(rv, sv)
+	return err1 == nil && err2 == nil && same
 }
 
 var (

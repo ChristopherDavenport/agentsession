@@ -675,3 +675,40 @@ func TestReplayFixtureNegative(t *testing.T) {
 		t.Errorf("VerifyRecords = %v, want ErrCallAnswered", err)
 	}
 }
+
+// TestFrozen07Fixture reads parts.jsonl as v0.0.10 generated it, a
+// file labelled agentsession/0.7, kept as released rather than
+// regenerated: a 0.7 file reads as it stands, every entry keeps its id,
+// the ids are those the 0.8 fixture holds, and every request hash
+// verifies.
+func TestFrozen07Fixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", "v0.7", "parts.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"format":"agentsession/0.7"`)) {
+		t.Fatal("the frozen fixture is not a 0.7 file")
+	}
+	old, err := Read(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated, _ := old.Migrated(); migrated {
+		t.Error("a 0.7 file was migrated")
+	}
+	current := loadFixture(t, "parts")
+	oe, ce := old.Entries(), current.Entries()
+	if len(oe) != len(ce) {
+		t.Fatalf("%d entries, the 0.8 fixture has %d", len(oe), len(ce))
+	}
+	for i := range oe {
+		if oe[i].Base().ID != ce[i].Base().ID {
+			t.Errorf("entry %d: id %s, the 0.8 fixture has %s", i, oe[i].Base().ID, ce[i].Base().ID)
+		}
+		if r, ok := oe[i].(*ResponseEntry); ok {
+			if err := old.Verify(r.ID); err != nil {
+				t.Errorf("%s: %v", r.ResponseID, err)
+			}
+		}
+	}
+}

@@ -42,19 +42,29 @@ type Settings struct {
 }
 
 // UnmarshalJSON decodes a checkpoint, taking instructions_omitted only
-// when it is a list of parts.
+// when the member is spelled exactly and holds a list of parts that
+// encodes back to what the line holds, extra members aside, as a
+// member promoted into a typed field is taken. Anything else, such as
+// a part whose id is spelled "ID", is left for the rewrite to keep as
+// written.
 func (s *Settings) UnmarshalJSON(data []byte) error {
 	type plain Settings
 	var aux struct {
 		plain
+		// Shadows the typed field, which is decoded below from the
+		// exactly spelled member alone.
 		Omitted json.RawMessage `json:"instructions_omitted"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 	*s = Settings(aux.plain)
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
 	var omitted []OmittedPart
-	if len(aux.Omitted) > 0 && json.Unmarshal(aux.Omitted, &omitted) == nil && len(omitted) > 0 {
+	if raw, ok := all["instructions_omitted"]; ok && holdsExactly(raw, &omitted) && len(omitted) > 0 {
 		s.InstructionsOmitted = omitted
 	}
 	return nil

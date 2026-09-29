@@ -292,6 +292,9 @@ type callState struct {
 	// the entry ID of the latest.
 	dispatches   int
 	lastDispatch string
+	// closed reports that a run end closed the call's last span with
+	// the call still pending, so finish does not open another.
+	closed bool
 }
 
 type pendingEvent struct {
@@ -358,7 +361,7 @@ func (t *tracker) prime(path []agentsession.Entry) {
 			}
 		case *agentsession.DispatchEntry:
 			if c, ok := t.calls[v.CallID]; ok {
-				c.dispatched = true
+				c.dispatched, c.held = true, false
 				c.dispatches++
 				c.lastDispatch = v.ID
 			}
@@ -375,9 +378,10 @@ func (t *tracker) register(e *agentsession.ItemEntry, fc *openresponses.Function
 }
 
 func (t *tracker) noteDecision(c *callState, d *agentsession.DecisionEntry) {
+	// A call is held while its latest decision is a hold, so any later
+	// decision answers the hold.
+	c.held = d.Verdict == agentsession.VerdictHold
 	switch d.Verdict {
-	case agentsession.VerdictHold:
-		c.held = true
 	case agentsession.VerdictReject:
 		c.rejected = true
 	case agentsession.VerdictAnswer:
@@ -535,6 +539,25 @@ func (t *tracker) endRun(r *agentsession.RunEntry, ts time.Time) {
 		t.run.SetStatus(codes.Error, r.Ref)
 	}
 	t.spans[r.ID] = t.run.SpanContext()
+	// A hand-off the run left without an output ends with the run, in
+	// the state the path reads for it; a later hand-off or output of the
+	// call opens a span of its own.
+	for _, id := range t.order {
+		c, ok := t.calls[id]
+		if !ok || c.span == nil || c.output {
+			continue
+		}
+		state := agentsession.CallInFlight
+		if c.held {
+			state = agentsession.CallHeld
+		}
+		c.span.SetAttributes(attribute.String(AttrCallState, state.String()))
+		if state == agentsession.CallInFlight {
+			c.span.SetStatus(codes.Error, "no output before the run ended")
+		}
+		c.span.End(trace.WithTimestamp(ts))
+		c.span, c.closed = nil, true
+	}
 	t.run.End(trace.WithTimestamp(ts))
 	t.run, t.runCtx = nil, t.sessionCtx
 }
@@ -614,15 +637,18 @@ func (t *tracker) decision(d *agentsession.DecisionEntry, ts time.Time) {
 
 // dispatch opens a tool span for one hand-off of a call to its tool. A
 // call handed over again, run again after a restart, gets a span for
-// each hand-off, linked to the one before it; one still open here, a
-// re-run in the same process, ends in flight, since the hand-off it
-// covers never returned an output.
+// each hand-off, linked to the one before it when this tracker made
+// that span: the first hand-off's span ends at its run's end, and one
+// still open here, a hand-off repeated within one run, ends in
+// flight. A tracker primed from a path an earlier process wrote,
+// which Store does on Open, never saw that process's spans, so its
+// first hand-off links to none; Export with WithKnownSpans can.
 func (t *tracker) dispatch(d *agentsession.DispatchEntry, ts time.Time) {
 	c, ok := t.calls[d.CallID]
 	if !ok {
 		return
 	}
-	c.dispatched = true
+	c.dispatched, c.held = true, false
 	c.dispatches++
 	var prev trace.SpanContext
 	if c.lastDispatch != "" {
@@ -667,6 +693,7 @@ func (t *tracker) startCall(c *callState, at time.Time, entryID string, prev tra
 	}
 	opts = t.withBranchLink(opts)
 	_, c.span = t.tracer.Start(t.runCtx, OpTool+" "+c.name, opts...)
+	c.closed = false
 	for _, ev := range c.events {
 		c.span.AddEvent(EventDecision, trace.WithTimestamp(ev.at), trace.WithAttributes(ev.attrs...))
 	}
@@ -689,7 +716,13 @@ func (t *tracker) output(callID string, e *agentsession.ItemEntry, ts time.Time)
 		if (c.rejected || c.answered) && len(c.events) > 0 {
 			start = c.events[0].at
 		}
-		t.startCall(c, start, e.ID, trace.SpanContext{})
+		// An answer to a call whose hand-off span a run end closed
+		// links to that span.
+		var prev trace.SpanContext
+		if c.lastDispatch != "" {
+			prev = t.spans[c.lastDispatch]
+		}
+		t.startCall(c, start, e.ID, prev)
 	}
 	switch {
 	case c.rejected:
@@ -710,11 +743,13 @@ func (t *tracker) output(callID string, e *agentsession.ItemEntry, ts time.Time)
 func (t *tracker) finish(ts time.Time) {
 	for _, id := range t.order {
 		c, ok := t.calls[id]
-		if !ok || c.output {
+		if !ok || c.output || c.closed {
 			continue
 		}
 		state := agentsession.CallUnknown
 		switch {
+		case c.answered:
+			state = agentsession.CallAnswered
 		case c.held:
 			state = agentsession.CallHeld
 		case c.dispatched:

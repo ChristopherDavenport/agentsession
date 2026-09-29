@@ -260,6 +260,7 @@ func TestDescribeEveryEntryType(t *testing.T) {
 		{entry: agentsession.NewItemEntry(openresponses.UserText("hi")), want: `user: "hi"`},
 		{entry: &agentsession.ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: "completed"}, want: "resp_1 gpt-5 completed"},
 		{entry: &agentsession.ConfigEntry{Model: "gpt-5"}, want: "model gpt-5"},
+		{entry: &agentsession.ConfigEntry{InstructionsOmitted: []agentsession.OmittedPart{}}, want: "omitted cleared"},
 		{entry: &agentsession.CompactionEntry{FirstKept: "i1", Summary: openresponses.UserText("so far")}, want: "first kept i1"},
 		{entry: &agentsession.BranchSummaryEntry{From: "i1", Summary: openresponses.UserText("before")}, want: "from i1"},
 		{entry: agentsession.NewRunStart("run-1", agentsession.SourceInput, "cron:x"), want: "start run-1 input"},

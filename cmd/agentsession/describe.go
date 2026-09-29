@@ -65,6 +65,8 @@ func describeEntry(e agentsession.Entry, full bool) string {
 				ids = append(ids, o.ID+" ("+o.Reason+")")
 			}
 			parts = append(parts, fmt.Sprintf("omitted %s", strings.Join(ids, ", ")))
+		} else if v.InstructionsOmitted != nil {
+			parts = append(parts, "omitted cleared")
 		}
 		if v.Reasoning != nil {
 			parts = append(parts, "reasoning")

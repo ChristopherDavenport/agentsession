@@ -3,6 +3,7 @@ package agentsession
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -216,7 +217,7 @@ func TestCallDispatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := calls[0]
-	if len(c.Dispatches) != 2 || c.Dispatch != first || c.IdempotencyKey() != "k-1" || c.Held() || c.State(s.Header()) != CallInFlight {
+	if len(c.Dispatches) != 2 || c.Dispatch != first || c.IdempotencyKey() != "k-1" || c.DispatchedArgs() != "{}" || c.Held() || c.State(s.Header()) != CallInFlight {
 		t.Errorf("dispatches %d, first %v, key %q, held %v, state %v", len(c.Dispatches), c.Dispatch == first, c.IdempotencyKey(), c.Held(), c.State(s.Header()))
 	}
 }
@@ -260,5 +261,206 @@ func TestTriggerMembers(t *testing.T) {
 	var nilTrigger *Trigger
 	if !nilTrigger.Equal(nil) || nilTrigger.Equal(&back) {
 		t.Error("Equal on nil")
+	}
+}
+
+// hashedLines builds a file from bodies, each entry the child of the
+// one before, with ids computed as a writer would, under a header of
+// format.
+func hashedLines(t *testing.T, format string, bodies ...string) (string, []string) {
+	t.Helper()
+	lines := []string{`{"type":"session","format":"` + format + `","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24","records":["run","dispatch","decision"]}`}
+	var ids []string
+	parent := "null"
+	for _, body := range bodies {
+		line := `{` + body + `,"parent":` + parent + `,"ts":"2026-09-17T16:00:01Z"}`
+		id, _, err := EntryHashes([]byte(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, `{"id":"`+id+`",`+line[1:])
+		ids = append(ids, id)
+		parent = `"` + id + `"`
+	}
+	return strings.Join(lines, "\n") + "\n", ids
+}
+
+// TestOmittedNullIsAbsent: a null instructions_omitted leaves the list
+// in force as it was.
+func TestOmittedNullIsAbsent(t *testing.T) {
+	in, _ := hashedLines(t, Format,
+		`"type":"config","model":"m","instructions_omitted":[{"id":"a"}]`,
+		`"type":"config","model":"m2","instructions_omitted":null`)
+	s, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ctx.InstructionsOmitted(); len(got) != 1 || got[0].ID != "a" {
+		t.Errorf("omitted after a null = %v", got)
+	}
+}
+
+// TestCheckpointOmittedFoldedKey: a 0.7 checkpoint whose omitted part
+// spells its id "ID" reads, verifies and is written back as it was;
+// the list is not taken, so none is in force.
+func TestCheckpointOmittedFoldedKey(t *testing.T) {
+	_, ids := hashedLines(t, "agentsession/0.7",
+		`"type":"config","model":"m"`,
+		`"type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"one"}]}`)
+	in, _ := hashedLines(t, "agentsession/0.7",
+		`"type":"config","model":"m"`,
+		`"type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"one"}]}`,
+		`"type":"compaction","first_kept":"`+ids[1]+`","summary":{"type":"message","role":"user","content":[{"type":"input_text","text":"s"}]},"config":{"model":"m","instructions_omitted":[{"ID":"a"}]}`)
+	s, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ctx.InstructionsOmitted(); got != nil {
+		t.Errorf("omitted = %v, want none: no conforming reader sees an id", got)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"instructions_omitted":[{"ID":"a"}]`) {
+		t.Errorf("the member was not written as read:\n%s", buf.String())
+	}
+	if _, err := Read(&buf); err != nil {
+		t.Errorf("read back: %v", err)
+	}
+}
+
+// TestKeyPairsWithItsDispatch: a call run again under a new key, for
+// new arguments, reads the last dispatch's key beside the arguments
+// that dispatch ran with, through two crashes; a later decision's
+// arguments are what a new hand-off would run with.
+func TestKeyPairsWithItsDispatch(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	fc := &ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "deploy", Arguments: `{"v":"A"}`}}
+	target, err := s.Append(fc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(key, dispatched, args string) {
+		t.Helper()
+		calls, err := s.Calls(s.Leaf())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := calls[0]
+		if c.IdempotencyKey() != key || c.DispatchedArgs() != dispatched || c.Args() != args {
+			t.Errorf("key %q args dispatched %s now %s, want %q %s %s", c.IdempotencyKey(), c.DispatchedArgs(), c.Args(), key, dispatched, args)
+		}
+	}
+	for _, e := range []Entry{NewDispatch("c", target).WithIdempotencyKey("k1")} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check("k1", `{"v":"A"}`, `{"v":"A"}`)
+	// First crash; the rerun rewrites the arguments under a new key.
+	for _, e := range []Entry{NewDecision("c", target, VerdictProceed, ByHuman).WithArgs(json.RawMessage(`{"v":"B"}`)), NewDispatch("c", target).WithIdempotencyKey("k2")} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check("k2", `{"v":"B"}`, `{"v":"B"}`)
+	// Second crash; a decision gives new arguments and nothing is
+	// handed over yet.
+	if _, err := s.Append(NewDecision("c", target, VerdictHold, ByPolicy).WithArgs(json.RawMessage(`{"v":"C"}`))); err != nil {
+		t.Fatal(err)
+	}
+	check("k2", `{"v":"B"}`, `{"v":"C"}`)
+}
+
+// TestHeldAfterDispatch: a hold after a dispatch holds a call that may
+// have run: its state is held, it is not in flight, it keeps its
+// dispatches, and a run left with it ends input_required.
+func TestHeldAfterDispatch(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	for _, e := range []Entry{NewRunStart("r", SourceInput, "")} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "deploy", Arguments: "{}"}, ResponseID: "resp_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []Entry{
+		&ResponseEntry{ResponseID: "resp_1", Status: openresponses.ResponseStatusCompleted},
+		NewDispatch("c", target),
+		NewDecision("c", target, VerdictHold, ByPolicy).WithReason("may have run; ask"),
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls, err := s.PendingCalls(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := calls[0]
+	if c.State(s.Header()) != CallHeld || c.InFlight() || len(c.Dispatches) != 1 {
+		t.Errorf("state %v, in flight %v, dispatches %d", c.State(s.Header()), c.InFlight(), len(c.Dispatches))
+	}
+	run, err := s.OpenRun(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ComputeReason(s.Path(s.Leaf()), run.Segment); got != ReasonInputRequired {
+		t.Errorf("run reads %s, want input_required", got)
+	}
+}
+
+// TestAnsweredOwesItsOutput: an answer whose output the record stopped
+// before is answered, not in flight; no dispatch may follow it, and in
+// a file that promises dispatch records an answer needs a dispatch
+// before it.
+func TestAnsweredOwesItsOutput(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	target, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "notify", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewDecision("c", target, VerdictAnswer, ByPolicy)); !errors.Is(err, ErrAnswerNotDispatched) {
+		t.Errorf("answer before any dispatch: Append = %v, want ErrAnswerNotDispatched", err)
+	}
+	for _, e := range []Entry{NewDispatch("c", target), NewDecision("c", target, VerdictAnswer, ByPolicy).WithReason("replay unknown")} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls, err := s.PendingCalls(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := calls[0]; c.State(s.Header()) != CallAnswered || c.InFlight() {
+		t.Errorf("state %v, in flight %v", c.State(s.Header()), c.InFlight())
+	}
+	if _, err := s.Append(NewDispatch("c", target)); !errors.Is(err, ErrCallAnswered) {
+		t.Errorf("dispatch after the answer: Append = %v, want ErrCallAnswered", err)
+	}
+	// A file another writer produced, answering a call it never
+	// dispatched and writing no output.
+	_, ids := hashedLines(t, Format,
+		`"type":"item","item":{"type":"function_call","id":"fc","call_id":"c","name":"notify","arguments":"{}"}`)
+	in, _ := hashedLines(t, Format,
+		`"type":"item","item":{"type":"function_call","id":"fc","call_id":"c","name":"notify","arguments":"{}"}`,
+		`"type":"decision","call_id":"c","target":"`+ids[0]+`","verdict":"answer"`)
+	read, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := read.VerifyRecords(read.Leaf()); !errors.Is(err, ErrAnswerNotDispatched) {
+		t.Errorf("VerifyRecords = %v, want ErrAnswerNotDispatched", err)
 	}
 }

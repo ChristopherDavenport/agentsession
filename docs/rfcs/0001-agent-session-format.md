@@ -599,6 +599,7 @@ omissions do not change between turns writes them once:
   the settings, and `[]` clears it explicitly.
 - A `config` entry MAY carry the member and no setting, when what was
   left out changed and nothing in force did.
+- A `null` member is an absent one: it leaves the list as it was.
 - A compaction's `config` checkpoint carries the list in force, below,
   and the list after the compaction starts from it.
 
@@ -727,7 +728,8 @@ Why a run started and how it ended. Two entries per run, paired by
   1. `error`: the last `response` on the segment carries a non-null
      `error`.
   2. `input_required`: at least one pending call is held, as `decision`
-     defines it, and no pending call has a `dispatch`.
+     defines it, and no pending call is in flight, as `dispatch`
+     defines it.
   3. `aborted`: any other segment with a pending call, or whose last
      `response` has a non-null `incomplete`.
   4. `done`: the segment has a `response` and its last one has no
@@ -792,8 +794,16 @@ A call was handed to its tool.
 
 `call_id` and `target` are required; `target` is the `item` entry
 holding the `function_call`. A call with a `dispatch` and no
-`function_call_output` on the path was in flight when the record
-stopped, and its side effect may have happened. When the header names
+`function_call_output` on the path may have run: its side effect may
+have happened. It is **in flight**, handed to its tool when the record
+stopped, unless a `decision` after its last `dispatch` holds it or
+answers it. A `hold` after a `dispatch` holds a call that may have
+run, and whoever answers the hold answers that call, as a replay rule
+would: a `proceed` and another `dispatch` run it again, an `answer`
+ends it without running it. An `answer` with no output after it is a
+call the harness answered and has not yet written the output of,
+since the record stopped between the two; the harness that continues
+the path writes that output and nothing else for the call. When the header names
 `dispatch` in `records`, a call with neither was never started;
 otherwise the file does not say whether it ran. A writer that names
 `dispatch` MUST write it, durably, before the tool runs, and no writer
@@ -811,7 +821,12 @@ again, carries an `answer` decision, below.
   this hand-off, in the harness's own terms, so that a tool that makes
   a second run safe by its key is handed the same key after a crash.
   The record holds it because the key has to outlive the process that
-  minted it. A call run again carries the key of its first `dispatch`.
+  minted it. A `dispatch` that repeats an earlier hand-off, the same
+  operation run again, carries that hand-off's key. A new key says the
+  harness treats the run as a new operation, which it does only when a
+  decision gave the call new `args` or when it chooses to on purpose;
+  a replay rule deciding whether the call may run again reads the key
+  of its last `dispatch` beside the arguments that hand-off ran with.
 - Each `dispatch` for a call is one hand-off to its tool, in path
   order. A second `dispatch` for the same call means the harness ran it
   again: after a restart, a call that was in flight when the record
@@ -846,7 +861,9 @@ A call's fate was decided outside the tool.
     `reason`.
   - `hold`: this decision neither let the call go nor ended it. The
     call waits. A call is held while its latest decision is a `hold`
-    with no `dispatch` and no `reject` after it on the path.
+    with no `dispatch` after it on the path; a later decision answers
+    it. A call held after a `dispatch` is held and may have run, as
+    `dispatch` says.
   - `answer`: this decision ended a call that may already have run,
     with an output the harness wrote rather than one its tool
     returned. It is the answer to a call in flight when the record
@@ -854,9 +871,9 @@ A call's fate was decided outside the tool.
     does not hand to its tool again, such as a call whose tool cannot
     say that a second run is safe and whose outcome is therefore
     unknown. No `dispatch` follows, and a `function_call_output` for
-    the call follows; `by` says who answered and `reason` why. A
-    writer writes `answer` only for a call with a `dispatch` on the
-    path or, in a file whose header does not name `dispatch` in
+    the call follows; `by` says who answered and `reason` SHOULD say
+    why. A writer writes `answer` only for a call with a `dispatch` on
+    the path or, in a file whose header does not name `dispatch` in
     `records`, one with neither a `dispatch` nor an output. A call
     the record shows never started did not run, and a writer that ends
     one without running it writes `reject`.
@@ -1416,17 +1433,25 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.7
 
-Additive but for one rule. One optional member, one verdict, and
-paragraphs in the `config`, `dispatch`, `run` and `queued` sections.
-No hash changes, and a 0.7 file is a 0.8 file with none of the new
-members, with one exception: `instructions_omitted`, which 0.7 said
-applied to the entry that carried it, is in force in 0.8 until a later
-`config` changes it, so a 0.7 file whose writer relied on its absence
-to say that nothing was left out reads the last list it wrote as still
-in force, and a 0.7 compaction, whose checkpoint has no list, clears
-it. Nothing in the list reaches a request, so no context and no
-`request_hash` changes with it, and the reference library already read
-the last non-empty list among a context's entries as the one in force.
+Additive but for two rules. One optional member, one verdict, and
+paragraphs in the `config`, `dispatch`, `decision`, `run` and `queued`
+sections. No hash changes, and a 0.7 file is a 0.8 file with none of
+the new members, with two exceptions:
+
+- `instructions_omitted`, which 0.7 said applied to the entry that
+  carried it, is in force in 0.8 until a later `config` changes it, so
+  a 0.7 file whose writer relied on its absence to say that nothing
+  was left out reads the last list it wrote as still in force, and a
+  0.7 compaction, whose checkpoint has no list, clears it. Nothing in
+  the list reaches a request, so no context and no `request_hash`
+  changes with it, and the reference library already read the last
+  non-empty list among a context's entries as the one in force.
+- A run whose pending call is held after its `dispatch` ends
+  `input_required`. 0.7 held such a call too, but its `input_required`
+  step asked that no pending call have a `dispatch` at all, so that
+  segment read `aborted`; in 0.8 the step asks that none be in flight,
+  and a held call is not. The call still reads as one that may have
+  run.
 
 - `instructions_omitted` stays in force as settings do: a delta
   without it leaves it, `[]` or a `replace` without it clears it, and
@@ -1437,7 +1462,12 @@ the last non-empty list among a context's entries as the one in force.
 - A `dispatch` carries `idempotency_key`, the key the harness gave the
   tool, so a tool that makes a second run safe by its key gets the same
   one after a crash; a key that lives only in memory does not survive
-  the crash it is for.
+  the crash it is for. A hand-off that repeats another carries its key,
+  and a new key is a new operation.
+- `dispatch` defines a call in flight: one with a `dispatch` and no
+  output that no later decision holds or answers. A call held after a
+  `dispatch` is held and may have run, and one answered with no output
+  yet is owed its output.
 - Each `dispatch` for a call is one hand-off to its tool, and a second
   one means the call ran again. 0.7 accepted a second and said nothing
   of it, and readers kept one. The ATIF projection lists every one, and

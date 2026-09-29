@@ -11,9 +11,12 @@ versions may break the API.
   optional member, one verdict, and paragraphs in four sections. A
   0.5, 0.6 or 0.7 file reads as it stands, with nothing rehashed;
   v0.0.10 refuses a 0.8 file, as a 0.x reader refuses a later minor.
-  One rule reads a 0.7 file differently, stated in the RFC: the
+  Two rules read a 0.7 file differently, stated in the RFC: the
   omitted instruction parts stay in force past the entry that wrote
-  them. No request and no hash moves with it.
+  them, and a run whose pending call is held after its dispatch ends
+  `input_required` rather than `aborted`. No request and no hash moves
+  with either. `testdata/sessions/v0.7/parts.jsonl` keeps the 0.7
+  fixture as v0.0.10 released it, and a test reads it.
 - **Omitted instruction parts stay in force.** The RFC said
   `instructions_omitted` applied to the entry that carried it, so a
   writer with a memory larger than its budget repeated every omitted
@@ -24,34 +27,55 @@ versions may break the API.
   a compaction's checkpoint carries it. `Settings.InstructionsOmitted`
   holds the list in force, `Context.InstructionsOmitted` returns it,
   and a compaction and `Continue` carry it over. `ConfigEntry`'s field
-  is now `omitzero`, so an empty, non-nil list is written as `[]`. A
-  checkpoint member that is not a list of parts is kept as written.
-  (#97)
+  is now `omitzero`, so an empty, non-nil list is written as `[]`, and
+  `null` is absent. A checkpoint member the typed field cannot hold
+  exactly, one that is not a list of parts or a part whose id is
+  spelled `ID`, is kept as written and none is in force, so a 0.7
+  checkpoint carrying one still verifies. `describe` prints a clearing
+  `[]` as `omitted cleared`. (#97)
 - **A dispatch carries its idempotency key.** `DispatchEntry.IdempotencyKey`,
-  promoted only from a non-empty string, and `WithIdempotencyKey`; a
-  call run again carries its first dispatch's key, which
-  `Call.IdempotencyKey` returns. The key has to outlive the process
-  that minted it, and a harness that wrote it as a member of its own
-  could not be read by another. `describe` prints it. (#98)
+  promoted only from a non-empty string, and `WithIdempotencyKey`. A
+  hand-off that repeats another carries its key, and a new key is a
+  new operation, which a harness mints for new arguments.
+  `Call.IdempotencyKey` returns the last dispatch's key, the one a
+  further run repeats, and `Call.DispatchedArgs` the arguments that
+  dispatch ran with, since a key paired with later arguments would
+  replay the wrong operation; `Call.Args` stays the arguments a new
+  hand-off runs with. The key has to outlive the process that minted
+  it, and a harness that wrote it as a member of its own could not be
+  read by another. On read the member moves out of
+  `EntryBase.Unknown` into the typed field, so code that looked for it
+  in `Unknown` finds it gone. `describe` prints it. (#98)
 - **A second dispatch is a second hand-off.** `Call.Dispatches` holds
   every dispatch in path order, with `Dispatch` still the first. The
   ATIF projection keeps the first under `dispatch` and, for a call
   handed over more than once, lists every one under `dispatches`,
   where it used to overwrite the first with the last. otel opens a
   tool span per hand-off, carrying `agentsession.call.dispatch`, the
-  hand-off's number: a span still open when the call is handed over
-  again ends in flight, and the next links to it. `Call.Held` reads a
-  hold after a dispatch as holding the call, as the RFC defines it,
-  where it used to read any call with a dispatch as not held. (#99)
+  hand-off's number. A hand-off its run left without an output ends
+  with the run, in flight, and the next hand-off or the answer links
+  to it; a tracker primed from an earlier process never saw that
+  process's spans and links to none. A hold answered by a later
+  decision no longer leaves the span reading held.
+  `Call.InFlight` reports a call with a dispatch and no output that no
+  later decision holds or answers, which is what the RFC now calls in
+  flight. `Call.Held` reads a hold after a dispatch as holding the
+  call, where it used to read any call with a dispatch as not held;
+  such a call's `State` is `CallHeld`, its `Dispatches` say it may
+  have run, and `ComputeReason` reads the run `input_required`. (#99)
 - **`answer`, a verdict for a call answered without running again.**
   `VerdictAnswer` ends a call that may already have run with an output
   the harness wrote, and its `by` and `reason` say who answered and
   why; neither `proceed` nor `reject` could say it honestly, so who
   answered an ambiguous call after a crash went unrecorded.
-  `Call.Answered` reports one; `Append` refuses a dispatch after one
-  with `ErrCallAnswered`, and `VerifyRecords` reports a file that
-  holds one. otel ends the call's span with the state `answered`.
-  (#100)
+  `Call.Answered` reports one. An answer whose output the record
+  stopped before reads as the new `CallAnswered` state, not in flight:
+  the harness that continues writes the output and nothing else.
+  `Append` refuses a dispatch after an answer with `ErrCallAnswered`,
+  and, in a session whose header promises dispatch records, an answer
+  to a call with no dispatch with `ErrAnswerNotDispatched`;
+  `VerifyRecords` reports both in a file. otel ends the call's span
+  with the state `answered`. (#100)
 - **A trigger keeps its own members.** `Trigger.Unknown`, encoded
   inline beside kind, ref and source, with `SetMember`, `Clone` and
   `Equal`, so a queued firing keeps when it was due and which attempt
