@@ -124,6 +124,9 @@ func printContext(w io.Writer, s *agentsession.Session, at string) error {
 		names := make([]string, 0, len(st.InstructionsParts))
 		for _, p := range st.InstructionsParts {
 			name := fmt.Sprintf("%s %dB", p.ID, len(p.Text))
+			if p.Unresolved() {
+				name = orDash(p.ID) + " unresolved"
+			}
 			if p.Source != "" {
 				name += " from " + p.Source
 			}

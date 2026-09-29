@@ -244,7 +244,7 @@ shape back reads it out of `extra`.
 | `config` change mid-path | `model_name` and `reasoning_effort` on the following agent steps; tool changes recorded in step `extra` |
 | `item` with a user message | step `source: "user"`, `message` as text or content parts |
 | `item` with a developer or system message, and `instructions` | step `source: "system"` |
-| assistant message items and the `response` entry for one model call | one step `source: "agent"`: `message` from output text, `reasoning_content` from reasoning items, `tool_calls` from function calls, `metrics` from the response usage, `llm_call_count: 1` |
+| assistant message items and the `response` entry for one model call | one step `source: "agent"`: `message` from output text, `reasoning_content` from reasoning items, `tool_calls` from function calls, `metrics` from the response usage, `llm_call_count` from the response `attempts`, 1 when absent |
 | `function_call_output` items for that call | `observation.results[]` with `source_call_id` = `call_id` |
 | `response.usage` | `metrics.prompt_tokens`, `completion_tokens`, `cached_tokens` from the input token details; `cost_usd` only when a price source is configured |
 | `compaction` | the ATIF context-management convention; steps before `first_kept_entry_id` are not emitted, the summary item becomes a `source: "system"` step with `is_copied_context: true` |

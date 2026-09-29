@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.6
+Status: draft 0.7
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -188,7 +188,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.6","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.7","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -459,7 +459,7 @@ The envelope of one model call, written after its output items.
 {"type":"response","id":"…","parent":"…","ts":"…",
  "response_id":"resp_…","model":"…","status":"completed",
  "usage":{…},"incomplete":null,"error":null,
- "request_hash":"sha256:…","latency_ms":1234}
+ "request_hash":"sha256:…","latency_ms":1234,"attempts":2}
 ```
 
 - Every member but the envelope's is optional. `error` and
@@ -470,6 +470,14 @@ The envelope of one model call, written after its output items.
 - `request_hash` SHOULD be the hash of the canonical request built by
   the context algorithm below, so a reader can check that the stored
   path rebuilds the request that was sent.
+- `attempts` is the number of calls to the model this response took,
+  itself included, when the harness retried calls that failed and
+  recorded none of them as a `response` of its own: a retry after a
+  rate limit or a dropped connection. It is a positive integer, and
+  absent means 1. A failed call the file does record as a `response`
+  is not counted again. `latency_ms`, when present, is the time the
+  harness measured; whether it spans the failed attempts is the
+  harness's to say.
 
 ### `config`
 
@@ -479,7 +487,7 @@ A delta to request settings. The first entry on any root SHOULD be a
 ```json
 {"type":"config","id":"…","parent":"…","ts":"…",
  "model":"…","instructions":"…","reasoning":{…},"text":{…},
- "instructions_parts":[{"id":"agentsmd","text":"…","source":"agentsmd"},
+ "instructions_parts":[{"keep":2},{"id":"agentsmd","text":"…","source":"agentsmd"},
                        {"id":"memory","hash":"sha256:…"}],
  "instructions_omitted":[{"id":"service/AGENTS.md","reason":"budget","size":4096,"source":"agentsmd"}],
  "tools_added":[…],"tools_removed":["name"],"extra":{…},"replace":false}
@@ -516,30 +524,58 @@ readers treat it as opaque.
   entries carry parts alone does not rebuild its instructions in a
   reader that does not know `instructions_parts`, which is the cost of
   this member and the reason it arrives in a new minor version.
-- A delta carries the **whole ordered list** of ids. A part whose text
-  changed, or that is new, carries its `text`. A part whose text is
-  unchanged carries `hash` and no `text`: the SHA-256 of its text in
+- A delta carries the **whole ordered list**: every part in force
+  after it, in order, and no other. A part whose text changed, or that
+  is new, carries its `id` and `text`. A part whose text is unchanged
+  carries its `id` and `hash` and no `text`: the SHA-256 of its text in
   the format's notation, `sha256:` and lowercase hexadecimal, and its
   text is the one the path already has for that id. A part the list
-  leaves out is removed. Order is therefore explicit in every delta,
-  and an unchanged part costs one id and one hash.
+  leaves out is removed. A list names each `id` once. Order is
+  therefore explicit in every delta. A part with an `id` and neither
+  `text` nor `hash` has empty text, which is how a writer that omits
+  an empty string writes one.
 - A part named by `hash` alone also keeps the `source` it had on the
   path, since the hash form has no way to say that a part has none
-  now. A writer that clears or changes a part's `source` writes the
-  part's `text` with it.
-- A part that carries neither `text` nor a `hash` this path can
-  resolve has no text a reader can rebuild. When the same entry
+  now, so a writer leaves `source` off it. A `source` present on such a
+  part, as a 0.6 writer repeated it, is the part's source. A writer
+  that clears or changes a part's `source` writes the part's `text`
+  with it.
+- A run of unchanged parts MAY be named by position instead:
+  `{"keep":n}`, an element with no `id` and a positive integer `keep`,
+  stands for the
+  next n parts in force before the entry, each unchanged, `text` and
+  `source` alike. "Next" is counted from a cursor into that list. The
+  cursor starts at its first part; an element naming a part in force
+  by `id` moves it to just after that part,
+  wherever that is; a `keep` moves it past the n parts it takes; an
+  element naming an `id` not in force leaves it where it is. A change
+  to the 61st of 126 parts is then
+  `[{"keep":60},{"id":"m61","text":"…"},{"keep":65}]`, and removing
+  the 61st is `[{"keep":60},{"id":"m62","hash":"sha256:…"},{"keep":64}]`.
+  An unchanged part costs one id and one hash when it is out of place
+  and nothing beyond its run's element when it is not. A writer MUST
+  NOT write a `keep` that runs past the end of the list in force, or
+  one that takes a part another element of the same list names, and
+  MUST NOT write any other member beside `keep`, which a reader
+  ignores. A `keep` member on an element that carries an `id` is a
+  member this document does not define there. Unlike a `hash`, a
+  `keep` names no text, so nothing but the `request_hash` checks it.
+- A part named by a `hash` this path cannot resolve, a `keep` that
+  runs past the end of the list in force or takes a part the list
+  names elsewhere, a `hash` or `keep` naming a part the path itself
+  could not rebuild, and an element with neither an `id` nor a
+  positive `keep`, have no text a reader can rebuild. When the same entry
   carries `instructions`, that string stands: it is the only record of
   what the model was sent, and a reader takes it over the join of
   parts it cannot resolve. Without it the instructions cannot be
   rebuilt and the `request_hash` will not verify, which is how such a
   file is found.
 - A writer MUST NOT write a delta with `replace: true` whose parts are
-  named by `hash` alone without `instructions` beside them: the
-  replace discards the parts the hashes would have resolved against,
-  so nothing on the path can rebuild them.
+  named by `hash` alone or by `keep` without `instructions` beside
+  them: the replace discards the parts they would have resolved
+  against, so nothing on the path can rebuild them.
 - `replace: true` discards the parts with the rest of the settings,
-  so a `hash` in the same entry resolves against nothing; a delta that
+  so a `hash` or a `keep` in the same entry resolves against nothing; a delta that
   sets `instructions` as a string and no parts replaces the
   composition, and the parts no longer describe what is in force.
 
@@ -873,18 +909,25 @@ closed, and `ref` is one string the harness can resolve to that file
 system (an image digest, a host, an instance ID). A local run MAY omit
 it. A container's `ref` SHOULD be a digest rather than a tag, because a
 tag moves. A container on a remote host is `container`, with the
-digest as `ref` and the host in a member this document does not
-define. Anything richer goes in such members too, which the envelope
-section says a rewriter preserves. An `env` entry applies from its
+digest as `ref` and the host in a member of `workspace` this document
+does not define. Anything else that tells one file system from
+another, a container's instance above all, since a restart from the
+same image is another file system with the same digest, goes in such
+members of `workspace` too, and not beside it in the entry: the
+substitution rule below compares `workspace` alone. The envelope
+section says a rewriter preserves them. An `env` entry applies from its
 position on the path until the next one.
 
 A later `env` entry whose `workspace` differs from the one in force
 before it on the path is a **substitution**: from that entry on, the
 tools ran against another file system than the path recorded until
 then, as when a session recorded in a container is resumed on a laptop.
-Two `workspace` members are compared as members, and an absent one
-equals only another absent one; a new `cwd`, `vcs` revision or file
-list in the same workspace is not a substitution. Recording the
+Two `workspace` members are compared member by member in their
+canonical form, as the entry hash writes them, every member this
+document does not define included, and an absent one equals only
+another absent one, an empty `kind` or `ref` being absent; a new
+`cwd`, `vcs` revision or file list in the same workspace is not a
+substitution. Recording the
 substitution is the point, so a writer writes the entry and nothing
 refuses it. A reader that holds the environment fixed, such as a strict
 replay or an evaluation comparing runs, treats the path from that entry
@@ -991,8 +1034,9 @@ stated as a rule a writer can be held to.
 Two things sit outside the rule, because neither is material from
 elsewhere. Media referenced by an item MAY be a sidecar, as the file
 section says; a sidecar is part of the session rather than outside it.
-An `instructions_parts` entry named by `hash` alone resolves against
-the parts already on this path, which is the same file.
+An `instructions_parts` entry named by `hash` alone, or taken by a
+`keep`, resolves against the parts already on this path, which is the
+same file.
 
 One thing the payload profile permits, this format does not. An `item`
 entry MUST NOT carry an `item_reference`. It names an item in the
@@ -1156,6 +1200,7 @@ One ATIF document per root-to-leaf path. `session_id` is the header ID;
 accompanying session plan and is normative for the Open Responses
 profile: user and system items to steps, one `response` with its items
 to one agent step with `tool_calls`, `reasoning_content` and `metrics`,
+its `llm_call_count` the response's `attempts`, 1 when absent,
 function call outputs to observations by `source_call_id`, compaction
 and branch summaries as copied-context system steps, `link` entries to
 `subagent_trajectories`. Where the output entry carries `parents`, the
@@ -1220,11 +1265,12 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.6 reads a 0.5 file as it stands,
-since 0.6 adds only optional members and the hashes do not change; a
-member 0.6 defines that a 0.5 file holds in another form, which it was
-free to while the name was undefined, is a member the reader does not
-know, and is preserved as one. A reader of 0.6 MUST read an earlier 0.x
+it begins at 1.0. A reader of 0.7 reads a 0.5 or 0.6 file as it
+stands, since 0.6 and 0.7 add only optional members and the hashes do
+not change; a member a later minor defines that an earlier file holds
+in another form, which it was free to while the name was undefined, is
+a member the reader does not know, and is preserved as one. A reader
+of 0.7 MUST read an earlier 0.x
 file by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
@@ -1267,7 +1313,10 @@ in three spellings and once in a member the format types as a number, a
 lone surrogate normalised with its `was`, output that was not valid
 UTF-8 replaced with its `raw`, 2^60 written as its canonical rendering
 1152921504606847000 and read back, a forked fixture whose `base` is
-found in its origin, the recomputed `reason` for every `run` end, and
+found in its origin, an instructions delta naming runs of parts by
+`keep` beside the parts it rebuilds, a `response` with `attempts`, an
+`env` whose `workspace` holds a host and an instance and a later one
+that substitutes another instance, the recomputed `reason` for every `run` end, and
 negative cases for a broken parent link, a truncated last line, an
 unknown type, a `dispatch` that follows a `reject`, and a header naming
 `dispatch` beside a call that has an output and no `dispatch`.
@@ -1289,6 +1338,35 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.6
+
+Additive but for one rule. Two optional members, and paragraphs in
+the instruction parts and `env` sections. No hash changes, and a 0.6
+file is a 0.7 file with none of the new members, with one exception: a
+part with an `id` and neither `text` nor `hash`, which 0.6 said had no
+text a reader could rebuild, is empty text in 0.7, because that is how
+a writer that omits an empty string, the reference library among
+them, wrote an empty part under 0.6. An element of a delta with no
+`id`, which a 0.7 reader may read as a `keep`, was not a 0.6 part.
+
+- A `response` carries `attempts`, the calls the model took to produce
+  it when the failed ones were retried without an entry of their own,
+  and the ATIF projection writes it as the step's `llm_call_count`.
+  Before it a reader could not tell a flaky provider from a slow one.
+- An instructions delta names a run of unchanged parts as `{"keep":n}`,
+  by position in the list in force, so a change to one part of a
+  composition of many small parts, a memory of a few hundred facts,
+  costs that part and not an id and a hash for every other. A part
+  named by `hash` leaves its `source` off, as it already kept the one
+  it had. The section also says that a part with an `id` and neither
+  `text` nor `hash` has empty text, as above, that a `source` on a part
+  named by `hash` is its source, and that a `hash` naming a part the
+  path could not rebuild does not rebuild it either.
+- `env` says the members that tell one file system from another, a
+  host or an instance, go inside `workspace`, so the substitution rule,
+  which compares `workspace` alone, covers them; the 0.6 text left
+  their place unstated.
 
 ## Changes since 0.5
 

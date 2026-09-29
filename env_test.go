@@ -1,10 +1,13 @@
 package agentsession
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -156,5 +159,87 @@ func TestOutcomeAndLinkBuilders(t *testing.T) {
 	}
 	if l := NewLabelEntry("a", ""); l.Label != nil {
 		t.Errorf("clearing label = %+v", l)
+	}
+}
+
+// TestSameWorkspace is the substitution rule over the members that
+// tell one file system from another (#95): a container restarted from
+// the same image, or moved to another host, is another workspace, and
+// its host and instance are members of workspace, which the rule
+// compares, rather than of the entry, which it does not.
+func TestSameWorkspace(t *testing.T) {
+	on := func(host, instance string) *Workspace {
+		var e EnvEntry
+		w := e.SetWorkspace(WorkspaceContainer, "sha256:ab")
+		if err := w.SetMember("host", host); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.SetMember("instance", instance); err != nil {
+			t.Fatal(err)
+		}
+		return e.Workspace
+	}
+	tests := []struct {
+		name string
+		a, b *Workspace
+		same bool
+	}{
+		{"both absent", nil, nil, true},
+		{"one absent", nil, &Workspace{Kind: WorkspaceLocal}, false},
+		{"equal", on("h1", "ctr-1"), on("h1", "ctr-1"), true},
+		{"another instance", on("h1", "ctr-1"), on("h1", "ctr-2"), false},
+		{"another host", on("h1", "ctr-1"), on("h2", "ctr-1"), false},
+		{"a member absent", on("h1", "ctr-1"), &Workspace{Kind: WorkspaceContainer, Ref: "sha256:ab"}, false},
+		{"members spelled apart", &Workspace{Kind: "local", Unknown: map[string]json.RawMessage{"n": json.RawMessage(`1.0`)}}, &Workspace{Kind: "local", Unknown: map[string]json.RawMessage{"n": json.RawMessage(`1`)}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SameWorkspace(tt.a, tt.b); got != tt.same {
+				t.Errorf("SameWorkspace = %v, want %v", got, tt.same)
+			}
+		})
+	}
+	// Set through the setter, the members reach the file inside
+	// workspace and read back as they were written.
+	s := New(Header{})
+	env := &EnvEntry{CWD: "/w"}
+	env.Workspace = on("h1", "ctr-1")
+	if _, err := s.Append(env); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"workspace":{"host":"h1","instance":"ctr-1","kind":"container","ref":"sha256:ab"}`) {
+		t.Errorf("workspace written as %s", buf.String())
+	}
+	back, err := Read(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !SameWorkspace(back.Entries()[0].(*EnvEntry).Workspace, env.Workspace) {
+		t.Error("the workspace did not read back as written")
+	}
+	var w Workspace
+	if err := w.SetMember("kind", "x"); err == nil {
+		t.Error("SetMember took a member the format defines")
+	}
+}
+
+// TestWorkspaceWithoutKind: kind is written only when set, so a
+// workspace without one reads and writes back as it was.
+func TestWorkspaceWithoutKind(t *testing.T) {
+	for _, w := range []string{`{}`, `{"ref":"x"}`, `{"Kind":"container"}`} {
+		line := `{"type":"env","parent":null,"ts":"2026-09-17T16:00:01Z","workspace":` + w + `}`
+		id, _, err := EntryHashes([]byte(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		line = `{"id":"` + id + `",` + line[1:]
+		head := `{"type":"session","format":"agentsession/0.6","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}`
+		if _, err := Read(strings.NewReader(head + "\n" + line + "\n")); err != nil {
+			t.Errorf("%s: %v", w, err)
+		}
 	}
 }

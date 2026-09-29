@@ -135,27 +135,71 @@ func JoinInstructions(parts []InstructionPart) string {
 
 // applyInstructionParts resolves a delta's ordered list against the
 // parts in force: a part carrying text sets it, a part carrying a
-// hash alone keeps the text the path has, and a part the list leaves
-// out is gone. A hash whose part is not on the path is kept as it
-// was written, so a reader can see that the text is missing rather
-// than read an empty part as empty text.
+// hash alone keeps the text the path has, a keep takes the next parts
+// in force as they are, and a part the list leaves out is gone. A
+// hash whose part is not on the path is kept as it was written, and
+// so is a keep that runs past the parts in force or takes one the
+// list names elsewhere, so a reader can see that the text is missing
+// rather than read an empty part as empty text.
+//
+// A keep counts from a cursor into the parts in force: an element
+// naming a part in force moves it to just after that part, a keep
+// moves it past the parts it takes, and a new id leaves it alone. A
+// part named with neither text nor hash has empty text, which is how
+// a writer spells one. An element with neither an id nor a keep, or a
+// hash or keep over a part the path itself could not rebuild, leaves
+// the part unresolved.
 func applyInstructionParts(prev, delta []InstructionPart) []InstructionPart {
 	byID := make(map[string]InstructionPart, len(prev))
-	for _, p := range prev {
+	at := make(map[string]int, len(prev))
+	for i, p := range prev {
 		byID[p.ID] = p
+		at[p.ID] = i
+	}
+	named := make(map[string]bool, len(delta))
+	for _, p := range delta {
+		if p.ID != "" {
+			named[p.ID] = true
+		}
 	}
 	out := make([]InstructionPart, 0, len(delta))
+	cursor := 0
 	for _, p := range delta {
+		if p.ID == "" && p.Keep > 0 {
+			run := prev[min(cursor, len(prev)):min(cursor+p.Keep, len(prev))]
+			ok := len(run) == p.Keep
+			for _, q := range run {
+				ok = ok && !named[q.ID]
+			}
+			cursor += p.Keep
+			if !ok {
+				out = append(out, InstructionPart{Keep: p.Keep})
+				continue
+			}
+			// A part kept as it is stays unresolved if it was.
+			out = append(out, run...)
+			continue
+		}
+		if p.ID == "" {
+			// Neither a part nor a keep: nothing to rebuild.
+			out = append(out, InstructionPart{Keep: p.Keep, unresolved: true})
+			continue
+		}
+		if i, ok := at[p.ID]; ok {
+			cursor = i + 1
+		}
 		next := InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source}
 		if p.Text == "" && p.Hash != "" {
 			old, ok := byID[p.ID]
 			switch {
-			case ok:
+			case ok && !old.Unresolved():
 				next.Text = old.Text
 				if next.Source == "" {
 					next.Source = old.Source
 				}
 			default:
+				// Not on the path, or on it without its text: the hash
+				// resolves against nothing.
 				next.Hash = p.Hash
 			}
 		}
@@ -164,12 +208,11 @@ func applyInstructionParts(prev, delta []InstructionPart) []InstructionPart {
 	return out
 }
 
-// unresolvedParts reports whether any part still carries the hash it
-// was named by, which is what [applyInstructionParts] leaves behind
-// for a part whose text is not on the path.
+// unresolvedParts reports whether any part is one the path could not
+// rebuild: see [InstructionPart.Unresolved].
 func unresolvedParts(parts []InstructionPart) bool {
 	for _, p := range parts {
-		if p.Hash != "" {
+		if p.Unresolved() {
 			return true
 		}
 	}
@@ -177,11 +220,13 @@ func unresolvedParts(parts []InstructionPart) bool {
 }
 
 // InstructionsDelta returns the config delta that takes the
-// instructions from these settings to parts: the whole ordered list
-// of IDs, with the text of every part that is new or whose text
-// changed and the hash alone of every part that is unchanged, so a
-// change to one layer costs that layer and not the whole prompt. A
-// part in force that parts leaves out is removed by its absence.
+// instructions from these settings to parts: the whole ordered list,
+// with the text of every part that is new or whose text or source
+// changed, a keep for every run of unchanged parts in the order they
+// are in force, and the hash alone of an unchanged part out of that
+// order, so a change to one layer costs that layer and not the whole
+// prompt, however many parts it has. A part in force that parts leaves
+// out is removed by its absence. parts names each ID once.
 //
 // It returns nil when parts are exactly the ones in force, so a
 // harness that re-renders its layers every turn writes nothing when
@@ -194,31 +239,52 @@ func (s Settings) InstructionsDelta(parts []InstructionPart) *ConfigEntry {
 		empty := ""
 		return &ConfigEntry{Instructions: &empty}
 	}
-	byID := make(map[string]InstructionPart, len(s.InstructionsParts))
-	for _, p := range s.InstructionsParts {
-		byID[p.ID] = p
+	at := make(map[string]int, len(s.InstructionsParts))
+	for i, p := range s.InstructionsParts {
+		at[p.ID] = i
 	}
 	same := len(parts) == len(s.InstructionsParts)
 	out := make([]InstructionPart, 0, len(parts))
+	cursor, run := 0, 0
+	flush := func() {
+		if run > 0 {
+			out = append(out, InstructionPart{Keep: run})
+			cursor += run
+			run = 0
+		}
+	}
 	for i, p := range parts {
-		old, ok := byID[p.ID]
-		// A part named by its hash inherits the source it had, so a
-		// part whose source moved, cleared above all, carries its text
-		// even when the text did not change: the hash form cannot say
+		j, ok := at[p.ID]
+		// A part named by its hash or kept inherits the source it had,
+		// so a part whose source moved, cleared above all, carries its
+		// text even when the text did not change: neither form can say
 		// "this part has no source now".
-		if !ok || old.Text != p.Text || old.Source != p.Source {
+		// A part in force the path could not rebuild is written out, so
+		// the delta resolves it rather than keeping what is missing.
+		if !ok || s.InstructionsParts[j].Unresolved() || s.InstructionsParts[j].Text != p.Text || s.InstructionsParts[j].Source != p.Source {
+			flush()
 			out = append(out, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source})
+			if ok {
+				cursor = j + 1
+			}
 			same = false
 			continue
 		}
-		if same && s.InstructionsParts[i].ID != p.ID {
+		if j != i {
 			same = false
 		}
-		out = append(out, InstructionPart{ID: p.ID, Source: p.Source, Hash: HashText(p.Text)})
+		if j == cursor+run {
+			run++
+			continue
+		}
+		flush()
+		out = append(out, InstructionPart{ID: p.ID, Hash: HashText(p.Text)})
+		cursor = j + 1
 	}
 	if same {
 		return nil
 	}
+	flush()
 	return &ConfigEntry{InstructionsParts: out}
 }
 

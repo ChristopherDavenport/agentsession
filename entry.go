@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -216,6 +217,19 @@ type ResponseEntry struct {
 	Error       *openresponses.ErrorPayload      `json:"error,omitempty"`
 	RequestHash string                           `json:"request_hash,omitempty"`
 	LatencyMS   int64                            `json:"latency_ms,omitempty"`
+	// Attempts is the number of calls to the model this response took,
+	// itself included, when the harness retried calls that failed and
+	// recorded none of them as a response entry of its own. Zero means
+	// one. An attempts member that is not a positive integer, which a
+	// file from before the member was defined may hold, is kept as
+	// written in Unknown and Attempts is zero.
+	Attempts int `json:"-" member:"attempts"`
+}
+
+// Calls returns the number of calls to the model the response took:
+// Attempts, or one when it is not set.
+func (e *ResponseEntry) Calls() int {
+	return max(e.Attempts, 1)
 }
 
 // EntryType returns "response".
@@ -263,8 +277,9 @@ type ConfigEntry struct {
 type InstructionPart struct {
 	// ID is the part's stable name, chosen by the harness: the same
 	// string across the session, so a delta can name a part it does
-	// not repeat.
-	ID string `json:"id"`
+	// not repeat. It is empty on a keep, and on a part in force that
+	// an element naming nothing left unresolved.
+	ID string `json:"id,omitempty"`
 	// Text is the part's text. On a delta it is absent for a part
 	// whose text is unchanged, which carries Hash instead.
 	Text string `json:"text,omitempty"`
@@ -276,6 +291,45 @@ type InstructionPart struct {
 	// [HashText] computes it. It is set on a delta's unchanged part
 	// and empty on a part that carries its text.
 	Hash string `json:"hash,omitempty"`
+	// Keep, on a delta, stands for the next Keep parts in force,
+	// unchanged, and is the element's only member: see
+	// [Settings.InstructionsDelta]. A keep member that is not a
+	// positive integer, which a file from before the member was defined
+	// may hold, is kept as written and Keep is zero; on an element that
+	// names an ID it means nothing.
+	Keep int `json:"keep,omitempty"`
+
+	// unresolved marks a part in force whose text the path could not
+	// rebuild and that carries neither the Hash nor the Keep that says
+	// so: an element with no ID and no keep.
+	unresolved bool
+}
+
+// Unresolved reports whether the path could not rebuild the part's
+// text: it was named by a hash or a keep the path could not resolve,
+// or by an element that names nothing.
+func (p InstructionPart) Unresolved() bool {
+	return p.Text == "" && p.Hash != "" || p.ID == "" && p.Keep > 0 || p.unresolved
+}
+
+// UnmarshalJSON decodes the part, taking keep only when it is a
+// positive integer written as digits, so an earlier file's keep in any
+// other form stays a member this package does not define.
+func (p *InstructionPart) UnmarshalJSON(data []byte) error {
+	type plain InstructionPart
+	var v struct {
+		plain
+		Keep json.RawMessage `json:"keep"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*p = InstructionPart(v.plain)
+	p.Keep = 0
+	if n, err := strconv.ParseInt(string(v.Keep), 10, 32); err == nil && n > 0 {
+		p.Keep = int(n)
+	}
+	return nil
 }
 
 // OmittedPart is a part the writer considered for the instructions
@@ -1452,7 +1506,15 @@ func (e *ItemEntry) decodeMembers(_ []byte, all map[string]json.RawMessage) erro
 // MarshalJSON emits the entry as one JSON object.
 func (e *ResponseEntry) MarshalJSON() ([]byte, error) {
 	type plain ResponseEntry
-	return marshalEntry(TypeResponse, &e.EntryBase, (*plain)(e))
+	if e.Attempts != 0 {
+		if _, dup := e.Unknown["attempts"]; dup {
+			return nil, errors.New("agentsession: response entry has attempts both typed and unknown")
+		}
+	}
+	return marshalEntry(TypeResponse, &e.EntryBase, struct {
+		*plain
+		Attempts int `json:"attempts,omitempty"`
+	}{(*plain)(e), e.Attempts})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -1466,7 +1528,12 @@ func (e *ResponseEntry) UnmarshalJSON(data []byte) error {
 
 func (e *ResponseEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain ResponseEntry
-	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), responseKeys)
+	e.Attempts = 0
+	if err := unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), responseKeys); err != nil {
+		return err
+	}
+	promoteIf(&e.EntryBase, "attempts", &e.Attempts, func(n int) bool { return n > 0 })
+	return nil
 }
 
 // MarshalJSON emits the entry as one JSON object.
@@ -1728,12 +1795,18 @@ func (e *CustomEntry) decodeMembers(data []byte, all map[string]json.RawMessage)
 // filled this way is tagged json:"-" with a member tag naming its wire
 // member, which the member round-trip test reads.
 func promote[T any](base *EntryBase, key string, dst *T) {
+	promoteIf(base, key, dst, nil)
+}
+
+// promoteIf is promote for a member the typed field takes only when
+// valid says the decoded value is one it can hold.
+func promoteIf[T any](base *EntryBase, key string, dst *T, valid func(T) bool) {
 	raw, ok := base.Unknown[key]
 	if !ok {
 		return
 	}
 	var v T
-	if json.Unmarshal(raw, &v) != nil || reflect.ValueOf(v).IsZero() {
+	if json.Unmarshal(raw, &v) != nil || reflect.ValueOf(v).IsZero() || valid != nil && !valid(v) {
 		return
 	}
 	// The decoder matches keys in any case; the typed field is taken only

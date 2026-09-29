@@ -21,6 +21,7 @@ package otel
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -437,6 +438,14 @@ func (t *tracker) entry(e agentsession.Entry) {
 			attrs = append(attrs, attribute.String("workspace.kind", v.Workspace.Kind))
 			if v.Workspace.Ref != "" {
 				attrs = append(attrs, attribute.String("workspace.ref", v.Workspace.Ref))
+			}
+			// The members that tell one file system from another, which
+			// RFC 0001 puts inside workspace, when they are strings.
+			for _, key := range []string{"host", "instance"} {
+				var s string
+				if json.Unmarshal(v.Workspace.Unknown[key], &s) == nil && s != "" {
+					attrs = append(attrs, attribute.String("workspace."+key, s))
+				}
 			}
 		}
 		t.session.AddEvent(EventEnv, trace.WithTimestamp(ts), trace.WithAttributes(attrs...))

@@ -2,6 +2,9 @@ package agentsession
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -30,19 +33,10 @@ func edit(parts []InstructionPart, id string, text string) []InstructionPart {
 	return out
 }
 
-func partByID(parts []InstructionPart, id string) InstructionPart {
-	for _, p := range parts {
-		if p.ID == id {
-			return p
-		}
-	}
-	return InstructionPart{}
-}
-
 // TestInstructionsDeltaCostsOnePart is the measurement three studies
 // filed: every change to any layer used to rewrite every layer into
-// the path. A delta now carries the text of the part that moved and
-// one id and one hash for each part that did not, so what it costs is
+// the path. A delta now carries the text of the part that moved and a
+// keep for each run of parts that did not, so what it costs is
 // proportional to the change.
 func TestInstructionsDeltaCostsOnePart(t *testing.T) {
 	base := composed()
@@ -91,20 +85,28 @@ func TestInstructionsDeltaCostsOnePart(t *testing.T) {
 				t.Errorf("a change to %s wrote %d bytes, against %d for the whole %d byte block",
 					tt.part, len(line), len(before), whole)
 			}
-			// Only the changed part carries text.
+			// Only the changed part carries text; the parts around it
+			// are runs kept in place.
+			covered := 0
 			for _, p := range delta.InstructionsParts {
-				if p.ID == tt.part {
+				switch {
+				case p.Keep > 0:
+					if p.ID != "" || p.Text != "" || p.Source != "" || p.Hash != "" {
+						t.Errorf("a keep carries other members: %+v", p)
+					}
+					covered += p.Keep
+					continue
+				case p.ID == tt.part:
 					if p.Text != tt.text || p.Hash != "" {
 						t.Errorf("the changed part carries text %d, hash %q", len(p.Text), p.Hash)
 					}
-					continue
+				default:
+					t.Errorf("unchanged part %s is named rather than kept: %+v", p.ID, p)
 				}
-				if p.Text != "" {
-					t.Errorf("part %s repeats %d bytes of unchanged text", p.ID, len(p.Text))
-				}
-				if p.Hash != HashText(partByID(base, p.ID).Text) {
-					t.Errorf("part %s carries hash %q", p.ID, p.Hash)
-				}
+				covered++
+			}
+			if covered != len(next) {
+				t.Errorf("the delta covers %d parts, want %d", covered, len(next))
 			}
 			// And the delta rebuilds the whole prompt.
 			got := settings.Apply(delta)
@@ -354,6 +356,192 @@ func TestInstructionsDeltaShapes(t *testing.T) {
 	})
 }
 
+// memoryParts is a memory block of many short facts, one part each:
+// the shape agentmemory's RenderParts produces, which the letta-memory
+// study measured at 126 entries of about 250 bytes.
+func memoryParts(n int) []InstructionPart {
+	parts := []InstructionPart{{ID: "product", Source: "product", Text: strings.Repeat("p", 92)}}
+	for i := 1; i < n; i++ {
+		parts = append(parts, InstructionPart{
+			ID:     fmt.Sprintf("m%d", i),
+			Source: "agentmemory",
+			Text:   fmt.Sprintf("fact %03d: ", i) + strings.Repeat("f", 240),
+		})
+	}
+	return parts
+}
+
+// TestInstructionsDeltaKeepsRuns is the letta-memory finding (#94):
+// naming every unchanged part by its id and hash cost 131 bytes a part,
+// so a 3 byte patch to a block of 126 short facts wrote 17 KB. A run of
+// unchanged parts is now one keep, and the patch costs what changed.
+func TestInstructionsDeltaKeepsRuns(t *testing.T) {
+	base := memoryParts(126)
+	full, err := ConfigFromRequestParts(openresponses.Request{Instructions: JoinInstructions(base)}, base...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := Settings{}.Apply(full)
+	hashOf := func(i int) string { return HashText(base[i].Text) }
+
+	patched := edit(base, "m60", base[60].Text+"abc")
+	inserted := append(append(append([]InstructionPart(nil), base[:60]...), InstructionPart{ID: "new", Source: "agentmemory", Text: "a new fact"}), base[60:]...)
+	removed := append(append([]InstructionPart(nil), base[:60]...), base[61:]...)
+	moved := append([]InstructionPart{base[125]}, base[:125]...)
+	tests := []struct {
+		name string
+		next []InstructionPart
+		want []InstructionPart
+	}{
+		{"a patch to one part", patched, []InstructionPart{{Keep: 60}, {ID: "m60", Source: "agentmemory", Text: patched[60].Text}, {Keep: 65}}},
+		{"a part inserted", inserted, []InstructionPart{{Keep: 60}, {ID: "new", Source: "agentmemory", Text: "a new fact"}, {Keep: 66}}},
+		{"a part removed", removed, []InstructionPart{{Keep: 60}, {ID: "m61", Hash: hashOf(61)}, {Keep: 64}}},
+		// Naming the last part moves the cursor past the end, so the
+		// first is named too before the run resumes.
+		{"the last part moved first", moved, []InstructionPart{{ID: "m125", Hash: hashOf(125)}, {ID: "product", Hash: hashOf(0)}, {Keep: 124}}},
+		{"the last part removed", base[:125], []InstructionPart{{Keep: 125}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			delta := settings.InstructionsDelta(tt.next)
+			if delta == nil {
+				t.Fatal("no delta")
+			}
+			if !reflect.DeepEqual(delta.InstructionsParts, tt.want) {
+				t.Errorf("delta = %+v\nwant    %+v", delta.InstructionsParts, tt.want)
+			}
+			got := settings.Apply(delta)
+			if !reflect.DeepEqual(got.InstructionsParts, tt.next) {
+				t.Errorf("the delta does not rebuild the parts")
+			}
+			if got.Instructions != JoinInstructions(tt.next) {
+				t.Errorf("the delta does not rebuild the instructions")
+			}
+		})
+	}
+
+	delta := settings.InstructionsDelta(patched)
+	line, err := MarshalEntry(withEnvelope(delta))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(line) > len(patched[60].Text)+400 {
+		t.Errorf("a 3 byte patch to a %d part block wrote %d bytes", len(base), len(line))
+	}
+	t.Logf("a 3 byte patch to %d parts of %d bytes: %d bytes", len(base), len(base[1].Text), len(line))
+}
+
+// TestInstructionsKeepUnresolved: a keep a path cannot satisfy leaves
+// its mark, as a hash that names nothing does, and the string beside
+// it stands.
+func TestInstructionsKeepUnresolved(t *testing.T) {
+	base := composed()
+	full, err := ConfigFromRequestParts(openresponses.Request{Instructions: JoinInstructions(base)}, base...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := Settings{}.Apply(full)
+	whole := "what the model was sent"
+	for name, parts := range map[string][]InstructionPart{
+		"past the end":              {{Keep: 5}},
+		"past the end after a part": {{ID: "agentskill", Hash: HashText(base[2].Text)}, {Keep: 2}},
+		"over a part named after":   {{Keep: 2}, {ID: "agentsmd", Hash: HashText(base[1].Text)}},
+		"after a replace":           nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := &ConfigEntry{InstructionsParts: parts}
+			if parts == nil {
+				c = &ConfigEntry{Replace: true, InstructionsParts: []InstructionPart{{Keep: 1}}}
+			}
+			got := settings.Apply(c)
+			if !unresolvedParts(got.InstructionsParts) {
+				t.Errorf("parts = %+v resolved", got.InstructionsParts)
+			}
+			c.Instructions = &whole
+			if got := settings.Apply(c); got.Instructions != whole {
+				t.Errorf("instructions = %q, want the string beside the parts", got.Instructions)
+			}
+		})
+	}
+	// A keep member on a part that names an id means nothing there.
+	got := settings.Apply(&ConfigEntry{InstructionsParts: []InstructionPart{{ID: "product", Hash: HashText(base[0].Text), Keep: 3}}})
+	if len(got.InstructionsParts) != 1 || got.InstructionsParts[0].Text != base[0].Text {
+		t.Errorf("parts = %+v", got.InstructionsParts)
+	}
+}
+
+// TestInstructionsKeepRoundTrip writes a session whose deltas keep
+// runs, reads it back, and checks every request hash, since what a
+// keep takes is covered by nothing else.
+func TestInstructionsKeepRoundTrip(t *testing.T) {
+	s := New(Header{})
+	base := memoryParts(20)
+	turn := func(parts []InstructionPart, user string) {
+		t.Helper()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg *ConfigEntry
+		if len(ctx.Entries) == 0 {
+			if cfg, err = ConfigFromRequestParts(openresponses.Request{Model: "gpt-5", Instructions: JoinInstructions(parts)}, parts...); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			cfg = ctx.Settings.InstructionsDelta(parts)
+		}
+		if cfg != nil {
+			if _, err := s.Append(cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := s.Append(NewItemEntry(openresponses.UserText(user))); err != nil {
+			t.Fatal(err)
+		}
+		if ctx, err = s.Context(); err != nil {
+			t.Fatal(err)
+		}
+		req, err := ctx.Request()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if req.Instructions != JoinInstructions(parts) {
+			t.Fatalf("the request carries %d bytes of instructions, want %d", len(req.Instructions), len(JoinInstructions(parts)))
+		}
+		hash, err := RequestHash(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(&ResponseEntry{ResponseID: "resp_" + user, Status: openresponses.ResponseStatusCompleted, RequestHash: hash}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	turn(base, "1")
+	next := edit(base, "m7", base[7].Text+" and more")
+	turn(next, "2")
+	next = append(append([]InstructionPart(nil), next[:3]...), next[4:]...)
+	turn(next, "3")
+
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `{"keep":`) {
+		t.Fatal("no delta kept a run")
+	}
+	back, err := Read(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range back.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			if err := back.Verify(r.ID); err != nil {
+				t.Errorf("%s: %v", r.ResponseID, err)
+			}
+		}
+	}
+}
+
 // TestInstructionsPartsValidation holds a writer to the rules the
 // format states, on the way in rather than at the far end of a file.
 func TestInstructionsPartsValidation(t *testing.T) {
@@ -383,6 +571,22 @@ func TestInstructionsPartsValidation(t *testing.T) {
 		{"a string that is not the join", &ConfigEntry{
 			Instructions:      &joined,
 			InstructionsParts: []InstructionPart{{ID: "a", Text: "one"}, {ID: "b", Text: "three"}},
+		}, false},
+		{"a keep", &ConfigEntry{
+			InstructionsParts: []InstructionPart{{Keep: 2}, {ID: "c", Text: "three"}},
+		}, true},
+		{"a keep that names a part", &ConfigEntry{
+			InstructionsParts: []InstructionPart{{ID: "a", Keep: 2}},
+		}, false},
+		{"a keep with a source", &ConfigEntry{
+			InstructionsParts: []InstructionPart{{Keep: 2, Source: "product"}},
+		}, false},
+		{"a negative keep", &ConfigEntry{
+			InstructionsParts: []InstructionPart{{Keep: -1}},
+		}, false},
+		{"a replacing keep with nothing to keep", &ConfigEntry{
+			Replace:           true,
+			InstructionsParts: []InstructionPart{{Keep: 1}},
 		}, false},
 		{"an omitted part with no id", &ConfigEntry{
 			InstructionsOmitted: []OmittedPart{{Reason: "budget"}},
@@ -598,5 +802,114 @@ func TestInstructionsPartsThroughCompaction(t *testing.T) {
 	}
 	if again.Settings.Instructions != ctx.Settings.Instructions {
 		t.Errorf("the instructions changed on a round trip")
+	}
+}
+
+// TestInstructionsUnresolvedStaysUnresolved: a part the path could not
+// rebuild stays so when a later delta keeps it or names it by hash, so
+// the string beside that delta still stands; an element that names
+// nothing is unresolved; and a part named with neither text nor hash
+// has empty text, which is how a writer spells one. (Review of #94.)
+func TestInstructionsUnresolvedStaysUnresolved(t *testing.T) {
+	lost := Settings{}.Apply(&ConfigEntry{InstructionsParts: []InstructionPart{{ID: "a", Hash: HashText("lost")}, {ID: "b", Text: "B"}}})
+	if !unresolvedParts(lost.InstructionsParts) {
+		t.Fatal("the hash resolved against nothing")
+	}
+	whole := "lost\n\nB2"
+	for name, parts := range map[string][]InstructionPart{
+		"kept":             {{Keep: 1}, {ID: "b", Text: "B2"}},
+		"named by hash":    {{ID: "a", Hash: HashText("lost")}, {ID: "b", Text: "B2"}},
+		"a keep of a keep": {{Keep: 1}, {ID: "b", Text: "B2"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			from := lost
+			if name == "a keep of a keep" {
+				from = Settings{}.Apply(&ConfigEntry{InstructionsParts: []InstructionPart{{Keep: 3}, {ID: "b", Text: "B"}}})
+			}
+			got := from.Apply(&ConfigEntry{Instructions: &whole, InstructionsParts: parts})
+			if !unresolvedParts(got.InstructionsParts) || got.Instructions != whole {
+				t.Errorf("instructions %q, parts %+v", got.Instructions, got.InstructionsParts)
+			}
+		})
+	}
+	t.Run("an element that names nothing", func(t *testing.T) {
+		for _, line := range []string{`{"keep":0}`, `{"keep":99999999999}`, `{}`} {
+			var p InstructionPart
+			if err := json.Unmarshal([]byte(line), &p); err != nil {
+				t.Fatal(err)
+			}
+			s := "S"
+			got := Settings{}.Apply(&ConfigEntry{Instructions: &s, InstructionsParts: []InstructionPart{p}})
+			if got.Instructions != "S" {
+				t.Errorf("%s: instructions %q, want the string beside it", line, got.Instructions)
+			}
+		}
+	})
+	t.Run("an empty part", func(t *testing.T) {
+		base := []InstructionPart{{ID: "a", Text: "A"}, {ID: "b", Text: "B"}, {ID: "c", Text: "C"}}
+		settings := Settings{}.Apply(&ConfigEntry{InstructionsParts: base})
+		next := []InstructionPart{{ID: "a", Text: "A"}, {ID: "e"}, {ID: "b", Text: "B"}, {ID: "c", Text: "C"}}
+		got := settings.Apply(settings.InstructionsDelta(next))
+		if unresolvedParts(got.InstructionsParts) || got.Instructions != JoinInstructions(next) {
+			t.Errorf("parts %+v", got.InstructionsParts)
+		}
+		// Naming a part in force with neither moves the cursor past it.
+		got = settings.Apply(&ConfigEntry{InstructionsParts: []InstructionPart{{ID: "b"}, {Keep: 1}}})
+		if len(got.InstructionsParts) != 2 || got.InstructionsParts[1].ID != "c" {
+			t.Errorf("parts %+v", got.InstructionsParts)
+		}
+	})
+}
+
+// TestCompactionLeavesUnresolvedPartsOut: a checkpoint's parts each
+// carry their text, so parts the path could not rebuild are not
+// carried, and the string that was sent stands.
+func TestCompactionLeavesUnresolvedPartsOut(t *testing.T) {
+	s := New(Header{})
+	whole := "X"
+	for _, e := range []Entry{
+		&ConfigEntry{InstructionsParts: []InstructionPart{{ID: "a", Text: "A"}}},
+		&ConfigEntry{Instructions: &whole, InstructionsParts: []InstructionPart{{Keep: 3}}},
+		NewItemEntry(openresponses.UserText("one")),
+		NewItemEntry(openresponses.UserText("two")),
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := s.Entries()[2].Base().ID
+	c, err := s.Compact(first, openresponses.UserText("summary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Config.InstructionsParts != nil || c.Config.Instructions != "X" {
+		t.Errorf("checkpoint = %+v", c.Config)
+	}
+}
+
+// TestInstructionsTextAndHash: a part in force that carries its text
+// beside a hash, as a checkpoint written elsewhere may, is resolved;
+// and a delta over a part in force that is not writes its text, so the
+// next delta resolves it. (Second review of #94.)
+func TestInstructionsTextAndHash(t *testing.T) {
+	a := InstructionPart{ID: "a", Text: "A", Hash: HashText("A")}
+	settings := Settings{InstructionsParts: []InstructionPart{a}}
+	for _, parts := range [][]InstructionPart{
+		{{ID: "a", Hash: HashText("A")}, {ID: "b", Text: "B"}},
+		{{Keep: 1}, {ID: "b", Text: "B"}},
+	} {
+		got := settings.Apply(&ConfigEntry{InstructionsParts: parts})
+		if unresolvedParts(got.InstructionsParts) || got.Instructions != "A\n\nB" {
+			t.Errorf("%+v: instructions %q", parts, got.Instructions)
+		}
+	}
+	lost := Settings{}.Apply(&ConfigEntry{InstructionsParts: []InstructionPart{{ID: "a", Hash: HashText("")}, {ID: "b", Text: "B"}}})
+	next := []InstructionPart{{ID: "a"}, {ID: "b", Text: "B"}}
+	delta := lost.InstructionsDelta(next)
+	if delta == nil {
+		t.Fatal("no delta over an unresolved part")
+	}
+	if got := lost.Apply(delta); unresolvedParts(got.InstructionsParts) || got.Instructions != JoinInstructions(next) {
+		t.Errorf("parts %+v", got.InstructionsParts)
 	}
 }

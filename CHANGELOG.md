@@ -5,6 +5,72 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **RFC 0001 draft 0.7; the library writes `agentsession/0.7`.**
+  Additive: two optional members and one paragraph. A 0.5 or 0.6 file
+  reads as it stands, with nothing rehashed; v0.0.9 refuses a 0.7 file,
+  as a 0.x reader refuses a later minor. As with 0.6, the typed field
+  of a new member is filled only from a member that decodes into it,
+  and an earlier file's member of the same name in any other form is
+  kept as written.
+- **A run of unchanged instruction parts costs one element.** A delta
+  named every unchanged part by its id, source and hash, about 130
+  bytes a part, so a 3 byte patch to a memory block of 126 short facts
+  wrote 17 KB, and the saving over the joined string shrank as the
+  memory grew. `InstructionsDelta` now writes `{"keep":n}` for each run
+  of parts that are unchanged and in the order they are in force, and
+  leaves `source` off a part it names by hash, which the reader already
+  inherited. The same patch is 427 bytes. `keep` counts from a cursor
+  into the parts in force: naming a part in force moves the cursor to
+  just after it, so a removal is a keep, the next part by hash and a
+  keep, and an insertion is a keep, the new part and a keep. A keep
+  that runs past the parts in force, or takes a part the delta names
+  elsewhere, resolves as an unknown hash does: the `instructions`
+  string beside it stands, and without one the request hash does not
+  verify. So does a hash or keep over a part the path itself could not
+  rebuild, which v0.0.9 turned into empty text, ignoring the string
+  beside it; an element with neither an id nor a keep; and, in a
+  compaction, parts the path could not rebuild, which the checkpoint
+  now leaves out so that its `instructions` stand alone. A part with an
+  id and neither text nor hash is empty text, as the writer spells
+  one, and moves the cursor like any other part named; 0.6 called such
+  a part unresolved, which the library never did. A delta over a part
+  in force that is unresolved writes that part's text. `Append`
+  refuses a keep that carries any other member, and a replacing config
+  with a keep and no string. `InstructionPart.ID` is now `omitempty`,
+  since a keep has none, and `InstructionPart.Unresolved` says whether
+  a part in force has text the path could rebuild. (#94)
+- **`attempts` on a response, and `llm_call_count` from it.** The
+  exporter wrote `llm_call_count: 1` on every step, so a benchmark
+  against a rate-limited provider read it as slow rather than flaky.
+  `ResponseEntry.Attempts` records the calls a response took when the
+  failed ones were retried without an entry of their own, `Calls`
+  reads it with absent as one, the ATIF step carries it, and `show`
+  prints it. `Append` refuses a negative count. The format carries the
+  count rather than the exporter counting another project's custom
+  entries; agentturn's half is to write it from its retry loop
+  (agentturn#117). (#93)
+- **A workspace holds its own host and instance.** The library told a
+  writer to put a container's host beside `workspace`, where the
+  substitution rule does not look, so a move to another host or a
+  restart from the same image read as the same workspace. `Workspace`
+  now has `Unknown`, encoded inline and kept on rewrite, and
+  `SetMember` to set one; `SetWorkspace` returns the workspace it
+  sets. `SameWorkspace` applies the substitution rule, every member
+  compared. RFC 0001 says the members that tell one file system from
+  another go inside `workspace`, and that members are compared in
+  their canonical form. A key in another case, such as `Kind`, is a
+  member of its own rather than read as `kind`, and `kind` is written
+  only when set, so a workspace without one, which v0.0.9 refused on
+  read, reads as written. The OpenTelemetry env event carries
+  `workspace.host` and `workspace.instance` beside `workspace.kind` and
+  `workspace.ref` when the workspace holds them as strings. (#95)
+- `testdata/sessions/parts.jsonl` is the 0.7 conformance fixture:
+  deltas that keep runs, a response that took retries, and a workspace
+  with its host and instance followed by a restart onto another
+  instance, every request hash verified.
+
 ## v0.0.9 - 2026-09-28
 
 - **A member nested inside an object the library types is kept and

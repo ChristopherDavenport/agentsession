@@ -690,6 +690,10 @@ func validateEntry(e Entry) error {
 	switch v := e.(type) {
 	case nil:
 		return errors.New("agentsession: nil entry")
+	case *ResponseEntry:
+		if v.Attempts < 0 {
+			return errors.New("agentsession: response attempts is negative")
+		}
 	case *ItemEntry:
 		if v.Item == nil {
 			return errors.New("agentsession: item entry has no item")
@@ -724,15 +728,26 @@ func validateEntry(e Entry) error {
 }
 
 // validateConfig checks the instructions parts of a config delta: a
-// part is named, named once, and when every part carries its text the
-// instructions string beside them is their join, which is the rule a
-// reader replays. A delta decoded from a file is not checked, since a
-// reader preserves what it is given; this is what a writer is held
-// to.
+// part is named, named once, or is a keep and nothing else, and when
+// every part carries its text the instructions string beside them is
+// their join, which is the rule a reader replays. A delta decoded from
+// a file is not checked, since a reader preserves what it is given;
+// this is what a writer is held to. Whether a keep stays within the
+// parts in force depends on the path, and is left to the request hash.
 func validateConfig(c *ConfigEntry) error {
 	seen := make(map[string]bool, len(c.InstructionsParts))
 	full := true
 	for _, p := range c.InstructionsParts {
+		if p.Keep < 0 {
+			return errors.New("agentsession: an instructions keep is negative")
+		}
+		if p.Keep > 0 {
+			if p.ID != "" || p.Text != "" || p.Source != "" || p.Hash != "" {
+				return errors.New("agentsession: an instructions keep carries other members")
+			}
+			full = false
+			continue
+		}
 		if p.ID == "" {
 			return errors.New("agentsession: an instructions part has no id")
 		}
@@ -832,7 +847,7 @@ func (s *Session) Compact(firstKept string, summary openresponses.Item) (*Compac
 	if !onPath {
 		return nil, fmt.Errorf("%w: first_kept %s is not on the path to %s", ErrNoEntry, firstKept, leaf)
 	}
-	return &CompactionEntry{FirstKept: firstKept, Summary: summary, Config: ctx.Settings}, nil
+	return &CompactionEntry{FirstKept: firstKept, Summary: summary, Config: checkpoint(ctx.Settings)}, nil
 }
 
 // CompactFrom is [Session.Compact] for a caller that split the request
@@ -901,7 +916,7 @@ func compactionFrom(ctx Context, first int, summary openresponses.Item) (*Compac
 		}
 		return nil, fmt.Errorf("agentsession: item %d is %s of compaction %s, which a later compaction replaces rather than keeps", first, what, e.Base().ID)
 	}
-	return &CompactionEntry{FirstKept: e.Base().ID, Summary: summary, Config: ctx.Settings}, nil
+	return &CompactionEntry{FirstKept: e.Base().ID, Summary: summary, Config: checkpoint(ctx.Settings)}, nil
 }
 
 // SummarizeBranch builds the branch summary that carries context from
@@ -1011,4 +1026,16 @@ func Fork(origin *Session, at string, h Header) (*Session, error) {
 	}
 	s.leaf = at
 	return s, nil
+}
+
+// checkpoint is the settings a compaction carries. Its parts must each
+// carry their text, with the instructions their join, so parts the path
+// could not rebuild are left out and the instructions string stands
+// alone: the string a delta carried beside them when it did, and
+// otherwise the join the request was built from.
+func checkpoint(settings Settings) Settings {
+	if unresolvedParts(settings.InstructionsParts) {
+		settings.InstructionsParts = nil
+	}
+	return settings
 }

@@ -1,10 +1,12 @@
 package agentsession
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 
+	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/agentsession/internal/jsonx"
 	"github.com/ChristopherDavenport/openresponses"
 )
@@ -259,11 +261,101 @@ func (e *QueuedEntry) Drain() *ItemEntry {
 // Workspace says which file system an env entry's cwd is a path in.
 // Ref is one string the harness can resolve to it: an image digest, a
 // host, an instance ID. A container's Ref should be a digest rather
-// than a tag, because a tag moves. Anything richer goes in unknown
-// members of the env entry.
+// than a tag, because a tag moves. Anything else that tells one file
+// system from another, the host a container runs on or its instance,
+// goes in Unknown, inside workspace and not beside it, since the
+// format's substitution rule compares workspace alone: see
+// [SameWorkspace].
 type Workspace struct {
-	Kind string `json:"kind"`
+	Kind string `json:"kind,omitempty"`
 	Ref  string `json:"ref,omitempty"`
+	// Unknown holds the members of workspace the format does not
+	// define, such as host or instance, encoded inline beside kind and
+	// ref. It is nil when there are none.
+	Unknown map[string]json.RawMessage `json:"-"`
+}
+
+// SetMember sets a member of the workspace the format does not
+// define, such as the host a container runs on or its instance.
+func (w *Workspace) SetMember(key string, v any) error {
+	if key == "kind" || key == "ref" {
+		return fmt.Errorf("agentsession: workspace member %q is defined; set the field", key)
+	}
+	data, err := jsonx.MarshalNoEscape(v)
+	if err != nil {
+		return fmt.Errorf("agentsession: workspace member %q: %w", key, err)
+	}
+	if w.Unknown == nil {
+		w.Unknown = make(map[string]json.RawMessage)
+	}
+	w.Unknown[key] = data
+	return nil
+}
+
+// MarshalJSON emits kind, ref and the unknown members as one object.
+func (w Workspace) MarshalJSON() ([]byte, error) {
+	for key := range w.Unknown {
+		if key == "kind" || key == "ref" {
+			return nil, fmt.Errorf("agentsession: workspace has %s both typed and unknown", key)
+		}
+	}
+	type plain Workspace
+	b, err := jsonx.MarshalNoEscape(plain(w))
+	if err != nil {
+		return nil, err
+	}
+	return jsonx.JoinObjects(b, nil, w.Unknown), nil
+}
+
+// UnmarshalJSON takes kind and ref, spelled exactly, and keeps every
+// other member in Unknown.
+func (w *Workspace) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	*w = Workspace{}
+	for key, raw := range all {
+		var err error
+		switch key {
+		case "kind":
+			err = json.Unmarshal(raw, &w.Kind)
+		case "ref":
+			err = json.Unmarshal(raw, &w.Ref)
+		default:
+			if w.Unknown == nil {
+				w.Unknown = make(map[string]json.RawMessage)
+			}
+			w.Unknown[key] = raw
+		}
+		if err != nil {
+			return fmt.Errorf("workspace %s: %w", key, err)
+		}
+	}
+	return nil
+}
+
+// SameWorkspace reports whether two workspace members are the same
+// under the format's substitution rule: compared member by member in
+// their canonical form, the ones the format does not define included,
+// and an absent one equal only to another absent one. An empty kind or
+// ref is the same as an absent one, as the format says. An env entry whose workspace is not the same as
+// the one in force before it on the path is a substitution.
+func SameWorkspace(a, b *Workspace) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	ca, err1 := canonicalWorkspace(a)
+	cb, err2 := canonicalWorkspace(b)
+	return err1 == nil && err2 == nil && bytes.Equal(ca, cb)
+}
+
+func canonicalWorkspace(w *Workspace) ([]byte, error) {
+	data, err := w.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return jcs.Transform(data)
 }
 
 // validateLifecycle checks the members the format requires on the
