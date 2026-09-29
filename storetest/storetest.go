@@ -32,6 +32,7 @@ func Run(t *testing.T, opts Options) {
 	}
 	t.Run("CreateAndOpen", func(t *testing.T) { testCreateAndOpen(t, opts) })
 	t.Run("Append", func(t *testing.T) { testAppend(t, opts) })
+	t.Run("HeldAppend", func(t *testing.T) { testHeldAppend(t, opts) })
 	t.Run("List", func(t *testing.T) { testList(t, opts) })
 	t.Run("Continue", func(t *testing.T) { testContinue(t, opts) })
 	t.Run("Delete", func(t *testing.T) { testDelete(t, opts) })
@@ -41,6 +42,55 @@ func Run(t *testing.T, opts Options) {
 		t.Run("Persistence", func(t *testing.T) { testPersistence(t, opts) })
 		t.Run("DurableLeaf", func(t *testing.T) { testDurableLeaf(t, opts) })
 		t.Run("Convergence", func(t *testing.T) { testConvergence(t, opts) })
+	}
+}
+
+// testHeldAppend appends an entry the session already holds: the same
+// type, content and parent at the same ts, which is the same entry. RFC
+// 0002 makes the second append a no-op the store reports as such, so a
+// writer that retries an append whose acknowledgement it lost gets the
+// entry's id and no error, and nothing is stored twice.
+func testHeldAppend(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	root, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("root")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := agentsession.NewItemEntry(openresponses.UserText("once"))
+	first.Parent = root
+	want, err := st.Append(ctx, id, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again := agentsession.NewItemEntry(openresponses.UserText("once"))
+	again.Parent = root
+	again.Timestamp = first.Timestamp
+	got, err := st.Append(ctx, id, again)
+	if err != nil {
+		t.Fatalf("appending an entry the session holds: %v", err)
+	}
+	if got != want {
+		t.Errorf("the second append's id %s, want %s", got, want)
+	}
+	if n := s.Len(); n != 2 {
+		t.Errorf("session holds %d entries, want 2", n)
+	}
+	if opts.Reopen == nil {
+		return
+	}
+	st2 := opts.Reopen(t, st)
+	s2, err := st2.Open(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s2.Len() != 2 || len(s2.Repeated()) != 0 {
+		t.Errorf("after reopening: %d entries, repeated %v; want 2 and none", s2.Len(), s2.Repeated())
 	}
 }
 

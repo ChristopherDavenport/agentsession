@@ -446,17 +446,20 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	if err != nil {
 		return "", err
 	}
+	// The entry is prepared first, so that one the session refuses or
+	// already holds leaves the file as it was: a second append of an
+	// entry the session holds is a no-op, as RFC 0002 has it, and writing
+	// its line again would leave a repeated id every reader reports.
+	r, err := h.session.Prepare(e)
+	if err != nil {
+		return "", err
+	}
+	if r.Outcome == agentsession.Held {
+		return r.ID, nil
+	}
 	if raises(h.diskFormat) {
-		// The entry is prepared first, so that one the session refuses
-		// or already holds leaves the file as it was.
-		r, err := h.session.Prepare(e)
-		if err != nil {
+		if err := s.raiseFormat(sessionID, h); err != nil {
 			return "", err
-		}
-		if r.Outcome != agentsession.Held {
-			if err := s.raiseFormat(sessionID, h); err != nil {
-				return "", err
-			}
 		}
 	}
 	id, err := h.session.Append(e)
