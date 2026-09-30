@@ -137,7 +137,9 @@ func (o *objects) packList() []*pack {
 	return append([]*pack(nil), o.packs...)
 }
 
-// locate finds an object: its loose path, or the pack holding it. A
+// locate finds an object: the pack holding it, or its loose path. The
+// packs' indexes are in memory and are looked in first, so a read from
+// a packed store costs no stat of a loose path that is not there. A
 // miss reloads the pack list if the directory changed and looks again;
 // with sure set, a miss then forces a reload and looks a third time, so
 // a pack another process wrote within the directory's timestamp
@@ -163,13 +165,13 @@ func (o *objects) locate(sp space, hash string, sure bool) (loose string, p *pac
 				return "", nil, 0, 0, err
 			}
 		}
-		if _, err := os.Stat(path); err == nil {
-			return path, nil, 0, 0, nil
-		}
 		for _, p := range o.packList() {
 			if off, length, ok := p.find(sp, d); ok {
 				return "", p, off, length, nil
 			}
+		}
+		if _, err := os.Stat(path); err == nil {
+			return path, nil, 0, 0, nil
 		}
 	}
 	return "", nil, 0, 0, os.ErrNotExist
@@ -201,10 +203,37 @@ func (o *objects) read(sp space, hash string) ([]byte, error) {
 			return nil, fmt.Errorf("cas: %s %s: %w", sp, hash, err)
 		}
 		if hashBytes(data) != hash {
+			// A copy that fails may have a good one elsewhere: in another
+			// pack, or loose, as a sweep writes back.
+			if good, ok := o.otherCopy(sp, hash); ok {
+				return good, nil
+			}
 			return nil, fmt.Errorf("%w: %s object %s (%s)", ErrCorrupt, sp, hash, where)
 		}
 		return data, nil
 	}
+}
+
+// otherCopy looks through every pack and the loose path for a copy of
+// an object that matches its name.
+func (o *objects) otherCopy(sp space, hash string) ([]byte, bool) {
+	d, err := digestOf(hash)
+	if err != nil {
+		return nil, false
+	}
+	for _, p := range o.packList() {
+		if off, length, ok := p.find(sp, d); ok {
+			if data, err := p.read(off, length); err == nil && hashBytes(data) == hash {
+				return data, true
+			}
+		}
+	}
+	if lp, err := o.loosePath(sp, hash); err == nil {
+		if data, err := os.ReadFile(lp); err == nil && hashBytes(data) == hash {
+			return data, true
+		}
+	}
+	return nil, false
 }
 
 // size returns an object's stored length.

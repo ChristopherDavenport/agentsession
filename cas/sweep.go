@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -165,8 +166,12 @@ func (s *Store) sweepLock(ctx context.Context) (*dirLock, error) {
 
 // Pack moves the store's loose objects into one new pack and removes the
 // loose copies, as git's repack does without -a: nothing is dropped, so
-// it needs no grace and takes no lock a writer waits on. It returns how
-// many objects it packed.
+// it needs no grace and takes no lock a writer waits on. Then it merges
+// the smallest packs, as git's geometric repack does, until each pack
+// is at least twice the size of all the packs smaller than it together,
+// so a store holds a number of packs that grows with the logarithm of
+// its size and each object is rewritten a logarithmic number of times.
+// It returns how many loose objects it packed.
 func (s *Store) Pack(ctx context.Context) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -179,22 +184,24 @@ func (s *Store) Pack(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer gc.release()
+	n, err := s.packLoose(ctx)
+	if err != nil {
+		return n, err
+	}
+	return n, s.consolidate(ctx)
+}
+
+// packLoose is Pack's first step, under the gc lock.
+func (s *Store) packLoose(ctx context.Context) (int, error) {
 	var objs []packObject
-	var paths []string
+	paths := map[objKey]string{}
 	for _, sp := range []space{spaceEntries, spaceContents} {
 		err := s.objs.eachLoose(sp, func(hash, path string, _ os.FileInfo, tmp bool) error {
 			if tmp {
 				return nil
 			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil // removed as we walked
-			}
-			if hashBytes(data) != hash {
-				return nil // corrupt: left for Verify to report, never packed
-			}
-			objs = append(objs, packObject{sp, hash, data})
-			paths = append(paths, path)
+			objs = append(objs, packObject{sp: sp, hash: hash, load: func() ([]byte, error) { return os.ReadFile(path) }})
+			paths[objKey{sp, hash}] = path
 			return ctx.Err()
 		})
 		if err != nil {
@@ -204,18 +211,89 @@ func (s *Store) Pack(ctx context.Context) (int, error) {
 	if len(objs) == 0 {
 		return 0, nil
 	}
-	if _, err := writePack(s.objs.packDir(), objs); err != nil {
+	// One that is corrupt, or removed as we walked, is left out and left
+	// where it is, for Verify to report.
+	_, skipped, err := writePackSkipping(s.objs.packDir(), objs, nil)
+	if err != nil {
 		return 0, fmt.Errorf("cas: pack: %w", err)
 	}
 	if err := s.objs.reloadPacks(true); err != nil {
 		return 0, err
+	}
+	for _, o := range skipped {
+		delete(paths, objKey{o.sp, o.hash})
 	}
 	// The pack is durable; a loose copy is now a duplicate, and a reader
 	// that finds it gone looks in the packs.
 	for _, p := range paths {
 		os.Remove(p)
 	}
-	return len(objs), nil
+	return len(paths), nil
+}
+
+// consolidate merges the smallest packs into one while the next is less
+// than twice their size together, under the gc lock. The merged pack
+// holds every object the packs it replaces did, so a reader holding one
+// of those still reads, and one that looks again finds the merged pack.
+// A pack holding an object that fails its name is not removed.
+func (s *Store) consolidate(ctx context.Context) error {
+	type sized struct {
+		p    *pack
+		size int64
+	}
+	var packs []sized
+	for _, p := range s.objs.packList() {
+		if info, err := os.Stat(p.path); err == nil {
+			packs = append(packs, sized{p, info.Size()})
+		}
+	}
+	sort.Slice(packs, func(i, j int) bool { return packs[i].size < packs[j].size })
+	m, acc := 1, int64(0)
+	if len(packs) > 0 {
+		acc = packs[0].size
+	}
+	for m < len(packs) && packs[m].size < 2*acc {
+		acc += packs[m].size
+		m++
+	}
+	if m < 2 {
+		return nil
+	}
+	var objs []packObject
+	for _, sp := range packs[:m] {
+		p := sp.p
+		err := p.each(func(sp space, hash string, off, length int64) error {
+			objs = append(objs, packObject{sp: sp, hash: hash, load: func() ([]byte, error) { return p.read(off, length) }})
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	name, skipped, err := writePackSkipping(s.objs.packDir(), objs, nil)
+	if err != nil {
+		return fmt.Errorf("cas: pack: %w", err)
+	}
+	if err := s.objs.reloadPacks(true); err != nil {
+		return err
+	}
+	if len(skipped) > 0 {
+		return nil // the old packs stay, with what Verify will report
+	}
+	for _, sp := range packs[:m] {
+		if sp.p.name == name {
+			continue
+		}
+		os.Remove(filepath.Join(s.objs.packDir(), sp.p.name+".idx"))
+		os.Remove(sp.p.path)
+	}
+	if err := syncDir(s.objs.packDir()); err != nil {
+		return err
+	}
+	return s.objs.reloadPacks(true)
 }
 
 // Sweep collects garbage as git's gc does: it repacks every object the
@@ -267,8 +345,11 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	}
 	young := started.Add(-grace)
 
-	// What the new pack takes: every kept object, loose or packed.
+	// What the new pack takes: every kept object, loose or packed, by
+	// where it is; its bytes are read as the pack is written. A second
+	// copy is kept as a fallback, taken if the first fails its name.
 	var objs []packObject
+	alts := map[objKey][]packObject{}
 	inNew := map[space]map[string]bool{spaceEntries: {}, spaceContents: {}}
 	type candidate struct {
 		path string
@@ -276,12 +357,16 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	}
 	var prune []candidate // loose, unneeded and old
 	var packedLoose []string
-	add := func(sp space, hash string, data []byte) {
-		if !inNew[sp][hash] {
-			inNew[sp][hash] = true
-			objs = append(objs, packObject{sp, hash, data})
+	add := func(o packObject) {
+		if inNew[o.sp][o.hash] {
+			k := objKey{o.sp, o.hash}
+			alts[k] = append(alts[k], o)
+			return
 		}
+		inNew[o.sp][o.hash] = true
+		objs = append(objs, o)
 	}
+	loosePaths := map[objKey]string{}
 	for _, sp := range []space{spaceEntries, spaceContents} {
 		err := s.objs.eachLoose(sp, func(hash, path string, info os.FileInfo, tmp bool) error {
 			if tmp {
@@ -296,12 +381,8 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 				}
 				return nil
 			}
-			data, err := os.ReadFile(path)
-			if err != nil || hashBytes(data) != hash {
-				return nil // gone, or corrupt and left for Verify
-			}
-			add(sp, hash, data)
-			packedLoose = append(packedLoose, path)
+			add(packObject{sp: sp, hash: hash, load: func() ([]byte, error) { return os.ReadFile(path) }})
+			loosePaths[objKey{sp, hash}] = path
 			return ctx.Err()
 		})
 		if err != nil {
@@ -325,29 +406,38 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		}
 		scanned[p.name] = info.ModTime()
 		err = p.each(func(sp space, hash string, off, length int64) error {
-			if inNew[sp][hash] {
-				return nil
-			}
-			data, err := p.read(off, length)
-			if err != nil || hashBytes(data) != hash {
-				return nil
-			}
 			if keep.has(sp, hash) {
-				add(sp, hash, data)
-			} else if info.ModTime().After(young) {
-				youngOrphans = append(youngOrphans, rescue{sp, hash, data, info.ModTime()})
-			} else {
-				dropped++
+				add(packObject{sp: sp, hash: hash, load: func() ([]byte, error) { return p.read(off, length) }})
+				return nil
 			}
+			if info.ModTime().After(young) {
+				data, err := p.read(off, length)
+				if err != nil || hashBytes(data) != hash {
+					return nil
+				}
+				youngOrphans = append(youngOrphans, rescue{sp, hash, data, info.ModTime()})
+				return nil
+			}
+			dropped++
 			return nil
 		})
 		if err != nil {
 			return 0, err
 		}
 	}
-	newPack, err := writePack(s.objs.packDir(), objs)
+	newPack, skipped, err := writePackSkipping(s.objs.packDir(), objs, alts)
 	if err != nil {
 		return 0, fmt.Errorf("cas: pack: %w", err)
+	}
+	// An object no copy of which reads is not in the new pack: it is
+	// looked for again below like anything else the pack lacks, and its
+	// loose copy stays for Verify.
+	for _, o := range skipped {
+		delete(inNew[o.sp], o.hash)
+		delete(loosePaths, objKey{o.sp, o.hash})
+	}
+	for _, path := range loosePaths {
+		packedLoose = append(packedLoose, path)
 	}
 	if err := s.objs.reloadPacks(true); err != nil {
 		return 0, err
@@ -548,4 +638,35 @@ func envelopeContent(env []byte) (string, bool) {
 		return "", false
 	}
 	return e.Content, true
+}
+
+// autoPackLoose is the estimated count of loose objects past which a
+// writing store packs on its own, as git's gc.auto is. A variable so
+// tests can lower it.
+var autoPackLoose = 4096
+
+// autoPackEvery is how many appends a store makes between looks at
+// whether to pack.
+const autoPackEvery = 1024
+
+// looseEstimate estimates the store's loose objects as git does, from
+// one of the 256 fan-out directories of each space.
+func (s *Store) looseEstimate() int {
+	n := 0
+	for _, sp := range []space{spaceEntries, spaceContents} {
+		ents, _ := os.ReadDir(filepath.Join(s.objs.spaceDir(sp), "17"))
+		n += len(ents)
+	}
+	return n * 256
+}
+
+// maybePack packs when the loose objects look to have passed
+// autoPackLoose. A pack that cannot run, because a sweep, pack or
+// compaction holds the gc lock, is left for the next look; its failure
+// is no failure of the caller's.
+func (s *Store) maybePack() {
+	if s.readOnly || s.looseEstimate() < autoPackLoose {
+		return
+	}
+	_, _ = s.Pack(context.Background())
 }

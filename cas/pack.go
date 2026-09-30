@@ -55,11 +55,64 @@ func (sp space) String() string {
 	return "content"
 }
 
-// packObject is one object to put in a pack.
+// packObject is one object to put in a pack: its bytes, or where to
+// read them. A pack of the whole store is written from locations, so
+// what it costs in memory follows the number of objects and not their
+// size; the bytes are read, and checked against their names, as the
+// pack is written.
 type packObject struct {
 	sp   space
 	hash string
 	data []byte
+	load func() ([]byte, error)
+}
+
+// corruptObject is an object whose bytes, read to be packed, failed
+// their name or could not be read.
+type corruptObject struct {
+	sp   space
+	hash string
+	err  error
+}
+
+func (c *corruptObject) Error() string {
+	return fmt.Sprintf("cas: %s object %s does not read: %v", c.sp, c.hash, c.err)
+}
+
+// writePackSkipping writes objs as writePack does. An object whose
+// bytes fail to read or to match its name is taken from its next
+// source in alts, when it has one, and otherwise left out and returned:
+// such an object is left where it is, for Verify to report.
+func writePackSkipping(dir string, objs []packObject, alts map[objKey][]packObject) (string, []packObject, error) {
+	var skipped []packObject
+	for {
+		name, err := writePack(dir, objs)
+		var bad *corruptObject
+		if !errors.As(err, &bad) {
+			return name, skipped, err
+		}
+		k := objKey{bad.sp, bad.hash}
+		keep := objs[:0:0]
+		for _, o := range objs {
+			if o.sp != bad.sp || o.hash != bad.hash {
+				keep = append(keep, o)
+				continue
+			}
+			if next := alts[k]; len(next) > 0 {
+				keep = append(keep, next[0])
+				alts[k] = next[1:]
+				continue
+			}
+			skipped = append(skipped, o)
+		}
+		objs = keep
+	}
+}
+
+// objKey names an object across spaces.
+type objKey struct {
+	sp   space
+	hash string
 }
 
 // pack is an open pack: its index in memory, its file open for reads.
@@ -178,7 +231,9 @@ func openPack(dir, name string) (*pack, error) {
 // writePack writes objects into a new pack in dir, durably: the pack is
 // fsynced and renamed, then its index, then the directory, so a visible
 // index never names a pack the power loss took. Duplicate objects are
-// written once. It returns the pack's name, or "" for no objects.
+// written once. An object given by location is read as it is written
+// and checked against its name; one that fails stops the write with a
+// *corruptObject. It returns the pack's name, or "" for no objects.
 func writePack(dir string, objs []packObject) (string, error) {
 	sort.Slice(objs, func(i, j int) bool {
 		if objs[i].sp != objs[j].sp {
@@ -219,20 +274,30 @@ func writePack(dir string, objs []packObject) (string, error) {
 			tmp.Close()
 			return "", err
 		}
+		data := o.data
+		if data == nil && o.load != nil {
+			if data, err = o.load(); err == nil && hashBytes(data) != o.hash {
+				err = ErrCorrupt
+			}
+			if err != nil {
+				tmp.Close()
+				return "", &corruptObject{o.sp, o.hash, err}
+			}
+		}
 		var lb [binary.MaxVarintLen64]byte
-		ln := binary.PutUvarint(lb[:], uint64(len(o.data)))
+		ln := binary.PutUvarint(lb[:], uint64(len(data)))
 		w.WriteByte(byte(o.sp))
 		w.Write(d)
 		w.Write(lb[:ln])
 		off += int64(1 + len(d) + ln)
-		w.Write(o.data)
-		rec := make([]byte, idxRecord)
+		w.Write(data)
+		var rec [idxRecord]byte
 		rec[0] = byte(o.sp)
 		copy(rec[1:], d)
 		binary.BigEndian.PutUint64(rec[1+sha256.Size:], uint64(off))
-		binary.BigEndian.PutUint64(rec[1+sha256.Size+8:], uint64(len(o.data)))
-		idx = append(idx, rec...)
-		off += int64(len(o.data))
+		binary.BigEndian.PutUint64(rec[1+sha256.Size+8:], uint64(len(data)))
+		idx = append(idx, rec[:]...)
+		off += int64(len(data))
 	}
 	if err := w.Flush(); err != nil {
 		tmp.Close()

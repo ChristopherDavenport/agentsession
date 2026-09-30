@@ -217,6 +217,9 @@ type Store struct {
 	// which decides when it compacts, and compactRetryAt the size an
 	// automatic compaction that could not proceed waits for.
 	journalSize, compactRetryAt int64
+	// appends counts this store's appends, which decides when it looks
+	// at whether to pack.
+	appends int
 }
 
 type handle struct {
@@ -499,10 +502,10 @@ func (s *Store) packEntries(entries []agentsession.Entry, blobs map[string][]byt
 		}
 		id, ch := e.Base().ID, e.Base().ContentHash()
 		sizes[id] = int64(len(env) + len(body))
-		all = append(all, packObject{spaceContents, ch, body}, packObject{spaceEntries, id, env})
+		all = append(all, packObject{sp: spaceContents, hash: ch, data: body}, packObject{sp: spaceEntries, hash: id, data: env})
 	}
 	for h, data := range blobs {
-		all = append(all, packObject{spaceContents, h, data})
+		all = append(all, packObject{sp: spaceContents, hash: h, data: data})
 	}
 	var missing, held []packObject
 	for _, o := range all {
@@ -1750,6 +1753,9 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	}
 	h.count++
 	s.maybeCompact()
+	if s.appends++; s.appends%autoPackEvery == 0 {
+		s.maybePack()
+	}
 	return r, nil
 }
 
@@ -2143,6 +2149,7 @@ func (s *Store) Close() error {
 			s.journalSize = info.Size()
 		}
 		s.maybeCompact()
+		s.maybePack()
 		// A store that only appended never replayed what it wrote; the
 		// replay reads it and saves the checkpoint the next open starts
 		// from, when the journal has grown enough to want one. A failure
