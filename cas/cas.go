@@ -10,10 +10,13 @@
 //	    log                               one entry hash and its size per line, in append order
 //	    HEAD                              the head's hash, or empty
 //	    record                            "record" or "mirror"
+//	    summary                           its size and name, kept for a listing
 //	  locks/<session id>                  the lock of the process holding the session
 //	  sweep.lock                          held shared by writers, exclusive by a sweep's last step
-//	  gc.lock                             the lock of a running sweep or pack
+//	  gc.lock                             the lock of a running sweep, pack or compaction
+//	  journal.lock                        held shared by a commit, exclusive by a compaction
 //	  journal                             one line per commit: the commit point
+//	  checkpoint                          the journal read to an offset, to start a replay from
 //
 // An entry is stored as two objects, its body under the content hash
 // and its envelope under the id, so a body shared by many entries is
@@ -23,10 +26,20 @@
 // read, and one that fails is reported as corrupt by name and place.
 //
 // Objects are written loose, one file each, and packed later, as git
-// does: [Store.Pack] moves loose objects into a pack, and [Store.Sweep]
-// repacks everything the store holds into one pack and removes what
-// nothing needs. A store of small entries otherwise pays a filesystem
-// block for every envelope and every body.
+// does: [Store.Pack] moves loose objects into a pack and merges the
+// smallest packs, and [Store.Sweep] repacks everything the store holds
+// into one pack and removes what nothing needs. A store of small
+// entries otherwise pays a filesystem block for every envelope and
+// every body. A writing store packs on its own once its loose objects
+// look to pass a few thousand, as git's gc --auto does.
+//
+// Nothing a process pays follows the size of the store. Opening one
+// reads nothing store-wide; a session recovers when it is opened. The
+// journal is replayed from a checkpoint and read on from where the
+// last replay stopped, and [Store.Compact] replaces it with one holding
+// only what sessions' own files cannot yet stand for, which a writing
+// store does on its own past 16 MiB. Pack indexes are mapped, not read,
+// and a listing reads the summary kept beside each session's log.
 //
 // Every write follows one order. The objects go first, idempotently,
 // since their bytes are their names. Then one journal record is
@@ -849,6 +862,9 @@ type view struct {
 	// their objects and says so, since a durable append it makes next
 	// must not be cut with them by a later crash.
 	adopt []string
+	// fromFiles is set when the journal holds nothing for the session,
+	// so its files are all there is.
+	fromFiles bool
 	// dropped lists the appends found lost that no lost record names
 	// yet: a writing store that recovers the session commits one for
 	// each, so a sync record after them, or a durable append that goes
@@ -887,8 +903,20 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 	fileMark := readMark(dir)
 	v.sizes = sizes
 	if st == nil {
-		v.log, v.head, v.mark = have, fileHead, fileMark
+		v.log, v.head, v.mark, v.fromFiles = have, fileHead, fileMark, true
 		return v, nil
+	}
+	// A session a compaction dropped, and a writer took up again, begins
+	// its records here with a settled record: that many entries of its
+	// log were there, fsynced, before the journal held anything of it,
+	// and stand as they are.
+	settled := 0
+	if !st.created {
+		for _, r := range st.recs {
+			if r.Op == opSettled {
+				settled = r.Seq
+			}
+		}
 	}
 	// The journal's own view, cut at the first lazy append that was lost.
 	var jEntries []string
@@ -962,6 +990,9 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 				continue
 			}
 			jHead, hasJHead = r.Head, true
+		case opSettled:
+			// The head as the session's files had it when taken up.
+			jHead, hasJHead = r.Head, true
 		}
 	}
 	for _, e := range jEntries {
@@ -973,9 +1004,14 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 		}
 	}
 	inLog := map[string]bool{}
-	for _, e := range have {
+	for i, e := range have {
 		if lost[e] {
 			v.logChanged = true
+			continue
+		}
+		if i < settled && !seen[e] {
+			inLog[e] = true
+			v.log = append(v.log, e)
 			continue
 		}
 		if !seen[e] {
@@ -1577,6 +1613,15 @@ func (s *Store) openLocked(id string) (*handle, error) {
 	}
 	if !v.exists {
 		return fail(fmt.Errorf("%w: %s", agentsession.ErrNoSession, id))
+	}
+	if v.fromFiles && !s.readOnly {
+		// Whatever this store commits for the session follows a record
+		// of how much of its log stood before, which recovery trusts as
+		// it stands; lazily, since any later fsync of the journal makes
+		// it durable ahead of the records after it.
+		if err := s.commit(false, journalRecord{Op: opSettled, Session: id, Seq: len(v.log), Head: v.head}); err != nil {
+			return fail(err)
+		}
 	}
 	hdr, err := readHeader(dir)
 	if err != nil {

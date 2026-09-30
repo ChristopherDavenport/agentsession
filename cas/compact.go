@@ -46,6 +46,14 @@ const damagedPrefix = "journal.damaged-"
 // opJournal is the op of the record that opens a compacted journal.
 const opJournal = "journal"
 
+// opSettled is the op of the record a writer commits as it takes up a
+// session the journal holds nothing of: its Seq is how many entries of
+// the session's log stood before, which recovery trusts as they stand
+// rather than taking them for entries a damaged journal lost, and its
+// Head the head then, which recovery falls back to as it would to an
+// earlier head record.
+const opSettled = "settled"
+
 // journalSession is the session a journal record is filed under: not a
 // valid session ID, so no store takes it for a session's.
 const journalSession = "*"

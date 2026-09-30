@@ -411,3 +411,65 @@ func TestListUsesSummaries(t *testing.T) {
 		t.Errorf("after an append: %+v", got["s2"])
 	}
 }
+
+// TestCompactThenTakeUp: a session a compaction dropped and a writer
+// takes up again reads whole, settles again at the next compaction,
+// and still loses to a crash only the lazy append the crash took.
+func TestCompactThenTakeUp(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	for i := range 5 {
+		mustAppend(t, st, "s", item(fmt.Sprint(i)))
+	}
+	st.Close()
+	compact := func() {
+		t.Helper()
+		c, _ := Open(root)
+		defer c.Close()
+		if _, err := c.Compact(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compact()
+	if journalSessions(t, root)["s"] != 0 {
+		t.Fatal("the settled session was not dropped")
+	}
+
+	w, _ := Open(root)
+	sixth := mustAppend(t, w, "s", item("5"))
+	w.Close()
+	scan := func() *journalScan {
+		ro, _ := Open(root, WithReadOnly())
+		defer ro.Close()
+		sc, _ := ro.replay()
+		return sc
+	}
+	ro, _ := Open(root, WithReadOnly())
+	v, err := ro.reconcile("s", filepath.Join(root, "sessions", "s"), scan())
+	ro.Close()
+	if err != nil || v.damaged || len(v.log) != 6 || v.head != sixth {
+		t.Fatalf("taken up again: damaged %v, %d entries, head %s: %v", v.damaged, len(v.log), v.head, err)
+	}
+	compact()
+	if journalSessions(t, root)["s"] != 0 {
+		t.Error("a session taken up again did not settle at the next compaction")
+	}
+
+	// A lazy append whose objects a crash took, its log line kept.
+	l, _ := Open(root, WithSync(SyncNever))
+	lost := mustAppend(t, l, "s", item("lost"))
+	die(l)
+	p, _ := l.objs.loosePath(spaceEntries, lost)
+	os.Remove(p)
+	r, _ := Open(root)
+	defer r.Close()
+	s, err := r.Open(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 6 || s.Leaf() != sixth {
+		t.Errorf("after the crash: %d entries at %s, want 6 at %s", s.Len(), s.Leaf(), sixth)
+	}
+}
