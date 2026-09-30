@@ -5,6 +5,34 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+The format is unchanged.
+
+- **cas: an append recovery found lost stays lost.** Recovery that cut a
+  lost lazy append wrote a sync record, which the next open took to mean
+  the lost append was durable: it came back into the log and the session
+  failed to open on the objects the crash took. Without the sync record,
+  a durable append made after recovery would have been cut instead.
+  Recovery now journals a `lost` record for each append it cuts before
+  the sync record. A store left by v0.0.15 in that state still fails to
+  open that session.
+- **cas: opening a session costs what the session holds, not the
+  store.** Each open and each `List` replayed the journal from the start.
+  The store now reads on from where it last stopped: opening a
+  101-entry session in a store of 1000 takes 6 ms, down from 206 ms.
+  `Verify` still reads the whole journal.
+- **cas: a store says when a held session's lazy appends are durable.**
+  Only recovery wrote a sync record, so every open, `List` included,
+  read and hashed each lazy append's objects to find them present. A
+  durable append, `Sync`, `Release` and `Close` now write one for each
+  session they make durable. Listing a store of 1000 sessions takes
+  55 ms, down from 1.5 s.
+- **`Read` is a fifth faster on small lines**, testing each line against
+  I-JSON once rather than twice.
+- `BenchmarkRead` runs again (it reused one call ID), and cas has
+  benchmarks for appends, opens and listings.
+
 ## v0.0.15 - 2026-09-29
 
 Draft 0.9 is amended in place again.
