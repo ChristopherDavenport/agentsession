@@ -83,6 +83,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -191,8 +192,11 @@ type Store struct {
 	// same entry under the same parent — and prefix holds the entries
 	// some session's base path needs. Together they are what the store
 	// holds: an object written ahead of its journal record is in neither.
-	owners map[string]map[string]bool
-	prefix map[string]bool
+	// They cost a read of every session, so they are built only when a
+	// lookup needs them, and kept from then on; indexed says they are.
+	owners  map[string]map[string]bool
+	prefix  map[string]bool
+	indexed bool
 	// faulty records sessions the index could not read, with why, so
 	// one fault is reported at that session's Open and hides no other.
 	faulty map[string]error
@@ -217,6 +221,10 @@ type handle struct {
 	head       string // the head as the HEAD file has it
 	count      int    // entries the store has committed into the session
 	diskFormat string // the format the header file names
+	// own holds the entries the store committed to the session's log,
+	// so the head is checked against them and not against an entry
+	// appended to the session behind the store's back.
+	own map[string]bool
 	// lazy is set while the session holds a lazy append of this store's
 	// that no sync record covers. The store holds the session's lock,
 	// so every lazy record in it is this store's or was adopted at open,
@@ -249,9 +257,9 @@ func Open(root string, opts ...Option) (*Store, error) {
 	if err := s.objs.reloadPacks(true); err != nil {
 		return nil, fmt.Errorf("cas: packs: %w", err)
 	}
-	if err := s.index(); err != nil {
-		return nil, err
-	}
+	// Nothing store-wide is read here: each session recovers when it is
+	// opened, and the index of which session holds what is built only if
+	// a lookup needs it, so opening a store costs the same at any size.
 	return s, nil
 }
 
@@ -656,13 +664,92 @@ func (s *Store) isLeafLabel(id string) (bool, error) {
 
 // holds reports whether the store holds the entry: it is in a session's
 // log or on a session's prefix. An object written ahead of its journal
-// record is in neither.
+// record is in neither. It builds the index if nothing has.
 func (s *Store) holds(id string) bool {
+	if err := s.ensureIndex(); err != nil {
+		return false
+	}
 	return len(s.owners[id]) > 0 || s.prefix[id]
 }
 
-// own records that session's log holds entry.
+// ensureIndex builds the index once.
+func (s *Store) ensureIndex() error {
+	if s.indexed {
+		return nil
+	}
+	return s.index()
+}
+
+// holderOf finds a session that holds the entry, in its log or on its
+// prefix, looking first at the session a caller names: the session a
+// fork names as its parent almost always holds its base, and reading
+// that one session is what the lookup then costs. Only an entry that
+// session does not hold is looked up in the index. owner is the session
+// whose log holds the entry, when the lookup finds one; the index may
+// find the entry held on a prefix alone.
+func (s *Store) holderOf(entry, parent string) (owner string, held bool, err error) {
+	for seen := 0; parent != "" && seen < 64; seen++ {
+		dir, derr := s.sessionDir(parent)
+		if derr != nil {
+			break
+		}
+		hashes, _, lerr := readLog(dir)
+		if lerr != nil {
+			break
+		}
+		if slices.Contains(hashes, entry) {
+			return parent, true, nil
+		}
+		hdr, herr := readHeader(dir)
+		if herr != nil || hdr.Base == "" {
+			break
+		}
+		onPrefix, perr := s.onPath(entry, hdr.Base)
+		if perr != nil || !onPrefix {
+			break
+		}
+		// On the parent's prefix: the parent's own origin holds it in
+		// its log, or on its prefix in turn.
+		if hdr.ParentSession == "" {
+			return "", true, nil
+		}
+		parent = hdr.ParentSession
+	}
+	if err := s.ensureIndex(); err != nil {
+		return "", false, err
+	}
+	if !(len(s.owners[entry]) > 0 || s.prefix[entry]) {
+		// Another process may have committed it since the index was
+		// built; look again before saying no.
+		if err := s.index(); err != nil {
+			return "", false, err
+		}
+	}
+	owner, ok := s.anyOwner(entry)
+	return owner, ok || s.prefix[entry], nil
+}
+
+// onPath reports whether entry is on the path to tip.
+func (s *Store) onPath(entry, tip string) (bool, error) {
+	for id := tip; id != ""; {
+		if id == entry {
+			return true, nil
+		}
+		parent, err := s.parentOf(id)
+		if err != nil {
+			return false, err
+		}
+		id = parent
+	}
+	return false, nil
+}
+
+// own records that session's log holds entry, in the index once there
+// is one.
 func (s *Store) own(entry, session string) {
+	if !s.indexed {
+		return
+	}
 	set := s.owners[entry]
 	if set == nil {
 		set = map[string]bool{}
@@ -1056,6 +1143,7 @@ func (s *Store) index() error {
 	if err != nil {
 		return err
 	}
+	s.owners, s.prefix, s.indexed = map[string]map[string]bool{}, map[string]bool{}, true
 	for id, st := range scan.states {
 		if st.deleted {
 			continue
@@ -1263,14 +1351,11 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		prefix [][]byte
 	)
 	if h.Base != "" {
-		if !s.holds(h.Base) {
-			// Another process may have committed it since the index was
-			// built; look again before refusing.
-			if err := s.index(); err != nil {
-				return nil, err
-			}
+		owner, held, err := s.holderOf(h.Base, h.ParentSession)
+		if err != nil {
+			return nil, err
 		}
-		if !s.holds(h.Base) {
+		if !held {
 			return nil, fmt.Errorf("%w: base %s is not held by this store", agentsession.ErrNoEntry, h.Base)
 		}
 		if isLabel, err := s.isLeafLabel(h.Base); err != nil {
@@ -1278,7 +1363,7 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		} else if isLabel {
 			return nil, errors.New("cas: a base may not be a leaf label")
 		}
-		if owner, ok := s.anyOwner(h.Base); ok {
+		if owner != "" {
 			if h.ParentSession == "" {
 				h.ParentSession = owner
 			}
@@ -1299,7 +1384,6 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 				}
 			}
 		}
-		var err error
 		if prefix, err = s.pathLines(h.Base); err != nil {
 			return nil, err
 		}
@@ -1378,12 +1462,12 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 	if err := syncDir(filepath.Join(s.root, "sessions")); err != nil {
 		return fail(err)
 	}
-	if h.Base != "" {
+	if h.Base != "" && s.indexed {
 		if err := s.markPrefix(h.Base); err != nil {
 			return fail(err)
 		}
 	}
-	s.open[h.ID] = &handle{session: sess, dir: dir, lock: lk, mark: mark, head: h.Base, count: sess.Len(), diskFormat: h.Format}
+	s.open[h.ID] = &handle{session: sess, dir: dir, lock: lk, mark: mark, head: h.Base, count: sess.Len(), diskFormat: h.Format, own: map[string]bool{}}
 	return sess, nil
 }
 
@@ -1508,10 +1592,12 @@ func (s *Store) openLocked(id string) (*handle, error) {
 	if err != nil {
 		return fail(err)
 	}
+	committed := make(map[string]bool, len(v.log))
 	for _, h := range v.log {
+		committed[h] = true
 		s.own(h, id) // another process may have appended since the index was built
 	}
-	h := &handle{session: sess, dir: dir, lock: lk, mark: v.mark, head: v.head, count: sess.Len(), diskFormat: diskFormat}
+	h := &handle{session: sess, dir: dir, lock: lk, mark: v.mark, head: v.head, count: sess.Len(), diskFormat: diskFormat, own: committed}
 	s.open[id] = h
 	return h, nil
 }
@@ -1641,6 +1727,7 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 		h.head = head
 	}
 	s.own(r.ID, sessionID)
+	h.own[r.ID] = true
 	if h.session.Leaf() != leafAtPrepare {
 		// A reader moved the leaf between Prepare and Commit, through
 		// Session.Branch, which does not take the store's lock. The
@@ -1710,7 +1797,7 @@ func (s *Store) syncHead(h *handle, sessionID string) error {
 		// The head must be something the store committed: the base or
 		// an entry in this session's log, never one appended on the
 		// session behind the store's back.
-		if !s.owners[leaf][sessionID] && leaf != h.session.Header().Base {
+		if !h.own[leaf] && leaf != h.session.Header().Base {
 			return fmt.Errorf("%w: head %s is not in the log", ErrModified, leaf)
 		}
 	} else if h.session.Header().Base != "" {
@@ -2228,7 +2315,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		own = append(own, e)
 	}
 	if h.Base != "" {
-		if owner, ok := s.anyOwner(h.Base); ok {
+		if owner, _, err := s.holderOf(h.Base, h.ParentSession); err == nil && owner != "" {
 			if odir, err := s.sessionDir(owner); err == nil {
 				if oh, err := readHeader(odir); err == nil && mediaOf(oh) != mediaOf(h) {
 					return nil, errors.New("cas: import: media differs from the session holding the base")
@@ -2318,7 +2405,7 @@ func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header,
 			return fail(err)
 		}
 	}
-	if h.Base != "" {
+	if h.Base != "" && s.indexed {
 		if err := s.markPrefix(h.Base); err != nil {
 			return fail(err)
 		}
