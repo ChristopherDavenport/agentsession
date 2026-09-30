@@ -224,6 +224,9 @@ func (d LogDamage) Error() string {
 // both read whole.
 var errNewline = errors.New("a record's newline is damaged")
 
+// recordOpening begins every record a line holds.
+var recordOpening = []byte(`{"op":"`)
+
 // decodeLine reads the records of one log line. A line normally holds
 // one. In the store-wide journal a store migrates from, a crash could
 // cut a record short and the next record land on the same line after
@@ -235,7 +238,7 @@ var errNewline = errors.New("a record's newline is damaged")
 func decodeLine(line []byte) ([]logRecord, error) {
 	var starts []int
 	for i := 0; ; {
-		k := bytes.Index(line[i:], []byte(`{"op":"`))
+		k := bytes.Index(line[i:], recordOpening)
 		if k < 0 {
 			break
 		}

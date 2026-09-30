@@ -35,11 +35,22 @@ session is a ref, and its log is its own write-ahead log.
   version that still holds a session: stop those first. A crash part
   way is finished by the next writing open. A session that fails to
   migrate is reported when opened, and the journal kept for another
-  try; the rest of the store opens. Migration never removes a session
-  outright: one the journal cannot vouch was deleted is migrated from
-  its files, and one that was is renamed into the trash. A read-only
-  open reads the migrated sessions and reports `ErrLegacyStore` for the
-  rest.
+  try; `Verify` reports the kept journal, and the rest of the store
+  opens. Only a session whose log is still in the earlier format is
+  locked and migrated, so a kept journal neither blocks an open on a
+  session another process holds nor rewrites a damaged log of this
+  version, whose damage is reported instead. Migration never removes a
+  session outright: one the journal cannot vouch was deleted is
+  migrated from its files, and one that was is renamed into the trash.
+  Any damage in the journal counts against every delete it records, so
+  a session deleted before migrating whose header is still on disk
+  comes back. A read-only open reads the migrated sessions and reports
+  `ErrLegacyStore` for the rest.
+
+  `Sweep` refuses while any session's log has a record it cannot read,
+  since that record could name what the sweep would remove: one damaged
+  log holds up sweeps of the whole store until that session is repaired
+  or deleted.
 
   A lazy append takes 0.15 ms, down from 1.2–1.9 ms, and opening a
   store takes microseconds at any size.

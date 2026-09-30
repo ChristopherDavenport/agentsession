@@ -2,6 +2,7 @@ package cas
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -436,16 +437,39 @@ func (s *Store) migrate() error {
 			ids[d.Name()] = true
 		}
 	}
+	// Only a session still in the earlier format is migrated. One
+	// already rewritten, by this migration before a crash or at an open
+	// that kept the journal, or created since, is this version's to
+	// recover, damage and all; migrating it again would write its log
+	// over from the journal's older view.
+	failed := false
+	var todo []string
+	for id := range ids {
+		dir, err := s.sessionDir(id)
+		if err == nil {
+			var old bool
+			if old, err = unmigrated(dir); err == nil && !old {
+				continue
+			}
+		}
+		if err != nil {
+			s.faulty[id] = fmt.Errorf("cas: migrate session %s: %w", id, err)
+			failed = true
+			continue
+		}
+		todo = append(todo, id)
+	}
 	// A writer of the earlier version holds its session's lock, the
-	// same lock this version takes; migration holds every session's
-	// until it is done, and refuses while any is held.
+	// same lock this version takes; migration holds the lock of every
+	// session it migrates until it is done, and refuses while any is
+	// held.
 	var locks []*dirLock
 	defer func() {
 		for _, lk := range locks {
 			lk.release()
 		}
 	}()
-	for id := range ids {
+	for _, id := range todo {
 		lk, err := s.lockSession(id)
 		if errors.Is(err, ErrSessionLocked) {
 			return fmt.Errorf("%w: session %s", ErrMigrationBusy, id)
@@ -458,8 +482,7 @@ func (s *Store) migrate() error {
 	// A session that fails to migrate is left as it was and reported
 	// when it is opened; the others go on, and the journal is kept for
 	// the next writing open to try that session again.
-	failed := false
-	for id := range ids {
+	for _, id := range todo {
 		if err := s.migrateSession(id, scan); err != nil {
 			s.faulty[id] = fmt.Errorf("cas: migrate session %s: %w", id, err)
 			failed = true
@@ -493,12 +516,41 @@ func (s *Store) migrate() error {
 	return syncDir(s.root)
 }
 
-// migrated reports whether a session's log is already per session: it
-// reads with no record lost and opens with a create record. A log with
-// no directory is none.
-func migrated(dir string) bool {
-	l, err := readSessionLog(dir, 0)
-	return err == nil && !l.legacy && !l.lost && len(l.recs) > 0 && l.recs[0].Op == opCreate
+// unmigrated reports whether a session's directory is in the format of
+// a store from before logs were per session: it has a directory, and
+// its log is missing, empty, or holds no line with a record's opening.
+// A legacy line is a hash and a size, torn or whole, and cannot hold
+// one, so a log that does is this version's, however damaged; its
+// damage is for recovery to report, not for a migration to write over.
+// A session with no directory has nothing to migrate.
+func unmigrated(dir string) (bool, error) {
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	f, err := os.Open(filepath.Join(dir, logName))
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	br := bufio.NewReaderSize(f, 64<<10)
+	for {
+		line, err := br.ReadSlice('\n')
+		if bytes.Contains(line, recordOpening) {
+			return false, nil
+		}
+		switch {
+		case errors.Is(err, bufio.ErrBufferFull):
+			// A line longer than the buffer is no legacy line.
+			return false, nil
+		case errors.Is(err, io.EOF):
+			return true, nil
+		case err != nil:
+			return false, err
+		}
+	}
 }
 
 // discard renames a session's directory into the trash, where a sweep
@@ -519,15 +571,15 @@ func (s *Store) discard(id, dir string) error {
 const damagedPrefix = "journal.damaged-"
 
 // migrateSession rewrites one session's log from its legacy state. A
-// session whose log is already per session was migrated before a crash
-// and is passed over.
+// session whose log is already per session is passed over; migrate
+// checked before taking its lock, and this checks again under it.
 func (s *Store) migrateSession(id string, scan *journalScan) error {
 	dir, err := s.sessionDir(id)
 	if err != nil {
 		return err
 	}
-	if migrated(dir) {
-		return nil
+	if old, err := unmigrated(dir); err != nil || !old {
+		return err
 	}
 	v, err := s.legacyReconcile(id, dir, scan)
 	if err != nil {

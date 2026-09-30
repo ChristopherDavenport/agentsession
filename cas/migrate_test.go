@@ -211,6 +211,36 @@ func TestMigrateTornLegacyLine(t *testing.T) {
 // opens, read-only too.
 func TestMigrateIsolatesFailure(t *testing.T) {
 	ctx := context.Background()
+	root, want := partialStore(t)
+	st, err := Open(root)
+	if err != nil {
+		t.Fatalf("one bad session closed the store: %v", err)
+	}
+	defer st.Close()
+	if s, err := st.Open(ctx, "a"); err != nil || s.Len() != len(want) {
+		t.Errorf("the good session: %v", err)
+	}
+	if _, err := st.Open(ctx, "bad"); err == nil {
+		t.Error("the bad session opened")
+	}
+	if rep, err := st.Verify(ctx); err != nil || rep.OK() {
+		t.Errorf("verify with a session unmigrated: %v %v", err, rep.Problems)
+	}
+	ro, err := Open(root, WithReadOnly())
+	if err != nil {
+		t.Fatalf("read-only after a partial migration: %v", err)
+	}
+	defer ro.Close()
+	if _, err := ro.Open(ctx, "a"); err != nil {
+		t.Errorf("read-only, the good session: %v", err)
+	}
+}
+
+// partialStore is legacyStore with a second session, "bad", that
+// cannot be migrated, so a writing open migrates "a" and keeps the
+// journal.
+func partialStore(t *testing.T) (string, []string) {
+	t.Helper()
 	root, want := legacyStore(t)
 	// A second session whose one entry's envelope is corrupt, not gone,
 	// and named only by its old log.
@@ -231,24 +261,59 @@ func TestMigrateIsolatesFailure(t *testing.T) {
 	os.MkdirAll(dir, 0o755)
 	writeHeader(dir, scratch.Header())
 	os.WriteFile(filepath.Join(dir, logName), []byte(e.Base().ID+"\n"), 0o600)
-	st, err := Open(root)
+	return root, want
+}
+
+// TestMigrateKeptJournalLeavesMigrated: while a journal is kept for a
+// session that failed to migrate, a writing open neither waits on the
+// lock of a session already migrated nor writes over its log. A
+// damaged log stays as it is, for recovery to report.
+func TestMigrateKeptJournalLeavesMigrated(t *testing.T) {
+	ctx := context.Background()
+	root, want := partialStore(t)
+	st1, err := Open(root)
 	if err != nil {
-		t.Fatalf("one bad session closed the store: %v", err)
+		t.Fatal(err)
 	}
-	defer st.Close()
-	if s, err := st.Open(ctx, "a"); err != nil || s.Len() != len(want) {
-		t.Errorf("the good session: %v", err)
+	defer st1.Close()
+	if _, err := os.Stat(filepath.Join(root, journalFile)); err != nil {
+		t.Fatal("the journal went with a session unmigrated")
 	}
-	if _, err := st.Open(ctx, "bad"); err == nil {
-		t.Error("the bad session opened")
+	if _, err := st1.Open(ctx, "a"); err != nil {
+		t.Fatal(err)
 	}
-	ro, err := Open(root, WithReadOnly())
+	st1.Create(ctx, agentsession.Header{ID: "fresh"})
+	for _, text := range []string{"x", "y", "z"} {
+		if _, err := st1.Append(ctx, "fresh", item(text)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st2, err := Open(root)
 	if err != nil {
-		t.Fatalf("read-only after a partial migration: %v", err)
+		t.Fatalf("a second writer, with sessions held: %v", err)
 	}
-	defer ro.Close()
-	if _, err := ro.Open(ctx, "a"); err != nil {
-		t.Errorf("read-only, the good session: %v", err)
+	st2.Close()
+	st1.Close()
+
+	p := filepath.Join(root, "sessions", "fresh", logName)
+	data, _ := os.ReadFile(p)
+	lines := bytes.SplitAfter(data, []byte("\n"))
+	mid := len(lines[0]) + len(lines[1]) + len(lines[2])/2
+	data[mid] ^= 1
+	os.WriteFile(p, data, 0o600)
+	st3, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st3.Close()
+	if after, _ := os.ReadFile(p); !bytes.Equal(after, data) {
+		t.Errorf("migration rewrote a damaged log of this version:\n%s", after)
+	}
+	if s, err := st3.Open(ctx, "a"); err != nil || s.Len() != len(want) {
+		t.Errorf("session a after another open: %v", err)
+	}
+	if _, err := st3.Open(ctx, "fresh"); !errors.As(err, new(LogDamage)) {
+		t.Errorf("a damaged log opened with %v, want its damage reported", err)
 	}
 }
 
