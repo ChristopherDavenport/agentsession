@@ -23,6 +23,17 @@ import (
 // so integers beyond 2^53 lose precision. A number that overflows a
 // double is an error, as is anything after the first document.
 func Transform(data []byte) ([]byte, error) {
+	if out, ok := transformFast(data); ok {
+		return out, nil
+	}
+	return transformDecoded(data)
+}
+
+// transformDecoded is Transform by way of encoding/json: the document
+// decoded into Go values and written back. It is the reference the
+// byte-level path must agree with, and what handles what that path
+// leaves to it.
+func transformDecoded(data []byte) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	var v any

@@ -1298,6 +1298,9 @@ type memberDecoder interface {
 
 // splitMembers parses one line into its top-level members.
 func splitMembers(data []byte) (map[string]json.RawMessage, error) {
+	if all, ok := jsonx.Members(data); ok {
+		return all, nil
+	}
 	var all map[string]json.RawMessage
 	if err := json.Unmarshal(data, &all); err != nil {
 		return nil, err
