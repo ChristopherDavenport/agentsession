@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 )
 
@@ -410,10 +411,27 @@ func (s *Store) commit(durable bool, recs ...journalRecord) error {
 }
 
 // syncJournal fsyncs what lazy commits left: the objects, then the
-// journal.
+// journal, with a sync record for each held session that has lazy
+// appends, so a later open need not check their objects.
 func (s *Store) syncJournal() error {
 	if err := s.objs.flush(); err != nil {
 		return err
+	}
+	var syncs []journalRecord
+	for id, h := range s.open {
+		if h.lazy {
+			syncs = append(syncs, journalRecord{Op: "sync", Session: id})
+		}
+	}
+	if len(syncs) > 0 {
+		sort.Slice(syncs, func(i, j int) bool { return syncs[i].Session < syncs[j].Session })
+		if err := s.commit(true, syncs...); err != nil {
+			return err
+		}
+		for _, r := range syncs {
+			s.open[r.Session].lazy = false
+		}
+		return nil
 	}
 	if !s.journalDirty {
 		return nil

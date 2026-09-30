@@ -214,6 +214,12 @@ type handle struct {
 	head       string // the head as the HEAD file has it
 	count      int    // entries the store has committed into the session
 	diskFormat string // the format the header file names
+	// lazy is set while the session holds a lazy append of this store's
+	// that no sync record covers. The store holds the session's lock,
+	// so every lazy record in it is this store's or was adopted at open,
+	// and the commit that makes them durable says so with a sync record;
+	// otherwise every later open checks each one's objects again.
+	lazy bool
 }
 
 // Open opens or creates the store at root, and replays the journal
@@ -1613,11 +1619,17 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	case agentsession.LeafMoved:
 		head = e.(*agentsession.LabelEntry).Target
 	}
-	err = s.commit(durable, journalRecord{Op: "append", Session: sessionID, Entry: r.ID, Head: head, Seq: h.session.Len() + 1, Size: size})
+	recs := []journalRecord{{Op: "append", Session: sessionID, Entry: r.ID, Head: head, Seq: h.session.Len() + 1, Size: size}}
+	if durable && h.lazy {
+		// The commit flushes the lazy appends before it, objects first.
+		recs = append(recs, journalRecord{Op: "sync", Session: sessionID})
+	}
+	err = s.commit(durable, recs...)
 	guard.release()
 	if err != nil {
 		return agentsession.Result{}, err
 	}
+	h.lazy = !durable
 	r.Durable = durable
 	// The append is committed from here. The log and the head are
 	// indexes the next open rebuilds from the journal, so a failure to

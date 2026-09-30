@@ -31,6 +31,16 @@ func journalLines(t *testing.T, root, id string) ([]string, []int) {
 	return lines, appends
 }
 
+// die ends a store as a crash does: its locks go, and nothing it left
+// lazy is flushed or said to be durable.
+func die(st *Store) {
+	for id, h := range st.open {
+		h.lock.release()
+		delete(st.open, id)
+	}
+	st.objs.close()
+}
+
 // TestJournalRecord round-trips a record through its checksum, finds a
 // flipped byte, and reads a record written before checksums.
 func TestJournalRecord(t *testing.T) {
@@ -127,7 +137,7 @@ func TestLazyAppends(t *testing.T) {
 	if strings.Contains(lines[appends[0]], `"lazy"`) || !strings.Contains(lines[appends[1]], `"lazy":true`) {
 		t.Errorf("journal:\n%s", strings.Join(lines, ""))
 	}
-	st.Close()
+	die(st)
 	// A crash took the lazy entry's envelope; the log line survived.
 	p, _ := st.objs.loosePath(spaceEntries, lost.ID)
 	os.Remove(p)
@@ -439,7 +449,7 @@ func TestLostAppendStaysLost(t *testing.T) {
 	kept, _ := st.Write(ctx, "l", agentsession.NewItemEntry(openresponses.UserText("kept")))
 	lost, _ := st.Write(ctx, "l", agentsession.NewItemEntry(openresponses.UserText("lost")))
 	after, _ := st.Write(ctx, "l", agentsession.NewItemEntry(openresponses.UserText("after")))
-	st.Close()
+	die(st)
 	// A crash took the lost entry's envelope.
 	p, _ := st.objs.loosePath(spaceEntries, lost.ID)
 	os.Remove(p)
@@ -484,5 +494,54 @@ func TestLostAppendStaysLost(t *testing.T) {
 			}
 		}
 		st3.Close()
+	}
+}
+
+// TestSyncRecords: making a held session's lazy appends durable says so
+// in the journal, on Sync, on Close and with a durable append, so a
+// later open does not read their objects again to find them present.
+func TestSyncRecords(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncOnResponse))
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	syncs := func() int {
+		lines, _ := journalLines(t, root, "s")
+		n := 0
+		for _, l := range lines {
+			if strings.Contains(l, `"op":"sync"`) && strings.Contains(l, `"session":"s"`) {
+				n++
+			}
+		}
+		return n
+	}
+	mustAppend(t, st, "s", item("lazy"))
+	if _, err := st.Write(ctx, "s", &agentsession.ResponseEntry{ResponseID: "r", Status: openresponses.ResponseStatusCompleted}); err != nil {
+		t.Fatal(err)
+	}
+	if n := syncs(); n != 1 {
+		t.Errorf("after a durable append: %d sync records, want 1", n)
+	}
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := syncs(); n != 1 {
+		t.Errorf("Sync with nothing lazy: %d sync records, want 1", n)
+	}
+	mustAppend(t, st, "s", item("lazy again"))
+	st.Close()
+	if n := syncs(); n != 2 {
+		t.Errorf("after Close: %d sync records, want 2", n)
+	}
+	// Every lazy append is covered, so an open reads no object to check.
+	ro, err := Open(root, WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	scan, _ := ro.replay()
+	v, err := ro.reconcile("s", filepath.Join(root, "sessions", "s"), scan)
+	if err != nil || len(v.adopt) != 0 {
+		t.Errorf("reconcile after Close: adopt %v, %v", v.adopt, err)
 	}
 }
