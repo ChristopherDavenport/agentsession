@@ -3,8 +3,10 @@ package cas
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -415,7 +417,24 @@ func (o *objects) flushSet(pend *pendSet) error {
 		pend.files, pend.dirs = map[string]bool{}, map[string]bool{}
 	}
 	o.mu.Unlock()
-	if err := syncAll(files, func(f string) error {
+	// What an fsync failed on stays pending, so the next commit tries
+	// it again rather than taking it for durable; the directories
+	// behind a failed file are not yet synced, and stay too.
+	putBack := func(files, dirs []string) {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		pf, pd := o.pendFiles, o.pendDirs
+		if pend != nil {
+			pf, pd = pend.files, pend.dirs
+		}
+		for _, f := range files {
+			pf[f] = true
+		}
+		for _, d := range dirs {
+			pd[d] = true
+		}
+	}
+	if failed, err := syncAll(files, func(f string) error {
 		fh, err := os.Open(f)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -423,41 +442,56 @@ func (o *objects) flushSet(pend *pendSet) error {
 		if err != nil {
 			return err
 		}
-		err = fh.Sync()
+		err = syncObject(fh)
 		fh.Close()
 		return err
 	}); err != nil {
+		putBack(failed, slices.Collect(maps.Keys(dirs)))
 		return err
 	}
-	return syncAll(dirs, func(d string) error {
+	failed, err := syncAll(dirs, func(d string) error {
 		if err := syncDir(d); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		return nil
 	})
+	if err != nil {
+		putBack(nil, failed)
+	}
+	return err
 }
+
+// syncObject fsyncs an object's file; a variable so a test can fail it.
+var syncObject = func(f *os.File) error { return f.Sync() }
 
 // flushWorkers bounds the fsyncs a flush has in flight.
 const flushWorkers = 32
 
 // syncAll calls fsync for every path, flushWorkers at a time, and
-// returns the first error once all have finished.
-func syncAll(paths map[string]bool, fsync func(string) error) error {
+// returns the paths that failed and the first error once all have
+// finished.
+func syncAll(paths map[string]bool, fsync func(string) error) ([]string, error) {
+	type result struct {
+		path string
+		err  error
+	}
 	if len(paths) <= 1 {
 		for p := range paths {
-			return fsync(p)
+			if err := fsync(p); err != nil {
+				return []string{p}, err
+			}
 		}
-		return nil
+		return nil, nil
 	}
 	work := make(chan string)
-	errs := make(chan error, len(paths))
+	results := make(chan result, len(paths))
 	var wg sync.WaitGroup
 	for range min(flushWorkers, len(paths)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for p := range work {
-				errs <- fsync(p)
+				results <- result{p, fsync(p)}
 			}
 		}()
 	}
@@ -466,13 +500,18 @@ func syncAll(paths map[string]bool, fsync func(string) error) error {
 	}
 	close(work)
 	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			return err
+	close(results)
+	var failed []string
+	var first error
+	for r := range results {
+		if r.err != nil {
+			failed = append(failed, r.path)
+			if first == nil {
+				first = r.err
+			}
 		}
 	}
-	return nil
+	return failed, first
 }
 
 func (o *objects) close() {

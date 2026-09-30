@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -618,7 +619,14 @@ func TestFailedCommitLeavesNothing(t *testing.T) {
 	st.Create(ctx, agentsession.Header{ID: "s"})
 	first := mustAppend(t, st, "s", item("one"))
 	old := syncLog
-	syncLog = func(*os.File) error { return errors.New("injected fsync failure") }
+	failed := false
+	syncLog = func(f *os.File) error {
+		if failed {
+			return f.Sync() // the cut back
+		}
+		failed = true
+		return errors.New("injected fsync failure")
+	}
 	_, err := st.Append(ctx, "s", item("failed"))
 	syncLog = old
 	if err == nil {
@@ -634,6 +642,68 @@ func TestFailedCommitLeavesNothing(t *testing.T) {
 	}
 	if s.Len() != 2 || s.Leaf() != second || s.Entries()[0].Base().ID != first {
 		t.Errorf("after a failed commit: %d entries at %s, want 2 at %s", s.Len(), s.Leaf(), second)
+	}
+}
+
+// TestUncertainLogLetsGo: a commit that fails and cannot be taken back
+// out of the log lets the session go, whatever wrote it, so a later
+// operation recovers it from the disk rather than trusting state the
+// log no longer follows from.
+func TestUncertainLogLetsGo(t *testing.T) {
+	ctx := context.Background()
+	for name, commit := range map[string]func(st *Store, first string) error{
+		"head":    func(st *Store, first string) error { return st.SetHead(ctx, "s", st.open["s"].head, first) },
+		"release": func(st *Store, _ string) error { return st.Release("s") },
+		"sync":    func(st *Store, _ string) error { return st.Sync(ctx) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			st, _ := Open(root, WithSync(SyncNever))
+			defer st.Close()
+			st.Create(ctx, agentsession.Header{ID: "s"})
+			first := mustAppend(t, st, "s", item("one"))
+			mustAppend(t, st, "s", item("two"))
+			old := syncLog
+			syncLog = func(*os.File) error { return errors.New("injected fsync failure") }
+			err := commit(st, first)
+			syncLog = old
+			if !errors.Is(err, errLogUncertain) {
+				t.Fatalf("the commit: %v", err)
+			}
+			if _, ok := st.open["s"]; ok {
+				t.Error("the store still holds a session its log is uncertain of")
+			}
+			other, _ := Open(root)
+			defer other.Close()
+			if _, err := other.Open(ctx, "s"); err != nil {
+				t.Errorf("another store, after the session was let go: %v", err)
+			}
+		})
+	}
+}
+
+// TestFailedFlushStaysPending: objects whose fsync failed are still
+// pending, so the next commit syncs them rather than taking them for
+// durable.
+func TestFailedFlushStaysPending(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir(), WithSync(SyncNever))
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, st, "s", item("one"))
+	old := syncObject
+	defer func() { syncObject = old }()
+	syncObject = func(*os.File) error { return errors.New("injected fsync failure") }
+	if err := st.Sync(ctx); err == nil {
+		t.Fatal("the commit reported success")
+	}
+	var synced atomic.Int32
+	syncObject = func(f *os.File) error { synced.Add(1); return f.Sync() }
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if synced.Load() == 0 {
+		t.Error("the next commit synced none of the objects the failed one did not")
 	}
 }
 

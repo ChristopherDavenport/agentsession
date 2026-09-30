@@ -196,11 +196,20 @@ func (s *Store) appendRecords(h *handle, dir string, durable bool, recs ...logRe
 		// log is cut back to where it was. If even that fails, what the
 		// log holds is unknown, and the caller drops the session so its
 		// next open reads the disk.
-		if terr := f.Truncate(before); terr != nil {
-			return fmt.Errorf("%w: %v; and cutting it back: %v", errLogUncertain, err, terr)
+		uncertain := func(err error) error {
+			// A held session's state no longer follows from its log;
+			// it is let go, and its next open recovers from the disk.
+			// Every record names the session it belongs to.
+			if h != nil {
+				s.dropHandle(recs[0].Session, h)
+			}
+			return err
 		}
-		if serr := f.Sync(); serr != nil {
-			return fmt.Errorf("%w: %v; and syncing it cut back: %v", errLogUncertain, err, serr)
+		if terr := f.Truncate(before); terr != nil {
+			return uncertain(fmt.Errorf("%w: %v; and cutting it back: %v", errLogUncertain, err, terr))
+		}
+		if serr := syncLog(f); serr != nil {
+			return uncertain(fmt.Errorf("%w: %v; and syncing it cut back: %v", errLogUncertain, err, serr))
 		}
 		return fmt.Errorf("cas: log: %w", err)
 	}
@@ -208,7 +217,7 @@ func (s *Store) appendRecords(h *handle, dir string, durable bool, recs ...logRe
 }
 
 // errLogUncertain is an append that failed and could not be taken back
-// out of the log.
+// out of the log. appendRecords has let the session's handle go.
 var errLogUncertain = errors.New("cas: a failed append could not be taken out of the log")
 
 // syncLog fsyncs a session's log; a variable so a test can fail it.

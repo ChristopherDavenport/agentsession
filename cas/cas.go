@@ -1730,9 +1730,6 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	err = s.appendRecords(h, h.dir, durable, recs...)
 	guard.release()
 	if err != nil {
-		if errors.Is(err, errLogUncertain) {
-			s.dropHandle(sessionID, h)
-		}
 		return agentsession.Result{}, err
 	}
 	h.lazy = !durable
@@ -2162,6 +2159,9 @@ func (s *Store) releaseHandle(id string, h *handle) error {
 	var err error
 	if !s.readOnly {
 		err = s.commitHandle(id, h)
+		if errors.Is(err, errLogUncertain) {
+			return err // let go already, and the indexes are not ours to write
+		}
 		_ = writeHead(h.dir, h.head)
 		s.summarizeHeld(id, h)
 	}
@@ -2172,7 +2172,9 @@ func (s *Store) releaseHandle(id string, h *handle) error {
 // dropHandle forgets a held session without writing anything: its log
 // is closed and its lock let go.
 func (s *Store) dropHandle(id string, h *handle) {
-	delete(s.open, id)
+	if s.open[id] == h {
+		delete(s.open, id)
+	}
 	if h.logf != nil {
 		h.logf.Close()
 		h.logf = nil
