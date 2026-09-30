@@ -426,3 +426,63 @@ func TestReplayReadsOn(t *testing.T) {
 		}
 	}
 }
+
+// TestLostAppendStaysLost: recovery that finds a lazy append lost
+// journals the loss before the sync record it writes, so a later open
+// neither brings the lost appends back, which would name objects the
+// store does not hold, nor cuts the durable appends made after it.
+func TestLostAppendStaysLost(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "l"})
+	kept, _ := st.Write(ctx, "l", agentsession.NewItemEntry(openresponses.UserText("kept")))
+	lost, _ := st.Write(ctx, "l", agentsession.NewItemEntry(openresponses.UserText("lost")))
+	after, _ := st.Write(ctx, "l", agentsession.NewItemEntry(openresponses.UserText("after")))
+	st.Close()
+	// A crash took the lost entry's envelope.
+	p, _ := st.objs.loosePath(spaceEntries, lost.ID)
+	os.Remove(p)
+
+	st2, _ := Open(root)
+	s, err := st2.Open(ctx, "l")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 1 || s.Leaf() != kept.ID {
+		t.Fatalf("recovered: len %d leaf %s, want 1 %s", s.Len(), s.Leaf(), kept.ID)
+	}
+	again := mustAppend(t, st2, "l", agentsession.NewItemEntry(openresponses.UserText("again")))
+	st2.Close()
+
+	lines, _ := journalLines(t, root, "l")
+	var lostRecs int
+	for _, l := range lines {
+		if strings.Contains(l, `"op":"lost"`) {
+			lostRecs++
+		}
+	}
+	if lostRecs != 2 {
+		t.Errorf("%d lost records, want 2:\n%s", lostRecs, strings.Join(lines, ""))
+	}
+
+	for i := range 2 {
+		st3, err := Open(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err = st3.Open(ctx, "l")
+		if err != nil {
+			t.Fatalf("open %d after recovery: %v", i+1, err)
+		}
+		if s.Len() != 2 || s.Leaf() != again {
+			t.Errorf("open %d after recovery: len %d leaf %s, want 2 %s", i+1, s.Len(), s.Leaf(), again)
+		}
+		for _, id := range []string{lost.ID, after.ID} {
+			if _, ok := s.Entry(id); ok {
+				t.Errorf("open %d after recovery: lost append %s came back", i+1, id)
+			}
+		}
+		st3.Close()
+	}
+}

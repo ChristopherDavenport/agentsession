@@ -23,7 +23,7 @@ import (
 // that reads is damage, never a torn write. A record written before the
 // checksum existed has none and is taken as it reads.
 type journalRecord struct {
-	Op      string `json:"op"` // create, append, head, mark, delete
+	Op      string `json:"op"` // create, append, head, mark, delete, sync, lost
 	Session string `json:"session"`
 	Entry   string `json:"entry,omitempty"`
 	Head    string `json:"head,omitempty"`

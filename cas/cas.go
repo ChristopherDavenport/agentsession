@@ -744,6 +744,11 @@ type view struct {
 	// their objects and says so, since a durable append it makes next
 	// must not be cut with them by a later crash.
 	adopt []string
+	// dropped lists the appends found lost that no lost record names
+	// yet: a writing store that recovers the session commits one for
+	// each, so a sync record after them, or a durable append that goes
+	// on from what survived, does not bring them back or cut with them.
+	dropped []string
 
 	logChanged, headChanged, markChanged bool
 }
@@ -786,22 +791,41 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 	lost := map[string]bool{}
 	jHead, hasJHead := "", false
 	cut := false
-	// A sync record says every lazy record before it is durable.
+	// A sync record says every lazy record before it is durable, apart
+	// from the ones a lost record already said were lost.
 	synced := -1
+	// lostAt is where the last lost record naming each entry is: an
+	// append of it before that is gone, one after it is kept.
+	lostAt := map[string]int{}
 	for i, r := range st.recs {
-		if r.Op == "sync" {
+		switch r.Op {
+		case "sync":
 			synced = i
+		case "lost":
+			lostAt[r.Entry] = i
 		}
 	}
+	gone := func(entry string, i int) bool {
+		at, ok := lostAt[entry]
+		return ok && at > i
+	}
+	var dropped []string
 	for i, r := range st.recs {
 		if cut {
 			if r.Op == "append" && r.Entry != "" {
 				lost[r.Entry] = true
+				if !gone(r.Entry, i) {
+					dropped = append(dropped, r.Entry)
+				}
 			}
 			continue
 		}
 		switch r.Op {
 		case "append":
+			if r.Entry != "" && gone(r.Entry, i) {
+				lost[r.Entry] = true // lost, and recorded so, earlier
+				continue
+			}
 			if r.Lazy && r.Entry != "" && i > synced {
 				ok, err := s.present(r.Entry)
 				if errors.Is(err, ErrCorrupt) {
@@ -813,6 +837,7 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 				if !ok {
 					cut = true
 					lost[r.Entry] = true
+					dropped = append(dropped, r.Entry)
 					continue
 				}
 				v.adopt = append(v.adopt, r.Entry)
@@ -828,11 +853,19 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 				jHead, hasJHead = r.Head, true
 			}
 		case "head":
+			if gone(r.Head, i) {
+				continue
+			}
 			jHead, hasJHead = r.Head, true
 		}
 	}
 	for _, e := range jEntries {
 		delete(lost, e) // appended again after the loss, and kept
+	}
+	for _, e := range dropped {
+		if lost[e] {
+			v.dropped = append(v.dropped, e)
+		}
 	}
 	inLog := map[string]bool{}
 	for _, e := range have {
@@ -946,6 +979,17 @@ func (s *Store) recoverSession(id, dir string) (view, error) {
 	}
 	if v.markChanged {
 		if err := writeIndex(filepath.Join(dir, "record"), []byte(v.mark+"\n")); err != nil {
+			return v, err
+		}
+	}
+	if len(v.dropped) > 0 {
+		// Before the sync record adopt writes, which would otherwise
+		// say the lost appends were durable.
+		recs := make([]journalRecord, len(v.dropped))
+		for i, e := range v.dropped {
+			recs[i] = journalRecord{Op: "lost", Session: id, Entry: e}
+		}
+		if err := s.commit(true, recs...); err != nil {
 			return v, err
 		}
 	}
