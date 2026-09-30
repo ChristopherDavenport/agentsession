@@ -15,6 +15,12 @@ continues from or none, a **head** entry its next append will name as
 parent, and a **log** of the entries it appended, in the order the store
 accepted them.
 
+A session is to its entries what a git ref is to commits, and its log
+is its own write-ahead log: a store keeps no state wider than a session,
+and a writer chooses how often to **commit**, making the session's
+appends durable, and how much to leave as **working state**, which a
+crash may take.
+
 The JSONL file of RFC 0001 is a projection of a session: its header,
 the path to its base, then its own entries in log order. A reader
 verifies a projection entry by entry by recomputing hashes, and verifies
@@ -107,6 +113,10 @@ in RFC 2119.
   the appender names another.
 - **Log**: the entries a session appended, in the order the store
   accepted them. These are the session's **own** entries.
+- **Commit**: making a session's appends durable; see durability and
+  recovery.
+- **Working state**: a session's appends acknowledged before a commit
+  made them durable, which a crash may take.
 - **Prefix**: the path from a session's base to its root. A session's
   prefix entries are, or were, another session's own entries; a store
   may hold them without holding that session.
@@ -208,7 +218,7 @@ A session is created with a header and optionally a base.
 - A session's header is written at creation and changes afterwards only
   in `format`. A store MUST raise the header's `format` to the minor of
   a writer that appends to the session, when that minor is later than
-  the header's, durably and before the append's commit point, as RFC
+  the header's, durably and before the append is accepted, as RFC
   0001 requires of a writer of a file; so a reader of an earlier minor
   refuses a session a later one has continued, rather than reading
   entries it cannot represent. A raise that outlives an append a crash
@@ -271,10 +281,11 @@ under the new head, sets the head to its own entry, or leaves the branch
 is the writer's decision, not the store's. This is the whole of the
 concurrency model, and it is the one git has for refs.
 
-Durability is the next section's concern: an append is one commit, and a
-store offers one that returns only when the commit is durable, which is
-the one RFC 0001's writing discipline requires for an entry whose type
-the header names in `records`.
+Durability is the next section's concern: an append is atomic, and a
+store offers one that returns only when it is committed, which is the
+one RFC 0001's writing discipline requires for an entry whose type the
+header names in `records`; other appends may be left as working state
+until a later commit.
 
 ## Head
 
@@ -328,16 +339,23 @@ one.
 
 ## Durability and recovery
 
-An append is three writes — the object, the log entry, the head — and
-the store promises them as one. At scale the store also promises them
-fast, to many writers at once, and those two promises are met by the
-same structure, which a database calls a write-ahead log.
+A session is a ref and its entries are objects, as a git branch is a
+ref and its commits are objects. What makes an entry part of a session
+is the session's log, so what commits an append is the session's own,
+as a ref's update is its own in git: a store writes nothing wider than
+the session to accept an append, and reads nothing wider than the
+session to recover one.
 
-- A store MUST have a single commit point per append, after which the
-  append is acknowledged and before which nothing of it is visible. An
-  object written ahead of its record is not an entry the store holds, so
-  it cannot satisfy another append's parent rule.
-- A store MUST offer an append that does not return until its commit is
+An append is three writes — the object, the log entry, the head — and
+the store promises them as one.
+
+- A store MUST accept an append at a single point, after which the
+  append is acknowledged and before which nothing of it is visible.
+  Accepting is not committing: an append may be accepted as working
+  state and committed later. An object written ahead of its append's
+  acceptance is not an entry the store holds, so it cannot satisfy
+  another append's parent rule.
+- A store MUST offer an append that does not return until it is
   durable. A writer MUST use it for an entry the header's `records`
   names that precedes a side effect, as RFC 0001's writing discipline
   requires, and SHOULD for a `response` entry and for a
@@ -352,66 +370,81 @@ same structure, which a database calls a write-ahead log.
   MUST NOT serve it and MAY discard it. Content addressing is what makes
   a half-written object detectable and a rewrite of it harmless.
 
-The design that meets these under contention is a store-wide journal.
-Every append is one record naming the session, the entry's hash and
-whether the head moved, written to a sequential log. The object is
-written before its record, idempotently, since a second write of the
-same bytes under the same hash changes nothing. The record is the
-commit point, and durability is the journal's fsync, or on object
-storage the acknowledged write of the record, which a store shares
-across the appends of many writers in one call. Recovery
-replays the journal tail against the objects, the logs and the heads.
-Each session's log is then a projection of the journal, and the
-journal's order is the total order the ordering section describes, of
-which a session's log is a filter.
+### Working state and commits
 
-A store that builds the journal keeps it so its damage cannot pass for a
-crash, since the journal is the one record recovery trusts. A record
-carries a checksum; a crash cuts short only the record being written, at
-the journal's end, so a record written whole that fails its checksum is
-damage, reported rather than skipped. The log and the head are never
-made durable ahead of the record that names their change. Recovery only
-adds: a log that holds an entry its journal lacks keeps it, since only
-damage or a journal restored from before the log can cause that, and the
-head does not move back past it. An append acknowledged before it was
-durable is marked so in its record, and its objects are made durable
-before the next durable commit, of any session; after a crash, such a
-record whose objects are missing is an append the crash took, with what
-the session appended after it, and not damage.
+An append acknowledged before it is durable is the session's **working
+state**: it is in the log, it moves the head as any append does, and a
+reader of the session sees it, but a crash may take it. A **commit**
+makes a session's working state durable in one step, with the append
+that asks for it: the objects first, then the log through that append.
+What durability costs a store is paid per commit and not per append, so
+how often a writer commits is how it trades speed for what a crash can
+take. RFC 0001's writing discipline names where a commit is owed, and
+between those points a writer MAY leave every append as working state.
+A commit covers one session's working state; another session's is its
+own.
 
-A store MAY compact the journal, as git replaces loose refs once
-packed-refs holds them. A session's records may go once its log, its
-head and its mark are durable and say what those records say, and no
-append in it acknowledged before it was durable still waits on its
-objects: recovery of a session the journal says nothing about reads
-its log and head as they stand. The journal then holds the tail of the
-store's total order, and each log keeps its own session's, which is the
-order a reader uses. A compaction MUST NOT drop a record whose change
-the session's files do not yet show, and MUST NOT let a commit land in
-a journal it is replacing. A journal holding damage is kept beside its
-replacement, so the damage is still reported.
+After a crash, a store keeps a session's working state up to the first
+append whose objects the crash took, and drops that append and what the
+session appended after it, as the loss of an uncommitted tail and not
+as damage. What it keeps, it commits before the session's next append.
+A writer that must know what survived reads the head.
+
+### A log per session
+
+The design that meets these on a filesystem is a log per session that
+is its write-ahead log, as a ref's lock file and reflog are git's. Each
+record is one line carrying a checksum: an append, naming the entry,
+its sequence and where the head went; a head move; a mark; or a commit.
+The objects are written first, idempotently, since a second write of the
+same bytes under the same hash changes nothing; then the records; then
+the head, which is an index of the log's last head record and is
+rebuilt from it. An append is accepted when its record is written, and
+a commit is the log's fsync, after its objects'. A store appends to a
+session's log under the session's own lock, as git updates a ref under
+its lock file and as the append section permits, so appends to
+different sessions commit independently and at once, and a journaling
+filesystem joins their fsyncs into one commit of its own.
+
+A crash cuts short only the record being written, at the log's end, so
+a record written whole that fails its checksum is damage, reported
+rather than skipped. The head is never made durable ahead of the record
+that names it. Recovery reads one session's log, when the session is
+opened, and nothing else, so what a store pays to recover a session is
+what the session costs, however large the store has grown. A session's
+log is deleted with the session and holds nothing of any other, so
+there is nothing store-wide to compact.
 
 A store built on a database that has its own write-ahead log gets
 atomicity and recovery from the database. Durability it must still ask
 for: SQLite's WAL commit at `synchronous=NORMAL`, which the reference
 store runs, is not fsynced, so its durable append is what sets the
-pragma or forces the checkpoint. A store built on a filesystem or on
-object storage builds the journal first.
+pragma or forces the checkpoint. A store built on object storage, which
+has no append, writes a session's log as objects named by the session
+and a sequence, each written only if absent, so a commit is the
+acknowledged write of one, and its working state may stay with the
+writer until it commits.
 
-What the journal does not hold is a model call in flight. RFC 0001
+What a session's log does not hold is a model call in flight. RFC 0001
 forbids writing partial output as an entry, so the bytes of a response
 still streaming are a harness's to buffer, outside the store, and reach
 it as entries only when the items are complete. That spool is not this
-document's concern, and it is not this journal.
+document's concern, and it is not this log.
 
 ## Deletion and retention
 
 - A store MUST NOT delete an entry that any session's log references.
 - A store MUST NOT sweep an entry on any session's prefix, its base
   included: the session's projection needs it.
-- Deleting a session removes its ref, its header and its log. Entries
-  referenced by no remaining log and on no remaining prefix MAY then be
-  swept.
+- Deleting a session removes its ref, its header and its log, all at
+  once: a session created afterwards under the same ID starts from
+  nothing. Entries referenced by no remaining log and on no remaining
+  prefix MAY then be swept.
+- An object no log names yet may be one whose append a writer has yet
+  to be accepted. A store MUST NOT sweep an object younger than the
+  longest interval a writer holds between writing an object and the
+  acceptance of the append that names it, as git's collector spares a
+  young loose object.
 - A store MUST NOT sweep by reachability from heads. A session's
   abandoned branches are in its log and are its record; RFC 0001's
   `outcome` entries score them and a consumer's preference between
