@@ -1177,6 +1177,36 @@ func TestConcurrentWriters(t *testing.T) {
 	}
 }
 
+// TestLazyLargeObjectNotTrusted: a large object written lazily, whose
+// writeback failed in the background and whose pages were evicted
+// before any fsync, is read and compared at its next reuse, not taken
+// on the trust its write earned, and written again.
+func TestLazyLargeObjectNotTrusted(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	big := strings.Repeat("large content ", (checkedSize/14)+1)
+	st.Create(ctx, agentsession.Header{ID: "a"})
+	e := mustAppend(t, st, "a", item(big))
+	c, _ := st.contentOf(e)
+	p, _ := st.objs.loosePath(spaceContents, c)
+	info, _ := os.Stat(p)
+	f, _ := os.OpenFile(p, os.O_WRONLY, 0)
+	f.WriteAt(make([]byte, info.Size()), 0) // the same file, zeros
+	f.Close()
+	st.Create(ctx, agentsession.Header{ID: "b"})
+	mustAppend(t, st, "b", item(big))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	r, _ := Open(root)
+	defer r.Close()
+	if _, err := r.Open(ctx, "b"); err != nil {
+		t.Errorf("a session committed over a large object gone to zeros: %v", err)
+	}
+}
+
 // TestForkRefusesDoomedBase: a fork of a base another process holds as
 // working state, after an earlier uncommitted append of that session
 // whose objects are gone, is refused: recovery would cut the origin's

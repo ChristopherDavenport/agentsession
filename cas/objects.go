@@ -47,10 +47,14 @@ type objects struct {
 	// rewrite holds pending objects an fsync failed on, which the next
 	// flush writes again rather than fsyncs again.
 	rewrite map[string]bool
-	// checked holds the large loose files this store wrote or read and
-	// found to hold their object's bytes. An object's file is replaced
-	// only by renaming a new one over it, so the same file still holds
-	// them, unless an fsync of it has failed since.
+	// checked holds the large loose files this store fsynced, after
+	// writing them or finding them to hold their object's bytes. Their
+	// bytes are on the disk, so an eviction since reads them back; and
+	// an object's file is replaced only by renaming a new one over it,
+	// so the same file still holds them, unless an fsync of it has
+	// failed since. A file not yet fsynced is not taken on trust: its
+	// writeback may fail in the background, and its pages be evicted
+	// and read back as zeros, before any fsync reports it.
 	checked map[string]os.FileInfo
 }
 
@@ -317,9 +321,6 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 			if err == nil && !bytes.Equal(have, data) {
 				goto write
 			}
-			if err == nil {
-				o.check(path, info)
-			}
 		}
 		if err == nil {
 			now := time.Now()
@@ -352,17 +353,16 @@ write:
 		}
 		o.remember(pend, "", filepath.Dir(dir))
 	}
-	if err := writeFile(path, data, durable); err != nil {
+	info, err := writeFileInfo(path, data, durable)
+	if err != nil {
 		return err
 	}
 	// A new file, whose writeback has not failed.
 	o.mu.Lock()
 	delete(o.rewrite, path)
 	o.mu.Unlock()
-	if len(data) >= checkedSize {
-		if info, err := os.Stat(path); err == nil {
-			o.check(path, info)
-		}
+	if durable {
+		o.check(path, info)
 	}
 	if !durable {
 		return o.remember(pend, path, dir)
@@ -499,7 +499,11 @@ func (o *objects) flushSet(pend *pendSet) error {
 			return nil
 		}
 		if err == nil {
-			err = syncObject(fh)
+			if err = syncObject(fh); err == nil {
+				if info, serr := fh.Stat(); serr == nil {
+					o.check(f, info)
+				}
+			}
 			fh.Close()
 		}
 		if err != nil {
@@ -584,7 +588,11 @@ func (o *objects) writeAgain(sp space, hash, path string) error {
 		return err
 	}
 	if hashBytes(data) == hash {
-		return writeFile(path, data, true)
+		info, err := writeFileInfo(path, data, true)
+		if err == nil {
+			o.check(path, info)
+		}
+		return err
 	}
 	trash := filepath.Join(o.root, "trash")
 	if err := os.MkdirAll(trash, 0o755); err != nil {

@@ -385,9 +385,16 @@ func syncDir(dir string) error {
 // file before the rename when durable is set. The directory is the
 // caller's to sync.
 func writeFile(path string, data []byte, durable bool) error {
+	_, err := writeFileInfo(path, data, durable)
+	return err
+}
+
+// writeFileInfo is writeFile, returning the file it wrote as it was
+// before the rename, so a rename over it since is not taken for it.
+func writeFileInfo(path string, data []byte, durable bool) (os.FileInfo, error) {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	_, werr := tmp.Write(data)
 	if durable {
@@ -395,18 +402,22 @@ func writeFile(path string, data []byte, durable bool) error {
 			werr = serr
 		}
 	}
+	info, serr := tmp.Stat()
+	if werr == nil {
+		werr = serr
+	}
 	if cerr := tmp.Close(); werr == nil {
 		werr = cerr
 	}
 	if werr != nil {
 		os.Remove(tmp.Name())
-		return werr
+		return nil, werr
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		os.Remove(tmp.Name())
-		return err
+		return nil, err
 	}
-	return nil
+	return info, nil
 }
 
 // writeAtomic replaces the file at path with data durably: through a
