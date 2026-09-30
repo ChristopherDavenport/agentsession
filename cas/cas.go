@@ -209,8 +209,14 @@ type Store struct {
 	scanMu sync.Mutex
 	scan   *journalScan
 	// checkpointed is the journal offset of the checkpoint the scan
-	// started from or last saved.
-	checkpointed int64
+	// started from or last saved, and checkpointBytes that checkpoint's
+	// size; scanFile is the journal file the scan was read from.
+	checkpointed, checkpointBytes int64
+	scanFile                      os.FileInfo
+	// journalSize is where this store's last commit left the journal,
+	// which decides when it compacts, and compactRetryAt the size an
+	// automatic compaction that could not proceed waits for.
+	journalSize, compactRetryAt int64
 }
 
 type handle struct {
@@ -1743,6 +1749,7 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 		return s.committedButNotApplied(sessionID, r)
 	}
 	h.count++
+	s.maybeCompact()
 	return r, nil
 }
 
@@ -2132,14 +2139,15 @@ func (s *Store) Close() error {
 	var first error
 	if !s.readOnly {
 		first = s.syncJournal()
-		// A store that only appended never replayed what it wrote; the
-		// next open's checkpoint should hold it. A failure only costs
-		// that open a longer replay.
-		if _, err := s.replay(); err == nil {
-			s.scanMu.Lock()
-			s.saveCheckpoint()
-			s.scanMu.Unlock()
+		if info, err := os.Stat(filepath.Join(s.root, "journal")); err == nil {
+			s.journalSize = info.Size()
 		}
+		s.maybeCompact()
+		// A store that only appended never replayed what it wrote; the
+		// replay reads it and saves the checkpoint the next open starts
+		// from, when the journal has grown enough to want one. A failure
+		// only costs that open a longer replay.
+		_, _ = s.replay()
 	}
 	for id, h := range s.open {
 		if err := h.lock.release(); err != nil && first == nil {

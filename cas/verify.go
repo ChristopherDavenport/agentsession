@@ -68,6 +68,11 @@ func (s *Store) Verify(ctx context.Context) (Report, error) {
 	for _, d := range scan.damage {
 		add(Problem{Kind: "journal", Err: d})
 	}
+	kept, _ := filepath.Glob(filepath.Join(s.root, damagedPrefix+"*"))
+	sort.Strings(kept)
+	for _, p := range kept {
+		add(Problem{Kind: "journal", Err: fmt.Errorf("a compaction replaced a journal with damaged lines, kept as %s", filepath.Base(p))})
+	}
 
 	if err := s.objs.reloadPacks(true); err != nil {
 		add(Problem{Kind: "corrupt", Err: err})

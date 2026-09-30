@@ -9,6 +9,10 @@ import (
 	"os"
 )
 
+// sharedLocks says whether the locks here are real across processes:
+// without flock nothing keeps other processes' commits out of a journal being compacted, so a store does not compact.
+const sharedLocks = false
+
 // dirLock on a platform without flock is a file created exclusively; a
 // lock a crashed process left behind has to be removed by hand, and
 // release removes it, so this fallback does unlink. The
