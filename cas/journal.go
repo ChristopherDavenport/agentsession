@@ -85,7 +85,9 @@ func decodeRecord(seg []byte) (rec journalRecord, torn bool, err error) {
 			return rec, false, errors.New("checksum mismatch")
 		}
 	}
-	if err := json.Unmarshal(seg, &rec); err != nil {
+	if r, ok := parseRecord(seg); ok {
+		rec = r
+	} else if err := json.Unmarshal(seg, &rec); err != nil {
 		return rec, false, err
 	}
 	rec.checked = bytes.Contains(seg, []byte(crcMember))
@@ -93,6 +95,119 @@ func decodeRecord(seg []byte) (rec journalRecord, torn bool, err error) {
 		return rec, false, errors.New("record names no operation or session")
 	}
 	return rec, false, nil
+}
+
+// parseRecord reads a record in the shape encode writes it: one flat
+// object of known lower-case members, strings without escapes, whole
+// numbers and true. It reports false for anything else, which the
+// caller hands to encoding/json, so a record read here reads as that
+// would read it; replay is mostly this, and the decoder's reflection
+// was most of what opening a store cost.
+func parseRecord(seg []byte) (journalRecord, bool) {
+	var r journalRecord
+	if len(seg) < 2 || seg[0] != '{' || seg[len(seg)-1] != '}' {
+		return r, false
+	}
+	i := 1
+	str := func() (string, bool) {
+		if i >= len(seg) || seg[i] != '"' {
+			return "", false
+		}
+		start := i + 1
+		for j := start; j < len(seg); j++ {
+			switch c := seg[j]; {
+			case c == '"':
+				i = j + 1
+				return string(seg[start:j]), true
+			case c == '\\' || c < 0x20 || c >= 0x80:
+				return "", false
+			}
+		}
+		return "", false
+	}
+	num := func() (int64, bool) {
+		start, neg := i, false
+		if i < len(seg) && seg[i] == '-' {
+			neg = true
+			i++
+		}
+		digits := i
+		var n int64
+		for i < len(seg) && seg[i] >= '0' && seg[i] <= '9' {
+			if i-digits >= 18 {
+				return 0, false
+			}
+			n = n*10 + int64(seg[i]-'0')
+			i++
+		}
+		if i == digits || (seg[digits] == '0' && i-digits > 1) || i-start == 0 {
+			return 0, false
+		}
+		if neg {
+			n = -n
+		}
+		return n, true
+	}
+	if seg[i] == '}' {
+		return r, i == len(seg)-1
+	}
+	for {
+		key, ok := str()
+		if !ok || i >= len(seg) || seg[i] != ':' {
+			return r, false
+		}
+		i++
+		switch key {
+		case "op", "session", "entry", "head", "base", "mark", "crc":
+			v, ok := str()
+			if !ok {
+				return r, false
+			}
+			switch key {
+			case "op":
+				r.Op = v
+			case "session":
+				r.Session = v
+			case "entry":
+				r.Entry = v
+			case "head":
+				r.Head = v
+			case "base":
+				r.Base = v
+			case "mark":
+				r.Mark = v
+			}
+		case "seq", "size":
+			n, ok := num()
+			if !ok {
+				return r, false
+			}
+			if key == "seq" {
+				r.Seq = int(n)
+			} else {
+				r.Size = n
+			}
+		case "lazy":
+			if !bytes.HasPrefix(seg[i:], []byte("true")) {
+				return r, false
+			}
+			r.Lazy = true
+			i += len("true")
+		default:
+			return r, false
+		}
+		if i >= len(seg) {
+			return r, false
+		}
+		switch seg[i] {
+		case ',':
+			i++
+		case '}':
+			return r, i == len(seg)-1
+		default:
+			return r, false
+		}
+	}
 }
 
 // JournalDamage is a journal record that was written whole and no

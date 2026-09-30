@@ -3,6 +3,7 @@ package cas
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -544,4 +545,70 @@ func TestSyncRecords(t *testing.T) {
 	if err != nil || len(v.adopt) != 0 {
 		t.Errorf("reconcile after Close: adopt %v, %v", v.adopt, err)
 	}
+}
+
+// TestParseRecord: a record the fast path reads reads as encoding/json
+// reads it, and one it declines is left to encoding/json.
+func TestParseRecord(t *testing.T) {
+	h := "sha256:" + strings.Repeat("ab", 32)
+	for _, r := range []journalRecord{
+		{Op: "append", Session: "s-1_x.y", Entry: h, Head: h, Seq: 3, Size: 1234, Lazy: true},
+		{Op: "create", Session: "s", Base: h},
+		{Op: "mark", Session: "s", Mark: "mirror"},
+		{Op: "sync", Session: "s"},
+		{Op: "head", Session: "s", Head: h, Seq: 0},
+	} {
+		line, err := r.encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		seg := bytes.TrimRight(line, "\n")
+		fast, ok := parseRecord(seg)
+		if !ok {
+			t.Errorf("fast path declined %s", seg)
+			continue
+		}
+		var slow journalRecord
+		if err := json.Unmarshal(seg, &slow); err != nil {
+			t.Fatal(err)
+		}
+		if fast != slow {
+			t.Errorf("%s: fast %+v, encoding/json %+v", seg, fast, slow)
+		}
+	}
+	for _, seg := range []string{
+		`{"op":"append","session":"s","seq":1.5}`,
+		`{"op":"append","session":"s","seq":01}`,
+		`{"op":"append","session":"s","Seq":1}`,
+		`{"op":"append","session":"s\u0041"}`,
+		`{"op":"append", "session":"s"}`,
+		`{"op":"append","session":"s","lazy":false}`,
+		`{"op":"append","session":"s","extra":1}`,
+		`{"op":"append","session":"s","seq":-}`,
+		`{"op":"append","session":"s","seq":12345678901234567890}`,
+		`{"op":"append","session":"s"}x`,
+		`{"op":"append","session":null}`,
+	} {
+		if r, ok := parseRecord([]byte(seg)); ok {
+			t.Errorf("fast path read %s as %+v", seg, r)
+		}
+	}
+}
+
+func FuzzParseRecord(f *testing.F) {
+	f.Add([]byte(`{"op":"append","session":"s","entry":"e","seq":1,"size":2,"lazy":true,"crc":"ff"}`))
+	f.Add([]byte(`{"op":"sync","session":"s"}`))
+	f.Fuzz(func(t *testing.T, seg []byte) {
+		fast, ok := parseRecord(seg)
+		if !ok {
+			return
+		}
+		var slow journalRecord
+		if err := json.Unmarshal(seg, &slow); err != nil {
+			t.Fatalf("fast path read %q, encoding/json refused it: %v", seg, err)
+		}
+		if fast != slow {
+			t.Fatalf("%q: fast %+v, encoding/json %+v", seg, fast, slow)
+		}
+	})
 }
