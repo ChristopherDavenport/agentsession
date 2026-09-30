@@ -3,6 +3,7 @@ package cas
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -304,12 +305,19 @@ func (s *Store) replay() (*journalScan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cas: journal: %w", err)
 	}
-	if s.scan == nil || s.scanFile == nil || !os.SameFile(s.scanFile, info) || info.Size() < s.scan.end {
+	// A filesystem may give a compacted journal the inode of the one it
+	// replaced, so the file's identity is checked by its first line too,
+	// which a compaction makes unique.
+	gen, err := journalGen(f, info.Size())
+	if err != nil {
+		return nil, fmt.Errorf("cas: journal: %w", err)
+	}
+	if s.scan == nil || s.scanFile == nil || !os.SameFile(s.scanFile, info) || gen != s.scanGen || info.Size() < s.scan.end {
 		s.scan, s.checkpointBytes = s.loadCheckpoint(f, info.Size())
 		if s.scan == nil {
 			s.scan = &journalScan{states: map[string]*sessionState{}}
 		}
-		s.checkpointed, s.scanFile = s.scan.end, info
+		s.checkpointed, s.scanFile, s.scanGen = s.scan.end, info, gen
 	}
 	tail, err := s.scan.read(f)
 	if err != nil {
@@ -321,6 +329,23 @@ func (s *Store) replay() (*journalScan, error) {
 		snap.apply(rec)
 	}
 	return snap, nil
+}
+
+// journalGen hashes the journal's first line, up to checkpointTail
+// bytes of it: the same until a compaction replaces the journal, and
+// different after, since a compacted journal opens with a record naming
+// a new generation at random. A journal whose first line is not yet
+// whole has none.
+func journalGen(f *os.File, size int64) ([32]byte, error) {
+	head := make([]byte, min(size, checkpointTail))
+	if _, err := f.ReadAt(head, 0); err != nil {
+		return [32]byte{}, err
+	}
+	k := bytes.IndexByte(head, '\n')
+	if k < 0 {
+		return [32]byte{}, nil
+	}
+	return sha256.Sum256(head[:k+1]), nil
 }
 
 // saveCheckpoint writes the scan, read from the journal f, as the

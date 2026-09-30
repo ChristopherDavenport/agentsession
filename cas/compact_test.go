@@ -473,3 +473,257 @@ func TestCompactThenTakeUp(t *testing.T) {
 		t.Errorf("after the crash: %d entries at %s, want 6 at %s", s.Len(), s.Leaf(), sixth)
 	}
 }
+
+// TestCompactNotStarved: a compaction finishes within its deadline while
+// writers in other stores commit durably without a pause, since commits
+// that arrive while it waits wait behind it.
+func TestCompactNotStarved(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for w := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			st, err := Open(root)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer st.Close()
+			id := fmt.Sprintf("w%d", w)
+			st.Create(ctx, agentsession.Header{ID: id})
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if _, err := st.Append(ctx, id, item(fmt.Sprint(i))); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	time.Sleep(200 * time.Millisecond)
+	c, _ := Open(root)
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	_, err := c.Compact(cctx)
+	cancel()
+	c.Close()
+	close(stop)
+	wg.Wait()
+	if err != nil {
+		t.Fatalf("compaction beside busy writers: %v", err)
+	}
+}
+
+// TestCompactHeldSession: a session a writer holds across a compaction
+// keeps a settled record in its place, so the writer's next append is
+// recovered in full after a crash that took its log line and HEAD, and
+// nothing reads as damage.
+func TestCompactHeldSession(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	w, _ := Open(root)
+	w.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, w, "s", item("a"))
+	mustAppend(t, w, "s", item("b"))
+	c, _ := Open(root)
+	if _, err := c.Compact(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	if n := journalSessions(t, root)["s"]; n != 1 {
+		t.Fatalf("a held session left %d records, want its one settled record", n)
+	}
+	dir := filepath.Join(root, "sessions", "s")
+	logBefore, _ := os.ReadFile(filepath.Join(dir, "log"))
+	headBefore, _ := os.ReadFile(filepath.Join(dir, "HEAD"))
+	acked := mustAppend(t, w, "s", item("c"))
+	die(w)
+	// The crash took the indexes the append wrote after its commit.
+	os.WriteFile(filepath.Join(dir, "log"), logBefore, 0o644)
+	os.WriteFile(filepath.Join(dir, "HEAD"), headBefore, 0o644)
+	r, _ := Open(root)
+	defer r.Close()
+	s, err := r.Open(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 3 || s.Leaf() != acked {
+		t.Errorf("after the crash: %d entries at %s, want 3 at %s", s.Len(), s.Leaf(), acked)
+	}
+	if rep, err := r.Verify(ctx); err != nil || !rep.OK() {
+		t.Errorf("verify: %v %v", err, rep.Problems)
+	}
+}
+
+// TestAutoCompactHeld: a long-lived writer's session settles at each
+// automatic compaction rather than piling up its records.
+func TestAutoCompactHeld(t *testing.T) {
+	old := compactAt
+	compactAt = 4096
+	t.Cleanup(func() { compactAt = old })
+	ctx := context.Background()
+	root := t.TempDir()
+	w, _ := Open(root)
+	w.Create(ctx, agentsession.Header{ID: "s"})
+	for i := range 60 {
+		mustAppend(t, w, "s", item(fmt.Sprint(i)))
+	}
+	if n := journalSessions(t, root)["s"]; n > 25 {
+		t.Errorf("a held session has %d records after automatic compactions", n)
+	}
+	w.Close()
+	ro, _ := Open(root, WithReadOnly())
+	defer ro.Close()
+	if rep, err := ro.Verify(ctx); err != nil || !rep.OK() {
+		t.Errorf("verify: %v %v", err, rep.Problems)
+	}
+	if s, err := ro.Open(ctx, "s"); err != nil || s.Len() != 60 {
+		t.Errorf("open: %v", err)
+	}
+}
+
+// TestTakeUpLosesOnlyTheLazy: a lazy append to a session taken up after
+// a compaction, whose record a crash took and whose log line it kept, is
+// found lost, since the settled record before it is durable.
+func TestTakeUpLosesOnlyTheLazy(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	kept := mustAppend(t, st, "s", item("kept"))
+	st.Close()
+	c, _ := Open(root)
+	c.Compact(ctx)
+	c.Close()
+	l, _ := Open(root, WithSync(SyncNever))
+	if _, err := l.Open(ctx, "s"); err != nil {
+		t.Fatal(err)
+	}
+	journal, _ := os.ReadFile(filepath.Join(root, "journal"))
+	lost := mustAppend(t, l, "s", item("lost"))
+	die(l)
+	// The crash took the lazy record and the objects, not the log line.
+	os.WriteFile(filepath.Join(root, "journal"), journal, 0o600)
+	p, _ := l.objs.loosePath(spaceEntries, lost)
+	os.Remove(p)
+	r, _ := Open(root)
+	defer r.Close()
+	s, err := r.Open(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 1 || s.Leaf() != kept {
+		t.Errorf("after the crash: %d entries at %s, want 1 at %s", s.Len(), s.Leaf(), kept)
+	}
+}
+
+// TestCompactDuringImport: a compaction that finds a session committed
+// and its header not yet written keeps its records, so the import
+// survives a crash that took its unsynced log.
+func TestCompactDuringImport(t *testing.T) {
+	ctx := context.Background()
+	src := t.TempDir()
+	a, _ := Open(src)
+	a.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, a, "s", item("x"))
+	mustAppend(t, a, "s", item("y"))
+	var file bytes.Buffer
+	a.Project(ctx, &file, "s")
+	a.Close()
+
+	root := t.TempDir()
+	st, _ := Open(root)
+	if _, err := st.Import(ctx, &file, true); err != nil {
+		t.Fatal(err)
+	}
+	st.Release("s")
+	dir := filepath.Join(root, "sessions", "s")
+	header, _ := os.ReadFile(filepath.Join(dir, "header"))
+	os.Remove(filepath.Join(dir, "header")) // as between the commit and the header
+	if _, err := st.Compact(ctx); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "header"), header, 0o644)
+	die(st)
+	os.Remove(filepath.Join(dir, "log"))
+	r, _ := Open(root)
+	defer r.Close()
+	s, err := r.Open(ctx, "s")
+	if err != nil || s.Len() != 2 {
+		t.Fatalf("the import after a compaction and a crash: %v", err)
+	}
+}
+
+// TestReplayAcrossGenerations: a store that read one journal reads a
+// compacted one afresh even when the new file has the old one's inode
+// and has grown past where the old read stopped.
+func TestReplayAcrossGenerations(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	w, _ := Open(root)
+	w.Create(ctx, agentsession.Header{ID: "x"})
+	mustAppend(t, w, "x", item("old"))
+	if err := w.Delete(ctx, "x"); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := Open(root)
+	defer p.Close()
+	if _, err := p.replay(); err != nil {
+		t.Fatal(err)
+	}
+	end := p.scan.end
+	w.Create(ctx, agentsession.Header{ID: "x"})
+	mustAppend(t, w, "x", item("new"))
+	w.Release("x")
+	for range 2 {
+		if _, err := w.Compact(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.Create(ctx, agentsession.Header{ID: "pad"})
+	for i := 0; ; i++ {
+		info, _ := os.Stat(filepath.Join(root, "journal"))
+		if info.Size() >= end {
+			break
+		}
+		mustAppend(t, w, "pad", item(fmt.Sprint(i)))
+	}
+	w.Close()
+	s, err := p.Open(ctx, "x")
+	if err != nil || s.Len() != 1 {
+		t.Fatalf("the recreated session through a store that read the old journal: %v", err)
+	}
+}
+
+// TestCompactPaysForItself: when another process's unsynced lazy
+// appends are more than compactAt, a compaction that must carry them is
+// not followed by another until compactAt more has been committed.
+func TestCompactPaysForItself(t *testing.T) {
+	old := compactAt
+	compactAt = 4096
+	t.Cleanup(func() { compactAt = old })
+	ctx := context.Background()
+	root := t.TempDir()
+	lazy, _ := Open(root, WithSync(SyncNever))
+	defer lazy.Close()
+	lazy.Create(ctx, agentsession.Header{ID: "lazy"})
+	for i := range 60 {
+		mustAppend(t, lazy, "lazy", item(fmt.Sprint(i)))
+	}
+	w, _ := Open(root)
+	defer w.Close()
+	w.Create(ctx, agentsession.Header{ID: "w"})
+	const appends = 100
+	for i := range appends {
+		mustAppend(t, w, "w", item(fmt.Sprint(i)))
+	}
+	if limit := appends*260/int(compactAt) + 2; w.compactions > limit {
+		t.Errorf("%d compactions for %d appends, want at most %d", w.compactions, appends, limit)
+	}
+}

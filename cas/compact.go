@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/ChristopherDavenport/agentsession"
 )
 
 // Compaction replaces the journal with one that holds only what the
@@ -92,13 +94,20 @@ func (s *Store) Compact(ctx context.Context) (int, error) {
 }
 
 // maybeCompact compacts when this store's last commit left the journal
-// past compactAt. A compaction that cannot proceed, because the gc lock
+// compactAt past what the last compaction carried into it, which its
+// opening record says: a compaction that had to carry much, for sessions
+// still being written, is not followed by another until as much again
+// has been committed, so each pays for compactAt of new records however
+// much it carries. A compaction that cannot proceed, because the gc lock
 // is taken or other processes' commits held the journal lock too long,
 // is tried again once the journal has grown another quarter of
 // compactAt. It runs under mu, and its failure is no failure of the
 // caller's.
 func (s *Store) maybeCompact() {
 	if s.readOnly || !sharedLocks || s.journalSize < max(compactAt, s.compactRetryAt) {
+		return
+	}
+	if s.journalSize < s.journalBase()+compactAt {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), compactWait)
@@ -108,14 +117,46 @@ func (s *Store) maybeCompact() {
 	}
 }
 
-// journalLock takes the journal lock shared, as every commit does.
+// journalBase is how much of the journal the compaction that wrote it
+// carried, from its opening record, or 0 for a journal no compaction
+// wrote.
+func (s *Store) journalBase() int64 {
+	f, err := os.Open(filepath.Join(s.root, "journal"))
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	head := make([]byte, checkpointTail)
+	n, _ := f.ReadAt(head, 0)
+	line, _, ok := bytes.Cut(head[:n], []byte("\n"))
+	if !ok {
+		return 0
+	}
+	rec, _, err := decodeRecord(line)
+	if err != nil || rec.Op != opJournal {
+		return 0
+	}
+	return int64(len(line)+1) + rec.Size
+}
+
+// journalLock takes the journal lock shared, as every commit does. It
+// passes through the gate first: a compaction waiting for the journal
+// lock holds the gate exclusive, so commits that arrive then wait
+// behind it rather than keeping the journal lock shared without a gap,
+// which a compaction polling for it would never find. The gate is held
+// for no longer than it takes to pass, so a compaction finds it free.
 func (s *Store) journalLock() (*dirLock, error) {
+	gate, err := lockShared(context.Background(), filepath.Join(s.root, "journal.gate"))
+	if err != nil {
+		return nil, err
+	}
+	gate.release()
 	return lockShared(context.Background(), filepath.Join(s.root, "journal.lock"))
 }
 
-// compactLocked compacts under mu, unless the journal is under atLeast
-// bytes by the time the locks are held, as it is when another process
-// compacted first.
+// compactLocked compacts under mu, unless the journal has grown less
+// than atLeast past what the last compaction carried by the time the
+// locks are held, as when another process compacted first.
 func (s *Store) compactLocked(ctx context.Context, atLeast int64) (int, error) {
 	gc, err := s.gcLock()
 	if err != nil {
@@ -129,6 +170,11 @@ func (s *Store) compactLocked(ctx context.Context, atLeast int64) (int, error) {
 	if err := s.syncJournal(); err != nil {
 		return 0, err
 	}
+	gate, err := lockExclusive(ctx, filepath.Join(s.root, "journal.gate"))
+	if err != nil {
+		return 0, err
+	}
+	defer gate.release()
 	jl, err := lockExclusive(ctx, filepath.Join(s.root, "journal.lock"))
 	if err != nil {
 		return 0, err
@@ -143,8 +189,8 @@ func (s *Store) compactLocked(ctx context.Context, atLeast int64) (int, error) {
 		return 0, fmt.Errorf("cas: journal: %w", err)
 	}
 	s.journalSize = info.Size()
-	if info.Size() < atLeast {
-		return 0, nil
+	if atLeast > 0 && info.Size() < s.journalBase()+atLeast {
+		return 0, nil // another process compacted first
 	}
 	scan, err := s.replay()
 	if err != nil {
@@ -165,16 +211,25 @@ func (s *Store) compactLocked(ctx context.Context, atLeast int64) (int, error) {
 	}
 	sort.Strings(ids)
 	var carry []journalRecord
+	var locks []*dirLock
+	defer func() {
+		for _, lk := range locks {
+			lk.release()
+		}
+	}()
 	toSync := map[string]bool{}
 	dropped := 0
 	for _, id := range ids {
 		st := scan.states[id]
-		keep, files := s.settle(id, st, scan)
+		keep, files, lk := s.settle(id, st, scan, len(locks))
+		if lk != nil {
+			locks = append(locks, lk)
+		}
+		for _, f := range files {
+			toSync[f] = true
+		}
 		if keep == nil {
 			dropped++
-			for _, f := range files {
-				toSync[f] = true
-			}
 			continue
 		}
 		carry = append(carry, keep...)
@@ -188,14 +243,22 @@ func (s *Store) compactLocked(ctx context.Context, atLeast int64) (int, error) {
 	if _, err := rand.Read(gen); err != nil {
 		return 0, err
 	}
-	var buf bytes.Buffer
-	for _, r := range append([]journalRecord{{Op: opJournal, Session: journalSession, Mark: hex.EncodeToString(gen)}}, carry...) {
+	var body bytes.Buffer
+	for _, r := range carry {
 		line, err := r.encode()
 		if err != nil {
 			return 0, err
 		}
-		buf.Write(line)
+		body.Write(line)
 	}
+	// The opening record names the generation and how much was carried.
+	opening, err := journalRecord{Op: opJournal, Session: journalSession, Mark: hex.EncodeToString(gen), Size: int64(body.Len())}.encode()
+	if err != nil {
+		return 0, err
+	}
+	var buf bytes.Buffer
+	buf.Write(opening)
+	buf.Write(body.Bytes())
 	tmp, err := os.CreateTemp(s.root, "journal.tmp-*")
 	if err != nil {
 		return 0, fmt.Errorf("cas: compact: %w", err)
@@ -218,15 +281,31 @@ func (s *Store) compactLocked(ctx context.Context, atLeast int64) (int, error) {
 		return dropped, fmt.Errorf("cas: compact: %w", err)
 	}
 	s.journalSize, s.journalDirty = int64(buf.Len()), false
+	s.compactions++
 	// The checkpoint was of the old journal and no longer matches.
 	os.Remove(filepath.Join(s.root, checkpointName))
 	return dropped, nil
 }
 
+// maxCompactLocks bounds the session locks one compaction holds; a
+// session it would drop past that is carried to the next.
+const maxCompactLocks = 512
+
 // settle decides what the new journal keeps of one session: nil when
 // its files stand for its records, with the files to fsync before they
-// go, or the records to carry.
-func (s *Store) settle(id string, st *sessionState, scan *journalScan) (keep []journalRecord, files []string) {
+// go and the session's lock, which the compaction holds until the new
+// journal is in place, so no writer takes the session up from the old
+// journal's view and commits to the new one as if its records were
+// still there; or the records to carry.
+//
+// A session another holder has open keeps one settled record in place
+// of its records, naming the log's length and the head its files show,
+// so what the holder commits next follows the record a writer taking
+// it up would have written. A session whose directory has no header
+// yet is being created or imported, and keeps its records, as does a
+// delete whose directory is still there or whose deleter still holds
+// it.
+func (s *Store) settle(id string, st *sessionState, scan *journalScan, locks int) (keep []journalRecord, files []string, lk *dirLock) {
 	carryAll := func() []journalRecord {
 		var out []journalRecord
 		if st.deleted {
@@ -243,30 +322,55 @@ func (s *Store) settle(id string, st *sessionState, scan *journalScan) (keep []j
 	}
 	dir, err := s.sessionDir(id)
 	if err != nil {
-		return carryAll(), nil // not a session's; kept as found
+		return carryAll(), nil, nil // not a session's; kept as found
+	}
+	var held bool
+	if locks < maxCompactLocks {
+		lk, err = s.lockSession(id)
+		switch {
+		case errors.Is(err, agentsession.ErrSessionLocked):
+			held = true
+		case err != nil:
+			return carryAll(), nil, nil
+		}
+	} else {
+		held = true // no lock to spare: treated as held
+	}
+	carry := func(recs []journalRecord) ([]journalRecord, []string, *dirLock) {
+		lk.release()
+		return recs, nil, nil
 	}
 	if st.deleted {
-		if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+		if _, err := os.Stat(dir); held || !errors.Is(err, os.ErrNotExist) {
+			return carry(carryAll())
 		}
-		return carryAll(), nil
+		// The directory's removal reaches the disk before the delete
+		// record stops saying it happened.
+		return nil, []string{filepath.Join(s.root, "sessions")}, lk
+	}
+	if _, err := os.Stat(filepath.Join(dir, "header")); err != nil {
+		if _, derr := os.Stat(dir); held || derr == nil {
+			return carry(carryAll()) // being created or imported
+		}
+		return nil, nil, lk // nothing on disk for recovery to read
 	}
 	v, err := s.reconcile(id, dir, scan)
-	if err != nil {
-		return carryAll(), nil
-	}
-	if !v.exists {
-		// Never finished creating: recovery ignores it either way, and
-		// a writer finishing it now writes the files recovery reads.
-		return nil, nil
+	if err != nil || !v.exists {
+		return carry(carryAll())
 	}
 	if v.logChanged || v.headChanged || v.markChanged || v.damaged || len(v.adopt) > 0 || len(v.dropped) > 0 || lazyUnsynced(st) {
-		return carryAll(), nil
+		return carry(carryAll())
 	}
 	for _, name := range []string{"log", "HEAD", "record", "header"} {
 		files = append(files, filepath.Join(dir, name))
 	}
-	return nil, append(files, dir)
+	files = append(files, dir)
+	if held {
+		// Its files are fsynced like any settled session's, and one
+		// record stands for all it had.
+		return []journalRecord{{Op: opSettled, Session: id, Seq: len(v.log), Head: v.head}}, files, nil
+	}
+	return nil, files, lk
 }
 
 // lazyUnsynced reports whether a lazy append follows the session's last

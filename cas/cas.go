@@ -15,6 +15,7 @@
 //	  sweep.lock                          held shared by writers, exclusive by a sweep's last step
 //	  gc.lock                             the lock of a running sweep, pack or compaction
 //	  journal.lock                        held shared by a commit, exclusive by a compaction
+//	  journal.gate                        passed by a commit, held by a compaction waiting for the lock
 //	  journal                             one line per commit: the commit point
 //	  checkpoint                          the journal read to an offset, to start a replay from
 //
@@ -226,13 +227,14 @@ type Store struct {
 	// size; scanFile is the journal file the scan was read from.
 	checkpointed, checkpointBytes int64
 	scanFile                      os.FileInfo
+	scanGen                       [32]byte
 	// journalSize is where this store's last commit left the journal,
 	// which decides when it compacts, and compactRetryAt the size an
 	// automatic compaction that could not proceed waits for.
 	journalSize, compactRetryAt int64
 	// appends counts this store's appends, which decides when it looks
-	// at whether to pack.
-	appends int
+	// at whether to pack, and compactions the compactions it ran.
+	appends, compactions int
 }
 
 type handle struct {
@@ -710,10 +712,17 @@ func (s *Store) ensureIndex() error {
 // whose log holds the entry, when the lookup finds one; the index may
 // find the entry held on a prefix alone.
 func (s *Store) holderOf(entry, parent string) (owner string, held bool, err error) {
+	scan, err := s.replay()
+	if err != nil {
+		return "", false, err
+	}
 	for seen := 0; parent != "" && seen < 64; seen++ {
 		dir, derr := s.sessionDir(parent)
 		if derr != nil {
 			break
+		}
+		if st := scan.states[parent]; st != nil && st.deleted {
+			break // deleted, its directory not yet removed
 		}
 		hashes, _, lerr := readLog(dir)
 		if lerr != nil {
@@ -1617,9 +1626,11 @@ func (s *Store) openLocked(id string) (*handle, error) {
 	if v.fromFiles && !s.readOnly {
 		// Whatever this store commits for the session follows a record
 		// of how much of its log stood before, which recovery trusts as
-		// it stands; lazily, since any later fsync of the journal makes
-		// it durable ahead of the records after it.
-		if err := s.commit(false, journalRecord{Op: opSettled, Session: id, Seq: len(v.log), Head: v.head}); err != nil {
+		// it stands. It is durable before anything follows it: a lazy
+		// append after it whose record a crash took, and whose log line
+		// it did not, is found lost by the record, where without one
+		// recovery would take the log as it stands.
+		if err := s.commit(true, journalRecord{Op: opSettled, Session: id, Seq: len(v.log), Head: v.head}); err != nil {
 			return fail(err)
 		}
 	}
