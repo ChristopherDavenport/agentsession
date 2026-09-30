@@ -42,6 +42,39 @@ The format is unchanged.
   Canonical form, the I-JSON check and member splitting walk the bytes
   rather than decoding through `encoding/json`, handing what they do
   not handle to the decoder path, and each line is tested once.
+- **cas: nothing a process pays follows the size of the store.** RFC
+  0002 now permits compacting the journal, and cas does:
+  - `Store.Open` reads nothing store-wide. The index of which session
+    holds what is built only for a fork whose named parent does not
+    hold its base.
+  - `Store.Compact` replaces the journal with one holding only the
+    records of sessions whose files do not yet stand for them, after
+    fsyncing the files of those it drops; a writing store compacts on
+    its own once 16 MiB has been committed past what the last
+    compaction carried. Commits pass a new `journal.gate` and hold a new
+    `journal.lock` shared; a compaction holds both exclusive, and the
+    lock of each session it drops. A session someone holds keeps one
+    `settled` record naming its log length and head, which a writer
+    taking up a compacted session also commits, durably. A journal with
+    damaged lines is kept aside as `journal.damaged-*`, and `Verify`
+    reports it.
+  - `Pack` and `Sweep` write packs from where objects are rather than
+    from their bytes in memory, falling back to another copy of an
+    object that fails its name. `Pack` merges packs geometrically, and
+    a writing store packs on its own once its loose objects look to
+    pass about 4096.
+  - Pack indexes are mapped rather than read, and checked in full by
+    `Verify` rather than at every open. Lookups try the packs before
+    the loose path, and a read of a copy that fails its name tries the
+    others.
+  - `List` filters on the header first and uses a `summary` kept
+    beside each session's log while the log is unchanged.
+
+  In a store eight concurrent writers built to a million appends
+  (`TestScale`, opt-in), the journal never passed 18 MB, a new agent
+  opened the store in 0.1 ms holding 8 MB for it, and listing 334
+  sessions took 52 ms. Opening one 3000-entry session costs about
+  0.1–0.4 s at any store size, which is decoding its entries.
 - `BenchmarkRead` runs again (it reused one call ID), and cas has
   benchmarks for appends, opens and listings.
 

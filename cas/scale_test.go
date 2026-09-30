@@ -157,6 +157,11 @@ func TestScale(t *testing.T) {
 
 	ro, _ := Open(root, WithReadOnly())
 	t0 = time.Now()
+	if _, err := ro.Open(ctx, fmt.Sprintf("s%06d", sessions/3)); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("a reader: a session open %v", time.Since(t0))
+	t0 = time.Now()
 	n := 0
 	for _, err := range ro.List(ctx, agentsession.ListFilter{}) {
 		if err != nil {
