@@ -30,13 +30,16 @@ func (k keepSet) has(sp space, hash string) bool {
 // that is not there needs nothing kept; any other failure to read one
 // fails the sweep, since what it would name cannot be known and a sweep
 // that guessed would remove it.
-func (s *Store) keepEntry(k keepSet, id string) error {
+//
+// A torn entry is kept by name and not followed when torn is set: the
+// append is one recovery cut, or will, so nothing reads what it names.
+func (s *Store) keepEntry(k keepSet, id string, torn bool) error {
 	if k.entries[id] {
 		return nil
 	}
 	k.entries[id] = true
 	env, err := s.objs.read(spaceEntries, id)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || (torn && errors.Is(err, ErrCorrupt)) {
 		return nil
 	}
 	if err != nil {
@@ -48,7 +51,7 @@ func (s *Store) keepEntry(k keepSet, id string) error {
 	}
 	k.contents[c] = true
 	body, err := s.objs.read(spaceContents, c)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || (torn && errors.Is(err, ErrCorrupt)) {
 		return nil
 	}
 	if err != nil {
@@ -63,7 +66,7 @@ func (s *Store) keepEntry(k keepSet, id string) error {
 // keepPath adds the path to base.
 func (s *Store) keepPath(k keepSet, base string) error {
 	for id := base; id != "" && !k.entries[id]; {
-		if err := s.keepEntry(k, id); err != nil {
+		if err := s.keepEntry(k, id, false); err != nil {
 			return err
 		}
 		parent, err := s.parentOf(id)
@@ -79,12 +82,29 @@ func (s *Store) keepPath(k keepSet, base string) error {
 }
 
 // keepRecords adds what log records name: the entries they append and
-// the heads they set, and a created session's base.
+// the heads they set, and a created session's base. An append a crash
+// may have left torn, one a lost record names or a lazy one no sync
+// record covers yet, does not fail the sweep: recovery cuts it.
 func (s *Store) keepRecords(k keepSet, recs []logRecord) error {
-	for _, r := range recs {
+	synced := -1
+	lostAt := map[string]int{}
+	for i, r := range recs {
+		switch r.Op {
+		case opSync:
+			synced = i
+		case opLost:
+			lostAt[r.Entry] = i
+		}
+	}
+	for i, r := range recs {
+		torn := false
+		if r.Op == opAppend {
+			at, lost := lostAt[r.Entry]
+			torn = (lost && at > i) || (r.Lazy && i > synced)
+		}
 		for _, id := range []string{r.Entry, r.Head} {
 			if id != "" {
-				if err := s.keepEntry(k, id); err != nil {
+				if err := s.keepEntry(k, id, torn); err != nil {
 					return err
 				}
 			}

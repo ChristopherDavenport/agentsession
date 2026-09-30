@@ -419,7 +419,12 @@ objects are written first, idempotently, since a second write of the
 same bytes under the same hash changes nothing; then the records; then
 the head, which is an index of the head the log's last record names and
 is rebuilt from it. An append is accepted when its record is written,
-and a commit is an fsync of its objects and then of the log. A store
+and a commit is an fsync of its objects and then of the log. An fsync
+that fails may leave pages marked written that never reached the disk,
+and a later fsync of the same file can succeed without writing them,
+so after a failed fsync a store MUST NOT count what it covered as
+committed until it has written those bytes again, to a new file, or
+recovered the session from what the disk holds. A store
 appends to a session's log under the session's own lock, as git
 updates a ref under its lock file and as the ordering section requires,
 so appends to different sessions commit independently and at once, and
@@ -434,14 +439,19 @@ deleted in one step after which nothing of it is read, such as renaming
 its directory away. A session created afterwards under the same ID
 starts from nothing.
 
-A crash cuts short only the record being written, at the log's end, so
-a record written whole that fails its checksum is damage, reported
-rather than skipped. The head is never made durable ahead of the record
-that names it. Recovery reads one session's log, when the session is
-opened, so what a store pays to recover a session is proportional to
-that session's log, however large the store has grown. A session's log
-is deleted with the session and holds nothing of any other, so there is
-nothing store-wide to compact.
+A crash damages only what was written after a session's last commit: it
+may cut the log short or, on a filesystem that writes a file out of
+order, leave blocks of that uncommitted tail unwritten, and what it
+takes there is working state, dropped as a crash's loss. Anything else
+that fails its checksum, a record or bytes that are no record, is
+damage, reported rather than skipped, since the log is the session's
+only record. The head, the record mark and any other index are rebuilt
+from the log and never read over it, so a crash that leaves one behind
+or ahead of the log changes nothing. Recovery reads one session's log,
+when the session is opened, so what a store pays to recover a session is
+proportional to that session's log, however large the store has grown. A
+session's log is deleted with the session and holds nothing of any
+other, so there is nothing store-wide to compact.
 
 A store built on a database that has its own write-ahead log gets
 atomicity and recovery from the database. Durability it must still ask
@@ -475,6 +485,10 @@ document's concern, and it is not this log.
   `gc.pruneExpire`; and when it accepts an append it MUST hold that
   append's objects, writing back any a sweep took, which is harmless
   since a write of an object is idempotent.
+- An append recovery dropped as lost, or one no commit covers whose
+  objects a crash left torn, does not hold its objects for the first
+  rule: nothing reads them, and a torn one is not damage for a sweep
+  to stop at. A store MAY sweep them or keep them.
 - A store MUST NOT sweep by reachability from heads. A session's
   abandoned branches are in its log and are its record; RFC 0001's
   `outcome` entries score them and a consumer's preference between
@@ -586,8 +600,10 @@ apply here, where holding the session already is the usual case.
   objects as it admits an append, hash verified and parent first, with
   one difference: admission under exchange moves no head. Exchange never
   rests on working state: a sender MUST commit the session before it
-  pushes or serves it, and a receiver MUST commit what it admits, and a
-  mark it sets, before it acknowledges them. A `leaf` label
+  pushes or serves it, and one that cannot, such as a store open
+  read-only beside another process's writer, MUST serve only what that
+  writer committed; a receiver MUST commit what it admits, and a mark
+  it sets, before it acknowledges them. A `leaf` label
   among the pushed entries is an entry like any other here, and the head
   moves only by the compare-and-swap below.
 - **A receiver that lacks the session** first admits the prefix, so that

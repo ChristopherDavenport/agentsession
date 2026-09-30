@@ -663,10 +663,11 @@ func TestUncertainLogLetsGo(t *testing.T) {
 			st.Create(ctx, agentsession.Header{ID: "s"})
 			first := mustAppend(t, st, "s", item("one"))
 			mustAppend(t, st, "s", item("two"))
-			old := syncLog
+			oldSync, oldWrite := syncLog, writeLogFile
 			syncLog = func(*os.File) error { return errors.New("injected fsync failure") }
+			writeLogFile = func(string, []byte) error { return errors.New("injected write failure") }
 			err := commit(st, first)
-			syncLog = old
+			syncLog, writeLogFile = oldSync, oldWrite
 			if !errors.Is(err, errLogUncertain) {
 				t.Fatalf("the commit: %v", err)
 			}
@@ -827,6 +828,188 @@ func TestZeroedObjectNotReused(t *testing.T) {
 	defer r.Close()
 	if _, err := r.Open(ctx, "c"); err != nil {
 		t.Errorf("a session committed over a zeroed copy: %v", err)
+	}
+}
+
+// crash abandons a store as a process that died would: its sessions'
+// locks go, and nothing it holds is committed.
+func crash(st *Store) {
+	for id, h := range st.open {
+		st.dropHandle(id, h)
+	}
+}
+
+// TestSweepPastTornLazyAppend: an object a crash left torn, named only
+// by a lazy append no commit covered, does not stop sweeps, before
+// recovery cuts the append or after.
+func TestSweepPastTornLazyAppend(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, st, "s", item("kept"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	torn := mustAppend(t, st, "s", item("torn"))
+	c, _ := st.contentOf(torn)
+	crash(st)
+	p, _ := st.objs.loosePath(spaceContents, c)
+	os.WriteFile(p, nil, 0o600)
+	w, _ := Open(root)
+	defer w.Close()
+	if _, err := w.Sweep(ctx, 0); err != nil {
+		t.Errorf("a sweep before recovery: %v", err)
+	}
+	if s, err := w.Open(ctx, "s"); err != nil || s.Len() != 1 {
+		t.Fatalf("recovery: %v", err)
+	}
+	if _, err := w.Sweep(ctx, 0); err != nil {
+		t.Errorf("a sweep after recovery: %v", err)
+	}
+}
+
+// TestZeroedLogLineReported: a committed record whose line, newline and
+// all, a failed writeback left zeros runs into the next line, and is
+// reported as damage rather than passed over.
+func TestZeroedLogLineReported(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	a := mustAppend(t, st, "s", item("a"))
+	b := mustAppend(t, st, "s", item("b"))
+	if err := st.SetHead(ctx, "s", b, a); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, st, "s", item("c"))
+	st.Close()
+	p := filepath.Join(root, "sessions", "s", logName)
+	data, _ := os.ReadFile(p)
+	var out []byte
+	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
+		if bytes.Contains(line, []byte(`"op":"append"`)) && bytes.Contains(line, []byte(b)) {
+			line = make([]byte, len(line))
+		}
+		out = append(out, line...)
+	}
+	os.WriteFile(p, out, 0o600)
+	r, _ := Open(root)
+	defer r.Close()
+	if s, err := r.Open(ctx, "s"); !errors.As(err, new(LogDamage)) {
+		n := 0
+		if s != nil {
+			n = s.Len()
+		}
+		t.Errorf("a zeroed record opened with %v and %d entries, want its damage", err, n)
+	}
+}
+
+// TestUnwrittenTailCut: blocks a crash left unwritten in a log's
+// uncommitted tail, with lazy appends after them, are the loss of that
+// tail, cut as such, and not damage that closes the session.
+func TestUnwrittenTailCut(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	kept := mustAppend(t, st, "s", item("kept"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	hole := mustAppend(t, st, "s", item("hole"))
+	mustAppend(t, st, "s", item("after"))
+	crash(st)
+	p := filepath.Join(root, "sessions", "s", logName)
+	data, _ := os.ReadFile(p)
+	var out []byte
+	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
+		if bytes.Contains(line, []byte(hole)) {
+			line = make([]byte, len(line))
+		}
+		out = append(out, line...)
+	}
+	os.WriteFile(p, out, 0o600)
+	w, _ := Open(root)
+	defer w.Close()
+	s, err := w.Open(ctx, "s")
+	if err != nil {
+		t.Fatalf("a crash's unwritten tail: %v", err)
+	}
+	if s.Len() != 1 || s.Leaf() != kept {
+		t.Errorf("after the cut: %d entries at %s, want 1 at %s", s.Len(), s.Leaf(), kept)
+	}
+	if rep, err := w.Verify(ctx); err != nil || !rep.OK() {
+		t.Errorf("verify after the cut: %v %v", err, rep.Problems)
+	}
+}
+
+// TestReadOnlyServesCommitted: a read-only store serving a session
+// another process writes serves what it committed, and none of its
+// working state, which a crash could still take.
+func TestReadOnlyServesCommitted(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	kept := mustAppend(t, st, "s", item("kept"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, st, "s", item("working"))
+	ro, _ := Open(root, WithReadOnly())
+	defer ro.Close()
+	mir, _ := Open(t.TempDir())
+	defer mir.Close()
+	if _, err := mir.Fetch(ctx, ro, "s"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := mir.Open(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 1 || s.Leaf() != kept {
+		t.Errorf("the mirror holds %d entries at %s, want only the committed %s", s.Len(), s.Leaf(), kept)
+	}
+}
+
+// TestFailedLogSyncRewrites: a log whose fsync failed is written again
+// as a new file, not fsynced again, and the session goes on.
+func TestFailedLogSyncRewrites(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, st, "s", item("one"))
+	p := filepath.Join(root, "sessions", "s", logName)
+	before, _ := os.Stat(p)
+	old := syncLog
+	failed := false
+	syncLog = func(f *os.File) error {
+		if failed {
+			return nil // as Linux does, after it reported the failure
+		}
+		failed = true
+		return errors.New("injected writeback failure")
+	}
+	err := st.Sync(ctx)
+	syncLog = old
+	if err == nil {
+		t.Fatal("the commit reported success")
+	}
+	if now, _ := os.Stat(p); os.SameFile(before, now) {
+		t.Error("the log was fsynced again rather than written again")
+	}
+	two := mustAppend(t, st, "s", item("two"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	r, _ := Open(root)
+	defer r.Close()
+	if s, err := r.Open(ctx, "s"); err != nil || s.Len() != 2 || s.Leaf() != two {
+		t.Errorf("after the log was written again: %v", err)
 	}
 }
 

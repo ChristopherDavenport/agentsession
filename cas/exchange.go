@@ -81,19 +81,30 @@ func (s *Store) bundleOf(ctx context.Context, id string) (*bundle, error) {
 	}
 	// A sender commits the session before it pushes or serves it, so a
 	// receiver never holds what a crash here could take back. A
-	// read-only store serves the log as it stands.
+	// read-only store cannot commit another process's working state, and
+	// serves what that process committed.
+	sess, head, mark := h.session, h.head, h.mark
 	if !s.readOnly {
 		if err := s.commitHandle(id, h); err != nil {
 			return nil, err
 		}
+	} else {
+		v, err := s.committedView(id, h.dir)
+		if err != nil {
+			return nil, err
+		}
+		if sess, _, err = s.build(id, h.dir, v); err != nil {
+			return nil, err
+		}
+		head, mark = v.head, v.mark
 	}
 	hdr, err := readHeader(h.dir)
 	if err != nil {
 		return nil, err
 	}
-	b := &bundle{header: hdr, mark: h.mark, head: h.head, blobs: map[string][]byte{}}
-	for _, e := range h.session.Entries() {
-		if h.session.Prefix(e.Base().ID) {
+	b := &bundle{header: hdr, mark: mark, head: head, blobs: map[string][]byte{}}
+	for _, e := range sess.Entries() {
+		if sess.Prefix(e.Base().ID) {
 			b.prefix = append(b.prefix, e)
 		} else {
 			b.own = append(b.own, e)

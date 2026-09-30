@@ -872,6 +872,18 @@ type view struct {
 // session accepted after it, head moves and marks included, since a
 // commit would have made those objects durable first.
 func (s *Store) reconcile(id, dir string) (view, error) {
+	return s.reconcileAs(id, dir, false)
+}
+
+// committedView is reconcile's view of what a session has committed:
+// every lazy append no sync record covers is taken as cut, whether or
+// not its objects are there, and nothing is written. It is what a store
+// that cannot commit another process's working state serves.
+func (s *Store) committedView(id, dir string) (view, error) {
+	return s.reconcileAs(id, dir, true)
+}
+
+func (s *Store) reconcileAs(id, dir string, committedOnly bool) (view, error) {
 	var v view
 	hdr, err := readHeader(dir)
 	if err != nil {
@@ -888,12 +900,24 @@ func (s *Store) reconcile(id, dir string) (view, error) {
 	if l.legacy {
 		return v, fmt.Errorf("cas: session %s: %w", id, ErrLegacyStore)
 	}
-	if l.lost {
+	cutAt := len(l.recs)
+	if l.lost && !tailLoss(l) {
 		// The log is the only record of the session: a damaged record
 		// is reported, never passed over as if it were not there.
 		return v, fmt.Errorf("cas: session %s: %w", id, firstLoss(l))
 	}
 	v.whole, v.size, v.unterminated, v.damage = l.whole, l.size, l.unterminated, l.damage
+	if l.lost {
+		// Damage in the uncommitted tail: the tail is cut from the
+		// damaged line, as a crash's loss, and the holder truncates the
+		// log there.
+		cutAt, v.whole, v.unterminated, v.damage = l.lossRec, l.lossOff, false, nil
+		for _, d := range l.damage {
+			if d.Offset < l.lossOff {
+				v.damage = append(v.damage, d)
+			}
+		}
+	}
 	fileHead, err := readHead(dir)
 	if err != nil {
 		return v, err
@@ -924,6 +948,9 @@ func (s *Store) reconcile(id, dir string) (view, error) {
 	cut := false
 	var dropped []string
 	for i, r := range l.recs {
+		if i >= cutAt {
+			cut = true
+		}
 		if cut {
 			if r.Op == opAppend && r.Entry != "" {
 				lost[r.Entry] = true
@@ -940,6 +967,10 @@ func (s *Store) reconcile(id, dir string) (view, error) {
 			}
 			if gone(r.Entry, i) {
 				lost[r.Entry] = true // lost, and recorded so, earlier
+				continue
+			}
+			if r.Lazy && i > synced && committedOnly {
+				cut = true
 				continue
 			}
 			if r.Lazy && i > synced {
@@ -1578,29 +1609,11 @@ func (s *Store) openHeld(id, dir string, lk *dirLock) (*handle, error) {
 	if !v.exists {
 		return fail(fmt.Errorf("%w: %s", agentsession.ErrNoSession, id))
 	}
-	hdr, err := readHeader(dir)
+	sess, hdr, err := s.build(id, dir, v)
 	if err != nil {
 		return fail(err)
 	}
 	diskFormat := hdr.Format
-	var prefix [][]byte
-	if hdr.Base != "" {
-		if prefix, err = s.pathLines(hdr.Base); err != nil {
-			return fail(err)
-		}
-	}
-	own := make([][]byte, 0, len(v.log))
-	for _, h := range v.log {
-		line, err := s.loadLine(h)
-		if err != nil {
-			return fail(fmt.Errorf("cas: session %s: %w", id, err))
-		}
-		own = append(own, line)
-	}
-	sess, err := s.assemble(hdr, prefix, own, v.head)
-	if err != nil {
-		return fail(err)
-	}
 	committed := make(map[string]bool, len(v.log))
 	for _, h := range v.log {
 		committed[h] = true
@@ -1615,6 +1628,31 @@ func (s *Store) openHeld(id, dir string, lk *dirLock) (*handle, error) {
 	h := &handle{session: sess, dir: dir, lock: lk, logf: logf, pend: newPendSet(), mark: v.mark, head: v.head, count: sess.Len(), diskFormat: diskFormat, own: committed}
 	s.open[id] = h
 	return h, nil
+}
+
+// build assembles the session a view says: the path to its base, then
+// the entries of its log.
+func (s *Store) build(id, dir string, v view) (*agentsession.Session, agentsession.Header, error) {
+	hdr, err := readHeader(dir)
+	if err != nil {
+		return nil, hdr, err
+	}
+	var prefix [][]byte
+	if hdr.Base != "" {
+		if prefix, err = s.pathLines(hdr.Base); err != nil {
+			return nil, hdr, err
+		}
+	}
+	own := make([][]byte, 0, len(v.log))
+	for _, h := range v.log {
+		line, err := s.loadLine(h)
+		if err != nil {
+			return nil, hdr, fmt.Errorf("cas: session %s: %w", id, err)
+		}
+		own = append(own, line)
+	}
+	sess, err := s.assemble(hdr, prefix, own, v.head)
+	return sess, hdr, err
 }
 
 // Append implements agentsession.Store; see Write for what it reports.
@@ -2162,8 +2200,12 @@ func (s *Store) releaseHandle(id string, h *handle) error {
 		if errors.Is(err, errLogUncertain) {
 			return err // let go already, and the indexes are not ours to write
 		}
-		_ = writeHead(h.dir, h.head)
-		s.summarizeHeld(id, h)
+		if err == nil {
+			// Indexes of what was committed; after a failed commit, the
+			// next open rebuilds them from the log.
+			_ = writeHead(h.dir, h.head)
+			s.summarizeHeld(id, h)
+		}
 	}
 	s.dropHandle(id, h)
 	return err

@@ -26,7 +26,13 @@ session is a ref, and its log is its own write-ahead log.
   `Sync` is a commit on its own. A log record that fails its checksum
   keeps the session from opening, since the log is its only record,
   and `Verify` reports it as a `log` problem; `JournalDamage` is now
-  `LogDamage`.
+  `LogDamage`. Blocks a crash left unwritten in the uncommitted tail
+  are cut as that tail's loss instead. After a failed fsync, a log or
+  object is written again to a new file rather than fsynced again,
+  since Linux reports a failed writeback once; an object whose bytes
+  are gone by then fails every commit that needs it until a write of
+  it or a reopen. A read-only store serves exchange only what the
+  session's writer committed.
 
   **Migration:** the first writing open of a store written by v0.0.15
   or earlier rewrites each session's log from the journal and retires
