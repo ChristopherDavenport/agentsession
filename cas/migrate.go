@@ -71,20 +71,6 @@ type sessionState struct {
 	base    string // the create record's base, when it carries one
 }
 
-// entries returns the own entries the records append, each once, in
-// journal order.
-func (st *sessionState) entries() []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, r := range st.recs {
-		if r.Op == "append" && r.Entry != "" && !seen[r.Entry] {
-			seen[r.Entry] = true
-			out = append(out, r.Entry)
-		}
-	}
-	return out
-}
-
 // mark returns the last mark the records set.
 func (st *sessionState) mark() string {
 	m := ""
