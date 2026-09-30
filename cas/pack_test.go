@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -361,8 +362,24 @@ func TestPackFormat(t *testing.T) {
 	idx, _ := os.ReadFile(filepath.Join(dir, name+".idx"))
 	idx[len(idxMagic)+9] ^= 0xff
 	os.WriteFile(filepath.Join(dir, name+".idx"), idx, 0o600)
+	// A damaged record opens, as git's does, and Verify finds it.
+	p, err = openPack(dir, name)
+	if err != nil {
+		t.Fatalf("a damaged index record: %v", err)
+	}
+	defer p.close()
+	found := false
+	for _, err := range verifyPack(p) {
+		found = found || errors.Is(err, ErrCorrupt) && strings.Contains(err.Error(), ".idx fails its checksum")
+	}
+	if !found {
+		t.Errorf("verify of a damaged index: %v", verifyPack(p))
+	}
+	// A damaged header does not open.
+	idx[0] ^= 0xff
+	os.WriteFile(filepath.Join(dir, name+".idx"), idx, 0o600)
 	if _, err := openPack(dir, name); !errors.Is(err, ErrCorrupt) {
-		t.Errorf("a damaged index: %v", err)
+		t.Errorf("a damaged index header: %v", err)
 	}
 }
 
@@ -472,5 +489,46 @@ func TestAutoPack(t *testing.T) {
 	packs, _ := filepath.Glob(filepath.Join(st.objs.packDir(), "*.idx"))
 	if loose != 0 || len(packs) == 0 {
 		t.Errorf("after Close: %d loose objects, %d packs", loose, len(packs))
+	}
+}
+
+// TestPackCloseWhileReading: a pack closed while lookups and walks are
+// in its mapped index waits for them, and a lookup after finds nothing.
+func TestPackCloseWhileReading(t *testing.T) {
+	dir := t.TempDir()
+	var objs []packObject
+	for i := range 2000 {
+		b := []byte(fmt.Sprint(i))
+		objs = append(objs, packObject{sp: spaceContents, hash: hashBytes(b), data: b})
+	}
+	name, err := writePack(dir, objs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 20 {
+		p, err := openPack(dir, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, _ := digestOf(objs[1234].hash)
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				for range 200 {
+					p.find(spaceContents, d)
+				}
+			}()
+			go func() {
+				defer wg.Done()
+				p.each(func(space, string, int64, int64) error { return nil })
+			}()
+		}
+		p.close()
+		wg.Wait()
+		if _, _, ok := p.find(spaceContents, d); ok {
+			t.Fatal("a closed pack answered a lookup")
+		}
 	}
 }

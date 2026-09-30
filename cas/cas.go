@@ -1968,23 +1968,51 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 		}
 		var out []agentsession.Summary
 		var errs []error
+		meta := f.WithNames || f.Current
 		for _, d := range dirs {
 			if !d.IsDir() || !validSessionID(d.Name()) {
 				continue
 			}
-			dir := filepath.Join(s.root, "sessions", d.Name())
-			v, err := s.reconcile(d.Name(), dir, scan)
+			id := d.Name()
+			dir := filepath.Join(s.root, "sessions", id)
+			st := scan.states[id]
+			if st != nil && st.deleted {
+				continue
+			}
+			// The header decides most filters, and a session it rules
+			// out is not read further.
+			hdr, err := readHeader(dir)
+			if err != nil || !f.Matches(hdr) {
+				continue // never finished creating, or filtered out
+			}
+			if st == nil {
+				if c, ok := cachedSummary(dir, meta); ok {
+					sum := agentsession.Summary{Header: hdr, Path: dir, Size: c.Size, Name: c.Name, SupersededBy: c.SupersededBy}
+					if info, err := os.Stat(filepath.Join(dir, "log")); err == nil {
+						sum.Modified = info.ModTime()
+					}
+					if f.Keep(sum) {
+						out = append(out, sum)
+					}
+					continue
+				}
+			}
+			size, modified := logStamp(dir)
+			v, err := s.reconcile(id, dir, scan)
 			if err != nil {
-				errs = append(errs, fmt.Errorf("cas: %s: %w", d.Name(), err))
+				errs = append(errs, fmt.Errorf("cas: %s: %w", id, err))
 				continue
 			}
 			if !v.exists {
 				continue
 			}
-			sum, err := s.summarize(d.Name(), dir, v, f.WithNames || f.Current)
+			sum, err := s.summarize(id, dir, v, meta)
 			if err != nil {
 				errs = append(errs, err)
 				continue
+			}
+			if !s.readOnly && !v.logChanged {
+				keepSummary(dir, size, modified, sum, meta)
 			}
 			if f.Keep(sum) {
 				out = append(out, sum)
@@ -2115,6 +2143,9 @@ func (s *Store) Release(id string) error {
 	var err error
 	if !s.readOnly {
 		err = s.syncJournal()
+		if scan, rerr := s.replay(); rerr == nil {
+			s.summarizeHeld(id, h, scan)
+		}
 	}
 	delete(s.open, id)
 	if rerr := h.lock.release(); err == nil {
@@ -2154,7 +2185,11 @@ func (s *Store) Close() error {
 		// replay reads it and saves the checkpoint the next open starts
 		// from, when the journal has grown enough to want one. A failure
 		// only costs that open a longer replay.
-		_, _ = s.replay()
+		if scan, err := s.replay(); err == nil {
+			for id, h := range s.open {
+				s.summarizeHeld(id, h, scan)
+			}
+		}
 	}
 	for id, h := range s.open {
 		if err := h.lock.release(); err != nil && first == nil {

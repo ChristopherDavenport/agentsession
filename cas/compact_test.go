@@ -355,3 +355,59 @@ func TestCompactKeepsDamage(t *testing.T) {
 		t.Errorf("Verify after compacting a damaged journal: %v", rep.Problems)
 	}
 }
+
+// TestListUsesSummaries: a listing of sessions whose logs have not
+// changed since they were summarized reads the kept summaries, not the
+// objects, and one whose log changed is summarized afresh.
+func TestListUsesSummaries(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	for i := range 3 {
+		id := fmt.Sprintf("s%d", i)
+		st.Create(ctx, agentsession.Header{ID: id})
+		mustAppend(t, st, id, item("hello"))
+		mustAppend(t, st, id, &agentsession.InfoEntry{Name: "named " + id})
+	}
+	st.Close()
+	c, _ := Open(root)
+	if _, err := c.Compact(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	list := func() map[string]agentsession.Summary {
+		ro, _ := Open(root, WithReadOnly())
+		defer ro.Close()
+		out := map[string]agentsession.Summary{}
+		for sum, err := range ro.List(ctx, agentsession.ListFilter{WithNames: true}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			out[sum.Header.ID] = sum
+		}
+		return out
+	}
+	want := list()
+	if len(want) != 3 || want["s1"].Name != "named s1" || want["s1"].Size == 0 {
+		t.Fatalf("listing: %+v", want)
+	}
+	// With the objects gone, only the summaries can answer.
+	saved := filepath.Join(t.TempDir(), "objects")
+	if err := os.Rename(filepath.Join(root, "objects"), saved); err != nil {
+		t.Fatal(err)
+	}
+	got := list()
+	for id, w := range want {
+		if g := got[id]; g.Name != w.Name || g.Size != w.Size {
+			t.Errorf("%s from its summary: %+v, want %+v", id, g, w)
+		}
+	}
+	os.Rename(saved, filepath.Join(root, "objects"))
+
+	w, _ := Open(root)
+	mustAppend(t, w, "s2", &agentsession.InfoEntry{Name: "renamed"})
+	w.Close()
+	if got := list(); got["s2"].Name != "renamed" || got["s2"].Size <= want["s2"].Size {
+		t.Errorf("after an append: %+v", got["s2"])
+	}
+}
