@@ -709,7 +709,7 @@ func (s *Store) holderOf(entry, parent string) (owner string, held bool, err err
 		if lerr != nil || l.legacy {
 			break
 		}
-		if slices.Contains(ownEntries(l.recs), entry) {
+		if slices.Contains(heldEntries(l.recs), entry) {
 			return parent, true, nil
 		}
 		hdr, herr := readHeader(dir)
@@ -1095,7 +1095,7 @@ func (s *Store) index() error {
 			s.faulty[d.Name()] = err
 			continue
 		}
-		for _, h := range ownEntries(l.recs) {
+		for _, h := range heldEntries(l.recs) {
 			s.own(h, d.Name())
 		}
 		h, err := readHeader(dir)
@@ -1309,6 +1309,11 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		if err := s.freshenPath(h.Base); err != nil {
 			return fail(err)
 		}
+		// The path's objects are durable before any log that names the
+		// base is, whichever process wrote them.
+		if err := s.objs.flush(); err != nil {
+			return fail(err)
+		}
 		if err := s.commitOrigin(owner); err != nil {
 			return fail(err)
 		}
@@ -1389,6 +1394,15 @@ func (s *Store) commitOrigin(owner string) error {
 		return nil
 	}
 	return fsyncPath(filepath.Join(dir, logName))
+}
+
+// withSync appends a sync record to records a durable commit writes when
+// the session has working state, which the commit makes durable.
+func (s *Store) withSync(h *handle, id string, recs ...logRecord) []logRecord {
+	if h.lazy {
+		recs = append(recs, logRecord{Op: opSync, Session: id})
+	}
+	return recs
 }
 
 // commitHandle commits a held session's working state: its objects, a
@@ -1491,6 +1505,12 @@ func (s *Store) openLocked(id string) (*handle, error) {
 	if err != nil {
 		return nil, err
 	}
+	return s.openHeld(id, dir, lk)
+}
+
+// openHeld recovers and opens a session whose lock the caller has
+// taken, which it keeps, or lets go on failure.
+func (s *Store) openHeld(id, dir string, lk *dirLock) (*handle, error) {
 	fail := func(err error) (*handle, error) {
 		lk.release()
 		return nil, err
@@ -1699,8 +1719,7 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 // a reported failure.
 func (s *Store) committedButNotApplied(sessionID string, r agentsession.Result) (agentsession.Result, error) {
 	if h, ok := s.open[sessionID]; ok {
-		delete(s.open, sessionID)
-		h.lock.release()
+		s.dropHandle(sessionID, h)
 	}
 	r.Reopen = true
 	return r, nil
@@ -1748,7 +1767,7 @@ func (s *Store) syncHead(h *handle, sessionID string) error {
 	} else if h.session.Header().Base != "" {
 		return fmt.Errorf("%w: a session with a base has a head", agentsession.ErrNoEntry)
 	}
-	if err := s.appendRecords(h, h.dir, true, logRecord{Op: opHead, Session: sessionID, Head: leaf, Seq: h.session.Len()}); err != nil {
+	if err := s.appendRecords(h, h.dir, true, s.withSync(h, sessionID, logRecord{Op: opHead, Session: sessionID, Head: leaf, Seq: h.session.Len()})...); err != nil {
 		return err
 	}
 	h.lazy = false
@@ -1792,7 +1811,7 @@ func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) err
 
 // moveHead commits a head move and applies it.
 func (s *Store) moveHead(h *handle, sessionID, to string) error {
-	if err := s.appendRecords(h, h.dir, true, logRecord{Op: opHead, Session: sessionID, Head: to, Seq: h.session.Len()}); err != nil {
+	if err := s.appendRecords(h, h.dir, true, s.withSync(h, sessionID, logRecord{Op: opHead, Session: sessionID, Head: to, Seq: h.session.Len()})...); err != nil {
 		return err
 	}
 	h.lazy = false
@@ -1842,7 +1861,7 @@ func (s *Store) Mark(ctx context.Context, sessionID string) (string, error) {
 
 // setMark commits a mark and applies it.
 func (s *Store) setMark(h *handle, sessionID, mark string) error {
-	if err := s.appendRecords(h, h.dir, true, logRecord{Op: opMark, Session: sessionID, Mark: mark}); err != nil {
+	if err := s.appendRecords(h, h.dir, true, s.withSync(h, sessionID, logRecord{Op: opMark, Session: sessionID, Mark: mark})...); err != nil {
 		return err
 	}
 	h.lazy = false
@@ -2326,11 +2345,11 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 }
 
 // admitNew takes in a session the store lacks: its objects as one pack,
-// then one commit of its create record, its mark, an append record per
-// own entry in order and its head, then the indexes and the header
-// last. A failure after the create record commits a delete, so the ID
-// is free again and nothing half-admitted counts. It returns the
-// session as the store holds it, rebuilt from the objects and the log.
+// committed, then the session placed in one step with its create
+// record, its mark, an append record per own entry in order and its
+// head. Nothing is in place until the rename, so a failure before it
+// leaves the ID free. It returns the session as the store holds it,
+// rebuilt from the objects and the log, without letting its lock go.
 func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header, mark string, stored, own []agentsession.Entry, blobs map[string][]byte, head string) (*handle, error) {
 	lk, err := s.lockSession(h.ID)
 	if err != nil {
@@ -2385,8 +2404,7 @@ func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header,
 			return fail(err)
 		}
 	}
-	lk.release()
-	return s.openLocked(h.ID)
+	return s.openHeld(h.ID, dir, lk)
 }
 
 var _ agentsession.Store = (*Store)(nil)

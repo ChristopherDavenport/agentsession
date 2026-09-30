@@ -360,7 +360,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if len(recs) > 0 {
 		// Committed before it is acknowledged, as RFC 0002 requires of
 		// what a receiver admits and a mark it sets.
-		if err := s.appendRecords(h, h.dir, true, recs...); err != nil {
+		if err := s.appendRecords(h, h.dir, true, s.withSync(h, id, recs...)...); err != nil {
 			return Exchange{}, err
 		}
 		h.lazy = false

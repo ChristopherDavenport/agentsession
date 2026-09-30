@@ -77,8 +77,10 @@ func readSessionLog(dir string, from int64) (sessionLog, error) {
 	}
 	l.size, l.whole = info.Size(), from
 	if from == 0 && info.Size() > 0 {
-		var first [1]byte
-		if _, err := f.ReadAt(first[:], 0); err == nil && first[0] != '{' {
+		// A log of bare hashes is one from before logs were per session;
+		// any other first line is read, and damage in it reported.
+		var first [7]byte
+		if n, _ := f.ReadAt(first[:], 0); string(first[:n]) == "sha256:" {
 			l.legacy = true
 			return l, nil
 		}
@@ -207,7 +209,7 @@ func mendTail(dir string, whole int64, unterminated bool) error {
 
 // ownEntries returns the entries the records append, each once, in
 // order: what a session's log names, lost appends included, which is
-// what the index and a sweep keep.
+// what a sweep keeps.
 func ownEntries(recs []logRecord) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -235,4 +237,29 @@ func fsyncPath(p string) error {
 		err = cerr
 	}
 	return err
+}
+
+// heldEntries returns the entries a session holds: those its records
+// append, less the ones a later lost record says a crash took. A lost
+// append is no entry of the session's, and no fork may hang from it.
+func heldEntries(recs []logRecord) []string {
+	lostAt := map[string]int{}
+	for i, r := range recs {
+		if r.Op == opLost {
+			lostAt[r.Entry] = i
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for i, r := range recs {
+		if r.Op != opAppend || r.Entry == "" || seen[r.Entry] {
+			continue
+		}
+		if at, ok := lostAt[r.Entry]; ok && at > i {
+			continue
+		}
+		seen[r.Entry] = true
+		out = append(out, r.Entry)
+	}
+	return out
 }

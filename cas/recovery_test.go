@@ -511,3 +511,75 @@ func FuzzParseRecord(f *testing.F) {
 		}
 	})
 }
+
+// TestForkOfWorkingState: a fork of a base another process holds as
+// working state makes the base's objects durable before it exists, so
+// a crash cannot take the base from under it.
+func TestForkOfWorkingState(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	a, _ := Open(root, WithSync(SyncNever))
+	defer a.Close()
+	a.Create(ctx, agentsession.Header{ID: "o"})
+	x := mustAppend(t, a, "o", item("x"))
+	b, _ := Open(root)
+	defer b.Close()
+	if _, err := b.Create(ctx, agentsession.Header{ID: "f", Base: x, ParentSession: "o"}); err != nil {
+		t.Fatal(err)
+	}
+	ep, _ := b.objs.loosePath(spaceEntries, x)
+	b.objs.mu.Lock()
+	pending := b.objs.pendFiles[ep]
+	b.objs.mu.Unlock()
+	if pending {
+		t.Error("the fork exists and its base's envelope waits on a flush")
+	}
+}
+
+// TestNoForkFromLost: an append its session's log records as lost is no
+// entry of the session's, and no fork hangs from it.
+func TestNoForkFromLost(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "o"})
+	x := mustAppend(t, st, "o", item("x"))
+	st.Sync(ctx)
+	a1 := mustAppend(t, st, "o", item("a1"))
+	lost := item("b")
+	lost.Base().Parent = x
+	b := mustAppend(t, st, "o", lost)
+	die(st)
+	c, _ := st.contentOf(a1)
+	cp, _ := st.objs.loosePath(spaceContents, c)
+	os.Remove(cp)
+	r, _ := Open(root)
+	defer r.Close()
+	if s, err := r.Open(ctx, "o"); err != nil || s.Len() != 1 {
+		t.Fatalf("recovery: %v", err)
+	}
+	for _, parent := range []string{"o", ""} {
+		if _, err := r.Create(ctx, agentsession.Header{Base: b, ParentSession: parent}); !errors.Is(err, agentsession.ErrNoEntry) {
+			t.Errorf("a fork from a lost append, parent %q: %v", parent, err)
+		}
+	}
+}
+
+// TestDamagedFirstByte: a log whose first byte is damaged is reported as
+// damage, not taken for a store from before per-session logs.
+func TestDamagedFirstByte(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	fill(t, st, "s", 2)
+	st.Close()
+	p := filepath.Join(root, "sessions", "s", logName)
+	data, _ := os.ReadFile(p)
+	data[0] = 'z'
+	os.WriteFile(p, data, 0o600)
+	r, _ := Open(root)
+	defer r.Close()
+	if _, err := r.Open(ctx, "s"); !errors.As(err, new(LogDamage)) {
+		t.Errorf("open: %v", err)
+	}
+}

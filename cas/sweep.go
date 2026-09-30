@@ -681,7 +681,7 @@ func (s *Store) looseEstimate() int {
 
 // maybePack packs when the loose objects look to have passed
 // autoPackLoose. A pack that cannot run, because a sweep, pack or
-// compaction holds the gc lock, is left for the next look; its failure
+// another pack holds the gc lock, is left for the next look; its failure
 // is no failure of the caller's.
 func (s *Store) maybePack() {
 	if s.readOnly || s.looseEstimate() < autoPackLoose {
