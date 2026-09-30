@@ -198,6 +198,12 @@ type Store struct {
 	faulty map[string]error
 	// journalDirty is set while a lazy commit's record is unsynced.
 	journalDirty bool
+
+	// scan is the journal as far as this store has read it, which
+	// replay reads on from. scanMu guards it apart from mu, since List,
+	// Verify and a sweep replay without holding mu.
+	scanMu sync.Mutex
+	scan   *journalScan
 }
 
 type handle struct {

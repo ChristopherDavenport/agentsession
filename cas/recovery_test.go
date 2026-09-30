@@ -341,3 +341,88 @@ func TestFormatRaised(t *testing.T) {
 		t.Error("a current header was rewritten")
 	}
 }
+
+// TestReplayReadsOn: a store reads the journal on from where it last
+// stopped, so records another process commits later, a torn record's
+// line a later record completes, and a scan already handed out all come
+// out as a replay from the start would have them.
+func TestReplayReadsOn(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	a, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	for range a.List(ctx, agentsession.ListFilter{}) {
+	}
+	if _, err := b.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		mustAppend(t, b, "s", agentsession.NewItemEntry(openresponses.UserText("b")))
+	}
+	before, err := a.replay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(before.states["s"].entries()); n != 3 {
+		t.Fatalf("a read %d of b's appends, want 3", n)
+	}
+
+	// A record a crashed process cut short, which the next record lands
+	// after on the same line.
+	f, err := os.OpenFile(filepath.Join(root, "journal"), os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"op":"append","sess`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if _, err := a.replay(); err != nil {
+		t.Fatal(err)
+	}
+	last := mustAppend(t, b, "s", agentsession.NewItemEntry(openresponses.UserText("b")))
+	if err := b.Release("s"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(before.states["s"].entries()); n != 3 {
+		t.Errorf("a scan handed out changed: %d entries, want 3", n)
+	}
+
+	// The log lost the appends, as a crash after the commit point leaves
+	// it; a rebuilds it from what it read of the journal.
+	if err := os.WriteFile(filepath.Join(root, "sessions", "s", "log"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := a.Open(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Len() != 4 || sess.Leaf() != last {
+		t.Errorf("a opened %d entries at %s, want 4 at %s", sess.Len(), sess.Leaf(), last)
+	}
+	fresh, err := a.replayFrom(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := a.replay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached.end != fresh.end || len(cached.damage) != len(fresh.damage) || len(cached.states) != len(fresh.states) {
+		t.Errorf("read on: end %d, %d damaged, %d sessions; from the start: end %d, %d damaged, %d sessions",
+			cached.end, len(cached.damage), len(cached.states), fresh.end, len(fresh.damage), len(fresh.states))
+	}
+	for id, st := range fresh.states {
+		if got, want := len(cached.states[id].recs), len(st.recs); got != want {
+			t.Errorf("session %s: %d records read on, %d from the start", id, got, want)
+		}
+	}
+}

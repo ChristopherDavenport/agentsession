@@ -147,6 +147,7 @@ type journalScan struct {
 	states map[string]*sessionState
 	damage []JournalDamage
 	end    int64 // where the read stopped: the next record's offset
+	lines  int   // the whole lines read, for damage line numbers
 }
 
 // replay reads the journal from the start and returns each session's
@@ -157,60 +158,46 @@ type journalScan struct {
 // record is reported and skipped. Nothing is ever truncated: the
 // journal is shared, and a record another process fsynced is not this
 // process's to remove.
+//
+// The journal only grows, so the store keeps what it has read and each
+// replay reads only the records written since, by this process or any
+// other. What it returns is the caller's own, unchanged by later
+// replays.
 func (s *Store) replay() (*journalScan, error) {
-	return s.replayFrom(0)
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
+	if s.scan == nil || s.journalShrank(s.scan.end) {
+		s.scan = &journalScan{states: map[string]*sessionState{}}
+	}
+	tail, err := s.scan.read(s.root)
+	if err != nil {
+		return nil, err
+	}
+	snap := s.scan.snapshot()
+	for _, rec := range tail {
+		snap.apply(rec)
+	}
+	return snap, nil
 }
 
+// journalShrank reports whether the journal is shorter than end, which
+// only replacing the store's files behind its back can cause; the
+// journal is then read again from the start.
+func (s *Store) journalShrank(end int64) bool {
+	info, err := os.Stat(filepath.Join(s.root, "journal"))
+	return err == nil && info.Size() < end
+}
+
+// replayFrom reads the journal from an offset on its own, for a caller
+// that wants only the records written after it.
 func (s *Store) replayFrom(from int64) (*journalScan, error) {
 	scan := &journalScan{states: map[string]*sessionState{}, end: from}
-	f, err := os.Open(filepath.Join(s.root, "journal"))
-	if errors.Is(err, os.ErrNotExist) {
-		return scan, nil
-	}
+	tail, err := scan.read(s.root)
 	if err != nil {
-		return nil, fmt.Errorf("cas: journal: %w", err)
+		return nil, err
 	}
-	defer f.Close()
-	if _, err := f.Seek(from, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("cas: journal: %w", err)
-	}
-	br := bufio.NewReaderSize(f, 1<<20)
-	off := from
-	lineNo := 0
-	for {
-		line, err := br.ReadBytes('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return nil, fmt.Errorf("cas: journal: %w", err)
-		}
-		if len(line) == 0 {
-			break
-		}
-		if line[len(line)-1] != '\n' {
-			// The journal's end without a newline: a record still being
-			// written, one a crash cut short, or a whole record whose
-			// newline was damaged. Only whole records that pass their
-			// checksum count, and nothing is reported: the rest may be a
-			// write in flight.
-			if recs, _ := decodeLine(line); len(recs) > 0 {
-				for _, rec := range recs {
-					if rec.checked {
-						scan.apply(rec)
-					}
-				}
-			}
-			break
-		}
-		lineNo++
-		start := off
-		off += int64(len(line))
-		scan.end = off
-		recs, derr := decodeLine(line)
-		if derr != nil {
-			scan.damage = append(scan.damage, JournalDamage{Line: lineNo, Offset: start, Err: derr})
-		}
-		for _, rec := range recs {
-			scan.apply(rec)
-		}
+	for _, rec := range tail {
+		scan.apply(rec)
 	}
 	if from > 0 {
 		// Line numbers from an offset are relative; say so in the offset.
@@ -219,6 +206,78 @@ func (s *Store) replayFrom(from int64) (*journalScan, error) {
 		}
 	}
 	return scan, nil
+}
+
+// read takes into the scan every whole line from its end on, and
+// returns the checked records of a last line without its newline
+// unapplied: that line may be a write in flight, which a later read
+// reads again once it is whole.
+func (scan *journalScan) read(root string) ([]journalRecord, error) {
+	f, err := os.Open(filepath.Join(root, "journal"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cas: journal: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.Seek(scan.end, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("cas: journal: %w", err)
+	}
+	br := bufio.NewReaderSize(f, 1<<20)
+	for {
+		line, err := br.ReadBytes('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("cas: journal: %w", err)
+		}
+		if len(line) == 0 {
+			return nil, nil
+		}
+		if line[len(line)-1] != '\n' {
+			// The journal's end without a newline: a record still being
+			// written, one a crash cut short, or a whole record whose
+			// newline was damaged. Only whole records that pass their
+			// checksum count, and nothing is reported: the rest may be a
+			// write in flight.
+			var tail []journalRecord
+			recs, _ := decodeLine(line)
+			for _, rec := range recs {
+				if rec.checked {
+					tail = append(tail, rec)
+				}
+			}
+			return tail, nil
+		}
+		scan.lines++
+		start := scan.end
+		scan.end += int64(len(line))
+		recs, derr := decodeLine(line)
+		if derr != nil {
+			scan.damage = append(scan.damage, JournalDamage{Line: scan.lines, Offset: start, Err: derr})
+		}
+		for _, rec := range recs {
+			scan.apply(rec)
+		}
+	}
+}
+
+// snapshot returns a copy of the scan that later reads into the scan do
+// not change: each state is copied, and each slice is capped at its
+// length, so an append on either side reallocates rather than writing
+// where the other reads.
+func (scan *journalScan) snapshot() *journalScan {
+	snap := &journalScan{
+		states: make(map[string]*sessionState, len(scan.states)),
+		damage: scan.damage[:len(scan.damage):len(scan.damage)],
+		end:    scan.end,
+		lines:  scan.lines,
+	}
+	for id, st := range scan.states {
+		c := *st
+		c.recs = st.recs[:len(st.recs):len(st.recs)]
+		snap.states[id] = &c
+	}
+	return snap
 }
 
 // decodeLine reads the records of one journal line. A line normally
