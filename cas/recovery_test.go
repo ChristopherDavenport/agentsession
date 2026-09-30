@@ -685,24 +685,36 @@ func TestUncertainLogLetsGo(t *testing.T) {
 // linuxFsync fails an object's first fsync and reports every later one
 // on that file a success without syncing anything, as Linux does once
 // writeback fails; lose, when set, also takes the page cache's bytes,
-// so the file reads back as the disk has it.
-func linuxFsync(t *testing.T, lose bool) {
+// so the file reads back as the disk often has it: zeros, of the
+// file's length. The function it returns stops failing files that have
+// not failed yet; those that have go on reporting success.
+func linuxFsync(t *testing.T, lose bool) (stop func()) {
 	t.Helper()
 	old := syncObject
 	t.Cleanup(func() { syncObject = old })
 	var mu sync.Mutex
 	failed := map[string]bool{}
+	stopped := false
 	syncObject = func(f *os.File) error {
 		mu.Lock()
 		defer mu.Unlock()
 		if failed[f.Name()] {
 			return nil
 		}
+		if stopped {
+			return f.Sync()
+		}
 		failed[f.Name()] = true
 		if lose {
-			os.WriteFile(f.Name(), []byte("what the disk held"), 0o600)
+			info, _ := os.Stat(f.Name())
+			os.WriteFile(f.Name(), make([]byte, info.Size()), 0o600)
 		}
 		return errors.New("injected writeback failure")
+	}
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		stopped = true
 	}
 }
 
@@ -756,6 +768,65 @@ func TestLostObjectFailsCommits(t *testing.T) {
 	}
 	if err := st.Sync(ctx); !errors.Is(err, ErrCorrupt) {
 		t.Errorf("the next commit: %v", err)
+	}
+}
+
+// TestLostObjectRepairedByWriter: a lost object is put back by the next
+// write that holds its bytes, whose commit then holds, rather than that
+// commit failing on the loss too.
+func TestLostObjectRepairedByWriter(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "a"})
+	mustAppend(t, st, "a", item("same"))
+	stop := linuxFsync(t, true)
+	if err := st.Sync(ctx); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("the commit of a lost object: %v", err)
+	}
+	stop()
+	st.Release("a")
+	st.Create(ctx, agentsession.Header{ID: "b"})
+	mustAppend(t, st, "b", item("same"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatalf("a commit holding the lost object's bytes: %v", err)
+	}
+	st.Close()
+	r, _ := Open(root)
+	defer r.Close()
+	if _, err := r.Open(ctx, "b"); err != nil {
+		t.Errorf("the session that put the object back: %v", err)
+	}
+}
+
+// TestZeroedObjectNotReused: a loose object a crash left the right
+// length and the wrong bytes is written again by the next write of it,
+// not taken as a copy and committed.
+func TestZeroedObjectNotReused(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	st.Create(ctx, agentsession.Header{ID: "a"})
+	e := mustAppend(t, st, "a", item("same"))
+	c, _ := st.contentOf(e)
+	st.Close()
+	for _, obj := range []struct {
+		sp   space
+		hash string
+	}{{spaceEntries, e}, {spaceContents, c}} {
+		p, _ := st.objs.loosePath(obj.sp, obj.hash)
+		info, _ := os.Stat(p)
+		os.WriteFile(p, make([]byte, info.Size()), 0o600)
+	}
+	w, _ := Open(root)
+	w.Create(ctx, agentsession.Header{ID: "c"})
+	mustAppend(t, w, "c", item("same"))
+	w.Close()
+	r, _ := Open(root)
+	defer r.Close()
+	if _, err := r.Open(ctx, "c"); err != nil {
+		t.Errorf("a session committed over a zeroed copy: %v", err)
 	}
 }
 

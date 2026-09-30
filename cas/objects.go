@@ -1,6 +1,7 @@
 package cas
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"maps"
@@ -295,16 +296,30 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 		return err
 	}
 	dir := filepath.Dir(path)
-	if info, err := os.Stat(path); err == nil && info.Size() == int64(len(data)) {
-		now := time.Now()
-		if err := os.Chtimes(path, now, now); err == nil {
+	o.mu.Lock()
+	suspect := o.rewrite[path]
+	o.mu.Unlock()
+	if info, err := os.Stat(path); err == nil && info.Size() == int64(len(data)) && !suspect {
+		// A loose copy is taken only once its bytes are read and match:
+		// a crash, or a writeback that failed, can leave a file of the
+		// right length holding zeros.
+		have, err := os.ReadFile(path)
+		if err == nil && !bytes.Equal(have, data) {
+			goto write
+		}
+		if err == nil {
+			now := time.Now()
+			err = os.Chtimes(path, now, now)
+		}
+		if err == nil {
 			return o.remember(pend, path, dir)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		// Packed and removed since the stat; look in the packs.
 	} else if err == nil {
-		// A loose copy of the wrong length: written again below.
+		// A loose copy of the wrong length, or one whose fsync failed,
+		// is written again below: this write holds its right bytes.
 		goto write
 	}
 	if _, lp, _, _, lerr := o.locate(sp, hash, false); lerr == nil && lp != nil {
@@ -326,6 +341,10 @@ write:
 	if err := writeFile(path, data, durable); err != nil {
 		return err
 	}
+	// A new file, whose writeback has not failed.
+	o.mu.Lock()
+	delete(o.rewrite, path)
+	o.mu.Unlock()
 	if !durable {
 		return o.remember(pend, path, dir)
 	}
@@ -498,21 +517,17 @@ func (o *objects) flushSet(pend *pendSet) error {
 // rewriteObject writes a loose object again, durably, from the bytes
 // its file reads: after a failed fsync, the page cache's. Bytes that no
 // longer match the object's name were evicted and read back from the
-// disk, and the object is lost; it stays to be written again, so every
-// later flush that owes it fails, until an open recovers the session
-// from what the disk holds.
+// disk, and the object is lost: its file is moved into the trash, so no
+// later write takes it for a copy and recovery finds it gone, and it
+// stays owed, so every later flush that owes it fails until a write
+// holding its bytes puts it back or an open recovers the session from
+// the disk.
 func (o *objects) rewriteObject(path string) error {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		err = nil // packed since, and a pack is written durably
-	} else if err == nil {
-		name := agentsession.HashPrefix + filepath.Base(filepath.Dir(path)) + filepath.Base(path)
-		if hashBytes(data) != name {
-			err = fmt.Errorf("%w: %s was lost before it reached the disk", ErrCorrupt, o.rel(path))
-		} else {
-			err = writeFile(path, data, true)
-		}
+	sp, hash, ok := o.objectAt(path)
+	if !ok {
+		return fmt.Errorf("cas: %s is no object", o.rel(path))
 	}
+	err := o.writeAgain(sp, hash, path)
 	o.mu.Lock()
 	if err != nil {
 		o.rewrite[path] = true
@@ -521,6 +536,53 @@ func (o *objects) rewriteObject(path string) error {
 	}
 	o.mu.Unlock()
 	return err
+}
+
+func (o *objects) writeAgain(sp space, hash, path string) error {
+	lost := fmt.Errorf("%w: %s %s was lost before it reached the disk", ErrCorrupt, sp, hash)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		// Packed since, and a pack is written durably; or moved aside
+		// by another process that found it lost.
+		if _, p, _, _, lerr := o.locate(sp, hash, true); lerr == nil && p != nil {
+			return nil
+		}
+		return lost
+	}
+	if err != nil {
+		return err
+	}
+	if hashBytes(data) == hash {
+		return writeFile(path, data, true)
+	}
+	trash := filepath.Join(o.root, "trash")
+	if err := os.MkdirAll(trash, 0o755); err != nil {
+		return err
+	}
+	aside := filepath.Join(trash, fmt.Sprintf("object-%s-%d", filepath.Base(path), time.Now().UnixNano()))
+	if err := os.Rename(path, aside); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	// Another process may have written a good copy between the read
+	// and the rename; that one is put back, durably.
+	if good, err := os.ReadFile(aside); err == nil && hashBytes(good) == hash {
+		os.Remove(aside)
+		return writeFile(path, good, true)
+	}
+	return lost
+}
+
+// objectAt returns the object a loose path names.
+func (o *objects) objectAt(path string) (space, string, bool) {
+	for _, sp := range []space{spaceEntries, spaceContents} {
+		rel, err := filepath.Rel(o.spaceDir(sp), path)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		h := agentsession.HashPrefix + strings.ReplaceAll(rel, string(filepath.Separator), "")
+		return sp, h, agentsession.ValidHash(h)
+	}
+	return 0, "", false
 }
 
 // syncObject fsyncs an object's file; a variable so a test can fail it.
