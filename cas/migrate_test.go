@@ -1,0 +1,160 @@
+package cas
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/ChristopherDavenport/agentsession"
+)
+
+// legacyStore lays out a store as one from before per-session logs left
+// it after a crash: a session whose log lags the journal, with a lazy
+// append that survived and one whose envelope the crash took; a session
+// the journal deleted whose directory remained; and a directory a create
+// never finished. It returns the root and the entries session "a" should
+// hold after migrating, in order.
+func legacyStore(t *testing.T) (string, []string) {
+	t.Helper()
+	root := t.TempDir()
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratch := agentsession.New(agentsession.Header{ID: "a"})
+	var es []agentsession.Entry
+	for _, text := range []string{"one", "two", "three", "lost"} {
+		e := item(text)
+		if _, err := scratch.Append(e); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := st.storeEntry(e, true); err != nil {
+			t.Fatal(err)
+		}
+		es = append(es, e)
+	}
+	g := item("gone")
+	gs := agentsession.New(agentsession.Header{ID: "gone"})
+	gs.Append(g)
+	st.storeEntry(g, true)
+	st.Close()
+	// The crash took the last lazy append's envelope.
+	p, _ := st.objs.loosePath(spaceEntries, es[3].Base().ID)
+	os.Remove(p)
+
+	id := func(i int) string { return es[i].Base().ID }
+	var journal []byte
+	for _, r := range []logRecord{
+		{Op: "create", Session: "a"},
+		{Op: "mark", Session: "a", Mark: MarkRecord},
+		{Op: "append", Session: "a", Entry: id(0), Head: id(0), Seq: 1},
+		{Op: "append", Session: "a", Entry: id(1), Head: id(1), Seq: 2},
+		{Op: "create", Session: "gone"},
+		{Op: "append", Session: "gone", Entry: g.Base().ID, Head: g.Base().ID, Seq: 1},
+		{Op: "append", Session: "a", Entry: id(2), Head: id(2), Seq: 3, Lazy: true},
+		{Op: "append", Session: "a", Entry: id(3), Head: id(3), Seq: 4, Lazy: true},
+		{Op: "delete", Session: "gone"},
+	} {
+		line, err := r.encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		journal = append(journal, line...)
+	}
+	if err := os.WriteFile(filepath.Join(root, journalFile), journal, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, sess := range []struct {
+		id, log, head string
+	}{
+		{"a", id(0) + "\n" + id(1) + "\n", id(0)},
+		{"gone", g.Base().ID + "\n", g.Base().ID},
+	} {
+		dir := filepath.Join(root, "sessions", sess.id)
+		os.MkdirAll(dir, 0o755)
+		if err := writeHeader(dir, agentsession.New(agentsession.Header{ID: sess.id}).Header()); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(dir, logName), []byte(sess.log), 0o600)
+		os.WriteFile(filepath.Join(dir, "HEAD"), []byte(sess.head+"\n"), 0o600)
+		os.WriteFile(filepath.Join(dir, "record"), []byte(MarkRecord+"\n"), 0o600)
+	}
+	os.MkdirAll(filepath.Join(root, "sessions", "half"), 0o755)
+	return root, []string{id(0), id(1), id(2)}
+}
+
+// TestMigrate: the first writing open of a legacy store rewrites each
+// session's log from what the journal and the old log together said,
+// recovering it as that store would have, and retires the journal; a
+// read-only open refuses the store until then.
+func TestMigrate(t *testing.T) {
+	ctx := context.Background()
+	root, want := legacyStore(t)
+	if _, err := Open(root, WithReadOnly()); !errors.Is(err, ErrLegacyStore) {
+		t.Fatalf("a read-only open of a legacy store: %v", err)
+	}
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	checkMigrated(t, root, want)
+	s, err := st.Open(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 3 || s.Leaf() != want[2] {
+		t.Errorf("after migrating: %d entries at %s, want 3 at %s", s.Len(), s.Leaf(), want[2])
+	}
+	if rep, err := st.Verify(ctx); err != nil || !rep.OK() {
+		t.Errorf("verify after migrating: %v %v", err, rep.Problems)
+	}
+}
+
+// TestMigrateResumes: a migration a crash stopped after rewriting some
+// sessions finishes at the next writing open.
+func TestMigrateResumes(t *testing.T) {
+	root, want := legacyStore(t)
+	st := &Store{root: root, objs: newObjects(root), open: map[string]*handle{}, owners: map[string]map[string]bool{}, prefix: map[string]bool{}, faulty: map[string]error{}}
+	scan, err := readJournal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.migrateSession("a", scan); err != nil {
+		t.Fatal(err)
+	}
+	st.objs.close()
+	st2, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	checkMigrated(t, root, want)
+}
+
+func checkMigrated(t *testing.T, root string, want []string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(root, journalFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Error("the journal outlived the migration")
+	}
+	for _, gone := range []string{"gone", "half"} {
+		if _, err := os.Stat(filepath.Join(root, "sessions", gone)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("session %s outlived the migration", gone)
+		}
+	}
+	data, _ := os.ReadFile(filepath.Join(root, "sessions", "a", logName))
+	if !bytes.HasPrefix(data, []byte(`{"op":"create"`)) || strings.Contains(string(data), `"lazy"`) {
+		t.Errorf("migrated log:\n%s", data)
+	}
+	l, err := readSessionLog(filepath.Join(root, "sessions", "a"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ownEntries(l.recs); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("migrated entries %v, want %v", got, want)
+	}
+}

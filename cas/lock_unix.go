@@ -11,10 +11,6 @@ import (
 	"time"
 )
 
-// sharedLocks says whether the locks here are real across processes:
-// flock keeps other processes' commits out of a journal being compacted.
-const sharedLocks = true
-
 // dirLock is an exclusive lock held through flock on a file that is
 // never unlinked, so no holder can be left locking an inode nothing
 // points at. The kernel drops it when the process exits, however it
@@ -55,7 +51,7 @@ func (l *dirLock) release() error {
 
 // lockShared takes a shared lock at path: many holders at once, none
 // while an exclusive holder has it. Object writers hold the sweep's
-// lock shared from the object write through the journal commit, so a
+// lock shared from the object write through its log record, so a
 // sweep's last step never runs between the two. The sweep holds it
 // exclusive only for short steps, so the wait is short.
 func lockShared(ctx context.Context, path string) (*dirLock, error) {

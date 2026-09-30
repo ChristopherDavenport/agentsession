@@ -79,6 +79,14 @@ func (s *Store) bundleOf(ctx context.Context, id string) (*bundle, error) {
 	if err := s.untouched(h); err != nil {
 		return nil, err
 	}
+	// A sender commits the session before it pushes or serves it, so a
+	// receiver never holds what a crash here could take back. A
+	// read-only store serves the log as it stands.
+	if !s.readOnly {
+		if err := s.commitHandle(id, h); err != nil {
+			return nil, err
+		}
+	}
 	hdr, err := readHeader(h.dir)
 	if err != nil {
 		return nil, err
@@ -334,31 +342,31 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 			return Exchange{}, err
 		}
 	}
-	var recs []journalRecord
+	var recs []logRecord
 	var hashes []string
 	seq := h.session.Len() - len(b.prefix)
 	for _, e := range fresh {
 		seq++
 		eid := e.Base().ID
 		hashes = append(hashes, eid)
-		recs = append(recs, journalRecord{Op: "append", Session: id, Entry: eid, Seq: seq, Size: sizes[eid]})
+		recs = append(recs, logRecord{Op: opAppend, Session: id, Entry: eid, Seq: seq, Size: sizes[eid]})
 	}
 	if x.HeadMoved {
-		recs = append(recs, journalRecord{Op: "head", Session: id, Head: newHead, Seq: seq})
+		recs = append(recs, logRecord{Op: opHead, Session: id, Head: newHead, Seq: seq})
 	}
 	if o.handover {
-		recs = append(recs, journalRecord{Op: "mark", Session: id, Mark: MarkRecord})
+		recs = append(recs, logRecord{Op: opMark, Session: id, Mark: MarkRecord})
 	}
 	if len(recs) > 0 {
-		if err := s.commit(true, recs...); err != nil {
+		// Committed before it is acknowledged, as RFC 0002 requires of
+		// what a receiver admits and a mark it sets.
+		if err := s.appendRecords(h, h.dir, true, recs...); err != nil {
 			return Exchange{}, err
 		}
+		h.lazy = false
 	}
 	// Committed. The indexes follow, and the session is rebuilt from
 	// what the store holds on its next open.
-	if len(hashes) > 0 {
-		_ = appendLog(h.dir, hashes, sizes)
-	}
 	for _, eid := range hashes {
 		s.own(eid, id)
 	}
@@ -369,8 +377,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if o.handover {
 		_ = writeIndex(filepath.Join(h.dir, "record"), []byte(MarkRecord+"\n"))
 	}
-	delete(s.open, id)
-	h.lock.release()
+	s.dropHandle(id, h)
 	if _, err := s.openLocked(id); err != nil {
 		return x, fmt.Errorf("cas: exchange committed, and the session could not be reopened: %w", err)
 	}

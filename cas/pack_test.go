@@ -247,7 +247,7 @@ func TestSweepRescuesCommittedSince(t *testing.T) {
 	if err := st.Delete(ctx, "gone"); err != nil {
 		t.Fatal(err)
 	}
-	keep, offset, err := st.keepAll()
+	keep, marks, err := st.keepAll()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,11 +261,12 @@ func TestSweepRescuesCommittedSince(t *testing.T) {
 	if looseCount(t, st) != 1 {
 		t.Fatalf("%d loose objects, want the envelope alone", looseCount(t, st))
 	}
-	scan, _ := st.replayFrom(offset)
 	since := keepSet{entries: map[string]bool{}, contents: map[string]bool{}}
-	st.keepFromScan(since, scan)
+	if err := st.keepLogs(since, marks); err != nil {
+		t.Fatal(err)
+	}
 	if !since.entries[id] || !since.contents[e.ContentHash()] {
-		t.Fatal("the journal read from the keep set's offset does not name the new append")
+		t.Fatal("the logs read on from the keep set's marks do not name the new append")
 	}
 	// A sweep with a grace that makes the packed objects old.
 	if _, err := st.Sweep(ctx, -time.Hour); err != nil {
@@ -312,8 +313,14 @@ func TestSummarySize(t *testing.T) {
 	if got := size(); got != want {
 		t.Errorf("Size after packing %d, want %d", got, want)
 	}
-	// A log of bare hashes, as v0.0.11 wrote it.
-	os.WriteFile(filepath.Join(st.Root(), "sessions", "z", "log"), []byte(strings.Join(ids, "\n")+"\n"), 0o600)
+	// Append records without sizes, as a writer may leave them.
+	var recs []logRecord
+	for i, id := range ids {
+		recs = append(recs, logRecord{Op: opAppend, Session: "z", Entry: id, Seq: i + 1})
+	}
+	data, _ := encodeRecords(true, recs)
+	st.Release("z")
+	os.WriteFile(filepath.Join(st.Root(), "sessions", "z", logName), data, 0o600)
 	if got := size(); got != want {
 		t.Errorf("Size from a log without sizes %d, want %d", got, want)
 	}

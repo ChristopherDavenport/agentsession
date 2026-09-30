@@ -78,75 +78,81 @@ func (s *Store) keepPath(k keepSet, base string) error {
 	return nil
 }
 
-// keepFromScan adds what the journal records name: every session's own
-// entries and head, and the base of every session created in it.
-func (s *Store) keepFromScan(k keepSet, scan *journalScan) error {
-	for _, st := range scan.states {
-		if st.deleted {
-			continue
-		}
-		if st.base != "" {
-			if err := s.keepPath(k, st.base); err != nil {
-				return err
+// keepRecords adds what log records name: the entries they append and
+// the heads they set, and a created session's base.
+func (s *Store) keepRecords(k keepSet, recs []logRecord) error {
+	for _, r := range recs {
+		for _, id := range []string{r.Entry, r.Head} {
+			if id != "" {
+				if err := s.keepEntry(k, id); err != nil {
+					return err
+				}
 			}
 		}
-		for _, r := range st.recs {
-			for _, id := range []string{r.Entry, r.Head} {
-				if id != "" {
-					if err := s.keepEntry(k, id); err != nil {
-						return err
-					}
-				}
+		if r.Base != "" {
+			if err := s.keepPath(k, r.Base); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
-// keepAll computes what the store holds: what the journal names, what
-// every log names, and the path to every session's base. It returns
-// the journal offset it read to, from which the sweep's last step reads
-// what was committed since.
-func (s *Store) keepAll() (keepSet, int64, error) {
+// logMarks is how far a sweep read each session's log, from which its
+// last step reads what was accepted since.
+type logMarks map[string]int64
+
+// keepAll computes what the store holds: what every session's log
+// names, and the path to every session's base.
+func (s *Store) keepAll() (keepSet, logMarks, error) {
 	k := keepSet{entries: map[string]bool{}, contents: map[string]bool{}}
-	scan, err := s.replay()
-	if err != nil {
-		return k, 0, err
+	marks := logMarks{}
+	if err := s.keepLogs(k, marks); err != nil {
+		return k, nil, err
 	}
-	if err := s.keepFromScan(k, scan); err != nil {
-		return k, 0, fmt.Errorf("cas: sweep: %w", err)
-	}
+	return k, marks, nil
+}
+
+// keepLogs adds what each session's log names beyond the mark it has in
+// marks, and moves the marks to where it read to. A session with no
+// mark is read whole, its header's base with it.
+func (s *Store) keepLogs(k keepSet, marks logMarks) error {
 	dirs, err := os.ReadDir(filepath.Join(s.root, "sessions"))
 	if err != nil {
-		return k, 0, fmt.Errorf("cas: %w", err)
+		return fmt.Errorf("cas: %w", err)
 	}
 	for _, d := range dirs {
 		if !d.IsDir() || !validSessionID(d.Name()) {
 			continue
 		}
-		if st := scan.states[d.Name()]; st != nil && st.deleted {
-			continue
+		id := d.Name()
+		dir := filepath.Join(s.root, "sessions", id)
+		from, seen := marks[id]
+		if seen {
+			if info, err := os.Stat(filepath.Join(dir, logName)); err != nil || info.Size() <= from {
+				continue
+			}
 		}
-		dir := filepath.Join(s.root, "sessions", d.Name())
-		hashes, _, err := readLog(dir)
+		l, err := readSessionLog(dir, from)
+		if err == nil && l.legacy {
+			err = ErrLegacyStore
+		}
 		if err != nil {
-			return k, 0, fmt.Errorf("cas: session %s: %w", d.Name(), err)
+			return fmt.Errorf("cas: session %s: %w", id, err)
 		}
-		if head, err := readHead(dir); err == nil && head != "" {
-			hashes = append(hashes, head)
+		if err := s.keepRecords(k, l.recs); err != nil {
+			return fmt.Errorf("cas: sweep: %w", err)
 		}
-		for _, h := range hashes {
-			if err := s.keepEntry(k, h); err != nil {
-				return k, 0, fmt.Errorf("cas: sweep: %w", err)
+		if !seen {
+			if h, err := readHeader(dir); err == nil && h.Base != "" {
+				if err := s.keepPath(k, h.Base); err != nil {
+					return fmt.Errorf("cas: sweep: %w", err)
+				}
 			}
 		}
-		if h, err := readHeader(dir); err == nil && h.Base != "" {
-			if err := s.keepPath(k, h.Base); err != nil {
-				return k, 0, fmt.Errorf("cas: sweep: %w", err)
-			}
-		}
+		marks[id] = l.whole
 	}
-	return k, scan.end, nil
+	return nil
 }
 
 // gcLock takes the lock that keeps sweeps and packs apart.
@@ -299,17 +305,17 @@ func (s *Store) consolidate(ctx context.Context) error {
 // Sweep collects garbage as git's gc does: it repacks every object the
 // store holds into one pack, drops what nothing needs, and removes the
 // loose copies and the packs it replaced. What is held follows
-// references down: an envelope is kept while the journal, a log or a
+// references down: an envelope is kept while a log or a
 // prefix names it, a content while a kept envelope names it, a media
-// blob while a kept content names it. It works from the journal, so an
-// append whose log line never reached disk is kept.
+// blob while a kept content names it. It works from every session's
+// log, which is where an append is accepted.
 //
 // It runs beside live writers, in this process and others. The keep set
 // and the new pack are built without any lock a writer waits on and
 // without the store's own mutex. Then the sweep's lock is taken
 // exclusive, waiting until ctx ends for writers between an object write
-// and its commit, and held only for a short last step: the journal is
-// read from where the keep set stopped, anything committed since that
+// and its acceptance, and held only for a short last step: each log is
+// read from where the keep set stopped, anything accepted since that
 // lies only in a replaced pack is written back loose, and the replaced
 // packs go. Loose objects nothing needs are removed after, a batch at a
 // time under the same lock, each checked again for a writer that
@@ -319,7 +325,7 @@ func (s *Store) consolidate(ctx context.Context) error {
 // names it, as git spares a young loose object, and so is an unneeded
 // object of a pack younger than grace, which is written back loose with
 // the pack's age. grace must exceed the longest interval any live
-// writer holds between writing an object and committing its record; a
+// writer holds between writing an object and accepting its record; a
 // grace of zero is therefore safe only when no writer is active, as git
 // says of pruning with an expiry of now. An hour is a reasonable grace
 // for a live store. It returns how many objects went.
@@ -339,7 +345,7 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		return 0, err
 	}
 	started := time.Now()
-	keep, offset, err := s.keepAll()
+	keep, marks, err := s.keepAll()
 	if err != nil {
 		return 0, err
 	}
@@ -470,20 +476,15 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	}
 
 	// The last step, under the sweep's lock: no writer is between an
-	// object write and its commit.
+	// object write and its record.
 	lk, err := s.sweepLock(ctx)
 	if err != nil {
 		return 0, err
 	}
-	scan, err := s.replayFrom(offset)
-	if err != nil {
+	since := keepSet{entries: map[string]bool{}, contents: map[string]bool{}}
+	if err := s.keepLogs(since, marks); err != nil {
 		lk.release()
 		return 0, err
-	}
-	since := keepSet{entries: map[string]bool{}, contents: map[string]bool{}}
-	if err := s.keepFromScan(since, scan); err != nil {
-		lk.release()
-		return 0, fmt.Errorf("cas: sweep: %w", err)
 	}
 	for _, pair := range []struct {
 		sp  space
@@ -587,11 +588,29 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		lk.release()
 	}
 	s.cleanPackDir(young)
+	s.cleanStaging(young)
 	return dropped, nil
 }
 
+// cleanStaging removes what a crash left staged or discarded: a session
+// created or imported in tmp and never renamed into place, and one a
+// delete renamed into trash and did not finish removing. Neither is
+// read; each goes once older than young, so a create still staging is
+// left to finish.
+func (s *Store) cleanStaging(young time.Time) {
+	for _, dir := range []string{"tmp", "trash"} {
+		ents, _ := os.ReadDir(filepath.Join(s.root, dir))
+		for _, e := range ents {
+			p := filepath.Join(s.root, dir, e.Name())
+			if info, err := os.Stat(p); err == nil && info.ModTime().Before(young) {
+				os.RemoveAll(p)
+			}
+		}
+	}
+}
+
 // isKeptSince reports whether a loose object's path names an object the
-// journal named after the keep set was taken.
+// logs named after the keep set was taken.
 func isKeptSince(s *Store, path string, since keepSet) bool {
 	for _, sp := range []space{spaceEntries, spaceContents} {
 		dir := s.objs.spaceDir(sp)

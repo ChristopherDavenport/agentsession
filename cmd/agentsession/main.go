@@ -34,7 +34,7 @@ const usage = `usage: agentsession <command> [flags] <arguments>
 commands:
   show    <session> [-leaf id] [-v]  print the entries and the context at a leaf
   verify  <session>                  check every entry hash and recorded request hash
-  verify  <cas-root>                 check a whole cas store: journal, objects, sessions
+  verify  <cas-root>                 check a whole cas store: logs, objects, sessions
   export  <session> -out dir         write ATIF documents for every leaf
   list    <root>                     list the sessions of a jsonl or cas store
 

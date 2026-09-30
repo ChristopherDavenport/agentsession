@@ -131,7 +131,7 @@ func casResolver(root string) func(id string) (*agentsession.Session, error) {
 	}
 }
 
-// verifyStore checks a whole cas store as git fsck does: journal,
+// verifyStore checks a whole cas store as git fsck does: logs,
 // objects, packs and every session's entries.
 func verifyStore(root string, stdout io.Writer) error {
 	st, err := cas.Open(root, cas.WithReadOnly())
