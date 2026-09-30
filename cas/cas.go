@@ -447,18 +447,18 @@ func join(id string, env, body []byte) ([]byte, error) {
 
 // storeEntry writes an entry's two objects loose and returns their
 // combined size.
-func (s *Store) storeEntry(e agentsession.Entry, durable bool) (int64, error) {
+func (s *Store) storeEntry(e agentsession.Entry, durable bool) (int64, []byte, error) {
 	env, body, err := split(e)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if err := s.objs.write(spaceContents, e.Base().ContentHash(), body, durable); err != nil {
-		return 0, fmt.Errorf("cas: store content: %w", err)
+		return 0, nil, fmt.Errorf("cas: store content: %w", err)
 	}
 	if err := s.objs.write(spaceEntries, e.Base().ID, env, durable); err != nil {
-		return 0, fmt.Errorf("cas: store entry: %w", err)
+		return 0, nil, fmt.Errorf("cas: store entry: %w", err)
 	}
-	return int64(len(env) + len(body)), nil
+	return int64(len(env) + len(body)), body, nil
 }
 
 // unpackLimit is how many objects a transfer brings before they arrive
@@ -1593,7 +1593,7 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	if err != nil {
 		return agentsession.Result{}, err
 	}
-	size, err := s.storeEntry(e, durable)
+	size, body, err := s.storeEntry(e, durable)
 	if err != nil {
 		guard.release()
 		return agentsession.Result{}, err
@@ -1605,11 +1605,9 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	// One the store does not hold is reported, as the format allows,
 	// rather than refused; a projection of the session will fail until
 	// it arrives.
-	if _, body, err := split(e); err == nil {
-		for _, b := range blobsNamedBy(body) {
-			if err := s.objs.freshen(spaceContents, b); err != nil {
-				r.Unresolved = append(r.Unresolved, b)
-			}
+	for _, b := range blobsNamedBy(body) {
+		if err := s.objs.freshen(spaceContents, b); err != nil {
+			r.Unresolved = append(r.Unresolved, b)
 		}
 	}
 	head := ""
