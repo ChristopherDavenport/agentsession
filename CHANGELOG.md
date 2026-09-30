@@ -28,8 +28,20 @@ The format is unchanged.
   durable append, `Sync`, `Release` and `Close` now write one for each
   session they make durable. Listing a store of 1000 sessions takes
   55 ms, down from 1.5 s.
-- **`Read` is a fifth faster on small lines**, testing each line against
-  I-JSON once rather than twice.
+- **cas: opening a store starts from a checkpoint.** A writing store
+  saves the journal scan as `checkpoint` once the journal has grown
+  256 KiB past the last one, and on `Close`; the next open reads it and
+  the records after it. It is checked against the journal's bytes and
+  its own checksum, and ignored when either fails. Journal records are
+  also read without reflection. Opening a store of 1000 sessions takes
+  about 130 ms, down from 270 ms.
+- **cas: a flush fsyncs its objects concurrently**, so releasing a
+  session of 101 lazy appends waits on a few filesystem commits rather
+  than 200 fsyncs in turn: 119 ms, down from 1.45 s.
+- **`Read` is a quarter faster on small lines and allocates 60% less.**
+  Canonical form, the I-JSON check and member splitting walk the bytes
+  rather than decoding through `encoding/json`, handing what they do
+  not handle to the decoder path, and each line is tested once.
 - `BenchmarkRead` runs again (it reused one call ID), and cas has
   benchmarks for appends, opens and listings.
 
