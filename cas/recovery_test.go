@@ -160,13 +160,13 @@ func TestSyncNever(t *testing.T) {
 	if err != nil || r.Durable {
 		t.Fatalf("%+v, %v", r, err)
 	}
-	if len(st.objs.pendFiles) == 0 || !st.open["n"].lazy {
+	if len(st.open["n"].pend.files) == 0 || !st.open["n"].lazy {
 		t.Fatal("nothing pending after a lazy append")
 	}
 	if err := st.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(st.objs.pendFiles) != 0 || len(st.objs.pendDirs) != 0 || st.open["n"].lazy {
+	if h := st.open["n"]; len(h.pend.files) != 0 || len(h.pend.dirs) != 0 || h.lazy {
 		t.Error("Sync left something pending")
 	}
 }
@@ -581,5 +581,138 @@ func TestDamagedFirstByte(t *testing.T) {
 	defer r.Close()
 	if _, err := r.Open(ctx, "s"); !errors.As(err, new(LogDamage)) {
 		t.Errorf("open: %v", err)
+	}
+}
+
+// TestSweepRefusesDamagedLog: a sweep will not run while a session's log
+// has a record it cannot read, since what that record named cannot be
+// known, and removing it would make the damage a loss.
+func TestSweepRefusesDamagedLog(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	ids := fill(t, st, "a", 3)
+	st.Close()
+	lines, appends := journalLines(t, root, "a")
+	l := []byte(lines[appends[1]])
+	l[len(l)/2] ^= 1
+	lines[appends[1]] = string(l)
+	os.WriteFile(filepath.Join(root, "sessions", "a", logName), []byte(strings.Join(lines, "")), 0o600)
+	sw, _ := Open(root)
+	defer sw.Close()
+	if _, err := sw.Sweep(ctx, 0); !errors.As(err, new(LogDamage)) {
+		t.Errorf("a sweep over a damaged log: %v", err)
+	}
+	if _, err := sw.objs.read(spaceEntries, ids[1]); err != nil {
+		t.Errorf("the damaged record's entry after the sweep: %v", err)
+	}
+}
+
+// TestFailedCommitLeavesNothing: an append whose commit fails is taken
+// back out of the log, so a later open does not find, as a branch, an
+// append the writer was told failed.
+func TestFailedCommitLeavesNothing(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	first := mustAppend(t, st, "s", item("one"))
+	old := syncLog
+	syncLog = func(*os.File) error { return errors.New("injected fsync failure") }
+	_, err := st.Append(ctx, "s", item("failed"))
+	syncLog = old
+	if err == nil {
+		t.Fatal("the append reported success")
+	}
+	second := mustAppend(t, st, "s", item("two"))
+	st.Close()
+	r, _ := Open(root)
+	defer r.Close()
+	s, err := r.Open(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 2 || s.Leaf() != second || s.Entries()[0].Base().ID != first {
+		t.Errorf("after a failed commit: %d entries at %s, want 2 at %s", s.Len(), s.Leaf(), second)
+	}
+}
+
+// TestForkRefusesDoomedBase: a fork of a base another process holds as
+// working state, after an earlier uncommitted append of that session
+// whose objects are gone, is refused: recovery would cut the origin's
+// log there and take the base with it.
+func TestForkRefusesDoomedBase(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	a, _ := Open(root, WithSync(SyncNever))
+	defer a.Close()
+	a.Create(ctx, agentsession.Header{ID: "o"})
+	x := mustAppend(t, a, "o", item("x"))
+	gone := mustAppend(t, a, "o", item("gone"))
+	sibling := item("base")
+	sibling.Base().Parent = x // a sibling of gone, not its child
+	base := mustAppend(t, a, "o", sibling)
+	c, _ := a.contentOf(gone)
+	cp, _ := a.objs.loosePath(spaceContents, c)
+	os.Remove(cp)
+	ep, _ := a.objs.loosePath(spaceEntries, gone)
+	os.Remove(ep)
+	b, _ := Open(root)
+	defer b.Close()
+	if _, err := b.Create(ctx, agentsession.Header{ID: "f", Base: base, ParentSession: "o"}); !errors.Is(err, agentsession.ErrNoEntry) {
+		t.Errorf("a fork from a base its origin's recovery will cut: %v", err)
+	}
+}
+
+// TestListAfterLostWorkingState: a listing taken while a writer held
+// working state does not keep a summary a crash then makes wrong.
+func TestListAfterLostWorkingState(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	w, _ := Open(root, WithSync(SyncNever))
+	w.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, w, "s", item("kept"))
+	w.Sync(ctx)
+	lost := mustAppend(t, w, "s", item("lost"))
+	size := func(st *Store) int64 {
+		for sum, err := range st.List(ctx, agentsession.ListFilter{}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			return sum.Size
+		}
+		return -1
+	}
+	l, _ := Open(root)
+	before := size(l)
+	l.Close()
+	die(w)
+	p, _ := w.objs.loosePath(spaceEntries, lost)
+	os.Remove(p)
+	r, _ := Open(root, WithReadOnly())
+	defer r.Close()
+	if after := size(r); after >= before {
+		t.Errorf("after the crash took an append, the listing still says %d bytes (was %d)", after, before)
+	}
+}
+
+// TestCommitIsOneSession: a session's commit flushes the objects its own
+// appends wrote, and leaves another session's working state to it.
+func TestCommitIsOneSession(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir(), WithSync(SyncNever))
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "a"})
+	st.Create(ctx, agentsession.Header{ID: "b"})
+	mustAppend(t, st, "a", item("a's"))
+	mustAppend(t, st, "b", item("b's"))
+	if err := st.commitHandle("a", st.open["a"]); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.open["a"].pend.files) != 0 {
+		t.Error("a's commit left a's objects unflushed")
+	}
+	if len(st.open["b"].pend.files) == 0 {
+		t.Error("a's commit flushed b's working state")
 	}
 }

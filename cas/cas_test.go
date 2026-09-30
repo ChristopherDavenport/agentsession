@@ -337,7 +337,7 @@ func TestRefusals(t *testing.T) {
 	if _, err := scratch.Append(ghost); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.storeEntry(ghost, true); err != nil {
+	if _, _, err := st.storeEntry(ghost, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Create(ctx, agentsession.Header{ID: "f3", Base: ghost.ID}); !errors.Is(err, agentsession.ErrNoEntry) {
@@ -500,7 +500,7 @@ func TestCrashWindows(t *testing.T) {
 	if _, err := scratch.Append(orphan); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.storeEntry(orphan, true); err != nil {
+	if _, _, err := st.storeEntry(orphan, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	st2, _ := Open(st.Root())
@@ -795,7 +795,7 @@ func TestSweepGrace(t *testing.T) {
 	ghost := agentsession.NewItemEntry(openresponses.UserText("ahead of its record"))
 	scratch := agentsession.New(agentsession.Header{})
 	scratch.Append(ghost)
-	if _, _, err := st.storeEntry(ghost, true); err != nil {
+	if _, _, err := st.storeEntry(ghost, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := st.Sweep(ctx, time.Hour); n != 0 {

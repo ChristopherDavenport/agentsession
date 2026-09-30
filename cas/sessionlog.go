@@ -151,8 +151,8 @@ func openLog(dir string) (*os.File, error) {
 
 // appendRecords accepts records into a session's log, through the
 // handle's open log when it has one. Durable, it is a commit: every
-// object written lazily before, this session's appends' included, is
-// fsynced first, then the log.
+// object the session's appends wrote or found lazily is fsynced first,
+// then the log.
 func (s *Store) appendRecords(h *handle, dir string, durable bool, recs ...logRecord) error {
 	if s.readOnly {
 		return errReadOnly()
@@ -162,7 +162,13 @@ func (s *Store) appendRecords(h *handle, dir string, durable bool, recs ...logRe
 		return err
 	}
 	if durable {
-		if err := s.objs.flush(); err != nil {
+		// A session's commit flushes what its own appends wrote or found
+		// lazily; recovery, which has no handle, flushes the store's own.
+		var pend *pendSet
+		if h != nil {
+			pend = h.pend
+		}
+		if err := s.objs.flushSet(pend); err != nil {
 			return fmt.Errorf("cas: flush: %w", err)
 		}
 	}
@@ -176,16 +182,37 @@ func (s *Store) appendRecords(h *handle, dir string, durable bool, recs ...logRe
 		}
 		defer f.Close()
 	}
-	if _, err := f.Write(data); err != nil {
+	info, err := f.Stat()
+	if err != nil {
 		return fmt.Errorf("cas: log: %w", err)
 	}
-	if durable {
-		if err := f.Sync(); err != nil {
-			return fmt.Errorf("cas: log: %w", err)
+	before := info.Size()
+	_, err = f.Write(data)
+	if err == nil && durable {
+		err = syncLog(f)
+	}
+	if err != nil {
+		// A record that failed is not left for a later open to find: the
+		// log is cut back to where it was. If even that fails, what the
+		// log holds is unknown, and the caller drops the session so its
+		// next open reads the disk.
+		if terr := f.Truncate(before); terr != nil {
+			return fmt.Errorf("%w: %v; and cutting it back: %v", errLogUncertain, err, terr)
 		}
+		if serr := f.Sync(); serr != nil {
+			return fmt.Errorf("%w: %v; and syncing it cut back: %v", errLogUncertain, err, serr)
+		}
+		return fmt.Errorf("cas: log: %w", err)
 	}
 	return nil
 }
+
+// errLogUncertain is an append that failed and could not be taken back
+// out of the log.
+var errLogUncertain = errors.New("cas: a failed append could not be taken out of the log")
+
+// syncLog fsyncs a session's log; a variable so a test can fail it.
+var syncLog = func(f *os.File) error { return f.Sync() }
 
 // mendTail cuts a torn last line from a session's log, and ends one a
 // crash left whole but without its newline, which only the session's
@@ -262,4 +289,14 @@ func heldEntries(recs []logRecord) []string {
 		out = append(out, r.Entry)
 	}
 	return out
+}
+
+// firstLoss returns the first damage in a log that cost a record.
+func firstLoss(l sessionLog) error {
+	for _, d := range l.damage {
+		if !errors.Is(d.Err, errNewline) {
+			return d
+		}
+	}
+	return nil
 }

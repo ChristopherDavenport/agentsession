@@ -30,9 +30,16 @@ session is a ref, and its log is its own write-ahead log.
 
   **Migration:** the first writing open of a store written by v0.0.15
   or earlier rewrites each session's log from the journal and retires
-  the journal, under the gc lock; a crash part way is finished by the
-  next open. Stop every writer of the earlier version first. A
-  read-only open of such a store returns `ErrLegacyStore` until then.
+  the journal, under the gc lock and holding every session's lock, so it
+  returns `ErrMigrationBusy` rather than race a writer of the earlier
+  version that still holds a session: stop those first. A crash part
+  way is finished by the next writing open. A session that fails to
+  migrate is reported when opened, and the journal kept for another
+  try; the rest of the store opens. Migration never removes a session
+  outright: one the journal cannot vouch was deleted is migrated from
+  its files, and one that was is renamed into the trash. A read-only
+  open reads the migrated sessions and reports `ErrLegacyStore` for the
+  rest.
 
   A lazy append takes 0.15 ms, down from 1.2–1.9 ms, and opening a
   store takes microseconds at any size.

@@ -123,6 +123,9 @@ type pack struct {
 
 	mu sync.RWMutex // held shared by a read, exclusive by close
 	f  *os.File
+	// data is the bytes of the pack before its checksum: an index record
+	// naming anything outside them is damage, found before it is read.
+	data int64
 
 	// A lookup or walk of the index holds a reference, and the mapping
 	// goes when a closed pack's last reference does, so no lookup reads
@@ -195,6 +198,9 @@ func (p *pack) read(off, length int64) ([]byte, error) {
 	defer p.mu.RUnlock()
 	if p.f == nil {
 		return nil, errPackClosed
+	}
+	if off < int64(len(packMagic)+8) || length < 0 || length > p.data-off {
+		return nil, fmt.Errorf("%w: %s.pack: an index record names bytes %d+%d outside it", ErrCorrupt, p.name, off, length)
 	}
 	buf := make([]byte, length)
 	if _, err := p.f.ReadAt(buf, off); err != nil {
@@ -286,7 +292,12 @@ func openPack(dir, name string) (*pack, error) {
 	if err != nil {
 		return fail(err)
 	}
-	return &pack{name: name, path: filepath.Join(dir, name+".pack"), idx: records, f: f, unmap: unmap}, nil
+	pinfo, err := f.Stat()
+	if err != nil || pinfo.Size() < int64(len(packMagic)+8+sha256.Size) {
+		f.Close()
+		return fail(fmt.Errorf("%w: %s.pack is cut short", ErrCorrupt, name))
+	}
+	return &pack{name: name, path: filepath.Join(dir, name+".pack"), idx: records, f: f, data: pinfo.Size() - sha256.Size, unmap: unmap}, nil
 }
 
 // verifyIndex checks a pack index's own checksum.

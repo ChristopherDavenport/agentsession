@@ -268,6 +268,23 @@ func (o *objects) size(sp space, hash string) (int64, bool) {
 // names the object does first, so the directories a commit touched are
 // synced once each however many objects it wrote.
 func (o *objects) write(sp space, hash string, data []byte, durable bool) error {
+	return o.writeTo(sp, hash, data, durable, nil)
+}
+
+// pendSet is what a flush owes: files written or found lazily, and the
+// directories they are in. A session holds its own, so its commit
+// flushes the objects its appends named and no other session's.
+type pendSet struct {
+	files, dirs map[string]bool
+}
+
+func newPendSet() *pendSet {
+	return &pendSet{files: map[string]bool{}, dirs: map[string]bool{}}
+}
+
+// writeTo is write, remembering what it leaves unsynced in pend, or in
+// the store's own set when pend is nil.
+func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend *pendSet) error {
 	path, err := o.loosePath(sp, hash)
 	if err != nil {
 		return err
@@ -276,7 +293,7 @@ func (o *objects) write(sp space, hash string, data []byte, durable bool) error 
 	if info, err := os.Stat(path); err == nil && info.Size() == int64(len(data)) {
 		now := time.Now()
 		if err := os.Chtimes(path, now, now); err == nil {
-			return o.remember(path, dir)
+			return o.remember(pend, path, dir)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -299,28 +316,31 @@ write:
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
-		if err := o.syncOrDefer(filepath.Dir(dir), true, false); err != nil {
-			return err
-		}
+		o.remember(pend, "", filepath.Dir(dir))
 	}
 	if err := writeFile(path, data, durable); err != nil {
 		return err
 	}
 	if !durable {
-		return o.remember(path, dir)
+		return o.remember(pend, path, dir)
 	}
-	return o.syncOrDefer(dir, true, false)
+	return o.remember(pend, "", dir)
 }
 
 // freshen is write for an object known only by its name: it reads the
 // object, from a pack a sweep removed if this store still holds it
 // open, and writes or freshens it.
 func (o *objects) freshen(sp space, hash string) error {
+	return o.freshenTo(sp, hash, nil)
+}
+
+// freshenTo is freshen, remembering what it leaves unsynced in pend.
+func (o *objects) freshenTo(sp space, hash string, pend *pendSet) error {
 	data, err := o.read(sp, hash)
 	if err != nil {
 		return err
 	}
-	return o.write(sp, hash, data, true)
+	return o.writeTo(sp, hash, data, true, pend)
 }
 
 // readPacked reads an object from the packs alone, checked against its
@@ -352,27 +372,19 @@ func (o *objects) hasQuick(sp space, hash string) bool {
 	return err == nil
 }
 
-// remember adds a file and its directory to what the next flush syncs.
-func (o *objects) remember(path, dir string) error {
+// remember adds a file, when path is set, and its directory to what the
+// next flush of pend syncs, or of the store's own set when pend is nil.
+func (o *objects) remember(pend *pendSet, path, dir string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.pendFiles[path] = true
-	o.pendDirs[dir] = true
-	return nil
-}
-
-// syncOrDefer fsyncs a directory now, or remembers it for flush.
-func (o *objects) syncOrDefer(path string, isDir, now bool) error {
-	if now {
-		return syncDir(path)
+	files, dirs := o.pendFiles, o.pendDirs
+	if pend != nil {
+		files, dirs = pend.files, pend.dirs
 	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if isDir {
-		o.pendDirs[path] = true
-	} else {
-		o.pendFiles[path] = true
+	if path != "" {
+		files[path] = true
 	}
+	dirs[dir] = true
 	return nil
 }
 
@@ -387,9 +399,21 @@ func (o *objects) syncOrDefer(path string, isDir, now bool) error {
 // fsync does; each file is still fsynced, and every file before any
 // directory.
 func (o *objects) flush() error {
+	return o.flushSet(nil)
+}
+
+// flushSet flushes what pend owes, or the store's own set when pend is
+// nil, as flush does.
+func (o *objects) flushSet(pend *pendSet) error {
 	o.mu.Lock()
-	files, dirs := o.pendFiles, o.pendDirs
-	o.pendFiles, o.pendDirs = map[string]bool{}, map[string]bool{}
+	var files, dirs map[string]bool
+	if pend == nil {
+		files, dirs = o.pendFiles, o.pendDirs
+		o.pendFiles, o.pendDirs = map[string]bool{}, map[string]bool{}
+	} else {
+		files, dirs = pend.files, pend.dirs
+		pend.files, pend.dirs = map[string]bool{}, map[string]bool{}
+	}
 	o.mu.Unlock()
 	if err := syncAll(files, func(f string) error {
 		fh, err := os.Open(f)

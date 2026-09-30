@@ -80,7 +80,7 @@ func (s *Store) summarizeHeld(id string, h *handle) {
 	}
 	size, modified := logStamp(h.dir)
 	v, err := s.reconcile(id, h.dir)
-	if err != nil || !v.exists {
+	if err != nil || !v.exists || len(v.adopt) > 0 {
 		return
 	}
 	sum, err := s.summarize(id, h.dir, v, false)

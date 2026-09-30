@@ -359,7 +359,11 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	}
 	if len(recs) > 0 {
 		// Committed before it is acknowledged, as RFC 0002 requires of
-		// what a receiver admits and a mark it sets.
+		// what a receiver admits and a mark it sets: the objects
+		// packEntries left loose first, then the log.
+		if err := s.objs.flush(); err != nil {
+			return Exchange{}, err
+		}
 		if err := s.appendRecords(h, h.dir, true, s.withSync(h, id, recs...)...); err != nil {
 			return Exchange{}, err
 		}

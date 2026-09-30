@@ -137,6 +137,12 @@ func (s *Store) keepLogs(k keepSet, marks logMarks) error {
 		if err == nil && l.legacy {
 			err = ErrLegacyStore
 		}
+		if err == nil && l.lost {
+			// What a damaged record named cannot be known, and a sweep
+			// that guessed would remove it: RFC 0002 forbids deleting an
+			// entry any log references.
+			err = firstLoss(l)
+		}
 		if err != nil {
 			return fmt.Errorf("cas: session %s: %w", id, err)
 		}

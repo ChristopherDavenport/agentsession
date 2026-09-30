@@ -75,8 +75,10 @@
 // object written ahead of its record is safe.
 //
 // A store from before logs were per session kept a store-wide journal.
-// Its first writing open migrates it, and a read-only open refuses it
-// with [ErrLegacyStore] until then.
+// Its first writing open migrates it, holding every session's lock so a
+// writer of the earlier version still running is found rather than
+// raced; a read-only open reads the sessions already migrated and
+// reports [ErrLegacyStore] for the rest.
 package cas
 
 import (
@@ -226,6 +228,9 @@ type handle struct {
 	own map[string]bool
 	// logf is the session's log, open for appending, in a writing store.
 	logf *os.File
+	// pend is what the session's next commit flushes: the objects its
+	// appends wrote or found lazily, and no other session's.
+	pend *pendSet
 	// lazy is set while the session holds a lazy append of this store's
 	// that no sync record covers. The store holds the session's lock,
 	// so every lazy record in it is this store's or was adopted at open,
@@ -258,12 +263,10 @@ func Open(root string, opts ...Option) (*Store, error) {
 	if err := s.objs.reloadPacks(true); err != nil {
 		return nil, fmt.Errorf("cas: packs: %w", err)
 	}
-	// A store from before logs were per session is migrated by its first
-	// writing open; a read-only one cannot be.
-	if _, err := os.Stat(filepath.Join(root, journalFile)); err == nil {
-		if s.readOnly {
-			return nil, ErrLegacyStore
-		}
+	// A store from before per-session logs is migrated by its first
+	// writing open; a read-only open reads the sessions already migrated,
+	// and reports ErrLegacyStore for the rest.
+	if _, err := os.Stat(filepath.Join(root, journalFile)); err == nil && !s.readOnly {
 		if err := s.migrate(); err != nil {
 			return nil, err
 		}
@@ -470,15 +473,15 @@ func join(id string, env, body []byte) ([]byte, error) {
 
 // storeEntry writes an entry's two objects loose and returns their
 // combined size.
-func (s *Store) storeEntry(e agentsession.Entry, durable bool) (int64, []byte, error) {
+func (s *Store) storeEntry(e agentsession.Entry, durable bool, pend *pendSet) (int64, []byte, error) {
 	env, body, err := split(e)
 	if err != nil {
 		return 0, nil, err
 	}
-	if err := s.objs.write(spaceContents, e.Base().ContentHash(), body, durable); err != nil {
+	if err := s.objs.writeTo(spaceContents, e.Base().ContentHash(), body, durable, pend); err != nil {
 		return 0, nil, fmt.Errorf("cas: store content: %w", err)
 	}
-	if err := s.objs.write(spaceEntries, e.Base().ID, env, durable); err != nil {
+	if err := s.objs.writeTo(spaceEntries, e.Base().ID, env, durable, pend); err != nil {
 		return 0, nil, fmt.Errorf("cas: store entry: %w", err)
 	}
 	return int64(len(env) + len(body)), body, nil
@@ -888,11 +891,7 @@ func (s *Store) reconcile(id, dir string) (view, error) {
 	if l.lost {
 		// The log is the only record of the session: a damaged record
 		// is reported, never passed over as if it were not there.
-		for _, d := range l.damage {
-			if !errors.Is(d.Err, errNewline) {
-				return v, fmt.Errorf("cas: session %s: %w", id, d)
-			}
-		}
+		return v, fmt.Errorf("cas: session %s: %w", id, firstLoss(l))
 	}
 	v.whole, v.size, v.unterminated, v.damage = l.whole, l.size, l.unterminated, l.damage
 	fileHead, err := readHead(dir)
@@ -1314,7 +1313,7 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		if err := s.objs.flush(); err != nil {
 			return fail(err)
 		}
-		if err := s.commitOrigin(owner); err != nil {
+		if err := s.commitOrigin(owner, h.Base); err != nil {
 			return fail(err)
 		}
 	}
@@ -1331,7 +1330,7 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 	if err != nil {
 		return fail(fmt.Errorf("cas: log: %w", err))
 	}
-	s.open[h.ID] = &handle{session: sess, dir: dir, lock: lk, logf: logf, mark: mark, head: h.Base, count: sess.Len(), diskFormat: h.Format, own: map[string]bool{}}
+	s.open[h.ID] = &handle{session: sess, dir: dir, lock: lk, logf: logf, pend: newPendSet(), mark: mark, head: h.Base, count: sess.Len(), diskFormat: h.Format, own: map[string]bool{}}
 	return sess, nil
 }
 
@@ -1377,12 +1376,16 @@ func (s *Store) placeSession(dir string, h agentsession.Header, recs []logRecord
 	return syncDir(filepath.Join(s.root, "sessions"))
 }
 
-// commitOrigin commits the log of the session holding a fork's base, so
-// the base cannot be taken from its origin by a crash once the fork
-// hangs from it. A session this store holds commits its working state;
-// one another process holds has its log fsynced, which makes the base's
-// record durable, its objects having been freshened already.
-func (s *Store) commitOrigin(owner string) error {
+// commitOrigin commits the log of the session holding a fork's base
+// through the base, so a crash cannot take the base from under a fork
+// that hangs from it. A session this store holds commits its working
+// state. For one another process holds, the objects of every lazy
+// append up to the base's record are made durable here, since recovery
+// cuts the log at the first lazy append whose objects are gone, whether
+// or not it is the base's ancestor; then its log is fsynced. A lazy
+// append whose objects are gone already means the base will not
+// survive recovery, and the fork is refused.
+func (s *Store) commitOrigin(owner, base string) error {
 	if owner == "" {
 		return nil
 	}
@@ -1393,7 +1396,60 @@ func (s *Store) commitOrigin(owner string) error {
 	if err != nil {
 		return nil
 	}
+	l, err := readSessionLog(dir, 0)
+	if err == nil && l.legacy {
+		err = ErrLegacyStore
+	}
+	if err == nil && l.lost {
+		err = firstLoss(l)
+	}
+	if err != nil {
+		return fmt.Errorf("cas: session %s: %w", owner, err)
+	}
+	at, synced := -1, -1
+	for i, r := range l.recs {
+		switch {
+		case r.Op == opSync:
+			synced = i
+		case r.Op == opAppend && r.Entry == base && at < 0:
+			at = i
+		}
+	}
+	lostAt := map[string]int{}
+	for i, r := range l.recs {
+		if r.Op == opLost {
+			lostAt[r.Entry] = i
+		}
+	}
+	for i := synced + 1; i <= at; i++ {
+		r := l.recs[i]
+		if r.Op != opAppend || !r.Lazy || r.Entry == "" {
+			continue
+		}
+		if k, ok := lostAt[r.Entry]; ok && k > i {
+			continue
+		}
+		if err := s.freshenEntry(r.Entry); err != nil {
+			return fmt.Errorf("%w: base %s: its origin %s holds an uncommitted append before it that is gone: %v", agentsession.ErrNoEntry, base, owner, err)
+		}
+	}
+	if err := s.objs.flush(); err != nil {
+		return err
+	}
 	return fsyncPath(filepath.Join(dir, logName))
+}
+
+// freshenEntry writes an entry's two objects durably, rewriting any a
+// crash or a sweep took.
+func (s *Store) freshenEntry(id string) error {
+	if err := s.objs.freshen(spaceEntries, id); err != nil {
+		return err
+	}
+	c, err := s.contentOf(id)
+	if err != nil {
+		return err
+	}
+	return s.objs.freshen(spaceContents, c)
 }
 
 // withSync appends a sync record to records a durable commit writes when
@@ -1556,7 +1612,7 @@ func (s *Store) openHeld(id, dir string, lk *dirLock) (*handle, error) {
 			return fail(fmt.Errorf("cas: log: %w", err))
 		}
 	}
-	h := &handle{session: sess, dir: dir, lock: lk, logf: logf, mark: v.mark, head: v.head, count: sess.Len(), diskFormat: diskFormat, own: committed}
+	h := &handle{session: sess, dir: dir, lock: lk, logf: logf, pend: newPendSet(), mark: v.mark, head: v.head, count: sess.Len(), diskFormat: diskFormat, own: committed}
 	s.open[id] = h
 	return h, nil
 }
@@ -1642,7 +1698,7 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	if err != nil {
 		return agentsession.Result{}, err
 	}
-	size, body, err := s.storeEntry(e, durable)
+	size, body, err := s.storeEntry(e, durable, h.pend)
 	if err != nil {
 		guard.release()
 		return agentsession.Result{}, err
@@ -1655,7 +1711,7 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	// rather than refused; a projection of the session will fail until
 	// it arrives.
 	for _, b := range blobsNamedBy(body) {
-		if err := s.objs.freshen(spaceContents, b); err != nil {
+		if err := s.objs.freshenTo(spaceContents, b, h.pend); err != nil {
 			r.Unresolved = append(r.Unresolved, b)
 		}
 	}
@@ -1674,6 +1730,9 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	err = s.appendRecords(h, h.dir, durable, recs...)
 	guard.release()
 	if err != nil {
+		if errors.Is(err, errLogUncertain) {
+			s.dropHandle(sessionID, h)
+		}
 		return agentsession.Result{}, err
 	}
 	h.lazy = !durable
@@ -1952,7 +2011,10 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 				errs = append(errs, err)
 				continue
 			}
-			if !s.readOnly {
+			// A summary is kept only of what is committed: working state a
+			// crash may take would otherwise outlive the crash in it,
+			// the log's stamp unchanged until the session is next opened.
+			if !s.readOnly && len(v.adopt) == 0 {
 				keepSummary(dir, size, modified, sum, meta)
 			}
 			if f.Keep(sum) {
@@ -2155,6 +2217,9 @@ func (s *Store) Close() error {
 		}
 	}
 	if !s.readOnly {
+		if err := s.objs.flush(); err != nil && first == nil {
+			first = err
+		}
 		s.maybePack()
 	}
 	s.objs.close()

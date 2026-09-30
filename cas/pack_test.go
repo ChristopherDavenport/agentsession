@@ -3,6 +3,7 @@ package cas
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -537,5 +538,39 @@ func TestPackCloseWhileReading(t *testing.T) {
 		if _, _, ok := p.find(spaceContents, d); ok {
 			t.Fatal("a closed pack answered a lookup")
 		}
+	}
+}
+
+// TestDamagedIndexLength: an index record whose length or offset lies
+// outside its pack is reported as corrupt, not allocated, by a read and
+// by Verify.
+func TestDamagedIndexLength(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	ids := fill(t, st, "s", 2)
+	st.Close()
+	st, _ = Open(root)
+	if _, err := st.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	idxs, _ := filepath.Glob(filepath.Join(root, "objects", "pack", "*.idx"))
+	for _, p := range idxs {
+		data, _ := os.ReadFile(p)
+		for i := len(idxMagic) + 8; i+idxRecord <= len(data)-2*sha256.Size; i += idxRecord {
+			for k := 0; k < 8; k++ {
+				data[i+1+sha256.Size+8+k] = 0x7f // a length of about 2^63
+			}
+		}
+		os.WriteFile(p, data, 0o600)
+	}
+	r, _ := Open(root, WithReadOnly())
+	defer r.Close()
+	if _, err := r.objs.read(spaceEntries, ids[0]); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("a read through a damaged length: %v", err)
+	}
+	if rep, err := r.Verify(ctx); err != nil || rep.OK() {
+		t.Errorf("verify: %v %v", err, rep.Problems)
 	}
 }

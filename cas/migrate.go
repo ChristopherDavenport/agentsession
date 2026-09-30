@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ChristopherDavenport/agentsession"
 )
 
 // A store written before logs were per session committed every append
@@ -26,7 +28,11 @@ import (
 // ErrLegacyStore is returned for a store, or a session, in the layout of
 // a store from before logs were per session, where the operation cannot
 // migrate it: a read-only store, which writes nothing.
-var ErrLegacyStore = errors.New("cas: the store predates per-session logs; open it for writing once to migrate it")
+var ErrLegacyStore = errors.New("cas: the session predates per-session logs and has not been migrated; open the store for writing to migrate it")
+
+// ErrMigrationBusy is returned by the writing open that would migrate a
+// store while a process of an earlier version still holds a session.
+var ErrMigrationBusy = errors.New("cas: a process holds a session of a store that needs migrating; stop every writer of the earlier version first")
 
 // Legacy journal ops, which a migration reads and nothing writes.
 const (
@@ -51,8 +57,8 @@ func readLegacyLog(dir string) ([]string, map[string]int64, error) {
 	var out []string
 	for _, l := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
 		hash, size, _ := strings.Cut(l, " ")
-		if hash == "" {
-			continue
+		if !agentsession.ValidHash(hash) {
+			continue // a line a crash cut short; the journal has it
 		}
 		out = append(out, hash)
 		if n, err := strconv.ParseInt(size, 10, 64); err == nil {
@@ -430,13 +436,40 @@ func (s *Store) migrate() error {
 			ids[d.Name()] = true
 		}
 	}
+	// A writer of the earlier version holds its session's lock, the
+	// same lock this version takes; migration holds every session's
+	// until it is done, and refuses while any is held.
+	var locks []*dirLock
+	defer func() {
+		for _, lk := range locks {
+			lk.release()
+		}
+	}()
+	for id := range ids {
+		lk, err := s.lockSession(id)
+		if errors.Is(err, ErrSessionLocked) {
+			return fmt.Errorf("%w: session %s", ErrMigrationBusy, id)
+		}
+		if err != nil {
+			return fmt.Errorf("cas: migrate: %w", err)
+		}
+		locks = append(locks, lk)
+	}
+	// A session that fails to migrate is left as it was and reported
+	// when it is opened; the others go on, and the journal is kept for
+	// the next writing open to try that session again.
+	failed := false
 	for id := range ids {
 		if err := s.migrateSession(id, scan); err != nil {
-			return fmt.Errorf("cas: migrate session %s: %w", id, err)
+			s.faulty[id] = fmt.Errorf("cas: migrate session %s: %w", id, err)
+			failed = true
 		}
 	}
 	if err := syncDir(filepath.Join(s.root, "sessions")); err != nil {
 		return err
+	}
+	if failed {
+		return nil
 	}
 	journal := filepath.Join(s.root, journalFile)
 	if len(scan.damage) > 0 {
@@ -460,6 +493,27 @@ func (s *Store) migrate() error {
 	return syncDir(s.root)
 }
 
+// migrated reports whether a session's log is already per session: it
+// reads with no record lost and opens with a create record. A log with
+// no directory is none.
+func migrated(dir string) bool {
+	l, err := readSessionLog(dir, 0)
+	return err == nil && !l.legacy && !l.lost && len(l.recs) > 0 && l.recs[0].Op == opCreate
+}
+
+// discard renames a session's directory into the trash, where a sweep
+// removes it.
+func (s *Store) discard(id, dir string) error {
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	trash := filepath.Join(s.root, "trash")
+	if err := os.MkdirAll(trash, 0o755); err != nil {
+		return err
+	}
+	return os.Rename(dir, filepath.Join(trash, fmt.Sprintf("%s-%d", id, time.Now().UnixNano())))
+}
+
 // damagedPrefix names a legacy journal with damaged lines, kept after a
 // migration for Verify to report and a person to read.
 const damagedPrefix = "journal.damaged-"
@@ -472,16 +526,29 @@ func (s *Store) migrateSession(id string, scan *journalScan) error {
 	if err != nil {
 		return err
 	}
-	if l, err := readSessionLog(dir, 0); err == nil && !l.legacy && l.size > 0 {
+	if migrated(dir) {
 		return nil
 	}
 	v, err := s.legacyReconcile(id, dir, scan)
 	if err != nil {
 		return err
 	}
+	if v.deleted {
+		// A delete the journal cannot vouch for, because the journal
+		// holds damage or records follow the delete, leaves the session
+		// to be migrated from its own files rather than removed.
+		if st := scan.states[id]; len(scan.damage) > 0 || (st != nil && len(st.recs) > 0) {
+			if _, err := os.Stat(filepath.Join(dir, "header")); err == nil {
+				if v, err = s.legacyReconcile(id, dir, &journalScan{states: map[string]*sessionState{}}); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	if v.deleted || !v.exists {
-		// Deleted, or never finished creating: nothing of it is read.
-		return os.RemoveAll(dir)
+		// Deleted, or never finished creating: nothing of it is read,
+		// and it goes to the trash rather than straight away.
+		return s.discard(id, dir)
 	}
 	hdr, err := readHeader(dir)
 	if err != nil {

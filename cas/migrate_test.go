@@ -32,7 +32,7 @@ func legacyStore(t *testing.T) (string, []string) {
 		if _, err := scratch.Append(e); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := st.storeEntry(e, true); err != nil {
+		if _, _, err := st.storeEntry(e, true, nil); err != nil {
 			t.Fatal(err)
 		}
 		es = append(es, e)
@@ -40,7 +40,7 @@ func legacyStore(t *testing.T) (string, []string) {
 	g := item("gone")
 	gs := agentsession.New(agentsession.Header{ID: "gone"})
 	gs.Append(g)
-	st.storeEntry(g, true)
+	st.storeEntry(g, true, nil)
 	st.Close()
 	// The crash took the last lazy append's envelope.
 	p, _ := st.objs.loosePath(spaceEntries, es[3].Base().ID)
@@ -94,9 +94,14 @@ func legacyStore(t *testing.T) (string, []string) {
 func TestMigrate(t *testing.T) {
 	ctx := context.Background()
 	root, want := legacyStore(t)
-	if _, err := Open(root, WithReadOnly()); !errors.Is(err, ErrLegacyStore) {
+	ro, err := Open(root, WithReadOnly())
+	if err != nil {
 		t.Fatalf("a read-only open of a legacy store: %v", err)
 	}
+	if _, err := ro.Open(ctx, "a"); !errors.Is(err, ErrLegacyStore) {
+		t.Errorf("a read-only open of a session not yet migrated: %v", err)
+	}
+	ro.Close()
 	st, err := Open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -156,5 +161,120 @@ func checkMigrated(t *testing.T, root string, want []string) {
 	}
 	if got := ownEntries(l.recs); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("migrated entries %v, want %v", got, want)
+	}
+}
+
+// TestMigrateRefusesRunningWriter: a writer of the earlier version still
+// holding a session keeps the store from being migrated under it.
+func TestMigrateRefusesRunningWriter(t *testing.T) {
+	root, _ := legacyStore(t)
+	old, err := lockFile(filepath.Join(root, "locks", "a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(root); !errors.Is(err, ErrMigrationBusy) {
+		t.Errorf("migrating under a running writer: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, journalFile)); err != nil {
+		t.Error("the journal went while a writer held a session")
+	}
+	old.release()
+	st, err := Open(root)
+	if err != nil {
+		t.Fatalf("after the writer stopped: %v", err)
+	}
+	st.Close()
+}
+
+// TestMigrateTornLegacyLine: a legacy log whose first line a crash cut
+// short is migrated from the journal, not taken for one already
+// migrated.
+func TestMigrateTornLegacyLine(t *testing.T) {
+	ctx := context.Background()
+	root, want := legacyStore(t)
+	p := filepath.Join(root, "sessions", "a", logName)
+	data, _ := os.ReadFile(p)
+	os.WriteFile(p, append([]byte("sha25\n"), data...), 0o600)
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	s, err := st.Open(ctx, "a")
+	if err != nil || s.Len() != len(want) {
+		t.Fatalf("a torn legacy log: %v", err)
+	}
+}
+
+// TestMigrateIsolatesFailure: a session that cannot be migrated is
+// reported when it is opened, and the rest of the store migrates and
+// opens, read-only too.
+func TestMigrateIsolatesFailure(t *testing.T) {
+	ctx := context.Background()
+	root, want := legacyStore(t)
+	// A second session whose one entry's envelope is corrupt, not gone,
+	// and named only by its old log.
+	scratch := agentsession.New(agentsession.Header{ID: "bad"})
+	e := item("bad")
+	scratch.Append(e)
+	w := &Store{root: root, objs: newObjects(root)}
+	w.storeEntry(e, true, nil)
+	ep, _ := w.objs.loosePath(spaceEntries, e.Base().ID)
+	os.WriteFile(ep, []byte("garbage"), 0o600)
+	j, _ := os.OpenFile(filepath.Join(root, journalFile), os.O_WRONLY|os.O_APPEND, 0)
+	line, _ := logRecord{Op: "create", Session: "bad"}.encode()
+	j.Write(line)
+	j.Close()
+	// Its old log names the entry, which the journal does not: the old
+	// recovery reads such an entry to tell loss from damage, and cannot.
+	dir := filepath.Join(root, "sessions", "bad")
+	os.MkdirAll(dir, 0o755)
+	writeHeader(dir, scratch.Header())
+	os.WriteFile(filepath.Join(dir, logName), []byte(e.Base().ID+"\n"), 0o600)
+	st, err := Open(root)
+	if err != nil {
+		t.Fatalf("one bad session closed the store: %v", err)
+	}
+	defer st.Close()
+	if s, err := st.Open(ctx, "a"); err != nil || s.Len() != len(want) {
+		t.Errorf("the good session: %v", err)
+	}
+	if _, err := st.Open(ctx, "bad"); err == nil {
+		t.Error("the bad session opened")
+	}
+	ro, err := Open(root, WithReadOnly())
+	if err != nil {
+		t.Fatalf("read-only after a partial migration: %v", err)
+	}
+	defer ro.Close()
+	if _, err := ro.Open(ctx, "a"); err != nil {
+		t.Errorf("read-only, the good session: %v", err)
+	}
+}
+
+// TestMigrateDamagedJournalKeepsSession: a journal whose damage makes a
+// recreated session read as deleted does not remove it.
+func TestMigrateDamagedJournalKeepsSession(t *testing.T) {
+	ctx := context.Background()
+	root, want := legacyStore(t)
+	j := filepath.Join(root, journalFile)
+	data, _ := os.ReadFile(j)
+	var extra []byte
+	for _, r := range []logRecord{{Op: "delete", Session: "a"}, {Op: "create", Session: "a"}} {
+		line, _ := r.encode()
+		extra = append(extra, line...)
+	}
+	// The recreate's line is damaged, so the journal reads delete, then
+	// records for a session it says is gone.
+	extra[len(extra)-10] ^= 1
+	head, _ := logRecord{Op: "head", Session: "a", Head: want[2]}.encode()
+	os.WriteFile(j, append(append(data, extra...), head...), 0o600)
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Open(ctx, "a"); err != nil {
+		t.Errorf("a session a damaged journal says was deleted: %v", err)
 	}
 }
