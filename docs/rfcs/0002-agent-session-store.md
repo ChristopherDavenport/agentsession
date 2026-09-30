@@ -9,17 +9,17 @@ Depends on: RFC 0001, Agent Session Format, at draft 0.5 or later.
 A store holds sessions as content-addressed entries and mutable refs. An
 **entry** is one of RFC 0001's, stored once, its body under the hash of
 the body and its envelope under the hash of the envelope, immutable, and
-naming its parent by hash, so that a leaf hash commits to the whole path
+naming its parent by hash, so that a leaf hash covers the whole path
 above it. A **session** is a ref: a header, a **base** entry it
 continues from or none, a **head** entry its next append will name as
 parent, and a **log** of the entries it appended, in the order the store
 accepted them.
 
-A session is to its entries what a git ref is to commits, and its log
-is its own write-ahead log: a store keeps no state wider than a session,
-and a writer chooses how often to **commit**, making the session's
-appends durable, and how much to leave as **working state**, which a
-crash may take.
+A session is to its entries what a git ref is to the history it names.
+Its log is its own write-ahead log, and no log, lock or recovery spans
+sessions. A writer chooses how often to **commit**, making the
+session's appends durable, and how much to leave as **working state**,
+which a crash may take.
 
 The JSONL file of RFC 0001 is a projection of a session: its header,
 the path to its base, then its own entries in log order. A reader
@@ -71,8 +71,9 @@ is the order, and the head is a ref, never inferred.
   Sessions sharing a prefix share its entries.
 - **Verifiable.** A projection is checked hash by hash; a fork is
   checked against its origin by one hash.
-- **Appends need no session lock.** The model lets concurrent writers
-  to one session both succeed, with the head the only write one of them
+- **No writer holds a lock.** Concurrent writers to one session both
+  succeed; the store serialises each append only for as long as it
+  takes to write its record, and the head is the only write a writer
   can lose.
 - **Nothing is garbage.** Every entry a session appended stays in its
   log. Abandoned branches are the preference data a corpus is judged on,
@@ -115,8 +116,8 @@ in RFC 2119.
   accepted them. These are the session's **own** entries.
 - **Commit**: making a session's appends durable; see durability and
   recovery.
-- **Working state**: a session's appends acknowledged before a commit
-  made them durable, which a crash may take.
+- **Working state**: a session's appends the store has accepted but not
+  yet committed; a crash may take them.
 - **Prefix**: the path from a session's base to its root. A session's
   prefix entries are, or were, another session's own entries; a store
   may hold them without holding that session.
@@ -205,7 +206,10 @@ A session is created with a header and optionally a base.
   from that of a session it holds whose own entries include the base,
   since the prefix was written in that form and a projection carries
   media in one form. A session created with a base has that base as its
-  head.
+  head. A store MUST commit the log that holds the base, through the
+  base, before it creates the fork: a fork's recovery reads only its own
+  log, and a base a crash took from its origin's working state would
+  leave the fork hanging from nothing.
 - A session with no base is a fresh root. Its first append is a root
   entry, `parent` null.
 - A session's own entry MUST name as `parent` the session's base, one of
@@ -282,10 +286,10 @@ is the writer's decision, not the store's. This is the whole of the
 concurrency model, and it is the one git has for refs.
 
 Durability is the next section's concern: an append is atomic, and a
-store offers one that returns only when it is committed, which is the
-one RFC 0001's writing discipline requires for an entry whose type the
-header names in `records`; other appends may be left as working state
-until a later commit.
+store offers an append that returns only once committed, which RFC
+0001's writing discipline requires for an entry whose type the header
+names in `records`; other appends may be left as working state until a
+later commit.
 
 ## Head
 
@@ -340,31 +344,37 @@ one.
 ## Durability and recovery
 
 A session is a ref and its entries are objects, as a git branch is a
-ref and its commits are objects. What makes an entry part of a session
-is the session's log, so what commits an append is the session's own,
-as a ref's update is its own in git: a store writes nothing wider than
-the session to accept an append, and reads nothing wider than the
-session to recover one.
+ref over the history it names. What makes an entry part of a session is
+the session's log, so what accepts and commits an append belongs to the
+session alone, as a ref's update does in git: a store writes no record
+wider than the session to accept an append, and replays no record wider
+than the session to recover one. Objects are shared across sessions and
+are written, read and swept as the entries and retention sections say.
 
 An append is three writes — the object, the log entry, the head — and
 the store promises them as one.
 
-- A store MUST accept an append at a single point, after which the
-  append is acknowledged and before which nothing of it is visible.
-  Accepting is not committing: an append may be accepted as working
-  state and committed later. An object written ahead of its append's
-  acceptance is not an entry the store holds, so it cannot satisfy
-  another append's parent rule.
+- A store MUST accept an append at a single point, after which it is
+  visible and may be acknowledged, and before which nothing of it is
+  visible. Accepting is not committing: an append may be accepted and
+  committed later. An object written ahead of its append's acceptance
+  is not an entry the store holds, so it cannot satisfy another append's
+  parent rule.
 - A store MUST offer an append that does not return until it is
-  durable. A writer MUST use it for an entry the header's `records`
+  committed. A writer MUST use it for an entry the header's `records`
   names that precedes a side effect, as RFC 0001's writing discipline
   requires, and SHOULD for a `response` entry and for a
   `function_call_output` item, which is where that discipline asks for
   an fsync. A store MAY acknowledge other appends before they are
-  durable, and MUST say which it did.
+  committed, and MUST say which it did. A store MUST also offer a
+  commit of a session on its own, so a writer that needs what it has
+  appended durable need not append again to get it.
+- A head move by compare-and-swap is accepted and committed as an
+  append is, and a store MUST offer a durable one and say which it
+  performed. A record mark is committed before it is acknowledged.
 - After a crash a store MUST recover to a state in which every append it
-  acknowledged as durable is present in full and no append is present in
-  part: no log entry without its entry, no head moved to an entry the
+  acknowledged as committed is present in full and no append is present
+  in part: no log entry without its entry, no head moved to an entry the
   log lacks.
 - An object whose bytes do not hash to its name is corrupt. A store
   MUST NOT serve it and MAY discard it. Content addressing is what makes
@@ -372,48 +382,65 @@ the store promises them as one.
 
 ### Working state and commits
 
-An append acknowledged before it is durable is the session's **working
-state**: it is in the log, it moves the head as any append does, and a
-reader of the session sees it, but a crash may take it. A **commit**
-makes a session's working state durable in one step, with the append
-that asks for it: the objects first, then the log through that append.
-What durability costs a store is paid per commit and not per append, so
-how often a writer commits is how it trades speed for what a crash can
-take. RFC 0001's writing discipline names where a commit is owed, and
-between those points a writer MAY leave every append as working state.
-A commit covers one session's working state; another session's is its
-own.
+A session's appends accepted and not yet committed are its **working
+state**. Unlike git's working tree, working state is in the log: it
+moves the head as any append does, and a reader of the session sees it,
+but a crash may take it. A **commit** makes a session's working state
+durable, with the append or the request that asks for it: first every
+object its appends name, including one already present when an append
+wrote it, since another session may have written that one and not yet
+committed it, and then the log through the commit. What durability
+costs a store is paid per commit and not per append, so how often a
+writer commits is how it trades speed for what a crash can take. RFC
+0001's writing discipline names where a commit is required or
+recommended; elsewhere a writer MAY leave an append uncommitted. A
+commit covers one session: it neither waits for nor makes durable
+another session's working state.
 
 After a crash, a store keeps a session's working state up to the first
-append whose objects the crash took, and drops that append and what the
-session appended after it, as the loss of an uncommitted tail and not
-as damage. What it keeps, it commits before the session's next append.
-A writer that must know what survived reads the head.
+append whose objects the crash took or left corrupt, and drops that
+append and every record the session accepted after it, head moves and
+marks included, as the loss of an uncommitted tail and not as damage.
+What it keeps, it commits before it accepts anything more in the
+session. A writer that must know what survived reads the head.
 
 ### A log per session
 
 The design that meets these on a filesystem is a log per session that
-is its write-ahead log, as a ref's lock file and reflog are git's. Each
-record is one line carrying a checksum: an append, naming the entry,
-its sequence and where the head went; a head move; a mark; or a commit.
-The objects are written first, idempotently, since a second write of the
+is the session's write-ahead log and its record. Git has no
+counterpart: its ref is the record and its reflog a convenience, where
+here the log is the record and the head an index of it. Each record is
+one line carrying a checksum: an append, naming the entry, its sequence
+and where the head went; a head move; a record mark, as the exchange
+section defines it; a commit, after which recovery checks no object of
+an earlier record; or a loss, naming an append recovery dropped. The
+objects are written first, idempotently, since a second write of the
 same bytes under the same hash changes nothing; then the records; then
-the head, which is an index of the log's last head record and is
-rebuilt from it. An append is accepted when its record is written, and
-a commit is the log's fsync, after its objects'. A store appends to a
-session's log under the session's own lock, as git updates a ref under
-its lock file and as the append section permits, so appends to
-different sessions commit independently and at once, and a journaling
-filesystem joins their fsyncs into one commit of its own.
+the head, which is an index of the head the log's last record names and
+is rebuilt from it. An append is accepted when its record is written,
+and a commit is an fsync of its objects and then of the log. A store
+appends to a session's log under the session's own lock, as git
+updates a ref under its lock file and as the ordering section requires,
+so appends to different sessions commit independently and at once, and
+a filesystem that journals its metadata joins their fsyncs into one of
+its own. The header is a file of its own, written at creation and
+replaced, durably, when its `format` is raised.
+
+A session is created by writing its header and its first records where
+no session is, and making them visible under its ID in one step that
+fails if the ID is held, such as renaming a directory into place; it is
+deleted in one step after which nothing of it is read, such as renaming
+its directory away. A session created afterwards under the same ID
+starts from nothing.
 
 A crash cuts short only the record being written, at the log's end, so
 a record written whole that fails its checksum is damage, reported
 rather than skipped. The head is never made durable ahead of the record
 that names it. Recovery reads one session's log, when the session is
-opened, and nothing else, so what a store pays to recover a session is
-what the session costs, however large the store has grown. A session's
-log is deleted with the session and holds nothing of any other, so
-there is nothing store-wide to compact.
+opened, so what a store pays to recover a session is proportional to
+that session's log, however large the store has grown. A session's log
+is deleted with the session and holds nothing of any other, so there is
+nothing store-wide to compact.
 
 A store built on a database that has its own write-ahead log gets
 atomicity and recovery from the database. Durability it must still ask
@@ -422,8 +449,10 @@ store runs, is not fsynced, so its durable append is what sets the
 pragma or forces the checkpoint. A store built on object storage, which
 has no append, writes a session's log as objects named by the session
 and a sequence, each written only if absent, so a commit is the
-acknowledged write of one, and its working state may stay with the
-writer until it commits.
+acknowledged write of one such object. There a writer MAY batch appends
+and submit them together; until the store writes them they are not
+accepted, and when it does it assigns their sequences and tells the
+writer which continued the head.
 
 What a session's log does not hold is a model call in flight. RFC 0001
 forbids writing partial output as an entry, so the bytes of a response
@@ -436,15 +465,15 @@ document's concern, and it is not this log.
 - A store MUST NOT delete an entry that any session's log references.
 - A store MUST NOT sweep an entry on any session's prefix, its base
   included: the session's projection needs it.
-- Deleting a session removes its ref, its header and its log, all at
-  once: a session created afterwards under the same ID starts from
-  nothing. Entries referenced by no remaining log and on no remaining
-  prefix MAY then be swept.
-- An object no log names yet may be one whose append a writer has yet
-  to be accepted. A store MUST NOT sweep an object younger than the
-  longest interval a writer holds between writing an object and the
-  acceptance of the append that names it, as git's collector spares a
-  young loose object.
+- Deleting a session removes its ref, its header and its log in one
+  step, as the durability section says. Entries referenced by no
+  remaining log and on no remaining prefix MAY then be swept.
+- An object no log names may belong to an append the store has yet to
+  accept. A store sets a grace period and MUST NOT sweep an object
+  younger than it, as git's collector spares a young loose object for
+  `gc.pruneExpire`; and when it accepts an append it MUST hold that
+  append's objects, writing back any a sweep took, which is harmless
+  since a write of an object is idempotent.
 - A store MUST NOT sweep by reachability from heads. A session's
   abandoned branches are in its log and are its record; RFC 0001's
   `outcome` entries score them and a consumer's preference between
@@ -529,7 +558,8 @@ base. The marker names the head and is then discarded, so an export and
 import cycle adds nothing, and a genuine `leaf` label a writer appended
 is an entry like any other. Two refusals follow. The imported session
 keeps the header's `id`, and a store already holding a session with that
-ID MUST refuse the import. An importer MUST verify each line's hash and
+ID MUST refuse the import. An import is committed before it is
+acknowledged. An importer MUST verify each line's hash and
 MUST refuse a file in which one fails, and MUST refuse a file whose
 header carries `redacted` whether or not its lines verify against
 themselves, which RFC 0001 requires they do: a redacted projection is a
@@ -553,7 +583,10 @@ apply here, where holding the session already is the usual case.
   what two honest stores agree to, not a defence against a dishonest
   one. A sender MAY negotiate what the receiver lacks. A receiver admits
   objects as it admits an append, hash verified and parent first, with
-  one difference: admission under exchange moves no head. A `leaf` label
+  one difference: admission under exchange moves no head. Exchange never
+  rests on working state: a sender MUST commit the session before it
+  pushes or serves it, and a receiver MUST commit what it admits, and a
+  mark it sets, before it acknowledges them. A `leaf` label
   among the pushed entries is an entry like any other here, and the head
   moves only by the compare-and-swap below.
 - **A receiver that lacks the session** first admits the prefix, so that
@@ -605,9 +638,11 @@ apply here, where holding the session already is the usual case.
   nothing else can move it. A push from a store that is not the record
   MUST be refused. A handover is a push that sets the mark at the
   receiver and then clears it at the sender, each atomically with its
-  own step and in that order, so that a failure between the two leaves
-  two records and never none; two records are what the compare-and-swap
-  above reveals, and the sender finishes the handover by clearing. A
+  own step and in that order, the sender clearing only once the
+  receiver has acknowledged its mark committed, so that a failure
+  between the two leaves two records and never none; two records are
+  what the compare-and-swap above reveals, and the sender finishes the
+  handover by clearing. A
   mirror whose record has deleted the session without handing it over
   may declare itself the record, since nothing else can advance it.
 
@@ -637,7 +672,7 @@ like any other.
 
 A reader holding a fork's projection and its origin's checks the fork
 with one comparison: the fork header's `base` is one of the origin's own
-entries or on its prefix. Because the hash commits to the whole path,
+entries or on its prefix. Because the hash covers the whole path,
 agreement on that hash is agreement on every byte of the prefix. RFC
 0001's conformance suite asks for a forked fixture whose base is found
 in its origin; this is that check, and it is one lookup.
