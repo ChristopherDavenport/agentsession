@@ -159,11 +159,10 @@ func isEnvelopeKey(k string) bool {
 // form, a compact object with its members sorted as JCS writes one: the
 // body and the envelope are sliced out of it rather than decoded and
 // canonicalised again, which is most of what hashing a large line
-// costs. What it cannot slice goes to EntryHashes.
+// costs. What it cannot slice goes to EntryHashes. c must have passed
+// the I-JSON test already, as Read tests every line it reads; testing
+// it again here was a fifth of what reading a file cost.
 func entryHashesCanonical(c []byte) (id, content string, err error) {
-	if err := ijson.Check(c); err != nil {
-		return "", "", fmt.Errorf("agentsession: entry: %w", err)
-	}
 	members, ok := canonicalMembers(c)
 	if !ok {
 		return EntryHashes(c)
