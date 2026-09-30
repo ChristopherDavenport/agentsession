@@ -43,10 +43,13 @@ type objects struct {
 	// the directories they were renamed into.
 	pendFiles map[string]bool
 	pendDirs  map[string]bool
+	// rewrite holds pending objects an fsync failed on, which the next
+	// flush writes again rather than fsyncs again.
+	rewrite map[string]bool
 }
 
 func newObjects(root string) *objects {
-	return &objects{root: root, pendFiles: map[string]bool{}, pendDirs: map[string]bool{}}
+	return &objects{root: root, pendFiles: map[string]bool{}, pendDirs: map[string]bool{}, rewrite: map[string]bool{}}
 }
 
 func (o *objects) packDir() string { return filepath.Join(o.root, "objects", "pack") }
@@ -417,9 +420,11 @@ func (o *objects) flushSet(pend *pendSet) error {
 		pend.files, pend.dirs = map[string]bool{}, map[string]bool{}
 	}
 	o.mu.Unlock()
-	// What an fsync failed on stays pending, so the next commit tries
-	// it again rather than taking it for durable; the directories
-	// behind a failed file are not yet synced, and stay too.
+	// A failed fsync is not tried again. Linux marks the pages whose
+	// writeback failed clean and reports the error once, so a second
+	// fsync, on a descriptor opened since, succeeds for data that never
+	// reached the disk. The object is written again instead, from the
+	// bytes the page cache still holds, checked against its name.
 	putBack := func(files, dirs []string) {
 		o.mu.Lock()
 		defer o.mu.Unlock()
@@ -434,30 +439,87 @@ func (o *objects) flushSet(pend *pendSet) error {
 			pd[d] = true
 		}
 	}
-	if failed, err := syncAll(files, func(f string) error {
+	failed, err := syncAll(files, func(f string) error {
+		o.mu.Lock()
+		again := o.rewrite[f]
+		o.mu.Unlock()
+		if again {
+			return o.rewriteObject(f)
+		}
 		fh, err := os.Open(f)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		if err != nil {
-			return err
+		if err == nil {
+			err = syncObject(fh)
+			fh.Close()
 		}
-		err = syncObject(fh)
-		fh.Close()
-		return err
-	}); err != nil {
+		if err != nil {
+			if rerr := o.rewriteObject(f); rerr != nil {
+				return fmt.Errorf("%w; and writing it again: %w", err, rerr)
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		putBack(failed, slices.Collect(maps.Keys(dirs)))
 		return err
 	}
-	failed, err := syncAll(dirs, func(d string) error {
+	// Every rename above, and every object's, is in a directory synced
+	// here.
+	for f := range files {
+		dirs[filepath.Dir(f)] = true
+	}
+	failed, err = syncAll(dirs, func(d string) error {
 		if err := syncDir(d); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		return nil
 	})
 	if err != nil {
-		putBack(nil, failed)
+		// The names a failed directory holds are renamed into it again
+		// by the next flush, so it has something of its own to sync.
+		var again []string
+		for f := range files {
+			if slices.Contains(failed, filepath.Dir(f)) {
+				again = append(again, f)
+			}
+		}
+		o.mu.Lock()
+		for _, f := range again {
+			o.rewrite[f] = true
+		}
+		o.mu.Unlock()
+		putBack(again, failed)
 	}
+	return err
+}
+
+// rewriteObject writes a loose object again, durably, from the bytes
+// its file reads: after a failed fsync, the page cache's. Bytes that no
+// longer match the object's name were evicted and read back from the
+// disk, and the object is lost; it stays to be written again, so every
+// later flush that owes it fails, until an open recovers the session
+// from what the disk holds.
+func (o *objects) rewriteObject(path string) error {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		err = nil // packed since, and a pack is written durably
+	} else if err == nil {
+		name := agentsession.HashPrefix + filepath.Base(filepath.Dir(path)) + filepath.Base(path)
+		if hashBytes(data) != name {
+			err = fmt.Errorf("%w: %s was lost before it reached the disk", ErrCorrupt, o.rel(path))
+		} else {
+			err = writeFile(path, data, true)
+		}
+	}
+	o.mu.Lock()
+	if err != nil {
+		o.rewrite[path] = true
+	} else {
+		delete(o.rewrite, path)
+	}
+	o.mu.Unlock()
 	return err
 }
 

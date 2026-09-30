@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -682,28 +682,80 @@ func TestUncertainLogLetsGo(t *testing.T) {
 	}
 }
 
-// TestFailedFlushStaysPending: objects whose fsync failed are still
-// pending, so the next commit syncs them rather than taking them for
-// durable.
-func TestFailedFlushStaysPending(t *testing.T) {
+// linuxFsync fails an object's first fsync and reports every later one
+// on that file a success without syncing anything, as Linux does once
+// writeback fails; lose, when set, also takes the page cache's bytes,
+// so the file reads back as the disk has it.
+func linuxFsync(t *testing.T, lose bool) {
+	t.Helper()
+	old := syncObject
+	t.Cleanup(func() { syncObject = old })
+	var mu sync.Mutex
+	failed := map[string]bool{}
+	syncObject = func(f *os.File) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if failed[f.Name()] {
+			return nil
+		}
+		failed[f.Name()] = true
+		if lose {
+			os.WriteFile(f.Name(), []byte("what the disk held"), 0o600)
+		}
+		return errors.New("injected writeback failure")
+	}
+}
+
+// pendingObjects returns the objects a held session's next commit owes.
+func pendingObjects(st *Store, id string) []string {
+	var out []string
+	for f := range st.open[id].pend.files {
+		out = append(out, f)
+	}
+	return out
+}
+
+// TestFailedObjectSyncRewrites: an object whose fsync failed is written
+// again, not fsynced again, and the commit then holds.
+func TestFailedObjectSyncRewrites(t *testing.T) {
 	ctx := context.Background()
 	st, _ := Open(t.TempDir(), WithSync(SyncNever))
 	defer st.Close()
 	st.Create(ctx, agentsession.Header{ID: "s"})
 	mustAppend(t, st, "s", item("one"))
-	old := syncObject
-	defer func() { syncObject = old }()
-	syncObject = func(*os.File) error { return errors.New("injected fsync failure") }
-	if err := st.Sync(ctx); err == nil {
-		t.Fatal("the commit reported success")
+	before := map[string]os.FileInfo{}
+	for _, f := range pendingObjects(st, "s") {
+		before[f], _ = os.Stat(f)
 	}
-	var synced atomic.Int32
-	syncObject = func(f *os.File) error { synced.Add(1); return f.Sync() }
+	if len(before) == 0 {
+		t.Fatal("nothing pending")
+	}
+	linuxFsync(t, false)
 	if err := st.Sync(ctx); err != nil {
-		t.Fatal(err)
+		t.Fatalf("a commit whose objects could be written again: %v", err)
 	}
-	if synced.Load() == 0 {
-		t.Error("the next commit synced none of the objects the failed one did not")
+	for f, info := range before {
+		if now, err := os.Stat(f); err != nil || os.SameFile(info, now) {
+			t.Errorf("%s was fsynced again rather than written again: %v", f, err)
+		}
+	}
+}
+
+// TestLostObjectFailsCommits: an object whose bytes were gone by the
+// time its fsync failed fails every later commit that owes it, rather
+// than one of them taking an fsync's word that it is durable.
+func TestLostObjectFailsCommits(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir(), WithSync(SyncNever))
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, st, "s", item("one"))
+	linuxFsync(t, true)
+	if err := st.Sync(ctx); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("the commit: %v", err)
+	}
+	if err := st.Sync(ctx); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("the next commit: %v", err)
 	}
 }
 
