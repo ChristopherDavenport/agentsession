@@ -82,20 +82,30 @@ func readSessionLog(dir string, from int64) (sessionLog, error) {
 	if err != nil {
 		return l, err
 	}
-	l.size, l.whole = info.Size(), from
-	if from == 0 && info.Size() > 0 {
+	return parseSessionLog(f, from, info.Size())
+}
+
+// parseSessionLog reads a log of size bytes from r, from the byte
+// offset from, as readSessionLog does.
+func parseSessionLog(r interface {
+	io.ReaderAt
+	io.ReadSeeker
+}, from, size int64) (sessionLog, error) {
+	var l sessionLog
+	l.size, l.whole = size, from
+	if from == 0 && size > 0 {
 		// A log of bare hashes is one from before logs were per session;
 		// any other first line is read, and damage in it reported.
 		var first [7]byte
-		if n, _ := f.ReadAt(first[:], 0); string(first[:n]) == "sha256:" {
+		if n, _ := r.ReadAt(first[:], 0); string(first[:n]) == "sha256:" {
 			l.legacy = true
 			return l, nil
 		}
 	}
-	if _, err := f.Seek(from, io.SeekStart); err != nil {
+	if _, err := r.Seek(from, io.SeekStart); err != nil {
 		return l, err
 	}
-	br := bufio.NewReaderSize(f, 256<<10)
+	br := bufio.NewReaderSize(r, 256<<10)
 	lineNo := 0
 	for {
 		line, err := br.ReadBytes('\n')
@@ -258,6 +268,17 @@ func (s *Store) rewriteLog(h *handle, dir string, size int64) error {
 	}
 	if int64(len(data)) != size {
 		return fmt.Errorf("the log is %d bytes, not %d", len(data), size)
+	}
+	// The pages of a record the failed writeback marked clean may since
+	// have been evicted and read back as the disk has them. Such bytes
+	// are not written durably: the session is dropped instead, and its
+	// next open cuts them as a crash's loss of the uncommitted tail.
+	l, err := parseSessionLog(bytes.NewReader(data), 0, size)
+	if err != nil {
+		return err
+	}
+	if l.lost || l.legacy || l.unterminated || l.whole != size {
+		return errors.New("the log no longer reads whole")
 	}
 	if err := writeLogFile(path, data); err != nil {
 		return err

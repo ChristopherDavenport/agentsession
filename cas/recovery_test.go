@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/openresponses"
@@ -1010,6 +1012,168 @@ func TestFailedLogSyncRewrites(t *testing.T) {
 	defer r.Close()
 	if s, err := r.Open(ctx, "s"); err != nil || s.Len() != 2 || s.Leaf() != two {
 		t.Errorf("after the log was written again: %v", err)
+	}
+}
+
+// TestFailedLogSyncLostTail: a log whose fsync failed and whose earlier
+// uncommitted records read back as zeros is not written again with the
+// zeros: the session is dropped, and its next open cuts them as the
+// uncommitted tail's loss, as a crash would.
+func TestFailedLogSyncLostTail(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	one := mustAppend(t, st, "s", item("one"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	two := mustAppend(t, st, "s", item("two"))
+	mustAppend(t, st, "s", item("three"))
+	p := filepath.Join(root, "sessions", "s", logName)
+	old := syncLog
+	syncLog = func(f *os.File) error {
+		data, _ := os.ReadFile(p)
+		var out []byte
+		for _, line := range bytes.SplitAfter(data, []byte("\n")) {
+			if bytes.Contains(line, []byte(two)) {
+				line = make([]byte, len(line))
+			}
+			out = append(out, line...)
+		}
+		os.WriteFile(p, out, 0o600)
+		syncLog = old
+		return errors.New("injected writeback failure")
+	}
+	err := st.Sync(ctx)
+	syncLog = old
+	if !errors.Is(err, errLogUncertain) {
+		t.Fatalf("the commit: %v", err)
+	}
+	s, err := st.Open(ctx, "s")
+	if err != nil {
+		t.Fatalf("the next open: %v", err)
+	}
+	if s.Len() != 1 || s.Leaf() != one {
+		t.Errorf("after the cut: %d entries at %s, want 1 at %s", s.Len(), s.Leaf(), one)
+	}
+	four := mustAppend(t, st, "s", item("four"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	r, _ := Open(root)
+	defer r.Close()
+	if s, err := r.Open(ctx, "s"); err != nil || s.Leaf() != four {
+		t.Errorf("reopened: %v", err)
+	}
+}
+
+// TestSyncNeverCommitsRecords: under SyncNever an entry whose type the
+// header names in records is committed before it is acknowledged, as
+// RFC 0001 requires, and the rest stay lazy.
+func TestSyncNeverCommitsRecords(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir(), WithSync(SyncNever))
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "s", Records: agentsession.AllRecords})
+	r, err := st.Write(ctx, "s", item("lazy"))
+	if err != nil || r.Durable {
+		t.Errorf("an item: durable %v, %v", r.Durable, err)
+	}
+	r, err = st.Write(ctx, "s", agentsession.NewRunStart("run-1", agentsession.SourceInput, ""))
+	if err != nil || !r.Durable {
+		t.Errorf("a run the header records: durable %v, %v", r.Durable, err)
+	}
+}
+
+// TestSessionsIndependent: a session's commit, however slow its fsync,
+// does not hold up another session's append or open in the same store.
+func TestSessionsIndependent(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir(), WithSync(SyncNever))
+	defer st.Close()
+	for _, id := range []string{"slow", "fast", "other"} {
+		st.Create(ctx, agentsession.Header{ID: id})
+		mustAppend(t, st, id, item("one"))
+	}
+	st.Release("other")
+	old := syncLog
+	defer func() { syncLog = old }()
+	inSlow := make(chan struct{})
+	syncLog = func(f *os.File) error {
+		if strings.Contains(f.Name(), string(filepath.Separator)+"slow"+string(filepath.Separator)) {
+			close(inSlow)
+			time.Sleep(300 * time.Millisecond)
+		}
+		return f.Sync()
+	}
+	done := make(chan error)
+	go func() { done <- st.Release("slow") }()
+	<-inSlow
+	start := time.Now()
+	if _, err := st.Append(ctx, "fast", item("two")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Open(ctx, "other"); err != nil {
+		t.Fatal(err)
+	}
+	if waited := time.Since(start); waited > 150*time.Millisecond {
+		t.Errorf("another session waited %v behind a commit", waited)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestConcurrentWriters: goroutines writing their own sessions and one
+// they share, with commits, releases and reopens among them, leave
+// every append in its session.
+func TestConcurrentWriters(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "shared"})
+	const writers, appends = 8, 20
+	var wg sync.WaitGroup
+	for w := range writers {
+		id := fmt.Sprintf("w%d", w)
+		st.Create(ctx, agentsession.Header{ID: id})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range appends {
+				if _, err := st.Append(ctx, id, item(fmt.Sprintf("%s-%d", id, i))); err != nil {
+					t.Error(err)
+					return
+				}
+				if _, err := st.Append(ctx, "shared", item(fmt.Sprintf("shared-%s-%d", id, i))); err != nil {
+					t.Error(err)
+					return
+				}
+				switch i % 5 {
+				case 1:
+					st.Sync(ctx)
+				case 3:
+					st.Release(id)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := Open(root)
+	defer r.Close()
+	for w := range writers {
+		if s, err := r.Open(ctx, fmt.Sprintf("w%d", w)); err != nil || s.Len() != appends {
+			t.Errorf("w%d: %v", w, err)
+		}
+	}
+	if s, err := r.Open(ctx, "shared"); err != nil || s.Len() != writers*appends {
+		t.Errorf("shared: %v", err)
 	}
 }
 

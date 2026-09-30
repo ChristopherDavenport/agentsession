@@ -70,12 +70,11 @@ type bundle struct {
 // bundleOf reads a session's closure: its own entries and their
 // contents, its prefix and its media blobs, as RFC 0002's push carries.
 func (s *Store) bundleOf(ctx context.Context, id string) (*bundle, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	h, err := s.openLocked(id)
+	h, err := s.hold(id)
 	if err != nil {
 		return nil, err
 	}
+	defer h.mu.Unlock()
 	if err := s.untouched(h); err != nil {
 		return nil, err
 	}
@@ -152,12 +151,11 @@ func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions
 		return x, err
 	}
 	// The receiver is the record now; clear the mark here.
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	h, err := s.openLocked(id)
+	h, err := s.hold(id)
 	if err != nil {
 		return x, fmt.Errorf("cas: handover: the receiver is the record, and this store could not clear its mark: %w", err)
 	}
+	defer h.mu.Unlock()
 	if err := s.setMark(h, id, MarkMirror); err != nil {
 		return x, fmt.Errorf("cas: handover: the receiver is the record, and this store could not clear its mark: %w", err)
 	}
@@ -231,8 +229,6 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if laterFormat(b.header.Format, agentsession.Format) {
 		return Exchange{}, fmt.Errorf("%w: %s is later than this store's %s", agentsession.ErrUnsupportedFormat, b.header.Format, agentsession.Format)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	id := b.header.ID
 	dir, err := s.sessionDir(id)
 	if err != nil {
@@ -242,7 +238,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	for _, e := range append(append([]agentsession.Entry(nil), b.prefix...), b.own...) {
 		all[e.Base().ID] = e
 	}
-	h, err := s.openLocked(id)
+	h, err := s.hold(id)
 	if errors.Is(err, agentsession.ErrNoSession) {
 		mark := MarkMirror
 		// A fresh session's head is its base, or none: the value a push's
@@ -266,15 +262,25 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 			mark = MarkRecord
 		}
 		stored := append(append([]agentsession.Entry(nil), b.prefix...), b.own...)
-		if _, err := s.admitNew(ctx, dir, b.header, mark, stored, b.own, b.blobs, head); err != nil {
+		slot, held := s.claim(id)
+		if held {
+			slot.mu.Unlock()
+			return Exchange{}, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, id)
+		}
+		n, err := s.admitNew(ctx, dir, b.header, mark, stored, b.own, b.blobs, head)
+		if err != nil {
+			s.abandon(id, slot)
 			return Exchange{}, err
 		}
+		slot.take(n)
+		slot.mu.Unlock()
 		x.Head = head
 		return x, nil
 	}
 	if err != nil {
 		return Exchange{}, err
 	}
+	defer h.mu.Unlock()
 	hdr, err := readHeader(h.dir)
 	if err != nil {
 		return Exchange{}, err
@@ -392,8 +398,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if o.handover {
 		_ = writeIndex(filepath.Join(h.dir, "record"), []byte(MarkRecord+"\n"))
 	}
-	s.dropHandle(id, h)
-	if _, err := s.openLocked(id); err != nil {
+	if err := s.reopen(id, h); err != nil {
 		return x, fmt.Errorf("cas: exchange committed, and the session could not be reopened: %w", err)
 	}
 	if failedHandover {

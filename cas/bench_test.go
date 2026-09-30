@@ -146,3 +146,26 @@ func BenchmarkOpen(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkReuse writes an object the store already holds loose, as a
+// repeated content does: the write reads the copy and compares it
+// rather than write it again.
+func BenchmarkReuse(b *testing.B) {
+	for _, size := range []int{4 << 10, 64 << 10, 1 << 20, 16 << 20} {
+		b.Run(fmt.Sprintf("%dKiB", size>>10), func(b *testing.B) {
+			o := newObjects(b.TempDir())
+			data := []byte(strings.Repeat("x", size))
+			hash := hashBytes(data)
+			if err := o.write(spaceContents, hash, data, true); err != nil {
+				b.Fatal(err)
+			}
+			pend := newPendSet()
+			b.SetBytes(int64(size))
+			for b.Loop() {
+				if err := o.writeTo(spaceContents, hash, data, false, pend); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

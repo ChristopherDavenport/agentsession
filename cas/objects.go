@@ -47,10 +47,19 @@ type objects struct {
 	// rewrite holds pending objects an fsync failed on, which the next
 	// flush writes again rather than fsyncs again.
 	rewrite map[string]bool
+	// checked holds the large loose files this store wrote or read and
+	// found to hold their object's bytes. An object's file is replaced
+	// only by renaming a new one over it, so the same file still holds
+	// them, unless an fsync of it has failed since.
+	checked map[string]os.FileInfo
 }
 
+// checkedSize is the least size of a loose object whose check is
+// remembered; a smaller one is read and compared in microseconds.
+const checkedSize = 64 << 10
+
 func newObjects(root string) *objects {
-	return &objects{root: root, pendFiles: map[string]bool{}, pendDirs: map[string]bool{}, rewrite: map[string]bool{}}
+	return &objects{root: root, pendFiles: map[string]bool{}, pendDirs: map[string]bool{}, rewrite: map[string]bool{}, checked: map[string]os.FileInfo{}}
 }
 
 func (o *objects) packDir() string { return filepath.Join(o.root, "objects", "pack") }
@@ -297,15 +306,20 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 	}
 	dir := filepath.Dir(path)
 	o.mu.Lock()
-	suspect := o.rewrite[path]
+	suspect, known := o.rewrite[path], o.checked[path]
 	o.mu.Unlock()
 	if info, err := os.Stat(path); err == nil && info.Size() == int64(len(data)) && !suspect {
 		// A loose copy is taken only once its bytes are read and match:
 		// a crash, or a writeback that failed, can leave a file of the
 		// right length holding zeros.
-		have, err := os.ReadFile(path)
-		if err == nil && !bytes.Equal(have, data) {
-			goto write
+		if known == nil || !os.SameFile(known, info) {
+			have, err := os.ReadFile(path)
+			if err == nil && !bytes.Equal(have, data) {
+				goto write
+			}
+			if err == nil {
+				o.check(path, info)
+			}
 		}
 		if err == nil {
 			now := time.Now()
@@ -345,10 +359,25 @@ write:
 	o.mu.Lock()
 	delete(o.rewrite, path)
 	o.mu.Unlock()
+	if len(data) >= checkedSize {
+		if info, err := os.Stat(path); err == nil {
+			o.check(path, info)
+		}
+	}
 	if !durable {
 		return o.remember(pend, path, dir)
 	}
 	return o.remember(pend, "", dir)
+}
+
+// check remembers a large loose file found to hold its object's bytes.
+func (o *objects) check(path string, info os.FileInfo) {
+	if info.Size() < checkedSize {
+		return
+	}
+	o.mu.Lock()
+	o.checked[path] = info
+	o.mu.Unlock()
 }
 
 // freshen is write for an object known only by its name: it reads the
@@ -507,6 +536,7 @@ func (o *objects) flushSet(pend *pendSet) error {
 		o.mu.Lock()
 		for _, f := range again {
 			o.rewrite[f] = true
+			delete(o.checked, f)
 		}
 		o.mu.Unlock()
 		putBack(again, failed)
@@ -531,6 +561,7 @@ func (o *objects) rewriteObject(path string) error {
 	o.mu.Lock()
 	if err != nil {
 		o.rewrite[path] = true
+		delete(o.checked, path)
 	} else {
 		delete(o.rewrite, path)
 	}

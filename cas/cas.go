@@ -158,9 +158,11 @@ const (
 	// before the side effect it precedes. Each durable append also makes
 	// durable every lazy append before it.
 	SyncOnResponse
-	// SyncNever leaves every append lazy: durable at the next call to
-	// [Store.Sync] or [Store.Close], or when the operating system writes
-	// it back.
+	// SyncNever leaves every append lazy, durable at the next call to
+	// [Store.Sync] or [Store.Close], apart from an entry whose type the
+	// header names in records, which RFC 0001 requires to be durable
+	// before the side effect it precedes and which this policy too makes
+	// durable, with every lazy append before it.
 	SyncNever
 )
 
@@ -187,15 +189,24 @@ func WithReadOnly() Option {
 	return func(s *Store) { s.readOnly = true }
 }
 
-// Store is a content-addressed store rooted at a directory.
+// Store is a content-addressed store rooted at a directory. It is safe
+// for concurrent use: calls on one session take turns, and calls on
+// different sessions run at once, commits and opens included.
 type Store struct {
 	root     string
 	readOnly bool
 	policy   SyncPolicy
 	objs     *objects
 
+	// mu guards open, faulty and appends, and is held only to read or
+	// change them: never while waiting on a session, and never across a
+	// write to disk. A session's own work runs under its handle's lock,
+	// so sessions of one store go at once, as sessions of different
+	// processes do; the order is a handle's lock, then idx, then mu.
 	mu   sync.Mutex
 	open map[string]*handle
+	// idx guards owners, prefix and indexed.
+	idx sync.Mutex
 	// owners maps each committed own entry to the sessions whose logs
 	// hold it — one entry can be in two, when two sessions append the
 	// same entry under the same parent — and prefix holds the entries
@@ -214,7 +225,13 @@ type Store struct {
 	appends int
 }
 
+// handle is a session this store holds. Its mu is held by whoever works
+// on the session, opening it included; gone says the handle was let go
+// while a caller waited on mu, which then looks the session up again.
 type handle struct {
+	mu   sync.Mutex
+	gone bool
+
 	session    *agentsession.Session
 	dir        string
 	lock       *dirLock
@@ -681,13 +698,15 @@ func (s *Store) isLeafLabel(id string) (bool, error) {
 // log or on a session's prefix. An object written ahead of its log
 // record is in neither. It builds the index if nothing has.
 func (s *Store) holds(id string) bool {
+	s.idx.Lock()
+	defer s.idx.Unlock()
 	if err := s.ensureIndex(); err != nil {
 		return false
 	}
 	return len(s.owners[id]) > 0 || s.prefix[id]
 }
 
-// ensureIndex builds the index once.
+// ensureIndex builds the index once. The caller holds idx.
 func (s *Store) ensureIndex() error {
 	if s.indexed {
 		return nil
@@ -730,6 +749,8 @@ func (s *Store) holderOf(entry, parent string) (owner string, held bool, err err
 		}
 		parent = hdr.ParentSession
 	}
+	s.idx.Lock()
+	defer s.idx.Unlock()
 	if err := s.ensureIndex(); err != nil {
 		return "", false, err
 	}
@@ -762,6 +783,12 @@ func (s *Store) onPath(entry, tip string) (bool, error) {
 // own records that session's log holds entry, in the index once there
 // is one.
 func (s *Store) own(entry, session string) {
+	s.idx.Lock()
+	defer s.idx.Unlock()
+	s.ownLocked(entry, session)
+}
+
+func (s *Store) ownLocked(entry, session string) {
 	if !s.indexed {
 		return
 	}
@@ -773,7 +800,8 @@ func (s *Store) own(entry, session string) {
 	set[session] = true
 }
 
-// anyOwner returns one session whose log holds the entry, or "".
+// anyOwner returns one session whose log holds the entry, or "". The
+// caller holds idx.
 func (s *Store) anyOwner(entry string) (string, bool) {
 	for id := range s.owners[entry] {
 		return id, true
@@ -1106,6 +1134,7 @@ func (s *Store) adopt(id, dir string, entries []string) error {
 
 // index builds what the store holds from every session's log and base.
 // It reads every session, so it is built only when a lookup needs it.
+// The caller holds idx.
 func (s *Store) index() error {
 	s.owners, s.prefix, s.indexed = map[string]map[string]bool{}, map[string]bool{}, true
 	dirs, err := os.ReadDir(filepath.Join(s.root, "sessions"))
@@ -1122,11 +1151,11 @@ func (s *Store) index() error {
 			err = ErrLegacyStore
 		}
 		if err != nil {
-			s.faulty[d.Name()] = err
+			s.setFaulty(d.Name(), err)
 			continue
 		}
 		for _, h := range heldEntries(l.recs) {
-			s.own(h, d.Name())
+			s.ownLocked(h, d.Name())
 		}
 		h, err := readHeader(dir)
 		if err != nil {
@@ -1134,16 +1163,39 @@ func (s *Store) index() error {
 		}
 		if h.Base != "" {
 			if err := s.markPrefix(h.Base); err != nil {
-				s.faulty[d.Name()] = err
+				s.setFaulty(d.Name(), err)
 				continue
 			}
 		}
-		delete(s.faulty, d.Name())
+		s.setFaulty(d.Name(), nil)
 	}
 	return nil
 }
 
-// markPrefix records the path to base as held.
+// setFaulty records why a session could not be read, or with nil that
+// it could.
+func (s *Store) setFaulty(id string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		s.faulty[id] = err
+	} else {
+		delete(s.faulty, id)
+	}
+}
+
+// notePrefix records the path to a new session's base in the index,
+// once there is one.
+func (s *Store) notePrefix(base string) error {
+	s.idx.Lock()
+	defer s.idx.Unlock()
+	if !s.indexed {
+		return nil
+	}
+	return s.markPrefix(base)
+}
+
+// markPrefix records the path to base as held. The caller holds idx.
 func (s *Store) markPrefix(base string) error {
 	for id := base; id != ""; {
 		s.prefix[id] = true
@@ -1246,8 +1298,6 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	if s.readOnly {
 		return nil, errReadOnly()
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.createLocked(ctx, h, MarkRecord)
 }
 
@@ -1302,15 +1352,19 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := s.open[h.ID]; ok {
+	slot, held := s.claim(h.ID)
+	if held {
+		slot.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
 	lk, err := s.lockSession(h.ID)
 	if err != nil {
+		s.abandon(h.ID, slot)
 		return nil, err
 	}
 	fail := func(err error) (*agentsession.Session, error) {
 		lk.release()
+		s.abandon(h.ID, slot)
 		return nil, err
 	}
 	if _, err := os.Stat(dir); err == nil {
@@ -1352,8 +1406,8 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 	if err := s.placeSession(dir, h, recs, h.Base, mark); err != nil {
 		return fail(err)
 	}
-	if h.Base != "" && s.indexed {
-		if err := s.markPrefix(h.Base); err != nil {
+	if h.Base != "" {
+		if err := s.notePrefix(h.Base); err != nil {
 			return fail(err)
 		}
 	}
@@ -1361,7 +1415,8 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 	if err != nil {
 		return fail(fmt.Errorf("cas: log: %w", err))
 	}
-	s.open[h.ID] = &handle{session: sess, dir: dir, lock: lk, logf: logf, pend: newPendSet(), mark: mark, head: h.Base, count: sess.Len(), diskFormat: h.Format, own: map[string]bool{}}
+	slot.take(&handle{session: sess, dir: dir, lock: lk, logf: logf, pend: newPendSet(), mark: mark, head: h.Base, count: sess.Len(), diskFormat: h.Format, own: map[string]bool{}})
+	slot.mu.Unlock()
 	return sess, nil
 }
 
@@ -1420,7 +1475,8 @@ func (s *Store) commitOrigin(owner, base string) error {
 	if owner == "" {
 		return nil
 	}
-	if h, ok := s.open[owner]; ok {
+	if h := s.held(owner); h != nil {
+		defer h.mu.Unlock()
 		return s.commitHandle(owner, h)
 	}
 	dir, err := s.sessionDir(owner)
@@ -1565,19 +1621,118 @@ func (s *Store) Open(ctx context.Context, id string) (*agentsession.Session, err
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	h, err := s.openLocked(id)
+	h, err := s.hold(id)
 	if err != nil {
 		return nil, err
 	}
+	defer h.mu.Unlock()
 	return h.session, nil
 }
 
-func (s *Store) openLocked(id string) (*handle, error) {
-	if h, ok := s.open[id]; ok {
+// hold returns the handle of a session, opening it if this store does
+// not hold it, with the handle's lock taken; the caller lets it go.
+func (s *Store) hold(id string) (*handle, error) {
+	h, held := s.claim(id)
+	if held {
 		return h, nil
 	}
+	n, err := s.openSession(id)
+	if err != nil {
+		s.abandon(id, h)
+		return nil, err
+	}
+	h.take(n)
+	return h, nil
+}
+
+// held returns the handle of a session this store holds, its lock
+// taken, or nil when it holds none.
+func (s *Store) held(id string) *handle {
+	h, held := s.claim(id)
+	if !held {
+		s.abandon(id, h)
+		return nil
+	}
+	return h
+}
+
+// claim returns the handle of a session with its lock taken, and true,
+// when this store holds the session; otherwise a new, empty handle in
+// its place, its lock taken, which the caller fills with take and lets
+// go, or gives up with abandon. A second caller waits on the first.
+func (s *Store) claim(id string) (*handle, bool) {
+	for {
+		s.mu.Lock()
+		h, ok := s.open[id]
+		if !ok {
+			h = &handle{}
+			h.mu.Lock()
+			s.open[id] = h
+			s.mu.Unlock()
+			return h, false
+		}
+		s.mu.Unlock()
+		h.mu.Lock()
+		if !h.gone {
+			return h, true
+		}
+		h.mu.Unlock()
+	}
+}
+
+// abandon gives up a handle whose lock the caller holds: it leaves the
+// store's sessions, and a caller waiting on it looks again.
+func (s *Store) abandon(id string, h *handle) {
+	s.forget(id, h)
+	h.mu.Unlock()
+}
+
+// forget takes a handle out of the store's sessions.
+func (s *Store) forget(id string, h *handle) {
+	s.mu.Lock()
+	if s.open[id] == h {
+		delete(s.open, id)
+	}
+	s.mu.Unlock()
+	h.gone = true
+}
+
+// take fills a claimed handle with an opened session.
+func (h *handle) take(n *handle) {
+	h.session, h.dir, h.lock, h.mark, h.head = n.session, n.dir, n.lock, n.mark, n.head
+	h.count, h.diskFormat, h.own, h.logf, h.pend, h.lazy = n.count, n.diskFormat, n.own, n.logf, n.pend, n.lazy
+}
+
+// reopen rebuilds a held session from what the store holds, keeping
+// its lock; the handle is let go if that fails.
+func (s *Store) reopen(id string, h *handle) error {
+	if h.logf != nil {
+		h.logf.Close()
+		h.logf = nil
+	}
+	n, err := s.openHeld(id, h.dir, h.lock)
+	if err != nil {
+		s.forget(id, h) // openHeld let the lock go
+		return err
+	}
+	h.take(n)
+	return nil
+}
+
+// handles returns the sessions this store holds.
+func (s *Store) handles() map[string]*handle {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]*handle, len(s.open))
+	for id, h := range s.open {
+		out[id] = h
+	}
+	return out
+}
+
+// openSession recovers and opens a session this store does not hold,
+// taking its lock.
+func (s *Store) openSession(id string) (*handle, error) {
 	dir, err := s.sessionDir(id)
 	if err != nil {
 		return nil, err
@@ -1585,8 +1740,11 @@ func (s *Store) openLocked(id string) (*handle, error) {
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
 	}
-	if err, ok := s.faulty[id]; ok {
-		return nil, fmt.Errorf("cas: session %s could not be indexed: %w", id, err)
+	s.mu.Lock()
+	ferr, faulty := s.faulty[id]
+	s.mu.Unlock()
+	if faulty {
+		return nil, fmt.Errorf("cas: session %s could not be indexed: %w", id, ferr)
 	}
 	lk, err := s.lockSession(id)
 	if err != nil {
@@ -1625,9 +1783,7 @@ func (s *Store) openHeld(id, dir string, lk *dirLock) (*handle, error) {
 			return fail(fmt.Errorf("cas: log: %w", err))
 		}
 	}
-	h := &handle{session: sess, dir: dir, lock: lk, logf: logf, pend: newPendSet(), mark: v.mark, head: v.head, count: sess.Len(), diskFormat: diskFormat, own: committed}
-	s.open[id] = h
-	return h, nil
+	return &handle{session: sess, dir: dir, lock: lk, logf: logf, pend: newPendSet(), mark: v.mark, head: v.head, count: sess.Len(), diskFormat: diskFormat, own: committed}, nil
 }
 
 // build assembles the session a view says: the path to its base, then
@@ -1675,6 +1831,8 @@ func (s *Store) durableFor(hdr agentsession.Header, e agentsession.Entry) bool {
 			return ok
 		}
 		return hdr.HasRecord(e.EntryType())
+	case SyncNever:
+		return hdr.HasRecord(e.EntryType())
 	}
 	return false
 }
@@ -1699,12 +1857,28 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	if s.readOnly {
 		return agentsession.Result{}, errReadOnly()
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	h, err := s.openLocked(sessionID)
+	h, err := s.hold(sessionID)
 	if err != nil {
 		return agentsession.Result{}, err
 	}
+	r, err := s.writeHeld(ctx, h, sessionID, e)
+	h.mu.Unlock()
+	if err == nil && r.Outcome != agentsession.Held {
+		// A pack runs with no session's lock held, as another process's
+		// would.
+		s.mu.Lock()
+		s.appends++
+		pack := s.appends%autoPackEvery == 0
+		s.mu.Unlock()
+		if pack {
+			s.maybePack()
+		}
+	}
+	return r, err
+}
+
+// writeHeld is Write on a session whose handle's lock the caller holds.
+func (s *Store) writeHeld(ctx context.Context, h *handle, sessionID string, e agentsession.Entry) (agentsession.Result, error) {
 	if h.mark != MarkRecord {
 		return agentsession.Result{}, fmt.Errorf("%w: %s", ErrMirror, sessionID)
 	}
@@ -1792,16 +1966,13 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 		if leafAtPrepare == "" {
 			h.session.ResetLeaf()
 		} else if err := h.session.Branch(leafAtPrepare); err != nil {
-			return s.committedButNotApplied(sessionID, r)
+			return s.committedButNotApplied(sessionID, h, r)
 		}
 	}
 	if _, err := h.session.Commit(e); err != nil {
-		return s.committedButNotApplied(sessionID, r)
+		return s.committedButNotApplied(sessionID, h, r)
 	}
 	h.count++
-	if s.appends++; s.appends%autoPackEvery == 0 {
-		s.maybePack()
-	}
 	return r, nil
 }
 
@@ -1811,10 +1982,8 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 // dropped so the next Open rebuilds the session from what the store
 // holds. Nothing after the commit point may turn a committed append into
 // a reported failure.
-func (s *Store) committedButNotApplied(sessionID string, r agentsession.Result) (agentsession.Result, error) {
-	if h, ok := s.open[sessionID]; ok {
-		s.dropHandle(sessionID, h)
-	}
+func (s *Store) committedButNotApplied(sessionID string, h *handle, r agentsession.Result) (agentsession.Result, error) {
+	s.dropHandle(sessionID, h)
 	r.Reopen = true
 	return r, nil
 }
@@ -1882,12 +2051,11 @@ func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) err
 	if s.readOnly {
 		return errReadOnly()
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	h, err := s.openLocked(sessionID)
+	h, err := s.hold(sessionID)
 	if err != nil {
 		return err
 	}
+	defer h.mu.Unlock()
 	if h.mark != MarkRecord {
 		return fmt.Errorf("%w: %s", ErrMirror, sessionID)
 	}
@@ -1944,12 +2112,11 @@ func (s *Store) mayRestOn(sess *agentsession.Session, id string) error {
 // Mark returns whether this store is the record for the session or a
 // mirror of it.
 func (s *Store) Mark(ctx context.Context, sessionID string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	h, err := s.openLocked(sessionID)
+	h, err := s.hold(sessionID)
 	if err != nil {
 		return "", err
 	}
+	defer h.mu.Unlock()
 	return h.mark, nil
 }
 
@@ -1972,12 +2139,11 @@ func (s *Store) DeclareRecord(ctx context.Context, sessionID string) error {
 	if s.readOnly {
 		return errReadOnly()
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	h, err := s.openLocked(sessionID)
+	h, err := s.hold(sessionID)
 	if err != nil {
 		return err
 	}
+	defer h.mu.Unlock()
 	if err := s.setMark(h, sessionID, MarkRecord); err != nil {
 		return err
 	}
@@ -2135,8 +2301,6 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if s.readOnly {
 		return errReadOnly()
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	dir, err := s.sessionDir(id)
 	if err != nil {
 		return err
@@ -2144,17 +2308,22 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if _, err := os.Stat(filepath.Join(dir, "header")); errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
 	}
+	h, held := s.claim(id)
 	var lk *dirLock
-	if h, ok := s.open[id]; ok {
-		delete(s.open, id)
+	if held {
 		if h.logf != nil {
 			h.logf.Close()
+			h.logf = nil
 		}
 		lk = h.lock
 	} else if lk, err = s.lockSession(id); err != nil {
+		s.abandon(id, h)
 		return err
 	}
-	defer lk.release()
+	defer func() {
+		lk.release()
+		s.abandon(id, h)
+	}()
 	// One step, after which nothing of the session is read: its
 	// directory is renamed out of sessions, and removed after.
 	trash := filepath.Join(s.root, "trash")
@@ -2168,12 +2337,14 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if err := syncDir(filepath.Join(s.root, "sessions")); err != nil {
 		return err
 	}
-	for h, set := range s.owners {
+	s.idx.Lock()
+	for e, set := range s.owners {
 		delete(set, id)
 		if len(set) == 0 {
-			delete(s.owners, h)
+			delete(s.owners, e)
 		}
 	}
+	s.idx.Unlock()
 	_ = os.RemoveAll(gone)
 	return nil
 }
@@ -2182,12 +2353,11 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 // working state is committed first, so the next holder takes up a log
 // it need not check.
 func (s *Store) Release(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	h, ok := s.open[id]
-	if !ok {
+	h := s.held(id)
+	if h == nil {
 		return nil
 	}
+	defer h.mu.Unlock()
 	return s.releaseHandle(id, h)
 }
 
@@ -2212,11 +2382,10 @@ func (s *Store) releaseHandle(id string, h *handle) error {
 }
 
 // dropHandle forgets a held session without writing anything: its log
-// is closed and its lock let go.
+// is closed and its lock let go. The caller holds the handle's lock, and
+// lets it go after.
 func (s *Store) dropHandle(id string, h *handle) {
-	if s.open[id] == h {
-		delete(s.open, id)
-	}
+	s.forget(id, h)
 	if h.logf != nil {
 		h.logf.Close()
 		h.logf = nil
@@ -2233,32 +2402,30 @@ func (s *Store) Sync(ctx context.Context) error {
 	if s.readOnly {
 		return errReadOnly()
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.commitAll()
-}
-
-// commitAll commits the working state of every session this store
-// holds.
-func (s *Store) commitAll() error {
 	var first error
-	for id, h := range s.open {
-		if err := s.commitHandle(id, h); err != nil && first == nil {
-			first = err
+	for id, h := range s.handles() {
+		h.mu.Lock()
+		if !h.gone {
+			if err := s.commitHandle(id, h); err != nil && first == nil {
+				first = err
+			}
 		}
+		h.mu.Unlock()
 	}
 	return first
 }
 
 // Close commits and releases every session this store holds.
 func (s *Store) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var first error
-	for id, h := range s.open {
-		if err := s.releaseHandle(id, h); err != nil && first == nil {
-			first = err
+	for id, h := range s.handles() {
+		h.mu.Lock()
+		if !h.gone {
+			if err := s.releaseHandle(id, h); err != nil && first == nil {
+				first = err
+			}
 		}
+		h.mu.Unlock()
 	}
 	if !s.readOnly {
 		if err := s.objs.flush(); err != nil && first == nil {
@@ -2277,12 +2444,11 @@ func (s *Store) Project(ctx context.Context, w io.Writer, sessionID string) erro
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	h, err := s.openLocked(sessionID)
+	h, err := s.hold(sessionID)
 	if err != nil {
 		return err
 	}
+	defer h.mu.Unlock()
 	if err := s.untouched(h); err != nil {
 		return err
 	}
@@ -2297,12 +2463,11 @@ func (s *Store) ProjectDir(ctx context.Context, dir, sessionID string) (string, 
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	h, err := s.openLocked(sessionID)
+	h, err := s.hold(sessionID)
 	if err != nil {
 		return "", err
 	}
+	defer h.mu.Unlock()
 	if err := s.untouched(h); err != nil {
 		return "", err
 	}
@@ -2403,14 +2568,9 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	if migrated, unresolved := sess.Migrated(); migrated && len(unresolved) > 0 {
 		return nil, agentsession.ErrUnresolvedMigration
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	dir, err := s.sessionDir(h.ID)
 	if err != nil {
 		return nil, err
-	}
-	if _, ok := s.open[h.ID]; ok {
-		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
 	entries := sess.Entries()
 	var own, stored []agentsession.Entry
@@ -2446,10 +2606,18 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	if asRecord {
 		mark = MarkRecord
 	}
+	slot, held := s.claim(h.ID)
+	if held {
+		slot.mu.Unlock()
+		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
+	}
 	hd, err := s.admitNew(ctx, dir, h, mark, stored, own, nil, sess.Leaf())
 	if err != nil {
+		s.abandon(h.ID, slot)
 		return nil, err
 	}
+	slot.take(hd)
+	slot.mu.Unlock()
 	return hd.session, nil
 }
 
@@ -2508,8 +2676,8 @@ func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header,
 	for _, id := range hashes {
 		s.own(id, h.ID)
 	}
-	if h.Base != "" && s.indexed {
-		if err := s.markPrefix(h.Base); err != nil {
+	if h.Base != "" {
+		if err := s.notePrefix(h.Base); err != nil {
 			return fail(err)
 		}
 	}

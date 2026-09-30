@@ -59,7 +59,13 @@ session is a ref, and its log is its own write-ahead log.
   or deleted.
 
   A lazy append takes 0.15 ms, down from 1.2–1.9 ms, and opening a
-  store takes microseconds at any size.
+  store takes microseconds at any size. Sessions of one `Store` no
+  longer wait on each other: each holds its own lock, through its
+  commit's fsync and its recovery, and an automatic pack runs with no
+  session's lock held.
+- **cas: `SyncNever` commits an entry whose type the header names in
+  `records`**, as RFC 0001 requires before the side effect it
+  precedes; every other append stays lazy.
 - **cas: an append recovery found lost stays lost.** Recovery that cut a
   lost lazy append wrote a sync record, which the next open took to mean
   the lost append was durable: it came back into the log and the session

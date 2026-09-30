@@ -395,8 +395,9 @@ writer commits is how it trades speed for what a crash can take. RFC
 0001's writing discipline names where a commit is required or
 recommended; elsewhere a writer MAY leave an append uncommitted. A
 commit covers one session: it does not make another session's working
-state durable, and need not wait for another session's commit, though a
-store MAY take the commits of one process in turn.
+state durable and does not wait for another session's commit, and a
+store SHOULD NOT make one session's appends, commits or opens wait on
+another's, in one process or across processes.
 
 After a crash, a store keeps a session's working state up to the first
 append whose objects the crash took or left corrupt, and drops that
