@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -21,10 +22,12 @@ func largeSession(tb testing.TB, calls, outputSize int) []byte {
 	must(s.Append(&ConfigEntry{Model: "m", Instructions: ptr("Be brief.")}))
 	output := strings.Repeat("tool output line\n", outputSize/len("tool output line\n")+1)[:outputSize]
 	for i := 0; i < calls; i++ {
+		// A call ID names one call in the session, so each round has its own.
+		callID, respID := fmt.Sprintf("call_%d", i), fmt.Sprintf("resp_%d", i)
 		must(s.Append(&ItemEntry{Item: &openresponses.Message{Role: openresponses.RoleUser, Content: openresponses.Contents{&openresponses.InputText{Text: "run it"}}}}))
-		must(s.Append(&ItemEntry{Item: &openresponses.FunctionCall{CallID: "call", Name: "run", Arguments: `{"cmd":"make"}`}, ResponseID: "resp"}))
-		must(s.Append(&ResponseEntry{ResponseID: "resp", Model: "m", Status: openresponses.ResponseStatusCompleted, RequestHash: "sha256:0"}))
-		must(s.Append(&ItemEntry{Item: &openresponses.FunctionCallOutput{CallID: "call", Output: openresponses.FunctionCallOutputData{Text: output}}}))
+		must(s.Append(&ItemEntry{Item: &openresponses.FunctionCall{CallID: callID, Name: "run", Arguments: `{"cmd":"make"}`}, ResponseID: respID}))
+		must(s.Append(&ResponseEntry{ResponseID: respID, Model: "m", Status: openresponses.ResponseStatusCompleted, RequestHash: "sha256:0"}))
+		must(s.Append(&ItemEntry{Item: &openresponses.FunctionCallOutput{CallID: callID, Output: openresponses.FunctionCallOutputData{Text: output}}}))
 	}
 	var buf bytes.Buffer
 	if err := Write(&buf, s); err != nil {
