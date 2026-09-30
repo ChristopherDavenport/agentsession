@@ -96,6 +96,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -205,8 +206,15 @@ type Store struct {
 	// processes do; the order is a handle's lock, then idx, then mu.
 	mu   sync.Mutex
 	open map[string]*handle
-	// idx guards owners, prefix and indexed.
-	idx sync.Mutex
+	// idx guards owners, prefix, indexed, building and deltas, and is
+	// held only to read or change them. An index is built by reading
+	// every session with no lock held, one build at a time under
+	// indexing; what changes meanwhile is recorded in deltas and applied
+	// after.
+	idx      sync.Mutex
+	indexing sync.Mutex
+	building bool
+	deltas   []func(owners map[string]map[string]bool, prefix map[string]bool)
 	// owners maps each committed own entry to the sessions whose logs
 	// hold it — one entry can be in two, when two sessions append the
 	// same entry under the same parent — and prefix holds the entries
@@ -223,6 +231,10 @@ type Store struct {
 	// appends counts this store's appends, which decides when it looks
 	// at whether to pack.
 	appends int
+	// packing is set while a pack runs in the background, which Close
+	// waits for through background.
+	packing    atomic.Bool
+	background sync.WaitGroup
 }
 
 // handle is a session this store holds. Its mu is held by whoever works
@@ -402,6 +414,17 @@ func writeFileInfo(path string, data []byte, durable bool) (os.FileInfo, error) 
 			werr = serr
 		}
 	}
+	if werr == nil && renameOpen {
+		// Renamed while open, so the file's version, which a rename may
+		// change, is read after it from the descriptor holding the file.
+		if werr = os.Rename(tmp.Name(), path); werr == nil {
+			info, serr := tmp.Stat()
+			if cerr := tmp.Close(); serr == nil {
+				serr = cerr
+			}
+			return info, serr
+		}
+	}
 	info, serr := tmp.Stat()
 	if werr == nil {
 		werr = serr
@@ -526,7 +549,8 @@ const unpackLimit = 100
 // what it holds already through write, which freshens it, writes it
 // loose if a sweep removed it, and has the commit that names it sync
 // it. It returns each entry's size.
-func (s *Store) packEntries(entries []agentsession.Entry, blobs map[string][]byte) (map[string]int64, error) {
+// What it leaves to sync goes in pend, which the caller flushes.
+func (s *Store) packEntries(entries []agentsession.Entry, blobs map[string][]byte, pend *pendSet) (map[string]int64, error) {
 	sizes := map[string]int64{}
 	var all []packObject
 	for _, e := range entries {
@@ -560,7 +584,7 @@ func (s *Store) packEntries(entries []agentsession.Entry, blobs map[string][]byt
 		held = all
 	}
 	for _, o := range held {
-		if err := s.objs.write(o.sp, o.hash, o.data, true); err != nil {
+		if err := s.objs.writeTo(o.sp, o.hash, o.data, true, pend); err != nil {
 			return nil, fmt.Errorf("cas: store: %w", err)
 		}
 	}
@@ -571,13 +595,13 @@ func (s *Store) packEntries(entries []agentsession.Entry, blobs map[string][]byt
 // each would, so a fork's prefix is young to the sweep until the fork's
 // header lands, and an object a sweep removed from under this store's
 // view is written back loose.
-func (s *Store) freshenPath(id string) error {
+func (s *Store) freshenPath(id string, pend *pendSet) error {
 	for id != "" {
 		env, err := s.objs.read(spaceEntries, id)
 		if err != nil {
 			return err
 		}
-		if err := s.objs.write(spaceEntries, id, env, true); err != nil {
+		if err := s.objs.writeTo(spaceEntries, id, env, true, pend); err != nil {
 			return err
 		}
 		c, ok := envelopeContent(env)
@@ -588,7 +612,7 @@ func (s *Store) freshenPath(id string) error {
 		if err != nil {
 			return err
 		}
-		if err := s.objs.write(spaceContents, c, body, true); err != nil {
+		if err := s.objs.writeTo(spaceContents, c, body, true, pend); err != nil {
 			return err
 		}
 		if id, err = s.parentOf(id); err != nil {
@@ -709,20 +733,23 @@ func (s *Store) isLeafLabel(id string) (bool, error) {
 // log or on a session's prefix. An object written ahead of its log
 // record is in neither. It builds the index if nothing has.
 func (s *Store) holds(id string) bool {
-	s.idx.Lock()
-	defer s.idx.Unlock()
 	if err := s.ensureIndex(); err != nil {
 		return false
 	}
+	s.idx.Lock()
+	defer s.idx.Unlock()
 	return len(s.owners[id]) > 0 || s.prefix[id]
 }
 
-// ensureIndex builds the index once. The caller holds idx.
+// ensureIndex builds the index once.
 func (s *Store) ensureIndex() error {
-	if s.indexed {
+	s.idx.Lock()
+	indexed := s.indexed
+	s.idx.Unlock()
+	if indexed {
 		return nil
 	}
-	return s.index()
+	return s.index(false)
 }
 
 // holderOf finds a session that holds the entry, in its log or on its
@@ -760,20 +787,25 @@ func (s *Store) holderOf(entry, parent string) (owner string, held bool, err err
 		}
 		parent = hdr.ParentSession
 	}
-	s.idx.Lock()
-	defer s.idx.Unlock()
 	if err := s.ensureIndex(); err != nil {
 		return "", false, err
 	}
-	if !(len(s.owners[entry]) > 0 || s.prefix[entry]) {
-		// Another process may have committed it since the index was
-		// built; look again before saying no.
-		if err := s.index(); err != nil {
-			return "", false, err
-		}
+	lookup := func() (string, bool) {
+		s.idx.Lock()
+		defer s.idx.Unlock()
+		owner, ok := s.anyOwner(entry)
+		return owner, ok || s.prefix[entry]
 	}
-	owner, ok := s.anyOwner(entry)
-	return owner, ok || s.prefix[entry], nil
+	if owner, ok := lookup(); ok {
+		return owner, true, nil
+	}
+	// Another process may have committed it since the index was built;
+	// look again before saying no.
+	if err := s.index(true); err != nil {
+		return "", false, err
+	}
+	owner, ok := lookup()
+	return owner, ok, nil
 }
 
 // onPath reports whether entry is on the path to tip.
@@ -796,19 +828,43 @@ func (s *Store) onPath(entry, tip string) (bool, error) {
 func (s *Store) own(entry, session string) {
 	s.idx.Lock()
 	defer s.idx.Unlock()
-	s.ownLocked(entry, session)
+	if s.building {
+		s.deltas = append(s.deltas, func(owners map[string]map[string]bool, _ map[string]bool) {
+			addOwner(owners, entry, session)
+		})
+	}
+	if s.indexed {
+		addOwner(s.owners, entry, session)
+	}
 }
 
-func (s *Store) ownLocked(entry, session string) {
-	if !s.indexed {
-		return
-	}
-	set := s.owners[entry]
+func addOwner(owners map[string]map[string]bool, entry, session string) {
+	set := owners[entry]
 	if set == nil {
 		set = map[string]bool{}
-		s.owners[entry] = set
+		owners[entry] = set
 	}
 	set[session] = true
+}
+
+// disown takes a deleted session out of the index.
+func (s *Store) disown(session string) {
+	drop := func(owners map[string]map[string]bool, _ map[string]bool) {
+		for e, set := range owners {
+			delete(set, session)
+			if len(set) == 0 {
+				delete(owners, e)
+			}
+		}
+	}
+	s.idx.Lock()
+	defer s.idx.Unlock()
+	if s.building {
+		s.deltas = append(s.deltas, drop)
+	}
+	if s.indexed {
+		drop(s.owners, s.prefix)
+	}
 }
 
 // anyOwner returns one session whose log holds the entry, or "". The
@@ -843,10 +899,11 @@ func (s *Store) PutBlob(ctx context.Context, data []byte) (string, error) {
 		return "", err
 	}
 	defer guard.release()
-	if err := s.objs.write(spaceContents, hash, data, true); err != nil {
+	pend := newPendSet()
+	if err := s.objs.writeTo(spaceContents, hash, data, true, pend); err != nil {
 		return "", fmt.Errorf("cas: store blob: %w", err)
 	}
-	if err := s.objs.flush(); err != nil {
+	if err := s.objs.flushSet(pend); err != nil {
 		return "", fmt.Errorf("cas: store blob: %w", err)
 	}
 	return hash, nil
@@ -1128,33 +1185,67 @@ func (s *Store) emptyLoose(id string) bool {
 // synced nothing; without this, the next durable append made here could
 // be cut with them by a later crash.
 func (s *Store) adopt(id, dir string, entries []string) error {
+	pend := newPendSet()
 	for _, e := range entries {
-		if err := s.objs.freshen(spaceEntries, e); err != nil {
+		if err := s.freshenEntry(e, pend); err != nil {
 			return fmt.Errorf("cas: session %s: %w", id, err)
 		}
-		c, err := s.contentOf(e)
-		if err != nil {
-			return fmt.Errorf("cas: session %s: %w", id, err)
-		}
-		if err := s.objs.freshen(spaceContents, c); err != nil {
-			return fmt.Errorf("cas: session %s: %w", id, err)
-		}
+	}
+	if err := s.objs.flushSet(pend); err != nil {
+		return fmt.Errorf("cas: session %s: %w", id, err)
 	}
 	return s.appendRecords(nil, dir, true, logRecord{Op: opSync, Session: id})
 }
 
 // index builds what the store holds from every session's log and base.
 // It reads every session, so it is built only when a lookup needs it.
-// The caller holds idx.
-func (s *Store) index() error {
-	s.owners, s.prefix, s.indexed = map[string]map[string]bool{}, map[string]bool{}, true
+// index builds the index by reading every session, with no lock held,
+// so appends and opens of every session go on meanwhile; what they
+// record while it runs is applied to what it built. Unless force is
+// set, a build is not repeated once one has finished.
+func (s *Store) index(force bool) error {
+	s.indexing.Lock()
+	defer s.indexing.Unlock()
+	s.idx.Lock()
+	if s.indexed && !force {
+		s.idx.Unlock()
+		return nil
+	}
+	s.building, s.deltas = true, nil
+	s.idx.Unlock()
+	owners, prefix, err := s.scanIndex()
+	s.idx.Lock()
+	defer s.idx.Unlock()
+	deltas := s.deltas
+	s.building, s.deltas = false, nil
+	if err != nil {
+		return err
+	}
+	for _, d := range deltas {
+		d(owners, prefix)
+	}
+	s.owners, s.prefix, s.indexed = owners, prefix, true
+	return nil
+}
+
+// scanning, when set, is called as scanIndex reads each session, so a
+// test can hold a build part way.
+var scanning func()
+
+// scanIndex reads what every session's log holds and every session's
+// prefix.
+func (s *Store) scanIndex() (map[string]map[string]bool, map[string]bool, error) {
+	owners, prefix := map[string]map[string]bool{}, map[string]bool{}
 	dirs, err := os.ReadDir(filepath.Join(s.root, "sessions"))
 	if err != nil {
-		return fmt.Errorf("cas: %w", err)
+		return nil, nil, fmt.Errorf("cas: %w", err)
 	}
 	for _, d := range dirs {
 		if !d.IsDir() || !validSessionID(d.Name()) {
 			continue
+		}
+		if scanning != nil {
+			scanning()
 		}
 		dir := filepath.Join(s.root, "sessions", d.Name())
 		l, err := readSessionLog(dir, 0)
@@ -1166,21 +1257,25 @@ func (s *Store) index() error {
 			continue
 		}
 		for _, h := range heldEntries(l.recs) {
-			s.ownLocked(h, d.Name())
+			addOwner(owners, h, d.Name())
 		}
 		h, err := readHeader(dir)
 		if err != nil {
 			continue
 		}
 		if h.Base != "" {
-			if err := s.markPrefix(h.Base); err != nil {
+			path, err := s.pathTo(h.Base)
+			if err != nil {
 				s.setFaulty(d.Name(), err)
 				continue
+			}
+			for _, e := range path {
+				prefix[e] = true
 			}
 		}
 		s.setFaulty(d.Name(), nil)
 	}
-	return nil
+	return owners, prefix, nil
 }
 
 // setFaulty records why a session could not be read, or with nil that
@@ -1196,27 +1291,40 @@ func (s *Store) setFaulty(id string, err error) {
 }
 
 // notePrefix records the path to a new session's base in the index,
-// once there is one.
+// once there is one; the path is read with no lock held.
 func (s *Store) notePrefix(base string) error {
+	path, err := s.pathTo(base)
+	if err != nil {
+		return err
+	}
+	mark := func(_ map[string]map[string]bool, prefix map[string]bool) {
+		for _, e := range path {
+			prefix[e] = true
+		}
+	}
 	s.idx.Lock()
 	defer s.idx.Unlock()
-	if !s.indexed {
-		return nil
+	if s.building {
+		s.deltas = append(s.deltas, mark)
 	}
-	return s.markPrefix(base)
+	if s.indexed {
+		mark(s.owners, s.prefix)
+	}
+	return nil
 }
 
-// markPrefix records the path to base as held. The caller holds idx.
-func (s *Store) markPrefix(base string) error {
+// pathTo returns the entries on the path to base, base first.
+func (s *Store) pathTo(base string) ([]string, error) {
+	var path []string
 	for id := base; id != ""; {
-		s.prefix[id] = true
+		path = append(path, id)
 		parent, err := s.parentOf(id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		id = parent
 	}
-	return nil
+	return path, nil
 }
 
 // --- per-session files ---
@@ -1401,12 +1509,13 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 	}
 	defer guard.release()
 	if h.Base != "" {
-		if err := s.freshenPath(h.Base); err != nil {
+		pend := newPendSet()
+		if err := s.freshenPath(h.Base, pend); err != nil {
 			return fail(err)
 		}
 		// The path's objects are durable before any log that names the
 		// base is, whichever process wrote them.
-		if err := s.objs.flush(); err != nil {
+		if err := s.objs.flushSet(pend); err != nil {
 			return fail(err)
 		}
 		if err := s.commitOrigin(owner, h.Base); err != nil {
@@ -1519,6 +1628,7 @@ func (s *Store) commitOrigin(owner, base string) error {
 			lostAt[r.Entry] = i
 		}
 	}
+	pend := newPendSet()
 	for i := synced + 1; i <= at; i++ {
 		r := l.recs[i]
 		if r.Op != opAppend || !r.Lazy || r.Entry == "" {
@@ -1527,11 +1637,11 @@ func (s *Store) commitOrigin(owner, base string) error {
 		if k, ok := lostAt[r.Entry]; ok && k > i {
 			continue
 		}
-		if err := s.freshenEntry(r.Entry); err != nil {
+		if err := s.freshenEntry(r.Entry, pend); err != nil {
 			return fmt.Errorf("%w: base %s: its origin %s holds an uncommitted append before it that is gone: %v", agentsession.ErrNoEntry, base, owner, err)
 		}
 	}
-	if err := s.objs.flush(); err != nil {
+	if err := s.objs.flushSet(pend); err != nil {
 		return err
 	}
 	return fsyncPath(filepath.Join(dir, logName))
@@ -1539,15 +1649,15 @@ func (s *Store) commitOrigin(owner, base string) error {
 
 // freshenEntry writes an entry's two objects durably, rewriting any a
 // crash or a sweep took.
-func (s *Store) freshenEntry(id string) error {
-	if err := s.objs.freshen(spaceEntries, id); err != nil {
+func (s *Store) freshenEntry(id string, pend *pendSet) error {
+	if err := s.objs.freshenTo(spaceEntries, id, pend); err != nil {
 		return err
 	}
 	c, err := s.contentOf(id)
 	if err != nil {
 		return err
 	}
-	return s.objs.freshen(spaceContents, c)
+	return s.objs.freshenTo(spaceContents, c, pend)
 }
 
 // withSync appends a sync record to records a durable commit writes when
@@ -1875,14 +1985,20 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	r, err := s.writeHeld(ctx, h, sessionID, e)
 	h.mu.Unlock()
 	if err == nil && r.Outcome != agentsession.Held {
-		// A pack runs with no session's lock held, as another process's
-		// would.
+		// A pack runs in the background, with no session's lock held,
+		// as another process's would, so no append waits for it; one at
+		// a time.
 		s.mu.Lock()
 		s.appends++
 		pack := s.appends%autoPackEvery == 0
 		s.mu.Unlock()
-		if pack {
-			s.maybePack()
+		if pack && s.packing.CompareAndSwap(false, true) {
+			s.background.Add(1)
+			go func() {
+				defer s.background.Done()
+				defer s.packing.Store(false)
+				s.maybePack()
+			}()
 		}
 	}
 	return r, err
@@ -2348,14 +2464,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if err := syncDir(filepath.Join(s.root, "sessions")); err != nil {
 		return err
 	}
-	s.idx.Lock()
-	for e, set := range s.owners {
-		delete(set, id)
-		if len(set) == 0 {
-			delete(s.owners, e)
-		}
-	}
-	s.idx.Unlock()
+	s.disown(id)
 	_ = os.RemoveAll(gone)
 	return nil
 }
@@ -2438,6 +2547,7 @@ func (s *Store) Close() error {
 		}
 		h.mu.Unlock()
 	}
+	s.background.Wait()
 	if !s.readOnly {
 		if err := s.objs.flush(); err != nil && first == nil {
 			first = err
@@ -2660,13 +2770,14 @@ func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header,
 		lk.release()
 		return nil, err
 	}
-	sizes, err := s.packEntries(stored, blobs)
+	pend := newPendSet()
+	sizes, err := s.packEntries(stored, blobs, pend)
 	if err != nil {
 		return fail(err)
 	}
 	// What packEntries left loose reaches the disk before the log that
 	// names it: the session is committed before it is acknowledged.
-	if err := s.objs.flush(); err != nil {
+	if err := s.objs.flushSet(pend); err != nil {
 		return fail(err)
 	}
 	recs := []logRecord{{Op: opCreate, Session: h.ID, Base: h.Base}, {Op: opMark, Session: h.ID, Mark: mark}}

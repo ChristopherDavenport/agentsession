@@ -446,13 +446,16 @@ order, leave blocks of that uncommitted tail unwritten, and what it
 takes there is working state, dropped as a crash's loss. Anything else
 that fails its checksum, a record or bytes that are no record, is
 damage, reported rather than skipped, since the log is the session's
-only record. The head, the record mark and any other index are rebuilt
-from the log and never read over it, so a crash that leaves one behind
-or ahead of the log changes nothing. Recovery reads one session's log,
-when the session is opened, so what a store pays to recover a session is
-proportional to that session's log, however large the store has grown. A
-session's log is deleted with the session and holds nothing of any
-other, so there is nothing store-wide to compact.
+only record. The one damage the bytes cannot tell from a crash's is a
+committed record the medium itself unwrote, with nothing committed after
+it: it reads as an uncommitted tail, and is cut as one, unless a store
+keeps where its commits end. The head, the record mark and any other
+index are rebuilt from the log and never read over it, so a crash that
+leaves one behind or ahead of the log changes nothing. Recovery reads
+one session's log, when the session is opened, so what a store pays to
+recover a session is proportional to that session's log, however large
+the store has grown. A session's log is deleted with the session and
+holds nothing of any other, so there is nothing store-wide to compact.
 
 A store built on a database that has its own write-ahead log gets
 atomicity and recovery from the database. Durability it must still ask
@@ -603,8 +606,10 @@ apply here, where holding the session already is the usual case.
   rests on working state: a sender MUST commit the session before it
   pushes or serves it, and one that cannot, such as a store open
   read-only beside another process's writer, MUST serve only what that
-  writer committed; a receiver MUST commit what it admits, and a mark
-  it sets, before it acknowledges them. A `leaf` label
+  writer's log shows committed, which may include an append whose
+  commit is still in flight and that the writer takes back if the
+  commit fails; a receiver MUST commit what it admits, and a mark it
+  sets, before it acknowledges them. A `leaf` label
   among the pushed entries is an entry like any other here, and the head
   moves only by the compare-and-swap below.
 - **A receiver that lacks the session** first admits the prefix, so that

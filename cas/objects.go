@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -44,6 +45,13 @@ type objects struct {
 	// the directories they were renamed into.
 	pendFiles map[string]bool
 	pendDirs  map[string]bool
+	// pendRenamed holds the objects written durably whose directories
+	// are yet to be synced, which a failed sync of one writes again.
+	pendRenamed map[string]bool
+	// fanned holds the spaces whose fan-out directories this store has
+	// seen made durable; fanning makes them, one space at a time.
+	fanned  map[string]bool
+	fanning sync.Mutex
 	// rewrite holds pending objects an fsync failed on, which the next
 	// flush writes again rather than fsyncs again.
 	rewrite map[string]bool
@@ -54,8 +62,16 @@ type objects struct {
 	// so the same file still holds them, unless an fsync of it has
 	// failed since. A file not yet fsynced is not taken on trust: its
 	// writeback may fail in the background, and its pages be evicted
-	// and read back as zeros, before any fsync reports it.
-	checked map[string]os.FileInfo
+	// and read back as zeros, before any fsync reports it. A file is
+	// known by its version, change time included, since a file made
+	// after it is removed may take over its inode.
+	checked map[string]fileVersion
+}
+
+// fileVersion is one version of a file, as versionOf reads it.
+type fileVersion struct {
+	dev, ino    uint64
+	ctime, size int64
 }
 
 // checkedSize is the least size of a loose object whose check is
@@ -63,7 +79,7 @@ type objects struct {
 const checkedSize = 64 << 10
 
 func newObjects(root string) *objects {
-	return &objects{root: root, pendFiles: map[string]bool{}, pendDirs: map[string]bool{}, rewrite: map[string]bool{}, checked: map[string]os.FileInfo{}}
+	return &objects{root: root, pendFiles: map[string]bool{}, pendDirs: map[string]bool{}, pendRenamed: map[string]bool{}, fanned: map[string]bool{}, rewrite: map[string]bool{}, checked: map[string]fileVersion{}}
 }
 
 func (o *objects) packDir() string { return filepath.Join(o.root, "objects", "pack") }
@@ -295,10 +311,13 @@ func (o *objects) write(sp space, hash string, data []byte, durable bool) error 
 // flushes the objects its appends named and no other session's.
 type pendSet struct {
 	files, dirs map[string]bool
+	// renamed holds the objects written durably into dirs, which a
+	// failed sync of their directory writes again.
+	renamed map[string]bool
 }
 
 func newPendSet() *pendSet {
-	return &pendSet{files: map[string]bool{}, dirs: map[string]bool{}}
+	return &pendSet{files: map[string]bool{}, dirs: map[string]bool{}, renamed: map[string]bool{}}
 }
 
 // writeTo is write, remembering what it leaves unsynced in pend, or in
@@ -310,21 +329,12 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 	}
 	dir := filepath.Dir(path)
 	o.mu.Lock()
-	suspect, known := o.rewrite[path], o.checked[path]
+	suspect := o.rewrite[path]
 	o.mu.Unlock()
 	if info, err := os.Stat(path); err == nil && info.Size() == int64(len(data)) && !suspect {
-		// A loose copy is taken only once its bytes are read and match:
-		// a crash, or a writeback that failed, can leave a file of the
-		// right length holding zeros.
-		if known == nil || !os.SameFile(known, info) {
-			have, err := os.ReadFile(path)
-			if err == nil && !bytes.Equal(have, data) {
-				goto write
-			}
-		}
-		if err == nil {
-			now := time.Now()
-			err = os.Chtimes(path, now, now)
+		ok, err := o.reuse(path, data)
+		if err == nil && !ok {
+			goto write
 		}
 		if err == nil {
 			return o.remember(pend, path, dir)
@@ -332,6 +342,10 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 			return err
 		}
 		// Packed and removed since the stat; look in the packs.
+	} else if errors.Is(err, os.ErrNotExist) {
+		o.mu.Lock()
+		delete(o.checked, path)
+		o.mu.Unlock()
 	} else if err == nil {
 		// A loose copy of the wrong length, or one whose fsync failed,
 		// is written again below: this write holds its right bytes.
@@ -347,11 +361,8 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 		// The pack was removed by a sweep; write the object loose.
 	}
 write:
-	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-		o.remember(pend, "", filepath.Dir(dir))
+	if err := o.fanOut(filepath.Dir(dir)); err != nil {
+		return err
 	}
 	info, err := writeFileInfo(path, data, durable)
 	if err != nil {
@@ -367,27 +378,131 @@ write:
 	if !durable {
 		return o.remember(pend, path, dir)
 	}
-	return o.remember(pend, "", dir)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	renamed, dirs := o.pendRenamed, o.pendDirs
+	if pend != nil {
+		renamed, dirs = pend.renamed, pend.dirs
+	}
+	renamed[path] = true
+	dirs[dir] = true
+	return nil
 }
 
-// check remembers a large loose file found to hold its object's bytes.
+// fanOut makes a space's fan-out directories, all of them at once, and
+// syncs the space's directory, the first time this store writes into
+// the space; no object is renamed into a directory a crash could take.
+// A directory that exists is not made again, so those made here whose
+// parent's sync failed are removed, for a later write to make again,
+// rather than kept on the word of a later sync; no write has used them,
+// since none writes into a space before its fan-out is durable.
+func (o *objects) fanOut(space string) error {
+	o.mu.Lock()
+	done := o.fanned[space]
+	o.mu.Unlock()
+	if done {
+		return nil
+	}
+	o.fanning.Lock()
+	defer o.fanning.Unlock()
+	o.mu.Lock()
+	done = o.fanned[space]
+	o.mu.Unlock()
+	if done {
+		return nil
+	}
+	if err := os.MkdirAll(space, 0o755); err != nil {
+		return err
+	}
+	var made []string
+	for i := range 256 {
+		d := filepath.Join(space, fmt.Sprintf("%02x", i))
+		if err := os.Mkdir(d, 0o755); err == nil {
+			made = append(made, d)
+		} else if !errors.Is(err, os.ErrExist) {
+			for _, m := range made {
+				os.Remove(m)
+			}
+			return err
+		}
+	}
+	if err := syncDir(space); err != nil {
+		for _, m := range made {
+			os.Remove(m)
+		}
+		return err
+	}
+	o.mu.Lock()
+	o.fanned[space] = true
+	o.mu.Unlock()
+	return nil
+}
+
+// reuse takes the loose file at path for a copy of data, and freshens
+// it, when it holds data's bytes: it is read and compared, unless it is
+// the version this store fsynced. The file is opened once, and read,
+// compared and freshened through that one descriptor, so a file put in
+// its place meanwhile is not taken for it.
+func (o *objects) reuse(path string, data []byte) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	pre, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if pre.Size() != int64(len(data)) {
+		return false, nil
+	}
+	v, known := versionOf(pre)
+	o.mu.Lock()
+	known = known && o.checked[path] == v
+	o.mu.Unlock()
+	if !known {
+		have, err := io.ReadAll(f)
+		if err != nil {
+			return false, err
+		}
+		if !bytes.Equal(have, data) {
+			return false, nil
+		}
+	}
+	if err := touchFile(f, time.Now()); err != nil {
+		return false, err
+	}
+	if known {
+		// Freshening changed the file's change time; the version this
+		// store knows follows it.
+		if post, err := f.Stat(); err == nil {
+			if pv, ok := versionOf(post); ok {
+				o.mu.Lock()
+				if o.checked[path] == v {
+					o.checked[path] = pv
+				}
+				o.mu.Unlock()
+			}
+		}
+	}
+	return true, nil
+}
+
+// check remembers a large loose file this store fsynced.
 func (o *objects) check(path string, info os.FileInfo) {
-	if info.Size() < checkedSize {
+	v, ok := versionOf(info)
+	if !ok || v.size < checkedSize {
 		return
 	}
 	o.mu.Lock()
-	o.checked[path] = info
+	o.checked[path] = v
 	o.mu.Unlock()
 }
 
-// freshen is write for an object known only by its name: it reads the
-// object, from a pack a sweep removed if this store still holds it
-// open, and writes or freshens it.
-func (o *objects) freshen(sp space, hash string) error {
-	return o.freshenTo(sp, hash, nil)
-}
-
-// freshenTo is freshen, remembering what it leaves unsynced in pend.
+// freshenTo is write for an object known only by its name: it reads
+// the object, from a pack a sweep removed if this store still holds it
+// open, and writes or freshens it, remembering what it leaves unsynced
+// in pend.
 func (o *objects) freshenTo(sp space, hash string, pend *pendSet) error {
 	data, err := o.read(sp, hash)
 	if err != nil {
@@ -459,13 +574,13 @@ func (o *objects) flush() error {
 // nil, as flush does.
 func (o *objects) flushSet(pend *pendSet) error {
 	o.mu.Lock()
-	var files, dirs map[string]bool
+	var files, dirs, renamed map[string]bool
 	if pend == nil {
-		files, dirs = o.pendFiles, o.pendDirs
-		o.pendFiles, o.pendDirs = map[string]bool{}, map[string]bool{}
+		files, dirs, renamed = o.pendFiles, o.pendDirs, o.pendRenamed
+		o.pendFiles, o.pendDirs, o.pendRenamed = map[string]bool{}, map[string]bool{}, map[string]bool{}
 	} else {
-		files, dirs = pend.files, pend.dirs
-		pend.files, pend.dirs = map[string]bool{}, map[string]bool{}
+		files, dirs, renamed = pend.files, pend.dirs, pend.renamed
+		pend.files, pend.dirs, pend.renamed = map[string]bool{}, map[string]bool{}, map[string]bool{}
 	}
 	o.mu.Unlock()
 	// A failed fsync is not tried again. Linux marks the pages whose
@@ -515,6 +630,15 @@ func (o *objects) flushSet(pend *pendSet) error {
 	})
 	if err != nil {
 		putBack(failed, slices.Collect(maps.Keys(dirs)))
+		o.mu.Lock()
+		pr := o.pendRenamed
+		if pend != nil {
+			pr = pend.renamed
+		}
+		for f := range renamed {
+			pr[f] = true
+		}
+		o.mu.Unlock()
 		return err
 	}
 	// Every rename above, and every object's, is in a directory synced
@@ -523,16 +647,23 @@ func (o *objects) flushSet(pend *pendSet) error {
 		dirs[filepath.Dir(f)] = true
 	}
 	failed, err = syncAll(dirs, func(d string) error {
-		if err := syncDir(d); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := syncObjectDir(d); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		return nil
 	})
 	if err != nil {
 		// The names a failed directory holds are renamed into it again
-		// by the next flush, so it has something of its own to sync.
+		// by the next flush, so it has something of its own to sync:
+		// a sync of it again could report the failed one's names
+		// written when they are not.
 		var again []string
 		for f := range files {
+			if slices.Contains(failed, filepath.Dir(f)) {
+				again = append(again, f)
+			}
+		}
+		for f := range renamed {
 			if slices.Contains(failed, filepath.Dir(f)) {
 				again = append(again, f)
 			}
@@ -623,6 +754,10 @@ func (o *objects) objectAt(path string) (space, string, bool) {
 	}
 	return 0, "", false
 }
+
+// syncObjectDir fsyncs an object directory; a variable so a test can
+// fail it.
+var syncObjectDir = syncDir
 
 // syncObject fsyncs an object's file; a variable so a test can fail it.
 var syncObject = func(f *os.File) error { return f.Sync() }

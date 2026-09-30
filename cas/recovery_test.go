@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1204,6 +1205,229 @@ func TestLazyLargeObjectNotTrusted(t *testing.T) {
 	defer r.Close()
 	if _, err := r.Open(ctx, "b"); err != nil {
 		t.Errorf("a session committed over a large object gone to zeros: %v", err)
+	}
+}
+
+// TestNoSharedPending: what a fork, an import, an exchange, a blob and
+// a recovery write, each flushes itself; nothing waits in the store's
+// own set, where a flush of one caller could return before another's
+// fsyncs had.
+func TestNoSharedPending(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	defer st.Close()
+	ids := fill(t, st, "a", 3)
+	if _, err := st.Create(ctx, agentsession.Header{ID: "f", ParentSession: "a", Base: ids[1]}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutBlob(ctx, []byte("blob")); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := st.Project(ctx, &buf, "a"); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := Open(t.TempDir())
+	defer other.Close()
+	if _, err := other.Import(ctx, bytes.NewReader(buf.Bytes()), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Fetch(ctx, other, "a"); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []*objects{st.objs, other.objs} {
+		if n := len(o.pendFiles) + len(o.pendDirs) + len(o.pendRenamed); n != 0 {
+			t.Errorf("%d paths left in a store's own pending set", n)
+		}
+	}
+}
+
+// TestSweepPastUnwrittenTail: a crash's unwritten tail in one session's
+// log does not stop sweeps of the store before the session is opened.
+func TestSweepPastUnwrittenTail(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, st, "s", item("kept"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	hole := mustAppend(t, st, "s", item("hole"))
+	mustAppend(t, st, "s", item("after"))
+	crash(st)
+	p := filepath.Join(root, "sessions", "s", logName)
+	data, _ := os.ReadFile(p)
+	var out []byte
+	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
+		if bytes.Contains(line, []byte(hole)) {
+			line = make([]byte, len(line))
+		}
+		out = append(out, line...)
+	}
+	os.WriteFile(p, out, 0o600)
+	w, _ := Open(root)
+	defer w.Close()
+	if _, err := w.Sweep(ctx, 0); err != nil {
+		t.Errorf("a sweep past an unwritten tail: %v", err)
+	}
+}
+
+// TestIndexBuildBlocksNothing: while a fork builds the index, reading
+// every session, appends and opens of other sessions go on.
+func TestIndexBuildBlocksNothing(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir(), WithSync(SyncNever))
+	defer st.Close()
+	ids := fill(t, st, "a", 2)
+	st.Create(ctx, agentsession.Header{ID: "b"})
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	scanning = func() {
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+	}
+	defer func() { scanning = nil }()
+	done := make(chan error)
+	go func() {
+		// No parent named: the base is looked up in the index.
+		_, err := st.Create(ctx, agentsession.Header{ID: "f", Base: ids[1]})
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case err := <-done:
+		t.Fatalf("the fork ended before building the index: %v", err)
+	}
+	appended := make(chan error)
+	go func() {
+		_, err := st.Append(ctx, "b", item("during"))
+		appended <- err
+	}()
+	waited := false
+	select {
+	case err := <-appended:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("an append waited on an index build")
+		waited = true
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if waited {
+		<-appended
+	}
+	if owner, held, err := st.holderOf(ids[0], ""); err != nil || !held || owner != "a" {
+		t.Errorf("the index after the build: %s %v %v", owner, held, err)
+	}
+}
+
+// TestExchangeWithSelf: a store does not push to or fetch from itself,
+// nor from another Store open on its directory; a handover to itself
+// would leave no store the record.
+func TestExchangeWithSelf(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	defer st.Close()
+	fill(t, st, "s", 1)
+	if _, err := st.Push(ctx, st, "s", PushOptions{Handover: true}); !errors.Is(err, ErrSameStore) {
+		t.Errorf("a push to itself: %v", err)
+	}
+	twin, _ := Open(root, WithReadOnly())
+	defer twin.Close()
+	if _, err := st.Fetch(ctx, twin, "s"); !errors.Is(err, ErrSameStore) {
+		t.Errorf("a fetch from its own directory: %v", err)
+	}
+	if m, _ := st.Mark(ctx, "s"); m != MarkRecord {
+		t.Errorf("the mark after: %s", m)
+	}
+}
+
+// TestCheckedFileChangedInPlace: a large object this store fsynced and
+// remembers, changed in place since, is read and compared at its next
+// reuse, not taken for the version it fsynced.
+func TestCheckedFileChangedInPlace(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	big := strings.Repeat("large content ", (checkedSize/14)+1)
+	st.Create(ctx, agentsession.Header{ID: "a"})
+	e := mustAppend(t, st, "a", item(big))
+	c, _ := st.contentOf(e)
+	p, _ := st.objs.loosePath(spaceContents, c)
+	if _, ok := st.objs.checked[p]; !ok && runtime.GOOS == "linux" {
+		t.Fatal("a durable write was not remembered")
+	}
+	info, _ := os.Stat(p)
+	f, _ := os.OpenFile(p, os.O_WRONLY, 0)
+	f.WriteAt(make([]byte, info.Size()), 0)
+	f.Close()
+	st.Create(ctx, agentsession.Header{ID: "b"})
+	mustAppend(t, st, "b", item(big))
+	st.Close()
+	r, _ := Open(root)
+	defer r.Close()
+	if _, err := r.Open(ctx, "b"); err != nil {
+		t.Errorf("a session committed over a file changed in place: %v", err)
+	}
+}
+
+// TestUncheckedRecordIsDamage: a record of a session's log whose
+// checksum member damage renamed reads without its checksum, and is
+// damage, not a record from before checksums.
+func TestUncheckedRecordIsDamage(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	fill(t, st, "s", 2)
+	st.Close()
+	p := filepath.Join(root, "sessions", "s", logName)
+	data, _ := os.ReadFile(p)
+	lines := bytes.SplitAfter(data, []byte("\n"))
+	lines[2] = bytes.Replace(lines[2], []byte(`"crc":"`), []byte(`"crx":"`), 1)
+	os.WriteFile(p, bytes.Join(lines, nil), 0o600)
+	r, _ := Open(root)
+	defer r.Close()
+	if _, err := r.Open(ctx, "s"); !errors.As(err, new(LogDamage)) {
+		t.Errorf("a record without its checksum: %v", err)
+	}
+}
+
+// TestFailedObjectDirSyncRewrites: objects renamed into a directory
+// whose fsync failed are written into it again, durable or lazy, not
+// left to a sync of it again.
+func TestFailedObjectDirSyncRewrites(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	old := syncObjectDir
+	syncObjectDir = func(string) error { return errors.New("injected directory fsync failure") }
+	_, err := st.Append(ctx, "s", item("one"))
+	syncObjectDir = old
+	if err == nil {
+		t.Fatal("the commit reported success")
+	}
+	before := map[string]os.FileInfo{}
+	for f := range st.open["s"].pend.files {
+		before[f], _ = os.Stat(f)
+	}
+	if len(before) == 0 {
+		t.Fatal("nothing left to write again")
+	}
+	mustAppend(t, st, "s", item("two"))
+	for f, info := range before {
+		if now, err := os.Stat(f); err != nil || os.SameFile(info, now) {
+			t.Errorf("%s was left to a sync of its directory again: %v", f, err)
+		}
 	}
 }
 

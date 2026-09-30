@@ -134,6 +134,14 @@ func parseSessionLog(r interface {
 		start := l.whole
 		l.whole += int64(len(line))
 		recs, derr := decodeLine(line)
+		for _, r := range recs {
+			if !r.checked && derr == nil {
+				// Every record of a session's log carries a checksum; one
+				// read without, as the journal's oldest were, lost it to
+				// damage.
+				derr = errUnchecked
+			}
+		}
 		if derr == nil && (!bytes.HasPrefix(line, recordOpening) || len(recs) != bytes.Count(line, recordOpening)) {
 			// The journal's reading passes over torn bytes a later record
 			// landed after. A session's holder cuts a torn tail before it
@@ -191,14 +199,12 @@ func (s *Store) appendRecords(h *handle, dir string, durable bool, recs ...logRe
 	if err != nil {
 		return err
 	}
-	if durable {
+	if durable && h != nil {
 		// A session's commit flushes what its own appends wrote or found
-		// lazily; recovery, which has no handle, flushes the store's own.
-		var pend *pendSet
-		if h != nil {
-			pend = h.pend
-		}
-		if err := s.objs.flushSet(pend); err != nil {
+		// lazily. A caller with no handle flushed what it wrote itself,
+		// and no other caller's: a flush of a set another caller shares
+		// could return before that caller's fsyncs had.
+		if err := s.objs.flushSet(h.pend); err != nil {
 			return fmt.Errorf("cas: flush: %w", err)
 		}
 	}
@@ -292,6 +298,9 @@ func (s *Store) rewriteLog(h *handle, dir string, size int64) error {
 
 // writeLogFile writes a log again; a variable so a test can fail it.
 var writeLogFile = writeAtomic
+
+// errUnchecked is a record of a session's log without its checksum.
+var errUnchecked = errors.New("a record without its checksum")
 
 // errSkipped is a line of a session's log holding bytes that are no
 // record ahead of or between its records.

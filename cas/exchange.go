@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 
@@ -81,7 +82,9 @@ func (s *Store) bundleOf(ctx context.Context, id string) (*bundle, error) {
 	// A sender commits the session before it pushes or serves it, so a
 	// receiver never holds what a crash here could take back. A
 	// read-only store cannot commit another process's working state, and
-	// serves what that process committed.
+	// serves what that process's log shows committed: a durable append
+	// whose fsync is still in flight reads as committed, and the writer
+	// takes it back if the fsync fails.
 	sess, head, mark := h.session, h.head, h.mark
 	if !s.readOnly {
 		if err := s.commitHandle(id, h); err != nil {
@@ -139,6 +142,9 @@ func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions
 	if err := ctx.Err(); err != nil {
 		return Exchange{}, err
 	}
+	if s.sameStore(to) {
+		return Exchange{}, ErrSameStore
+	}
 	b, err := s.bundleOf(ctx, id)
 	if err != nil {
 		return Exchange{}, err
@@ -173,11 +179,29 @@ func (s *Store) Fetch(ctx context.Context, from *Store, id string) (Exchange, er
 	if err := ctx.Err(); err != nil {
 		return Exchange{}, err
 	}
+	if s.sameStore(from) {
+		return Exchange{}, ErrSameStore
+	}
 	b, err := from.bundleOf(ctx, id)
 	if err != nil {
 		return Exchange{}, err
 	}
 	return s.receive(ctx, b, receiveOptions{})
+}
+
+// ErrSameStore is an exchange between a store and itself, whether one
+// Store or two opened on one directory: it has one session to both send
+// and receive, and a handover would leave no store the record.
+var ErrSameStore = errors.New("cas: an exchange needs two stores; this one is both")
+
+// sameStore reports whether two Stores are one store.
+func (s *Store) sameStore(o *Store) bool {
+	if s == o {
+		return true
+	}
+	a, err1 := os.Stat(s.root)
+	b, err2 := os.Stat(o.root)
+	return err1 == nil && err2 == nil && os.SameFile(a, b)
 }
 
 type receiveOptions struct {
@@ -349,7 +373,8 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 		return Exchange{}, err
 	}
 	defer guard.release()
-	sizes, err := s.packEntries(append(append([]agentsession.Entry(nil), b.prefix...), fresh...), b.blobs)
+	pend := newPendSet()
+	sizes, err := s.packEntries(append(append([]agentsession.Entry(nil), b.prefix...), fresh...), b.blobs, pend)
 	if err != nil {
 		return Exchange{}, err
 	}
@@ -378,7 +403,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 		// Committed before it is acknowledged, as RFC 0002 requires of
 		// what a receiver admits and a mark it sets: the objects
 		// packEntries left loose first, then the log.
-		if err := s.objs.flush(); err != nil {
+		if err := s.objs.flushSet(pend); err != nil {
 			return Exchange{}, err
 		}
 		if err := s.appendRecords(h, h.dir, true, s.withSync(h, id, recs...)...); err != nil {

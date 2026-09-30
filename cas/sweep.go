@@ -120,7 +120,14 @@ func (s *Store) keepRecords(k keepSet, recs []logRecord) error {
 
 // logMarks is how far a sweep read each session's log, from which its
 // last step reads what was accepted since.
-type logMarks map[string]int64
+// A log recovery cut shorter since, or wrote again as a new file, is
+// read again whole.
+type logMarks map[string]logMark
+
+type logMark struct {
+	off  int64
+	file os.FileInfo
+}
 
 // keepAll computes what the store holds: what every session's log
 // names, and the path to every session's base.
@@ -147,15 +154,24 @@ func (s *Store) keepLogs(k keepSet, marks logMarks) error {
 		}
 		id := d.Name()
 		dir := filepath.Join(s.root, "sessions", id)
-		from, seen := marks[id]
-		if seen {
-			if info, err := os.Stat(filepath.Join(dir, logName)); err != nil || info.Size() <= from {
+		mark, seen := marks[id]
+		info, serr := os.Stat(filepath.Join(dir, logName))
+		from := int64(0)
+		if seen && serr == nil && os.SameFile(mark.file, info) && info.Size() >= mark.off {
+			if info.Size() == mark.off {
 				continue
 			}
+			from = mark.off
 		}
 		l, err := readSessionLog(dir, from)
 		if err == nil && l.legacy {
 			err = ErrLegacyStore
+		}
+		if err == nil && l.lost && tailLoss(l) {
+			// Blocks a crash left unwritten in the uncommitted tail:
+			// recovery cuts them as the tail's loss, and the lazy
+			// appends after them name nothing a sweep need stop at.
+			l.lost, l.whole = false, l.lossOff
 		}
 		if err == nil && l.lost {
 			// What a damaged record named cannot be known, and a sweep
@@ -169,14 +185,14 @@ func (s *Store) keepLogs(k keepSet, marks logMarks) error {
 		if err := s.keepRecords(k, l.recs); err != nil {
 			return fmt.Errorf("cas: sweep: %w", err)
 		}
-		if !seen {
+		if from == 0 {
 			if h, err := readHeader(dir); err == nil && h.Base != "" {
 				if err := s.keepPath(k, h.Base); err != nil {
 					return fmt.Errorf("cas: sweep: %w", err)
 				}
 			}
 		}
-		marks[id] = l.whole
+		marks[id] = logMark{off: l.whole, file: info}
 	}
 	return nil
 }

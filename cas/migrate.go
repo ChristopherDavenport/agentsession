@@ -608,19 +608,13 @@ func (s *Store) migrateSession(id string, scan *journalScan) error {
 	}
 	// Lazy appends that survived are made durable, as recovery would
 	// adopt them, since the rewritten log commits them.
+	pend := newPendSet()
 	for _, e := range v.adopt {
-		if err := s.objs.freshen(spaceEntries, e); err != nil {
-			return err
-		}
-		c, err := s.contentOf(e)
-		if err != nil {
-			return err
-		}
-		if err := s.objs.freshen(spaceContents, c); err != nil {
+		if err := s.freshenEntry(e, pend); err != nil {
 			return err
 		}
 	}
-	if err := s.objs.flush(); err != nil {
+	if err := s.objs.flushSet(pend); err != nil {
 		return err
 	}
 	recs := []logRecord{{Op: opCreate, Session: id, Base: hdr.Base}, {Op: opMark, Session: id, Mark: v.mark}}
