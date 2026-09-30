@@ -204,6 +204,9 @@ type Store struct {
 	// Verify and a sweep replay without holding mu.
 	scanMu sync.Mutex
 	scan   *journalScan
+	// checkpointed is the journal offset of the checkpoint the scan
+	// started from or last saved.
+	checkpointed int64
 }
 
 type handle struct {
@@ -2042,6 +2045,14 @@ func (s *Store) Close() error {
 	var first error
 	if !s.readOnly {
 		first = s.syncJournal()
+		// A store that only appended never replayed what it wrote; the
+		// next open's checkpoint should hold it. A failure only costs
+		// that open a longer replay.
+		if _, err := s.replay(); err == nil {
+			s.scanMu.Lock()
+			s.saveCheckpoint()
+			s.scanMu.Unlock()
+		}
 	}
 	for id, h := range s.open {
 		if err := h.lock.release(); err != nil && first == nil {

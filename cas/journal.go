@@ -277,23 +277,41 @@ type journalScan struct {
 //
 // The journal only grows, so the store keeps what it has read and each
 // replay reads only the records written since, by this process or any
-// other. What it returns is the caller's own, unchanged by later
-// replays.
+// other. The first starts from the store's checkpoint when it matches
+// the journal, and a writing store saves another once the journal has
+// grown checkpointEvery past the last. What replay returns is the
+// caller's own, unchanged by later replays.
 func (s *Store) replay() (*journalScan, error) {
 	s.scanMu.Lock()
 	defer s.scanMu.Unlock()
 	if s.scan == nil || s.journalShrank(s.scan.end) {
-		s.scan = &journalScan{states: map[string]*sessionState{}}
+		s.scan = s.loadCheckpoint()
+		if s.scan == nil {
+			s.scan = &journalScan{states: map[string]*sessionState{}}
+		}
+		s.checkpointed = s.scan.end
 	}
 	tail, err := s.scan.read(s.root)
 	if err != nil {
 		return nil, err
 	}
+	s.saveCheckpoint()
 	snap := s.scan.snapshot()
 	for _, rec := range tail {
 		snap.apply(rec)
 	}
 	return snap, nil
+}
+
+// saveCheckpoint writes the scan as the store's checkpoint once the
+// journal has grown checkpointEvery past the last, under scanMu.
+func (s *Store) saveCheckpoint() {
+	if s.readOnly || s.scan == nil || s.scan.end-s.checkpointed < checkpointEvery {
+		return
+	}
+	if s.writeCheckpoint(s.scan) == nil {
+		s.checkpointed = s.scan.end
+	}
 }
 
 // journalShrank reports whether the journal is shorter than end, which
