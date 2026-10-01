@@ -38,6 +38,14 @@ func TestConformance(t *testing.T) {
 			t.Cleanup(func() { st.Close() })
 			return st
 		},
+		Second: func(t *testing.T, s agentsession.Store) agentsession.Store {
+			st, err := Open(s.(*Store).Root())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		},
 	})
 }
 

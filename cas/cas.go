@@ -84,7 +84,8 @@
 // append. Only the holder writes a session's log, so a record a crash
 // cut short is at its end, and the next holder cuts it before writing.
 // [WithReadOnly] takes no session lock, so a session another process
-// holds can be read, projected and verified while it writes. The sweep
+// holds can be read, projected and verified while it writes, and
+// [Store.Read] reads one the same way through any store. The sweep
 // keeps everything a log names and every loose object younger than a
 // grace period, as git's collector spares a young loose object, so an
 // object written ahead of its record is safe.
@@ -252,6 +253,11 @@ func WithSync(p SyncPolicy) Option {
 // An open session is cached as it is in a writing store, so a session
 // read while another process appends to it shows what it held when it
 // was opened; call [Store.Release] and open it again to see the rest.
+// [Store.Read], on any store, reads a session without a hold and
+// caches nothing, so it reads what the store holds at each call. Both
+// read the writer's working state, as [Store.Read] says: what they show
+// can include appends the writer has not made durable, which a crash
+// can take back.
 func WithReadOnly() Option {
 	return func(s *Store) { s.readOnly = true }
 }
@@ -1999,7 +2005,17 @@ func (s *Store) assemble(h agentsession.Header, prefix, own [][]byte, head strin
 	return sess, nil
 }
 
-// Open implements agentsession.Store.
+// Open implements agentsession.Store. A session this store holds is
+// returned as is; otherwise it is recovered from its log and, in a
+// writing store, its lock is taken.
+//
+// The lock is the store's, not the caller's: it is kept until
+// [Store.Release], [Store.Delete] or [Store.Close], and a Release frees
+// it whoever opened the session. A process that reads sessions it does
+// not write, a search across a history beside the harness writing it,
+// uses [Store.Read], or a second store on the same root opened with
+// [WithReadOnly], so that it neither keeps them from other processes
+// nor frees one its own writer is using.
 func (s *Store) Open(ctx context.Context, id string) (*agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -2010,6 +2026,126 @@ func (s *Store) Open(ctx context.Context, id string) (*agentsession.Session, err
 	}
 	defer h.mu.Unlock()
 	return h.session, nil
+}
+
+// Read implements [agentsession.Reader]: it reads a session as a
+// read-only store's Open does, recovering it in memory, and takes no
+// lock, opens no log, writes nothing and keeps nothing, so a session
+// this store or another process is writing is read and stays the
+// writer's. The session returned is the caller's own, built afresh
+// from the log, even when this store holds the session.
+//
+// What it reads is the log as it stands. An append is there once its
+// record is, which is before Write returns, lazy or not: a lazy append
+// whose objects are present is read, as a recovery would keep it, and
+// one whose objects are not is cut, with every record after it. A
+// record being written as the log is read is a torn tail, and cut. The
+// head is the last the log records, so a leaf moved through
+// Session.Branch since the last append is not there.
+//
+// So Read, like a read-only Open, can show an append its writer has not
+// made durable: a lazy one no commit has covered yet, or a durable one
+// whose fsync is still running, which the writer takes back if the
+// fsync fails. A crash, or that failure, can take back what Read
+// showed. Neither offers a read of the committed entries alone. The
+// nearest is [Store.Fetch] from a read-only store into a store of the
+// caller's, which takes only what the log shows committed, though that
+// includes a durable append whose fsync is still running; or the
+// writer's own
+// [Store.Sync] before the read, where the writer is the caller.
+//
+// Objects a pack or a sweep moves while Read loads them are looked for
+// again. A session deleted while it is read is
+// [agentsession.ErrNoSession], and one deleted and created again under
+// the same ID is read again.
+func (s *Store) Read(ctx context.Context, id string) (*agentsession.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	dir, err := s.sessionDir(id)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	ferr, faulty := s.faulty[id]
+	s.mu.Unlock()
+	if faulty {
+		return nil, fmt.Errorf("cas: session %s could not be indexed: %w", id, ferr)
+	}
+	return readStable(id, dir, func() (*agentsession.Session, error) { return s.readSession(id, dir) })
+}
+
+// sessionStamp tells a session from one created at its path after it
+// was deleted: by its directory's identity and its header's bytes.
+type sessionStamp struct {
+	id     dirID
+	idOK   bool
+	info   os.FileInfo
+	header []byte
+}
+
+func stampOf(dir string) (sessionStamp, bool) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return sessionStamp{}, false
+	}
+	hdr, err := os.ReadFile(filepath.Join(dir, "header"))
+	if err != nil {
+		return sessionStamp{}, false
+	}
+	id, ok := dirIdentity(dir)
+	return sessionStamp{id: id, idOK: ok, info: info, header: hdr}, true
+}
+
+func (a sessionStamp) same(b sessionStamp) bool {
+	if a.idOK && b.idOK {
+		if a.id != b.id {
+			return false
+		}
+	} else if !os.SameFile(a.info, b.info) {
+		return false
+	}
+	return bytes.Equal(a.header, b.header)
+}
+
+// readStable runs read, which reads a session with no lock held, and
+// checks the session was the same one throughout: a delete can take it
+// part way, which is ErrNoSession, and a Create can put another in its
+// place, which is read again. A header a writer rewrote, raising its
+// format, reads as another session and is read again too.
+func readStable[T any](id, dir string, read func() (T, error)) (T, error) {
+	var zero T
+	gone := fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
+	for attempt := 0; attempt < 3; attempt++ {
+		before, ok := stampOf(dir)
+		if !ok {
+			return zero, gone
+		}
+		v, err := read()
+		after, ok := stampOf(dir)
+		if !ok {
+			return zero, gone
+		}
+		if before.same(after) {
+			return v, err
+		}
+	}
+	return zero, fmt.Errorf("cas: session %s was replaced each time it was read", id)
+}
+
+// readSession builds a session from what its log says, recovering it
+// in memory as a read-only store does, with no lock taken and nothing
+// written.
+func (s *Store) readSession(id, dir string) (*agentsession.Session, error) {
+	v, err := s.reconcile(id, dir)
+	if err != nil {
+		return nil, err
+	}
+	if !v.exists {
+		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
+	}
+	sess, _, err := s.build(id, dir, v)
+	return sess, err
 }
 
 // hold returns the handle of a session, opening it if this store does
@@ -2133,6 +2269,10 @@ func (s *Store) openSession(id string) (*handle, error) {
 	if err != nil {
 		return nil, err
 	}
+	if s.readOnly {
+		// A read-only open holds no lock a delete or a create waits on.
+		return readStable(id, dir, func() (*handle, error) { return s.openHeld(id, dir, nil) })
+	}
 	return s.openHeld(id, dir, lk)
 }
 
@@ -2173,9 +2313,16 @@ func (s *Store) openHeld(id, dir string, lk *dirLock) (*handle, error) {
 	return &handle{session: sess, dir: dir, lock: lk, logf: logf, pend: newPendSet(), mark: v.mark, head: v.head, count: sess.Len(), diskFormat: diskFormat, own: committed, lazy: lazy}, nil
 }
 
+// loading, when set, is called as build starts, once the log has been
+// read, so a test can change the store between the two.
+var loading func()
+
 // build assembles the session a view says: the path to its base, then
 // the entries of its log.
 func (s *Store) build(id, dir string, v view) (*agentsession.Session, agentsession.Header, error) {
+	if loading != nil {
+		loading()
+	}
 	hdr, err := readHeader(dir)
 	if err != nil {
 		return nil, hdr, err
@@ -2754,6 +2901,14 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 // Release closes a session this process holds, freeing its lock. Its
 // working state is committed first, so the next holder takes up a log
 // it need not check.
+//
+// The store holds a session once, however many callers opened it, so
+// Release lets it go for all of them: a writer still appending through
+// this store has the session recovered again at its next append, or is
+// refused with [ErrSessionLocked] if another process took it meanwhile,
+// and the Session it was handed no longer follows the store. A reader
+// beside a writer uses [Store.Read] or a store opened with
+// [WithReadOnly], and has nothing to release.
 func (s *Store) Release(id string) error {
 	h := s.held(id)
 	if h == nil {
@@ -3090,4 +3245,7 @@ func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header,
 	return s.openHeld(h.ID, dir, lk)
 }
 
-var _ agentsession.Store = (*Store)(nil)
+var (
+	_ agentsession.Store  = (*Store)(nil)
+	_ agentsession.Reader = (*Store)(nil)
+)

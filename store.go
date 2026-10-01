@@ -1,6 +1,7 @@
 package agentsession
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -51,7 +52,16 @@ type Store interface {
 	// media form other than the origin's, rather than letting the first
 	// append fail.
 	Create(ctx context.Context, h Header) (*Session, error)
-	// Open loads the session with the given ID.
+	// Open loads the session with the given ID. A store that guards
+	// sessions against a second writing process takes the session's
+	// hold here and keeps it until the store lets it go, at its Release
+	// or Close: one hold per session per store, which a Release frees
+	// whoever opened it. A process that reads sessions it does not
+	// write, such as a search across a history beside the harness
+	// writing it, reads them through [Reader] or through a second store
+	// opened read-only, never by Open and Release on the writing store,
+	// which would keep each session from other processes or free one
+	// its own writer is using.
 	Open(ctx context.Context, id string) (*Session, error)
 	// Append adds e to the session and returns its ID.
 	Append(ctx context.Context, sessionID string, e Entry) (string, error)
@@ -59,6 +69,26 @@ type Store interface {
 	List(ctx context.Context, f ListFilter) iter.Seq2[Summary, error]
 	// Delete removes the session.
 	Delete(ctx context.Context, id string) error
+}
+
+// Reader is implemented by a store that can read a session without
+// holding it. Read takes no hold, writes nothing, the recovery an Open
+// would write included, and keeps nothing: it returns a session of its
+// own, read from what the store holds, which no later append reaches
+// and whose leaf moves move no other session's. A session this store
+// or another process is writing is read as a store opened read-only
+// would read it, and stays the writer's. A missing session is
+// [ErrNoSession].
+//
+// What Read sees of a session being written is what the store held
+// when it read: an append in flight may not be there yet, and a leaf a
+// writer moved through Session.Branch and has not recorded is not.
+// Nor need what it sees be durable: Read can show an append its writer
+// has not yet made durable, under a lazy sync policy or while its
+// fsync runs, which a crash can take back. Each store says what, if
+// anything, reads only what is durable.
+type Reader interface {
+	Read(ctx context.Context, id string) (*Session, error)
 }
 
 // ListFilter narrows a List. Zero fields do not filter.
@@ -209,6 +239,22 @@ func (m *MemoryStore) Open(_ context.Context, id string) (*Session, error) {
 	return s, nil
 }
 
+// Read implements [Reader]: a copy of the session, rebuilt from its
+// encoding. Its leaf is the one the entries record, as a store reading
+// a file finds it: a leaf moved through Session.Branch and not recorded
+// is not there.
+func (m *MemoryStore) Read(ctx context.Context, id string) (*Session, error) {
+	live, err := m.Open(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, live); err != nil {
+		return nil, err
+	}
+	return Read(&buf)
+}
+
 // Append implements Store.
 func (m *MemoryStore) Append(ctx context.Context, sessionID string, e Entry) (string, error) {
 	s, err := m.Open(ctx, sessionID)
@@ -255,4 +301,7 @@ func (m *MemoryStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-var _ Store = (*MemoryStore)(nil)
+var (
+	_ Store  = (*MemoryStore)(nil)
+	_ Reader = (*MemoryStore)(nil)
+)

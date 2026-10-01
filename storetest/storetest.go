@@ -23,6 +23,11 @@ type Options struct {
 	// Reopen returns a second handle on the same underlying storage as
 	// s, for stores that persist. It is nil for a store that does not.
 	Reopen func(t *testing.T, s agentsession.Store) agentsession.Store
+	// Second returns another writing store on the same storage as s,
+	// open beside it, as another process's would be: one that is
+	// refused a session s holds. It is nil for a store that is not
+	// shared. The Read case uses it to show that Read takes no hold.
+	Second func(t *testing.T, s agentsession.Store) agentsession.Store
 }
 
 // Run exercises a store through the whole interface.
@@ -40,11 +45,156 @@ func Run(t *testing.T, opts Options) {
 	t.Run("Delete", func(t *testing.T) { testDelete(t, opts) })
 	t.Run("Fork", func(t *testing.T) { testFork(t, opts) })
 	t.Run("ForkPrefix", func(t *testing.T) { testForkPrefix(t, opts) })
+	t.Run("Read", func(t *testing.T) { testRead(t, opts) })
 	if opts.Reopen != nil {
 		t.Run("Persistence", func(t *testing.T) { testPersistence(t, opts) })
 		t.Run("DurableLeaf", func(t *testing.T) { testDurableLeaf(t, opts) })
 		t.Run("Convergence", func(t *testing.T) { testConvergence(t, opts) })
 	}
+}
+
+// testRead reads sessions through [agentsession.Reader], for a store
+// that implements it: one the store is writing, which Read copies and
+// leaves held, one nobody holds, which Read leaves free, and one that is
+// not there.
+func testRead(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	r, ok := st.(agentsession.Reader)
+	if !ok {
+		t.Skip("the store does not implement agentsession.Reader")
+	}
+	if _, err := r.Read(ctx, "no-such-session"); !errors.Is(err, agentsession.ErrNoSession) {
+		t.Errorf("Read of a missing session: %v, want ErrNoSession", err)
+	}
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	var ids []string
+	for _, text := range []string{"root", "a", "b"} {
+		e, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText(text)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, e)
+	}
+	root, leaf := ids[0], ids[2]
+
+	// Read while this store writes the session: a copy of it, not the
+	// session itself.
+	snap, err := r.Read(ctx, id)
+	if err != nil {
+		t.Fatalf("Read of a session the store is writing: %v", err)
+	}
+	if snap == s {
+		t.Fatal("Read returned the session the store writes through")
+	}
+	if got := entryIDs(snap); !reflect.DeepEqual(got, ids) {
+		t.Errorf("Read holds %v, want %v", got, ids)
+	}
+	if snap.Leaf() != leaf || snap.ID() != id {
+		t.Errorf("Read: session %s at leaf %s, want %s at %s", snap.ID(), snap.Leaf(), id, leaf)
+	}
+	// Its leaf is its own, both ways.
+	if err := snap.Branch(root); err != nil {
+		t.Fatal(err)
+	}
+	snap.ResetLeaf()
+	if s.Leaf() != leaf {
+		t.Errorf("moving the copy's leaf moved the writer's to %q", s.Leaf())
+	}
+	if err := s.Branch(root); err != nil {
+		t.Fatal(err)
+	}
+	if snap.Leaf() != "" {
+		t.Errorf("moving the writer's leaf moved the copy's to %q", snap.Leaf())
+	}
+	// A leaf the writer moved and has not recorded is not read.
+	if moved, err := r.Read(ctx, id); err != nil || moved.Leaf() != leaf {
+		t.Errorf("Read after an unrecorded Branch: leaf %v (%v), want the recorded %s", leafOf(moved), err, leaf)
+	}
+	if err := s.Branch(leaf); err != nil {
+		t.Fatal(err)
+	}
+	// The writer appends on, and the copy does not follow.
+	next, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("c")))
+	if err != nil {
+		t.Fatalf("Append after Read: %v", err)
+	}
+	if e, _ := s.Entry(next); e == nil || e.Base().Parent != leaf {
+		t.Errorf("the append after Read is not under the writer's leaf %s", leaf)
+	}
+	if snap.Len() != 3 {
+		t.Errorf("the copy holds %d entries after the writer's append, want 3", snap.Len())
+	}
+	if again, err := r.Read(ctx, id); err != nil || again.Len() != 4 {
+		t.Errorf("a second Read: %v, want the 4 entries the store holds", err)
+	}
+	if opts.Second == nil {
+		return
+	}
+
+	// Read left the session held: another process is refused it, and
+	// reads it all the same, which takes it from no one.
+	other := opts.Second(t, st)
+	if _, err := other.Open(ctx, id); !errors.Is(err, agentsession.ErrSessionLocked) {
+		t.Errorf("another store's Open of the session after Read: %v, want ErrSessionLocked", err)
+	}
+	or, ok := other.(agentsession.Reader)
+	if !ok {
+		t.Fatal("the second store does not implement agentsession.Reader")
+	}
+	if got, err := or.Read(ctx, id); err != nil || got.Len() != 4 {
+		t.Errorf("another store's Read of a held session: %v", err)
+	}
+	if _, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("d"))); err != nil {
+		t.Errorf("the writer's Append after another store's Read: %v", err)
+	}
+	if opts.Reopen == nil {
+		return
+	}
+
+	// A session nobody holds: Read takes no hold on it, so another
+	// process can open it for writing after.
+	st = opts.Reopen(t, st)
+	r = st.(agentsession.Reader)
+	got, err := r.Read(ctx, id)
+	if err != nil {
+		t.Fatalf("Read of a session nobody holds: %v", err)
+	}
+	if got.Len() != 5 {
+		t.Errorf("Read of a session nobody holds: %d entries, want 5", got.Len())
+	}
+	other = opts.Second(t, st)
+	if _, err := other.Open(ctx, id); err != nil {
+		t.Fatalf("another store's Open after Read: %v", err)
+	}
+	if _, err := other.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("e"))); err != nil {
+		t.Errorf("another store's Append after Read: %v", err)
+	}
+	if _, err := st.Open(ctx, id); !errors.Is(err, agentsession.ErrSessionLocked) {
+		t.Errorf("Open of a session another store holds: %v, want ErrSessionLocked", err)
+	}
+	if got, err := r.Read(ctx, id); err != nil || got.Len() != 6 {
+		t.Errorf("Read of a session another store holds: %v", err)
+	}
+}
+
+func leafOf(s *agentsession.Session) string {
+	if s == nil {
+		return ""
+	}
+	return s.Leaf()
+}
+
+func entryIDs(s *agentsession.Session) []string {
+	var out []string
+	for _, e := range s.Entries() {
+		out = append(out, e.Base().ID)
+	}
+	return out
 }
 
 // testHeldAppend appends an entry the session already holds: the same

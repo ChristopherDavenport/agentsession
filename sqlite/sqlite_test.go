@@ -41,6 +41,14 @@ func TestStoreSuite(t *testing.T) {
 			paths[st] = paths[old]
 			return st
 		},
+		Second: func(t *testing.T, s agentsession.Store) agentsession.Store {
+			st, err := sqlite.Open(paths[s])
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		},
 	})
 }
 
@@ -410,5 +418,43 @@ func TestRaiseFormat(t *testing.T) {
 		if back.Entries()[i].Base().ID != e.Base().ID {
 			t.Errorf("entry %d: %s after a round trip, want %s", i, back.Entries()[i].Base().ID, e.Base().ID)
 		}
+	}
+}
+
+// TestFailedOpenLetsHoldGo opens a session whose rows do not read: the
+// hold Open claimed before loading them goes with the failure, so the
+// store does not keep a session it never opened from other processes.
+func TestFailedOpenLetsHoldGo(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	st, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	for _, text := range []string{"a", "b"} {
+		if _, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText(text))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st.Release(id)
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE entries SET line = 'not json' WHERE session_id = ? AND seq = 1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Open(ctx, id); err == nil {
+		t.Fatal("Open of a session whose rows do not read succeeded")
+	}
+	if h, err := st.LockHolder(ctx, id); err != nil || h != nil {
+		t.Errorf("after a failed Open the session is held by %+v (%v), want no one", h, err)
 	}
 }

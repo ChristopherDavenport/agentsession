@@ -41,6 +41,14 @@ func TestStoreSuite(t *testing.T) {
 					t.Cleanup(func() { st.Close() })
 					return st
 				},
+				Second: func(t *testing.T, s agentsession.Store) agentsession.Store {
+					st, err := jsonl.Open(s.(*jsonl.Store).Root(), jsonl.WithSync(policy))
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { st.Close() })
+					return st
+				},
 			})
 		})
 	}
