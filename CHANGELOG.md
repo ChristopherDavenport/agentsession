@@ -5,6 +5,15 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **`verify` no longer blames early 0.9 writers for a run's source or
+  end.** No release checks either as it is appended, only
+  `VerifyRecords` afterwards, so a mismatch in a file of any minor,
+  0.10 included, now earns its own note: the writer of that run
+  computed it otherwise than `ComputeSource`, or `ComputeReason` and
+  `Run.Pending`. (#165)
+
 ## v0.0.18 - 2026-10-01
 
 **The format is 0.10**, and a 0.9 file is a 0.10 file. 0.9's rules

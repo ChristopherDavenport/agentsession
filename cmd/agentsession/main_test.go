@@ -742,3 +742,24 @@ func TestNoteDeclared(t *testing.T) {
 		t.Errorf("a hash mismatch in a 0.8 file earns %q", got)
 	}
 }
+
+// TestNoteWriter: no release checks a run's source or end as it is
+// appended, so a mismatch earns a note naming the writer of the run in
+// a file of any minor, never the note on early 0.9 writers (#165).
+func TestNoteWriter(t *testing.T) {
+	for err, note := range map[error]string{
+		agentsession.ErrSourceMismatch: sourceNote,
+		agentsession.ErrReasonMismatch: reasonNote,
+	} {
+		wrapped := fmt.Errorf("%w: run r", err)
+		for declared, want := range map[string]string{
+			"agentsession/0.8":  earlierNote + "\n" + note,
+			"agentsession/0.9":  note,
+			agentsession.Format: note,
+		} {
+			if got := noteFor(declared, wrapped); got != want {
+				t.Errorf("%v in %s: note %q, want %q", err, declared, got, want)
+			}
+		}
+	}
+}

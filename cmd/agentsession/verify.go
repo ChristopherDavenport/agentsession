@@ -58,6 +58,15 @@ func verify(args []string, stdout, stderr io.Writer) error {
 // carry; see amended09.
 const earlyNote = "note: draft 0.9 gained these rules after v0.0.12, v0.0.13 and v0.0.14 wrote it; a 0.9 file one of them wrote, or appended to, may break them without being corrupt"
 
+// sourceNote and reasonNote follow a run's source or end that
+// disagrees with its segment, in a file of any minor: no release
+// checks either as it is written, only VerifyRecords after, so the
+// writer of the run, of whatever version, computed it otherwise.
+const (
+	sourceNote = "note: no release checks a run's source as it is written; the writer of this run computed it otherwise than ComputeSource"
+	reasonNote = "note: no release checks a run's end as it is written; the writer of this run computed its reason or pending list otherwise than ComputeReason and Run.Pending"
+)
+
 // earlierNote follows such an error in a file of a minor before 0.9,
 // which did not forbid what failed; see noteFor.
 const earlierNote = "note: this file declares a minor before 0.9, which did not forbid what failed; it is checked here by 0.9's rules"
@@ -132,21 +141,42 @@ func gained09(err error) bool {
 // amended09 reports whether err breaks a rule draft 0.9 gained after
 // v0.0.12, v0.0.13 and v0.0.14 wrote it, in a file whose header said
 // 0.9 when it was read: such a file may be one of theirs, or one they
-// appended to, rather than corrupt.
+// appended to, rather than corrupt. A run's source and end are left
+// out: no later release refuses them as written either; see
+// writerNote.
 func amended09(declared string, err error) bool {
-	return declared == "agentsession/0.9" && gained09(err)
+	return declared == "agentsession/0.9" && gained09(err) && writerNote(err) == ""
+}
+
+// writerNote is the note for a rule no release checks as an entry is
+// appended, or "".
+func writerNote(err error) string {
+	switch {
+	case errors.Is(err, agentsession.ErrSourceMismatch):
+		return sourceNote
+	case errors.Is(err, agentsession.ErrReasonMismatch):
+		return reasonNote
+	}
+	return ""
 }
 
 // noteFor is the note a records error in a file that declared the
 // given format earns, or "": a 0.9 file may come from an early writer
 // of it, and a file of an earlier minor was written before 0.9 forbade
-// what failed. A file of the current minor earns none.
+// what failed. A run's source or end that disagrees with its segment
+// earns its own note in a file of any minor, after the earlier
+// minor's where that applies. Any other error in a file of the current
+// minor earns none.
 func noteFor(declared string, err error) string {
 	if amended09(declared, err) {
 		return earlyNote
 	}
+	note := writerNote(err)
 	if _, minor, perr := agentsession.ParseFormat(declared); perr == nil && minor < 9 && gained09(err) {
+		if note != "" {
+			return earlierNote + "\n" + note
+		}
 		return earlierNote
 	}
-	return ""
+	return note
 }
