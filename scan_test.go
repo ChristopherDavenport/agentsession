@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -125,7 +126,10 @@ func newScanFile(t *testing.T) scanFile {
 func (f scanFile) line(t *testing.T, members string) string {
 	t.Helper()
 	members = f.expand(members)
-	line := `{` + members + `,"ts":"2026-09-17T16:00:01Z"`
+	line := `{` + members
+	if !strings.Contains(members, `"ts":`) {
+		line += `,"ts":"2026-09-17T16:00:01Z"`
+	}
 	if !strings.Contains(members, `"parent":`) {
 		line += `,"parent":"` + f.r2 + `"`
 	}
@@ -165,6 +169,8 @@ func TestScanReadHashTheLine(t *testing.T) {
 		"parents in another case beside": `"type":"info","name":"n","parents":[{"entry":"R1","Entry":"x","SESSION":"o"}]`,
 		"parents into another session":   `"type":"info","name":"n","parents":[{"entry":"sha256:elsewhere","session":"o"}]`,
 		"parents an empty list":          `"type":"info","name":"n","parents":[]`,
+		"ts the zero time":               `"type":"info","name":"n","ts":"0001-01-01T00:00:00Z"`,
+		"extension, legacy_id null":      `"type":"acme:x","legacy_id":null,"normalised":[]`,
 	} {
 		t.Run("taken: "+name, func(t *testing.T) {
 			line := f.line(t, members)
@@ -276,6 +282,31 @@ func TestScanReadHashTheLine(t *testing.T) {
 			t.Errorf("Scan %v, Read %v; want ErrBadID", serr, rerr)
 		}
 	})
+}
+
+// TestKeptLineWithoutID: an entry decoded from a line with no id, which
+// no reader verifies, is written from its fields, so it appends and the
+// session writes.
+func TestKeptLineWithoutID(t *testing.T) {
+	s := New(Header{})
+	root, err := s.Append(NewItemEntry(openresponses.UserText("one")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e LinkEntry
+	if err := json.Unmarshal([]byte(`{"type":"link","rel":"subagent","parent":"`+root+`","ts":"2026-09-17T16:00:01Z"}`), &e); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(&e); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if _, err := Read(&buf); err != nil {
+		t.Fatalf("Write then Read: %v", err)
+	}
 }
 
 // TestScanLines: Scan numbers lines and skips empty ones as Read does,

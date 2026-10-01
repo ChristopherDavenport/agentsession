@@ -345,12 +345,18 @@ func rewriteEnvelope(u *UnknownEntry) ([]byte, error) {
 	for _, k := range envelopeKeys {
 		delete(all, k)
 	}
+	extra := u.extraMembers()
 	for _, k := range commonBodyKeys {
-		delete(all, k)
-	}
-	for k, v := range u.extraMembers() {
-		if k == "legacy_id" || k == "normalised" {
+		if v, ok := extra[k]; ok {
 			all[k] = v
+			continue
+		}
+		// Unset on the base: a member the line holds as null or empty
+		// says the same and stays as written, since it is hashed.
+		if raw, ok := all[k]; ok {
+			if v, err := parseValue(raw); err != nil || !isZeroValue(v) {
+				delete(all, k)
+			}
 		}
 	}
 	return jsonx.JoinObjects(head, []byte("{}"), all), nil

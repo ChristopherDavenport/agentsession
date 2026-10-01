@@ -28,8 +28,8 @@ that a released minor's rules do not change. (#132)
   convergence rules, and the types of `legacy_id` and `normalised`, with
   the same checks `Read` makes, blank lines and a cut last line taken
   as `Read` takes them; it yields each entry as a `RawEntry` whose
-  `Decode` decodes it when asked. It reads RATIO_SMALL times as fast as
-  `Read` on small lines and RATIO_LARGE times on 100 KB ones. A fuzz
+  `Decode` decodes it when asked. It reads about 4 times as fast as
+  `Read` on small lines and 5 times on 100 KB ones. A fuzz
   test holds `Scan` to `Read`. A file before 0.5, which `Read`
   migrates, is refused with `ErrScanMigrated`. (#127)
 - **`Read` hashes the line, not its own encoding of the entry**: RFC

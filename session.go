@@ -370,7 +370,7 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 	if err := s.checkParentRule(b.Parent); err != nil {
 		return Result{}, err
 	}
-	if b.Timestamp.IsZero() {
+	if b.Timestamp.IsZero() && b.tsRaw == "" { // a read entry's zero ts is its ts
 		b.Timestamp = s.now()
 	}
 	b.Timestamp = b.Timestamp.UTC()

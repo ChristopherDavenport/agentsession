@@ -972,9 +972,10 @@ func keepAsRead(e Entry, data []byte, all map[string]json.RawMessage) (c []byte,
 			restored = nil
 		}
 	}
-	if !bytes.Equal(restored, c) {
+	if _, hasID := all["id"]; hasID && b.ID != "" && !bytes.Equal(restored, c) {
 		// The fields do not write the line back: keep it, and have
-		// marshalEntry note what the fields encode now.
+		// marshalEntry note what the fields encode now. A line with no
+		// id is not one a reader verifies, and is left to the fields.
 		b.line = &keptLine{c: c, id: b.ID}
 		if _, err := jsonx.MarshalNoEscape(e); err != nil {
 			return nil, nil, nil, err
