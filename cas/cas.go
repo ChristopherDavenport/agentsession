@@ -315,6 +315,11 @@ func Open(root string, opts ...Option) (*Store, error) {
 	for _, o := range opts {
 		o(s)
 	}
+	// A layout this release does not read is refused before anything is
+	// written.
+	if err := checkLayout(root); err != nil {
+		return nil, err
+	}
 	dirs := []string{filepath.Join(root, "objects", "contents"), filepath.Join(root, "objects", "entries"), filepath.Join(root, "sessions"), filepath.Join(root, "locks")}
 	if s.readOnly {
 		if info, err := os.Stat(filepath.Join(root, "sessions")); err != nil || !info.IsDir() {
@@ -326,9 +331,6 @@ func Open(root string, opts ...Option) (*Store, error) {
 				return nil, fmt.Errorf("cas: %w", err)
 			}
 		}
-	}
-	if err := checkLayout(root); err != nil {
-		return nil, err
 	}
 	if err := s.objs.reloadPacks(true); err != nil {
 		return nil, fmt.Errorf("cas: packs: %w", err)

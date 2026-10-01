@@ -76,9 +76,13 @@ session is a ref, and its log is its own write-ahead log.
   writing open if rolling back may be needed.
 
   Object directories are made as their first object needs them, and
-  `Pack` and `Sweep` remove the ones they leave empty, so a small store
-  holds no more than its objects use; the commit that names an object
-  in a directory not yet known durable syncs its space's directory too.
+  `Pack` and `Sweep` remove the ones left empty for an hour, so a small
+  store holds no more than its objects use; the commit that names an
+  object in a directory not yet known durable syncs its space's
+  directory too. A directory is known by its inode's generation as well
+  as its inode, on Linux, so one made again in a removed one's place is
+  not taken for it; where the filesystem keeps no generation, as tmpfs,
+  every such commit syncs its space's directory.
   A sweep removes what a crash left of an append recovery recorded
   lost, so `Verify` stops reporting it as corrupt.
 

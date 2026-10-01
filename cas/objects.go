@@ -45,10 +45,12 @@ type objects struct {
 	pendFiles map[string]bool
 	pendDirs  map[string]bool
 	// known holds the object directories this store has seen made
-	// durable, by the fsync of their space's directory, as the files
-	// they were: one removed and made again since, by a sweep and
-	// another writer, is not taken for them.
-	known map[string]os.FileInfo
+	// durable, by the fsync of their space's directory, by identity: a
+	// directory a prune removed and another writer made again may take
+	// over its inode, and its change time moves with every name put in
+	// it, so the identity is the inode's generation too, which the
+	// filesystem changes when it reuses the inode.
+	known map[string]dirID
 	// noLink is set once the filesystem has refused a hard link, after
 	// which every object is written durably.
 	noLink atomic.Bool
@@ -68,6 +70,12 @@ type objects struct {
 	checked map[string]fileVersion
 }
 
+// dirID is a directory's identity, as dirIdentity reads it.
+type dirID struct {
+	dev, ino uint64
+	gen      uint32
+}
+
 // fileVersion is one version of a file, as versionOf reads it.
 type fileVersion struct {
 	dev, ino    uint64
@@ -78,7 +86,7 @@ type fileVersion struct {
 const checkedLimit = 1 << 16
 
 func newObjects(root string) *objects {
-	return &objects{root: root, pendFiles: map[string]bool{}, pendDirs: map[string]bool{}, known: map[string]os.FileInfo{}, syncing: map[string]*pathLock{}, checked: map[string]fileVersion{}}
+	return &objects{root: root, pendFiles: map[string]bool{}, pendDirs: map[string]bool{}, known: map[string]dirID{}, syncing: map[string]*pathLock{}, checked: map[string]fileVersion{}}
 }
 
 func (o *objects) packDir() string { return filepath.Join(o.root, "objects", "pack") }
@@ -336,6 +344,11 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 			goto write
 		}
 		if err == nil {
+			// Its directory may not be durable yet, whoever wrote it: the
+			// commit that names it syncs its space too, if so.
+			if err := o.objectDir(dir, pend); err != nil {
+				return err
+			}
 			return o.remember(pend, path, dir)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -413,37 +426,44 @@ write:
 // stops the store, so a directory made here is never left to the word
 // of a later sync.
 func (o *objects) objectDir(dir string, pend *pendSet) error {
-	info, err := os.Stat(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+	space := filepath.Dir(dir)
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(space, 0o755); err != nil {
 			return err
 		}
-		if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+		err = os.Mkdir(dir, 0o755)
+		if err == nil {
+			// Made here: new, whatever inode it took.
+			o.mu.Lock()
+			delete(o.known, dir)
+			o.mu.Unlock()
+			return o.remember(pend, "", space)
+		}
+		if !errors.Is(err, os.ErrExist) {
 			return err
 		}
-		info, err = os.Stat(dir)
-	}
-	if err != nil {
+	} else if err != nil {
 		return err
 	}
 	o.mu.Lock()
-	known := o.known[dir]
+	known, ok := o.known[dir]
 	o.mu.Unlock()
-	if known != nil && os.SameFile(known, info) {
-		return nil
+	if ok {
+		if id, idOK := dirIdentity(dir); idOK && id == known {
+			return nil
+		}
 	}
-	return o.remember(pend, "", filepath.Dir(dir))
+	return o.remember(pend, "", space)
 }
 
 // learnSpace records, after a fsync of a space's directory, the object
-// directories it held when the fsync began, as known durable.
-func (o *objects) learnSpace(names []os.FileInfo, space string) {
+// directories it held when the fsync began, by the identities read then,
+// as known durable.
+func (o *objects) learnSpace(ids map[string]dirID) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	for _, fi := range names {
-		if fi.IsDir() {
-			o.known[filepath.Join(space, fi.Name())] = fi
-		}
+	for d, id := range ids {
+		o.known[d] = id
 	}
 }
 
@@ -453,12 +473,20 @@ func (o *objects) isSpace(dir string) bool {
 	return dir == o.spaceDir(spaceEntries) || dir == o.spaceDir(spaceContents)
 }
 
-// prune removes the object directories left empty, as a pack or sweep
-// leaves them, and syncs the spaces it removed from. A directory a
-// writer is putting an object in holds its temporary file, so it is not
-// empty and stays; one removed under a writer that found it a moment
-// before is made again by that writer. It runs under the gc lock.
+// pruneAge is how long an object directory stays empty before a prune
+// removes it; a variable so a test can shorten it.
+var pruneAge = time.Hour
+
+// prune removes the object directories left empty for pruneAge, and
+// syncs the spaces it removed from. One a pack has just emptied changed
+// when it was emptied, and stays: a store being written fills it again,
+// and removing it would have the next commits make it again and sync
+// its space each time, after every pack. A directory a writer is
+// putting an object in holds its temporary file, so it is not empty and
+// stays; one removed under a writer that found it a moment before is
+// made again by that writer. It runs under the gc lock.
 func (o *objects) prune() error {
+	old := time.Now().Add(-pruneAge)
 	for _, sp := range []space{spaceEntries, spaceContents} {
 		space := o.spaceDir(sp)
 		ents, err := os.ReadDir(space)
@@ -471,6 +499,9 @@ func (o *objects) prune() error {
 				continue
 			}
 			d := filepath.Join(space, e.Name())
+			if info, err := e.Info(); err != nil || info.ModTime().After(old) {
+				continue
+			}
 			if os.Remove(d) == nil {
 				removed = true
 				o.mu.Lock()
@@ -676,14 +707,19 @@ func (o *objects) flushSet(pend *pendSet) error {
 		dirs[filepath.Dir(f)] = true
 	}
 	failed, err := syncAll(dirs, func(d string) error {
-		var names []os.FileInfo
+		var ids map[string]dirID
 		if o.isSpace(d) {
 			// What the sync makes durable is what the space held when it
 			// began.
+			ids = map[string]dirID{}
 			ents, _ := os.ReadDir(d)
 			for _, e := range ents {
-				if fi, err := e.Info(); err == nil {
-					names = append(names, fi)
+				if !e.IsDir() {
+					continue
+				}
+				sub := filepath.Join(d, e.Name())
+				if id, ok := dirIdentity(sub); ok {
+					ids[sub] = id
 				}
 			}
 		}
@@ -691,8 +727,8 @@ func (o *objects) flushSet(pend *pendSet) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		if err == nil && names != nil {
-			o.learnSpace(names, d)
+		if err == nil && ids != nil {
+			o.learnSpace(ids)
 		}
 		return err
 	})

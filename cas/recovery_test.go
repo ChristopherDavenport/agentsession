@@ -1857,8 +1857,17 @@ func TestObjectDirsAsNeeded(t *testing.T) {
 	if _, err := st.Pack(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if n := objectDirs(st); n == 0 {
+		t.Error("a pack removed directories it had just emptied, which a store being written fills again")
+	}
+	old := pruneAge
+	pruneAge = 0
+	defer func() { pruneAge = old }()
+	if _, err := st.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if n := objectDirs(st); n != 0 {
-		t.Errorf("%d object directories left after a pack took every loose object", n)
+		t.Errorf("%d object directories left empty past pruneAge after a pack", n)
 	}
 	mustAppend(t, st, "s", item("after the pack"))
 	st.Release("s")
@@ -1913,11 +1922,14 @@ func TestObjectDirDurable(t *testing.T) {
 	if !ek || !ck {
 		t.Error("a synced space's directories are not known durable")
 	}
+	oldAge := pruneAge
+	pruneAge = 0
 	other, _ := Open(root)
 	if _, err := other.Pack(ctx); err != nil {
 		t.Fatal(err)
 	}
 	other.Close()
+	pruneAge = oldAge
 	if n := commit("after another store's pack"); n == 0 {
 		t.Error("a directory made again after another store pruned it was not synced into its space")
 	}
@@ -2011,6 +2023,113 @@ func TestLostObjectsSwept(t *testing.T) {
 	}
 	if rep, err := r.Verify(ctx); err != nil || !rep.OK() {
 		t.Errorf("after a sweep: %v %v", err, rep.Problems)
+	}
+}
+
+// blobIn returns a blob whose hash puts it in the content directory
+// named by prefix, two hex digits.
+func blobIn(prefix string, salt int) []byte {
+	for i := 0; ; i++ {
+		b := []byte(fmt.Sprintf("blob %d %d", salt, i))
+		if strings.TrimPrefix(hashBytes(b), agentsession.HashPrefix)[:2] == prefix {
+			return b
+		}
+	}
+}
+
+// TestRemadeDirNotKnown: a content directory this store knows durable,
+// which another store's pack removed and a third made again, likely on
+// the same inode, is not taken for the one it knew: the next durable
+// write into it syncs its space's directory again.
+func TestRemadeDirNotKnown(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	a, _ := Open(root)
+	defer a.Close()
+	if _, err := a.PutBlob(ctx, blobIn("5e", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.PutBlob(ctx, blobIn("5e", 2)); err != nil {
+		t.Fatal(err)
+	}
+	space := a.objs.spaceDir(spaceContents)
+	if _, ok := a.objs.known[filepath.Join(space, "5e")]; !ok && runtime.GOOS == "linux" {
+		t.Skip("this filesystem keeps no inode generation")
+	}
+	old := pruneAge
+	pruneAge = 0
+	b, _ := Open(root)
+	if _, err := b.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b.Close()
+	pruneAge = old
+	if _, err := os.Stat(filepath.Join(space, "5e")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the pack left the emptied directory")
+	}
+	c, _ := Open(root)
+	if _, err := c.PutBlob(ctx, blobIn("5e", 3)); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	oldSync := syncDirFile
+	defer func() { syncDirFile = oldSync }()
+	var spaces atomic.Int64
+	syncDirFile = func(d *os.File) error {
+		if d.Name() == space {
+			spaces.Add(1)
+		}
+		return d.Sync()
+	}
+	if _, err := a.PutBlob(ctx, blobIn("5e", 4)); err != nil {
+		t.Fatal(err)
+	}
+	if spaces.Load() == 0 {
+		t.Error("a directory made again was taken for the one this store knew, and its space was not synced")
+	}
+}
+
+// TestReusedObjectDirDurable: a commit that names an object another
+// session of this store wrote lazily into a directory not yet known
+// durable syncs that directory's space, as the session that wrote it
+// would have, rather than take the file and leave the space unsynced.
+func TestReusedObjectDirDurable(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir(), WithSync(SyncNever))
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "a"})
+	st.Create(ctx, agentsession.Header{ID: "b"})
+	mustAppend(t, st, "a", item("shared tool output"))
+	space := st.objs.spaceDir(spaceContents)
+	old := syncDirFile
+	defer func() { syncDirFile = old }()
+	var spaces atomic.Int64
+	syncDirFile = func(d *os.File) error {
+		if d.Name() == space {
+			spaces.Add(1)
+		}
+		return d.Sync()
+	}
+	mustAppend(t, st, "b", item("shared tool output"))
+	if err := st.Release("b"); err != nil {
+		t.Fatal(err)
+	}
+	if spaces.Load() == 0 {
+		t.Error("b committed a content object in a directory not known durable without syncing its space")
+	}
+}
+
+// TestRefusedOpenWritesNothing: an open refused for a layout this
+// release does not read makes nothing in the store.
+func TestRefusedOpenWritesNothing(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, layoutFile), []byte("cas 3\n"), 0o600)
+	if _, err := Open(root); !errors.Is(err, ErrLayout) {
+		t.Fatalf("a later layout: %v", err)
+	}
+	ents, _ := os.ReadDir(root)
+	if len(ents) != 1 {
+		t.Errorf("a refused open left %d entries", len(ents))
 	}
 }
 

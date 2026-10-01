@@ -289,7 +289,7 @@ func (s *Store) packLoose(ctx context.Context) (int, error) {
 		}
 	}
 	if len(objs) == 0 {
-		return 0, nil
+		return 0, s.objs.prune()
 	}
 	// One that is corrupt, or removed as we walked, is left out and left
 	// where it is, for Verify to report.
