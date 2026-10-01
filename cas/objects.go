@@ -70,10 +70,14 @@ type objects struct {
 	checked map[string]fileVersion
 }
 
-// dirID is a directory's identity, as dirIdentity reads it.
+// dirID is a directory's identity, as dirIdentity reads it. hasGen
+// says the inode's generation was read; without it, a directory made
+// again in a removed one's place can be taken for it, so a store whose
+// directories have none never prunes them.
 type dirID struct {
 	dev, ino uint64
 	gen      uint32
+	hasGen   bool
 }
 
 // fileVersion is one version of a file, as versionOf reads it.
@@ -346,7 +350,7 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 		if err == nil {
 			// Its directory may not be durable yet, whoever wrote it: the
 			// commit that names it syncs its space too, if so.
-			if err := o.objectDir(dir, pend); err != nil {
+			if err := o.durableDir(dir, false, pend); err != nil {
 				return err
 			}
 			return o.remember(pend, path, dir)
@@ -375,10 +379,13 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 	}
 write:
 	var info os.FileInfo
+	made := false
 	for attempt := 0; ; attempt++ {
-		if err := o.objectDir(dir, pend); err != nil {
+		var m bool
+		if m, err = o.objectDir(dir); err != nil {
 			return err
 		}
+		made = made || m
 		if !durable && !replacing && !o.noLink.Load() {
 			// A new object, written lazily, takes its place only if
 			// nothing has since: one another process wrote meanwhile is
@@ -409,6 +416,9 @@ write:
 		return err
 	}
 	o.check(path, info)
+	if err := o.durableDir(dir, made, pend); err != nil {
+		return err
+	}
 	if !durable {
 		return o.remember(pend, path, dir)
 	}
@@ -417,36 +427,41 @@ write:
 
 // objectDir makes an object's directory when it is not there, as git
 // makes a fan-out directory on its first object, so a store holds the
-// directories its objects need and no more. A directory not known
-// durable has its space's directory synced by the commit that names
-// what goes in it, beside the fsyncs of the object directories it
-// already makes, so no object is committed into a directory a crash
-// could take; once a space's directory is synced, every directory then
-// in it is known, and later commits pay nothing for it. A failed sync
-// stops the store, so a directory made here is never left to the word
-// of a later sync.
-func (o *objects) objectDir(dir string, pend *pendSet) error {
-	space := filepath.Dir(dir)
-	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(space, 0o755); err != nil {
-			return err
-		}
-		err = os.Mkdir(dir, 0o755)
-		if err == nil {
-			// Made here: new, whatever inode it took.
-			o.mu.Lock()
-			delete(o.known, dir)
-			o.mu.Unlock()
-			return o.remember(pend, "", space)
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return err
-		}
-	} else if err != nil {
-		return err
+// directories its objects need and no more; made says this call made
+// it.
+func (o *objects) objectDir(dir string) (made bool, err error) {
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		return false, err
 	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return false, err
+	}
+	err = os.Mkdir(dir, 0o755)
+	if errors.Is(err, os.ErrExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// durableDir sees that the directory holding an object this caller has
+// just put in place is durable in its space by the commit that names
+// the object: if it is not known durable, its space's directory is
+// added to what the caller's commit syncs, beside the object
+// directories it syncs already, and once a space's directory is synced
+// every directory then in it is known, so later commits pay nothing.
+// It looks once the object is in place: the directory then holds it,
+// so no prune can remove it, and the one it looks at is the one the
+// object is in. One this caller made is new, whatever inode it took. A
+// failed sync stops the store, so a directory is never left to the word
+// of a later sync.
+func (o *objects) durableDir(dir string, made bool, pend *pendSet) error {
+	space := filepath.Dir(dir)
 	o.mu.Lock()
 	known, ok := o.known[dir]
+	if made {
+		delete(o.known, dir)
+		ok = false
+	}
 	o.mu.Unlock()
 	if ok {
 		if id, idOK := dirIdentity(dir); idOK && id == known {
@@ -486,6 +501,12 @@ var pruneAge = time.Hour
 // stays; one removed under a writer that found it a moment before is
 // made again by that writer. It runs under the gc lock.
 func (o *objects) prune() error {
+	// Where no generation tells a directory made again from the one a
+	// prune removed, none is removed: a store there keeps what it made,
+	// and knows its directories by device and inode, as before.
+	if id, ok := dirIdentity(o.spaceDir(spaceContents)); !ok || !id.hasGen {
+		return nil
+	}
 	old := time.Now().Add(-pruneAge)
 	for _, sp := range []space{spaceEntries, spaceContents} {
 		space := o.spaceDir(sp)

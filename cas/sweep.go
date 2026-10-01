@@ -526,6 +526,9 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	if err := s.objs.reloadPacks(true); err != nil {
 		return 0, err
 	}
+	// What goes back loose is durable, its directory's place in its
+	// space included, before any pack that held it goes.
+	rescued := newPendSet()
 	writeLoose := func(sp space, hash string, data []byte, mtime time.Time, replace bool) error {
 		path, err := s.objs.loosePath(sp, hash)
 		if err != nil {
@@ -534,10 +537,15 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		if _, err := os.Stat(path); err == nil && !replace {
 			return nil
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		dir := filepath.Dir(path)
+		made, err := s.objs.objectDir(dir)
+		if err != nil {
 			return err
 		}
 		if err := s.objs.writeAtomic(path, data); err != nil {
+			return err
+		}
+		if err := s.objs.durableDir(dir, made, rescued); err != nil {
 			return err
 		}
 		if !mtime.IsZero() {
@@ -616,6 +624,10 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 			lk.release()
 			return 0, err
 		}
+	}
+	if err := s.objs.flushSet(rescued); err != nil {
+		lk.release()
+		return 0, err
 	}
 	for _, p := range old {
 		if p.name == newPack {

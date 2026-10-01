@@ -2133,6 +2133,95 @@ func TestRefusedOpenWritesNothing(t *testing.T) {
 	}
 }
 
+// TestSweepWriteBackDurable: what a sweep writes back loose, into an
+// object directory it makes, has that directory synced into its space
+// before the pack that held it goes.
+func TestSweepWriteBackDurable(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	blob := blobIn("a0", 7)
+	if _, err := st.PutBlob(ctx, blob); err != nil {
+		t.Fatal(err)
+	}
+	old := pruneAge
+	pruneAge = 0
+	if _, err := st.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pruneAge = old
+	space := st.objs.spaceDir(spaceContents)
+	if _, err := os.Stat(filepath.Join(space, "a0")); !errors.Is(err, os.ErrNotExist) {
+		t.Skip("the pack left the directory; nothing for the sweep to make")
+	}
+	oldSync := syncDirFile
+	defer func() { syncDirFile = oldSync }()
+	var spaces atomic.Int64
+	syncDirFile = func(d *os.File) error {
+		if d.Name() == space {
+			spaces.Add(1)
+		}
+		return d.Sync()
+	}
+	// Unneeded but young: the sweep writes it back loose with its grace.
+	if _, err := st.Sweep(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(space, "a0")); err != nil {
+		t.Skip("the sweep wrote nothing back loose")
+	}
+	if spaces.Load() == 0 {
+		t.Error("the sweep wrote an object back into a directory it made, and removed its pack, without syncing the space")
+	}
+}
+
+// TestNoGenerationNoPrune: where the filesystem keeps no inode
+// generation, a store never prunes its object directories, and so knows
+// them by device and inode: a warm store's commits sync no space.
+func TestNoGenerationNoPrune(t *testing.T) {
+	ctx := context.Background()
+	base := "/dev/shm"
+	if _, err := os.Stat(base); err != nil {
+		t.Skip("no tmpfs at /dev/shm")
+	}
+	root, err := os.MkdirTemp(base, "cas-nogen-")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer os.RemoveAll(root)
+	st, _ := Open(root)
+	defer st.Close()
+	if id, ok := dirIdentity(st.objs.spaceDir(spaceContents)); ok && id.hasGen {
+		t.Skip("this tmpfs keeps generations")
+	}
+	fill(t, st, "s", 3)
+	old := pruneAge
+	pruneAge = 0
+	if _, err := st.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pruneAge = old
+	if objectDirs(st) == 0 {
+		t.Error("a store without generations pruned its object directories")
+	}
+	for i := range 40 {
+		mustAppend(t, st, "s", item(fmt.Sprint("warm ", i)))
+	}
+	// Every directory the commits made is known, by device and inode, so
+	// a later commit into it syncs no space.
+	for _, sp := range []space{spaceEntries, spaceContents} {
+		ents, _ := os.ReadDir(st.objs.spaceDir(sp))
+		for _, e := range ents {
+			d := filepath.Join(st.objs.spaceDir(sp), e.Name())
+			known, ok := st.objs.known[d]
+			id, idOK := dirIdentity(d)
+			if !ok || !idOK || id != known {
+				t.Errorf("%s is not known after the commits that made it", d)
+			}
+		}
+	}
+}
+
 // TestForkRefusesDoomedBase: a fork of a base another process holds as
 // working state, after an earlier uncommitted append of that session
 // whose objects are gone, is refused: recovery would cut the origin's
