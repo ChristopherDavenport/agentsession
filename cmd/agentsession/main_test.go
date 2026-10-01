@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -720,6 +721,81 @@ func TestCASRepair(t *testing.T) {
 	}
 	if code := run([]string{"repair", root}, &stdout, &stderr); code != 2 {
 		t.Errorf("repair without an id: exit %d", code)
+	}
+}
+
+// legacyCASStore lays the sessions of a new cas store out as a store
+// v0.0.15 wrote them after compacting its journal: each log a list of
+// entry hashes, an empty store-wide journal, and no layout file.
+func legacyCASStore(t *testing.T, root string, names ...string) {
+	t.Helper()
+	casStore(t, root, names...)
+	dirs, err := os.ReadDir(filepath.Join(root, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range dirs {
+		path := filepath.Join(root, "sessions", d.Name(), "log")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var legacy []byte
+		for _, l := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+			var rec struct{ Op, Entry string }
+			if err := json.Unmarshal(l, &rec); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Op == "append" {
+				legacy = append(legacy, rec.Entry+"\n"...)
+			}
+		}
+		if err := os.WriteFile(path, legacy, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"layout", "journal"} {
+		os.Remove(filepath.Join(root, name))
+	}
+	if err := os.WriteFile(filepath.Join(root, "journal"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCASMigrate: no read-only command reads a session of a store
+// v0.0.15 wrote, and says to migrate it; migrate does, after which
+// every command reads the store (#164).
+func TestCASMigrate(t *testing.T) {
+	root := t.TempDir()
+	legacyCASStore(t, root, "basic", "branch")
+	const id = "01995b2a-0000-7000-8000-000000000001"
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"show", root, id}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "agentsession migrate") {
+		t.Errorf("show of an unmigrated session: exit %d: %s", code, stderr.String())
+	}
+	stdout.Reset()
+	if code := run([]string{"verify", root}, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "agentsession migrate "+root) {
+		t.Errorf("verify of an unmigrated store: exit %d:\n%s", code, stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"migrate", root}, &stdout, &stderr); code != 0 || strings.TrimSpace(stdout.String()) != "migrated" {
+		t.Fatalf("migrate: exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	if code := run([]string{"verify", root}, &stdout, &stderr); code != 0 {
+		t.Errorf("verify after migrating: exit %d:\n%s", code, stdout.String())
+	}
+	stdout.Reset()
+	if code := run([]string{"show", root, id}, &stdout, &stderr); code != 0 {
+		t.Errorf("show after migrating: exit %d: %s", code, stderr.String())
+	}
+	stdout.Reset()
+	if code := run([]string{"migrate", root}, &stdout, &stderr); code != 0 || strings.TrimSpace(stdout.String()) != "nothing to migrate" {
+		t.Errorf("a second migrate: exit %d: %s", code, stdout.String())
+	}
+	if code := run([]string{"migrate", t.TempDir()}, &stdout, &stderr); code != 2 {
+		t.Errorf("migrate of a directory that is no store: exit %d", code)
 	}
 }
 

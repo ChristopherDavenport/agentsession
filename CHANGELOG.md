@@ -7,6 +7,22 @@ versions may break the API.
 
 ## Unreleased
 
+**On a cas store v0.0.15 or earlier wrote, stop every writer, take a
+copy of the store, run `agentsession migrate <root>`, then upgrade the
+readers and the writers together.** The reader-first order v0.0.18
+gave cannot be followed there: a read-only open of v0.0.16 or later
+reads no session of such a store until a writing open has migrated it,
+and once one has, no release before v0.0.16 reads it. The order
+v0.0.18 gave stands for jsonl and for a cas store already migrated.
+
+- **`agentsession migrate <cas-root>`** opens a cas store for writing
+  and closes it, which migrates a store v0.0.15 or earlier wrote, with
+  no harness started to do it. It refuses with `ErrMigrationBusy` while
+  a writer of the earlier release holds a session, and exits non-zero
+  when a session failed to migrate. A command that meets an unmigrated
+  session, and `verify` of a store holding a journal still to migrate,
+  now say to run it. `cas.NeedsMigration` reports whether a store holds
+  one. (#164)
 - **cas: a migrated store refuses a writer of v0.0.15 and earlier
   that the migration did not find.** The migration finds such a writer
   only while it holds a session; one idle between sessions went on
@@ -43,7 +59,11 @@ raises a 0.9 file to 0.10 before it appends, so
 every 0.9 reader, v0.0.12 to v0.0.17, refuses the file from then on,
 the early writers among them. **Upgrade every reader of a store,
 agentturn, agentkit and agenteval included, before any writer runs
-this release.** RFC 0001 is draft 0.10, and Versioning gains the rule
+this release.** A cas store v0.0.15 or earlier wrote is the exception:
+no reader of v0.0.16 or later reads it until a writing open has
+migrated it, so stop every writer, take a copy, open it for writing
+once with this release, then upgrade the readers and writers together
+(#164). RFC 0001 is draft 0.10, and Versioning gains the rule
 that a released minor's rules do not change. (#132)
 
 - **An answer may end a call dispatched only elsewhere in the

@@ -71,6 +71,14 @@ func legacyJournal(root string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
+// NeedsMigration reports whether the store at root holds a journal of a
+// store from before logs were per session, which its next writing open
+// migrates: a store no writing open has migrated yet, or one whose
+// migration left a session that failed, which [Store.Verify] names.
+func NeedsMigration(root string) bool {
+	return legacyJournal(root)
+}
+
 // retireJournal puts the tombstone in the journal's place in one rename,
 // so a crash leaves the journal or the tombstone and never neither. It
 // runs with the sweep's lock held exclusive, which a writer of the
