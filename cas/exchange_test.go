@@ -260,7 +260,7 @@ func TestLaterFormatRefused(t *testing.T) {
 	a.Release("s")
 	h, _ := readHeader(a.Root() + "/sessions/s")
 	h.Format = "agentsession/0.99"
-	if err := writeHeader(a.Root()+"/sessions/s", h); err != nil {
+	if err := writeHeader(nil, a.Root()+"/sessions/s", h); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.Create(ctx, agentsession.Header{ID: "f", Base: ids[0]}); !errors.Is(err, agentsession.ErrUnsupportedFormat) {

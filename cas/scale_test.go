@@ -47,7 +47,6 @@ func TestScale(t *testing.T) {
 	var next, done atomic.Int64
 	var wg sync.WaitGroup
 	errs := make(chan error, writers)
-	var maxJournal atomic.Int64
 	for range writers {
 		wg.Add(1)
 		go func() {
@@ -86,9 +85,6 @@ func TestScale(t *testing.T) {
 					errs <- err
 					return
 				}
-				if info, err := os.Stat(filepath.Join(root, "journal")); err == nil && info.Size() > maxJournal.Load() {
-					maxJournal.Store(info.Size())
-				}
 				if d := done.Add(1); d%10 == 0 {
 					t.Logf("  %d sessions, %d appends, %v", d, d*perSession, time.Since(start).Round(time.Second))
 				}
@@ -103,13 +99,6 @@ func TestScale(t *testing.T) {
 	t.Logf("built %d sessions, %d appends in %v (%v per append across %d writers)",
 		sessions, sessions*perSession, time.Since(start).Round(time.Second), time.Since(start)/time.Duration(sessions*perSession), writers)
 
-	size := func(name string) int64 {
-		info, err := os.Stat(filepath.Join(root, name))
-		if err != nil {
-			return 0
-		}
-		return info.Size()
-	}
 	packs, _ := filepath.Glob(filepath.Join(root, "objects", "pack", "*.pack"))
 	var loose int
 	for _, sp := range []string{"entries", "contents"} {
@@ -120,8 +109,7 @@ func TestScale(t *testing.T) {
 			return nil
 		})
 	}
-	t.Logf("journal now %d bytes, largest seen %d; checkpoint %d bytes; %d packs, %d loose objects",
-		size("journal"), maxJournal.Load(), size(checkpointName), len(packs), loose)
+	t.Logf("%d packs, %d loose objects; nothing store-wide beside them", len(packs), loose)
 
 	runtime.GC()
 	var before runtime.MemStats

@@ -11,7 +11,7 @@ import (
 
 // Problem is one thing Verify found wrong.
 type Problem struct {
-	// Kind is "journal" for a damaged record, "corrupt" for an object or
+	// Kind is "log" for a damaged log record, "corrupt" for an object or
 	// pack whose bytes fail their name or checksum, "missing" for an
 	// object something the store holds names and the store lacks, and
 	// "session" for a session that cannot be opened.
@@ -47,7 +47,7 @@ type Report struct {
 func (r Report) OK() bool { return len(r.Problems) == 0 }
 
 // Verify walks the whole store as git fsck does and reports what is
-// wrong with it: every journal record's checksum, every loose object
+// wrong with it: every log record's checksum, every loose object
 // and every pack against their names and checksums, every entry the
 // store holds for its two objects and the blobs its content names, and
 // every session by building it as Open does, which checks each entry's
@@ -58,20 +58,14 @@ func (s *Store) Verify(ctx context.Context) (Report, error) {
 	var rep Report
 	add := func(p Problem) { rep.Problems = append(rep.Problems, p) }
 
-	// Read the whole journal afresh rather than from what the store has
-	// read already: damage to records read earlier is what this looks
-	// for.
-	scan, err := s.replayFrom(0)
-	if err != nil {
-		return rep, err
-	}
-	for _, d := range scan.damage {
-		add(Problem{Kind: "journal", Err: d})
-	}
 	kept, _ := filepath.Glob(filepath.Join(s.root, damagedPrefix+"*"))
 	sort.Strings(kept)
 	for _, p := range kept {
-		add(Problem{Kind: "journal", Err: fmt.Errorf("a compaction replaced a journal with damaged lines, kept as %s", filepath.Base(p))})
+		add(Problem{Kind: "log", Err: fmt.Errorf("a migration retired a journal with damaged lines, kept as %s", filepath.Base(p))})
+	}
+	if _, err := os.Stat(filepath.Join(s.root, journalFile)); err == nil {
+		// Each session that failed to migrate is reported below.
+		add(Problem{Kind: "log", Err: errors.New("the journal of a store from before per-session logs is kept, as a session has not migrated; each writing open tries it again")})
 	}
 
 	if err := s.objs.reloadPacks(true); err != nil {
@@ -129,17 +123,29 @@ func (s *Store) Verify(ctx context.Context) (Report, error) {
 			return rep, err
 		}
 		dir := filepath.Join(s.root, "sessions", id)
-		v, err := s.reconcile(id, dir, scan)
+		v, err := s.reconcile(id, dir)
 		if err != nil {
-			add(Problem{Kind: "session", Session: id, Err: err})
+			kind := "session"
+			if errors.As(err, new(LogDamage)) {
+				kind = "log"
+			}
+			add(Problem{Kind: kind, Session: id, Err: err})
 			continue
 		}
 		if !v.exists {
 			continue
 		}
 		rep.Sessions++
-		if v.damaged {
-			add(Problem{Kind: "journal", Session: id, Err: errors.New("the log holds entries the journal lacks")})
+		cuts, _ := filepath.Glob(filepath.Join(dir, cutPrefix+"*"))
+		sort.Strings(cuts)
+		for _, c := range cuts {
+			add(Problem{Kind: "log", Session: id, Err: fmt.Errorf("recovery cut a commit that had finished, after a block left unwritten; its bytes are kept as %s", filepath.Base(c))})
+		}
+		if v.cutCommitted {
+			add(Problem{Kind: "log", Session: id, Err: errors.New("a block left unwritten is followed by a commit that had finished, which recovery will cut")})
+		}
+		for _, d := range v.damage {
+			add(Problem{Kind: "log", Session: id, Err: d})
 		}
 		hdr, err := readHeader(dir)
 		if err != nil {

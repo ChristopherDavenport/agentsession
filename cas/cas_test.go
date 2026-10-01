@@ -222,20 +222,18 @@ func TestProjectAndImport(t *testing.T) {
 	}
 }
 
-// TestRecovery cuts the log behind the journal and checks that opening
-// the store replays the journal's tail.
+// TestRecovery rebuilds the indexes a crash left stale or took, HEAD and
+// the mark, from the log.
 func TestRecovery(t *testing.T) {
 	ctx := context.Background()
 	st, _ := Open(t.TempDir())
 	st.Create(ctx, agentsession.Header{ID: "r"})
-	mustAppend(t, st, "r", agentsession.NewItemEntry(openresponses.UserText("a")))
+	first := mustAppend(t, st, "r", agentsession.NewItemEntry(openresponses.UserText("a")))
 	last := mustAppend(t, st, "r", agentsession.NewItemEntry(openresponses.UserText("b")))
 	st.Close()
 	dir := filepath.Join(st.Root(), "sessions", "r")
-	log, _ := os.ReadFile(filepath.Join(dir, "log"))
-	lines := strings.Split(strings.TrimRight(string(log), "\n"), "\n")
-	os.WriteFile(filepath.Join(dir, "log"), []byte(lines[0]+"\n"), 0o600)
-	os.Remove(filepath.Join(dir, "HEAD"))
+	writeHead(dir, first)
+	os.Remove(filepath.Join(dir, "record"))
 	st2, err := Open(st.Root())
 	if err != nil {
 		t.Fatal(err)
@@ -247,6 +245,9 @@ func TestRecovery(t *testing.T) {
 	}
 	if s.Len() != 2 || s.Leaf() != last {
 		t.Errorf("after recovery: len %d leaf %s, want 2 %s", s.Len(), s.Leaf(), last)
+	}
+	if head, _ := readHead(dir); head != last || readMark(dir) != MarkRecord {
+		t.Errorf("indexes after recovery: head %s, mark %s", head, readMark(dir))
 	}
 }
 
@@ -336,7 +337,7 @@ func TestRefusals(t *testing.T) {
 	if _, err := scratch.Append(ghost); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.storeEntry(ghost, true); err != nil {
+	if _, _, err := st.storeEntry(ghost, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Create(ctx, agentsession.Header{ID: "f3", Base: ghost.ID}); !errors.Is(err, agentsession.ErrNoEntry) {
@@ -437,7 +438,7 @@ func TestWriteOutcomes(t *testing.T) {
 	if rn.Outcome != agentsession.LeafNotMoved {
 		t.Errorf("leaf label onto a label = %s", rn.Outcome)
 	}
-	// A head moved in memory is journaled before the next append.
+	// A head moved in memory is logged before the next append.
 	s, _ := st.Open(ctx, "w")
 	if err := s.Branch(rb.ID); err != nil {
 		t.Fatal(err)
@@ -446,9 +447,9 @@ func TestWriteOutcomes(t *testing.T) {
 	if rd.Outcome != agentsession.Continued {
 		t.Errorf("append after an in-memory branch = %s", rd.Outcome)
 	}
-	journal, _ := os.ReadFile(filepath.Join(st.Root(), "journal"))
-	if !strings.Contains(string(journal), `"op":"head","session":"w","head":"`+rb.ID+`"`) {
-		t.Error("the in-memory head move was not journaled")
+	log, _ := os.ReadFile(filepath.Join(st.Root(), "sessions", "w", logName))
+	if !strings.Contains(string(log), `"op":"head","session":"w","head":"`+rb.ID+`"`) {
+		t.Error("the in-memory head move was not logged")
 	}
 }
 
@@ -492,14 +493,14 @@ func TestCrashWindows(t *testing.T) {
 	st.Close()
 	dir := filepath.Join(st.Root(), "sessions", "c")
 
-	// Objects written, no journal record: the entry does not exist.
+	// Objects written, no log record: the entry does not exist.
 	orphan := agentsession.NewItemEntry(openresponses.UserText("orphan"))
 	orphan.Parent = b
 	scratch, _ := agentsession.Read(bytes.NewReader(projectFile(t, st.Root(), "c")))
 	if _, err := scratch.Append(orphan); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.storeEntry(orphan, true); err != nil {
+	if _, _, err := st.storeEntry(orphan, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	st2, _ := Open(st.Root())
@@ -512,7 +513,7 @@ func TestCrashWindows(t *testing.T) {
 	}
 	st2.Close()
 
-	// Stale head: the HEAD file behind the journal.
+	// Stale head: the HEAD file behind the log.
 	writeHead(dir, a)
 	st3, _ := Open(st.Root())
 	s, _ = st3.Open(ctx, "c")
@@ -521,20 +522,23 @@ func TestCrashWindows(t *testing.T) {
 	}
 	st3.Close()
 
-	// Torn journal record: a record a crashed process cut short is
-	// skipped, the journal is not truncated since another process may
-	// have fsynced records after it, and the next commit is found even
-	// when it lands on the same line as the torn bytes.
-	journal := filepath.Join(st.Root(), "journal")
-	f, _ := os.OpenFile(journal, os.O_WRONLY|os.O_APPEND, 0o600)
+	// Torn log record: a record a crashed holder cut short is ignored
+	// by a reader, and cut by the next holder before it writes, so the
+	// next record starts a line of its own.
+	log := filepath.Join(dir, logName)
+	f, _ := os.OpenFile(log, os.O_WRONLY|os.O_APPEND, 0o600)
 	f.WriteString(`{"op":"append","session":"c","entry":"sha256:trunc`)
 	f.Close()
-	before, _ := os.ReadFile(journal)
-	st4, _ := Open(st.Root())
-	after, _ := os.ReadFile(journal)
-	if !bytes.Equal(before, after) {
-		t.Error("opening the store changed the journal")
+	before, _ := os.ReadFile(log)
+	ro, _ := Open(st.Root(), WithReadOnly())
+	if s, err := ro.Open(ctx, "c"); err != nil || s.Len() != 2 {
+		t.Errorf("a reader of a torn log: %v", err)
 	}
+	ro.Close()
+	if after, _ := os.ReadFile(log); !bytes.Equal(before, after) {
+		t.Error("a reader changed the log")
+	}
+	st4, _ := Open(st.Root())
 	c := mustAppend(t, st4, "c", agentsession.NewItemEntry(openresponses.UserText("c")))
 	st4.Close()
 	st5, _ := Open(st.Root())
@@ -690,19 +694,21 @@ func TestImportCleansUp(t *testing.T) {
 	}
 }
 
-// TestCrashDuringDelete: a directory left behind after the delete record
-// is removed on the next open, and the ID can be created again.
+// TestCrashDuringDelete: a session whose directory a delete renamed away
+// and a crash left in the trash is gone, and its ID can be created
+// again.
 func TestCrashDuringDelete(t *testing.T) {
 	ctx := context.Background()
 	st, _ := Open(t.TempDir())
 	st.Create(ctx, agentsession.Header{ID: "x"})
 	mustAppend(t, st, "x", agentsession.NewItemEntry(openresponses.UserText("a")))
 	st.Close()
-	// The delete record lands, the directory does not go.
-	st2, _ := Open(st.Root())
-	if err := st2.commit(true, journalRecord{Op: "delete", Session: "x"}); err != nil {
+	// The rename lands, the removal does not.
+	os.MkdirAll(filepath.Join(st.Root(), "trash"), 0o755)
+	if err := os.Rename(filepath.Join(st.Root(), "sessions", "x"), filepath.Join(st.Root(), "trash", "x-1")); err != nil {
 		t.Fatal(err)
 	}
+	st2, _ := Open(st.Root())
 	if _, err := st2.Open(ctx, "x"); !errors.Is(err, agentsession.ErrNoSession) {
 		t.Errorf("open of a deleted session = %v", err)
 	}
@@ -755,31 +761,29 @@ func TestTwoProcesses(t *testing.T) {
 	}
 }
 
-// TestSweepKeepsWhatTheJournalNames: an append acknowledged as durable
-// whose log line never reached disk, in a session nobody has reopened,
-// is kept by the sweep, since the sweep works from the journal.
-func TestSweepKeepsWhatTheJournalNames(t *testing.T) {
+// TestSweepKeepsWorkingState: appends another process accepted and has
+// not committed are named by its log, so a sweep keeps them.
+func TestSweepKeepsWorkingState(t *testing.T) {
 	ctx := context.Background()
-	st, _ := Open(t.TempDir())
-	st.Create(ctx, agentsession.Header{ID: "j"})
-	mustAppend(t, st, "j", agentsession.NewItemEntry(openresponses.UserText("a")))
-	last := mustAppend(t, st, "j", agentsession.NewItemEntry(openresponses.UserText("b")))
-	st.Close()
-	dir := filepath.Join(st.Root(), "sessions", "j")
-	log, _ := os.ReadFile(filepath.Join(dir, "log"))
-	lines := strings.Split(strings.TrimRight(string(log), "\n"), "\n")
-	os.WriteFile(filepath.Join(dir, "log"), []byte(lines[0]+"\n"), 0o600)
-	st2, _ := Open(st.Root())
-	defer st2.Close()
-	if _, err := st2.Sweep(ctx, 0); err != nil {
+	root := t.TempDir()
+	w, _ := Open(root, WithSync(SyncNever))
+	defer w.Close()
+	w.Create(ctx, agentsession.Header{ID: "j"})
+	mustAppend(t, w, "j", agentsession.NewItemEntry(openresponses.UserText("a")))
+	last := mustAppend(t, w, "j", agentsession.NewItemEntry(openresponses.UserText("b")))
+	sw, _ := Open(root)
+	if _, err := sw.Sweep(ctx, 0); err != nil {
 		t.Fatal(err)
 	}
-	s, err := st2.Open(ctx, "j")
+	sw.Close()
+	ro, _ := Open(root, WithReadOnly())
+	defer ro.Close()
+	s, err := ro.Open(ctx, "j")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s.Len() != 2 || s.Leaf() != last {
-		t.Errorf("after a sweep before recovery: len %d leaf %s", s.Len(), s.Leaf())
+		t.Errorf("after a sweep beside a writer: len %d leaf %s", s.Len(), s.Leaf())
 	}
 }
 
@@ -791,14 +795,14 @@ func TestSweepGrace(t *testing.T) {
 	ghost := agentsession.NewItemEntry(openresponses.UserText("ahead of its record"))
 	scratch := agentsession.New(agentsession.Header{})
 	scratch.Append(ghost)
-	if _, _, err := st.storeEntry(ghost, true); err != nil {
+	if _, _, err := st.storeEntry(ghost, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := st.Sweep(ctx, time.Hour); n != 0 {
 		t.Errorf("swept %d young objects", n)
 	}
-	if n, _ := st.Sweep(ctx, 0); n != 2 {
-		t.Errorf("swept %d old objects, want 2", n)
+	if n, err := st.Sweep(ctx, 0); n != 2 {
+		t.Errorf("swept %d old objects, want 2: %v", n, err)
 	}
 }
 
@@ -815,10 +819,10 @@ func TestFailedCreateKeepsLiveSession(t *testing.T) {
 	if _, err := st2.Create(ctx, agentsession.Header{ID: "live"}); !errors.Is(err, agentsession.ErrSessionExists) {
 		t.Errorf("Create of an existing id = %v", err)
 	}
-	// Make the journal unreadable so the existence check fails too.
-	os.Chmod(filepath.Join(st.Root(), "journal"), 0o000)
+	// Make the sessions unreadable so the existence check fails too.
+	os.Chmod(filepath.Join(st.Root(), "sessions"), 0o000)
 	_, err := st2.Create(ctx, agentsession.Header{ID: "live"})
-	os.Chmod(filepath.Join(st.Root(), "journal"), 0o600)
+	os.Chmod(filepath.Join(st.Root(), "sessions"), 0o755)
 	if err == nil {
 		t.Skip("running as a user that can read a mode-0 file")
 	}
@@ -995,7 +999,7 @@ func TestIndexIsLazy(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if st.indexed || st.scan != nil {
+	if st.indexed {
 		t.Fatal("Open read the store")
 	}
 	if _, err := st.Create(ctx, agentsession.Header{ID: "f1", Base: a, ParentSession: "o"}); err != nil {

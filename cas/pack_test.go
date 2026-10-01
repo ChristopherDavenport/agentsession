@@ -3,6 +3,7 @@ package cas
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -247,7 +248,7 @@ func TestSweepRescuesCommittedSince(t *testing.T) {
 	if err := st.Delete(ctx, "gone"); err != nil {
 		t.Fatal(err)
 	}
-	keep, offset, err := st.keepAll()
+	keep, marks, err := st.keepAll()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,11 +262,12 @@ func TestSweepRescuesCommittedSince(t *testing.T) {
 	if looseCount(t, st) != 1 {
 		t.Fatalf("%d loose objects, want the envelope alone", looseCount(t, st))
 	}
-	scan, _ := st.replayFrom(offset)
 	since := keepSet{entries: map[string]bool{}, contents: map[string]bool{}}
-	st.keepFromScan(since, scan)
+	if err := st.keepLogs(since, marks); err != nil {
+		t.Fatal(err)
+	}
 	if !since.entries[id] || !since.contents[e.ContentHash()] {
-		t.Fatal("the journal read from the keep set's offset does not name the new append")
+		t.Fatal("the logs read on from the keep set's marks do not name the new append")
 	}
 	// A sweep with a grace that makes the packed objects old.
 	if _, err := st.Sweep(ctx, -time.Hour); err != nil {
@@ -312,8 +314,14 @@ func TestSummarySize(t *testing.T) {
 	if got := size(); got != want {
 		t.Errorf("Size after packing %d, want %d", got, want)
 	}
-	// A log of bare hashes, as v0.0.11 wrote it.
-	os.WriteFile(filepath.Join(st.Root(), "sessions", "z", "log"), []byte(strings.Join(ids, "\n")+"\n"), 0o600)
+	// Append records without sizes, as a writer may leave them.
+	var recs []logRecord
+	for i, id := range ids {
+		recs = append(recs, logRecord{Op: opAppend, Session: "z", Entry: id, Seq: i + 1})
+	}
+	data, _ := encodeRecords(true, recs)
+	st.Release("z")
+	os.WriteFile(filepath.Join(st.Root(), "sessions", "z", logName), data, 0o600)
 	if got := size(); got != want {
 		t.Errorf("Size from a log without sizes %d, want %d", got, want)
 	}
@@ -328,7 +336,7 @@ func TestPackFormat(t *testing.T) {
 		{sp: spaceEntries, hash: hashBytes([]byte("a")), data: []byte("a")},
 		{sp: spaceContents, hash: hashBytes([]byte("b")), data: []byte("b")}, // a duplicate
 	}
-	name, err := writePack(dir, objs)
+	name, err := writePack(nil, dir, objs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,7 +451,7 @@ func TestSweepFallsBack(t *testing.T) {
 				// copy broken in place.
 				first := st.objs.packList()[0]
 				data, _ := st.objs.read(spaceEntries, id)
-				if _, err := writePack(st.objs.packDir(), []packObject{{sp: spaceEntries, hash: id, data: data}}); err != nil {
+				if _, err := writePack(nil, st.objs.packDir(), []packObject{{sp: spaceEntries, hash: id, data: data}}); err != nil {
 					t.Fatal(err)
 				}
 				d, _ := digestOf(id)
@@ -501,7 +509,7 @@ func TestPackCloseWhileReading(t *testing.T) {
 		b := []byte(fmt.Sprint(i))
 		objs = append(objs, packObject{sp: spaceContents, hash: hashBytes(b), data: b})
 	}
-	name, err := writePack(dir, objs)
+	name, err := writePack(nil, dir, objs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,5 +538,39 @@ func TestPackCloseWhileReading(t *testing.T) {
 		if _, _, ok := p.find(spaceContents, d); ok {
 			t.Fatal("a closed pack answered a lookup")
 		}
+	}
+}
+
+// TestDamagedIndexLength: an index record whose length or offset lies
+// outside its pack is reported as corrupt, not allocated, by a read and
+// by Verify.
+func TestDamagedIndexLength(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	ids := fill(t, st, "s", 2)
+	st.Close()
+	st, _ = Open(root)
+	if _, err := st.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	idxs, _ := filepath.Glob(filepath.Join(root, "objects", "pack", "*.idx"))
+	for _, p := range idxs {
+		data, _ := os.ReadFile(p)
+		for i := len(idxMagic) + 8; i+idxRecord <= len(data)-2*sha256.Size; i += idxRecord {
+			for k := 0; k < 8; k++ {
+				data[i+1+sha256.Size+8+k] = 0x7f // a length of about 2^63
+			}
+		}
+		os.WriteFile(p, data, 0o600)
+	}
+	r, _ := Open(root, WithReadOnly())
+	defer r.Close()
+	if _, err := r.objs.read(spaceEntries, ids[0]); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("a read through a damaged length: %v", err)
+	}
+	if rep, err := r.Verify(ctx); err != nil || rep.OK() {
+		t.Errorf("verify: %v %v", err, rep.Problems)
 	}
 }

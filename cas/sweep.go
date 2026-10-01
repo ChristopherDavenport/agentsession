@@ -30,13 +30,16 @@ func (k keepSet) has(sp space, hash string) bool {
 // that is not there needs nothing kept; any other failure to read one
 // fails the sweep, since what it would name cannot be known and a sweep
 // that guessed would remove it.
-func (s *Store) keepEntry(k keepSet, id string) error {
+//
+// A torn entry is kept by name and not followed when torn is set: the
+// append is one recovery cut, or will, so nothing reads what it names.
+func (s *Store) keepEntry(k keepSet, id string, torn bool) error {
 	if k.entries[id] {
 		return nil
 	}
 	k.entries[id] = true
 	env, err := s.objs.read(spaceEntries, id)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || (torn && errors.Is(err, ErrCorrupt)) {
 		return nil
 	}
 	if err != nil {
@@ -48,7 +51,7 @@ func (s *Store) keepEntry(k keepSet, id string) error {
 	}
 	k.contents[c] = true
 	body, err := s.objs.read(spaceContents, c)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || (torn && errors.Is(err, ErrCorrupt)) {
 		return nil
 	}
 	if err != nil {
@@ -63,7 +66,7 @@ func (s *Store) keepEntry(k keepSet, id string) error {
 // keepPath adds the path to base.
 func (s *Store) keepPath(k keepSet, base string) error {
 	for id := base; id != "" && !k.entries[id]; {
-		if err := s.keepEntry(k, id); err != nil {
+		if err := s.keepEntry(k, id, false); err != nil {
 			return err
 		}
 		parent, err := s.parentOf(id)
@@ -78,75 +81,120 @@ func (s *Store) keepPath(k keepSet, base string) error {
 	return nil
 }
 
-// keepFromScan adds what the journal records name: every session's own
-// entries and head, and the base of every session created in it.
-func (s *Store) keepFromScan(k keepSet, scan *journalScan) error {
-	for _, st := range scan.states {
-		if st.deleted {
-			continue
+// keepRecords adds what log records name: the entries they append and
+// the heads they set, and a created session's base. An append a crash
+// may have left torn, one a lost record names or a lazy one no sync
+// record covers yet, does not fail the sweep: recovery cuts it.
+func (s *Store) keepRecords(k keepSet, recs []logRecord) error {
+	synced := -1
+	lostAt := map[string]int{}
+	for i, r := range recs {
+		switch r.Op {
+		case opSync:
+			synced = i
+		case opLost:
+			lostAt[r.Entry] = i
 		}
-		if st.base != "" {
-			if err := s.keepPath(k, st.base); err != nil {
-				return err
+	}
+	for i, r := range recs {
+		torn := r.Op == opLost // an append recovery found gone or torn
+		if r.Op == opAppend {
+			at, lost := lostAt[r.Entry]
+			torn = (lost && at > i) || (r.Lazy && i > synced)
+		}
+		for _, id := range []string{r.Entry, r.Head} {
+			if id != "" {
+				if err := s.keepEntry(k, id, torn); err != nil {
+					return err
+				}
 			}
 		}
-		for _, r := range st.recs {
-			for _, id := range []string{r.Entry, r.Head} {
-				if id != "" {
-					if err := s.keepEntry(k, id); err != nil {
-						return err
-					}
-				}
+		if r.Base != "" {
+			if err := s.keepPath(k, r.Base); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
-// keepAll computes what the store holds: what the journal names, what
-// every log names, and the path to every session's base. It returns
-// the journal offset it read to, from which the sweep's last step reads
-// what was committed since.
-func (s *Store) keepAll() (keepSet, int64, error) {
+// logMarks is how far a sweep read each session's log, from which its
+// last step reads what was accepted since.
+// A log recovery cut shorter since, or wrote again as a new file, is
+// read again whole.
+type logMarks map[string]logMark
+
+type logMark struct {
+	off  int64
+	file os.FileInfo
+}
+
+// keepAll computes what the store holds: what every session's log
+// names, and the path to every session's base.
+func (s *Store) keepAll() (keepSet, logMarks, error) {
 	k := keepSet{entries: map[string]bool{}, contents: map[string]bool{}}
-	scan, err := s.replay()
-	if err != nil {
-		return k, 0, err
+	marks := logMarks{}
+	if err := s.keepLogs(k, marks); err != nil {
+		return k, nil, err
 	}
-	if err := s.keepFromScan(k, scan); err != nil {
-		return k, 0, fmt.Errorf("cas: sweep: %w", err)
-	}
+	return k, marks, nil
+}
+
+// keepLogs adds what each session's log names beyond the mark it has in
+// marks, and moves the marks to where it read to. A session with no
+// mark is read whole, its header's base with it.
+func (s *Store) keepLogs(k keepSet, marks logMarks) error {
 	dirs, err := os.ReadDir(filepath.Join(s.root, "sessions"))
 	if err != nil {
-		return k, 0, fmt.Errorf("cas: %w", err)
+		return fmt.Errorf("cas: %w", err)
 	}
 	for _, d := range dirs {
 		if !d.IsDir() || !validSessionID(d.Name()) {
 			continue
 		}
-		if st := scan.states[d.Name()]; st != nil && st.deleted {
-			continue
+		id := d.Name()
+		dir := filepath.Join(s.root, "sessions", id)
+		mark, seen := marks[id]
+		info, serr := os.Stat(filepath.Join(dir, logName))
+		from := int64(0)
+		if seen && serr == nil && os.SameFile(mark.file, info) && info.Size() >= mark.off {
+			if info.Size() == mark.off {
+				continue
+			}
+			from = mark.off
 		}
-		dir := filepath.Join(s.root, "sessions", d.Name())
-		hashes, _, err := readLog(dir)
+		l, err := readSessionLog(dir, from)
+		if err == nil && l.legacy {
+			err = ErrLegacyStore
+		}
+		if err == nil && l.lost && tailLoss(l) {
+			// Blocks a crash left unwritten in the uncommitted tail:
+			// recovery cuts them as the tail's loss, and the lazy
+			// appends after them name nothing a sweep need stop at.
+			l.lost, l.whole = false, l.lossOff
+		}
+		if err == nil && l.lost {
+			// What a damaged record named cannot be known, and a sweep
+			// that guessed would remove it: RFC 0002 forbids deleting an
+			// entry any log references.
+			err = firstLoss(l)
+		}
 		if err != nil {
-			return k, 0, fmt.Errorf("cas: session %s: %w", d.Name(), err)
+			return fmt.Errorf("cas: session %s: %w", id, err)
 		}
-		if head, err := readHead(dir); err == nil && head != "" {
-			hashes = append(hashes, head)
+		if err := s.keepRecords(k, l.recs); err != nil {
+			return fmt.Errorf("cas: sweep: %w", err)
 		}
-		for _, h := range hashes {
-			if err := s.keepEntry(k, h); err != nil {
-				return k, 0, fmt.Errorf("cas: sweep: %w", err)
+		if from == 0 {
+			if h, err := readHeader(dir); err == nil && h.Base != "" {
+				if err := s.keepPath(k, h.Base); err != nil {
+					return fmt.Errorf("cas: sweep: %w", err)
+				}
 			}
 		}
-		if h, err := readHeader(dir); err == nil && h.Base != "" {
-			if err := s.keepPath(k, h.Base); err != nil {
-				return k, 0, fmt.Errorf("cas: sweep: %w", err)
-			}
-		}
+		marks[id] = logMark{off: l.whole, file: info}
 	}
-	return k, scan.end, nil
+	return nil
 }
 
 // gcLock takes the lock that keeps sweeps and packs apart.
@@ -176,8 +224,8 @@ func (s *Store) Pack(ctx context.Context) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	if s.readOnly {
-		return 0, errReadOnly()
+	if err := s.writable(); err != nil {
+		return 0, err
 	}
 	gc, err := s.gcLock()
 	if err != nil {
@@ -213,7 +261,7 @@ func (s *Store) packLoose(ctx context.Context) (int, error) {
 	}
 	// One that is corrupt, or removed as we walked, is left out and left
 	// where it is, for Verify to report.
-	_, skipped, err := writePackSkipping(s.objs.packDir(), objs, nil)
+	_, skipped, err := writePackSkipping(s.objs, s.objs.packDir(), objs, nil)
 	if err != nil {
 		return 0, fmt.Errorf("cas: pack: %w", err)
 	}
@@ -273,7 +321,7 @@ func (s *Store) consolidate(ctx context.Context) error {
 			return err
 		}
 	}
-	name, skipped, err := writePackSkipping(s.objs.packDir(), objs, nil)
+	name, skipped, err := writePackSkipping(s.objs, s.objs.packDir(), objs, nil)
 	if err != nil {
 		return fmt.Errorf("cas: pack: %w", err)
 	}
@@ -290,7 +338,7 @@ func (s *Store) consolidate(ctx context.Context) error {
 		os.Remove(filepath.Join(s.objs.packDir(), sp.p.name+".idx"))
 		os.Remove(sp.p.path)
 	}
-	if err := syncDir(s.objs.packDir()); err != nil {
+	if err := s.objs.fsyncDir(s.objs.packDir()); err != nil {
 		return err
 	}
 	return s.objs.reloadPacks(true)
@@ -299,17 +347,17 @@ func (s *Store) consolidate(ctx context.Context) error {
 // Sweep collects garbage as git's gc does: it repacks every object the
 // store holds into one pack, drops what nothing needs, and removes the
 // loose copies and the packs it replaced. What is held follows
-// references down: an envelope is kept while the journal, a log or a
+// references down: an envelope is kept while a log or a
 // prefix names it, a content while a kept envelope names it, a media
-// blob while a kept content names it. It works from the journal, so an
-// append whose log line never reached disk is kept.
+// blob while a kept content names it. It works from every session's
+// log, which is where an append is accepted.
 //
 // It runs beside live writers, in this process and others. The keep set
 // and the new pack are built without any lock a writer waits on and
 // without the store's own mutex. Then the sweep's lock is taken
 // exclusive, waiting until ctx ends for writers between an object write
-// and its commit, and held only for a short last step: the journal is
-// read from where the keep set stopped, anything committed since that
+// and its acceptance, and held only for a short last step: each log is
+// read from where the keep set stopped, anything accepted since that
 // lies only in a replaced pack is written back loose, and the replaced
 // packs go. Loose objects nothing needs are removed after, a batch at a
 // time under the same lock, each checked again for a writer that
@@ -319,7 +367,7 @@ func (s *Store) consolidate(ctx context.Context) error {
 // names it, as git spares a young loose object, and so is an unneeded
 // object of a pack younger than grace, which is written back loose with
 // the pack's age. grace must exceed the longest interval any live
-// writer holds between writing an object and committing its record; a
+// writer holds between writing an object and accepting its record; a
 // grace of zero is therefore safe only when no writer is active, as git
 // says of pruning with an expiry of now. An hour is a reasonable grace
 // for a live store. It returns how many objects went.
@@ -327,8 +375,8 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	if s.readOnly {
-		return 0, errReadOnly()
+	if err := s.writable(); err != nil {
+		return 0, err
 	}
 	gc, err := s.gcLock()
 	if err != nil {
@@ -339,7 +387,7 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		return 0, err
 	}
 	started := time.Now()
-	keep, offset, err := s.keepAll()
+	keep, marks, err := s.keepAll()
 	if err != nil {
 		return 0, err
 	}
@@ -425,7 +473,7 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 			return 0, err
 		}
 	}
-	newPack, skipped, err := writePackSkipping(s.objs.packDir(), objs, alts)
+	newPack, skipped, err := writePackSkipping(s.objs, s.objs.packDir(), objs, alts)
 	if err != nil {
 		return 0, fmt.Errorf("cas: pack: %w", err)
 	}
@@ -453,7 +501,7 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
-		if err := writeAtomic(path, data); err != nil {
+		if err := s.objs.writeAtomic(path, data); err != nil {
 			return err
 		}
 		if !mtime.IsZero() {
@@ -470,20 +518,15 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	}
 
 	// The last step, under the sweep's lock: no writer is between an
-	// object write and its commit.
+	// object write and its record.
 	lk, err := s.sweepLock(ctx)
 	if err != nil {
 		return 0, err
 	}
-	scan, err := s.replayFrom(offset)
-	if err != nil {
+	since := keepSet{entries: map[string]bool{}, contents: map[string]bool{}}
+	if err := s.keepLogs(since, marks); err != nil {
 		lk.release()
 		return 0, err
-	}
-	since := keepSet{entries: map[string]bool{}, contents: map[string]bool{}}
-	if err := s.keepFromScan(since, scan); err != nil {
-		lk.release()
-		return 0, fmt.Errorf("cas: sweep: %w", err)
 	}
 	for _, pair := range []struct {
 		sp  space
@@ -545,7 +588,12 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		os.Remove(filepath.Join(s.objs.packDir(), p.name+".idx"))
 		os.Remove(p.path)
 	}
-	syncDir(s.objs.packDir())
+	if err := s.objs.fsyncDir(s.objs.packDir()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// The store has stopped; what the new pack holds stays loose
+		// too, and nothing more is removed.
+		lk.release()
+		return 0, err
+	}
 	lk.release()
 	if err := s.objs.reloadPacks(true); err != nil {
 		return 0, err
@@ -587,11 +635,29 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		lk.release()
 	}
 	s.cleanPackDir(young)
+	s.cleanStaging(young)
 	return dropped, nil
 }
 
+// cleanStaging removes what a crash left staged or discarded: a session
+// created or imported in tmp and never renamed into place, and one a
+// delete renamed into trash and did not finish removing. Neither is
+// read; each goes once older than young, so a create still staging is
+// left to finish.
+func (s *Store) cleanStaging(young time.Time) {
+	for _, dir := range []string{"tmp", "trash"} {
+		ents, _ := os.ReadDir(filepath.Join(s.root, dir))
+		for _, e := range ents {
+			p := filepath.Join(s.root, dir, e.Name())
+			if info, err := os.Stat(p); err == nil && info.ModTime().Before(young) {
+				os.RemoveAll(p)
+			}
+		}
+	}
+}
+
 // isKeptSince reports whether a loose object's path names an object the
-// journal named after the keep set was taken.
+// logs named after the keep set was taken.
 func isKeptSince(s *Store, path string, since keepSet) bool {
 	for _, sp := range []space{spaceEntries, spaceContents} {
 		dir := s.objs.spaceDir(sp)
@@ -662,7 +728,7 @@ func (s *Store) looseEstimate() int {
 
 // maybePack packs when the loose objects look to have passed
 // autoPackLoose. A pack that cannot run, because a sweep, pack or
-// compaction holds the gc lock, is left for the next look; its failure
+// another pack holds the gc lock, is left for the next look; its failure
 // is no failure of the caller's.
 func (s *Store) maybePack() {
 	if s.readOnly || s.looseEstimate() < autoPackLoose {

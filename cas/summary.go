@@ -14,9 +14,7 @@ import (
 // afresh reads the whole store. The summary is kept in the session's
 // directory beside the log it was computed from, with the log's size
 // and modification time, and a listing uses it while the log is
-// unchanged and the journal says nothing the log does not: the journal
-// holds no records for the session, as it holds none for a session
-// compaction settled. Like the log and HEAD, it is an index: written
+// unchanged. Like HEAD, it is an index: written
 // without an fsync, rewritten when it does not match, and never trusted
 // for anything but a listing.
 
@@ -75,14 +73,14 @@ func keepSummary(dir string, size, modified int64, sum agentsession.Summary, met
 
 // summarizeHeld computes and keeps the summary of a session this store
 // holds, as it releases it: the name and successor come from the
-// session in memory, so nothing is decoded. It runs under mu.
-func (s *Store) summarizeHeld(id string, h *handle, scan *journalScan) {
-	if s.readOnly || scan == nil {
+// session in memory, so nothing is decoded. It runs under the handle's lock.
+func (s *Store) summarizeHeld(id string, h *handle) {
+	if s.readOnly {
 		return
 	}
 	size, modified := logStamp(h.dir)
-	v, err := s.reconcile(id, h.dir, scan)
-	if err != nil || !v.exists || v.logChanged {
+	v, err := s.reconcile(id, h.dir)
+	if err != nil || !v.exists || len(v.adopt) > 0 {
 		return
 	}
 	sum, err := s.summarize(id, h.dir, v, false)

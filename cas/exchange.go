@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 
@@ -70,22 +71,42 @@ type bundle struct {
 // bundleOf reads a session's closure: its own entries and their
 // contents, its prefix and its media blobs, as RFC 0002's push carries.
 func (s *Store) bundleOf(ctx context.Context, id string) (*bundle, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	h, err := s.openLocked(id)
+	h, err := s.hold(id)
 	if err != nil {
 		return nil, err
 	}
+	defer h.mu.Unlock()
 	if err := s.untouched(h); err != nil {
 		return nil, err
+	}
+	// A sender commits the session before it pushes or serves it, so a
+	// receiver never holds what a crash here could take back. A
+	// read-only store cannot commit another process's working state, and
+	// serves what that process's log shows committed: a durable append
+	// whose fsync is still in flight reads as committed, and the writer
+	// takes it back if the fsync fails.
+	sess, head, mark := h.session, h.head, h.mark
+	if !s.readOnly {
+		if err := s.commitHandle(id, h); err != nil {
+			return nil, err
+		}
+	} else {
+		v, err := s.committedView(id, h.dir)
+		if err != nil {
+			return nil, err
+		}
+		if sess, _, err = s.build(id, h.dir, v); err != nil {
+			return nil, err
+		}
+		head, mark = v.head, v.mark
 	}
 	hdr, err := readHeader(h.dir)
 	if err != nil {
 		return nil, err
 	}
-	b := &bundle{header: hdr, mark: h.mark, head: h.head, blobs: map[string][]byte{}}
-	for _, e := range h.session.Entries() {
-		if h.session.Prefix(e.Base().ID) {
+	b := &bundle{header: hdr, mark: mark, head: head, blobs: map[string][]byte{}}
+	for _, e := range sess.Entries() {
+		if sess.Prefix(e.Base().ID) {
 			b.prefix = append(b.prefix, e)
 		} else {
 			b.own = append(b.own, e)
@@ -121,6 +142,9 @@ func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions
 	if err := ctx.Err(); err != nil {
 		return Exchange{}, err
 	}
+	if s.sameStore(to) {
+		return Exchange{}, ErrSameStore
+	}
 	b, err := s.bundleOf(ctx, id)
 	if err != nil {
 		return Exchange{}, err
@@ -133,12 +157,11 @@ func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions
 		return x, err
 	}
 	// The receiver is the record now; clear the mark here.
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	h, err := s.openLocked(id)
+	h, err := s.hold(id)
 	if err != nil {
 		return x, fmt.Errorf("cas: handover: the receiver is the record, and this store could not clear its mark: %w", err)
 	}
+	defer h.mu.Unlock()
 	if err := s.setMark(h, id, MarkMirror); err != nil {
 		return x, fmt.Errorf("cas: handover: the receiver is the record, and this store could not clear its mark: %w", err)
 	}
@@ -156,11 +179,29 @@ func (s *Store) Fetch(ctx context.Context, from *Store, id string) (Exchange, er
 	if err := ctx.Err(); err != nil {
 		return Exchange{}, err
 	}
+	if s.sameStore(from) {
+		return Exchange{}, ErrSameStore
+	}
 	b, err := from.bundleOf(ctx, id)
 	if err != nil {
 		return Exchange{}, err
 	}
 	return s.receive(ctx, b, receiveOptions{})
+}
+
+// ErrSameStore is an exchange between a store and itself, whether one
+// Store or two opened on one directory: it has one session to both send
+// and receive, and a handover would leave no store the record.
+var ErrSameStore = errors.New("cas: an exchange needs two stores; this one is both")
+
+// sameStore reports whether two Stores are one store.
+func (s *Store) sameStore(o *Store) bool {
+	if s == o {
+		return true
+	}
+	a, err1 := os.Stat(s.root)
+	b, err2 := os.Stat(o.root)
+	return err1 == nil && err2 == nil && os.SameFile(a, b)
 }
 
 type receiveOptions struct {
@@ -203,8 +244,8 @@ func descends(entries map[string]agentsession.Entry, head, anc string) bool {
 
 // receive admits a bundle.
 func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Exchange, error) {
-	if s.readOnly {
-		return Exchange{}, errReadOnly()
+	if err := s.writable(); err != nil {
+		return Exchange{}, err
 	}
 	if o.push && b.mark != MarkRecord {
 		return Exchange{}, ErrNotRecord
@@ -212,8 +253,6 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if laterFormat(b.header.Format, agentsession.Format) {
 		return Exchange{}, fmt.Errorf("%w: %s is later than this store's %s", agentsession.ErrUnsupportedFormat, b.header.Format, agentsession.Format)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	id := b.header.ID
 	dir, err := s.sessionDir(id)
 	if err != nil {
@@ -223,7 +262,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	for _, e := range append(append([]agentsession.Entry(nil), b.prefix...), b.own...) {
 		all[e.Base().ID] = e
 	}
-	h, err := s.openLocked(id)
+	h, err := s.hold(id)
 	if errors.Is(err, agentsession.ErrNoSession) {
 		mark := MarkMirror
 		// A fresh session's head is its base, or none: the value a push's
@@ -246,16 +285,38 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 			}
 			mark = MarkRecord
 		}
+		if b.header.Base != "" {
+			// A fork's media is its origin's, where this store holds the
+			// session whose own entries include the base, as at Create
+			// and Import.
+			if owner, _, err := s.holderOf(b.header.Base, b.header.ParentSession); err == nil && owner != "" {
+				if odir, err := s.sessionDir(owner); err == nil {
+					if oh, err := readHeader(odir); err == nil && mediaOf(oh) != mediaOf(b.header) {
+						return Exchange{}, errors.New("cas: exchange: media differs from the session holding the base")
+					}
+				}
+			}
+		}
 		stored := append(append([]agentsession.Entry(nil), b.prefix...), b.own...)
-		if _, err := s.admitNew(ctx, dir, b.header, mark, stored, b.own, b.blobs, head); err != nil {
+		slot, held := s.claim(id)
+		if held {
+			slot.mu.Unlock()
+			return Exchange{}, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, id)
+		}
+		n, err := s.admitNew(ctx, dir, b.header, mark, stored, b.own, b.blobs, head)
+		if err != nil {
+			s.abandon(id, slot)
 			return Exchange{}, err
 		}
+		slot.take(n)
+		slot.mu.Unlock()
 		x.Head = head
 		return x, nil
 	}
 	if err != nil {
 		return Exchange{}, err
 	}
+	defer h.mu.Unlock()
 	hdr, err := readHeader(h.dir)
 	if err != nil {
 		return Exchange{}, err
@@ -324,41 +385,46 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 		return Exchange{}, err
 	}
 	defer guard.release()
-	sizes, err := s.packEntries(append(append([]agentsession.Entry(nil), b.prefix...), fresh...), b.blobs)
+	pend := newPendSet()
+	sizes, err := s.packEntries(append(append([]agentsession.Entry(nil), b.prefix...), fresh...), b.blobs, pend)
 	if err != nil {
 		return Exchange{}, err
 	}
 	if laterFormat(b.header.Format, hdr.Format) {
 		hdr.Format = b.header.Format
-		if err := writeHeader(h.dir, hdr); err != nil {
+		if err := writeHeader(s.objs, h.dir, hdr); err != nil {
 			return Exchange{}, err
 		}
 	}
-	var recs []journalRecord
+	var recs []logRecord
 	var hashes []string
 	seq := h.session.Len() - len(b.prefix)
 	for _, e := range fresh {
 		seq++
 		eid := e.Base().ID
 		hashes = append(hashes, eid)
-		recs = append(recs, journalRecord{Op: "append", Session: id, Entry: eid, Seq: seq, Size: sizes[eid]})
+		recs = append(recs, logRecord{Op: opAppend, Session: id, Entry: eid, Seq: seq, Size: sizes[eid]})
 	}
 	if x.HeadMoved {
-		recs = append(recs, journalRecord{Op: "head", Session: id, Head: newHead, Seq: seq})
+		recs = append(recs, logRecord{Op: opHead, Session: id, Head: newHead, Seq: seq})
 	}
 	if o.handover {
-		recs = append(recs, journalRecord{Op: "mark", Session: id, Mark: MarkRecord})
+		recs = append(recs, logRecord{Op: opMark, Session: id, Mark: MarkRecord})
 	}
 	if len(recs) > 0 {
-		if err := s.commit(true, recs...); err != nil {
+		// Committed before it is acknowledged, as RFC 0002 requires of
+		// what a receiver admits and a mark it sets: the objects
+		// packEntries left loose first, then the log.
+		if err := s.objs.flushSet(pend); err != nil {
 			return Exchange{}, err
 		}
+		if err := s.appendRecords(h, h.dir, true, s.withSync(h, id, recs...)...); err != nil {
+			return Exchange{}, err
+		}
+		h.lazy = false
 	}
 	// Committed. The indexes follow, and the session is rebuilt from
 	// what the store holds on its next open.
-	if len(hashes) > 0 {
-		_ = appendLog(h.dir, hashes, sizes)
-	}
 	for _, eid := range hashes {
 		s.own(eid, id)
 	}
@@ -369,9 +435,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if o.handover {
 		_ = writeIndex(filepath.Join(h.dir, "record"), []byte(MarkRecord+"\n"))
 	}
-	delete(s.open, id)
-	h.lock.release()
-	if _, err := s.openLocked(id); err != nil {
+	if err := s.reopen(id, h); err != nil {
 		return x, fmt.Errorf("cas: exchange committed, and the session could not be reopened: %w", err)
 	}
 	if failedHandover {

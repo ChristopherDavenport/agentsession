@@ -75,8 +75,9 @@ func TestPutBlobFreshensPack(t *testing.T) {
 	}
 }
 
-// TestReusedObjectIsSynced: a durable append that reuses a loose object
-// another writer left unsynced makes it durable with its own commit.
+// TestReusedObjectIsSynced: a durable write of a loose object another
+// writer left unsynced writes a copy of its own, durably, rather than
+// take the other's file on the word of an fsync of it.
 func TestReusedObjectIsSynced(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -88,12 +89,16 @@ func TestReusedObjectIsSynced(t *testing.T) {
 	d, _ := Open(root)
 	defer d.Close()
 	path, _ := d.objs.loosePath(spaceContents, e.Base().ContentHash())
+	before, _ := os.Stat(path)
 	body, _ := d.objs.read(spaceContents, e.Base().ContentHash())
 	if err := d.objs.write(spaceContents, e.Base().ContentHash(), body, true); err != nil {
 		t.Fatal(err)
 	}
-	if !d.objs.pendFiles[path] || !d.objs.pendDirs[filepath.Dir(path)] {
-		t.Error("a reused loose object is not in what the next durable commit syncs")
+	if after, _ := os.Stat(path); os.SameFile(before, after) {
+		t.Error("another writer's unsynced object was taken rather than written again")
+	}
+	if !d.objs.pendDirs[filepath.Dir(path)] {
+		t.Error("the object's directory is not in what the next durable commit syncs")
 	}
 }
 
@@ -179,24 +184,18 @@ func TestHandoverNeedsTheHead(t *testing.T) {
 	}
 }
 
-// TestLogAheadOfLostLazyRecord: a log line that reached the disk ahead
-// of a lazy record and objects a crash took is a lost append, not damage
-// that keeps the session from opening.
-func TestLogAheadOfLostLazyRecord(t *testing.T) {
+// TestLogAheadOfLostLazyObjects: a lazy record that reached the disk
+// ahead of objects a crash took is a lost append, not damage that keeps
+// the session from opening.
+func TestLogAheadOfLostLazyObjects(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, _ := Open(root, WithSync(SyncNever))
 	st.Create(ctx, agentsession.Header{ID: "s"})
 	id := mustAppend(t, st, "s", item("lazy one"))
-	j := filepath.Join(root, "journal")
-	data, _ := os.ReadFile(j)
-	lines := strings.SplitAfter(string(data), "\n")
-	os.WriteFile(j, []byte(strings.Join(lines[:len(lines)-2], "")), 0o600)
 	p, _ := st.objs.loosePath(spaceEntries, id)
 	os.Remove(p)
-	st.objs.pendFiles = map[string]bool{}
-	st.journalDirty = false
-	st.Release("s")
+	die(st)
 	re, _ := Open(root)
 	defer re.Close()
 	s, err := re.Open(ctx, "s")
@@ -220,7 +219,7 @@ func TestNewlineFlip(t *testing.T) {
 			mustAppend(t, w, "s", item("three"))
 		}
 		w.Close()
-		j := filepath.Join(root, "journal")
+		j := filepath.Join(root, "sessions", "s", logName)
 		data, _ := os.ReadFile(j)
 		lines := strings.SplitAfter(string(data), "\n")
 		i := 4 // the head record
@@ -308,20 +307,15 @@ func TestImportOverStalePack(t *testing.T) {
 	}
 }
 
-// TestRecoveryKeepsUnreadable: a log line whose record is damaged and
-// whose envelope is corrupt, not absent, is kept and the open fails,
-// rather than the line being removed for good.
+// TestRecoveryKeepsUnreadable: an append whose envelope is corrupt, not
+// absent, is kept and the open fails, rather than the record being
+// removed for good.
 func TestRecoveryKeepsUnreadable(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, _ := Open(root)
 	ids := fill(t, st, "a", 2)
 	st.Close()
-	lines, appends := journalLines(t, root, "a")
-	l := []byte(lines[appends[1]])
-	l[0] = 'z'
-	lines[appends[1]] = string(l)
-	os.WriteFile(filepath.Join(root, "journal"), []byte(strings.Join(lines, "")), 0o600)
 	ep, _ := st.objs.loosePath(spaceEntries, ids[1])
 	os.WriteFile(ep, []byte("garbage"), 0o600)
 	logBefore, _ := os.ReadFile(filepath.Join(root, "sessions", "a", "log"))
@@ -338,8 +332,8 @@ func TestRecoveryKeepsUnreadable(t *testing.T) {
 // TestTornInChecksum: a record a crash cut inside its checksum, with the
 // next record on the same line, is torn, not damage.
 func TestTornInChecksum(t *testing.T) {
-	r1, _ := journalRecord{Op: "append", Session: "s", Entry: "sha256:x"}.encode()
-	r2, _ := journalRecord{Op: "head", Session: "s", Head: "sha256:x"}.encode()
+	r1, _ := logRecord{Op: "append", Session: "s", Entry: "sha256:x"}.encode()
+	r2, _ := logRecord{Op: "head", Session: "s", Head: "sha256:x"}.encode()
 	line := append(append([]byte{}, r1[:len(r1)-5]...), r2...)
 	recs, err := decodeLine(line)
 	if err != nil || len(recs) != 1 || recs[0].Op != "head" {
@@ -381,8 +375,12 @@ func TestReleaseSyncs(t *testing.T) {
 	if err := st.Release("l"); err != nil {
 		t.Fatal(err)
 	}
-	if st.journalDirty || len(st.objs.pendFiles) != 0 {
+	if len(st.objs.pendFiles) != 0 {
 		t.Error("Release left lazy appends unsynced")
+	}
+	lines, _ := journalLines(t, st.Root(), "l")
+	if last := lines[len(lines)-2]; !strings.Contains(last, `"op":"sync"`) {
+		t.Errorf("Release committed no sync record: %s", last)
 	}
 }
 

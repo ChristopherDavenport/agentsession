@@ -7,76 +7,112 @@ versions may break the API.
 
 ## Unreleased
 
-The format is unchanged.
+The format is unchanged. RFC 0002's durability section is rewritten: a
+session is a ref, and its log is its own write-ahead log.
 
+- **cas: each session's log is its write-ahead log; the store-wide
+  journal is gone.** An append is accepted when its record reaches the
+  session's log and committed when the log is fsynced after its
+  objects; appends a writer leaves uncommitted are the session's
+  **working state**, which `WithSync` already allowed and a crash may
+  take. Nothing wider than a session is written to accept an append or
+  read to recover one: opening the store reads nothing, a session
+  recovers from its own log when opened, and there is no journal to
+  replay or compact. A session is created by renaming a staged
+  directory into place and deleted by renaming it away, each in one
+  step. A fork is created only once its origin's log is committed
+  through the base. What exchange receives, and an import, is committed
+  before it is acknowledged, and a sender commits before it pushes.
+  `Sync` is a commit on its own. A log record that fails its checksum
+  keeps the session from opening, since the log is its only record,
+  and `Verify` reports it as a `log` problem; `JournalDamage` is now
+  `LogDamage`. Blocks a crash left unwritten are cut, from the first,
+  as the loss of an uncommitted tail instead, since no fsync of the
+  log finished after them; a zero byte that is no such block is
+  damage. A cut that drops a commit a later record followed, which
+  only the medium unwriting a committed sector leaves, keeps its bytes
+  beside the log as `cut-<time>`, and `Verify` reports them; the
+  commit in flight at a crash, whose records may reach the disk before
+  its fsync finishes, is a crash's loss and leaves none. After any fsync of its data fails, a store writes nothing
+  more and returns `ErrStopped` until it is opened again; it still
+  reads. Linux reports a failed writeback once and keeps the pages it
+  failed to write in memory as though written, so recovery that keeps
+  working state writes it, and the log, as new files, and a commit
+  writes its own copy of an object it did not write rather than fsync
+  another's; a copy that takes the place of an existing file is
+  written durably. On Windows a file is opened for writing to be
+  fsynced, as FlushFileBuffers requires, and a directory is not
+  fsynced, which NTFS has no call for. The package documentation says what is left between
+  processes. A
+  read-only store serves exchange only what the session's writer's log
+  shows committed. Exchange between a store and itself returns
+  `ErrSameStore`.
+
+  **Migration:** the first writing open of a store written by v0.0.15
+  or earlier rewrites each session's log from the journal and retires
+  the journal, under the gc lock and holding every session's lock, so it
+  returns `ErrMigrationBusy` rather than race a writer of the earlier
+  version that still holds a session: stop those first. A crash part
+  way is finished by the next writing open. A session that fails to
+  migrate is reported when opened, and the journal kept for another
+  try; `Verify` reports the kept journal, and the rest of the store
+  opens. Only a session whose log is still in the earlier format is
+  locked and migrated, so a kept journal neither blocks an open on a
+  session another process holds nor rewrites a damaged log of this
+  version, whose damage is reported instead. Migration never removes a
+  session outright: one the journal cannot vouch was deleted is
+  migrated from its files, and one that was is renamed into the trash.
+  Any damage in the journal counts against every delete it records, so
+  a session deleted before migrating whose header is still on disk
+  comes back. A read-only open reads the migrated sessions and reports
+  `ErrLegacyStore` for the rest.
+
+  `Sweep` refuses while any session's log has a record it cannot read,
+  since that record could name what the sweep would remove: one damaged
+  log holds up sweeps of the whole store until that session is repaired
+  or deleted.
+
+  A lazy append takes 0.15 ms, down from 1.2–1.9 ms, and opening a
+  store takes microseconds at any size. Sessions of one `Store` no
+  longer wait on each other: each holds its own lock, through its
+  commit's fsync and its recovery, and an automatic pack runs with no
+  session's lock held, in the background.
+- **cas: `SyncNever` commits an entry whose type the header names in
+  `records`**, as RFC 0001 requires before the side effect it
+  precedes; every other append stays lazy.
 - **cas: an append recovery found lost stays lost.** Recovery that cut a
   lost lazy append wrote a sync record, which the next open took to mean
   the lost append was durable: it came back into the log and the session
   failed to open on the objects the crash took. Without the sync record,
   a durable append made after recovery would have been cut instead.
-  Recovery now journals a `lost` record for each append it cuts before
-  the sync record. A store left by v0.0.15 in that state still fails to
-  open that session.
-- **cas: opening a session costs what the session holds, not the
-  store.** Each open and each `List` replayed the journal from the start.
-  The store now reads on from where it last stopped: opening a
-  101-entry session in a store of 1000 takes 6 ms, down from 206 ms.
-  `Verify` still reads the whole journal.
-- **cas: a store says when a held session's lazy appends are durable.**
-  Only recovery wrote a sync record, so every open, `List` included,
-  read and hashed each lazy append's objects to find them present. A
-  durable append, `Sync`, `Release` and `Close` now write one for each
-  session they make durable. Listing a store of 1000 sessions takes
-  55 ms, down from 1.5 s.
-- **cas: opening a store starts from a checkpoint.** A writing store
-  saves the journal scan as `checkpoint` once the journal has grown
-  256 KiB past the last one, and on `Close`; the next open reads it and
-  the records after it. It is checked against the journal's bytes and
-  its own checksum, and ignored when either fails. Journal records are
-  also read without reflection. Opening a store of 1000 sessions takes
-  about 130 ms, down from 270 ms.
-- **cas: a flush fsyncs its objects concurrently**, so releasing a
-  session of 101 lazy appends waits on a few filesystem commits rather
-  than 200 fsyncs in turn: 119 ms, down from 1.45 s.
+  Recovery now logs a `lost` record for each append it cuts before the
+  sync record. A store left by v0.0.15 in that state still fails to open
+  that session after migrating.
+- **cas: a session's holder says when its working state is committed**,
+  with a sync record beside a durable append and on `Sync`, `Release`
+  and `Close`, so a later open does not read and hash each lazy
+  append's objects to find them present.
+- **cas: objects at scale.** `Pack` and `Sweep` write packs from where
+  objects are rather than from their bytes in memory, falling back to
+  another copy of an object that fails its name. `Pack` merges packs
+  geometrically, and a writing store packs on its own once its loose
+  objects look to pass about 4096. Pack indexes are mapped rather than
+  read, and checked in full by `Verify` rather than at every open.
+  Lookups try the packs before the loose path, and a read of a copy
+  that fails its name tries the others. A flush fsyncs its objects
+  concurrently: releasing a session of 101 lazy appends takes 119 ms,
+  down from 1.45 s.
+- **cas: lookups and listings follow what is asked.** The index of which
+  session holds what is built only for a fork whose named parent does
+  not hold its base. `List` filters on the header first and uses a
+  `summary` kept beside each session's log while the log is unchanged.
 - **`Read` is a quarter faster on small lines and allocates 60% less.**
   Canonical form, the I-JSON check and member splitting walk the bytes
   rather than decoding through `encoding/json`, handing what they do
   not handle to the decoder path, and each line is tested once.
-- **cas: nothing a process pays follows the size of the store.** RFC
-  0002 now permits compacting the journal, and cas does:
-  - `Store.Open` reads nothing store-wide. The index of which session
-    holds what is built only for a fork whose named parent does not
-    hold its base.
-  - `Store.Compact` replaces the journal with one holding only the
-    records of sessions whose files do not yet stand for them, after
-    fsyncing the files of those it drops; a writing store compacts on
-    its own once 16 MiB has been committed past what the last
-    compaction carried. Commits pass a new `journal.gate` and hold a new
-    `journal.lock` shared; a compaction holds both exclusive, and the
-    lock of each session it drops. A session someone holds keeps one
-    `settled` record naming its log length and head, which a writer
-    taking up a compacted session also commits, durably. A journal with
-    damaged lines is kept aside as `journal.damaged-*`, and `Verify`
-    reports it.
-  - `Pack` and `Sweep` write packs from where objects are rather than
-    from their bytes in memory, falling back to another copy of an
-    object that fails its name. `Pack` merges packs geometrically, and
-    a writing store packs on its own once its loose objects look to
-    pass about 4096.
-  - Pack indexes are mapped rather than read, and checked in full by
-    `Verify` rather than at every open. Lookups try the packs before
-    the loose path, and a read of a copy that fails its name tries the
-    others.
-  - `List` filters on the header first and uses a `summary` kept
-    beside each session's log while the log is unchanged.
-
-  In a store eight concurrent writers built to a million appends
-  (`TestScale`, opt-in), the journal never passed 18 MB, a new agent
-  opened the store in 0.1 ms holding 8 MB for it, and listing 334
-  sessions took 52 ms. Opening one 3000-entry session costs about
-  0.1–0.4 s at any store size, which is decoding its entries.
 - `BenchmarkRead` runs again (it reused one call ID), and cas has
-  benchmarks for appends, opens and listings.
+  benchmarks for appends, opens and listings, and an opt-in scale test
+  (`AGENTSESSION_SCALE=1`).
 
 ## v0.0.15 - 2026-09-29
 

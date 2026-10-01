@@ -83,10 +83,10 @@ func (c *corruptObject) Error() string {
 // bytes fail to read or to match its name is taken from its next
 // source in alts, when it has one, and otherwise left out and returned:
 // such an object is left where it is, for Verify to report.
-func writePackSkipping(dir string, objs []packObject, alts map[objKey][]packObject) (string, []packObject, error) {
+func writePackSkipping(o *objects, dir string, objs []packObject, alts map[objKey][]packObject) (string, []packObject, error) {
 	var skipped []packObject
 	for {
-		name, err := writePack(dir, objs)
+		name, err := writePack(o, dir, objs)
 		var bad *corruptObject
 		if !errors.As(err, &bad) {
 			return name, skipped, err
@@ -123,6 +123,9 @@ type pack struct {
 
 	mu sync.RWMutex // held shared by a read, exclusive by close
 	f  *os.File
+	// data is the bytes of the pack before its checksum: an index record
+	// naming anything outside them is damage, found before it is read.
+	data int64
 
 	// A lookup or walk of the index holds a reference, and the mapping
 	// goes when a closed pack's last reference does, so no lookup reads
@@ -195,6 +198,9 @@ func (p *pack) read(off, length int64) ([]byte, error) {
 	defer p.mu.RUnlock()
 	if p.f == nil {
 		return nil, errPackClosed
+	}
+	if off < int64(len(packMagic)+8) || length < 0 || length > p.data-off {
+		return nil, fmt.Errorf("%w: %s.pack: an index record names bytes %d+%d outside it", ErrCorrupt, p.name, off, length)
 	}
 	buf := make([]byte, length)
 	if _, err := p.f.ReadAt(buf, off); err != nil {
@@ -286,7 +292,12 @@ func openPack(dir, name string) (*pack, error) {
 	if err != nil {
 		return fail(err)
 	}
-	return &pack{name: name, path: filepath.Join(dir, name+".pack"), idx: records, f: f, unmap: unmap}, nil
+	pinfo, err := f.Stat()
+	if err != nil || pinfo.Size() < int64(len(packMagic)+8+sha256.Size) {
+		f.Close()
+		return fail(fmt.Errorf("%w: %s.pack is cut short", ErrCorrupt, name))
+	}
+	return &pack{name: name, path: filepath.Join(dir, name+".pack"), idx: records, f: f, data: pinfo.Size() - sha256.Size, unmap: unmap}, nil
 }
 
 // verifyIndex checks a pack index's own checksum.
@@ -311,7 +322,8 @@ func verifyIndex(dir, name string) error {
 // written once. An object given by location is read as it is written
 // and checked against its name; one that fails stops the write with a
 // *corruptObject. It returns the pack's name, or "" for no objects.
-func writePack(dir string, objs []packObject) (string, error) {
+// Its fsyncs are o's, and o is nil for a pack of no store's.
+func writePack(o *objects, dir string, objs []packObject) (string, error) {
 	sort.Slice(objs, func(i, j int) bool {
 		if objs[i].sp != objs[j].sp {
 			return objs[i].sp < objs[j].sp
@@ -385,7 +397,7 @@ func writePack(dir string, objs []packObject) (string, error) {
 		tmp.Close()
 		return "", err
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := o.fsync(tmp.Name(), tmp, func(f *os.File) error { return f.Sync() }); err != nil {
 		tmp.Close()
 		return "", err
 	}
@@ -404,10 +416,10 @@ func writePack(dir string, objs []packObject) (string, error) {
 	ib.Write(checksum)
 	isum := sha256.Sum256(ib.Bytes())
 	ib.Write(isum[:])
-	if err := writeFile(filepath.Join(dir, name+".idx"), ib.Bytes(), true); err != nil {
+	if _, err := o.writeFile(filepath.Join(dir, name+".idx"), ib.Bytes(), true); err != nil {
 		return "", err
 	}
-	if err := syncDir(dir); err != nil {
+	if err := o.fsyncDir(dir); err != nil {
 		return "", err
 	}
 	return name, nil
