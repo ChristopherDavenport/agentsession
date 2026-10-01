@@ -21,6 +21,14 @@
 //	  sweep.lock.next                     held shared by writers taking sweep.lock, exclusive by a sweep waiting for it
 //	  gc.lock                             the lock of a running sweep or pack
 //
+// A body is held as its canonical bytes (RFC 8785), so what a session
+// reads back is equal to what was appended under canonical JSON, not in
+// bytes: member order inside opaque JSON, such as a tool's parameter
+// schema, comes back canonical, where the jsonl store gives members as
+// they were written. A request rebuilt here has the request hash of the
+// one sent; a renderer that needs its bytes passes both through
+// [agentsession.CanonicalRequest].
+//
 // An entry is stored as two objects, its body under the content hash
 // and its envelope under the id, so a body shared by many entries is
 // held once and a chain of envelopes verifies without its bodies. A

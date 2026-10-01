@@ -28,10 +28,12 @@ check the one against the other by a single hash.
 The file holds two kinds of entry. **Context entries** are what the
 model was sent and what it returned: items, responses, configuration,
 compaction and the summary carried across a branch. Replaying them
-along a path rebuilds a request byte for byte, without resolving
-anything outside the file: material that arrived from elsewhere is
-carried in the entry that received it, and the reference saying where
-it came from is provenance beside it. **Record entries** are
+along a path rebuilds a request byte for byte in canonical form
+(RFC 8785), without resolving anything outside the file: material that
+arrived from elsewhere is carried in the entry that received it, and
+the reference saying where it came from is provenance beside it. Member
+order inside opaque JSON, such as a tool's parameter schema, is not
+kept across a rewrite or a store. **Record entries** are
 what happened around the conversation: how a run started and how it
 ended, that a tool call was dispatched, what was decided about a call,
 the environment the tools ran in, links to other sessions, and
@@ -67,7 +69,11 @@ session worth training on.
 ## Goals
 
 - **Lossless.** A conforming file contains enough to rebuild every
-  request the model received, byte for byte where the payload allows.
+  request the model received, byte for byte in canonical form (RFC
+  8785). Preservation is of members, not bytes, so member order inside
+  opaque JSON, such as a tool's parameter schema, may not survive a
+  rewrite or a store; a renderer that needs the same bytes from a live
+  request and a rebuilt one canonicalises both.
 - **Resumable.** For every call without an output, a reader can tell
   from the path, and for a call a rebase left above its `dispatch` from
   the rest of the session, whether it was never started, was in flight when the

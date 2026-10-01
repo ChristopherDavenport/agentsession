@@ -147,6 +147,16 @@ which is harmless, and the next writing open puts it back.
   appended entries the repair cannot name. While a `damaged-*` log is
   kept, a sweep keeps every object any well-formed hash in it names,
   not only what its readable records name. (#167)
+- **`CanonicalRequest`** returns a request as its canonical JSON (RFC
+  8785) decodes, every member inside opaque JSON in canonical order. A
+  rebuilt request equals the one sent under canonical JSON, not in
+  bytes: a cas store gives a tool's parameter schema back with its
+  members sorted, and jsonl gives them as written, with one request
+  hash. A renderer that turns a request into tokens passes the live
+  request and the rebuilt one through it alike to render the same
+  bytes from both. RFC 0001's Goals now say byte for byte in canonical
+  form, as its normative text already did; `Context.Request` and the
+  cas and jsonl package docs say which store gives which. (#175)
 
 ## v0.0.18 - 2026-10-01
 
