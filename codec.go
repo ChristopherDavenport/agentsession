@@ -81,11 +81,13 @@ func Read(r io.Reader) (*Session, error) {
 			if minor < hashedMinor {
 				m = &migration{ids: map[string]string{}}
 			}
+			declared := h.Format
 			if err := migrate(&h); err != nil {
 				return nil, err
 			}
 			s = New(h)
 			s.migrated = m != nil
+			s.declared = declared
 		} else {
 			e, form, canonical, err := decodeLine(data)
 			if err != nil {

@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.9
+Status: draft 0.10
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -190,7 +190,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.9","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.10","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -1466,17 +1466,26 @@ what an existing member means, or what the context algorithm does with
 any member, is major — which is the line an addition has to stay behind
 to arrive in a minor version at all.
 
+A minor's rules do not change once a writer of it is released: what a
+file of that minor may hold, and how a reader reads it, stay as they
+were, and a change to either is a new minor. A writer that appends
+raises the header to its own minor, as above, so a writer of the
+earlier minor then refuses the file rather than append what the later
+one forbids, and a reader can tell which rules a file was written
+under from its header. A minor that only fixes the rules of one
+amended in place, as 0.10 does 0.9's, changes nothing else.
+
 The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.9 reads a 0.5, 0.6, 0.7 or 0.8 file
-as it stands, since 0.6 to 0.9 add optional members and elements and
-the hashes do not change, save for the few rules each minor's changes below say read
+it begins at 1.0. A reader of 0.10 reads a 0.5 to 0.9 file
+as it stands, since 0.6 to 0.9 add optional members and elements, 0.10
+changes no rule, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.9 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.10 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -1556,6 +1565,23 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.9
+
+None to what a file may hold or how a reader reads it: a 0.9 file is a
+0.10 file. 0.10 exists because 0.9's rules were amended in place after
+writers of it were released, so a 0.9 header does not say which of
+them a file was written under, and a writer of an early 0.9 appended
+what later ones forbid without complaint. A writer of 0.10 raises a
+0.9 file's header before it appends, so an early 0.9 writer refuses
+the file from then on, and a 0.10 file was written under the rules
+this draft states. Versioning gains the rule that a released minor's
+rules do not change.
+
+A file raised from 0.9 may still hold entries an early 0.9 writer
+appended before the raise; a reader that finds one of the rules below
+broken in such a file, which it cannot tell from a 0.10 file, reads it
+as broken.
 
 ## Changes since 0.8
 

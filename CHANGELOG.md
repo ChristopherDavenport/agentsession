@@ -5,6 +5,25 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+**The format is 0.10**, which changes no rule: a 0.9 file is a 0.10
+file. 0.9's rules were amended in place after writers of it were
+released, so a 0.9 header could not say which a file was written
+under; a writer now raises a 0.9 file to 0.10 before it appends, so
+v0.0.12 to v0.0.14 refuse the file from then on. RFC 0001 is draft
+0.10, and Versioning gains the rule that a released minor's rules do
+not change. (#132)
+
+- **`Session.DeclaredFormat`** returns the format a file's header named
+  when it was read, before `Read` raised it in memory, and `verify`
+  notes an early 0.9 writer only for a file that declared 0.9, not for
+  a 0.8 file whose header `Read` raised. (#134)
+- **`export.ItemsFrom` makes up call IDs in the alphabet and length
+  every provider takes**: a repeated native ID's characters outside
+  letters, digits, `_` and `-` become `_`, and the made-up ID is at
+  most 64 characters, as agentturn's renamer has it. (#136)
+
 ## v0.0.17 - 2026-10-01
 
 The format is unchanged. RFC 0002's exchange section gains a refusal,

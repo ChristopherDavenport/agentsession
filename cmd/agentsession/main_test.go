@@ -647,3 +647,18 @@ func TestCASVerifyChecksRecords(t *testing.T) {
 		t.Errorf("a store's verify lists each response:\n%s", stdout.String())
 	}
 }
+
+// TestAmended09Declared: the note that an early 0.9 writer may have
+// broken a rule goes with a file that declared 0.9 when read, not with
+// an earlier minor Read raised, nor a 0.10 file (#134).
+func TestAmended09Declared(t *testing.T) {
+	for declared, want := range map[string]bool{
+		"agentsession/0.8":  false,
+		"agentsession/0.9":  true,
+		agentsession.Format: false,
+	} {
+		if got := amended09(declared, agentsession.ErrCallIDRepeated); got != want {
+			t.Errorf("%s: amended09 = %v, want %v", declared, got, want)
+		}
+	}
+}

@@ -98,18 +98,19 @@ func checkSession(s *agentsession.Session, prefix string, stdout io.Writer, all 
 		if err := s.VerifyRecords(leaf); err != nil {
 			problem = true
 			fmt.Fprintf(stdout, "%srecords to %s  ERROR %v\n", prefix, shortID(leaf), err)
-			early = early || amended09(s.Header(), err)
+			early = early || amended09(s.DeclaredFormat(), err)
 		}
 	}
 	return problem, early
 }
 
 // amended09 reports whether err breaks a rule draft 0.9 gained after
-// v0.0.12, v0.0.13 and v0.0.14 wrote it, in a file whose header says
-// 0.9: such a file may be one of theirs, or one they appended to,
-// rather than corrupt.
-func amended09(h agentsession.Header, err error) bool {
-	if h.Format != "agentsession/0.9" {
+// v0.0.12, v0.0.13 and v0.0.14 wrote it, in a file whose header said
+// 0.9 when it was read: such a file may be one of theirs, or one they
+// appended to, rather than corrupt. A file of an earlier minor, which
+// Read brings up to the current one, never had these rules.
+func amended09(declared string, err error) bool {
+	if declared != "agentsession/0.9" {
 		return false
 	}
 	for _, e := range []error{
