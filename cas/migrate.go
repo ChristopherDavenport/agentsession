@@ -488,7 +488,12 @@ func (s *Store) migrate() error {
 			failed = true
 		}
 	}
-	if err := syncDir(filepath.Join(s.root, "sessions")); err != nil {
+	if err := s.objs.fsyncDir(filepath.Join(s.root, "sessions")); err != nil {
+		return err
+	}
+	if err := s.objs.stopped(); err != nil {
+		// A session's rewrite whose fsync failed may not survive a
+		// crash; the journal stays for the next open to migrate from.
 		return err
 	}
 	if failed {
@@ -513,7 +518,7 @@ func (s *Store) migrate() error {
 			os.Remove(p)
 		}
 	}
-	return syncDir(s.root)
+	return s.objs.fsyncDir(s.root)
 }
 
 // unmigrated reports whether a session's directory is in the format of
@@ -626,14 +631,13 @@ func (s *Store) migrateSession(id string, scan *journalScan) error {
 	if err != nil {
 		return err
 	}
-	if err := writeFile(filepath.Join(dir, logName), data, true); err != nil {
-		return err
+	for _, f := range []struct {
+		name string
+		data []byte
+	}{{logName, data}, {"HEAD", []byte(v.head + "\n")}, {"record", []byte(v.mark + "\n")}} {
+		if _, err := s.objs.writeFile(filepath.Join(dir, f.name), f.data, true); err != nil {
+			return err
+		}
 	}
-	if err := writeFile(filepath.Join(dir, "HEAD"), []byte(v.head+"\n"), true); err != nil {
-		return err
-	}
-	if err := writeFile(filepath.Join(dir, "record"), []byte(v.mark+"\n"), true); err != nil {
-		return err
-	}
-	return syncDir(dir)
+	return s.objs.fsyncDir(dir)
 }

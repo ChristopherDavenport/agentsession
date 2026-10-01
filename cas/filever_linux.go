@@ -10,7 +10,8 @@ import (
 
 // versionOf returns what tells one version of a file at a path from
 // another: its device and inode, which a file made after the old one is
-// removed may take over, and its change time, which it cannot.
+// removed may take over, and its change time, which that file shares
+// only if made within the same tick of the filesystem's clock.
 func versionOf(fi os.FileInfo) (fileVersion, bool) {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {

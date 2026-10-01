@@ -145,6 +145,15 @@ var ErrModified = errors.New("cas: session was modified outside the store")
 
 func errReadOnly() error { return agentsession.ErrReadOnly }
 
+// writable returns why the store writes nothing, if it does not: it was
+// opened read-only, or an fsync of its data failed.
+func (s *Store) writable() error {
+	if s.readOnly {
+		return errReadOnly()
+	}
+	return s.objs.stopped()
+}
+
 // SyncPolicy says when an append is durable before it returns.
 type SyncPolicy int
 
@@ -232,9 +241,11 @@ type Store struct {
 	// at whether to pack.
 	appends int
 	// packing is set while a pack runs in the background, which Close
-	// waits for through background.
+	// waits for through background; closing, under mu, says no other
+	// may start.
 	packing    atomic.Bool
 	background sync.WaitGroup
+	closing    bool
 }
 
 // handle is a session this store holds. Its mu is held by whoever works
@@ -397,22 +408,24 @@ func syncDir(dir string) error {
 // file before the rename when durable is set. The directory is the
 // caller's to sync.
 func writeFile(path string, data []byte, durable bool) error {
-	_, err := writeFileInfo(path, data, durable)
+	var sync func(*os.File) error
+	if durable {
+		sync = func(f *os.File) error { return f.Sync() }
+	}
+	_, err := writeFileWith(path, data, sync)
 	return err
 }
 
-// writeFileInfo is writeFile, returning the file it wrote as it was
-// before the rename, so a rename over it since is not taken for it.
-func writeFileInfo(path string, data []byte, durable bool) (os.FileInfo, error) {
+// writeFileWith is writeFile, fsyncing with sync when it is set, and
+// returning the file it wrote, as a rename over it since cannot change.
+func writeFileWith(path string, data []byte, sync func(*os.File) error) (os.FileInfo, error) {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
 		return nil, err
 	}
 	_, werr := tmp.Write(data)
-	if durable {
-		if serr := tmp.Sync(); werr == nil {
-			werr = serr
-		}
+	if sync != nil && werr == nil {
+		werr = sync(tmp)
 	}
 	if werr == nil && renameOpen {
 		// Renamed while open, so the file's version, which a rename may
@@ -574,7 +587,7 @@ func (s *Store) packEntries(entries []agentsession.Entry, blobs map[string][]byt
 		}
 	}
 	if len(missing) >= unpackLimit {
-		if _, err := writePack(s.objs.packDir(), missing); err != nil {
+		if _, err := writePack(s.objs, s.objs.packDir(), missing); err != nil {
 			return nil, fmt.Errorf("cas: pack: %w", err)
 		}
 		if err := s.objs.reloadPacks(true); err != nil {
@@ -890,8 +903,8 @@ func (s *Store) PutBlob(ctx context.Context, data []byte) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if s.readOnly {
-		return "", errReadOnly()
+	if err := s.writable(); err != nil {
+		return "", err
 	}
 	hash := hashBytes(data)
 	guard, err := s.writeGuard(ctx)
@@ -1129,7 +1142,7 @@ func (s *Store) recoverSession(id, dir string) (view, error) {
 		return v, err
 	}
 	if v.whole < v.size || v.unterminated {
-		if err := mendTail(dir, v.whole, v.unterminated); err != nil {
+		if err := mendTail(s.objs, dir, v.whole, v.unterminated); err != nil {
 			return v, fmt.Errorf("cas: session %s: %w", id, err)
 		}
 	}
@@ -1369,7 +1382,7 @@ func readHeader(dir string) (agentsession.Header, error) {
 }
 
 // writeHeader writes the header durably: it is not in the log.
-func writeHeader(dir string, h agentsession.Header) error {
+func writeHeader(o *objects, dir string, h agentsession.Header) error {
 	hdr, err := json.Marshal(h)
 	if err != nil {
 		return err
@@ -1377,7 +1390,7 @@ func writeHeader(dir string, h agentsession.Header) error {
 	if hdr, err = jcs.Transform(hdr); err != nil {
 		return err
 	}
-	return writeAtomic(filepath.Join(dir, "header"), append(hdr, '\n'))
+	return o.writeAtomic(filepath.Join(dir, "header"), append(hdr, '\n'))
 }
 
 // raiseFormat writes the format this package writes into the session's
@@ -1395,7 +1408,7 @@ func (s *Store) raiseFormat(h *handle) error {
 		return err
 	}
 	hdr.Format = agentsession.Format
-	if err := writeHeader(h.dir, hdr); err != nil {
+	if err := writeHeader(s.objs, h.dir, hdr); err != nil {
 		return fmt.Errorf("cas: raise the header's format: %w", err)
 	}
 	h.diskFormat = agentsession.Format
@@ -1414,8 +1427,8 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if s.readOnly {
-		return nil, errReadOnly()
+	if err := s.writable(); err != nil {
+		return nil, err
 	}
 	return s.createLocked(ctx, h, MarkRecord)
 }
@@ -1557,29 +1570,30 @@ func (s *Store) placeSession(dir string, h agentsession.Header, recs []logRecord
 		os.RemoveAll(stage)
 		return err
 	}
-	if err := writeHeader(stage, h); err != nil {
+	if err := writeHeader(s.objs, stage, h); err != nil {
 		return fail(fmt.Errorf("cas: header: %w", err))
 	}
 	data, err := encodeRecords(true, recs)
 	if err != nil {
 		return fail(err)
 	}
-	if err := writeFile(filepath.Join(stage, logName), data, true); err != nil {
-		return fail(fmt.Errorf("cas: log: %w", err))
+	for _, f := range []struct {
+		name string
+		data []byte
+	}{{logName, data}, {"HEAD", []byte(head + "\n")}, {"record", []byte(mark + "\n")}} {
+		if _, err := s.objs.writeFile(filepath.Join(stage, f.name), f.data, true); err != nil {
+			return fail(fmt.Errorf("cas: %s: %w", f.name, err))
+		}
 	}
-	if err := writeFile(filepath.Join(stage, "HEAD"), []byte(head+"\n"), true); err != nil {
-		return fail(err)
-	}
-	if err := writeFile(filepath.Join(stage, "record"), []byte(mark+"\n"), true); err != nil {
-		return fail(err)
-	}
-	if err := syncDir(stage); err != nil {
+	if err := s.objs.fsyncDir(stage); err != nil {
 		return fail(err)
 	}
 	if err := os.Rename(stage, dir); err != nil {
 		return fail(fmt.Errorf("cas: %w", err))
 	}
-	return syncDir(filepath.Join(s.root, "sessions"))
+	// A failed sync here stops the store, so nothing is committed into
+	// a session whose place a crash could still take.
+	return s.objs.fsyncDir(filepath.Join(s.root, "sessions"))
 }
 
 // commitOrigin commits the log of the session holding a fork's base
@@ -1644,7 +1658,7 @@ func (s *Store) commitOrigin(owner, base string) error {
 	if err := s.objs.flushSet(pend); err != nil {
 		return err
 	}
-	return fsyncPath(filepath.Join(dir, logName))
+	return s.objs.fsyncFile(filepath.Join(dir, logName))
 }
 
 // freshenEntry writes an entry's two objects durably, rewriting any a
@@ -1975,8 +1989,8 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	if err := ctx.Err(); err != nil {
 		return agentsession.Result{}, err
 	}
-	if s.readOnly {
-		return agentsession.Result{}, errReadOnly()
+	if err := s.writable(); err != nil {
+		return agentsession.Result{}, err
 	}
 	h, err := s.hold(sessionID)
 	if err != nil {
@@ -1990,10 +2004,12 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 		// a time.
 		s.mu.Lock()
 		s.appends++
-		pack := s.appends%autoPackEvery == 0
-		s.mu.Unlock()
-		if pack && s.packing.CompareAndSwap(false, true) {
+		pack := s.appends%autoPackEvery == 0 && !s.closing && s.packing.CompareAndSwap(false, true)
+		if pack {
 			s.background.Add(1)
+		}
+		s.mu.Unlock()
+		if pack {
 			go func() {
 				defer s.background.Done()
 				defer s.packing.Store(false)
@@ -2175,8 +2191,8 @@ func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if s.readOnly {
-		return errReadOnly()
+	if err := s.writable(); err != nil {
+		return err
 	}
 	h, err := s.hold(sessionID)
 	if err != nil {
@@ -2263,8 +2279,8 @@ func (s *Store) setMark(h *handle, sessionID, mark string) error {
 // without handing it over, or an importer does for a file it knows to
 // be the only copy.
 func (s *Store) DeclareRecord(ctx context.Context, sessionID string) error {
-	if s.readOnly {
-		return errReadOnly()
+	if err := s.writable(); err != nil {
+		return err
 	}
 	h, err := s.hold(sessionID)
 	if err != nil {
@@ -2425,8 +2441,8 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if s.readOnly {
-		return errReadOnly()
+	if err := s.writable(); err != nil {
+		return err
 	}
 	dir, err := s.sessionDir(id)
 	if err != nil {
@@ -2461,7 +2477,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if err := os.Rename(dir, gone); err != nil {
 		return fmt.Errorf("cas: delete %s: %w", id, err)
 	}
-	if err := syncDir(filepath.Join(s.root, "sessions")); err != nil {
+	if err := s.objs.fsyncDir(filepath.Join(s.root, "sessions")); err != nil {
 		return err
 	}
 	s.disown(id)
@@ -2487,9 +2503,6 @@ func (s *Store) releaseHandle(id string, h *handle) error {
 	var err error
 	if !s.readOnly {
 		err = s.commitHandle(id, h)
-		if errors.Is(err, errLogUncertain) {
-			return err // let go already, and the indexes are not ours to write
-		}
 		if err == nil {
 			// Indexes of what was committed; after a failed commit, the
 			// next open rebuilds them from the log.
@@ -2519,8 +2532,8 @@ func (s *Store) Sync(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if s.readOnly {
-		return errReadOnly()
+	if err := s.writable(); err != nil {
+		return err
 	}
 	var first error
 	for id, h := range s.handles() {
@@ -2547,6 +2560,9 @@ func (s *Store) Close() error {
 		}
 		h.mu.Unlock()
 	}
+	s.mu.Lock()
+	s.closing = true
+	s.mu.Unlock()
 	s.background.Wait()
 	if !s.readOnly {
 		if err := s.objs.flush(); err != nil && first == nil {
@@ -2672,8 +2688,8 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if s.readOnly {
-		return nil, errReadOnly()
+	if err := s.writable(); err != nil {
+		return nil, err
 	}
 	sess, err := agentsession.Read(r)
 	if err != nil {

@@ -336,7 +336,7 @@ func TestPackFormat(t *testing.T) {
 		{sp: spaceEntries, hash: hashBytes([]byte("a")), data: []byte("a")},
 		{sp: spaceContents, hash: hashBytes([]byte("b")), data: []byte("b")}, // a duplicate
 	}
-	name, err := writePack(dir, objs)
+	name, err := writePack(nil, dir, objs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +451,7 @@ func TestSweepFallsBack(t *testing.T) {
 				// copy broken in place.
 				first := st.objs.packList()[0]
 				data, _ := st.objs.read(spaceEntries, id)
-				if _, err := writePack(st.objs.packDir(), []packObject{{sp: spaceEntries, hash: id, data: data}}); err != nil {
+				if _, err := writePack(nil, st.objs.packDir(), []packObject{{sp: spaceEntries, hash: id, data: data}}); err != nil {
 					t.Fatal(err)
 				}
 				d, _ := digestOf(id)
@@ -509,7 +509,7 @@ func TestPackCloseWhileReading(t *testing.T) {
 		b := []byte(fmt.Sprint(i))
 		objs = append(objs, packObject{sp: spaceContents, hash: hashBytes(b), data: b})
 	}
-	name, err := writePack(dir, objs)
+	name, err := writePack(nil, dir, objs)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -76,7 +76,7 @@ func legacyStore(t *testing.T) (string, []string) {
 	} {
 		dir := filepath.Join(root, "sessions", sess.id)
 		os.MkdirAll(dir, 0o755)
-		if err := writeHeader(dir, agentsession.New(agentsession.Header{ID: sess.id}).Header()); err != nil {
+		if err := writeHeader(nil, dir, agentsession.New(agentsession.Header{ID: sess.id}).Header()); err != nil {
 			t.Fatal(err)
 		}
 		os.WriteFile(filepath.Join(dir, logName), []byte(sess.log), 0o600)
@@ -259,7 +259,7 @@ func partialStore(t *testing.T) (string, []string) {
 	// recovery reads such an entry to tell loss from damage, and cannot.
 	dir := filepath.Join(root, "sessions", "bad")
 	os.MkdirAll(dir, 0o755)
-	writeHeader(dir, scratch.Header())
+	writeHeader(nil, dir, scratch.Header())
 	os.WriteFile(filepath.Join(dir, logName), []byte(e.Base().ID+"\n"), 0o600)
 	return root, want
 }

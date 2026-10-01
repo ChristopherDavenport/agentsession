@@ -83,10 +83,10 @@ func (c *corruptObject) Error() string {
 // bytes fail to read or to match its name is taken from its next
 // source in alts, when it has one, and otherwise left out and returned:
 // such an object is left where it is, for Verify to report.
-func writePackSkipping(dir string, objs []packObject, alts map[objKey][]packObject) (string, []packObject, error) {
+func writePackSkipping(o *objects, dir string, objs []packObject, alts map[objKey][]packObject) (string, []packObject, error) {
 	var skipped []packObject
 	for {
-		name, err := writePack(dir, objs)
+		name, err := writePack(o, dir, objs)
 		var bad *corruptObject
 		if !errors.As(err, &bad) {
 			return name, skipped, err
@@ -322,7 +322,8 @@ func verifyIndex(dir, name string) error {
 // written once. An object given by location is read as it is written
 // and checked against its name; one that fails stops the write with a
 // *corruptObject. It returns the pack's name, or "" for no objects.
-func writePack(dir string, objs []packObject) (string, error) {
+// Its fsyncs are o's, and o is nil for a pack of no store's.
+func writePack(o *objects, dir string, objs []packObject) (string, error) {
 	sort.Slice(objs, func(i, j int) bool {
 		if objs[i].sp != objs[j].sp {
 			return objs[i].sp < objs[j].sp
@@ -396,7 +397,7 @@ func writePack(dir string, objs []packObject) (string, error) {
 		tmp.Close()
 		return "", err
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := o.fsync(tmp.Name(), tmp, func(f *os.File) error { return f.Sync() }); err != nil {
 		tmp.Close()
 		return "", err
 	}
@@ -415,10 +416,10 @@ func writePack(dir string, objs []packObject) (string, error) {
 	ib.Write(checksum)
 	isum := sha256.Sum256(ib.Bytes())
 	ib.Write(isum[:])
-	if err := writeFile(filepath.Join(dir, name+".idx"), ib.Bytes(), true); err != nil {
+	if _, err := o.writeFile(filepath.Join(dir, name+".idx"), ib.Bytes(), true); err != nil {
 		return "", err
 	}
-	if err := syncDir(dir); err != nil {
+	if err := o.fsyncDir(dir); err != nil {
 		return "", err
 	}
 	return name, nil

@@ -408,30 +408,34 @@ session. A writer that must know what survived reads the head.
 
 ### A log per session
 
-The design that meets these on a filesystem is a log per session that
-is the session's write-ahead log and its record. Git has no
-counterpart: its ref is the record and its reflog a convenience, where
-here the log is the record and the head an index of it. Each record is
-one line carrying a checksum: an append, naming the entry, its sequence
-and where the head went; a head move; a record mark, as the exchange
-section defines it; a commit, after which recovery checks no object of
-an earlier record; or a loss, naming an append recovery dropped. The
-objects are written first, idempotently, since a second write of the
-same bytes under the same hash changes nothing; then the records; then
-the head, which is an index of the head the log's last record names and
-is rebuilt from it. An append is accepted when its record is written,
-and a commit is an fsync of its objects and then of the log. An fsync
-that fails may leave pages marked written that never reached the disk,
-and a later fsync of the same file can succeed without writing them,
-so after a failed fsync a store MUST NOT count what it covered as
-committed until it has written those bytes again, to a new file, or
-recovered the session from what the disk holds. A store
-appends to a session's log under the session's own lock, as git
-updates a ref under its lock file and as the ordering section requires,
-so appends to different sessions commit independently and at once, and
-a filesystem that journals its metadata joins their fsyncs into one of
-its own. The header is a file of its own, written at creation and
-replaced, durably, when its `format` is raised.
+The design that meets these on a filesystem is a log per session that is
+the session's write-ahead log and its record. Git has no counterpart:
+its ref is the record and its reflog a convenience, where here the log
+is the record and the head an index of it. Each record is one line
+carrying a checksum: the session's creation, naming its base; an append,
+naming the entry, its sequence and where the head went; a head move; a
+record mark, as the exchange section defines it; a commit, after which
+recovery checks no object of an earlier record; or a loss, naming an
+append recovery dropped. The objects are written first, idempotently,
+since a second write of the same bytes under the same hash changes
+nothing; then the records; then the head, which is an index of the head
+the log's last record names and is rebuilt from it. An append is
+accepted when its record is written, and a commit is an fsync of its
+objects and then of the log. An fsync that fails may leave pages marked
+written that never reached the disk, and a later fsync of the same file
+can succeed without writing them, so after a failed fsync a store MUST
+NOT count what it covered as committed until it has written those bytes
+again, to a new file, or recovered the session from what the disk holds.
+The reference store does the second: after any fsync of its data fails
+it writes nothing more until it is opened again, and it runs one fsync
+of a file at a time, so no commit takes the word of an fsync that
+followed another's failure on the same file. A store appends to a
+session's log under the session's own lock, as git updates a ref under
+its lock file and as the ordering section requires, so appends to
+different sessions commit independently and at once, and a filesystem
+that journals its metadata joins their fsyncs into one of its own. The
+header is a file of its own, written at creation and replaced, durably,
+when its `format` is raised.
 
 A session is created by writing its header and its first records where
 no session is, and making them visible under its ID in one step that
@@ -440,22 +444,25 @@ deleted in one step after which nothing of it is read, such as renaming
 its directory away. A session created afterwards under the same ID
 starts from nothing.
 
-A crash damages only what was written after a session's last commit: it
-may cut the log short or, on a filesystem that writes a file out of
-order, leave blocks of that uncommitted tail unwritten, and what it
-takes there is working state, dropped as a crash's loss. Anything else
+A crash damages only what was written after the log's last fsync that
+finished: it may cut the log short or, on a filesystem that writes a
+file out of order, leave blocks unwritten anywhere after that fsync. No
+fsync of the log finished after a block of it was left unwritten, so
+from the first such block on nothing was committed, whatever records
+follow, a commit whose fsync was in flight included, and what the crash
+took there is working state, dropped as a crash's loss. Anything else
 that fails its checksum, a record or bytes that are no record, is
 damage, reported rather than skipped, since the log is the session's
 only record. The one damage the bytes cannot tell from a crash's is a
-committed record the medium itself unwrote, with nothing committed after
-it: it reads as an uncommitted tail, and is cut as one, unless a store
-keeps where its commits end. The head, the record mark and any other
-index are rebuilt from the log and never read over it, so a crash that
-leaves one behind or ahead of the log changes nothing. Recovery reads
-one session's log, when the session is opened, so what a store pays to
-recover a session is proportional to that session's log, however large
-the store has grown. A session's log is deleted with the session and
-holds nothing of any other, so there is nothing store-wide to compact.
+committed record the medium itself unwrote: it reads as an uncommitted
+tail, and is cut as one, unless a store keeps where its commits end. The
+head, the record mark and any other index are rebuilt from the log and
+never read over it, so a crash that leaves one behind or ahead of the
+log changes nothing. Recovery reads one session's log, when the session
+is opened, so what a store pays to recover a session is proportional to
+that session's log, however large the store has grown. A session's log
+is deleted with the session and holds nothing of any other, so there is
+nothing store-wide to compact.
 
 A store built on a database that has its own write-ahead log gets
 atomicity and recovery from the database. Durability it must still ask

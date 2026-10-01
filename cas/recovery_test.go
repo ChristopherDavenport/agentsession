@@ -614,7 +614,8 @@ func TestSweepRefusesDamagedLog(t *testing.T) {
 
 // TestFailedCommitLeavesNothing: an append whose commit fails is taken
 // back out of the log, so a later open does not find, as a branch, an
-// append the writer was told failed.
+// append the writer was told failed; and the store, whose fsync failed,
+// writes nothing more until it is opened again.
 func TestFailedCommitLeavesNothing(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -622,20 +623,23 @@ func TestFailedCommitLeavesNothing(t *testing.T) {
 	st.Create(ctx, agentsession.Header{ID: "s"})
 	first := mustAppend(t, st, "s", item("one"))
 	old := syncLog
-	failed := false
-	syncLog = func(f *os.File) error {
-		if failed {
-			return f.Sync() // the cut back
-		}
-		failed = true
-		return errors.New("injected fsync failure")
-	}
+	syncLog = func(*os.File) error { return errors.New("injected fsync failure") }
 	_, err := st.Append(ctx, "s", item("failed"))
 	syncLog = old
-	if err == nil {
-		t.Fatal("the append reported success")
+	if !errors.Is(err, ErrStopped) {
+		t.Fatalf("the append: %v", err)
 	}
-	second := mustAppend(t, st, "s", item("two"))
+	for name, write := range map[string]func() error{
+		"append": func() error { _, err := st.Append(ctx, "s", item("two")); return err },
+		"create": func() error { _, err := st.Create(ctx, agentsession.Header{ID: "n"}); return err },
+		"delete": func() error { return st.Delete(ctx, "s") },
+		"blob":   func() error { _, err := st.PutBlob(ctx, []byte("b")); return err },
+		"sync":   func() error { return st.Sync(ctx) },
+	} {
+		if err := write(); !errors.Is(err, ErrStopped) {
+			t.Errorf("%s on a stopped store: %v", name, err)
+		}
+	}
 	st.Close()
 	r, _ := Open(root)
 	defer r.Close()
@@ -643,164 +647,120 @@ func TestFailedCommitLeavesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Len() != 2 || s.Leaf() != second || s.Entries()[0].Base().ID != first {
-		t.Errorf("after a failed commit: %d entries at %s, want 2 at %s", s.Len(), s.Leaf(), second)
+	if s.Len() != 1 || s.Leaf() != first {
+		t.Errorf("reopened: %d entries at %s, want 1 at %s", s.Len(), s.Leaf(), first)
+	}
+	second := mustAppend(t, r, "s", item("two"))
+	if s, _ := r.Open(ctx, "s"); s.Leaf() != second {
+		t.Error("the reopened store does not write")
 	}
 }
 
-// TestUncertainLogLetsGo: a commit that fails and cannot be taken back
-// out of the log lets the session go, whatever wrote it, so a later
-// operation recovers it from the disk rather than trusting state the
-// log no longer follows from.
-func TestUncertainLogLetsGo(t *testing.T) {
+// TestSharedFsyncFailureStops: two sessions commit an object they
+// share; the first's fsync of it fails. The second's fsync of the same
+// file, which the kernel would tell it succeeded, waits for the first
+// and finds the store stopped, and its commit fails rather than claim
+// bytes the disk may not hold.
+func TestSharedFsyncFailureStops(t *testing.T) {
 	ctx := context.Background()
-	for name, commit := range map[string]func(st *Store, first string) error{
-		"head":    func(st *Store, first string) error { return st.SetHead(ctx, "s", st.open["s"].head, first) },
-		"release": func(st *Store, _ string) error { return st.Release("s") },
-		"sync":    func(st *Store, _ string) error { return st.Sync(ctx) },
-	} {
+	st, _ := Open(t.TempDir(), WithSync(SyncNever))
+	defer st.Close()
+	for _, id := range []string{"a", "b"} {
+		st.Create(ctx, agentsession.Header{ID: id})
+		mustAppend(t, st, id, item("shared"))
+	}
+	old := syncObject
+	defer func() { syncObject = old }()
+	var mu sync.Mutex
+	failed := false
+	entered := make(chan struct{})
+	syncObject = func(f *os.File) error {
+		if !strings.Contains(f.Name(), string(filepath.Separator)+"contents"+string(filepath.Separator)) {
+			return f.Sync() // each session's own entry
+		}
+		mu.Lock()
+		first := !failed
+		failed = true
+		mu.Unlock()
+		if first {
+			close(entered)
+			time.Sleep(100 * time.Millisecond)
+			return errors.New("injected writeback failure")
+		}
+		return nil // as Linux says, once the failure was reported
+	}
+	errs := make(chan error, 2)
+	go func() { errs <- st.Release("a") }()
+	<-entered
+	go func() { errs <- st.Release("b") }()
+	for range 2 {
+		if err := <-errs; !errors.Is(err, ErrStopped) {
+			t.Errorf("a commit of the object whose fsync failed: %v", err)
+		}
+	}
+}
+
+// TestDirFsyncFailureStops: a failed fsync of a directory stops the
+// store, at a session's create and at an object directory alike, so no
+// append is committed into what a crash could still take.
+func TestDirFsyncFailureStops(t *testing.T) {
+	ctx := context.Background()
+	for name, match := range map[string]string{"sessions": string(filepath.Separator) + "sessions", "objects": string(filepath.Separator) + "objects" + string(filepath.Separator)} {
 		t.Run(name, func(t *testing.T) {
-			root := t.TempDir()
-			st, _ := Open(root, WithSync(SyncNever))
+			st, _ := Open(t.TempDir())
 			defer st.Close()
-			st.Create(ctx, agentsession.Header{ID: "s"})
-			first := mustAppend(t, st, "s", item("one"))
-			mustAppend(t, st, "s", item("two"))
-			oldSync, oldWrite := syncLog, writeLogFile
-			syncLog = func(*os.File) error { return errors.New("injected fsync failure") }
-			writeLogFile = func(string, []byte) error { return errors.New("injected write failure") }
-			err := commit(st, first)
-			syncLog, writeLogFile = oldSync, oldWrite
-			if !errors.Is(err, errLogUncertain) {
-				t.Fatalf("the commit: %v", err)
+			if name == "objects" {
+				st.Create(ctx, agentsession.Header{ID: "s"})
 			}
-			if _, ok := st.open["s"]; ok {
-				t.Error("the store still holds a session its log is uncertain of")
+			old := syncDirFile
+			syncDirFile = func(d *os.File) error {
+				if strings.Contains(d.Name(), match) {
+					return errors.New("injected directory fsync failure")
+				}
+				return d.Sync()
 			}
-			other, _ := Open(root)
-			defer other.Close()
-			if _, err := other.Open(ctx, "s"); err != nil {
-				t.Errorf("another store, after the session was let go: %v", err)
+			var err error
+			if name == "sessions" {
+				_, err = st.Create(ctx, agentsession.Header{ID: "s"})
+			} else {
+				_, err = st.Append(ctx, "s", item("one"))
+			}
+			syncDirFile = old
+			if !errors.Is(err, ErrStopped) {
+				t.Fatalf("the write: %v", err)
+			}
+			if _, err := st.Append(ctx, "s", item("two")); !errors.Is(err, ErrStopped) {
+				t.Errorf("an append after: %v", err)
 			}
 		})
 	}
 }
 
-// linuxFsync fails an object's first fsync and reports every later one
-// on that file a success without syncing anything, as Linux does once
-// writeback fails; lose, when set, also takes the page cache's bytes,
-// so the file reads back as the disk often has it: zeros, of the
-// file's length. The function it returns stops failing files that have
-// not failed yet; those that have go on reporting success.
-func linuxFsync(t *testing.T, lose bool) (stop func()) {
-	t.Helper()
-	old := syncObject
-	t.Cleanup(func() { syncObject = old })
-	var mu sync.Mutex
-	failed := map[string]bool{}
-	stopped := false
-	syncObject = func(f *os.File) error {
-		mu.Lock()
-		defer mu.Unlock()
-		if failed[f.Name()] {
-			return nil
-		}
-		if stopped {
-			return f.Sync()
-		}
-		failed[f.Name()] = true
-		if lose {
-			info, _ := os.Stat(f.Name())
-			os.WriteFile(f.Name(), make([]byte, info.Size()), 0o600)
-		}
-		return errors.New("injected writeback failure")
-	}
-	return func() {
-		mu.Lock()
-		defer mu.Unlock()
-		stopped = true
-	}
-}
-
-// pendingObjects returns the objects a held session's next commit owes.
-func pendingObjects(st *Store, id string) []string {
-	var out []string
-	for f := range st.open[id].pend.files {
-		out = append(out, f)
-	}
-	return out
-}
-
-// TestFailedObjectSyncRewrites: an object whose fsync failed is written
-// again, not fsynced again, and the commit then holds.
-func TestFailedObjectSyncRewrites(t *testing.T) {
-	ctx := context.Background()
-	st, _ := Open(t.TempDir(), WithSync(SyncNever))
-	defer st.Close()
-	st.Create(ctx, agentsession.Header{ID: "s"})
-	mustAppend(t, st, "s", item("one"))
-	before := map[string]os.FileInfo{}
-	for _, f := range pendingObjects(st, "s") {
-		before[f], _ = os.Stat(f)
-	}
-	if len(before) == 0 {
-		t.Fatal("nothing pending")
-	}
-	linuxFsync(t, false)
-	if err := st.Sync(ctx); err != nil {
-		t.Fatalf("a commit whose objects could be written again: %v", err)
-	}
-	for f, info := range before {
-		if now, err := os.Stat(f); err != nil || os.SameFile(info, now) {
-			t.Errorf("%s was fsynced again rather than written again: %v", f, err)
-		}
-	}
-}
-
-// TestLostObjectFailsCommits: an object whose bytes were gone by the
-// time its fsync failed fails every later commit that owes it, rather
-// than one of them taking an fsync's word that it is durable.
-func TestLostObjectFailsCommits(t *testing.T) {
-	ctx := context.Background()
-	st, _ := Open(t.TempDir(), WithSync(SyncNever))
-	defer st.Close()
-	st.Create(ctx, agentsession.Header{ID: "s"})
-	mustAppend(t, st, "s", item("one"))
-	linuxFsync(t, true)
-	if err := st.Sync(ctx); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("the commit: %v", err)
-	}
-	if err := st.Sync(ctx); !errors.Is(err, ErrCorrupt) {
-		t.Errorf("the next commit: %v", err)
-	}
-}
-
-// TestLostObjectRepairedByWriter: a lost object is put back by the next
-// write that holds its bytes, whose commit then holds, rather than that
-// commit failing on the loss too.
-func TestLostObjectRepairedByWriter(t *testing.T) {
+// TestMendFsyncFailureStops: recovery whose fsync of the mended log
+// fails stops the store, rather than the next open taking the log as
+// whole and committing on it.
+func TestMendFsyncFailureStops(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, _ := Open(root, WithSync(SyncNever))
-	defer st.Close()
-	st.Create(ctx, agentsession.Header{ID: "a"})
-	mustAppend(t, st, "a", item("same"))
-	stop := linuxFsync(t, true)
-	if err := st.Sync(ctx); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("the commit of a lost object: %v", err)
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, st, "s", item("one"))
+	st.Sync(ctx)
+	crash(st)
+	f, _ := os.OpenFile(filepath.Join(root, "sessions", "s", logName), os.O_WRONLY|os.O_APPEND, 0)
+	f.WriteString(`{"op":"app`) // a torn tail
+	f.Close()
+	w, _ := Open(root)
+	defer w.Close()
+	old := syncLog
+	syncLog = func(*os.File) error { return errors.New("injected fsync failure") }
+	_, err := w.Open(ctx, "s")
+	syncLog = old
+	if !errors.Is(err, ErrStopped) {
+		t.Fatalf("recovery: %v", err)
 	}
-	stop()
-	st.Release("a")
-	st.Create(ctx, agentsession.Header{ID: "b"})
-	mustAppend(t, st, "b", item("same"))
-	if err := st.Sync(ctx); err != nil {
-		t.Fatalf("a commit holding the lost object's bytes: %v", err)
-	}
-	st.Close()
-	r, _ := Open(root)
-	defer r.Close()
-	if _, err := r.Open(ctx, "b"); err != nil {
-		t.Errorf("the session that put the object back: %v", err)
+	if _, err := w.Append(ctx, "s", item("two")); !errors.Is(err, ErrStopped) {
+		t.Errorf("an append after: %v", err)
 	}
 }
 
@@ -872,39 +832,123 @@ func TestSweepPastTornLazyAppend(t *testing.T) {
 	}
 }
 
-// TestZeroedLogLineReported: a committed record whose line, newline and
-// all, a failed writeback left zeros runs into the next line, and is
-// reported as damage rather than passed over.
-func TestZeroedLogLineReported(t *testing.T) {
+// TestZeroedLineCutsTail: a line a crash left unwritten, zeros run
+// into the next line, with committed records after it, is the cut of
+// an uncommitted tail: no fsync of the log finished after it, so what
+// follows, a commit that was in flight included, was never committed.
+// Damage that changed a line's bytes is reported instead.
+func TestZeroedLineCutsTail(t *testing.T) {
+	ctx := context.Background()
+	for _, zero := range []bool{true, false} {
+		root := t.TempDir()
+		st, _ := Open(root)
+		st.Create(ctx, agentsession.Header{ID: "s"})
+		a := mustAppend(t, st, "s", item("a"))
+		b := mustAppend(t, st, "s", item("b"))
+		if err := st.SetHead(ctx, "s", b, a); err != nil {
+			t.Fatal(err)
+		}
+		mustAppend(t, st, "s", item("c"))
+		st.Close()
+		p := filepath.Join(root, "sessions", "s", logName)
+		data, _ := os.ReadFile(p)
+		var out []byte
+		for _, line := range bytes.SplitAfter(data, []byte("\n")) {
+			if bytes.Contains(line, []byte(`"op":"append"`)) && bytes.Contains(line, []byte(b)) {
+				if zero {
+					line = make([]byte, len(line))
+				} else {
+					line = bytes.Replace(line, []byte(`"append"`), []byte(`"appenx"`), 1)
+				}
+			}
+			out = append(out, line...)
+		}
+		os.WriteFile(p, out, 0o600)
+		r, _ := Open(root)
+		s, err := r.Open(ctx, "s")
+		switch {
+		case zero && (err != nil || s.Len() != 1 || s.Leaf() != a):
+			t.Errorf("an unwritten line: %v", err)
+		case !zero && !errors.As(err, new(LogDamage)):
+			t.Errorf("a changed line opened with %v, want its damage", err)
+		}
+		if zero {
+			if rep, err := r.Verify(ctx); err != nil || !rep.OK() {
+				t.Errorf("verify after the cut: %v %v", err, rep.Problems)
+			}
+		}
+		r.Close()
+	}
+}
+
+// TestUnterminatedLineChecked: a last line without its newline is read
+// as any other line is: zeros ahead of the record it holds make it a
+// torn write, cut whole, not a record with the bytes before it passed
+// over.
+func TestUnterminatedLineChecked(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	st, _ := Open(root)
+	st, _ := Open(root, WithSync(SyncNever))
 	st.Create(ctx, agentsession.Header{ID: "s"})
+	kept := mustAppend(t, st, "s", item("kept"))
+	st.Sync(ctx)
 	a := mustAppend(t, st, "s", item("a"))
-	b := mustAppend(t, st, "s", item("b"))
-	if err := st.SetHead(ctx, "s", b, a); err != nil {
-		t.Fatal(err)
+	mustAppend(t, st, "s", item("b")) // a child of a
+	crash(st)
+	p := filepath.Join(root, "sessions", "s", logName)
+	data, _ := os.ReadFile(p)
+	lines := bytes.SplitAfter(data, []byte("\n"))
+	var out []byte
+	for _, line := range lines {
+		if bytes.Contains(line, []byte(a)) && bytes.Contains(line, []byte(`"op":"append"`)) {
+			line = make([]byte, len(line))
+		}
+		out = append(out, line...)
 	}
-	mustAppend(t, st, "s", item("c"))
-	st.Close()
+	out = bytes.TrimSuffix(out, []byte("\n"))
+	os.WriteFile(p, out, 0o600)
+	w, _ := Open(root)
+	defer w.Close()
+	s, err := w.Open(ctx, "s")
+	if err != nil || s.Len() != 1 || s.Leaf() != kept {
+		t.Errorf("a torn last line with zeros ahead: %v", err)
+	}
+}
+
+// TestSweepAfterTailCut: a sweep after recovery cut an unwritten tail,
+// and recorded as lost an append whose envelope a crash left torn, is
+// not stopped by that envelope.
+func TestSweepAfterTailCut(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, st, "s", item("kept"))
+	st.Sync(ctx)
+	hole := mustAppend(t, st, "s", item("hole"))
+	torn := mustAppend(t, st, "s", item("torn"))
+	crash(st)
+	ep, _ := st.objs.loosePath(spaceEntries, torn)
+	os.WriteFile(ep, []byte("x"), 0o600)
 	p := filepath.Join(root, "sessions", "s", logName)
 	data, _ := os.ReadFile(p)
 	var out []byte
 	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
-		if bytes.Contains(line, []byte(`"op":"append"`)) && bytes.Contains(line, []byte(b)) {
+		if bytes.Contains(line, []byte(hole)) {
 			line = make([]byte, len(line))
 		}
 		out = append(out, line...)
 	}
 	os.WriteFile(p, out, 0o600)
-	r, _ := Open(root)
-	defer r.Close()
-	if s, err := r.Open(ctx, "s"); !errors.As(err, new(LogDamage)) {
-		n := 0
-		if s != nil {
-			n = s.Len()
+	w, _ := Open(root)
+	defer w.Close()
+	if _, err := w.Open(ctx, "s"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := w.Sweep(ctx, 0); err != nil {
+			t.Errorf("a sweep after the cut: %v", err)
 		}
-		t.Errorf("a zeroed record opened with %v and %d entries, want its damage", err, n)
 	}
 }
 
@@ -974,100 +1018,6 @@ func TestReadOnlyServesCommitted(t *testing.T) {
 	}
 	if s.Len() != 1 || s.Leaf() != kept {
 		t.Errorf("the mirror holds %d entries at %s, want only the committed %s", s.Len(), s.Leaf(), kept)
-	}
-}
-
-// TestFailedLogSyncRewrites: a log whose fsync failed is written again
-// as a new file, not fsynced again, and the session goes on.
-func TestFailedLogSyncRewrites(t *testing.T) {
-	ctx := context.Background()
-	root := t.TempDir()
-	st, _ := Open(root, WithSync(SyncNever))
-	st.Create(ctx, agentsession.Header{ID: "s"})
-	mustAppend(t, st, "s", item("one"))
-	p := filepath.Join(root, "sessions", "s", logName)
-	before, _ := os.Stat(p)
-	old := syncLog
-	failed := false
-	syncLog = func(f *os.File) error {
-		if failed {
-			return nil // as Linux does, after it reported the failure
-		}
-		failed = true
-		return errors.New("injected writeback failure")
-	}
-	err := st.Sync(ctx)
-	syncLog = old
-	if err == nil {
-		t.Fatal("the commit reported success")
-	}
-	if now, _ := os.Stat(p); os.SameFile(before, now) {
-		t.Error("the log was fsynced again rather than written again")
-	}
-	two := mustAppend(t, st, "s", item("two"))
-	if err := st.Sync(ctx); err != nil {
-		t.Fatal(err)
-	}
-	st.Close()
-	r, _ := Open(root)
-	defer r.Close()
-	if s, err := r.Open(ctx, "s"); err != nil || s.Len() != 2 || s.Leaf() != two {
-		t.Errorf("after the log was written again: %v", err)
-	}
-}
-
-// TestFailedLogSyncLostTail: a log whose fsync failed and whose earlier
-// uncommitted records read back as zeros is not written again with the
-// zeros: the session is dropped, and its next open cuts them as the
-// uncommitted tail's loss, as a crash would.
-func TestFailedLogSyncLostTail(t *testing.T) {
-	ctx := context.Background()
-	root := t.TempDir()
-	st, _ := Open(root, WithSync(SyncNever))
-	defer st.Close()
-	st.Create(ctx, agentsession.Header{ID: "s"})
-	one := mustAppend(t, st, "s", item("one"))
-	if err := st.Sync(ctx); err != nil {
-		t.Fatal(err)
-	}
-	two := mustAppend(t, st, "s", item("two"))
-	mustAppend(t, st, "s", item("three"))
-	p := filepath.Join(root, "sessions", "s", logName)
-	old := syncLog
-	syncLog = func(f *os.File) error {
-		data, _ := os.ReadFile(p)
-		var out []byte
-		for _, line := range bytes.SplitAfter(data, []byte("\n")) {
-			if bytes.Contains(line, []byte(two)) {
-				line = make([]byte, len(line))
-			}
-			out = append(out, line...)
-		}
-		os.WriteFile(p, out, 0o600)
-		syncLog = old
-		return errors.New("injected writeback failure")
-	}
-	err := st.Sync(ctx)
-	syncLog = old
-	if !errors.Is(err, errLogUncertain) {
-		t.Fatalf("the commit: %v", err)
-	}
-	s, err := st.Open(ctx, "s")
-	if err != nil {
-		t.Fatalf("the next open: %v", err)
-	}
-	if s.Len() != 1 || s.Leaf() != one {
-		t.Errorf("after the cut: %d entries at %s, want 1 at %s", s.Len(), s.Leaf(), one)
-	}
-	four := mustAppend(t, st, "s", item("four"))
-	if err := st.Sync(ctx); err != nil {
-		t.Fatal(err)
-	}
-	st.Close()
-	r, _ := Open(root)
-	defer r.Close()
-	if s, err := r.Open(ctx, "s"); err != nil || s.Leaf() != four {
-		t.Errorf("reopened: %v", err)
 	}
 }
 
@@ -1237,7 +1187,7 @@ func TestNoSharedPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, o := range []*objects{st.objs, other.objs} {
-		if n := len(o.pendFiles) + len(o.pendDirs) + len(o.pendRenamed); n != 0 {
+		if n := len(o.pendFiles) + len(o.pendDirs); n != 0 {
 			t.Errorf("%d paths left in a store's own pending set", n)
 		}
 	}
@@ -1401,33 +1351,29 @@ func TestUncheckedRecordIsDamage(t *testing.T) {
 	}
 }
 
-// TestFailedObjectDirSyncRewrites: objects renamed into a directory
-// whose fsync failed are written into it again, durable or lazy, not
-// left to a sync of it again.
-func TestFailedObjectDirSyncRewrites(t *testing.T) {
+// TestPushKeepsMedia: a push that creates a fork at the receiver is
+// held to the media of the session there holding the base, as a create
+// or an import is.
+func TestPushKeepsMedia(t *testing.T) {
 	ctx := context.Background()
-	st, _ := Open(t.TempDir())
-	defer st.Close()
-	st.Create(ctx, agentsession.Header{ID: "s"})
-	old := syncObjectDir
-	syncObjectDir = func(string) error { return errors.New("injected directory fsync failure") }
-	_, err := st.Append(ctx, "s", item("one"))
-	syncObjectDir = old
-	if err == nil {
-		t.Fatal("the commit reported success")
+	rec, mir := twoStores(t)
+	ids := fill(t, mir, "o", 2) // inline, at the receiver
+	var buf bytes.Buffer
+	if err := mir.Project(ctx, &buf, "o"); err != nil {
+		t.Fatal(err)
 	}
-	before := map[string]os.FileInfo{}
-	for f := range st.open["s"].pend.files {
-		before[f], _ = os.Stat(f)
+	if _, err := rec.Import(ctx, bytes.NewReader(buf.Bytes()), true); err != nil {
+		t.Fatal(err)
 	}
-	if len(before) == 0 {
-		t.Fatal("nothing left to write again")
+	if _, err := rec.Create(ctx, agentsession.Header{ID: "f", Base: ids[1], ParentSession: "o", Media: agentsession.MediaSidecar}); err == nil {
+		// The sender's own check refuses it; build the fork's header by
+		// hand, as a sender of another implementation might.
+		t.Skip("the sender took a fork of other media")
 	}
-	mustAppend(t, st, "s", item("two"))
-	for f, info := range before {
-		if now, err := os.Stat(f); err != nil || os.SameFile(info, now) {
-			t.Errorf("%s was left to a sync of its directory again: %v", f, err)
-		}
+	hdr := agentsession.New(agentsession.Header{ID: "f", Base: ids[1], ParentSession: "o", Media: agentsession.MediaSidecar}).Header()
+	b := &bundle{header: hdr, mark: MarkRecord, head: ids[1], blobs: map[string][]byte{}}
+	if _, err := mir.receive(ctx, b, receiveOptions{push: true, expected: ids[1]}); err == nil || !strings.Contains(err.Error(), "media") {
+		t.Errorf("a push of a fork whose media differs from its origin's: %v", err)
 	}
 }
 

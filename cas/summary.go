@@ -73,7 +73,7 @@ func keepSummary(dir string, size, modified int64, sum agentsession.Summary, met
 
 // summarizeHeld computes and keeps the summary of a session this store
 // holds, as it releases it: the name and successor come from the
-// session in memory, so nothing is decoded. It runs under mu.
+// session in memory, so nothing is decoded. It runs under the handle's lock.
 func (s *Store) summarizeHeld(id string, h *handle) {
 	if s.readOnly {
 		return

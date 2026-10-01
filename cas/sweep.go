@@ -97,7 +97,7 @@ func (s *Store) keepRecords(k keepSet, recs []logRecord) error {
 		}
 	}
 	for i, r := range recs {
-		torn := false
+		torn := r.Op == opLost // an append recovery found gone or torn
 		if r.Op == opAppend {
 			at, lost := lostAt[r.Entry]
 			torn = (lost && at > i) || (r.Lazy && i > synced)
@@ -224,8 +224,8 @@ func (s *Store) Pack(ctx context.Context) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	if s.readOnly {
-		return 0, errReadOnly()
+	if err := s.writable(); err != nil {
+		return 0, err
 	}
 	gc, err := s.gcLock()
 	if err != nil {
@@ -261,7 +261,7 @@ func (s *Store) packLoose(ctx context.Context) (int, error) {
 	}
 	// One that is corrupt, or removed as we walked, is left out and left
 	// where it is, for Verify to report.
-	_, skipped, err := writePackSkipping(s.objs.packDir(), objs, nil)
+	_, skipped, err := writePackSkipping(s.objs, s.objs.packDir(), objs, nil)
 	if err != nil {
 		return 0, fmt.Errorf("cas: pack: %w", err)
 	}
@@ -321,7 +321,7 @@ func (s *Store) consolidate(ctx context.Context) error {
 			return err
 		}
 	}
-	name, skipped, err := writePackSkipping(s.objs.packDir(), objs, nil)
+	name, skipped, err := writePackSkipping(s.objs, s.objs.packDir(), objs, nil)
 	if err != nil {
 		return fmt.Errorf("cas: pack: %w", err)
 	}
@@ -338,7 +338,7 @@ func (s *Store) consolidate(ctx context.Context) error {
 		os.Remove(filepath.Join(s.objs.packDir(), sp.p.name+".idx"))
 		os.Remove(sp.p.path)
 	}
-	if err := syncDir(s.objs.packDir()); err != nil {
+	if err := s.objs.fsyncDir(s.objs.packDir()); err != nil {
 		return err
 	}
 	return s.objs.reloadPacks(true)
@@ -375,8 +375,8 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	if s.readOnly {
-		return 0, errReadOnly()
+	if err := s.writable(); err != nil {
+		return 0, err
 	}
 	gc, err := s.gcLock()
 	if err != nil {
@@ -473,7 +473,7 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 			return 0, err
 		}
 	}
-	newPack, skipped, err := writePackSkipping(s.objs.packDir(), objs, alts)
+	newPack, skipped, err := writePackSkipping(s.objs, s.objs.packDir(), objs, alts)
 	if err != nil {
 		return 0, fmt.Errorf("cas: pack: %w", err)
 	}
@@ -501,7 +501,7 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
-		if err := writeAtomic(path, data); err != nil {
+		if err := s.objs.writeAtomic(path, data); err != nil {
 			return err
 		}
 		if !mtime.IsZero() {
@@ -588,7 +588,7 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		os.Remove(filepath.Join(s.objs.packDir(), p.name+".idx"))
 		os.Remove(p.path)
 	}
-	syncDir(s.objs.packDir())
+	s.objs.fsyncDir(s.objs.packDir()) // a failure stops the store
 	lk.release()
 	if err := s.objs.reloadPacks(true); err != nil {
 		return 0, err

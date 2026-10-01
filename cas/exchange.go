@@ -244,8 +244,8 @@ func descends(entries map[string]agentsession.Entry, head, anc string) bool {
 
 // receive admits a bundle.
 func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Exchange, error) {
-	if s.readOnly {
-		return Exchange{}, errReadOnly()
+	if err := s.writable(); err != nil {
+		return Exchange{}, err
 	}
 	if o.push && b.mark != MarkRecord {
 		return Exchange{}, ErrNotRecord
@@ -284,6 +284,18 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 				return Exchange{}, fmt.Errorf("%w: a handover whose head does not move is refused: %s", ErrHeadMoved, x.Why)
 			}
 			mark = MarkRecord
+		}
+		if b.header.Base != "" {
+			// A fork's media is its origin's, where this store holds the
+			// session whose own entries include the base, as at Create
+			// and Import.
+			if owner, _, err := s.holderOf(b.header.Base, b.header.ParentSession); err == nil && owner != "" {
+				if odir, err := s.sessionDir(owner); err == nil {
+					if oh, err := readHeader(odir); err == nil && mediaOf(oh) != mediaOf(b.header) {
+						return Exchange{}, errors.New("cas: exchange: media differs from the session holding the base")
+					}
+				}
+			}
 		}
 		stored := append(append([]agentsession.Entry(nil), b.prefix...), b.own...)
 		slot, held := s.claim(id)
@@ -380,7 +392,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	}
 	if laterFormat(b.header.Format, hdr.Format) {
 		hdr.Format = b.header.Format
-		if err := writeHeader(h.dir, hdr); err != nil {
+		if err := writeHeader(s.objs, h.dir, hdr); err != nil {
 			return Exchange{}, err
 		}
 	}

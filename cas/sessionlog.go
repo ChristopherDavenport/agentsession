@@ -116,16 +116,12 @@ func parseSessionLog(r interface {
 			return l, nil
 		}
 		if line[len(line)-1] != '\n' {
-			// A last line without its newline: a torn write, unless it
-			// holds whole records that pass their checksums.
-			recs, _ := decodeLine(line)
-			for _, r := range recs {
-				if r.checked {
-					l.recs = append(l.recs, r)
-					l.unterminated = true
-				}
-			}
-			if l.unterminated {
+			// A last line without its newline: a torn write, cut by the
+			// holder, unless it is whole records and nothing else, each
+			// passing its checksum, as any other line must be.
+			if recs, err := decodeLine(line); err == nil && wholeRecords(line, recs) {
+				l.recs = append(l.recs, recs...)
+				l.unterminated = true
 				l.whole += int64(len(line))
 			}
 			return l, nil
@@ -134,21 +130,13 @@ func parseSessionLog(r interface {
 		start := l.whole
 		l.whole += int64(len(line))
 		recs, derr := decodeLine(line)
-		for _, r := range recs {
-			if !r.checked && derr == nil {
-				// Every record of a session's log carries a checksum; one
-				// read without, as the journal's oldest were, lost it to
-				// damage.
-				derr = errUnchecked
-			}
-		}
-		if derr == nil && (!bytes.HasPrefix(line, recordOpening) || len(recs) != bytes.Count(line, recordOpening)) {
-			// The journal's reading passes over torn bytes a later record
-			// landed after. A session's holder cuts a torn tail before it
-			// writes again, so here such bytes are a record that was
-			// whole and is not: a block of zeros where a line was, run
-			// into the next.
+		if derr == nil && !wholeRecords(line, recs) {
 			derr = errSkipped
+			for _, r := range recs {
+				if !r.checked {
+					derr = errUnchecked
+				}
+			}
 		}
 		if derr != nil {
 			l.damage = append(l.damage, LogDamage{Line: lineNo, Offset: start, Err: derr})
@@ -195,6 +183,9 @@ func (s *Store) appendRecords(h *handle, dir string, durable bool, recs ...logRe
 	if s.readOnly {
 		return errReadOnly()
 	}
+	if err := s.objs.stopped(); err != nil {
+		return err
+	}
 	data, err := encodeRecords(durable, recs)
 	if err != nil {
 		return err
@@ -224,80 +215,46 @@ func (s *Store) appendRecords(h *handle, dir string, durable bool, recs ...logRe
 	}
 	before := info.Size()
 	_, err = f.Write(data)
-	fsyncFailed := false
 	if err == nil && durable {
-		err = syncLog(f)
-		fsyncFailed = err != nil
+		err = s.objs.fsync(filepath.Join(dir, logName), f, syncLog)
 	}
 	if err != nil {
 		// A record that failed is not left for a later open to find: the
-		// log is cut back to where it was. If even that fails, what the
-		// log holds is unknown, and the session is dropped so its next
-		// open reads the disk.
-		uncertain := func(err error) error {
-			// A held session's state no longer follows from its log;
-			// it is let go, and its next open recovers from the disk.
-			// Every record names the session it belongs to.
-			if h != nil {
-				s.dropHandle(recs[0].Session, h)
-			}
-			return err
+		// log is cut back to where it was. After a failed fsync the store
+		// has stopped, and a held session is let go: its state no longer
+		// follows from what the disk holds, which the next open of the
+		// store recovers it from. So is one whose log could not be cut
+		// back. Every record names the session it belongs to.
+		terr := f.Truncate(before)
+		if h != nil && (terr != nil || errors.Is(err, ErrStopped)) {
+			s.dropHandle(recs[0].Session, h)
 		}
-		if terr := f.Truncate(before); terr != nil {
-			return uncertain(fmt.Errorf("%w: %v; and cutting it back: %v", errLogUncertain, err, terr))
-		}
-		// A failed fsync may have marked the pages of earlier records
-		// clean without writing them, and a later fsync of the file
-		// would say they were written; so the log is written again, to
-		// a new file, from the bytes the page cache still holds.
-		var serr error
-		if !fsyncFailed {
-			serr = syncLog(f)
-		}
-		if fsyncFailed || serr != nil {
-			if rerr := s.rewriteLog(h, dir, before); rerr != nil {
-				return uncertain(fmt.Errorf("%w: %v; and writing it again: %v", errLogUncertain, err, rerr))
-			}
+		if terr != nil {
+			return fmt.Errorf("%w: %v; and cutting it back: %v", errLogUncertain, err, terr)
 		}
 		return fmt.Errorf("cas: log: %w", err)
 	}
 	return nil
 }
 
-// rewriteLog writes a session's log again, durably, as a new file of
-// the size it had, and points the handle's open log at it.
-func (s *Store) rewriteLog(h *handle, dir string, size int64) error {
-	path := filepath.Join(dir, logName)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
+// wholeRecords reports whether a line of a session's log is its
+// records and nothing else, each carrying its checksum. The journal's
+// reading passes over torn bytes a later record landed after, and reads
+// a record without a checksum as one of its oldest; a session's holder
+// cuts a torn tail before it writes again, and writes every record
+// with its checksum, so here either is damage: a block of zeros where
+// a line was, run into the next, or a checksum's member damaged away.
+func wholeRecords(line []byte, recs []logRecord) bool {
+	if !bytes.HasPrefix(line, recordOpening) || len(recs) != bytes.Count(line, recordOpening) {
+		return false
 	}
-	if int64(len(data)) != size {
-		return fmt.Errorf("the log is %d bytes, not %d", len(data), size)
+	for _, r := range recs {
+		if !r.checked {
+			return false
+		}
 	}
-	// The pages of a record the failed writeback marked clean may since
-	// have been evicted and read back as the disk has them. Such bytes
-	// are not written durably: the session is dropped instead, and its
-	// next open cuts them as a crash's loss of the uncommitted tail.
-	l, err := parseSessionLog(bytes.NewReader(data), 0, size)
-	if err != nil {
-		return err
-	}
-	if l.lost || l.legacy || l.unterminated || l.whole != size {
-		return errors.New("the log no longer reads whole")
-	}
-	if err := writeLogFile(path, data); err != nil {
-		return err
-	}
-	if h != nil && h.logf != nil {
-		h.logf.Close()
-		h.logf, err = openLog(dir)
-	}
-	return err
+	return true
 }
-
-// writeLogFile writes a log again; a variable so a test can fail it.
-var writeLogFile = writeAtomic
 
 // errUnchecked is a record of a session's log without its checksum.
 var errUnchecked = errors.New("a record without its checksum")
@@ -316,7 +273,7 @@ var syncLog = func(f *os.File) error { return f.Sync() }
 // mendTail cuts a torn last line from a session's log, and ends one a
 // crash left whole but without its newline, which only the session's
 // holder does, so the next record starts a line of its own.
-func mendTail(dir string, whole int64, unterminated bool) error {
+func mendTail(o *objects, dir string, whole int64, unterminated bool) error {
 	f, err := os.OpenFile(filepath.Join(dir, logName), os.O_WRONLY, 0)
 	if err != nil {
 		return err
@@ -330,27 +287,22 @@ func mendTail(dir string, whole int64, unterminated bool) error {
 			return err
 		}
 	}
-	return f.Sync()
+	return o.fsync(f.Name(), f, syncLog)
 }
 
 // tailLoss reports whether a log's lossy damage is what a crash leaves
-// in an uncommitted tail: blocks left unwritten, holding zeros, with
-// nothing after the first of them but lazy appends, none of which a
-// commit covers. A crash damages only what was written after the last
-// fsync, and on a filesystem that writes a file out of order it can do
-// so anywhere in that tail; what it takes there is working state, cut
-// as any crash's. Damage that a committed record follows, or that
-// changed bytes rather than leaving them unwritten, is damage.
+// in an uncommitted tail: blocks left unwritten, holding zeros. A crash
+// damages only what was written after the last fsync that finished, and
+// on a filesystem that writes a file out of order it can do so anywhere
+// after it; and no fsync of the log finished after a block of it was
+// left unwritten, since the holder's fsync would have written it or,
+// failing, stopped the store. So from the first such block on nothing
+// was committed, whatever records follow, a commit that was in flight
+// included, and what the crash took there is cut as working state.
+// Damage that changed bytes rather than leaving them unwritten is
+// damage.
 func tailLoss(l sessionLog) bool {
-	if !l.lost || !l.unwritten {
-		return false
-	}
-	for _, r := range l.recs[l.lossRec:] {
-		if r.Op != opAppend || !r.Lazy {
-			return false
-		}
-	}
-	return true
+	return l.lost && l.unwritten
 }
 
 // ownEntries returns the entries the records append, each once, in
@@ -366,23 +318,6 @@ func ownEntries(recs []logRecord) []string {
 		}
 	}
 	return out
-}
-
-// fsyncPath fsyncs a file or directory; one that is not there needs
-// nothing.
-func fsyncPath(p string) error {
-	f, err := os.Open(p)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	err = f.Sync()
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	return err
 }
 
 // heldEntries returns the entries a session holds: those its records
