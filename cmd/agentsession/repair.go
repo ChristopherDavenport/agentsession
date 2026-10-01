@@ -37,13 +37,13 @@ func repair(args []string, stdout, stderr io.Writer) error {
 	for _, d := range rep.Damage {
 		fmt.Fprintf(stdout, "damaged  line %d (offset %d): %v\n", d.Line, d.Offset, d.Err)
 	}
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "kept     %d entries\n", len(rep.Kept))
 	for _, d := range rep.Dropped {
 		fmt.Fprintf(stdout, "dropped  %s: %v\n", shortID(d.Entry), d.Err)
 	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "kept     %d entries, %d of them recovered from what the damage hid\n", len(rep.Kept), len(rep.Hidden))
 	if rep.Head == rep.Named {
 		fmt.Fprintf(stdout, "head     %s, as the log last named it\n", orNone(shortID(rep.Head)))
 	} else {

@@ -31,6 +31,24 @@ func damageAppend(t *testing.T, root, id string, which int) (before []byte, line
 	return data, appends[which] + 1
 }
 
+// removeObject removes one of an entry's loose objects: its envelope, or
+// with content set its body.
+func removeObject(t *testing.T, st *Store, id string, content bool) {
+	t.Helper()
+	sp, hash := spaceEntries, id
+	if content {
+		c, err := st.contentOf(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sp, hash = spaceContents, c
+	}
+	p, _ := st.objs.loosePath(sp, hash)
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func droppedIDs(rep RepairReport) []string {
 	var out []string
 	for _, d := range rep.Dropped {
@@ -39,10 +57,10 @@ func droppedIDs(rep RepairReport) []string {
 	return out
 }
 
-// TestRepair: a damaged middle record hides an entry the later ones
-// hang from, so they are dropped with it; the head the log named is
-// gone, so the latest kept leaf takes its place; the damaged log is
-// kept beside the new one, and the session opens and appends again.
+// TestRepair: a damaged middle record hides an entry, which the later
+// ones name as their parent by its hash, so it is kept with them; the
+// damaged log is kept beside the new one, and the session opens and
+// appends again.
 func TestRepair(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -60,10 +78,10 @@ func TestRepair(t *testing.T) {
 	if len(rep.Damage) != 1 || rep.Damage[0].Line != line {
 		t.Errorf("damage: %v, want line %d", rep.Damage, line)
 	}
-	if !slices.Equal(rep.Kept, ids[:2]) || !slices.Equal(droppedIDs(rep), ids[3:]) {
-		t.Errorf("kept %v dropped %v", rep.Kept, droppedIDs(rep))
+	if !slices.Equal(rep.Kept, ids) || !slices.Equal(rep.Hidden, ids[2:3]) || len(rep.Dropped) != 0 {
+		t.Errorf("kept %v hidden %v dropped %v", rep.Kept, rep.Hidden, rep.Dropped)
 	}
-	if rep.Head != ids[1] || rep.Named != ids[4] || rep.Mark != MarkRecord {
+	if rep.Head != ids[4] || rep.Named != ids[4] || rep.Mark != MarkRecord {
 		t.Errorf("head %s named %s mark %s", rep.Head, rep.Named, rep.Mark)
 	}
 	if kept, err := os.ReadFile(rep.DamagedLog); err != nil || !bytes.Equal(kept, damaged) {
@@ -73,11 +91,11 @@ func TestRepair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Len() != 2 || s.Leaf() != ids[1] {
+	if s.Len() != 5 || s.Leaf() != ids[4] {
 		t.Errorf("repaired: len %d leaf %s", s.Len(), s.Leaf())
 	}
 	next := mustAppend(t, st2, "a", item("after the repair"))
-	if p, _ := st2.parentOf(next); p != ids[1] {
+	if p, _ := st2.parentOf(next); p != ids[4] {
 		t.Errorf("an append after the repair hangs from %s", p)
 	}
 	vr, err := st2.Verify(ctx)
@@ -93,21 +111,24 @@ func TestRepair(t *testing.T) {
 	}
 }
 
-// TestRepairKeepsIndependentEntries: an entry that does not hang from
-// the hidden one is kept, wherever it is in the log.
-func TestRepairKeepsIndependentEntries(t *testing.T) {
+// TestRepairDropsWhatHangsFromALostEntry: an entry hanging from one the
+// damage hid, whose objects are gone, is dropped; one that does not
+// hang from it is kept, wherever it is in the log, and the head the log
+// named being dropped, the latest kept leaf takes its place.
+func TestRepairDropsWhatHangsFromALostEntry(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, _ := Open(root)
 	st.Create(ctx, agentsession.Header{ID: "b"})
 	a := mustAppend(t, st, "b", item("a"))
-	mustAppend(t, st, "b", item("x"))
+	x := mustAppend(t, st, "b", item("x"))
 	side := agentsession.NewItemEntry(openresponses.UserText("y"))
 	side.Parent = a
 	y := mustAppend(t, st, "b", side)
 	z := mustAppend(t, st, "b", item("z"))
 	st.Close()
 	damageAppend(t, root, "b", 1)
+	removeObject(t, st, x, false)
 
 	st2, _ := Open(root)
 	defer st2.Close()
@@ -135,10 +156,7 @@ func TestRepairMissingObject(t *testing.T) {
 	ids := fill(t, st, "a", 5)
 	st.Close()
 	damageAppend(t, root, "a", 4)
-	p, _ := st.objs.loosePath(spaceEntries, ids[2])
-	if err := os.Remove(p); err != nil {
-		t.Fatal(err)
-	}
+	removeObject(t, st, ids[2], false)
 
 	st2, _ := Open(root)
 	defer st2.Close()
@@ -151,6 +169,33 @@ func TestRepairMissingObject(t *testing.T) {
 	}
 	if rep.Head != ids[1] {
 		t.Errorf("head %s", rep.Head)
+	}
+}
+
+// TestRepairConvergence: an entry converging one that is not kept is
+// dropped, rather than failing the repair.
+func TestRepairConvergence(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	st.Create(ctx, agentsession.Header{ID: "c"})
+	a := mustAppend(t, st, "c", item("a"))
+	b := mustAppend(t, st, "c", item("b"))
+	merge := agentsession.NewItemEntry(openresponses.UserText("merge"))
+	merge.Parent = a
+	merge.Parents = []agentsession.EntryRef{{Entry: b}}
+	m := mustAppend(t, st, "c", merge)
+	st.Close()
+	damageAppend(t, root, "c", 1)
+
+	st2, _ := Open(root)
+	defer st2.Close()
+	rep, err := st2.Repair(ctx, "c", RepairOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rep.Kept, []string{a}) || !slices.Equal(droppedIDs(rep), []string{m}) {
+		t.Errorf("kept %v dropped %v", rep.Kept, rep.Dropped)
 	}
 }
 
@@ -172,8 +217,8 @@ func TestRepairDryRun(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(rep.Kept, ids[:1]) || !slices.Equal(droppedIDs(rep), ids[2:]) || rep.DamagedLog != "" {
-			t.Errorf("dry run: kept %v dropped %v kept as %q", rep.Kept, droppedIDs(rep), rep.DamagedLog)
+		if !slices.Equal(rep.Kept, ids) || !slices.Equal(rep.Hidden, ids[1:2]) || rep.DamagedLog != "" {
+			t.Errorf("dry run: kept %v hidden %v kept as %q", rep.Kept, rep.Hidden, rep.DamagedLog)
 		}
 		if _, err := st2.Open(ctx, "a"); !errors.As(err, new(LogDamage)) {
 			t.Errorf("open after a dry run: %v", err)
@@ -188,18 +233,30 @@ func TestRepairDryRun(t *testing.T) {
 	}
 }
 
-// TestRepairRefuses a session with nothing to repair, one with nothing
-// to keep, one held open, and a store that cannot write.
+// TestRepairRefuses a session with nothing to repair, one whose only
+// damage lost nothing, one with nothing to keep, one held open, and a
+// store that cannot write.
 func TestRepairRefuses(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, _ := Open(root)
 	fill(t, st, "sound", 2)
-	fill(t, st, "lost", 2)
+	lost := fill(t, st, "lost", 2)
 	fill(t, st, "held", 2)
+	fill(t, st, "newline", 2)
 	st.Close()
 	damageAppend(t, root, "lost", 0)
+	removeObject(t, st, lost[0], false)
 	damageAppend(t, root, "held", 1)
+	{
+		// A record's newline damaged into another byte, both records
+		// reading: damage that lost nothing.
+		lines, appends := journalLines(t, root, "newline")
+		l := []byte(lines[appends[0]])
+		l[len(l)-1] = ' '
+		lines[appends[0]] = string(l)
+		os.WriteFile(filepath.Join(root, "sessions", "newline", logName), []byte(strings.Join(lines, "")), 0o600)
+	}
 
 	ro, _ := Open(root, WithReadOnly())
 	if _, err := ro.Repair(ctx, "held", RepairOptions{}); !errors.Is(err, agentsession.ErrReadOnly) {
@@ -209,8 +266,10 @@ func TestRepairRefuses(t *testing.T) {
 
 	st2, _ := Open(root)
 	defer st2.Close()
-	if _, err := st2.Repair(ctx, "sound", RepairOptions{}); !errors.Is(err, ErrNotDamaged) {
-		t.Errorf("repair of a sound log: %v", err)
+	for _, id := range []string{"sound", "newline"} {
+		if _, err := st2.Repair(ctx, id, RepairOptions{}); !errors.Is(err, ErrNotDamaged) {
+			t.Errorf("repair of %s: %v", id, err)
+		}
 	}
 	before, _ := os.ReadFile(filepath.Join(root, "sessions", "lost", logName))
 	if _, err := st2.Repair(ctx, "lost", RepairOptions{}); !errors.Is(err, ErrUnrecoverable) || !strings.Contains(err.Error(), "Delete") {
@@ -224,6 +283,9 @@ func TestRepairRefuses(t *testing.T) {
 	}
 	other, _ := Open(root)
 	defer other.Close()
+	if _, err := other.Open(ctx, "held"); !errors.As(err, new(LogDamage)) {
+		t.Fatalf("open of a damaged session: %v", err)
+	}
 	if _, err := other.Open(ctx, "sound"); err != nil {
 		t.Fatal(err)
 	}
@@ -245,21 +307,62 @@ func TestRepairThenSweep(t *testing.T) {
 	ids := fill(t, st, "a", 5)
 	st.Close()
 	damageAppend(t, root, "a", 2)
+	removeObject(t, st, ids[2], true)
 
 	st2, _ := Open(root)
 	defer st2.Close()
 	if _, err := st2.Sweep(ctx, 0); !errors.As(err, new(LogDamage)) {
 		t.Fatalf("a sweep before the repair: %v", err)
 	}
-	if _, err := st2.Repair(ctx, "a", RepairOptions{}); err != nil {
+	rep, err := st2.Repair(ctx, "a", RepairOptions{})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !slices.Equal(rep.Kept, ids[:2]) {
+		t.Fatalf("kept %v dropped %v", rep.Kept, rep.Dropped)
 	}
 	if _, err := st2.Sweep(ctx, 0); err != nil {
 		t.Fatalf("a sweep after the repair: %v", err)
 	}
-	for _, id := range ids {
+	for _, id := range append(ids[:2:2], ids[3:]...) {
 		if _, err := st2.loadLine(id); err != nil {
 			t.Errorf("entry %s after the sweep: %v", id, err)
 		}
+	}
+	if _, err := st2.objs.read(spaceEntries, ids[2]); err != nil {
+		t.Errorf("the hidden entry's envelope after the sweep: %v", err)
+	}
+}
+
+// TestSweepAfterRepairStopsAtCorruption: what a damaged log names is
+// kept whether or not it reads, but a fork's prefix needing the same
+// entry whole still stops the sweep at its corrupt object.
+func TestSweepAfterRepairStopsAtCorruption(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	ids := fill(t, st, "a", 4)
+	if _, err := st.Create(ctx, agentsession.Header{ID: "b", Base: ids[2]}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := st.contentOf(ids[1])
+	st.Close()
+	damageAppend(t, root, "a", 3)
+	p, _ := st.objs.loosePath(spaceContents, c)
+	if err := os.WriteFile(p, []byte(`{"corrupt":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st2, _ := Open(root)
+	defer st2.Close()
+	rep, err := st2.Repair(ctx, "a", RepairOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rep.Kept, ids[:1]) {
+		t.Fatalf("kept %v dropped %v", rep.Kept, rep.Dropped)
+	}
+	if _, err := st2.Sweep(ctx, 0); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("a sweep past a fork's corrupt prefix: %v", err)
 	}
 }

@@ -13,15 +13,17 @@ versions may break the API.
   the store from running; before, `Delete` was the only way past it.
   Holding the session's lock, a repair keeps every record that still
   reads and, of the entries those append, the ones whose objects are
-  whole and whose parent is the base or a kept entry; an entry hanging
-  from a dropped or unreadable one is dropped and reported. The head is
-  the kept entry the last readable head record names, or else the
-  latest kept leaf, and the report says which. The new log is written
+  whole and whose parent is the base or a kept entry. A parent whose
+  record the damage hid is kept when its objects, and its ancestors',
+  are whole: the child's envelope names it by its hash. An entry
+  hanging from a dropped one, or converging one, is dropped and
+  reported. The head is the kept entry the last readable head record
+  names, or else the latest kept leaf, and the report says which. The new log is written
   durably and renamed into place, and the damaged one is kept in the
   session's directory as `damaged-<time>`, which `Verify` reports until
   it is removed. `RepairOptions.DryRun` reports what would be kept and
   dropped and writes nothing, on a read-only store too. A repair
-  refuses a log with no damage with `ErrNotDamaged`, and one that would
+  refuses a log whose damage cost no record with `ErrNotDamaged`, and one that would
   keep nothing with `ErrUnrecoverable`, which points at `Delete`. While
   a `damaged-*` file is there, a sweep keeps every object its readable
   records name and the ancestors those hang from; what only a damaged

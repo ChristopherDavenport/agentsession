@@ -3,6 +3,7 @@ package cas
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -43,6 +44,10 @@ type RepairReport struct {
 	Damage []LogDamage
 	// Kept is the entries the repaired log holds, in log order.
 	Kept []string
+	// Hidden is the kept entries no readable record appends: ancestors
+	// of a kept entry, named by its envelope, whose records the damage
+	// hid.
+	Hidden []string
 	// Dropped is each entry a readable record appends that the repaired
 	// log does not hold, and why.
 	Dropped []DroppedEntry
@@ -66,22 +71,33 @@ type DroppedEntry struct {
 // Repair rewrites a session's damaged log from the records that still
 // read, holding the session's lock. It keeps every record that passes
 // its checksum, and of the entries those append, the ones whose objects
-// are present and hash to their names and whose parent is the session's
-// base, or no parent in a session without one, or a kept entry; an
-// entry hanging from a dropped one is dropped too. The head is the kept
-// entry the last readable head record names, or else the latest kept
-// leaf, and the mark is the last readable mark record's. The new log is
+// are present and hash to their names, whose convergence references
+// name kept entries, and whose parent is the session's base, or no
+// parent in a session without one, or a kept entry; an entry hanging
+// from a dropped one is dropped too. A parent no readable record
+// appends is one the damage hid: the child's envelope names it by its
+// hash, so it is kept, with its own ancestors, when they all read and
+// reach the base. The head is the kept entry the last readable head
+// record names, or else the latest kept leaf, and the mark is the last
+// readable mark record's, or a mirror's when none reads. The new log is
 // written durably and renamed into place; the damaged one is kept in
 // the session's directory as damaged-<time>, which Verify reports until
 // someone removes it, and while it is there a sweep keeps everything its
-// readable records name. Damage in the uncommitted tail, past a block a
-// crash left unwritten, is no damage here: the tail is not kept, as
-// recovery would not keep it.
+// readable records name.
 //
-// Repair refuses a session that is not damaged with ErrNotDamaged, one
-// this store holds open, which is released first, and a read-only or
-// stopped store, except for a dry run, which writes nothing and takes no
-// lock on a read-only store. When nothing can be kept it returns
+// Repair is not recovery, and its rule differs: a lazy append whose
+// objects are gone is dropped with what hangs from it, not with every
+// record after it, since a damaged log no longer says where its
+// commits ended; every append kept is committed by the new log, its
+// objects written durably first when no readable commit covered them.
+//
+// Repair refuses a session whose log lost no record to damage with
+// ErrNotDamaged: one with a record's newline damaged and both records
+// read, which opens and sweeps as it is, and one a crash left blocks
+// unwritten in, which its next open recovers. It refuses a session this
+// store holds open, which is released first, and a read-only or stopped
+// store, except for a dry run, which writes nothing and takes no lock
+// on a read-only store. When nothing can be kept it returns
 // ErrUnrecoverable.
 func (s *Store) Repair(ctx context.Context, id string, opts RepairOptions) (RepairReport, error) {
 	var rep RepairReport
@@ -128,30 +144,27 @@ func (s *Store) Repair(ctx context.Context, id string, opts RepairOptions) (Repa
 	if l.legacy {
 		return rep, fmt.Errorf("cas: session %s: %w", id, ErrLegacyStore)
 	}
-	recs, damage := l.recs, l.damage
-	if tailLoss(l) {
-		// Past a block a crash left unwritten nothing was committed:
-		// the tail is cut, as recovery cuts it, and is no damage.
-		recs, damage = recs[:l.lossRec], nil
-		for _, d := range l.damage {
-			if d.Offset < l.lossOff {
-				damage = append(damage, d)
-			}
-		}
-	}
-	if len(damage) == 0 {
+	if !l.lost || tailLoss(l) {
+		// No damage that cost a record, or only what a crash leaves in
+		// the uncommitted tail: the session opens, and its recovery cuts
+		// that tail.
 		return rep, fmt.Errorf("%w: session %s", ErrNotDamaged, id)
 	}
-	rep.Damage = damage
+	rep.Damage = l.damage
 
-	plan, err := s.planRepair(id, hdr, recs)
+	plan, err := s.planRepair(id, hdr, l.recs)
 	if err != nil {
 		return rep, err
 	}
-	rep.Kept, rep.Dropped, rep.Head, rep.Named = plan.kept, plan.dropped, plan.head, plan.named
+	rep.Kept, rep.Hidden, rep.Dropped, rep.Head, rep.Named = plan.kept, plan.hidden, plan.dropped, plan.head, plan.named
 	rep.Mark = plan.mark
 	if rep.Mark == "" {
 		rep.Mark = readMark(dir)
+	}
+	if rep.Mark != MarkRecord {
+		// A mark that cannot be read is a mirror's, as readMark takes
+		// it: nothing this store did not finish marking is advanced.
+		rep.Mark = MarkMirror
 	}
 	if len(plan.kept) == 0 {
 		return rep, fmt.Errorf("%w: session %s", ErrUnrecoverable, id)
@@ -208,13 +221,22 @@ func (s *Store) Repair(ctx context.Context, id string, opts RepairOptions) (Repa
 	if err := s.objs.fsyncDir(dir); err != nil {
 		return rep, fmt.Errorf("cas: session %s: %w", id, err)
 	}
-	rep.DamagedLog = aside
+	// A copy kept for a repair that did not take place would say one
+	// had: it goes while the damaged log is still the log.
+	unkeep := func() {
+		if again, err := os.ReadFile(path); err == nil && bytes.Equal(again, data) {
+			os.Remove(aside)
+		}
+	}
 	if again, err := os.ReadFile(path); err != nil || !bytes.Equal(again, data) {
+		unkeep()
 		return rep, fmt.Errorf("cas: session %s: the log changed as repair read it", id)
 	}
 	if err := s.objs.writeAtomic(path, fresh); err != nil {
+		unkeep()
 		return rep, fmt.Errorf("cas: session %s: %w", id, err)
 	}
+	rep.DamagedLog = aside
 	// Indexes of the new log; the next open rebuilds any left stale.
 	_ = writeHead(dir, plan.head)
 	_ = writeIndex(filepath.Join(dir, "record"), []byte(rep.Mark+"\n"))
@@ -235,6 +257,7 @@ func (s *Store) Repair(ctx context.Context, id string, opts RepairOptions) (Repa
 // repairPlan is what a repair keeps of a log's readable records.
 type repairPlan struct {
 	kept        []string
+	hidden      []string
 	dropped     []DroppedEntry
 	sizes       map[string]int64
 	uncommitted []string // kept appends no readable commit covers
@@ -244,8 +267,26 @@ type repairPlan struct {
 }
 
 // planRepair works out what a repair keeps of a log's readable records.
-func (s *Store) planRepair(id string, hdr agentsession.Header, recs []logRecord) (repairPlan, error) {
+// A record damaged in a way that leaves it decoding without its
+// checksum is no readable record.
+func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord) (repairPlan, error) {
 	p := repairPlan{sizes: map[string]int64{}}
+	var recs []logRecord
+	for _, r := range all {
+		if r.checked {
+			recs = append(recs, r)
+		}
+	}
+	onPath := map[string]bool{}
+	if hdr.Base != "" {
+		var err error
+		if p.path, err = s.pathTo(hdr.Base); err != nil {
+			return p, fmt.Errorf("cas: session %s: the path to its base: %w", id, err)
+		}
+		for _, e := range p.path {
+			onPath[e] = true
+		}
+	}
 	synced := -1
 	lostAt := map[string]int{}
 	for i, r := range recs {
@@ -263,7 +304,94 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, recs []logRecord)
 		return ok && at > i
 	}
 	kept := map[string]bool{}
-	seen := map[string]bool{}
+	seen := map[string]bool{}    // appended by a readable record
+	failed := map[string]error{} // hidden entries that cannot be kept
+	// check reads an entry's objects, checked against their names, and
+	// returns its parent once its convergence references are all in the
+	// session.
+	check := func(e string) (string, error) {
+		if _, err := s.loadLine(e); err != nil {
+			return "", err
+		}
+		env, err := s.envelope(e)
+		if err != nil {
+			return "", err
+		}
+		var parent *string
+		if err := json.Unmarshal(env["parent"], &parent); err != nil {
+			return "", fmt.Errorf("cas: entry %s: %w", e, err)
+		}
+		if raw, ok := env["parents"]; ok {
+			var refs []agentsession.EntryRef
+			if err := json.Unmarshal(raw, &refs); err != nil {
+				return "", fmt.Errorf("cas: entry %s: %w", e, err)
+			}
+			for _, r := range refs {
+				if (r.Session == "" || r.Session == id) && !kept[r.Entry] && !onPath[r.Entry] {
+					return "", fmt.Errorf("it converges %s, which is not kept", r.Entry)
+				}
+			}
+		}
+		if parent == nil {
+			return "", nil
+		}
+		return *parent, nil
+	}
+	keep := func(e string, i int, r logRecord) {
+		kept[e] = true
+		p.kept = append(p.kept, e)
+		if r.Size > 0 {
+			p.sizes[e] = r.Size
+		}
+		if i < 0 || (r.Lazy && i > synced) {
+			p.uncommitted = append(p.uncommitted, e)
+		}
+	}
+	// hidden keeps the ancestors of an entry that no readable record
+	// appends, down to a kept entry or the base: the damage hid their
+	// records, and the entry's envelope names them by their hashes. An
+	// entry of the session hangs from the base or another of its own, so
+	// each is the session's. It fails if any of them is unreadable, or
+	// was dropped, or the chain leaves the session.
+	hidden := func(parent string) error {
+		var chain []string
+		var err error
+		for e := parent; ; {
+			if kept[e] || e == hdr.Base {
+				break
+			}
+			if e == "" {
+				err = errors.New("its parent chain does not reach the session's base")
+				break
+			}
+			if seen[e] {
+				err = fmt.Errorf("its parent %s was dropped", e)
+				break
+			}
+			if ferr, ok := failed[e]; ok {
+				err = ferr
+				break
+			}
+			next, cerr := check(e)
+			if cerr != nil {
+				err = fmt.Errorf("its parent %s, which no readable record appends, cannot be kept: %w", e, cerr)
+				break
+			}
+			chain = append(chain, e)
+			e = next
+		}
+		if err != nil {
+			for _, e := range chain {
+				failed[e] = err
+			}
+			return err
+		}
+		for i := len(chain) - 1; i >= 0; i-- {
+			keep(chain[i], -1, logRecord{})
+			p.hidden = append(p.hidden, chain[i])
+		}
+		return nil
+	}
 	p.named = hdr.Base
 	for i, r := range recs {
 		switch r.Op {
@@ -286,32 +414,22 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, recs []logRecord)
 			continue
 		}
 		seen[r.Entry] = true
-		drop := func(err error) { p.dropped = append(p.dropped, DroppedEntry{Entry: r.Entry, Err: err}) }
-		if _, err := s.loadLine(r.Entry); err != nil {
-			drop(err)
-			continue
+		if kept[r.Entry] {
+			continue // kept already, as an ancestor an earlier entry named
 		}
-		parent, err := s.parentOf(r.Entry)
+		drop := func(err error) { p.dropped = append(p.dropped, DroppedEntry{Entry: r.Entry, Err: err}) }
+		parent, err := check(r.Entry)
 		if err != nil {
 			drop(err)
 			continue
 		}
 		if !kept[parent] && parent != hdr.Base {
-			if seen[parent] {
-				drop(fmt.Errorf("its parent %s was dropped", parent))
-			} else {
-				drop(fmt.Errorf("its parent %s is not in the session's readable records", parent))
+			if err := hidden(parent); err != nil {
+				drop(err)
+				continue
 			}
-			continue
 		}
-		kept[r.Entry] = true
-		p.kept = append(p.kept, r.Entry)
-		if r.Size > 0 {
-			p.sizes[r.Entry] = r.Size
-		}
-		if r.Lazy && i > synced {
-			p.uncommitted = append(p.uncommitted, r.Entry)
-		}
+		keep(r.Entry, i, r)
 	}
 	if len(p.kept) == 0 {
 		return p, nil
@@ -320,9 +438,6 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, recs []logRecord)
 	if hdr.Base != "" {
 		var err error
 		if prefix, err = s.pathLines(hdr.Base); err != nil {
-			return p, fmt.Errorf("cas: session %s: the path to its base: %w", id, err)
-		}
-		if p.path, err = s.pathTo(hdr.Base); err != nil {
 			return p, fmt.Errorf("cas: session %s: the path to its base: %w", id, err)
 		}
 	}

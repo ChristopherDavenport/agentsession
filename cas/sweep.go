@@ -181,6 +181,11 @@ func (s *Store) keepLogs(k keepSet, marks logMarks) error {
 	if err != nil {
 		return fmt.Errorf("cas: %w", err)
 	}
+	// What damaged logs name is gathered apart and added last: it is
+	// kept whether or not it reads, and an entry marked kept is not read
+	// again, so added first it would let a live log or prefix needing
+	// the same entry whole pass over its corruption.
+	damaged := keepSet{entries: map[string]bool{}, contents: map[string]bool{}}
 	for _, d := range dirs {
 		if !d.IsDir() || !validSessionID(d.Name()) {
 			continue
@@ -225,11 +230,17 @@ func (s *Store) keepLogs(k keepSet, marks logMarks) error {
 					return fmt.Errorf("cas: sweep: %w", err)
 				}
 			}
-			if err := s.keepDamaged(k, dir); err != nil {
+			if err := s.keepDamaged(damaged, dir); err != nil {
 				return fmt.Errorf("cas: session %s: %w", id, err)
 			}
 		}
 		marks[id] = logMark{off: l.whole, file: info}
+	}
+	for h := range damaged.entries {
+		k.entries[h] = true
+	}
+	for h := range damaged.contents {
+		k.contents[h] = true
 	}
 	return nil
 }
@@ -248,6 +259,9 @@ func (s *Store) keepDamaged(k keepSet, dir string) error {
 	}
 	walked := map[string]bool{}
 	for _, p := range kept {
+		if info, err := os.Lstat(p); err == nil && !info.Mode().IsRegular() {
+			continue // not a log a repair kept
+		}
 		f, err := os.Open(p)
 		if err != nil {
 			return err
