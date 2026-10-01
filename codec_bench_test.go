@@ -56,3 +56,32 @@ func BenchmarkRead(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkScan is BenchmarkRead's files verified by Scan, which
+// decodes no entry.
+func BenchmarkScan(b *testing.B) {
+	for _, tc := range []struct {
+		name          string
+		calls, output int
+	}{
+		{"small-lines", 2000, 200},
+		{"large-lines", 100, 100 << 10},
+	} {
+		data := largeSession(b, tc.calls, tc.output)
+		b.Run(tc.name, func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			b.ReportAllocs()
+			for b.Loop() {
+				_, seq, err := Scan(bytes.NewReader(data))
+				if err != nil {
+					b.Fatal(err)
+				}
+				for _, err := range seq {
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		})
+	}
+}

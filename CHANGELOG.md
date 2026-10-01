@@ -22,6 +22,15 @@ that a released minor's rules do not change. (#132)
   notes an early 0.9 writer only for a file that declared 0.9; for a
   file of an earlier minor it notes that the minor did not forbid what
   failed. (#134)
+- **`Scan` verifies a session file without decoding its entries**:
+  each line's I-JSON test, its `id` against the hash of its canonical
+  bytes, its `ts` spelling, and its parent and convergence links, as
+  `Read` checks them, yielding each entry as a `RawEntry` whose
+  `Decode` decodes it when asked. It reads 3.6 times as fast as `Read`
+  on small lines and 5 times on 100 KB ones. RFC 0001 says the line's
+  canonical bytes define an `id`, so a reader that decodes and one that
+  does not agree; a fuzz test holds `Scan` to `Read`. A file before 0.5,
+  which `Read` migrates, is refused with `ErrScanMigrated`. (#127)
 - **`export.ItemsFrom` makes up call IDs in the alphabet and length
   every provider takes**: a repeated native ID's characters outside
   letters, digits, `_` and `-` become `_`, and the made-up ID is at

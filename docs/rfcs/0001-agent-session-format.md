@@ -340,7 +340,12 @@ store writes canonical lines. `sha256:` is the only prefix, and a reader
 MUST refuse an `id` carrying another.
 
 A reader MUST verify each entry's `id` by computing its content hash and
-then its envelope hash, and MUST report a line that fails. It is
+then its envelope hash, and MUST report a line that fails. The hashes
+are of the line's own members, in canonical form: what defines an `id`
+is the line, not any reader's model of the entry, so a reader that
+verifies a line from its canonical bytes alone, decoding nothing, and
+one that decodes it reach the same answer, and a reader whose decode
+would hash differently is wrong where they differ. It is
 corruption, not an extension, and a reader MUST NOT repair it. A file
 that has been redacted has had its hashes recomputed over the redacted
 bodies, as the header's `redacted` row requires, so it walks and
