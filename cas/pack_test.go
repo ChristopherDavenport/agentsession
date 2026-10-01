@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -323,9 +324,9 @@ func TestSummarySize(t *testing.T) {
 func TestPackFormat(t *testing.T) {
 	dir := t.TempDir()
 	objs := []packObject{
-		{spaceContents, hashBytes([]byte("b")), []byte("b")},
-		{spaceEntries, hashBytes([]byte("a")), []byte("a")},
-		{spaceContents, hashBytes([]byte("b")), []byte("b")}, // a duplicate
+		{sp: spaceContents, hash: hashBytes([]byte("b")), data: []byte("b")},
+		{sp: spaceEntries, hash: hashBytes([]byte("a")), data: []byte("a")},
+		{sp: spaceContents, hash: hashBytes([]byte("b")), data: []byte("b")}, // a duplicate
 	}
 	name, err := writePack(dir, objs)
 	if err != nil {
@@ -361,7 +362,173 @@ func TestPackFormat(t *testing.T) {
 	idx, _ := os.ReadFile(filepath.Join(dir, name+".idx"))
 	idx[len(idxMagic)+9] ^= 0xff
 	os.WriteFile(filepath.Join(dir, name+".idx"), idx, 0o600)
+	// A damaged record opens, as git's does, and Verify finds it.
+	p, err = openPack(dir, name)
+	if err != nil {
+		t.Fatalf("a damaged index record: %v", err)
+	}
+	defer p.close()
+	found := false
+	for _, err := range verifyPack(p) {
+		found = found || errors.Is(err, ErrCorrupt) && strings.Contains(err.Error(), ".idx fails its checksum")
+	}
+	if !found {
+		t.Errorf("verify of a damaged index: %v", verifyPack(p))
+	}
+	// A damaged header does not open.
+	idx[0] ^= 0xff
+	os.WriteFile(filepath.Join(dir, name+".idx"), idx, 0o600)
 	if _, err := openPack(dir, name); !errors.Is(err, ErrCorrupt) {
-		t.Errorf("a damaged index: %v", err)
+		t.Errorf("a damaged index header: %v", err)
+	}
+}
+
+// TestPackConsolidates: packing after every few appends leaves a number
+// of packs that grows with the logarithm of the store, and every entry
+// still reads.
+func TestPackConsolidates(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	var ids []string
+	for round := range 64 {
+		for i := range 4 {
+			ids = append(ids, mustAppend(t, st, "s", item(fmt.Sprintf("%d-%d", round, i))))
+		}
+		if _, err := st.Pack(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(st.objs.packList()); n > 8 {
+		t.Errorf("%d packs after 64 packings, want a handful", n)
+	}
+	st.Close()
+	ro, _ := Open(root, WithReadOnly())
+	defer ro.Close()
+	s, err := ro.Open(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		if _, ok := s.Entry(id); !ok {
+			t.Fatalf("entry %s lost to consolidation", id)
+		}
+	}
+	if rep, err := ro.Verify(ctx); err != nil || !rep.OK() {
+		t.Errorf("verify after consolidation: %v %v", err, rep.Problems)
+	}
+}
+
+// TestSweepFallsBack: a sweep that finds the first copy of an object it
+// keeps corrupt takes another, loose or packed, rather than losing it.
+func TestSweepFallsBack(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []string{"corrupt loose, good packed", "corrupt in one pack, good in another"} {
+		t.Run(tc, func(t *testing.T) {
+			root := t.TempDir()
+			st, _ := Open(root)
+			st.Create(ctx, agentsession.Header{ID: "s"})
+			id := mustAppend(t, st, "s", item("precious"))
+			st.Release("s")
+			if _, err := st.Pack(ctx); err != nil {
+				t.Fatal(err)
+			}
+			lp, _ := st.objs.loosePath(spaceEntries, id)
+			os.MkdirAll(filepath.Dir(lp), 0o755)
+			if tc == "corrupt loose, good packed" {
+				os.WriteFile(lp, []byte("not the envelope"), 0o600)
+			} else {
+				// A second pack holding the same envelope, then the first
+				// copy broken in place.
+				first := st.objs.packList()[0]
+				data, _ := st.objs.read(spaceEntries, id)
+				if _, err := writePack(st.objs.packDir(), []packObject{{sp: spaceEntries, hash: id, data: data}}); err != nil {
+					t.Fatal(err)
+				}
+				d, _ := digestOf(id)
+				off, _, _ := first.find(spaceEntries, d)
+				f, _ := os.OpenFile(first.path, os.O_WRONLY, 0)
+				f.WriteAt([]byte{'!'}, off)
+				f.Close()
+				st.objs.reloadPacks(true)
+			}
+			if _, err := st.Sweep(ctx, 0); err != nil {
+				t.Fatal(err)
+			}
+			st.Close()
+			ro, _ := Open(root, WithReadOnly())
+			defer ro.Close()
+			if _, err := ro.objs.read(spaceEntries, id); err != nil {
+				t.Errorf("the kept envelope after the sweep: %v", err)
+			}
+			if _, err := ro.Open(ctx, "s"); err != nil {
+				t.Errorf("the session after the sweep: %v", err)
+			}
+		})
+	}
+}
+
+// TestAutoPack: a writing store packs its loose objects on its own.
+func TestAutoPack(t *testing.T) {
+	old := autoPackLoose
+	autoPackLoose = 0
+	t.Cleanup(func() { autoPackLoose = old })
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	for i := range 20 {
+		mustAppend(t, st, "s", item(fmt.Sprint(i)))
+	}
+	st.Close()
+	loose := 0
+	for _, sp := range []space{spaceEntries, spaceContents} {
+		st.objs.eachLoose(sp, func(string, string, os.FileInfo, bool) error { loose++; return nil })
+	}
+	packs, _ := filepath.Glob(filepath.Join(st.objs.packDir(), "*.idx"))
+	if loose != 0 || len(packs) == 0 {
+		t.Errorf("after Close: %d loose objects, %d packs", loose, len(packs))
+	}
+}
+
+// TestPackCloseWhileReading: a pack closed while lookups and walks are
+// in its mapped index waits for them, and a lookup after finds nothing.
+func TestPackCloseWhileReading(t *testing.T) {
+	dir := t.TempDir()
+	var objs []packObject
+	for i := range 2000 {
+		b := []byte(fmt.Sprint(i))
+		objs = append(objs, packObject{sp: spaceContents, hash: hashBytes(b), data: b})
+	}
+	name, err := writePack(dir, objs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 20 {
+		p, err := openPack(dir, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, _ := digestOf(objs[1234].hash)
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				for range 200 {
+					p.find(spaceContents, d)
+				}
+			}()
+			go func() {
+				defer wg.Done()
+				p.each(func(space, string, int64, int64) error { return nil })
+			}()
+		}
+		p.close()
+		wg.Wait()
+		if _, _, ok := p.find(spaceContents, d); ok {
+			t.Fatal("a closed pack answered a lookup")
+		}
 	}
 }

@@ -379,6 +379,18 @@ before the next durable commit, of any session; after a crash, such a
 record whose objects are missing is an append the crash took, with what
 the session appended after it, and not damage.
 
+A store MAY compact the journal, as git replaces loose refs once
+packed-refs holds them. A session's records may go once its log, its
+head and its mark are durable and say what those records say, and no
+append in it acknowledged before it was durable still waits on its
+objects: recovery of a session the journal says nothing about reads
+its log and head as they stand. The journal then holds the tail of the
+store's total order, and each log keeps its own session's, which is the
+order a reader uses. A compaction MUST NOT drop a record whose change
+the session's files do not yet show, and MUST NOT let a commit land in
+a journal it is replacing. A journal holding damage is kept beside its
+replacement, so the damage is still reported.
+
 A store built on a database that has its own write-ahead log gets
 atomicity and recovery from the database. Durability it must still ask
 for: SQLite's WAL commit at `synchronous=NORMAL`, which the reference

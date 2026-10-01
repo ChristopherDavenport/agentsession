@@ -3,6 +3,7 @@ package cas
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -281,21 +282,48 @@ type journalScan struct {
 // the journal, and a writing store saves another once the journal has
 // grown checkpointEvery past the last. What replay returns is the
 // caller's own, unchanged by later replays.
+//
+// The journal file is opened once per replay, and everything the replay
+// reads, checkpoint checks included, comes through that one handle: a
+// compaction may rename a new journal into place at any moment, and a
+// replay must not read part of one file and part of the other. A
+// journal that is not the file the scan was read from, or is shorter
+// than where it stopped, is read afresh.
 func (s *Store) replay() (*journalScan, error) {
 	s.scanMu.Lock()
 	defer s.scanMu.Unlock()
-	if s.scan == nil || s.journalShrank(s.scan.end) {
-		s.scan = s.loadCheckpoint()
+	f, err := os.Open(filepath.Join(s.root, "journal"))
+	if errors.Is(err, os.ErrNotExist) {
+		s.scan, s.scanFile, s.checkpointed = &journalScan{states: map[string]*sessionState{}}, nil, 0
+		return s.scan.snapshot(), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cas: journal: %w", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("cas: journal: %w", err)
+	}
+	// A filesystem may give a compacted journal the inode of the one it
+	// replaced, so the file's identity is checked by its first line too,
+	// which a compaction makes unique.
+	gen, err := journalGen(f, info.Size())
+	if err != nil {
+		return nil, fmt.Errorf("cas: journal: %w", err)
+	}
+	if s.scan == nil || s.scanFile == nil || !os.SameFile(s.scanFile, info) || gen != s.scanGen || info.Size() < s.scan.end {
+		s.scan, s.checkpointBytes = s.loadCheckpoint(f, info.Size())
 		if s.scan == nil {
 			s.scan = &journalScan{states: map[string]*sessionState{}}
 		}
-		s.checkpointed = s.scan.end
+		s.checkpointed, s.scanFile, s.scanGen = s.scan.end, info, gen
 	}
-	tail, err := s.scan.read(s.root)
+	tail, err := s.scan.read(f)
 	if err != nil {
 		return nil, err
 	}
-	s.saveCheckpoint()
+	s.saveCheckpoint(f)
 	snap := s.scan.snapshot()
 	for _, rec := range tail {
 		snap.apply(rec)
@@ -303,30 +331,51 @@ func (s *Store) replay() (*journalScan, error) {
 	return snap, nil
 }
 
-// saveCheckpoint writes the scan as the store's checkpoint once the
-// journal has grown checkpointEvery past the last, under scanMu.
-func (s *Store) saveCheckpoint() {
-	if s.readOnly || s.scan == nil || s.scan.end-s.checkpointed < checkpointEvery {
-		return
+// journalGen hashes the journal's first line, up to checkpointTail
+// bytes of it: the same until a compaction replaces the journal, and
+// different after, since a compacted journal opens with a record naming
+// a new generation at random. A journal whose first line is not yet
+// whole has none.
+func journalGen(f *os.File, size int64) ([32]byte, error) {
+	head := make([]byte, min(size, checkpointTail))
+	if _, err := f.ReadAt(head, 0); err != nil {
+		return [32]byte{}, err
 	}
-	if s.writeCheckpoint(s.scan) == nil {
-		s.checkpointed = s.scan.end
+	k := bytes.IndexByte(head, '\n')
+	if k < 0 {
+		return [32]byte{}, nil
 	}
+	return sha256.Sum256(head[:k+1]), nil
 }
 
-// journalShrank reports whether the journal is shorter than end, which
-// only replacing the store's files behind its back can cause; the
-// journal is then read again from the start.
-func (s *Store) journalShrank(end int64) bool {
-	info, err := os.Stat(filepath.Join(s.root, "journal"))
-	return err == nil && info.Size() < end
+// saveCheckpoint writes the scan, read from the journal f, as the
+// store's checkpoint once the journal has grown past the last one by
+// checkpointEvery or by the last one's size, whichever is more, so a
+// checkpoint is rewritten at most once per its own size of journal. It
+// runs under scanMu.
+func (s *Store) saveCheckpoint(f *os.File) {
+	if s.readOnly || s.scan == nil || s.scan.end-s.checkpointed < max(checkpointEvery, s.checkpointBytes) {
+		return
+	}
+	if n, err := s.writeCheckpoint(s.scan, f); err == nil {
+		s.checkpointed, s.checkpointBytes = s.scan.end, n
+	}
 }
 
 // replayFrom reads the journal from an offset on its own, for a caller
-// that wants only the records written after it.
+// that wants only the records written after it. The caller holds the gc
+// lock, which a compaction takes too, so the offset is into this file.
 func (s *Store) replayFrom(from int64) (*journalScan, error) {
 	scan := &journalScan{states: map[string]*sessionState{}, end: from}
-	tail, err := scan.read(s.root)
+	f, err := os.Open(filepath.Join(s.root, "journal"))
+	if errors.Is(err, os.ErrNotExist) {
+		return scan, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cas: journal: %w", err)
+	}
+	defer f.Close()
+	tail, err := scan.read(f)
 	if err != nil {
 		return nil, err
 	}
@@ -346,15 +395,7 @@ func (s *Store) replayFrom(from int64) (*journalScan, error) {
 // returns the checked records of a last line without its newline
 // unapplied: that line may be a write in flight, which a later read
 // reads again once it is whole.
-func (scan *journalScan) read(root string) ([]journalRecord, error) {
-	f, err := os.Open(filepath.Join(root, "journal"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("cas: journal: %w", err)
-	}
-	defer f.Close()
+func (scan *journalScan) read(f *os.File) ([]journalRecord, error) {
 	if _, err := f.Seek(scan.end, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("cas: journal: %w", err)
 	}
@@ -473,6 +514,9 @@ func decodeLine(line []byte) ([]journalRecord, error) {
 
 // apply takes one record into the scan.
 func (scan *journalScan) apply(rec journalRecord) {
+	if rec.Op == opJournal {
+		return // names the journal, not a session
+	}
 	st := scan.states[rec.Session]
 	if st == nil {
 		st = &sessionState{}
@@ -515,6 +559,14 @@ func (s *Store) commit(durable bool, recs ...journalRecord) error {
 			return fmt.Errorf("cas: flush: %w", err)
 		}
 	}
+	// A compaction renames a new journal into place while it holds this
+	// lock exclusive; held shared from the open through the close, it
+	// keeps a record from landing in a journal that is being replaced.
+	jl, err := s.journalLock()
+	if err != nil {
+		return err
+	}
+	defer jl.release()
 	path := filepath.Join(s.root, "journal")
 	_, existed := os.Stat(path)
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
@@ -524,6 +576,9 @@ func (s *Store) commit(durable bool, recs ...journalRecord) error {
 	if _, err := f.Write(buf.Bytes()); err != nil {
 		f.Close()
 		return fmt.Errorf("cas: journal: %w", err)
+	}
+	if end, err := f.Seek(0, io.SeekCurrent); err == nil {
+		s.journalSize = end
 	}
 	if durable {
 		if err := f.Sync(); err != nil {
@@ -569,6 +624,11 @@ func (s *Store) syncJournal() error {
 	if !s.journalDirty {
 		return nil
 	}
+	jl, err := s.journalLock()
+	if err != nil {
+		return err
+	}
+	defer jl.release()
 	f, err := os.OpenFile(filepath.Join(s.root, "journal"), os.O_WRONLY, 0)
 	if err != nil {
 		return fmt.Errorf("cas: journal: %w", err)

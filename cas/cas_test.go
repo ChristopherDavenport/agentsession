@@ -976,3 +976,50 @@ func TestBlobFreshened(t *testing.T) {
 		t.Errorf("blob mtime not refreshed: %v", info.ModTime())
 	}
 }
+
+// TestIndexIsLazy: opening a store reads nothing store-wide, and a fork
+// that names its parent finds its base there, on the parent's log or up
+// its prefix, without building the index; only one that names none
+// builds it.
+func TestIndexIsLazy(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	w, _ := Open(root)
+	w.Create(ctx, agentsession.Header{ID: "o"})
+	a := mustAppend(t, w, "o", item("a"))
+	mustAppend(t, w, "o", item("b"))
+	w.Close()
+
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if st.indexed || st.scan != nil {
+		t.Fatal("Open read the store")
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "f1", Base: a, ParentSession: "o"}); err != nil {
+		t.Fatal(err)
+	}
+	f1 := mustAppend(t, st, "f1", item("f1"))
+	// Its base is on f1's prefix, held in o's log.
+	if _, err := st.Create(ctx, agentsession.Header{ID: "f2", Base: a, ParentSession: "f1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "f3", Base: f1, ParentSession: "f1"}); err != nil {
+		t.Fatal(err)
+	}
+	if st.indexed {
+		t.Error("a fork naming its parent built the index")
+	}
+	s, err := st.Create(ctx, agentsession.Header{ID: "f4", Base: a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.indexed || s.Header().ParentSession != "o" {
+		t.Errorf("a fork naming no parent: indexed %v, parent %q", st.indexed, s.Header().ParentSession)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "f5", Base: a, ParentSession: "f3"}); err != nil {
+		t.Errorf("a base two forks up the parent's prefix: %v", err)
+	}
+}

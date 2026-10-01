@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// sharedLocks says whether the locks here are real across processes:
+// flock keeps other processes' commits out of a journal being compacted.
+const sharedLocks = true
+
 // dirLock is an exclusive lock held through flock on a file that is
 // never unlinked, so no holder can be left locking an inode nothing
 // points at. The kernel drops it when the process exits, however it

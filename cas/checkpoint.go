@@ -22,11 +22,14 @@ import (
 // commit point and the record, and a checkpoint that does not match it
 // is ignored, never trusted.
 //
-// It matches when the journal is at least as long as the offset and the
-// journal's last checkpointTail bytes before the offset hash to what
-// the checkpoint says. The journal only grows, so bytes that match
-// there are the bytes the checkpoint was read from; a journal replaced
-// by another, or restored from before the offset, fails. The file ends
+// It matches when the journal is at least as long as the offset, its
+// first line hashes to what the checkpoint says, and its last
+// checkpointTail bytes before the offset do too. The journal only grows
+// until a compaction replaces it, and a compacted journal begins with a
+// record naming a new generation at random, so a journal whose first
+// line matches is the one the checkpoint was read from, and bytes that
+// match before the offset are the bytes it read; a journal compacted
+// since, or restored from before the offset, fails. The file ends
 // in the SHA-256 of what precedes it, so one a crash cut short or a
 // flipped bit damaged fails too. It is written to a temporary name and
 // renamed without an fsync: a crash may leave it empty or stale, which
@@ -35,13 +38,13 @@ import (
 // Layout, integers as varints:
 //
 //	magic
-//	end, lines, SHA-256 of the journal tail
+//	end, lines, SHA-256 of the journal's first line, of its tail
 //	damage count, then each: line, offset, message
 //	session count, then each: id, flags, base, record count, records
 //	SHA-256 of everything above
 const (
 	checkpointName  = "checkpoint"
-	checkpointMagic = "agentsession-cas-checkpoint 1\n"
+	checkpointMagic = "agentsession-cas-checkpoint 2\n"
 	checkpointTail  = 4096
 )
 
@@ -113,12 +116,17 @@ func hashDigest(s string) ([]byte, bool) {
 	return d, err == nil
 }
 
-func encodeCheckpoint(scan *journalScan, tail [sha256.Size]byte) []byte {
+// journalMarks are the hashes a checkpoint is checked against: of the
+// journal's first line and of its tail before the checkpoint's offset.
+type journalMarks struct{ head, tail [sha256.Size]byte }
+
+func encodeCheckpoint(scan *journalScan, m journalMarks) []byte {
 	w := &ckptWriter{buf: make([]byte, 0, 64+len(scan.states)*64)}
 	w.buf = append(w.buf, checkpointMagic...)
 	w.varint(scan.end)
 	w.uvarint(uint64(scan.lines))
-	w.buf = append(w.buf, tail[:]...)
+	w.buf = append(w.buf, m.head[:]...)
+	w.buf = append(w.buf, m.tail[:]...)
 	w.uvarint(uint64(len(scan.damage)))
 	for _, d := range scan.damage {
 		w.uvarint(uint64(d.Line))
@@ -250,22 +258,23 @@ func (r *ckptReader) str(entry string) string {
 	return ""
 }
 
-// decodeCheckpoint reads a checkpoint's scan and the tail hash it
-// claims, or fails for a file that is not one whole checkpoint.
-func decodeCheckpoint(data []byte) (*journalScan, [sha256.Size]byte, error) {
-	var tail [sha256.Size]byte
+// decodeCheckpoint reads a checkpoint's scan and the marks it claims,
+// or fails for a file that is not one whole checkpoint.
+func decodeCheckpoint(data []byte) (*journalScan, journalMarks, error) {
+	var m journalMarks
 	if len(data) < len(checkpointMagic)+sha256.Size || !bytes.HasPrefix(data, []byte(checkpointMagic)) {
-		return nil, tail, errCheckpoint
+		return nil, m, errCheckpoint
 	}
 	body := data[:len(data)-sha256.Size]
 	if sum := sha256.Sum256(body); !bytes.Equal(sum[:], data[len(body):]) {
-		return nil, tail, errCheckpoint
+		return nil, m, errCheckpoint
 	}
 	r := &ckptReader{buf: body[len(checkpointMagic):]}
 	scan := &journalScan{states: map[string]*sessionState{}}
 	scan.end = r.varint()
 	scan.lines = int(r.uvarint())
-	copy(tail[:], r.bytes(sha256.Size))
+	copy(m.head[:], r.bytes(sha256.Size))
+	copy(m.tail[:], r.bytes(sha256.Size))
 	if n := r.count(3); n > 0 {
 		scan.damage = make([]JournalDamage, n)
 		for i := range scan.damage {
@@ -296,83 +305,87 @@ func decodeCheckpoint(data []byte) (*journalScan, [sha256.Size]byte, error) {
 		scan.states[id] = st
 	}
 	if r.err != nil || len(r.buf) != 0 || scan.end < 0 {
-		return nil, tail, errCheckpoint
+		return nil, m, errCheckpoint
 	}
-	return scan, tail, nil
+	return scan, m, nil
 }
 
-// journalTailHash hashes the journal's last checkpointTail bytes
-// before end.
-func journalTailHash(root string, end int64) ([sha256.Size]byte, error) {
-	var sum [sha256.Size]byte
-	f, err := os.Open(filepath.Join(root, "journal"))
-	if err != nil {
-		return sum, err
+// marksOf hashes the journal f's first line, up to checkpointTail
+// bytes of it, and its last checkpointTail bytes before end.
+func marksOf(f *os.File, end int64) (journalMarks, error) {
+	var m journalMarks
+	head := make([]byte, min(end, checkpointTail))
+	if _, err := f.ReadAt(head, 0); err != nil {
+		return m, err
 	}
-	defer f.Close()
+	if k := bytes.IndexByte(head, '\n'); k >= 0 {
+		head = head[:k+1]
+	}
+	m.head = sha256.Sum256(head)
 	start := max(end-checkpointTail, 0)
-	buf := make([]byte, end-start)
-	if _, err := f.ReadAt(buf, start); err != nil {
-		return sum, err
+	tail := make([]byte, end-start)
+	if _, err := f.ReadAt(tail, start); err != nil {
+		return m, err
 	}
-	return sha256.Sum256(buf), nil
+	m.tail = sha256.Sum256(tail)
+	return m, nil
 }
 
-// loadCheckpoint returns the scan the store's checkpoint holds when it
-// matches the journal, and nil otherwise.
-func (s *Store) loadCheckpoint() *journalScan {
+// loadCheckpoint returns the scan the store's checkpoint holds, with
+// the checkpoint's size, when it matches the journal f of the given
+// size, and nil otherwise.
+func (s *Store) loadCheckpoint(f *os.File, size int64) (*journalScan, int64) {
 	data, err := os.ReadFile(filepath.Join(s.root, checkpointName))
 	if err != nil {
-		return nil
+		return nil, 0
 	}
-	scan, tail, err := decodeCheckpoint(data)
-	if err != nil || scan.end == 0 {
-		return nil
+	scan, want, err := decodeCheckpoint(data)
+	if err != nil || scan.end == 0 || size < scan.end {
+		return nil, 0
 	}
-	info, err := os.Stat(filepath.Join(s.root, "journal"))
-	if err != nil || info.Size() < scan.end {
-		return nil
+	if got, err := marksOf(f, scan.end); err != nil || got != want {
+		return nil, 0
 	}
-	if got, err := journalTailHash(s.root, scan.end); err != nil || got != tail {
-		return nil
-	}
-	return scan
+	return scan, int64(len(data))
 }
 
-// writeCheckpoint saves the scan as the store's checkpoint. A failure
-// costs the next open a longer replay and nothing else, so the caller
-// may ignore it.
-func (s *Store) writeCheckpoint(scan *journalScan) error {
+// writeCheckpoint saves the scan, read from the journal f, as the
+// store's checkpoint and returns its size. A failure costs the next
+// open a longer replay and nothing else, so the caller may ignore it.
+func (s *Store) writeCheckpoint(scan *journalScan, f *os.File) (int64, error) {
 	if s.readOnly || scan.end == 0 {
-		return nil
+		return 0, nil
 	}
-	tail, err := journalTailHash(s.root, scan.end)
+	m, err := marksOf(f, scan.end)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	f, err := os.CreateTemp(s.root, checkpointName+".tmp-*")
+	data := encodeCheckpoint(scan, m)
+	tmp, err := os.CreateTemp(s.root, checkpointName+".tmp-*")
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, werr := f.Write(encodeCheckpoint(scan, tail))
-	if cerr := f.Close(); werr == nil {
+	_, werr := tmp.Write(data)
+	if cerr := tmp.Close(); werr == nil {
 		werr = cerr
 	}
 	if werr == nil {
-		werr = os.Rename(f.Name(), filepath.Join(s.root, checkpointName))
+		werr = os.Rename(tmp.Name(), filepath.Join(s.root, checkpointName))
 	}
 	if werr != nil {
-		os.Remove(f.Name())
+		os.Remove(tmp.Name())
 	}
 	s.cleanCheckpointTemps()
-	return werr
+	return int64(len(data)), werr
 }
 
-// cleanCheckpointTemps removes temporary checkpoints a crash left, once
-// they are old enough that no writer can still be renaming them.
+// cleanCheckpointTemps removes temporary checkpoints and journals a
+// crash left, once they are old enough that no writer can still be
+// renaming them.
 func (s *Store) cleanCheckpointTemps() {
 	old, _ := filepath.Glob(filepath.Join(s.root, checkpointName+".tmp-*"))
-	for _, p := range old {
+	journals, _ := filepath.Glob(filepath.Join(s.root, "journal.tmp-*"))
+	for _, p := range append(old, journals...) {
 		if info, err := os.Stat(p); err == nil && time.Since(info.ModTime()) > time.Hour {
 			os.Remove(p)
 		}

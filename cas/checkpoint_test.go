@@ -109,10 +109,10 @@ func TestCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.checkpointed == 0 {
-		t.Error("open did not start from the checkpoint")
-	}
 	got, _ := st.replay()
+	if st.checkpointed == 0 {
+		t.Error("the replay did not start from the checkpoint")
+	}
 	want, _ := st.replayFrom(0)
 	if d := sameScan(got, want); d != "" {
 		t.Errorf("from the checkpoint and from the start differ: %s", d)
@@ -194,10 +194,10 @@ func TestCheckpointIgnored(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer st.Close()
+			got, _ := st.replay()
 			if st.checkpointed != 0 {
 				t.Error("used a checkpoint that does not match")
 			}
-			got, _ := st.replay()
 			want, _ := st.replayFrom(0)
 			if d := sameScan(got, want); d != "" {
 				t.Errorf("differs from a replay from the start: %s", d)
