@@ -25,6 +25,17 @@ versions may break the API.
   about 7 fsyncs, down from 20; one of two items, 7, down from 13.
   `SyncPolicy`'s doc says that records make the lazy policies commit.
   (#170)
+- **cas: a sweep beside steady writers is no longer starved.** A
+  writer that found `sweep.lock` free took it shared at once, and
+  durable appends hold it through their commit's fsyncs, so back-to-back
+  writers left a sweep waiting for its exclusive hold almost without
+  end: a sweep of 60,000 unneeded objects removed a few thousand a
+  minute. A sweep waiting for the lock now holds a third lock,
+  `sweep.lock.next`, exclusive, and a writer holds it shared while it
+  takes `sweep.lock`, so a writer arriving once a sweep waits queues
+  behind it for one batch. A fork's `Create` commits its origin's log
+  before it takes `sweep.lock`, since it may wait there for the
+  origin's writer. (#168)
 
 ## v0.0.18 - 2026-10-01
 

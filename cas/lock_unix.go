@@ -61,7 +61,21 @@ func (l *dirLock) release() error {
 // retaking the lock for batch after batch would otherwise starve a
 // writer polling for it through nearly all of them, since flock does
 // not queue a non-blocking caller.
+//
+// The turnstile has a second side. Every holder first takes path's next
+// lock shared, and lets it go once it has the lock, so it holds it only
+// while it tries; lockExclusive holds next exclusive while it waits. A
+// holder arriving once a sweep waits therefore queues behind it, and
+// writers whose holds overlap, as durable appends' fsyncs do, cannot
+// keep the lock from ever being free for the sweep. No caller may hold
+// the lock while it takes it again, nor wait, holding it, on one that
+// takes it: behind a waiting sweep, that is a deadlock.
 func lockShared(ctx context.Context, path string) (*dirLock, error) {
+	next, err := lockPoll(ctx, path+".next", syscall.LOCK_SH, 2*time.Millisecond)
+	if err != nil {
+		return nil, err
+	}
+	defer next.release()
 	if lk, ok, err := lockTry(path, syscall.LOCK_SH); ok || err != nil {
 		return lk, err
 	}
@@ -96,14 +110,23 @@ func lockTry(path string, how int) (*dirLock, bool, error) {
 // lockExclusive takes an exclusive lock at path, waiting for its
 // holders to let it go until ctx ends. It first waits for each holder
 // waiting in lockShared to take the lock shared, so a caller that takes
-// it again and again lets those waiting in between.
+// it again and again lets those waiting in between. It holds path's
+// next lock exclusive from before that wait until it has the lock, so
+// no holder arriving meanwhile takes the lock ahead of it.
 func lockExclusive(ctx context.Context, path string) (*dirLock, error) {
+	next, err := lockPoll(ctx, path+".next", syscall.LOCK_EX, 2*time.Millisecond)
+	if err != nil {
+		return nil, err
+	}
+	defer next.release()
 	want, err := lockPoll(ctx, path+".want", syscall.LOCK_EX, 2*time.Millisecond)
 	if err != nil {
 		return nil, err
 	}
 	want.release()
-	return lockWait(ctx, path, syscall.LOCK_EX)
+	// Holders arriving now wait on this caller, so it polls at a short
+	// interval rather than lockWait's longest.
+	return lockPoll(ctx, path, syscall.LOCK_EX, 2*time.Millisecond)
 }
 
 // lockWait tries the lock without blocking and retries until ctx ends,

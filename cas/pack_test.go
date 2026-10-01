@@ -199,28 +199,44 @@ func TestSweepWaitsForWriter(t *testing.T) {
 		t.Errorf("sweep after the writer committed: %v", err)
 	}
 	// The sweep does not hold the store's mutex while it builds its
-	// keep set and pack; an append beside a waiting sweep completes.
+	// keep set and pack; an open beside a waiting sweep completes. An
+	// append queues behind the sweep, which goes first once the writer
+	// commits (#168).
 	writer, _ = lockShared(ctx, filepath.Join(st.Root(), "sweep.lock"))
 	go func() {
 		_, err := st.Sweep(ctx, 0)
 		done <- err
 	}()
 	time.Sleep(50 * time.Millisecond)
+	opened := make(chan error, 1)
+	go func() {
+		_, err := st.Open(ctx, "s")
+		opened <- err
+	}()
+	select {
+	case err := <-opened:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("an open waited on a sweep that was waiting on a writer")
+	}
 	appended := make(chan error, 1)
 	go func() {
 		_, err := st.Append(ctx, "s", agentsession.NewItemEntry(openresponses.UserText("beside a sweep")))
 		appended <- err
 	}()
+	time.Sleep(50 * time.Millisecond)
 	select {
 	case err := <-appended:
-		if err != nil {
-			t.Error(err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Error("an append waited on a sweep that was waiting on a writer")
+		t.Errorf("an append went ahead of a waiting sweep: %v", err)
+	default:
 	}
 	writer.release()
 	if err := <-done; err != nil {
+		t.Error(err)
+	}
+	if err := <-appended; err != nil {
 		t.Error(err)
 	}
 	// Cancelled while waiting: the context's error, nothing removed.

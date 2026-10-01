@@ -17,6 +17,7 @@
 //	  layout                              the layout the store is in, which an open checks
 //	  sweep.lock                          held shared by writers, exclusive by a sweep's last step
 //	  sweep.lock.want                     held shared by writers waiting for sweep.lock
+//	  sweep.lock.next                     held shared by writers taking sweep.lock, exclusive by a sweep waiting for it
 //	  gc.lock                             the lock of a running sweep or pack
 //
 // An entry is stored as two objects, its body under the content hash
@@ -1729,10 +1730,20 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 	} else {
 		sess = tmp
 	}
+	// The origin's log is committed through the base, since the fork's
+	// recovery reads only its own log. That is done before the sweep's
+	// lock is taken: it waits for the origin's handle, whose holder may
+	// be waiting for the sweep's lock behind a sweep that waits for this
+	// one, and what it commits the origin's log names already, so a
+	// sweep keeps it.
+	if h.Base != "" {
+		if err := s.commitOrigin(owner, h.Base); err != nil {
+			return fail(err)
+		}
+	}
 	// No sweep's last step from here until the session names the
 	// prefix. The prefix is freshened, so it is durable and young once
-	// the lock is dropped, and the origin's log is committed through the
-	// base, since the fork's recovery reads only its own log.
+	// the lock is dropped.
 	guard, err := s.writeGuard(ctx)
 	if err != nil {
 		return fail(err)
@@ -1746,9 +1757,6 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		// The path's objects are durable before any log that names the
 		// base is, whichever process wrote them.
 		if err := s.objs.flushSet(pend); err != nil {
-			return fail(err)
-		}
-		if err := s.commitOrigin(owner, h.Base); err != nil {
 			return fail(err)
 		}
 	}
