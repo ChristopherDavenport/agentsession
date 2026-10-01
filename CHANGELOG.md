@@ -157,6 +157,16 @@ which is harmless, and the next writing open puts it back.
   bytes from both. RFC 0001's Goals now say byte for byte in canonical
   form, as its normative text already did; `Context.Request` and the
   cas and jsonl package docs say which store gives which. (#175)
+- **ATIF export fills `metrics.logprobs`** from the step's
+  `output_text` logprobs, in item order and then part order, the order
+  its message is built in. ATIF gives one per completion token, so it
+  is filled only when the record covers them all: every output item of
+  the step a message, every part an `output_text` carrying logprobs,
+  no refusal, and no reasoning tokens. Otherwise it is left out, and
+  the raw items under `extra` keep what logprobs there are. A step with
+  logprobs and no usage gets `metrics` holding them alone.
+  `completion_token_ids` stays empty: Open Responses carries no token
+  IDs. (#176)
 
 ## v0.0.18 - 2026-10-01
 

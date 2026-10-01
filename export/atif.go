@@ -679,6 +679,16 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 	if resp != nil {
 		copyUnknown(step.Extra, resp.Unknown)
 	}
+	var usage *openresponses.Usage
+	if resp != nil {
+		usage = resp.Usage
+	}
+	if lp := stepLogprobs(g.entries, usage); lp != nil {
+		if step.Metrics == nil {
+			step.Metrics = &atif.Metrics{}
+		}
+		step.Metrics.Logprobs = lp
+	}
 	if anchor == nil {
 		return
 	}
@@ -689,6 +699,36 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 			b.callStep[fc.CallID] = idx
 		}
 	}
+}
+
+// stepLogprobs is a step's metrics.logprobs: the logprob of each
+// output_text token, in item order and then part order, the order the
+// step's message is built in. ATIF gives one per completion token, so
+// it is filled only when the record covers every one: each item is a
+// message, each of its parts an output_text carrying logprobs, and no
+// token went to reasoning. Otherwise it is nil, and the raw items under
+// extra keep whatever logprobs there are.
+func stepLogprobs(entries []*agentsession.ItemEntry, usage *openresponses.Usage) []float64 {
+	if usage != nil && usage.OutputTokensDetails.ReasoningTokens != 0 {
+		return nil
+	}
+	var out []float64
+	for _, e := range entries {
+		m, ok := e.Item.(*openresponses.Message)
+		if !ok {
+			return nil
+		}
+		for _, p := range m.Content {
+			t, ok := p.(*openresponses.OutputText)
+			if !ok || len(t.Logprobs) == 0 {
+				return nil
+			}
+			for _, lp := range t.Logprobs {
+				out = append(out, lp.Logprob)
+			}
+		}
+	}
+	return out
 }
 
 // addStep appends a step built from entry, numbering it, stamping it
