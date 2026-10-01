@@ -85,6 +85,16 @@ func (c *Call) Rejected() bool { return c.hasVerdict(VerdictReject) }
 // run, answered without being handed to its tool again.
 func (c *Call) Answered() bool { return c.hasVerdict(VerdictAnswer) }
 
+// answer returns the call's first answer, or nil.
+func (c *Call) answer() *DecisionEntry {
+	for _, d := range c.Decisions {
+		if d.Verdict == VerdictAnswer {
+			return d
+		}
+	}
+	return nil
+}
+
 func (c *Call) hasVerdict(verdict string) bool {
 	for _, d := range c.Decisions {
 		if d.Verdict == verdict {
@@ -445,6 +455,48 @@ func (c *Call) takenUpIn(in map[string]bool) bool {
 	return false
 }
 
+// ComputeSource returns the source a run's start names, by the
+// format's rule: [SourceResume] when the segment's first function call
+// output, decision or dispatch takes up a call that was on the path
+// with no output when the run began, whatever messages come before
+// it, and [SourceInput] otherwise, a run that takes up nothing
+// included. A run built by hand with no Path has nothing before its
+// segment, so it is an input.
+func ComputeSource(r *Run) string {
+	path := r.Path
+	if path == nil {
+		path = r.Segment
+	}
+	before := map[string]bool{}
+	for _, e := range path[:len(path)-len(r.Segment)] {
+		before[e.Base().ID] = true
+	}
+	// part names the call each output, decision and dispatch is for.
+	part := map[string]*Call{}
+	for _, c := range Calls(path) {
+		if c.Output != nil {
+			part[c.Output.ID] = c
+		}
+		for _, d := range c.Decisions {
+			part[d.ID] = c
+		}
+		for _, d := range c.Dispatches {
+			part[d.ID] = c
+		}
+	}
+	for _, e := range r.Segment {
+		c, ok := part[e.Base().ID]
+		if !ok {
+			continue
+		}
+		if before[c.Entry.ID] && (c.Output == nil || !before[c.Output.ID]) {
+			return SourceResume
+		}
+		return SourceInput
+	}
+	return SourceInput
+}
+
 // Pending returns the IDs of the run's calls with no output on the
 // path, a call made before the segment that the run took up among them;
 // see [Run.Calls].
@@ -702,6 +754,17 @@ var ErrBadTarget = errors.New("agentsession: target does not name the call")
 // names one call in a session.
 var ErrCallIDRepeated = errors.New("agentsession: call ID repeated")
 
+// ErrCallIDEmpty is returned when a function call is appended with no
+// call ID, and by [Session.VerifyRecords] for a session that holds one:
+// nothing could name the call, not its output, a decision or a pending
+// list.
+var ErrCallIDEmpty = errors.New("agentsession: function call has no call ID")
+
+// ErrSourceMismatch is returned by [Session.VerifyRecords] for a run
+// start whose source is not the shape of its segment; see
+// [ComputeSource].
+var ErrSourceMismatch = errors.New("agentsession: run source disagrees with its segment")
+
 // ErrRejectDispatched is returned when a reject is appended for a call
 // that has a dispatch on the path: a reject says the call did not run,
 // and one that may have run is ended by an answer.
@@ -731,13 +794,17 @@ var ErrAnswerNotDispatched = errors.New("agentsession: answer for a call the rec
 var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 
 // VerifyRecords checks the record entries on the path to leaf against
-// the format's rules: no call ID repeats in the session, every
-// decision and dispatch names its call by target, every run end agrees
-// with its segment, no dispatch or decision follows a reject or an
-// answer on the same call, no answer, reject or dispatch follows an
-// output and no reject a dispatch, and, when the header names dispatch
-// in records, no answer ends a call with no dispatch and every call
-// that ran has a dispatch. It returns the first problem found.
+// the format's rules: every function call has a call ID and none
+// repeats in the session, every decision and dispatch names its call
+// by target, every run start's source and every run end agree with
+// the segment, no dispatch or decision follows a reject or an answer
+// on the same call, no answer, reject or dispatch follows an output and
+// no reject a dispatch, and, when the header names dispatch in records,
+// no answer ends a call with no dispatch and every call that ran has a
+// dispatch. The rules that rest on records apply to what the session
+// wrote, the entries after its base: a fork's prefix is another
+// session's record, kept to that session's promise. It returns the
+// first problem found.
 func (s *Session) VerifyRecords(leaf string) error {
 	path := s.Path(leaf)
 	if path == nil {
@@ -758,8 +825,14 @@ func (s *Session) VerifyRecords(leaf string) error {
 		if err := r.Verify(); err != nil {
 			return err
 		}
+		if src := r.Start.Source; (src == SourceInput || src == SourceResume) && src != ComputeSource(r) {
+			return fmt.Errorf("%w: run %s starts as %s and its segment is the shape of %s", ErrSourceMismatch, r.RunID(), src, ComputeSource(r))
+		}
 	}
 	h := s.Header()
+	// promised says the header's records promise covers the entry: one
+	// the session wrote, after its base.
+	promised := func(id string) bool { return h.HasRecord(TypeDispatch) && !s.Prefix(id) }
 	for _, c := range calls {
 		if c.ended != nil {
 			if c.ended.Verdict == VerdictAnswer {
@@ -782,10 +855,10 @@ func (s *Session) VerifyRecords(leaf string) error {
 		if c.endAfterOutput != nil {
 			return fmt.Errorf("%w: %s %s follows the output of call %s", ErrCallCompleted, c.endAfterOutput.Verdict, c.endAfterOutput.ID, c.ID())
 		}
-		if h.HasRecord(TypeDispatch) && c.Answered() && c.Dispatch == nil {
+		if c.Answered() && c.Dispatch == nil && promised(c.answer().ID) {
 			return fmt.Errorf("%w: call %s", ErrAnswerNotDispatched, c.ID())
 		}
-		if h.HasRecord(TypeDispatch) && c.Output != nil && c.Dispatch == nil && !c.Rejected() {
+		if c.Output != nil && c.Dispatch == nil && !c.Rejected() && promised(c.Output.ID) {
 			return fmt.Errorf("%w: call %s has an output and no dispatch", ErrRecordMissing, c.ID())
 		}
 	}
@@ -804,6 +877,9 @@ func (s *Session) verifyCallIDs() error {
 			continue
 		}
 		if fc, ok := it.Item.(*openresponses.FunctionCall); ok {
+			if fc.CallID == "" {
+				return fmt.Errorf("%w: %s", ErrCallIDEmpty, it.ID)
+			}
 			if first, dup := seen[fc.CallID]; dup {
 				return fmt.Errorf("%w: %s at %s and %s", ErrCallIDRepeated, fc.CallID, first, it.ID)
 			}

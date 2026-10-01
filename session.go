@@ -422,7 +422,7 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		switch {
 		case !ok:
 		case fc.CallID == "":
-			return errors.New("agentsession: a function call needs a call_id")
+			return ErrCallIDEmpty
 		case s.callIDs[fc.CallID]:
 			return fmt.Errorf("%w: %s", ErrCallIDRepeated, fc.CallID)
 		}
