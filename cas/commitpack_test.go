@@ -92,18 +92,51 @@ func TestCommitPackBelowMin(t *testing.T) {
 	if _, err := st.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
 		t.Fatal(err)
 	}
-	for i := range 3 {
-		mustAppend(t, st, "s", item(fmt.Sprintf("lazy %d", i)))
-	}
+	mustAppend(t, st, "s", item("lazy"))
 	objects, _ := countSyncs(t)
 	if err := st.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := objects.Load(); got != 6 {
-		t.Errorf("%d object fsyncs, want 6", got)
+	if got := objects.Load(); got != 2 {
+		t.Errorf("%d object fsyncs, want 2", got)
 	}
 	if got := len(st.objs.packList()); got != 0 {
 		t.Errorf("%d packs", got)
+	}
+}
+
+// TestCommitPackUnderRecords: under a header whose records name runs, a
+// lazy policy commits at each run, owing only the few objects since the
+// last, and those still go as one pack (#170).
+func TestCommitPackUnderRecords(t *testing.T) {
+	ctx := context.Background()
+	old := autoPackPacks
+	autoPackPacks = 1 << 30
+	defer func() { autoPackPacks = old }()
+	st, err := Open(t.TempDir(), WithSync(SyncNever))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Create(ctx, agentsession.Header{ID: "s", Records: agentsession.AllRecords}); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, st, "s", item("lazy 0"))
+	mustAppend(t, st, "s", item("lazy 1"))
+	objects, _ := countSyncs(t)
+	r, err := st.Write(ctx, "s", agentsession.NewRunStart("run-1", agentsession.SourceInput, ""))
+	if err != nil || !r.Durable {
+		t.Fatalf("a run the header records: durable %v, %v", r.Durable, err)
+	}
+	if got := objects.Load(); got > 1 {
+		t.Errorf("%d object fsyncs; want the pack's index alone", got)
+	}
+	if got := len(st.objs.packList()); got != 1 {
+		t.Errorf("%d packs after the run's commit, want 1", got)
+	}
+	// The run's own objects, written durably, stay loose.
+	if got := looseCount(t, st); got != 2 {
+		t.Errorf("%d loose objects left beside the pack, want the run's 2", got)
 	}
 }
 

@@ -339,6 +339,11 @@ func TestRepairThenSweep(t *testing.T) {
 // entry whole still stops the sweep at its corrupt object.
 func TestSweepAfterRepairStopsAtCorruption(t *testing.T) {
 	ctx := context.Background()
+	// The fork's commit leaves its base's objects loose, for the test to
+	// damage one.
+	old := commitPackMin
+	commitPackMin = 1 << 30
+	defer func() { commitPackMin = old }()
 	root := t.TempDir()
 	st, _ := Open(root)
 	ids := fill(t, st, "a", 4)

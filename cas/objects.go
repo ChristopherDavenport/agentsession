@@ -829,9 +829,15 @@ func (o *objects) flushSet(pend *pendSet) error {
 
 // commitPackMin is how many objects a flush owes before it writes them
 // as one pack: three fsyncs, of the pack, its index and their directory,
-// in place of one for each object and one for each directory it is in.
-// A variable so tests can lower it.
-var commitPackMin = 32
+// in place of one for each object and one for each directory it is in,
+// nearly two an object, since objects spread across 256 directories.
+// The pack wins on the count from two objects, but a flush runs the
+// per-file fsyncs concurrently and each pack is a file every lookup
+// tries until a merge takes it, so the pack waits for twice that. It is
+// low because a header's records make a lazy policy commit at every run
+// and dispatch, each owing only the few objects written since the last.
+// A variable so tests can change it.
+var commitPackMin = 4
 
 // packPending writes the loose objects at paths as one pack, removes
 // the loose copies the durable pack holds, and returns their paths. A

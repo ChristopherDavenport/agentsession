@@ -59,8 +59,8 @@
 // smallest packs, and [Store.Sweep] repacks everything the store holds
 // into one pack and removes what nothing needs. A store of small
 // entries otherwise pays a filesystem block for every envelope and
-// every body. A commit owing more than a few dozen lazily written
-// objects writes them as one pack instead, in three fsyncs rather than
+// every body. A commit owing more than a few lazily written objects
+// writes them as one pack instead, in three fsyncs rather than
 // one for each object and its directory. A writing store packs on its
 // own once its loose objects look to pass a few thousand, as git's gc
 // --auto does, or its packs pass 64. Pack indexes are
@@ -191,6 +191,11 @@ func (s *Store) writable() error {
 }
 
 // SyncPolicy says when an append is durable before it returns.
+//
+// A header's records make the lazy policies commit too: under
+// SyncOnResponse and SyncNever, a session whose header's records name
+// run and dispatch, as a turn recorder's does, commits at every run and
+// dispatch, so few appends are lazy between commits.
 type SyncPolicy int
 
 const (

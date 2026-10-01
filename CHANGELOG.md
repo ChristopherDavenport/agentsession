@@ -16,6 +16,15 @@ versions may break the API.
   per commit. The split is now taken from the largest pack down, as
   git's `repack --geometric=2` takes it, weighing packs by their size.
   (#169)
+- **cas: a commit owing 4 lazily written objects writes them as a
+  pack**, down from 32. A header whose `records` name runs and
+  dispatches, as agentturn's recorder's does, makes `SyncNever` and
+  `SyncOnResponse` commit at every run and dispatch, each owing only
+  the few objects written since the last, so the commit pack never
+  fired for them. A turn of a run start and four lazy items now takes
+  about 7 fsyncs, down from 20; one of two items, 7, down from 13.
+  `SyncPolicy`'s doc says that records make the lazy policies commit.
+  (#170)
 
 ## v0.0.18 - 2026-10-01
 
