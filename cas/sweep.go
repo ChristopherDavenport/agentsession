@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -253,17 +254,36 @@ func (s *Store) sweepLock(ctx context.Context) (*dirLock, error) {
 // its size and each object is rewritten a logarithmic number of times.
 // It returns how many loose objects it packed.
 func (s *Store) Pack(ctx context.Context) (int, error) {
+	return s.pack(ctx, true)
+}
+
+// gcLockFor takes the gc lock; for a caller's Pack or Sweep, once a
+// pack this store runs on its own has finished.
+func (s *Store) gcLockFor(public bool) (*dirLock, error) {
+	if public {
+		s.bgPack.Lock()
+		defer s.bgPack.Unlock()
+	}
+	return s.gcLock()
+}
+
+// pack is Pack, run by a caller or by the store on its own.
+func (s *Store) pack(ctx context.Context, public bool) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 	if err := s.writable(); err != nil {
 		return 0, err
 	}
-	gc, err := s.gcLock()
+	gc, err := s.gcLockFor(public)
 	if err != nil {
 		return 0, err
 	}
 	defer gc.release()
+	// Another process may have packed since this one last looked.
+	if err := s.objs.reloadPacks(true); err != nil {
+		return 0, err
+	}
 	n, err := s.packLoose(ctx)
 	if err != nil {
 		return n, err
@@ -344,10 +364,22 @@ func (s *Store) consolidate(ctx context.Context) error {
 		return nil
 	}
 	var objs []packObject
+	// An object two packs hold is taken from the first, and from the
+	// other if the first copy fails its name; holders says which packs
+	// hold each.
+	alts := map[objKey][]packObject{}
+	holders := map[objKey][]string{}
 	for _, sp := range packs[:m] {
 		p := sp.p
 		err := p.each(func(sp space, hash string, off, length int64) error {
-			objs = append(objs, packObject{sp: sp, hash: hash, load: func() ([]byte, error) { return p.read(off, length) }})
+			k := objKey{sp, hash}
+			o := packObject{sp: sp, hash: hash, load: func() ([]byte, error) { return p.read(off, length) }}
+			if len(holders[k]) == 0 {
+				objs = append(objs, o)
+			} else {
+				alts[k] = append(alts[k], o)
+			}
+			holders[k] = append(holders[k], p.name)
 			return nil
 		})
 		if err != nil {
@@ -357,18 +389,29 @@ func (s *Store) consolidate(ctx context.Context) error {
 			return err
 		}
 	}
-	name, skipped, err := writePackSkipping(s.objs, s.objs.packDir(), objs, nil)
+	name, skipped, err := writePackSkipping(s.objs, s.objs.packDir(), objs, alts)
 	if err != nil {
 		return fmt.Errorf("cas: pack: %w", err)
 	}
 	if err := s.objs.reloadPacks(true); err != nil {
 		return err
 	}
-	if len(skipped) > 0 {
-		return nil // the old packs stay, with what Verify will report
+	// A pack holding an object no pack holds a good copy of stays, with
+	// what Verify will report; the merged pack holds everything else,
+	// so the rest go, and one bad object does not keep the store from
+	// merging its packs.
+	// Nothing goes unless the merged pack is one a reader finds.
+	if !slices.ContainsFunc(s.objs.packList(), func(p *pack) bool { return p.name == name }) {
+		return nil
+	}
+	keep := map[string]bool{name: true}
+	for _, o := range skipped {
+		for _, n := range holders[objKey{o.sp, o.hash}] {
+			keep[n] = true
+		}
 	}
 	for _, sp := range packs[:m] {
-		if sp.p.name == name {
+		if keep[sp.p.name] {
 			continue
 		}
 		os.Remove(filepath.Join(s.objs.packDir(), sp.p.name+".idx"))
@@ -414,7 +457,7 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	if err := s.writable(); err != nil {
 		return 0, err
 	}
-	gc, err := s.gcLock()
+	gc, err := s.gcLockFor(true)
 	if err != nil {
 		return 0, err
 	}
@@ -762,6 +805,12 @@ func envelopeContent(env []byte) (string, bool) {
 // tests can lower it.
 var autoPackLoose = 4096
 
+// autoPackPacks is the count of packs past which a writing store packs
+// on its own, which merges the smallest geometrically: commits that
+// write their objects as packs add one each. A variable so tests can
+// lower it.
+var autoPackPacks = 64
+
 // autoPackEvery is how many appends a store makes between looks at
 // whether to pack.
 const autoPackEvery = 1024
@@ -778,12 +827,26 @@ func (s *Store) looseEstimate() int {
 }
 
 // maybePack packs when the loose objects look to have passed
-// autoPackLoose. A pack that cannot run, because a sweep, pack or
+// autoPackLoose, or the packs autoPackPacks. A pack that cannot run, because a sweep, pack or
 // another pack holds the gc lock, is left for the next look; its failure
 // is no failure of the caller's.
 func (s *Store) maybePack() {
-	if s.readOnly || s.looseEstimate() < autoPackLoose {
+	if s.readOnly {
 		return
 	}
-	_, _ = s.Pack(context.Background())
+	s.bgPack.Lock()
+	defer s.bgPack.Unlock()
+	if s.looseEstimate() < autoPackLoose {
+		// The count may be stale: another process may have merged the
+		// packs this one last listed.
+		if err := s.objs.reloadPacks(true); err != nil || s.objs.packCount() < autoPackPacks {
+			s.packStuck.Store(false)
+			return
+		}
+	}
+	_, _ = s.pack(context.Background(), false)
+	// A pack that could not bring the count down, because it failed or
+	// a damaged pack is kept, is not tried again on the count alone
+	// until the next look every autoPackEvery appends.
+	s.packStuck.Store(s.objs.packCount() >= autoPackPacks)
 }

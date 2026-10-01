@@ -59,8 +59,11 @@
 // smallest packs, and [Store.Sweep] repacks everything the store holds
 // into one pack and removes what nothing needs. A store of small
 // entries otherwise pays a filesystem block for every envelope and
-// every body. A writing store packs on its own once its loose objects
-// look to pass a few thousand, as git's gc --auto does. Pack indexes are
+// every body. A commit owing more than a few dozen lazily written
+// objects writes them as one pack instead, in three fsyncs rather than
+// one for each object and its directory. A writing store packs on its
+// own once its loose objects look to pass a few thousand, as git's gc
+// --auto does, or its packs pass 64. Pack indexes are
 // mapped, not read, and a listing reads the summary kept beside each
 // session's log.
 //
@@ -274,6 +277,15 @@ type Store struct {
 	packing    atomic.Bool
 	background sync.WaitGroup
 	closing    bool
+	// packStuck is set when a pack in the background left the store
+	// holding autoPackPacks packs or more, so the pack count alone no
+	// longer starts one until the next due look.
+	packStuck atomic.Bool
+	// bgPack is held by a pack this store runs on its own, for as long
+	// as it runs, and by a caller's Pack or Sweep while it takes the gc
+	// lock, so the caller waits for the store's own pack rather than
+	// find the lock taken; two a caller runs still refuse each other.
+	bgPack sync.Mutex
 }
 
 // handle is a session this store holds. Its mu is held by whoever works
@@ -352,7 +364,9 @@ func Open(root string, opts ...Option) (*Store, error) {
 	// Nothing else store-wide is read here: each session recovers when
 	// it is opened, and the index of which session holds what is built
 	// only if a lookup needs it, so opening a store costs the same at
-	// any size.
+	// any size. Packs a process left past autoPackPacks, killed before
+	// it could merge them, are merged in the background.
+	s.startPack(false)
 	return s, nil
 }
 
@@ -2201,25 +2215,37 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	r, err := s.writeHeld(ctx, h, sessionID, e)
 	h.mu.Unlock()
 	if err == nil && r.Outcome != agentsession.Held {
-		// A pack runs in the background, with no session's lock held,
-		// as another process's would, so no append waits for it; one at
-		// a time.
 		s.mu.Lock()
 		s.appends++
-		pack := s.appends%autoPackEvery == 0 && !s.closing && s.packing.CompareAndSwap(false, true)
-		if pack {
-			s.background.Add(1)
-		}
+		due := s.appends%autoPackEvery == 0
 		s.mu.Unlock()
-		if pack {
-			go func() {
-				defer s.background.Done()
-				defer s.packing.Store(false)
-				s.maybePack()
-			}()
-		}
+		s.startPack(due)
 	}
 	return r, err
+}
+
+// startPack looks, in the background, at whether to pack: when due,
+// every autoPackEvery appends, or at once when the store holds
+// autoPackPacks packs, which a commit writing its objects as a pack
+// adds to. A pack runs with no session's lock held, as another
+// process's would, so no append waits for it; one at a time.
+func (s *Store) startPack(due bool) {
+	if s.readOnly || (!due && (s.packStuck.Load() || s.objs.packCount() < autoPackPacks)) {
+		return
+	}
+	s.mu.Lock()
+	pack := !s.closing && s.packing.CompareAndSwap(false, true)
+	if pack {
+		s.background.Add(1)
+	}
+	s.mu.Unlock()
+	if pack {
+		go func() {
+			defer s.background.Done()
+			defer s.packing.Store(false)
+			s.maybePack()
+		}()
+	}
 }
 
 // writeHeld is Write on a session whose handle's lock the caller holds.
@@ -2715,6 +2741,7 @@ func (s *Store) releaseHandle(id string, h *handle) error {
 		}
 	}
 	s.dropHandle(id, h)
+	s.startPack(false)
 	return err
 }
 
@@ -2749,6 +2776,7 @@ func (s *Store) Sync(ctx context.Context) error {
 		}
 		h.mu.Unlock()
 	}
+	s.startPack(false)
 	return first
 }
 

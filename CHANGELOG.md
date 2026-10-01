@@ -32,10 +32,24 @@ The format is unchanged. RFC 0002's exchange section gains a refusal.
   prune. (#141)
 - **`agentsession verify <cas-root>` checks each session's request
   hashes and records** after the store's own walk, as `verify <root>
-  <id>` does, printing only what fails, and exits non-zero on any,
-  or on a session it could not check.
-  Before, a store whose sessions broke the records rules reported no
-  problems. (#133)
+  <id>` does, printing only what fails, and exits non-zero on any, or
+  on a session it could not check. Before, a store whose sessions
+  broke the records rules reported no problems. (#133)
+- **cas: a commit owing many lazily written objects writes them as one
+  pack.** Past 32 objects, a commit writes them into a pack, fsyncing
+  the pack, its index and their directory, and removes the loose
+  copies, rather than fsyncing each object and, since objects were
+  spread across directories, each object's directory. Committing 101
+  lazy appends takes 13 ms, down from 26 ms; 500 take 32 ms, down from
+  106 ms. A store also packs on its own once it holds 64 packs, which
+  merges the smallest: it looks after each `Sync` and `Release` and at
+  `Open`, so packs a killed process left are merged by the next. A
+  caller's `Pack` or `Sweep` waits for a pack the store runs on its own
+  rather than return `ErrSweepRunning`. (#142)
+- **cas: one corrupt object no longer keeps every pack from merging.**
+  A merge takes an object a pack holds damaged from another pack that
+  holds it whole, and keeps only a pack holding an object no pack has a
+  good copy of, for `Verify` to report.
 
 ## v0.0.16 - 2026-10-01
 

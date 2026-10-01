@@ -95,7 +95,14 @@ func (s *Store) Verify(ctx context.Context) (Report, error) {
 				return nil
 			}
 			rep.Objects++
+			// A loose copy beside a pack holding the object, as a crash can
+			// leave the removal of a commit pack's unsynced loose copies,
+			// is a duplicate no read takes: the pack's copy is checked
+			// above.
 			if hashBytes(data) != hash {
+				if _, p, _, _, err := s.objs.locate(sp, hash, true); err == nil && p != nil {
+					return ctx.Err()
+				}
 				add(Problem{Kind: "corrupt", Object: hash, Err: fmt.Errorf("%w: %s object (%s)", ErrCorrupt, sp, s.objs.rel(path))})
 			}
 			return ctx.Err()
