@@ -44,13 +44,18 @@ type objects struct {
 	// the directories they were renamed into.
 	pendFiles map[string]bool
 	pendDirs  map[string]bool
-	// fanned holds the spaces whose fan-out directories this store has
-	// seen made durable; fanning makes them, one space at a time.
-	fanned  map[string]bool
-	fanning sync.Mutex
+	// known holds the object directories this store has seen made
+	// durable, by the fsync of their space's directory, by identity: a
+	// directory a prune removed and another writer made again may take
+	// over its inode, and its change time moves with every name put in
+	// it, so the identity is the inode's generation too, which the
+	// filesystem changes when it reuses the inode.
+	known map[string]dirID
 	// noLink is set once the filesystem has refused a hard link, after
 	// which every object is written durably.
 	noLink atomic.Bool
+	// pruned is set once this store has seen the prune marker.
+	pruned atomic.Bool
 	// failure is the first fsync of the store's data that failed, after
 	// which the store writes nothing; syncing holds this process's lock
 	// on fsyncs of each path in flight.
@@ -67,6 +72,16 @@ type objects struct {
 	checked map[string]fileVersion
 }
 
+// dirID is a directory's identity, as dirIdentity reads it. hasGen
+// says the inode's generation was read; without it, a directory made
+// again in a removed one's place can be taken for it, so a store whose
+// directories have none never prunes them.
+type dirID struct {
+	dev, ino uint64
+	gen      uint32
+	hasGen   bool
+}
+
 // fileVersion is one version of a file, as versionOf reads it.
 type fileVersion struct {
 	dev, ino    uint64
@@ -77,7 +92,7 @@ type fileVersion struct {
 const checkedLimit = 1 << 16
 
 func newObjects(root string) *objects {
-	return &objects{root: root, pendFiles: map[string]bool{}, pendDirs: map[string]bool{}, fanned: map[string]bool{}, syncing: map[string]*pathLock{}, checked: map[string]fileVersion{}}
+	return &objects{root: root, pendFiles: map[string]bool{}, pendDirs: map[string]bool{}, known: map[string]dirID{}, syncing: map[string]*pathLock{}, checked: map[string]fileVersion{}}
 }
 
 func (o *objects) packDir() string { return filepath.Join(o.root, "objects", "pack") }
@@ -335,6 +350,11 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 			goto write
 		}
 		if err == nil {
+			// Its directory may not be durable yet, whoever wrote it: the
+			// commit that names it syncs its space too, if so.
+			if err := o.durableDir(dir, false, pend); err != nil {
+				return err
+			}
 			return o.remember(pend, path, dir)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -360,83 +380,204 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 		// The pack was removed by a sweep; write the object loose.
 	}
 write:
-	if err := o.fanOut(filepath.Dir(dir)); err != nil {
-		return err
-	}
 	var info os.FileInfo
-	if !durable && !replacing && !o.noLink.Load() {
-		// A new object, written lazily, takes its place only if nothing
-		// has since: one another process wrote meanwhile is replaced
-		// durably instead. So is the object where the filesystem makes
-		// no hard link, from then on, which is slower but as sound.
-		info, err = writeFileWith(path, data, nil, false)
-		if errors.Is(err, errNoLink) {
-			o.noLink.Store(true)
+	made := false
+	for attempt := 0; ; attempt++ {
+		var m bool
+		if m, err = o.objectDir(dir); err != nil {
+			return err
 		}
-		if errors.Is(err, os.ErrExist) || errors.Is(err, errNoLink) {
+		made = made || m
+		if !durable && !replacing && !o.noLink.Load() {
+			// A new object, written lazily, takes its place only if
+			// nothing has since: one another process wrote meanwhile is
+			// replaced durably instead. So is the object where the
+			// filesystem makes no hard link, from then on, which is
+			// slower but as sound.
+			info, err = writeFileWith(path, data, nil, false)
+			if errors.Is(err, errNoLink) {
+				o.noLink.Store(true)
+			}
+			if errors.Is(err, os.ErrExist) || errors.Is(err, errNoLink) {
+				durable = true
+			}
+		} else if !durable {
 			durable = true
 		}
-	} else if !durable {
-		durable = true
-	}
-	if durable {
-		info, err = o.writeFile(path, data, true)
+		if durable {
+			info, err = o.writeFile(path, data, true)
+		}
+		if errors.Is(err, os.ErrNotExist) && attempt == 0 {
+			// A sweep removed the directory, empty, after it was found:
+			// it is made again.
+			continue
+		}
+		break
 	}
 	if err != nil {
 		return err
 	}
 	o.check(path, info)
+	if err := o.durableDir(dir, made, pend); err != nil {
+		return err
+	}
 	if !durable {
 		return o.remember(pend, path, dir)
 	}
 	return o.remember(pend, "", dir)
 }
 
-// fanOut makes a space's fan-out directories, all of them at once, and
-// syncs the space's directory, the first time this store writes into
-// the space; no object is renamed into a directory a crash could take.
-// A failed sync stops the store; the directories made here are removed,
-// since no write has used them: none writes into a space before its
-// fan-out is durable.
-func (o *objects) fanOut(space string) error {
+// objectDir makes an object's directory when it is not there, as git
+// makes a fan-out directory on its first object, so a store holds the
+// directories its objects need and no more; made says this call made
+// it.
+func (o *objects) objectDir(dir string) (made bool, err error) {
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return false, err
+	}
+	err = os.Mkdir(dir, 0o755)
+	if errors.Is(err, os.ErrExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// durableDir sees that the directory holding an object this caller has
+// just put in place is durable in its space by the commit that names
+// the object: if it is not known durable, its space's directory is
+// added to what the caller's commit syncs, beside the object
+// directories it syncs already, and once a space's directory is synced
+// every directory then in it is known, so later commits pay nothing.
+// It looks once the object is in place: the directory then holds it,
+// so no prune can remove it, and the one it looks at is the one the
+// object is in. One this caller made is new, whatever inode it took. A
+// failed sync stops the store, so a directory is never left to the word
+// of a later sync.
+func (o *objects) durableDir(dir string, made bool, pend *pendSet) error {
+	space := filepath.Dir(dir)
 	o.mu.Lock()
-	done := o.fanned[space]
+	known, ok := o.known[dir]
+	if made {
+		delete(o.known, dir)
+		ok = false
+	}
 	o.mu.Unlock()
-	if done {
+	if ok {
+		// Without a generation, a directory known by device and inode is
+		// the one it was only while nothing has ever pruned the store:
+		// another store, reading generations where this one cannot, may
+		// have, and says so first.
+		if id, idOK := dirIdentity(dir); idOK && id == known && (id.hasGen || !o.everPruned()) {
+			return nil
+		}
+	}
+	return o.remember(pend, "", space)
+}
+
+// prunedFile, in objects, says a prune has removed object directories
+// from the store; it is written, durably, before the first removal.
+const prunedFile = "pruned"
+
+// everPruned reports whether any store has pruned this one.
+func (o *objects) everPruned() bool {
+	if o.pruned.Load() {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(o.root, "objects", prunedFile)); err == nil {
+		o.pruned.Store(true)
+		return true
+	}
+	return false
+}
+
+// markPruned writes the prune marker, durably, before a prune removes
+// anything.
+func (o *objects) markPruned() error {
+	if o.everPruned() {
 		return nil
 	}
-	o.fanning.Lock()
-	defer o.fanning.Unlock()
-	o.mu.Lock()
-	done = o.fanned[space]
-	o.mu.Unlock()
-	if done {
-		return nil
-	}
-	if err := os.MkdirAll(space, 0o755); err != nil {
+	p := filepath.Join(o.root, "objects", prunedFile)
+	if err := o.writeAtomic(p, nil); err != nil {
 		return err
 	}
-	var made []string
-	for i := range 256 {
-		d := filepath.Join(space, fmt.Sprintf("%02x", i))
-		if err := os.Mkdir(d, 0o755); err == nil {
-			made = append(made, d)
-		} else if !errors.Is(err, os.ErrExist) {
-			for _, m := range made {
-				os.Remove(m)
+	o.pruned.Store(true)
+	return nil
+}
+
+// learnSpace records, after a fsync of a space's directory, the object
+// directories it held when the fsync began, by the identities read then,
+// as known durable.
+func (o *objects) learnSpace(ids map[string]dirID) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for d, id := range ids {
+		o.known[d] = id
+	}
+}
+
+// isSpace reports whether a directory is a space's, which holds the
+// object directories.
+func (o *objects) isSpace(dir string) bool {
+	return dir == o.spaceDir(spaceEntries) || dir == o.spaceDir(spaceContents)
+}
+
+// pruneAge is how long an object directory stays empty before a prune
+// removes it; a variable so a test can shorten it.
+var pruneAge = time.Hour
+
+// prune removes the object directories left empty for pruneAge, and
+// syncs the spaces it removed from. One a pack has just emptied changed
+// when it was emptied, and stays: a store being written fills it again,
+// and removing it would have the next commits make it again and sync
+// its space each time, after every pack. A directory a writer is
+// putting an object in holds its temporary file, so it is not empty and
+// stays; one removed under a writer that found it a moment before is
+// made again by that writer. It runs under the gc lock.
+func (o *objects) prune() error {
+	// Where no generation tells a directory made again from the one a
+	// prune removed, none is removed: a store there keeps what it made,
+	// and knows its directories by device and inode, as before.
+	if id, ok := dirIdentity(o.spaceDir(spaceContents)); !ok || !id.hasGen {
+		return nil
+	}
+	old := time.Now().Add(-pruneAge)
+	for _, sp := range []space{spaceEntries, spaceContents} {
+		space := o.spaceDir(sp)
+		ents, err := os.ReadDir(space)
+		if err != nil {
+			continue
+		}
+		removed := false
+		for _, e := range ents {
+			if !e.IsDir() {
+				continue
 			}
-			return err
+			d := filepath.Join(space, e.Name())
+			if info, err := e.Info(); err != nil || info.ModTime().After(old) {
+				continue
+			}
+			if more, err := os.ReadDir(d); err != nil || len(more) > 0 {
+				continue
+			}
+			if err := o.markPruned(); err != nil {
+				return err
+			}
+			if os.Remove(d) == nil {
+				removed = true
+				o.mu.Lock()
+				delete(o.known, d)
+				o.mu.Unlock()
+			}
+		}
+		if removed {
+			if err := o.fsyncDir(space); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
 		}
 	}
-	if err := o.fsyncDir(space); err != nil {
-		for _, m := range made {
-			os.Remove(m)
-		}
-		return err
-	}
-	o.mu.Lock()
-	o.fanned[space] = true
-	o.mu.Unlock()
 	return nil
 }
 
@@ -629,9 +770,28 @@ func (o *objects) flushSet(pend *pendSet) error {
 		dirs[filepath.Dir(f)] = true
 	}
 	failed, err := syncAll(dirs, func(d string) error {
+		var ids map[string]dirID
+		if o.isSpace(d) {
+			// What the sync makes durable is what the space held when it
+			// began.
+			ids = map[string]dirID{}
+			ents, _ := os.ReadDir(d)
+			for _, e := range ents {
+				if !e.IsDir() {
+					continue
+				}
+				sub := filepath.Join(d, e.Name())
+				if id, ok := dirIdentity(sub); ok {
+					ids[sub] = id
+				}
+			}
+		}
 		err := o.fsyncDir(d)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
+		}
+		if err == nil && ids != nil {
+			o.learnSpace(ids)
 		}
 		return err
 	})

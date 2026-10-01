@@ -340,8 +340,15 @@ func writePack(o *objects, dir string, objs []packObject) (string, error) {
 	if len(uniq) == 0 {
 		return "", nil
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", err
+		}
+		// A pack directory made here is durable in its parent before a
+		// pack in it stands for what it holds.
+		if err := o.fsyncDir(filepath.Dir(dir)); err != nil {
+			return "", err
+		}
 	}
 	tmp, err := os.CreateTemp(dir, ".tmp-pack-*")
 	if err != nil {

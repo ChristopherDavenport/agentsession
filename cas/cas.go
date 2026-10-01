@@ -14,6 +14,7 @@
 //	  locks/<session id>                  the lock of the process holding the session
 //	  tmp/                                sessions being created, renamed into place whole
 //	  trash/                              sessions a delete renamed away, being removed
+//	  layout                              the layout the store is in, which an open checks
 //	  sweep.lock                          held shared by writers, exclusive by a sweep's last step
 //	  gc.lock                             the lock of a running sweep or pack
 //
@@ -314,6 +315,11 @@ func Open(root string, opts ...Option) (*Store, error) {
 	for _, o := range opts {
 		o(s)
 	}
+	// A layout this release does not read is refused before anything is
+	// written.
+	if err := checkLayout(root); err != nil {
+		return nil, err
+	}
 	dirs := []string{filepath.Join(root, "objects", "contents"), filepath.Join(root, "objects", "entries"), filepath.Join(root, "sessions"), filepath.Join(root, "locks")}
 	if s.readOnly {
 		if info, err := os.Stat(filepath.Join(root, "sessions")); err != nil || !info.IsDir() {
@@ -337,11 +343,67 @@ func Open(root string, opts ...Option) (*Store, error) {
 			return nil, err
 		}
 	}
+	if !s.readOnly {
+		if err := s.markLayout(); err != nil {
+			return nil, err
+		}
+	}
 	// Nothing else store-wide is read here: each session recovers when
 	// it is opened, and the index of which session holds what is built
 	// only if a lookup needs it, so opening a store costs the same at
 	// any size.
 	return s, nil
+}
+
+// layoutFile names the store's layout at its root, so a release that
+// does not read it says so by name, rather than reading files whose
+// shape it does not know as damage. A store without one has the layout
+// of the release that wrote it: per-session logs, or a journal still to
+// migrate.
+const layoutFile = "layout"
+
+// layout is the layout this release writes and reads: per-session logs,
+// each its session's write-ahead log. The store-wide journal's, which
+// wrote no file, was 1.
+const layout = "cas 2"
+
+// ErrLayout is returned by Open for a store whose layout file names a
+// layout this release does not read: one a later release wrote.
+var ErrLayout = errors.New("cas: the store's layout is not one this release reads")
+
+// checkLayout refuses a store whose layout file names another layout.
+func checkLayout(root string) error {
+	data, err := os.ReadFile(filepath.Join(root, layoutFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("cas: %w", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != layout {
+		return fmt.Errorf("%w: %q, where this release reads %q", ErrLayout, got, layout)
+	}
+	return nil
+}
+
+// markLayout writes the layout file of a store that has none and no
+// journal left to migrate, durably, with the store's own directories:
+// the open that made them did not sync them.
+func (s *Store) markLayout() error {
+	p := filepath.Join(s.root, layoutFile)
+	if _, err := os.Stat(p); err == nil {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(s.root, journalFile)); err == nil {
+		return nil // a migration left part way; the next open finishes it
+	}
+	if err := s.objs.fsyncDir(filepath.Join(s.root, "objects")); err != nil {
+		return err
+	}
+	if err := s.objs.writeAtomic(p, []byte(layout+"\n")); err != nil {
+		return fmt.Errorf("cas: layout: %w", err)
+	}
+	return nil
 }
 
 // IsStore reports whether dir looks like the root of a store: it holds

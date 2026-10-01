@@ -31,14 +31,23 @@ func (k keepSet) has(sp space, hash string) bool {
 // fails the sweep, since what it would name cannot be known and a sweep
 // that guessed would remove it.
 //
-// A torn entry is kept by name and not followed when torn is set: the
-// append is one recovery cut, or will, so nothing reads what it names.
-func (s *Store) keepEntry(k keepSet, id string, torn bool) error {
+// A torn entry of an append no commit covers is kept by name and not
+// followed: recovery will cut it, so nothing reads what it names, and a
+// live writer may yet commit it, writing its objects again. One of an
+// append recovery recorded lost, gone for good, is not kept at all, so
+// a sweep removes what a crash left of it, as RFC 0002's retention
+// allows, and Verify stops reporting it.
+func (s *Store) keepEntry(k keepSet, id string, mode keepMode) error {
 	if k.entries[id] {
 		return nil
 	}
 	k.entries[id] = true
+	torn := mode != keepWhole
 	env, err := s.objs.read(spaceEntries, id)
+	if mode == keepLost && err != nil && (errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrCorrupt)) {
+		delete(k.entries, id)
+		return nil
+	}
 	if errors.Is(err, os.ErrNotExist) || (torn && errors.Is(err, ErrCorrupt)) {
 		return nil
 	}
@@ -49,8 +58,14 @@ func (s *Store) keepEntry(k keepSet, id string, torn bool) error {
 	if !ok {
 		return fmt.Errorf("%w: entry %s names no content", ErrCorrupt, id)
 	}
+	alreadyKept := k.contents[c]
 	k.contents[c] = true
 	body, err := s.objs.read(spaceContents, c)
+	if mode == keepLost && !alreadyKept && err != nil && (errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrCorrupt)) {
+		delete(k.entries, id)
+		delete(k.contents, c)
+		return nil
+	}
 	if errors.Is(err, os.ErrNotExist) || (torn && errors.Is(err, ErrCorrupt)) {
 		return nil
 	}
@@ -63,10 +78,25 @@ func (s *Store) keepEntry(k keepSet, id string, torn bool) error {
 	return nil
 }
 
+// keepMode is how a sweep keeps what a log record names.
+type keepMode int
+
+const (
+	// keepWhole follows every reference, and fails on an object that
+	// does not read.
+	keepWhole keepMode = iota
+	// keepTorn keeps an append no commit covers by name, not following
+	// what a crash left torn of it.
+	keepTorn
+	// keepLost keeps an append recovery recorded lost only if what it
+	// names still reads.
+	keepLost
+)
+
 // keepPath adds the path to base.
 func (s *Store) keepPath(k keepSet, base string) error {
 	for id := base; id != "" && !k.entries[id]; {
-		if err := s.keepEntry(k, id, false); err != nil {
+		if err := s.keepEntry(k, id, keepWhole); err != nil {
 			return err
 		}
 		parent, err := s.parentOf(id)
@@ -97,14 +127,16 @@ func (s *Store) keepRecords(k keepSet, recs []logRecord) error {
 		}
 	}
 	for i, r := range recs {
-		torn := r.Op == opLost // an append recovery found gone or torn
-		if r.Op == opAppend {
-			at, lost := lostAt[r.Entry]
-			torn = (lost && at > i) || (r.Lazy && i > synced)
+		mode := keepWhole
+		switch at, lost := lostAt[r.Entry]; {
+		case r.Op == opLost, r.Op == opAppend && lost && at > i:
+			mode = keepLost
+		case r.Op == opAppend && r.Lazy && i > synced:
+			mode = keepTorn
 		}
 		for _, id := range []string{r.Entry, r.Head} {
 			if id != "" {
-				if err := s.keepEntry(k, id, torn); err != nil {
+				if err := s.keepEntry(k, id, mode); err != nil {
 					return err
 				}
 			}
@@ -257,7 +289,7 @@ func (s *Store) packLoose(ctx context.Context) (int, error) {
 		}
 	}
 	if len(objs) == 0 {
-		return 0, nil
+		return 0, s.objs.prune()
 	}
 	// One that is corrupt, or removed as we walked, is left out and left
 	// where it is, for Verify to report.
@@ -275,6 +307,10 @@ func (s *Store) packLoose(ctx context.Context) (int, error) {
 	// that finds it gone looks in the packs.
 	for _, p := range paths {
 		os.Remove(p)
+	}
+	// The directories the loose copies left empty go with them.
+	if err := s.objs.prune(); err != nil {
+		return len(paths), err
 	}
 	return len(paths), nil
 }
@@ -490,6 +526,9 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	if err := s.objs.reloadPacks(true); err != nil {
 		return 0, err
 	}
+	// What goes back loose is durable, its directory's place in its
+	// space included, before any pack that held it goes.
+	rescued := newPendSet()
 	writeLoose := func(sp space, hash string, data []byte, mtime time.Time, replace bool) error {
 		path, err := s.objs.loosePath(sp, hash)
 		if err != nil {
@@ -498,10 +537,15 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		if _, err := os.Stat(path); err == nil && !replace {
 			return nil
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		dir := filepath.Dir(path)
+		made, err := s.objs.objectDir(dir)
+		if err != nil {
 			return err
 		}
 		if err := s.objs.writeAtomic(path, data); err != nil {
+			return err
+		}
+		if err := s.objs.durableDir(dir, made, rescued); err != nil {
 			return err
 		}
 		if !mtime.IsZero() {
@@ -581,6 +625,10 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 			return 0, err
 		}
 	}
+	if err := s.objs.flushSet(rescued); err != nil {
+		lk.release()
+		return 0, err
+	}
 	for _, p := range old {
 		if p.name == newPack {
 			continue
@@ -636,6 +684,9 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	}
 	s.cleanPackDir(young)
 	s.cleanStaging(young)
+	if err := s.objs.prune(); err != nil {
+		return dropped, err
+	}
 	return dropped, nil
 }
 
