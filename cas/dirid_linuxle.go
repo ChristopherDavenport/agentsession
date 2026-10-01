@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64 || riscv64 || loong64)
+//go:build linux && (amd64 || arm64 || riscv64 || loong64 || 386 || arm)
 
 package cas
 
@@ -8,12 +8,6 @@ import (
 	"syscall"
 	"unsafe"
 )
-
-// fsIocGetversion is FS_IOC_GETVERSION, which reads an inode's
-// generation: ext4, XFS and btrfs change it when they reuse the inode.
-// Its number declares a long, so it is this on 64-bit architectures
-// with the generic ioctl encoding; the kernel writes a 4-byte int.
-const fsIocGetversion = 0x80087601
 
 // dirIdentity returns what tells a directory from one made at its path
 // after it was removed: its device, inode and the inode's generation.

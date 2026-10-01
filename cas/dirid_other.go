@@ -1,4 +1,4 @@
-//go:build unix && !(linux && (amd64 || arm64 || riscv64 || loong64))
+//go:build unix && !(linux && (amd64 || arm64 || riscv64 || loong64 || 386 || arm))
 
 package cas
 
@@ -9,9 +9,9 @@ import (
 
 // dirIdentity returns a directory's device and inode. No generation is
 // read here, on other systems and on Linux architectures whose ioctl
-// numbers or byte order differ, so the store never prunes its object
-// directories, and a directory known by device and inode is the one it
-// was.
+// encoding or byte order differ, so this store never prunes its object
+// directories, and trusts a directory known by device and inode only
+// while no other store has pruned them.
 func dirIdentity(path string) (dirID, bool) {
 	info, err := os.Stat(path)
 	if err != nil {

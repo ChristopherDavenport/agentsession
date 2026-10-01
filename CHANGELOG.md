@@ -80,10 +80,13 @@ session is a ref, and its log is its own write-ahead log.
   store holds no more than its objects use; the commit that names an
   object in a directory not yet known durable syncs its space's
   directory too. A directory is known by its inode's generation as well
-  as its inode, on 64-bit little-endian Linux, so one made again in a
+  as its inode, on little-endian Linux, so one made again in a
   removed one's place is not taken for it. Where the filesystem keeps
-  no generation, as tmpfs and overlayfs, or on another system, object
-  directories are never pruned, and are known by device and inode.
+  no generation, as tmpfs and overlayfs, or on another system, a store
+  never prunes its object directories, and knows them by device and
+  inode until some store that reads generations has pruned the store,
+  which it records in `objects/pruned` before the first removal. The
+  first pack syncs the pack directory it makes into `objects`.
   A sweep removes what a crash left of an append recovery recorded
   lost, so `Verify` stops reporting it as corrupt.
 

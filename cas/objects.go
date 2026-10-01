@@ -54,6 +54,8 @@ type objects struct {
 	// noLink is set once the filesystem has refused a hard link, after
 	// which every object is written durably.
 	noLink atomic.Bool
+	// pruned is set once this store has seen the prune marker.
+	pruned atomic.Bool
 	// failure is the first fsync of the store's data that failed, after
 	// which the store writes nothing; syncing holds this process's lock
 	// on fsyncs of each path in flight.
@@ -464,11 +466,45 @@ func (o *objects) durableDir(dir string, made bool, pend *pendSet) error {
 	}
 	o.mu.Unlock()
 	if ok {
-		if id, idOK := dirIdentity(dir); idOK && id == known {
+		// Without a generation, a directory known by device and inode is
+		// the one it was only while nothing has ever pruned the store:
+		// another store, reading generations where this one cannot, may
+		// have, and says so first.
+		if id, idOK := dirIdentity(dir); idOK && id == known && (id.hasGen || !o.everPruned()) {
 			return nil
 		}
 	}
 	return o.remember(pend, "", space)
+}
+
+// prunedFile, in objects, says a prune has removed object directories
+// from the store; it is written, durably, before the first removal.
+const prunedFile = "pruned"
+
+// everPruned reports whether any store has pruned this one.
+func (o *objects) everPruned() bool {
+	if o.pruned.Load() {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(o.root, "objects", prunedFile)); err == nil {
+		o.pruned.Store(true)
+		return true
+	}
+	return false
+}
+
+// markPruned writes the prune marker, durably, before a prune removes
+// anything.
+func (o *objects) markPruned() error {
+	if o.everPruned() {
+		return nil
+	}
+	p := filepath.Join(o.root, "objects", prunedFile)
+	if err := o.writeAtomic(p, nil); err != nil {
+		return err
+	}
+	o.pruned.Store(true)
+	return nil
 }
 
 // learnSpace records, after a fsync of a space's directory, the object
@@ -522,6 +558,12 @@ func (o *objects) prune() error {
 			d := filepath.Join(space, e.Name())
 			if info, err := e.Info(); err != nil || info.ModTime().After(old) {
 				continue
+			}
+			if more, err := os.ReadDir(d); err != nil || len(more) > 0 {
+				continue
+			}
+			if err := o.markPruned(); err != nil {
+				return err
 			}
 			if os.Remove(d) == nil {
 				removed = true

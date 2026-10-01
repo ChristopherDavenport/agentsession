@@ -1860,6 +1860,9 @@ func TestObjectDirsAsNeeded(t *testing.T) {
 	if n := objectDirs(st); n == 0 {
 		t.Error("a pack removed directories it had just emptied, which a store being written fills again")
 	}
+	if id, ok := dirIdentity(st.objs.spaceDir(spaceContents)); !ok || !id.hasGen {
+		return // no generation here: nothing is pruned
+	}
 	old := pruneAge
 	pruneAge = 0
 	defer func() { pruneAge = old }()
@@ -2053,8 +2056,8 @@ func TestRemadeDirNotKnown(t *testing.T) {
 		t.Fatal(err)
 	}
 	space := a.objs.spaceDir(spaceContents)
-	if _, ok := a.objs.known[filepath.Join(space, "5e")]; !ok && runtime.GOOS == "linux" {
-		t.Skip("this filesystem keeps no inode generation")
+	if id, ok := dirIdentity(space); !ok || !id.hasGen {
+		t.Skip("this filesystem keeps no inode generation, and is not pruned")
 	}
 	old := pruneAge
 	pruneAge = 0
@@ -2219,6 +2222,79 @@ func TestNoGenerationNoPrune(t *testing.T) {
 				t.Errorf("%s is not known after the commits that made it", d)
 			}
 		}
+	}
+}
+
+// TestPrunedMarker: a store that reads no generation, and so knows its
+// directories by device and inode, trusts them only until some store,
+// one that reads generations, has pruned the store: from then on every
+// commit into a directory syncs its space.
+func TestPrunedMarker(t *testing.T) {
+	ctx := context.Background()
+	if _, err := os.Stat("/dev/shm"); err != nil {
+		t.Skip("no tmpfs at /dev/shm")
+	}
+	root, err := os.MkdirTemp("/dev/shm", "cas-marker-")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer os.RemoveAll(root)
+	st, _ := Open(root)
+	defer st.Close()
+	if id, ok := dirIdentity(st.objs.spaceDir(spaceContents)); !ok || id.hasGen {
+		t.Skip("this tmpfs keeps generations, or no identity is read")
+	}
+	if _, err := st.PutBlob(ctx, blobIn("7c", 1)); err != nil {
+		t.Fatal(err)
+	}
+	space := st.objs.spaceDir(spaceContents)
+	old := syncDirFile
+	defer func() { syncDirFile = old }()
+	var spaces atomic.Int64
+	syncDirFile = func(d *os.File) error {
+		if d.Name() == space {
+			spaces.Add(1)
+		}
+		return d.Sync()
+	}
+	if _, err := st.PutBlob(ctx, blobIn("7c", 2)); err != nil {
+		t.Fatal(err)
+	}
+	if spaces.Load() != 0 {
+		t.Fatal("a known directory, never pruned, synced its space")
+	}
+	// Another store, one that reads generations, pruned the store.
+	os.WriteFile(filepath.Join(root, "objects", prunedFile), nil, 0o600)
+	if _, err := st.PutBlob(ctx, blobIn("7c", 3)); err != nil {
+		t.Fatal(err)
+	}
+	if spaces.Load() == 0 {
+		t.Error("a directory known by device and inode was trusted after another store pruned")
+	}
+}
+
+// TestPackDirDurable: the pack directory the first pack makes is synced
+// into objects before a pack in it stands for what it holds.
+func TestPackDirDurable(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	fill(t, st, "s", 2)
+	objects := filepath.Join(st.Root(), "objects")
+	old := syncDirFile
+	defer func() { syncDirFile = old }()
+	var synced atomic.Int64
+	syncDirFile = func(d *os.File) error {
+		if d.Name() == objects {
+			synced.Add(1)
+		}
+		return d.Sync()
+	}
+	if _, err := st.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if synced.Load() == 0 {
+		t.Error("the first pack made objects/pack without syncing objects")
 	}
 }
 
