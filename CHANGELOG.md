@@ -61,6 +61,36 @@ which is harmless, and the next writing open puts it back.
   migration, and its commit then meets the tombstone. On a platform
   without flock the lock is nothing, as it is for sweeps. A migration
   that waits a minute for the lock returns `ErrMigrationBusy`. (#166)
+- **`verify` no longer blames early 0.9 writers for a run's source or
+  end.** No release checks either as it is appended, only
+  `VerifyRecords` afterwards, so a mismatch in a file of any minor,
+  0.10 included, now earns its own note: the writer of that run
+  computed it otherwise than `ComputeSource`, or `ComputeReason` and
+  `Run.Pending`. (#165)
+- **`Run.Empty`** reports whether a run's segment holds nothing but its
+  start and end, or nothing after its start for a run that was cut. A
+  run written `resume` that a subscriber refused, or that was killed,
+  before it took up its call is such a run; 0.10's `source` rule still
+  reports it with `ErrSourceMismatch`, and `verify` now notes that it
+  took up nothing, is not corruption, and that format 0.11 is expected
+  to accept it. A resume that adds a message keeps the ordinary note.
+  (#172)
+- **An instructions part named by hash resolves against any text the
+  path gave its id**, as RFC 0001 reads, not only the part in force: a
+  delta that hands back to an agent whose parts left force may name
+  them by hash. Where the id has had several texts, the one with the
+  part's hash is taken, with the source it had, and a hash no text of
+  the id has, the one in force included, now resolves nothing; it was
+  taken unchecked before. A replace or a compaction's checkpoint
+  starts the history afresh. Every file this library wrote reads as
+  before; `InstructionsDelta` still names only parts in force, since a
+  v0.0.18 reader could not resolve the rest. (#173)
+- **RFC 0002 and cas's `ErrCallIDRepeated` exchange error say that a
+  line pushed as a session with a base takes its subsessions with it**,
+  each under an ID derived from the new session's, as `SubsessionID`
+  derives one, theirs in turn likewise, with its `subsession` links
+  pointed at them. Left under the old IDs, the subsession for the
+  repeated call had the ID of the receiver's own. (#163)
 
 ## v0.0.18 - 2026-10-01
 

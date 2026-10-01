@@ -42,6 +42,59 @@ type Settings struct {
 	// Extra carries request members beyond the named ones, keyed by
 	// their wire name.
 	Extra map[string]json.RawMessage `json:"extra,omitempty"`
+
+	// left holds the parts that have left force since the replay
+	// began, a compaction's checkpoint or a replace, which a later
+	// delta may still name by hash; see applyInstructionParts.
+	left *partHistory
+}
+
+// partHistory is the parts that left force, one node per config entry
+// that moved any, newest first. A node is never changed once built, so
+// settings copied by value share it.
+type partHistory struct {
+	byID map[string][]InstructionPart
+	prev *partHistory
+}
+
+// leave returns the history after a delta took the parts in force from
+// prev to now: each part of prev, with its text, that now does not hold
+// as it was. A part left unresolved has no text to name.
+func (h *partHistory) leave(prev, now []InstructionPart) *partHistory {
+	if len(prev) == 0 {
+		return h
+	}
+	kept := make(map[InstructionPart]bool, len(now))
+	for _, p := range now {
+		kept[p] = true
+	}
+	var byID map[string][]InstructionPart
+	for _, p := range prev {
+		if p.ID == "" || p.Unresolved() || kept[p] {
+			continue
+		}
+		if byID == nil {
+			byID = make(map[string][]InstructionPart)
+		}
+		byID[p.ID] = append(byID[p.ID], p)
+	}
+	if byID == nil {
+		return h
+	}
+	return &partHistory{byID: byID, prev: h}
+}
+
+// find returns the part that most recently left force under id with
+// the text hash names.
+func (h *partHistory) find(id, hash string) (InstructionPart, bool) {
+	for ; h != nil; h = h.prev {
+		for _, p := range h.byID[id] {
+			if HashText(p.Text) == hash {
+				return p, true
+			}
+		}
+	}
+	return InstructionPart{}, false
 }
 
 // UnmarshalJSON decodes a checkpoint, taking instructions_omitted only
@@ -121,7 +174,8 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 		if c.Replace {
 			prev = nil
 		}
-		out.InstructionsParts = applyInstructionParts(prev, c.InstructionsParts)
+		out.InstructionsParts = applyInstructionParts(prev, c.InstructionsParts, out.left)
+		out.left = out.left.leave(prev, out.InstructionsParts)
 		out.Instructions = JoinInstructions(out.InstructionsParts)
 		if c.Instructions != nil && unresolvedParts(out.InstructionsParts) {
 			// A part the path cannot resolve has no text to join, so
@@ -133,6 +187,7 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 		// One string replaces the composition: the parts no longer
 		// describe what is in force.
 		out.Instructions = *c.Instructions
+		out.left = out.left.leave(out.InstructionsParts, nil)
 		out.InstructionsParts = nil
 	}
 	if c.Reasoning != nil {
@@ -187,12 +242,13 @@ func JoinInstructions(parts []InstructionPart) string {
 
 // applyInstructionParts resolves a delta's ordered list against the
 // parts in force: a part carrying text sets it, a part carrying a
-// hash alone keeps the text the path has, a keep takes the next parts
-// in force as they are, and a part the list leaves out is gone. A
-// hash whose part is not on the path is kept as it was written, and
-// so is a keep that runs past the parts in force or takes one the
-// list names elsewhere, so a reader can see that the text is missing
-// rather than read an empty part as empty text.
+// hash alone takes the text the path has given its id with that hash,
+// in force or, from left, one that has since left force, a keep takes
+// the next parts in force as they are, and a part the list leaves out
+// is gone. A hash no text of its id on the path has is kept as it was
+// written, and so is a keep that runs past the parts in force or takes
+// one the list names elsewhere, so a reader can see that the text is
+// missing rather than read an empty part as empty text.
 //
 // A keep counts from a cursor into the parts in force: an element
 // naming a part in force moves it to just after that part, a keep
@@ -201,7 +257,7 @@ func JoinInstructions(parts []InstructionPart) string {
 // a writer spells one. An element with neither an id nor a keep, or a
 // hash or keep over a part the path itself could not rebuild, leaves
 // the part unresolved.
-func applyInstructionParts(prev, delta []InstructionPart) []InstructionPart {
+func applyInstructionParts(prev, delta []InstructionPart, left *partHistory) []InstructionPart {
 	byID := make(map[string]InstructionPart, len(prev))
 	at := make(map[string]int, len(prev))
 	for i, p := range prev {
@@ -243,6 +299,11 @@ func applyInstructionParts(prev, delta []InstructionPart) []InstructionPart {
 		next := InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source}
 		if p.Text == "" && p.Hash != "" {
 			old, ok := byID[p.ID]
+			if !ok || !old.Unresolved() && HashText(old.Text) != p.Hash {
+				// Not the text in force: a text the id had before, or
+				// none.
+				old, ok = left.find(p.ID, p.Hash)
+			}
 			switch {
 			case ok && !old.Unresolved():
 				next.Text = old.Text
@@ -250,8 +311,9 @@ func applyInstructionParts(prev, delta []InstructionPart) []InstructionPart {
 					next.Source = old.Source
 				}
 			default:
-				// Not on the path, or on it without its text: the hash
-				// resolves against nothing.
+				// No text of the id's on the path has the hash, or the
+				// part in force has none: the hash resolves against
+				// nothing.
 				next.Hash = p.Hash
 			}
 		}

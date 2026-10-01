@@ -64,6 +64,50 @@ func TestSourceShape(t *testing.T) {
 	}
 }
 
+// TestEmptyResume: a resume refused before it takes up its call, or
+// cut, holds nothing but its start and end; 0.10's rule still reports
+// it, and Run.Empty tells it from a resume that adds a message (#172).
+func TestEmptyResume(t *testing.T) {
+	held := "start user calls:a resp hold:a end:input_required "
+	for _, tt := range []struct {
+		name, script string
+		empty        bool
+	}{
+		{"refused", held + "start:resume end:error", true},
+		{"cut", held + "start:resume", true},
+		{"a message", held + "start:resume user resp end:done", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := New(Header{Records: AllRecords})
+			for _, e := range seg(t, tt.script) {
+				b := e.Base()
+				b.ID, b.Parent = "", ""
+				if r, ok := e.(*RunEntry); ok && r.IsEnd() {
+					if end, err := s.EndRun(r.Reason, ""); err == nil {
+						e = end
+					}
+				}
+				if _, err := s.Append(e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrSourceMismatch) {
+				t.Errorf("VerifyRecords = %v, want ErrSourceMismatch", err)
+			}
+			runs, err := s.Runs(s.Leaf())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := runs[len(runs)-1].Empty(); got != tt.empty {
+				t.Errorf("Empty = %v, want %v", got, tt.empty)
+			}
+			if runs[0].Empty() {
+				t.Error("the first run, which made a call, is empty")
+			}
+		})
+	}
+}
+
 // TestForkPromise: the rules resting on a header's records promise
 // apply to what the session wrote, after its base; a fork promising
 // dispatch of a session that promised nothing verifies, and its own
