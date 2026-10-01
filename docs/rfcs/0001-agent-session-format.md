@@ -337,8 +337,14 @@ a hand-written file can.
 Preservation is of members, not bytes. A rewriter MAY re-serialise a
 line, since both hashes are over canonical forms and verification does
 not depend on the bytes a file happens to carry; a projection from a
-store writes canonical lines. `sha256:` is the only prefix, and a reader
-MUST refuse an `id` carrying another.
+store writes canonical lines. An `id` is the hash of the line, not of
+any reader's model of the entry: a reader MUST compute both hashes from
+the line's own members in canonical form, and where a decode would hash
+differently, the decode is wrong. A reader that verifies a line from its
+canonical bytes alone, decoding nothing, and one that decodes it reach
+the same answer, and a rewriter that changes no member of a line writes
+each back as the line held it, present or absent. `sha256:` is the only
+prefix, and a reader MUST refuse an `id` carrying another.
 
 A reader MUST verify each entry's `id` by computing its content hash and
 then its envelope hash, and MUST report a line that fails. It is

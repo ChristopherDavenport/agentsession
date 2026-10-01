@@ -31,6 +31,27 @@ that a released minor's rules do not change. (#132)
   notes an early 0.9 writer only for a file that declared 0.9; for a
   file of an earlier minor it notes that the minor did not forbid what
   failed. (#134)
+- **`Scan` verifies a session file without decoding its entries**:
+  each line's I-JSON test, its `id` against the hash of its canonical
+  bytes, its `ts` spelling, its parent and its `parents` under the
+  convergence rules, and the types of `legacy_id` and `normalised`, with
+  the same checks `Read` makes, blank lines and a cut last line taken
+  as `Read` takes them; it yields each entry as a `RawEntry` whose
+  `Decode` decodes it when asked. It reads about 4 times as fast as
+  `Read` on small lines and 5 times on 100 KB ones. A fuzz
+  test holds `Scan` to `Read`. A file before 0.5, which `Read`
+  migrates, is refused with `ErrScanMigrated`. (#127)
+- **`Read` hashes the line, not its own encoding of the entry**: RFC
+  0001 now says a reader computes both hashes from the line's members in
+  canonical form. A line `Read` refused with `ErrBadID` because its
+  fields wrote the entry back otherwise — a `link` with no `session`, a
+  `label` with no `target`, a message whose `content` is a string —
+  now reads, and `Write`, `MarshalEntry` and every store write it back
+  as read, with its id, until a caller changes a member. A line whose
+  id was computed over such a re-encoding is now refused. A `parents`
+  reference is read by its members' exact names, so `{"Entry": …}`
+  names no entry and is refused, and `"parent": ""` is refused with
+  `ErrBadID`: a root's parent is `null`. (#127)
 - **`export.ItemsFrom` makes up call IDs in the alphabet and length
   every provider takes**: a repeated native ID's characters outside
   letters, digits, `_` and `-` become `_`, and the made-up ID is at

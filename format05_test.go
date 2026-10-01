@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -688,15 +689,30 @@ func TestNestedMembersReadAsWritten(t *testing.T) {
 			}
 		})
 	}
-	// What the reader does not read as written stays refused.
+	// A line whose members the fields write back otherwise — a member
+	// they add where the line has none — is still the line its id is
+	// the hash of: it reads, and is written back as read.
 	for name, body := range map[string]string{
 		"run end without pending":   `"type":"run","run_id":"r","phase":"end","reason":"done"`,
 		"label without target":      `"type":"label","label":"x"`,
 		"compaction, no first_kept": `"type":"compaction","summary":{"type":"message","role":"user","content":[{"type":"input_text","text":"s"}]}`,
 	} {
-		t.Run("refused: "+name, func(t *testing.T) {
-			if _, err := Read(strings.NewReader(head + "\n" + hashed(body) + "\n")); err == nil {
-				t.Error("Read accepted a line the reader does not read as written")
+		t.Run("read as written: "+name, func(t *testing.T) {
+			line := hashed(body)
+			s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			var buf bytes.Buffer
+			if err := Write(&buf, s); err != nil {
+				t.Fatal(err)
+			}
+			want, _ := jcs.Transform([]byte(line))
+			if got := strings.Split(strings.TrimSpace(buf.String()), "\n")[1]; got != string(want) {
+				t.Errorf("rewrite changed the line\nread  %s\nwrote %s", line, got)
+			}
+			if _, err := Read(&buf); err != nil {
+				t.Errorf("read back: %v", err)
 			}
 		})
 	}

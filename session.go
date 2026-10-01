@@ -374,7 +374,7 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 	if err := s.checkParentRule(b.Parent); err != nil {
 		return Result{}, err
 	}
-	if b.Timestamp.IsZero() {
+	if b.Timestamp.IsZero() && b.tsRaw == "" { // a read entry's zero ts is its ts
 		b.Timestamp = s.now()
 	}
 	b.Timestamp = b.Timestamp.UTC()
@@ -791,29 +791,39 @@ func sortParents(refs []EntryRef) {
 // into another session is not resolvable here and is only checked for
 // shape; whether that session exists is a question for a store.
 func (s *Session) checkParents(b *EntryBase) error {
-	if len(b.Parents) == 0 {
+	return checkRefs(b.ID, b.Parent, s.header.ID, b.Parents, func(id string) bool {
+		_, ok := s.byID[id]
+		return ok
+	})
+}
+
+// checkRefs is checkParents for an entry id under parent in session,
+// with has saying whether an entry is in the session yet. Read, Append
+// and Scan all hold parents to it, so they cannot differ on it.
+func checkRefs(id, parent, session string, refs []EntryRef, has func(string) bool) error {
+	if len(refs) == 0 {
 		return nil
 	}
-	seen := make(map[EntryRef]bool, len(b.Parents))
-	for _, r := range b.Parents {
+	seen := make(map[EntryRef]bool, len(refs))
+	for _, r := range refs {
 		if r.Entry == "" {
-			return fmt.Errorf("%w: entry %s names a predecessor with no entry id", ErrBadConvergence, b.ID)
+			return fmt.Errorf("%w: entry %s names a predecessor with no entry id", ErrBadConvergence, id)
 		}
-		if r.Session == s.header.ID {
+		if r.Session == session {
 			r.Session = ""
 		}
 		if seen[r] {
-			return fmt.Errorf("%w: entry %s names %s twice", ErrBadConvergence, b.ID, r.Entry)
+			return fmt.Errorf("%w: entry %s names %s twice", ErrBadConvergence, id, r.Entry)
 		}
 		seen[r] = true
 		if r.Session != "" {
 			continue
 		}
-		if r.Entry == b.Parent {
-			return fmt.Errorf("%w: entry %s converges its own parent %s", ErrBadConvergence, b.ID, r.Entry)
+		if r.Entry == parent {
+			return fmt.Errorf("%w: entry %s converges its own parent %s", ErrBadConvergence, id, r.Entry)
 		}
-		if _, ok := s.byID[r.Entry]; !ok {
-			return fmt.Errorf("%w: entry %s converges %s, which is not in this session yet", ErrBadConvergence, b.ID, r.Entry)
+		if !has(r.Entry) {
+			return fmt.Errorf("%w: entry %s converges %s, which is not in this session yet", ErrBadConvergence, id, r.Entry)
 		}
 	}
 	return nil
