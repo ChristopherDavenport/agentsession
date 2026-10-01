@@ -42,7 +42,14 @@ The format is unchanged. RFC 0002's exchange section gains a refusal.
   spread across directories, each object's directory. Committing 101
   lazy appends takes 13 ms, down from 26 ms; 500 take 32 ms, down from
   106 ms. A store also packs on its own once it holds 64 packs, which
-  merges the smallest. (#142)
+  merges the smallest: it looks after each `Sync` and `Release` and at
+  `Open`, so packs a killed process left are merged by the next. A
+  caller's `Pack` or `Sweep` waits for a pack the store runs on its own
+  rather than return `ErrSweepRunning`. (#142)
+- **cas: one corrupt object no longer keeps every pack from merging.**
+  A merge takes an object a pack holds damaged from another pack that
+  holds it whole, and keeps only a pack holding an object no pack has a
+  good copy of, for `Verify` to report.
 
 ## v0.0.16 - 2026-10-01
 

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 )
@@ -107,30 +108,99 @@ func TestCommitPackBelowMin(t *testing.T) {
 }
 
 // TestCommitPacksMerge: once commits have written autoPackPacks packs,
-// the store packs on its own and merges them.
+// the store packs on its own after the next commit and merges them,
+// without waiting for autoPackEvery appends or Close.
 func TestCommitPacksMerge(t *testing.T) {
 	ctx := context.Background()
 	old := autoPackPacks
 	autoPackPacks = 4
 	defer func() { autoPackPacks = old }()
-	st, _ := Open(t.TempDir(), WithSync(SyncNever))
+	st, err := Open(t.TempDir(), WithSync(SyncNever))
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer st.Close()
-	st.Create(ctx, agentsession.Header{ID: "s"})
-	for c := range autoPackPacks {
+	if _, err := st.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	most := 0
+	for c := range 3 * autoPackPacks {
 		for i := range commitPackMin {
 			mustAppend(t, st, "s", item(fmt.Sprintf("commit %d lazy %d", c, i)))
 		}
 		if err := st.Sync(ctx); err != nil {
 			t.Fatal(err)
 		}
+		st.background.Wait()
+		most = max(most, st.objs.packCount())
 	}
-	before := len(st.objs.packList())
-	if before < autoPackPacks {
-		t.Fatalf("%d packs, want %d", before, autoPackPacks)
+	if most > autoPackPacks {
+		t.Errorf("the store reached %d packs, past %d", most, autoPackPacks)
 	}
-	st.maybePack()
-	if after := len(st.objs.packList()); after >= before {
-		t.Errorf("%d packs after an automatic pack, %d before", after, before)
+}
+
+// TestConsolidatePastCorrupt: an object that fails its name in one pack
+// keeps that pack, and only that one, from being merged away; the rest
+// merge.
+func TestConsolidatePastCorrupt(t *testing.T) {
+	ctx := context.Background()
+	old := autoPackPacks
+	autoPackPacks = 1 << 30
+	defer func() { autoPackPacks = old }()
+	st, err := Open(t.TempDir(), WithSync(SyncNever))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	var bad string
+	const rounds = 6
+	for c := range rounds {
+		for i := range commitPackMin {
+			id := mustAppend(t, st, "s", item(fmt.Sprintf("commit %d lazy %d", c, i)))
+			if bad == "" {
+				bad = id
+			}
+		}
+		if err := st.Sync(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := st.objs.packCount(); n != rounds {
+		t.Fatalf("%d packs, want %d", n, rounds)
+	}
+	d, _ := digestOf(bad)
+	var holder *pack
+	for _, p := range st.objs.packList() {
+		if _, _, ok := p.find(spaceEntries, d); ok {
+			holder = p
+		}
+	}
+	off, _, _ := holder.find(spaceEntries, d)
+	f, err := os.OpenFile(holder.path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteAt([]byte{'!'}, off)
+	f.Close()
+	if _, err := st.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, p := range st.objs.packList() {
+		names[p.name] = true
+	}
+	if len(names) != 2 || !names[holder.name] {
+		t.Errorf("after merging: %d packs, the damaged one kept: %v", len(names), names[holder.name])
+	}
+	rep, err := st.Verify(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.OK() {
+		t.Error("Verify no longer reports the damaged object")
 	}
 }
 
@@ -202,5 +272,98 @@ func TestVerifyLooseBesidePack(t *testing.T) {
 	os.WriteFile(q, bad, 0o644)
 	if rep, _ := st.Verify(ctx); rep.OK() {
 		t.Error("a corrupt object with no good copy passed")
+	}
+}
+
+// commitPacks makes a store at root holding n commit packs, with the
+// automatic pack held off, and closes it.
+func commitPacks(t *testing.T, root string, n int) {
+	t.Helper()
+	ctx := context.Background()
+	old := autoPackPacks
+	autoPackPacks = 1 << 30
+	defer func() { autoPackPacks = old }()
+	st, err := Open(root, WithSync(SyncNever))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	for c := range n {
+		for i := range commitPackMin {
+			mustAppend(t, st, "s", item(fmt.Sprintf("commit %d lazy %d", c, i)))
+		}
+		if err := st.Sync(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSweepBesideOwnPack: a caller's Sweep or Pack waits for the pack a
+// store runs on its own, here the one Open starts for the packs a
+// killed process left, rather than finding the gc lock taken.
+func TestSweepBesideOwnPack(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	commitPacks(t, root, 8)
+	old := autoPackPacks
+	autoPackPacks = 4
+	defer func() { autoPackPacks = old }()
+	for _, op := range []string{"sweep", "pack"} {
+		st, err := Open(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if op == "sweep" {
+			_, err = st.Sweep(ctx, time.Hour)
+		} else {
+			_, err = st.Pack(ctx)
+		}
+		if err != nil {
+			t.Errorf("a %s beside the store's own: %v", op, err)
+		}
+		st.Close()
+	}
+}
+
+// TestPackCountReloads: a store whose packs another process merged
+// does not go on packing on a count it last saw.
+func TestPackCountReloads(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	commitPacks(t, root, 8)
+	old := autoPackPacks
+	autoPackPacks = 1 << 30
+	a, err := Open(root, WithSync(SyncNever))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if _, err := a.Open(ctx, "s"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b.Close()
+	autoPackPacks = 4
+	defer func() { autoPackPacks = old }()
+	if a.objs.packCount() < autoPackPacks {
+		t.Fatalf("the first store already sees %d packs", a.objs.packCount())
+	}
+	if err := a.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	a.background.Wait()
+	if n := a.objs.packCount(); n >= autoPackPacks {
+		t.Errorf("after a look, the store still counts %d packs", n)
 	}
 }

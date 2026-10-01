@@ -39,6 +39,8 @@ type objects struct {
 	// bad records packs whose index does not read, reported by Verify
 	// and skipped, so one damaged index does not close the store.
 	bad map[string]error
+	// nPacks is len(packs), read without mu by the append path.
+	nPacks atomic.Int32
 
 	// Written but not yet fsynced, under a lazy sync policy: files and
 	// the directories they were renamed into.
@@ -175,8 +177,14 @@ func (o *objects) reloadPacks(force bool) error {
 	}
 	sort.Slice(next, func(i, j int) bool { return next[i].name < next[j].name })
 	o.packs = next
+	o.nPacks.Store(int32(len(next)))
 	o.packStat = info.ModTime()
 	return nil
+}
+
+// packCount is how many packs the store's list holds.
+func (o *objects) packCount() int {
+	return int(o.nPacks.Load())
 }
 
 func (o *objects) packList() []*pack {
@@ -1065,6 +1073,7 @@ func (o *objects) close() {
 		p.close()
 	}
 	o.packs = nil
+	o.nPacks.Store(0)
 }
 
 // eachLoose calls fn for every loose object of a space, and for every
