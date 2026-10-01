@@ -7,6 +7,56 @@ versions may break the API.
 
 ## Unreleased
 
+**The format is 0.10**, and a 0.9 file is a 0.10 file. 0.9's rules
+were amended in place after writers of it were released, so a 0.9
+header could not say which a file was written under; a writer now
+raises a 0.9 file to 0.10 before it appends, so
+every 0.9 reader, v0.0.12 to v0.0.17, refuses the file from then on,
+the early writers among them. **Upgrade every reader of a store,
+agentturn, agentkit and agenteval included, before any writer runs
+this release.** RFC 0001 is draft 0.10, and Versioning gains the rule
+that a released minor's rules do not change. (#132)
+
+- **An answer may end a call dispatched only elsewhere in the
+  session.** A writer that rebases to a point between a call and its
+  `dispatch` leaves a call that may have run; 0.10 lets an `answer` end
+  it, where 0.9 left only a `reject`, which says the call never ran, or
+  a second `dispatch`. Such a `reject` still reads, and RFC 0001 says a
+  writer SHOULD NOT write one. Only a `dispatch` naming the call by its
+  call ID counts. `Call.State` reads such a call as `CallUnknown`, not
+  `CallNeverStarted`, and the otel exporter likewise.
+  `Session.Dispatches` returns a call's dispatches on every branch.
+  (#157)
+- **`Session.DeclaredFormat`** returns the format a file's header named
+  when it was read, before `Read` raised it in memory, and `verify`
+  notes an early 0.9 writer only for a file that declared 0.9; for a
+  file of an earlier minor it notes that the minor did not forbid what
+  failed. (#134)
+- **`Scan` verifies a session file without decoding its entries**:
+  each line's I-JSON test, its `id` against the hash of its canonical
+  bytes, its `ts` spelling, its parent and its `parents` under the
+  convergence rules, and the types of `legacy_id` and `normalised`, with
+  the same checks `Read` makes, blank lines and a cut last line taken
+  as `Read` takes them; it yields each entry as a `RawEntry` whose
+  `Decode` decodes it when asked. It reads about 4 times as fast as
+  `Read` on small lines and 5 times on 100 KB ones. A fuzz
+  test holds `Scan` to `Read`. A file before 0.5, which `Read`
+  migrates, is refused with `ErrScanMigrated`. (#127)
+- **`Read` hashes the line, not its own encoding of the entry**: RFC
+  0001 now says a reader computes both hashes from the line's members in
+  canonical form. A line `Read` refused with `ErrBadID` because its
+  fields wrote the entry back otherwise — a `link` with no `session`, a
+  `label` with no `target`, a message whose `content` is a string —
+  now reads, and `Write`, `MarshalEntry` and every store write it back
+  as read, with its id, until a caller changes a member. A line whose
+  id was computed over such a re-encoding is now refused. A `parents`
+  reference is read by its members' exact names, so `{"Entry": …}`
+  names no entry and is refused, and `"parent": ""` is refused with
+  `ErrBadID`: a root's parent is `null`. (#127)
+- **`export.ItemsFrom` makes up call IDs in the alphabet and length
+  every provider takes**: a repeated native ID's characters outside
+  letters, digits, `_` and `-` become `_`, and the made-up ID is at
+  most 64 characters, as agentturn's renamer has it. (#136)
 - **cas: `Store.Repair` rewrites a session's damaged log, and
   `agentsession repair <cas-root> <id>` runs it.** A log record that
   fails its checksum keeps the session from opening and every sweep of

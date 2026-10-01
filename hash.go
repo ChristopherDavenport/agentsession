@@ -167,6 +167,13 @@ func entryHashesCanonical(c []byte) (id, content string, err error) {
 	if !ok {
 		return EntryHashes(c)
 	}
+	id, content = memberHashes(c, members)
+	return id, content, nil
+}
+
+// memberHashes is entryHashesCanonical for c already sliced into its
+// members.
+func memberHashes(c []byte, members []canonicalMember) (id, content string) {
 	body := make([]byte, 0, len(c))
 	body = append(body, '{')
 	env := map[string][]byte{}
@@ -208,7 +215,7 @@ func entryHashesCanonical(c []byte) (id, content string, err error) {
 	envJSON = append(envJSON, orNull(env["type"])...)
 	envJSON = append(envJSON, '}')
 	sum = sha256.Sum256(envJSON)
-	return HashPrefix + hex.EncodeToString(sum[:]), content, nil
+	return HashPrefix + hex.EncodeToString(sum[:]), content
 }
 
 // canonicalMember is one member of a compact object: its key, the whole

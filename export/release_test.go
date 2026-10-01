@@ -284,3 +284,35 @@ func TestItemsFromRepeatedWithinAStep(t *testing.T) {
 		t.Errorf("calls and outputs = %s, want %s", strings.Join(got, " "), want)
 	}
 }
+
+// TestItemsFromMadeUpAlphabet: an ID ItemsFrom makes up for a repeated
+// native ID keeps to the alphabet and length every provider takes,
+// whatever the native ID holds; the native ID itself, the first time,
+// is kept as the producer wrote it (#136).
+func TestItemsFromMadeUpAlphabet(t *testing.T) {
+	long := strings.Repeat("x", 70)
+	var calls []atif.ToolCall
+	var results []atif.ObservationResult
+	for _, native := range []string{"toolu:01 A", "toolu:01 A", long, long} {
+		calls = append(calls, atif.ToolCall{ToolCallID: native, FunctionName: "f", Arguments: map[string]any{}})
+		results = append(results, atif.ObservationResult{SourceCallID: native, Content: atif.Text("r")})
+	}
+	doc := &atif.Trajectory{SchemaVersion: atif.SchemaVersion, Agent: atif.Agent{Name: "x", Version: "1"}, Steps: []atif.Step{
+		{StepID: 1, Source: atif.SourceUser, Message: atif.Text("go")},
+		{StepID: 2, Source: atif.SourceAgent, Message: atif.Text(""), ToolCalls: calls, Observation: &atif.Observation{Results: results}},
+	}}
+	items, err := ItemsFrom(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range items {
+		if v, ok := it.(*openresponses.FunctionCall); ok {
+			got = append(got, v.CallID)
+		}
+	}
+	want := []string{"toolu:01 A", "toolu_01_A_2", long, long[:62] + "_2"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("call IDs = %q, want %q", got, want)
+	}
+}

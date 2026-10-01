@@ -163,7 +163,8 @@ func verifyStore(root string, stdout io.Writer) error {
 	// A session that fails to list or to open is one the store's walk
 	// has reported; it is named here as unchecked, and not counted
 	// again.
-	checked, failing, unchecked, anyEarly := 0, 0, 0, false
+	checked, failing, unchecked := 0, 0, 0
+	notes := map[string]bool{}
 	var ids []string
 	for sum, err := range st.List(ctx, agentsession.ListFilter{}) {
 		if err != nil {
@@ -181,13 +182,17 @@ func verifyStore(root string, stdout io.Writer) error {
 			continue
 		}
 		checked++
-		if problem, early := checkSession(s, id+": ", stdout, false); problem {
+		if problem, note := checkSession(s, id+": ", stdout, false); problem {
 			failing++
-			anyEarly = anyEarly || early
+			if note != "" {
+				notes[note] = true
+			}
 		}
 	}
-	if anyEarly {
-		fmt.Fprintln(stdout, earlyNote)
+	for _, n := range []string{earlyNote, earlierNote} {
+		if notes[n] {
+			fmt.Fprintln(stdout, n)
+		}
 	}
 	fmt.Fprintf(stdout, "%d sessions' hashes and records checked, %d failed, %d not checked\n", checked, failing, unchecked)
 	if !rep.OK() || failing > 0 || unchecked > 0 {

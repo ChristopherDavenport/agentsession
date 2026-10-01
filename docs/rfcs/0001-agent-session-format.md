@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.9
+Status: draft 0.10
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -69,7 +69,8 @@ session worth training on.
 - **Lossless.** A conforming file contains enough to rebuild every
   request the model received, byte for byte where the payload allows.
 - **Resumable.** For every call without an output, a reader can tell
-  from the path whether it was never started, was in flight when the
+  from the path, and for a call a rebase left above its `dispatch` from
+  the rest of the session, whether it was never started, was in flight when the
   record stopped, is waiting on an answer, or was rejected or answered
   and is owed only its output, in any file whose header says the
   writer records dispatches and decisions.
@@ -190,7 +191,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.9","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.10","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -336,8 +337,14 @@ a hand-written file can.
 Preservation is of members, not bytes. A rewriter MAY re-serialise a
 line, since both hashes are over canonical forms and verification does
 not depend on the bytes a file happens to carry; a projection from a
-store writes canonical lines. `sha256:` is the only prefix, and a reader
-MUST refuse an `id` carrying another.
+store writes canonical lines. An `id` is the hash of the line, not of
+any reader's model of the entry: a reader MUST compute both hashes from
+the line's own members in canonical form, and where a decode would hash
+differently, the decode is wrong. A reader that verifies a line from its
+canonical bytes alone, decoding nothing, and one that decodes it reach
+the same answer, and a rewriter that changes no member of a line writes
+each back as the line held it, present or absent. `sha256:` is the only
+prefix, and a reader MUST refuse an `id` carrying another.
 
 A reader MUST verify each entry's `id` by computing its content hash and
 then its envelope hash, and MUST report a line that fails. It is
@@ -892,7 +899,11 @@ output after it is a call the harness answered and has not yet written
 the output of, since the record stopped between the two; the harness
 that continues the path writes that output and nothing else for the
 call. When the header names `dispatch` in `records`, a call with neither
-was never started; otherwise the file does not say whether it ran. A
+on its path was never started, unless the session holds a `dispatch`
+naming it elsewhere, off the path: a writer that rebases to a point
+between a call and its `dispatch` leaves the call on the new path with
+no `dispatch`, and it may have run. Otherwise the file does not say
+whether it ran. A
 writer that names `dispatch` MUST write it, durably, before the tool
 runs, and no writer may write it for a call that was rejected or
 answered or that has its output: the output ends the call, and a harness
@@ -950,7 +961,10 @@ A call's fate was decided outside the tool.
     `dispatch` and no other `decision` ever follow, and a
     `function_call_output` for the call follows that carries `reason`.
     A writer writes `reject` only for a call with no `dispatch` and no
-    output on the path; one that may have run is ended by `answer`. A
+    output on the path, and SHOULD NOT for one with a `dispatch` for it
+    elsewhere in the session, which may have run and is ended by
+    `answer`; a reader accepts such a `reject`, which 0.9 left as the
+    only way to end that call without a second `dispatch`. A
     `reject` with no output after it is a call the harness refused and
     has not yet written the output of, since the record stopped between
     the two; the harness that continues the path writes that output and
@@ -969,9 +983,9 @@ A call's fate was decided outside the tool.
     therefore unknown. No `dispatch` and no other `decision` follow it,
     and a `function_call_output` for the call follows; `by` says who
     answered and `reason` SHOULD say why. A writer writes `answer` only
-    for a call with no output on the path, and with a `dispatch` on it
-    or, in a file whose header does not name `dispatch` in `records`,
-    without one. A call the record shows never started did not run, and
+    for a call with no output on the path, and with a `dispatch` for it
+    on the path or elsewhere in the session or, in a file whose header
+    does not name `dispatch` in `records`, without one. A call the record shows never started did not run, and
     a writer that ends one without running it writes `reject`. A call
     whose tool ran and whose result the harness then withheld, such as
     one a hook blocked after the tool returned, is ended by `answer`,
@@ -980,8 +994,9 @@ A call's fate was decided outside the tool.
   A call may carry several decisions on the path, in order. An answered
   `hold` is followed by a `proceed`, a `dispatch`, a `reject` or an
   `answer` on the same call and stays as written, a `reject` only when
-  no `dispatch` came before it and an `answer` only when one did or
-  the file does not record dispatches; a call still held is what makes
+  no `dispatch` came before it and an `answer` only when one came
+  before it on the path, or the session holds one for the call
+  elsewhere, or the file does not record dispatches; a call still held is what makes
   a run end `input_required`. The decision that answers a `hold` says
   by its verdict what the answer did. A writer SHOULD write `proceed`
   only when it answers an earlier `hold` or carries `args`, or lets a
@@ -1461,6 +1476,15 @@ earlier than 0.5 is out of scope: no writer of such files remains, a
 reader migrates one only to read it, and a raised header would have
 its entries read as hashed.
 
+A minor's rules do not change once a writer of it is released, in 0.x
+as after it: what a file of that minor may hold, and how a reader reads
+it, stay as they were, and a change to either is a new minor. A writer
+that appends raises the header to its own minor, as above, so a 0.x
+writer of the earlier minor, which refuses a minor it does not name,
+then refuses the file rather than append what the later one forbids,
+and a reader can tell which rules a file was written under from its
+header.
+
 Adding an optional member to the envelope is a minor change. Changing
 what an existing member means, or what the context algorithm does with
 any member, is major — which is the line an addition has to stay behind
@@ -1470,13 +1494,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.9 reads a 0.5, 0.6, 0.7 or 0.8 file
-as it stands, since 0.6 to 0.9 add optional members and elements and
-the hashes do not change, save for the few rules each minor's changes below say read
+it begins at 1.0. A reader of 0.10 reads a 0.5 to 0.9 file
+as it stands, since 0.6 to 0.9 add optional members and elements, 0.10
+relaxes one rule, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.9 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.10 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -1557,6 +1581,31 @@ item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
 
+## Changes since 0.9
+
+One rule is relaxed and one reading corrected. A `dispatch` for a call
+elsewhere in the session, off the path, now satisfies the `answer`
+rule, and a reader no longer reads the call as never started, in a 0.9
+file as in a 0.10 one: a writer that rebases to a point between a call
+and its `dispatch` leaves a call that may have run, which 0.9 let it
+end only by a `reject`, which says the call never reached its tool, or
+by a second `dispatch`, which says it was handed over again. A 0.9 file
+is a 0.10 file. 0.10 also exists because 0.9's rules were amended in place after
+writers of it were released, so a 0.9 header does not say which of
+them a file was written under, and a writer of an early 0.9 appended
+what later ones forbid without complaint. A writer of 0.10 raises a
+0.9 file's header before it appends, so every reader of 0.9, which
+refuses a minor it does not name, refuses the file from then on, an
+early 0.9 writer among them, and every entry appended after the raise
+was written under the rules this draft states. Readers of 0.9 are
+upgraded before writers of 0.10 reach the files they read. Versioning
+gains the rule that a released minor's rules do not change.
+
+A file raised from 0.9 may still hold entries an early 0.9 writer
+appended before the raise; a reader that finds one of the rules below
+broken in such a file, which it cannot tell from a 0.10 file, reads it
+as broken.
+
 ## Changes since 0.8
 
 One element and a paragraph in the `config` section, a writer's rule in
@@ -1574,7 +1623,7 @@ an output, a `target` that names another call, or a repeated or empty
 
 These rules were added to 0.9 after the reference library first wrote
 it, in the same draft, while 0.9 had been public for less than a day.
-A 0.9 file an earlier writer of this draft produced, or a file such a
+A 0.9 file an earlier writer of 0.9 produced, or a file such a
 writer appended to and raised to 0.9, may break them, and nothing in
 the file says which rules it was written under; a reader that finds
 one broken in a 0.9 file SHOULD say it may come from such a writer

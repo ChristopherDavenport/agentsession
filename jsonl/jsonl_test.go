@@ -790,3 +790,54 @@ func TestRaiseFormatLeavesCurrent(t *testing.T) {
 		t.Error("a session already current was rewritten")
 	}
 }
+
+// TestRaiseFrom09: a 0.9 file reads as declaring 0.9, and the first
+// append raises it to 0.10, so a reader of 0.9 refuses it from then on
+// and the session read again declares 0.10 (#132).
+func TestRaiseFrom09(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, err := jsonl.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, "s", agentsession.NewItemEntry(openresponses.UserText("hello"))); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := st.Path("s")
+	st.Close()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := `"format":"` + agentsession.Format + `"`
+	if err := os.WriteFile(path, []byte(strings.Replace(string(data), current, `"format":"agentsession/0.9"`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err = jsonl.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := st.Open(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.DeclaredFormat() != "agentsession/0.9" || s.Header().Format != agentsession.Format {
+		t.Errorf("opened: declared %s, header %s", s.DeclaredFormat(), s.Header().Format)
+	}
+	if _, err := st.Append(ctx, "s", agentsession.NewItemEntry(openresponses.UserText("again"))); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	if got, _ := os.ReadFile(path); !strings.Contains(string(got), current) {
+		t.Errorf("the append left the header at 0.9")
+	}
+	st, _ = jsonl.Open(root)
+	defer st.Close()
+	if s, err := st.Open(ctx, "s"); err != nil || s.DeclaredFormat() != agentsession.Format {
+		t.Errorf("read again: %v, declared %s", err, s.DeclaredFormat())
+	}
+}

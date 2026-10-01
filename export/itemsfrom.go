@@ -33,9 +33,11 @@ import (
 // A call ID names one call in a session, and ATIF lets a document
 // repeat a tool call ID, across steps as a producer that numbers calls
 // per turn does, or within one. A tool call whose ID an earlier call
-// used, or that has none, gets one of its own: the native ID followed
-// by "_" and a number ("call" when it has none), which a provider that
-// limits call IDs to letters, digits, "_" and "-" still takes. The
+// used, or that has none, gets one of its own: the native ID with every
+// character outside letters, digits, "_" and "-" made "_", cut so the
+// whole is at most 64 characters, followed by "_" and a number ("call"
+// when it has none), which a provider that limits call IDs to that
+// alphabet and length still takes, as agentturn's renamer does. The
 // observation results that name a native ID take the step's calls with
 // it in order, the last taking any results left over; ATIF puts a
 // result in the step of its call, so the renames hold until the next
@@ -47,13 +49,11 @@ func ItemsFrom(doc *atif.Trajectory) (openresponses.Items, error) {
 	// calls with it were given, in order, for its results to take.
 	ids := map[string][]string{}
 	callID := func(native string) string {
-		base := native
-		if base == "" {
-			base = "call"
-		}
+		base := callIDBase(native)
 		id := native
 		for n := 2; id == "" || seen[id]; n++ {
-			id = fmt.Sprintf("%s_%d", base, n)
+			suffix := fmt.Sprintf("_%d", n)
+			id = base[:min(len(base), maxCallID-len(suffix))] + suffix
 		}
 		seen[id] = true
 		ids[native] = append(ids[native], id)
@@ -165,4 +165,24 @@ func argumentsText(args map[string]any) string {
 		return "{}"
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// maxCallID is the longest call ID ItemsFrom makes up, which OpenAI and
+// Anthropic both take.
+const maxCallID = 64
+
+// callIDBase is a native call ID in the alphabet every provider takes
+// for a call ID, letters, digits, '_' and '-', anything else made '_',
+// or "call" when it is empty.
+func callIDBase(native string) string {
+	if native == "" {
+		return "call"
+	}
+	b := []byte(native)
+	for i, c := range b {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			b[i] = '_'
+		}
+	}
+	return string(b)
 }

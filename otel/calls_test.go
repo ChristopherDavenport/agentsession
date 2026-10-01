@@ -139,3 +139,22 @@ func TestForkPrefixCallUnknown(t *testing.T) {
 		t.Errorf("span states %v", got)
 	}
 }
+
+// TestRebasedCallUnknown: a call whose dispatch a rebase left on
+// another branch exports as unknown, as the library reads it (#157).
+func TestRebasedCallUnknown(t *testing.T) {
+	s := agentsession.New(agentsession.Header{Records: agentsession.AllRecords})
+	call, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fa", CallID: "a", Name: "alpha", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(agentsession.NewDispatch("a", call)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Branch(call); err != nil {
+		t.Fatal(err)
+	}
+	if got := callStates(t, s)["execute_tool alpha"]; got != agentsession.CallUnknown.String() {
+		t.Errorf("span state %q, want unknown", got)
+	}
+}

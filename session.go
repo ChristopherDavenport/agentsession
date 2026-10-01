@@ -40,12 +40,19 @@ type Session struct {
 	// callIDs holds the call ID of every function call the session
 	// holds, on any branch: a call ID names one call in a session.
 	callIDs map[string]bool
+	// dispatches holds the dispatches for each call, by target, on
+	// every branch: a rebase above a dispatch leaves a call that may
+	// have run with none on its path.
+	dispatches map[string][]*DispatchEntry
 	// repeated lists the IDs Read met a second time, each treated as
 	// the same entry; unresolved lists the entries a migration could
 	// not rewrite, which keeps a migrated file from being re-emitted.
 	repeated   []string
 	unresolved []string
 	migrated   bool
+	// declared is the format the file's header named when Read met it,
+	// before the header was brought up to this package's.
+	declared string
 }
 
 // New creates an empty session. Header fields left empty are filled:
@@ -57,10 +64,24 @@ func New(h Header) *Session {
 	s := &Session{now: utcNow}
 	h.fill(s.now())
 	s.header = h
+	s.declared = h.Format
 	s.byID = map[string]Entry{}
 	s.callIDs = map[string]bool{}
 	s.children = map[string][]string{}
 	return s
+}
+
+// DeclaredFormat returns the format the session's file named in its
+// header when it was read, before Read brought the header up to the
+// format this package writes; for a session made here, the format it
+// writes. A reader that hedges on a rule a minor gained says so of the
+// minor the file declared. A store that raises the header before an
+// append leaves this as read; the session read again declares the
+// raised format.
+func (s *Session) DeclaredFormat() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.declared
 }
 
 // Header returns a copy of the header.
@@ -353,7 +374,7 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 	if err := s.checkParentRule(b.Parent); err != nil {
 		return Result{}, err
 	}
-	if b.Timestamp.IsZero() {
+	if b.Timestamp.IsZero() && b.tsRaw == "" { // a read entry's zero ts is its ts
 		b.Timestamp = s.now()
 	}
 	b.Timestamp = b.Timestamp.UTC()
@@ -441,7 +462,7 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		case v.Verdict != VerdictAnswer && v.Verdict != VerdictReject:
 		case c.Output != nil:
 			return fmt.Errorf("%w: %s", ErrCallCompleted, v.CallID)
-		case v.Verdict == VerdictAnswer && c.Dispatch == nil && s.header.HasRecord(TypeDispatch) && !s.prefix[c.Entry.ID]:
+		case v.Verdict == VerdictAnswer && c.Dispatch == nil && s.header.HasRecord(TypeDispatch) && !s.prefix[c.Entry.ID] && len(s.dispatches[c.Entry.ID]) == 0:
 			return fmt.Errorf("%w: %s", ErrAnswerNotDispatched, v.CallID)
 		}
 	case *DispatchEntry:
@@ -770,29 +791,39 @@ func sortParents(refs []EntryRef) {
 // into another session is not resolvable here and is only checked for
 // shape; whether that session exists is a question for a store.
 func (s *Session) checkParents(b *EntryBase) error {
-	if len(b.Parents) == 0 {
+	return checkRefs(b.ID, b.Parent, s.header.ID, b.Parents, func(id string) bool {
+		_, ok := s.byID[id]
+		return ok
+	})
+}
+
+// checkRefs is checkParents for an entry id under parent in session,
+// with has saying whether an entry is in the session yet. Read, Append
+// and Scan all hold parents to it, so they cannot differ on it.
+func checkRefs(id, parent, session string, refs []EntryRef, has func(string) bool) error {
+	if len(refs) == 0 {
 		return nil
 	}
-	seen := make(map[EntryRef]bool, len(b.Parents))
-	for _, r := range b.Parents {
+	seen := make(map[EntryRef]bool, len(refs))
+	for _, r := range refs {
 		if r.Entry == "" {
-			return fmt.Errorf("%w: entry %s names a predecessor with no entry id", ErrBadConvergence, b.ID)
+			return fmt.Errorf("%w: entry %s names a predecessor with no entry id", ErrBadConvergence, id)
 		}
-		if r.Session == s.header.ID {
+		if r.Session == session {
 			r.Session = ""
 		}
 		if seen[r] {
-			return fmt.Errorf("%w: entry %s names %s twice", ErrBadConvergence, b.ID, r.Entry)
+			return fmt.Errorf("%w: entry %s names %s twice", ErrBadConvergence, id, r.Entry)
 		}
 		seen[r] = true
 		if r.Session != "" {
 			continue
 		}
-		if r.Entry == b.Parent {
-			return fmt.Errorf("%w: entry %s converges its own parent %s", ErrBadConvergence, b.ID, r.Entry)
+		if r.Entry == parent {
+			return fmt.Errorf("%w: entry %s converges its own parent %s", ErrBadConvergence, id, r.Entry)
 		}
-		if _, ok := s.byID[r.Entry]; !ok {
-			return fmt.Errorf("%w: entry %s converges %s, which is not in this session yet", ErrBadConvergence, b.ID, r.Entry)
+		if !has(r.Entry) {
+			return fmt.Errorf("%w: entry %s converges %s, which is not in this session yet", ErrBadConvergence, id, r.Entry)
 		}
 	}
 	return nil
@@ -933,11 +964,43 @@ func (s *Session) add(e Entry) {
 	s.entries = append(s.entries, e)
 	s.byID[b.ID] = e
 	s.children[b.Parent] = append(s.children[b.Parent], b.ID)
-	if it, ok := e.(*ItemEntry); ok {
-		if fc, ok := it.Item.(*openresponses.FunctionCall); ok {
+	switch v := e.(type) {
+	case *ItemEntry:
+		if fc, ok := v.Item.(*openresponses.FunctionCall); ok {
 			s.callIDs[fc.CallID] = true
 		}
+	case *DispatchEntry:
+		// Only a dispatch that names its call, a function call with its
+		// call ID, stands for one: a file may hold one that does not,
+		// on a branch nothing verified.
+		if it, ok := s.byID[v.Target].(*ItemEntry); ok {
+			if fc, ok := it.Item.(*openresponses.FunctionCall); ok && fc.CallID == v.CallID {
+				if s.dispatches == nil {
+					s.dispatches = map[string][]*DispatchEntry{}
+				}
+				s.dispatches[v.Target] = append(s.dispatches[v.Target], v)
+			}
+		}
 	}
+}
+
+// Dispatches returns the dispatches for the call whose function call is
+// the entry target, anywhere in the session, in the order they were
+// added, each naming the call by its call ID. A call with none on its
+// path may have one elsewhere, which a rebase above it leaves, and may
+// then have run.
+func (s *Session) Dispatches(target string) []*DispatchEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]*DispatchEntry(nil), s.dispatches[target]...)
+}
+
+// dispatched reports whether the session holds a dispatch for the call
+// at target anywhere; see Dispatches.
+func (s *Session) dispatched(target string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.dispatches[target]) > 0
 }
 
 // Truncated reports the final line of the file this session was read
