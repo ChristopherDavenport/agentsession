@@ -40,6 +40,10 @@ type Session struct {
 	// callIDs holds the call ID of every function call the session
 	// holds, on any branch: a call ID names one call in a session.
 	callIDs map[string]bool
+	// dispatches holds the dispatches for each call, by target, on
+	// every branch: a rebase above a dispatch leaves a call that may
+	// have run with none on its path.
+	dispatches map[string][]*DispatchEntry
 	// repeated lists the IDs Read met a second time, each treated as
 	// the same entry; unresolved lists the entries a migration could
 	// not rewrite, which keeps a migrated file from being re-emitted.
@@ -458,7 +462,7 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		case v.Verdict != VerdictAnswer && v.Verdict != VerdictReject:
 		case c.Output != nil:
 			return fmt.Errorf("%w: %s", ErrCallCompleted, v.CallID)
-		case v.Verdict == VerdictAnswer && c.Dispatch == nil && s.header.HasRecord(TypeDispatch) && !s.prefix[c.Entry.ID]:
+		case v.Verdict == VerdictAnswer && c.Dispatch == nil && s.header.HasRecord(TypeDispatch) && !s.prefix[c.Entry.ID] && len(s.dispatches[c.Entry.ID]) == 0:
 			return fmt.Errorf("%w: %s", ErrAnswerNotDispatched, v.CallID)
 		}
 	case *DispatchEntry:
@@ -950,11 +954,43 @@ func (s *Session) add(e Entry) {
 	s.entries = append(s.entries, e)
 	s.byID[b.ID] = e
 	s.children[b.Parent] = append(s.children[b.Parent], b.ID)
-	if it, ok := e.(*ItemEntry); ok {
-		if fc, ok := it.Item.(*openresponses.FunctionCall); ok {
+	switch v := e.(type) {
+	case *ItemEntry:
+		if fc, ok := v.Item.(*openresponses.FunctionCall); ok {
 			s.callIDs[fc.CallID] = true
 		}
+	case *DispatchEntry:
+		// Only a dispatch that names its call, a function call with its
+		// call ID, stands for one: a file may hold one that does not,
+		// on a branch nothing verified.
+		if it, ok := s.byID[v.Target].(*ItemEntry); ok {
+			if fc, ok := it.Item.(*openresponses.FunctionCall); ok && fc.CallID == v.CallID {
+				if s.dispatches == nil {
+					s.dispatches = map[string][]*DispatchEntry{}
+				}
+				s.dispatches[v.Target] = append(s.dispatches[v.Target], v)
+			}
+		}
 	}
+}
+
+// Dispatches returns the dispatches for the call whose function call is
+// the entry target, anywhere in the session, in the order they were
+// added, each naming the call by its call ID. A call with none on its
+// path may have one elsewhere, which a rebase above it leaves, and may
+// then have run.
+func (s *Session) Dispatches(target string) []*DispatchEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]*DispatchEntry(nil), s.dispatches[target]...)
+}
+
+// dispatched reports whether the session holds a dispatch for the call
+// at target anywhere; see Dispatches.
+func (s *Session) dispatched(target string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.dispatches[target]) > 0
 }
 
 // Truncated reports the final line of the file this session was read

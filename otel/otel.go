@@ -130,7 +130,7 @@ func Export(ctx context.Context, tracer trace.Tracer, s *agentsession.Session, l
 		o(&cfg)
 	}
 	h := s.Header()
-	t := newTracker(ctx, tracer, h, s.Name(), h.CreatedAt, false, s.Prefix)
+	t := newTracker(ctx, tracer, h, s.Name(), h.CreatedAt, false, s)
 	for id, sc := range cfg.known {
 		t.spans[id] = sc
 	}
@@ -186,7 +186,7 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	}
 	hdr := sess.Header()
 	s.mu.Lock()
-	s.live[hdr.ID] = newTracker(ctx, s.tracer, hdr, sess.Name(), hdr.CreatedAt, false, sess.Prefix)
+	s.live[hdr.ID] = newTracker(ctx, s.tracer, hdr, sess.Name(), hdr.CreatedAt, false, sess)
 	s.mu.Unlock()
 	return sess, nil
 }
@@ -200,8 +200,12 @@ func (s *Store) Open(ctx context.Context, id string) (*agentsession.Session, err
 		return nil, err
 	}
 	s.mu.Lock()
-	if _, ok := s.live[id]; !ok {
-		t := newTracker(ctx, s.tracer, sess.Header(), sess.Name(), time.Now(), true, sess.Prefix)
+	if t, ok := s.live[id]; ok {
+		// The store may have rebuilt the session since the tracker was
+		// made; ask the one it holds now.
+		t.sess = sess
+	} else {
+		t := newTracker(ctx, s.tracer, sess.Header(), sess.Name(), time.Now(), true, sess)
 		t.prime(sess.Path(sess.Leaf()))
 		s.live[id] = t
 	}
@@ -271,9 +275,11 @@ func (s *Store) CloseAll() {
 type tracker struct {
 	tracer trace.Tracer
 	header agentsession.Header
-	// prefix reports an entry of a fork's prefix, which the header's
-	// records promise does not cover; nil when there is none.
-	prefix func(string) bool
+	// sess is the session the entries come from, which says whether a
+	// call is on a fork's prefix, which the header's records promise
+	// does not cover, and whether another branch holds its dispatch;
+	// nil when there is none to ask.
+	sess *agentsession.Session
 
 	sessionCtx context.Context
 	session    trace.Span
@@ -343,7 +349,7 @@ func (t *tracker) pendingState(c *callState) agentsession.CallState {
 		return agentsession.CallHeld
 	case c.dispatched:
 		return agentsession.CallInFlight
-	case t.header.HasRecord(agentsession.TypeDispatch) && !c.inPrefix:
+	case t.header.HasRecord(agentsession.TypeDispatch) && !c.inPrefix && (t.sess == nil || len(t.sess.Dispatches(c.entryID)) == 0):
 		return agentsession.CallNeverStarted
 	}
 	return agentsession.CallUnknown
@@ -362,11 +368,11 @@ type pendingEvent struct {
 	attrs []attribute.KeyValue
 }
 
-func newTracker(ctx context.Context, tracer trace.Tracer, h agentsession.Header, name string, at time.Time, resumed bool, prefix func(string) bool) *tracker {
+func newTracker(ctx context.Context, tracer trace.Tracer, h agentsession.Header, name string, at time.Time, resumed bool, sess *agentsession.Session) *tracker {
 	t := &tracker{
 		tracer:      tracer,
 		header:      h,
-		prefix:      prefix,
+		sess:        sess,
 		inference:   map[string]trace.SpanContext{},
 		firstItemTS: map[string]time.Time{},
 		spans:       map[string]trace.SpanContext{},
@@ -438,7 +444,7 @@ func (t *tracker) register(e *agentsession.ItemEntry, fc *openresponses.Function
 		return
 	}
 	c := &callState{name: fc.Name, callID: fc.CallID, entryID: e.ID, responseID: e.ResponseID, seen: e.Timestamp}
-	c.inPrefix = t.prefix != nil && t.prefix(e.ID)
+	c.inPrefix = t.sess != nil && t.sess.Prefix(e.ID)
 	t.calls[fc.CallID] = c
 	t.byEntry[e.ID] = c
 	t.order = append(t.order, c)

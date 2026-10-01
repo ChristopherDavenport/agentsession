@@ -69,7 +69,8 @@ session worth training on.
 - **Lossless.** A conforming file contains enough to rebuild every
   request the model received, byte for byte where the payload allows.
 - **Resumable.** For every call without an output, a reader can tell
-  from the path whether it was never started, was in flight when the
+  from the path, and for a call a rebase left above its `dispatch` from
+  the rest of the session, whether it was never started, was in flight when the
   record stopped, is waiting on an answer, or was rejected or answered
   and is owed only its output, in any file whose header says the
   writer records dispatches and decisions.
@@ -892,7 +893,11 @@ output after it is a call the harness answered and has not yet written
 the output of, since the record stopped between the two; the harness
 that continues the path writes that output and nothing else for the
 call. When the header names `dispatch` in `records`, a call with neither
-was never started; otherwise the file does not say whether it ran. A
+on its path was never started, unless the session holds a `dispatch`
+naming it elsewhere, off the path: a writer that rebases to a point
+between a call and its `dispatch` leaves the call on the new path with
+no `dispatch`, and it may have run. Otherwise the file does not say
+whether it ran. A
 writer that names `dispatch` MUST write it, durably, before the tool
 runs, and no writer may write it for a call that was rejected or
 answered or that has its output: the output ends the call, and a harness
@@ -950,7 +955,10 @@ A call's fate was decided outside the tool.
     `dispatch` and no other `decision` ever follow, and a
     `function_call_output` for the call follows that carries `reason`.
     A writer writes `reject` only for a call with no `dispatch` and no
-    output on the path; one that may have run is ended by `answer`. A
+    output on the path, and SHOULD NOT for one with a `dispatch` for it
+    elsewhere in the session, which may have run and is ended by
+    `answer`; a reader accepts such a `reject`, which 0.9 left as the
+    only way to end that call without a second `dispatch`. A
     `reject` with no output after it is a call the harness refused and
     has not yet written the output of, since the record stopped between
     the two; the harness that continues the path writes that output and
@@ -969,9 +977,9 @@ A call's fate was decided outside the tool.
     therefore unknown. No `dispatch` and no other `decision` follow it,
     and a `function_call_output` for the call follows; `by` says who
     answered and `reason` SHOULD say why. A writer writes `answer` only
-    for a call with no output on the path, and with a `dispatch` on it
-    or, in a file whose header does not name `dispatch` in `records`,
-    without one. A call the record shows never started did not run, and
+    for a call with no output on the path, and with a `dispatch` for it
+    on the path or elsewhere in the session or, in a file whose header
+    does not name `dispatch` in `records`, without one. A call the record shows never started did not run, and
     a writer that ends one without running it writes `reject`. A call
     whose tool ran and whose result the harness then withheld, such as
     one a hook blocked after the tool returned, is ended by `answer`,
@@ -980,8 +988,9 @@ A call's fate was decided outside the tool.
   A call may carry several decisions on the path, in order. An answered
   `hold` is followed by a `proceed`, a `dispatch`, a `reject` or an
   `answer` on the same call and stays as written, a `reject` only when
-  no `dispatch` came before it and an `answer` only when one did or
-  the file does not record dispatches; a call still held is what makes
+  no `dispatch` came before it and an `answer` only when one came
+  before it on the path, or the session holds one for the call
+  elsewhere, or the file does not record dispatches; a call still held is what makes
   a run end `input_required`. The decision that answers a `hold` says
   by its verdict what the answer did. A writer SHOULD write `proceed`
   only when it answers an earlier `hold` or carries `args`, or lets a
@@ -1468,8 +1477,7 @@ that appends raises the header to its own minor, as above, so a 0.x
 writer of the earlier minor, which refuses a minor it does not name,
 then refuses the file rather than append what the later one forbids,
 and a reader can tell which rules a file was written under from its
-header. A minor cut only to mark that an earlier one's rules were
-amended in place after release, as 0.10 is for 0.9, changes no rule.
+header.
 
 Adding an optional member to the envelope is a minor change. Changing
 what an existing member means, or what the context algorithm does with
@@ -1482,7 +1490,7 @@ a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
 it begins at 1.0. A reader of 0.10 reads a 0.5 to 0.9 file
 as it stands, since 0.6 to 0.9 add optional members and elements, 0.10
-changes no rule, and the hashes do not change, save for the few rules each minor's changes below say read
+relaxes one rule, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
@@ -1569,8 +1577,14 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.9
 
-None to what a file may hold or how a reader reads it: a 0.9 file is a
-0.10 file. 0.10 exists because 0.9's rules were amended in place after
+One rule is relaxed and one reading corrected. A `dispatch` for a call
+elsewhere in the session, off the path, now satisfies the `answer`
+rule, and a reader no longer reads the call as never started, in a 0.9
+file as in a 0.10 one: a writer that rebases to a point between a call
+and its `dispatch` leaves a call that may have run, which 0.9 let it
+end only by a `reject`, which says the call never reached its tool, or
+by a second `dispatch`, which says it was handed over again. A 0.9 file
+is a 0.10 file. 0.10 also exists because 0.9's rules were amended in place after
 writers of it were released, so a 0.9 header does not say which of
 them a file was written under, and a writer of an early 0.9 appended
 what later ones forbid without complaint. A writer of 0.10 raises a

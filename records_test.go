@@ -282,3 +282,82 @@ func TestForkCallState(t *testing.T) {
 		}
 	}
 }
+
+// TestAnswerDispatchedOnAnotherBranch: a rebase to a point between a
+// call and its dispatch leaves the call with no dispatch on the new
+// path though the session holds one, so it may have run: it reads
+// unknown, an answer may end it, and Dispatches finds the dispatch on
+// the branch left (#157).
+func TestAnswerDispatchedOnAnotherBranch(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	call, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fa", CallID: "a", Name: "t", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := NewDispatch("a", call)
+	d.IdempotencyKey = "k1"
+	if _, err := s.Append(d); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Branch(call); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.PendingCalls(s.Leaf())
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("PendingCalls = %v, %v", pending, err)
+	}
+	if got := pending[0].State(s.Header()); got != CallUnknown {
+		t.Errorf("the call after the rebase is %s, want unknown", got)
+	}
+	if d := s.Dispatches(call); len(d) != 1 || d[0].IdempotencyKey != "k1" {
+		t.Errorf("Dispatches = %v", d)
+	}
+	if _, err := s.Append(NewDecision("a", call, VerdictAnswer, ByPolicy).WithReason("outcome unknown")); err != nil {
+		t.Fatalf("an answer to a call dispatched on another branch: %v", err)
+	}
+	if _, err := s.Append(NewItemEntry(openresponses.NewFunctionCallOutput("a", "outcome unknown"))); err != nil {
+		t.Fatal(err)
+	}
+	var buf strings.Builder
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	read, err := Read(strings.NewReader(buf.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := read.VerifyRecords(read.Leaf()); err != nil {
+		t.Errorf("VerifyRecords = %v", err)
+	}
+	// With no dispatch anywhere, the call never started, and an answer
+	// is refused.
+	bare := New(Header{Records: AllRecords})
+	bc, _ := bare.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fb", CallID: "b", Name: "t", Arguments: "{}"}})
+	if _, err := bare.Append(NewDecision("b", bc, VerdictAnswer, ByPolicy)); !errors.Is(err, ErrAnswerNotDispatched) {
+		t.Errorf("an answer to a call never dispatched: %v", err)
+	}
+}
+
+// TestDispatchNamingAnotherCall: a dispatch elsewhere in the session
+// stands for one on the path only when it names the call by its call
+// ID; one a file holds that names the target with another call ID does
+// not permit an answer.
+func TestDispatchNamingAnotherCall(t *testing.T) {
+	call := `"type":"item","item":{"type":"function_call","id":"fa","call_id":"a","name":"t","arguments":"{}"}`
+	_, ids := hashedLines(t, Format, call)
+	wrong := `"type":"dispatch","call_id":"zzz","target":"` + ids[0] + `"`
+	in, _ := hashedLines(t, Format, call, wrong)
+	s, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := s.Dispatches(ids[0]); len(d) != 0 {
+		t.Errorf("Dispatches = %v, want none", d)
+	}
+	if err := s.Branch(ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewDecision("a", ids[0], VerdictAnswer, ByPolicy)); !errors.Is(err, ErrAnswerNotDispatched) {
+		t.Errorf("an answer on a dispatch naming another call: %v", err)
+	}
+}
