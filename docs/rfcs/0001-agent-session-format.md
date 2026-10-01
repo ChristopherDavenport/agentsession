@@ -1533,8 +1533,11 @@ negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a `dispatch` that follows a
 `reject`, an `answer` or the call's output, a decision that follows a
 `reject`, a `reject` that follows a `dispatch` or an output, a `target`
-naming another call, a repeated `call_id`, and a header naming
-`dispatch` beside a call that has an output and no `dispatch`.
+naming another call, a repeated `call_id`, an empty `call_id`, a `run`
+start whose `source` is not the shape of its segment, and a header
+naming `dispatch` beside a call that has an output and no `dispatch`;
+and a fork naming `dispatch` whose prefix, from a session that promised
+nothing, holds such a call, and which verifies.
 Converters for pi, Claude Code and Codex are part of the initial
 proposal so the format arrives with three existing corpora behind it.
 

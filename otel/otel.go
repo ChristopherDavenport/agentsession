@@ -130,7 +130,7 @@ func Export(ctx context.Context, tracer trace.Tracer, s *agentsession.Session, l
 		o(&cfg)
 	}
 	h := s.Header()
-	t := newTracker(ctx, tracer, h, s.Name(), h.CreatedAt, false)
+	t := newTracker(ctx, tracer, h, s.Name(), h.CreatedAt, false, s.Prefix)
 	for id, sc := range cfg.known {
 		t.spans[id] = sc
 	}
@@ -186,7 +186,7 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	}
 	hdr := sess.Header()
 	s.mu.Lock()
-	s.live[hdr.ID] = newTracker(ctx, s.tracer, hdr, sess.Name(), hdr.CreatedAt, false)
+	s.live[hdr.ID] = newTracker(ctx, s.tracer, hdr, sess.Name(), hdr.CreatedAt, false, sess.Prefix)
 	s.mu.Unlock()
 	return sess, nil
 }
@@ -201,7 +201,7 @@ func (s *Store) Open(ctx context.Context, id string) (*agentsession.Session, err
 	}
 	s.mu.Lock()
 	if _, ok := s.live[id]; !ok {
-		t := newTracker(ctx, s.tracer, sess.Header(), sess.Name(), time.Now(), true)
+		t := newTracker(ctx, s.tracer, sess.Header(), sess.Name(), time.Now(), true, sess.Prefix)
 		t.prime(sess.Path(sess.Leaf()))
 		s.live[id] = t
 	}
@@ -271,6 +271,9 @@ func (s *Store) CloseAll() {
 type tracker struct {
 	tracer trace.Tracer
 	header agentsession.Header
+	// prefix reports an entry of a fork's prefix, which the header's
+	// records promise does not cover; nil when there is none.
+	prefix func(string) bool
 
 	sessionCtx context.Context
 	session    trace.Span
@@ -306,7 +309,9 @@ type callState struct {
 	rewritten, held, rejected         bool
 	answered                          bool
 	dispatched                        bool
-	output                            bool
+	// inPrefix is set for a call made in a fork's prefix.
+	inPrefix bool
+	output   bool
 	// dispatches counts the hand-offs to the tool, and lastDispatch is
 	// the entry ID of the latest.
 	dispatches   int
@@ -338,7 +343,7 @@ func (t *tracker) pendingState(c *callState) agentsession.CallState {
 		return agentsession.CallHeld
 	case c.dispatched:
 		return agentsession.CallInFlight
-	case t.header.HasRecord(agentsession.TypeDispatch):
+	case t.header.HasRecord(agentsession.TypeDispatch) && !c.inPrefix:
 		return agentsession.CallNeverStarted
 	}
 	return agentsession.CallUnknown
@@ -357,10 +362,11 @@ type pendingEvent struct {
 	attrs []attribute.KeyValue
 }
 
-func newTracker(ctx context.Context, tracer trace.Tracer, h agentsession.Header, name string, at time.Time, resumed bool) *tracker {
+func newTracker(ctx context.Context, tracer trace.Tracer, h agentsession.Header, name string, at time.Time, resumed bool, prefix func(string) bool) *tracker {
 	t := &tracker{
 		tracer:      tracer,
 		header:      h,
+		prefix:      prefix,
 		inference:   map[string]trace.SpanContext{},
 		firstItemTS: map[string]time.Time{},
 		spans:       map[string]trace.SpanContext{},
@@ -432,6 +438,7 @@ func (t *tracker) register(e *agentsession.ItemEntry, fc *openresponses.Function
 		return
 	}
 	c := &callState{name: fc.Name, callID: fc.CallID, entryID: e.ID, responseID: e.ResponseID, seen: e.Timestamp}
+	c.inPrefix = t.prefix != nil && t.prefix(e.ID)
 	t.calls[fc.CallID] = c
 	t.byEntry[e.ID] = c
 	t.order = append(t.order, c)

@@ -118,6 +118,8 @@ func amended09(h agentsession.Header, err error) bool {
 		agentsession.ErrRejectDispatched,
 		agentsession.ErrCallCompleted,
 		agentsession.ErrCallIDRepeated,
+		agentsession.ErrCallIDEmpty,
+		agentsession.ErrSourceMismatch,
 		agentsession.ErrBadTarget,
 	} {
 		if errors.Is(err, e) {

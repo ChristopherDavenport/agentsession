@@ -28,6 +28,10 @@ type Call struct {
 	// when the call is pending.
 	Output *ItemEntry
 
+	// inPrefix is set by the session for a call made in a fork's
+	// prefix, which its header's promise does not cover.
+	inPrefix bool
+
 	// ended is the decision that ended the call, a reject or an answer,
 	// that a dispatch follows on the path, which the format forbids.
 	ended *DecisionEntry
@@ -160,11 +164,14 @@ const (
 	// CallInFlight: the call was dispatched and no output arrived, so
 	// its side effect may have happened.
 	CallInFlight
-	// CallNeverStarted: no dispatch and no output, in a file whose
-	// header promises dispatches are recorded.
+	// CallNeverStarted: no dispatch and no output, for a call the
+	// session made under a header that promises dispatches are recorded
+	// before the tool runs, so the tool never ran.
+	// A call in a fork's prefix was made under its origin's promise,
+	// which this header does not vouch for, and is CallUnknown.
 	CallNeverStarted
-	// CallUnknown: no dispatch and no output, in a file that makes no
-	// such promise, so the file does not say whether the tool ran.
+	// CallUnknown: no dispatch and no output, where no promise covers
+	// the call, so the file does not say whether the tool ran.
 	CallUnknown
 	// CallAnswered: an answer decision ended the call and its output is
 	// not on the path yet, since the record stopped between the two.
@@ -203,7 +210,11 @@ func (s CallState) String() string {
 // State returns what the path says happened to the call, reading the
 // header's records to decide whether a missing dispatch means the
 // call never started or means the file does not say. A held call with
-// dispatches is held, and may have run.
+// dispatches is held, and may have run. The promise covers a call the
+// session made, after its base: one in a fork's prefix, from a call
+// [Session.Calls] or [Session.PendingCalls] returns, is unknown, since
+// its origin may have promised nothing. A call from [Calls] over a
+// bare path is taken to be the session's own.
 func (c *Call) State(h Header) CallState {
 	switch {
 	case c.Output != nil:
@@ -216,7 +227,7 @@ func (c *Call) State(h Header) CallState {
 		return CallHeld
 	case c.Dispatch != nil:
 		return CallInFlight
-	case h.HasRecord(TypeDispatch):
+	case h.HasRecord(TypeDispatch) && !c.inPrefix:
 		return CallNeverStarted
 	}
 	return CallUnknown
@@ -309,13 +320,19 @@ func (c *Call) endingDecision() *DecisionEntry {
 	return nil
 }
 
-// Calls returns the calls on the path to leaf; see [Calls].
+// Calls returns the calls on the path to leaf; see [Calls]. A call
+// made in a fork's prefix is known as one, so its State reads the
+// header's promise as not covering it.
 func (s *Session) Calls(leaf string) ([]*Call, error) {
 	path := s.Path(leaf)
 	if path == nil {
 		return nil, fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
 	}
-	return Calls(path), nil
+	calls := Calls(path)
+	for _, c := range calls {
+		c.inPrefix = s.Prefix(c.Entry.ID)
+	}
+	return calls, nil
 }
 
 // PendingCalls returns the calls on the path to leaf that have no
@@ -443,6 +460,55 @@ func (c *Call) takenUpIn(in map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+// ComputeSource returns the source a run's start names, by the
+// format's rule: [SourceResume] when the segment's first function call
+// output, decision or dispatch takes up a call that was on the path
+// with no output when the run began, whatever messages come before
+// it, and [SourceInput] otherwise, a run that takes up nothing
+// included. A run built by hand with no Path has nothing before its
+// segment, so it is an input.
+func ComputeSource(r *Run) string {
+	path := r.Path
+	if path == nil {
+		path = r.Segment
+	}
+	before := map[string]bool{}
+	for _, e := range path[:len(path)-len(r.Segment)] {
+		before[e.Base().ID] = true
+	}
+	// part names the call each output, decision and dispatch is for.
+	part := map[string]*Call{}
+	for _, c := range Calls(path) {
+		if c.Output != nil {
+			part[c.Output.ID] = c
+		}
+		for _, d := range c.Decisions {
+			part[d.ID] = c
+		}
+		for _, d := range c.Dispatches {
+			part[d.ID] = c
+		}
+	}
+	for _, e := range r.Segment {
+		c, ok := part[e.Base().ID]
+		if !ok {
+			// An output no call on the path is owed takes up nothing,
+			// and is still the segment's first output.
+			if it, isItem := e.(*ItemEntry); isItem {
+				if _, isOut := it.Item.(*openresponses.FunctionCallOutput); isOut {
+					return SourceInput
+				}
+			}
+			continue
+		}
+		if before[c.Entry.ID] && (c.Output == nil || !before[c.Output.ID]) {
+			return SourceResume
+		}
+		return SourceInput
+	}
+	return SourceInput
 }
 
 // Pending returns the IDs of the run's calls with no output on the
@@ -702,6 +768,17 @@ var ErrBadTarget = errors.New("agentsession: target does not name the call")
 // names one call in a session.
 var ErrCallIDRepeated = errors.New("agentsession: call ID repeated")
 
+// ErrCallIDEmpty is returned when a function call is appended with no
+// call ID, and by [Session.VerifyRecords] for a session that holds one:
+// nothing could name the call, not its output, a decision or a pending
+// list.
+var ErrCallIDEmpty = errors.New("agentsession: function call has no call ID")
+
+// ErrSourceMismatch is returned by [Session.VerifyRecords] for a run
+// start whose source is not the shape of its segment; see
+// [ComputeSource].
+var ErrSourceMismatch = errors.New("agentsession: run source disagrees with its segment")
+
 // ErrRejectDispatched is returned when a reject is appended for a call
 // that has a dispatch on the path: a reject says the call did not run,
 // and one that may have run is ended by an answer.
@@ -731,13 +808,17 @@ var ErrAnswerNotDispatched = errors.New("agentsession: answer for a call the rec
 var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 
 // VerifyRecords checks the record entries on the path to leaf against
-// the format's rules: no call ID repeats in the session, every
-// decision and dispatch names its call by target, every run end agrees
-// with its segment, no dispatch or decision follows a reject or an
-// answer on the same call, no answer, reject or dispatch follows an
-// output and no reject a dispatch, and, when the header names dispatch
-// in records, no answer ends a call with no dispatch and every call
-// that ran has a dispatch. It returns the first problem found.
+// the format's rules: every function call has a call ID and none
+// repeats in the session, every decision and dispatch names its call
+// by target, every run start's source and every run end agree with
+// the segment, no dispatch or decision follows a reject or an answer
+// on the same call, no answer, reject or dispatch follows an output and
+// no reject a dispatch, and, when the header names dispatch in records,
+// no answer ends a call with no dispatch and every call that ran has a
+// dispatch. The rules that rest on records apply to what the session
+// wrote, the entries after its base: a fork's prefix is another
+// session's record, kept to that session's promise. It returns the
+// first problem found.
 func (s *Session) VerifyRecords(leaf string) error {
 	path := s.Path(leaf)
 	if path == nil {
@@ -758,8 +839,19 @@ func (s *Session) VerifyRecords(leaf string) error {
 		if err := r.Verify(); err != nil {
 			return err
 		}
+		if src := r.Start.Source; (src == SourceInput || src == SourceResume) && src != ComputeSource(r) {
+			return fmt.Errorf("%w: run %s starts as %s and its segment is the shape of %s", ErrSourceMismatch, r.RunID(), src, ComputeSource(r))
+		}
 	}
 	h := s.Header()
+	// promised says the header's records promise covers the entry: one
+	// the session wrote, after its base. An answer is owed a dispatch
+	// when its call was made here, since one made in a prefix that
+	// promised nothing may have run unrecorded, and the answer says the
+	// outcome is unknown; an output is owed one when it was written
+	// here, since this writer ran the tool, unless an answer stood for
+	// the run.
+	promised := func(id string) bool { return h.HasRecord(TypeDispatch) && !s.Prefix(id) }
 	for _, c := range calls {
 		if c.ended != nil {
 			if c.ended.Verdict == VerdictAnswer {
@@ -782,10 +874,10 @@ func (s *Session) VerifyRecords(leaf string) error {
 		if c.endAfterOutput != nil {
 			return fmt.Errorf("%w: %s %s follows the output of call %s", ErrCallCompleted, c.endAfterOutput.Verdict, c.endAfterOutput.ID, c.ID())
 		}
-		if h.HasRecord(TypeDispatch) && c.Answered() && c.Dispatch == nil {
+		if c.Answered() && c.Dispatch == nil && promised(c.Entry.ID) {
 			return fmt.Errorf("%w: call %s", ErrAnswerNotDispatched, c.ID())
 		}
-		if h.HasRecord(TypeDispatch) && c.Output != nil && c.Dispatch == nil && !c.Rejected() {
+		if c.Output != nil && c.Dispatch == nil && !c.Rejected() && !c.Answered() && promised(c.Output.ID) {
 			return fmt.Errorf("%w: call %s has an output and no dispatch", ErrRecordMissing, c.ID())
 		}
 	}
@@ -804,6 +896,9 @@ func (s *Session) verifyCallIDs() error {
 			continue
 		}
 		if fc, ok := it.Item.(*openresponses.FunctionCall); ok {
+			if fc.CallID == "" {
+				return fmt.Errorf("%w: %s", ErrCallIDEmpty, it.ID)
+			}
 			if first, dup := seen[fc.CallID]; dup {
 				return fmt.Errorf("%w: %s at %s and %s", ErrCallIDRepeated, fc.CallID, first, it.ID)
 			}

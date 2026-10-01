@@ -422,7 +422,7 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		switch {
 		case !ok:
 		case fc.CallID == "":
-			return errors.New("agentsession: a function call needs a call_id")
+			return ErrCallIDEmpty
 		case s.callIDs[fc.CallID]:
 			return fmt.Errorf("%w: %s", ErrCallIDRepeated, fc.CallID)
 		}
@@ -441,7 +441,7 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		case v.Verdict != VerdictAnswer && v.Verdict != VerdictReject:
 		case c.Output != nil:
 			return fmt.Errorf("%w: %s", ErrCallCompleted, v.CallID)
-		case v.Verdict == VerdictAnswer && c.Dispatch == nil && s.header.HasRecord(TypeDispatch):
+		case v.Verdict == VerdictAnswer && c.Dispatch == nil && s.header.HasRecord(TypeDispatch) && !s.prefix[c.Entry.ID]:
 			return fmt.Errorf("%w: %s", ErrAnswerNotDispatched, v.CallID)
 		}
 	case *DispatchEntry:

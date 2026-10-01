@@ -7,7 +7,32 @@ versions may break the API.
 
 ## Unreleased
 
-The format is unchanged. RFC 0002's exchange section gains a refusal.
+The format is unchanged. RFC 0002's exchange section gains a refusal,
+and RFC 0001's conformance list names three cases `VerifyRecords`
+now checks.
+
+- **`VerifyRecords` holds a session to the rest of RFC 0001's records
+  rules.** A function call with an empty `call_id` is reported with
+  `ErrCallIDEmpty`, which `Append` now returns too (#135). A `run`
+  start whose `source` is not its segment's shape, `resume` when the
+  segment's first output, decision or dispatch takes up a call pending
+  when the run began and `input` otherwise, is reported with
+  `ErrSourceMismatch`; `ComputeSource` gives the shape (#147). The rules
+  that rest on the header's `records` promise apply to the entries
+  after a fork's `base`, as the RFC says, so a fork promising
+  `dispatch` of a session that promised nothing verifies (#144). An
+  output the fork writes is owed a dispatch, whoever made the call,
+  since the fork ran the tool, unless the call was answered; a fork
+  may answer a call its prefix made without one, since a dispatch in
+  that prefix may have gone unrecorded.
+- **`Call.State` reads a call a fork's prefix made, with no dispatch,
+  as `CallUnknown`**, not `CallNeverStarted`: the fork's promise covers
+  what the fork wrote, and the origin may have run the call unrecorded.
+  A call from `Session.Calls` or `Session.PendingCalls` knows whether
+  it is in the prefix; one from `Calls` over a bare path is taken to be
+  the session's own. The otel exporter reads it the same way.
+  `verify` notes both new errors in a 0.9 file as ones v0.0.12 to
+  v0.0.14 may have written.
 
 - **cas: an exchange that would merge two function calls with one
   `call_id` is refused** with `ErrCallIDRepeated`, as RFC 0002 now
