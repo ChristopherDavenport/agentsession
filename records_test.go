@@ -337,3 +337,27 @@ func TestAnswerDispatchedOnAnotherBranch(t *testing.T) {
 		t.Errorf("an answer to a call never dispatched: %v", err)
 	}
 }
+
+// TestDispatchNamingAnotherCall: a dispatch elsewhere in the session
+// stands for one on the path only when it names the call by its call
+// ID; one a file holds that names the target with another call ID does
+// not permit an answer.
+func TestDispatchNamingAnotherCall(t *testing.T) {
+	call := `"type":"item","item":{"type":"function_call","id":"fa","call_id":"a","name":"t","arguments":"{}"}`
+	_, ids := hashedLines(t, Format, call)
+	wrong := `"type":"dispatch","call_id":"zzz","target":"` + ids[0] + `"`
+	in, _ := hashedLines(t, Format, call, wrong)
+	s, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := s.Dispatches(ids[0]); len(d) != 0 {
+		t.Errorf("Dispatches = %v, want none", d)
+	}
+	if err := s.Branch(ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewDecision("a", ids[0], VerdictAnswer, ByPolicy)); !errors.Is(err, ErrAnswerNotDispatched) {
+		t.Errorf("an answer on a dispatch naming another call: %v", err)
+	}
+}

@@ -16,11 +16,13 @@ agentturn, agentkit and agenteval included, before any writer runs
 this release.** RFC 0001 is draft 0.10, and Versioning gains the rule
 that a released minor's rules do not change. (#132)
 
-- **An answer may end a call dispatched only on another branch.** A
-  writer that rebases to a point between a call and its `dispatch`
-  leaves a call that may have run; 0.10 lets an `answer` end it, where
-  0.9 left only a `reject`, which says the call never ran, or a second
-  `dispatch`. `Call.State` reads such a call as `CallUnknown`, not
+- **An answer may end a call dispatched only elsewhere in the
+  session.** A writer that rebases to a point between a call and its
+  `dispatch` leaves a call that may have run; 0.10 lets an `answer` end
+  it, where 0.9 left only a `reject`, which says the call never ran, or
+  a second `dispatch`. Such a `reject` still reads, and RFC 0001 says a
+  writer SHOULD NOT write one. Only a `dispatch` naming the call by its
+  call ID counts. `Call.State` reads such a call as `CallUnknown`, not
   `CallNeverStarted`, and the otel exporter likewise.
   `Session.Dispatches` returns a call's dispatches on every branch.
   (#157)

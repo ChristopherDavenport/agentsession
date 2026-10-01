@@ -200,7 +200,11 @@ func (s *Store) Open(ctx context.Context, id string) (*agentsession.Session, err
 		return nil, err
 	}
 	s.mu.Lock()
-	if _, ok := s.live[id]; !ok {
+	if t, ok := s.live[id]; ok {
+		// The store may have rebuilt the session since the tracker was
+		// made; ask the one it holds now.
+		t.sess = sess
+	} else {
 		t := newTracker(ctx, s.tracer, sess.Header(), sess.Name(), time.Now(), true, sess)
 		t.prime(sess.Path(sess.Leaf()))
 		s.live[id] = t

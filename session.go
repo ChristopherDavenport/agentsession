@@ -960,21 +960,37 @@ func (s *Session) add(e Entry) {
 			s.callIDs[fc.CallID] = true
 		}
 	case *DispatchEntry:
-		if s.dispatches == nil {
-			s.dispatches = map[string][]*DispatchEntry{}
+		// Only a dispatch that names its call, a function call with its
+		// call ID, stands for one: a file may hold one that does not,
+		// on a branch nothing verified.
+		if it, ok := s.byID[v.Target].(*ItemEntry); ok {
+			if fc, ok := it.Item.(*openresponses.FunctionCall); ok && fc.CallID == v.CallID {
+				if s.dispatches == nil {
+					s.dispatches = map[string][]*DispatchEntry{}
+				}
+				s.dispatches[v.Target] = append(s.dispatches[v.Target], v)
+			}
 		}
-		s.dispatches[v.Target] = append(s.dispatches[v.Target], v)
 	}
 }
 
 // Dispatches returns the dispatches for the call whose function call is
-// the entry target, on every branch of the session, in the order they
-// were added. A call with none on its path may have one on a branch a
-// rebase left, and may then have run.
+// the entry target, anywhere in the session, in the order they were
+// added, each naming the call by its call ID. A call with none on its
+// path may have one elsewhere, which a rebase above it leaves, and may
+// then have run.
 func (s *Session) Dispatches(target string) []*DispatchEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return append([]*DispatchEntry(nil), s.dispatches[target]...)
+}
+
+// dispatched reports whether the session holds a dispatch for the call
+// at target anywhere; see Dispatches.
+func (s *Session) dispatched(target string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.dispatches[target]) > 0
 }
 
 // Truncated reports the final line of the file this session was read

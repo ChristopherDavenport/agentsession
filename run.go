@@ -335,7 +335,7 @@ func (s *Session) Calls(leaf string) ([]*Call, error) {
 	calls := Calls(path)
 	for _, c := range calls {
 		c.inPrefix = s.Prefix(c.Entry.ID)
-		c.dispatchedElsewhere = c.Dispatch == nil && len(s.Dispatches(c.Entry.ID)) > 0
+		c.dispatchedElsewhere = c.Dispatch == nil && s.dispatched(c.Entry.ID)
 	}
 	return calls, nil
 }
@@ -879,7 +879,7 @@ func (s *Session) VerifyRecords(leaf string) error {
 		if c.endAfterOutput != nil {
 			return fmt.Errorf("%w: %s %s follows the output of call %s", ErrCallCompleted, c.endAfterOutput.Verdict, c.endAfterOutput.ID, c.ID())
 		}
-		if c.Answered() && c.Dispatch == nil && promised(c.Entry.ID) && len(s.Dispatches(c.Entry.ID)) == 0 {
+		if c.Answered() && c.Dispatch == nil && promised(c.Entry.ID) && !s.dispatched(c.Entry.ID) {
 			return fmt.Errorf("%w: call %s", ErrAnswerNotDispatched, c.ID())
 		}
 		if c.Output != nil && c.Dispatch == nil && !c.Rejected() && !c.Answered() && promised(c.Output.ID) {
