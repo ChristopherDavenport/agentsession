@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -645,5 +646,79 @@ func TestCASVerifyChecksRecords(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), " ok\n") {
 		t.Errorf("a store's verify lists each response:\n%s", stdout.String())
+	}
+}
+
+// TestCASRepair: repair -dry-run reports what a repair of a damaged
+// log would keep and writes nothing; repair rewrites the log, keeping
+// the damaged one, and the session reads again (#153).
+func TestCASRepair(t *testing.T) {
+	root := t.TempDir()
+	casStore(t, root, "basic")
+	const id = "01995b2a-0000-7000-8000-000000000001"
+	path := filepath.Join(root, "sessions", id, "log")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(data), "\n")
+	last := -1
+	for i, l := range lines {
+		if strings.Contains(l, `"op":"append"`) {
+			last = i
+		}
+	}
+	l := []byte(lines[last])
+	l[len(l)/2] ^= 1
+	lines[last] = string(l)
+	damaged := []byte(strings.Join(lines, ""))
+	if err := os.WriteFile(path, damaged, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"show", root, id}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "damaged") {
+		t.Errorf("show of a damaged session: exit %d: %s", code, stderr.String())
+	}
+	for _, dry := range []bool{true, false} {
+		args := []string{"repair", root, id}
+		if dry {
+			args = append(args, "-dry-run")
+		}
+		stdout.Reset()
+		stderr.Reset()
+		if code := run(args, &stdout, &stderr); code != 0 {
+			t.Fatalf("%v: exit %d\nstdout:\n%s\nstderr:\n%s", args, code, stdout.String(), stderr.String())
+		}
+		want := []string{fmt.Sprintf("damaged  line %d", last+1), "kept     ", "head     ", "mark     record"}
+		if dry {
+			want = append(want, "dry run: nothing written")
+		} else {
+			want = append(want, "the damaged log is kept as "+filepath.Join(root, "sessions", id, "damaged-"))
+		}
+		for _, w := range want {
+			if !strings.Contains(stdout.String(), w) {
+				t.Errorf("%v: stdout lacks %q:\n%s", args, w, stdout.String())
+			}
+		}
+		if after, _ := os.ReadFile(path); dry != bytes.Equal(after, damaged) {
+			t.Errorf("%v: the log changed: %v", args, !dry)
+		}
+	}
+	stdout.Reset()
+	if code := run([]string{"show", root, id}, &stdout, &stderr); code != 0 {
+		t.Errorf("show after the repair: exit %d: %s", code, stderr.String())
+	}
+	stdout.Reset()
+	if code := run([]string{"verify", root}, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "the damaged log is kept as damaged-") {
+		t.Errorf("verify after the repair: exit %d:\n%s", code, stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"repair", root, id}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "nothing to repair") {
+		t.Errorf("a second repair: exit %d: %s", code, stderr.String())
+	}
+	if code := run([]string{"repair", root}, &stdout, &stderr); code != 2 {
+		t.Errorf("repair without an id: exit %d", code)
 	}
 }
