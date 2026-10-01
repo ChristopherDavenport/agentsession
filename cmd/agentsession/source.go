@@ -132,14 +132,17 @@ func casResolver(root string) func(id string) (*agentsession.Session, error) {
 }
 
 // verifyStore checks a whole cas store as git fsck does: logs,
-// objects, packs and every session's entries.
+// objects, packs and every session's entries, and then each session as
+// verify of one session does, its request hashes and records, printing
+// only what fails.
 func verifyStore(root string, stdout io.Writer) error {
+	ctx := context.Background()
 	st, err := cas.Open(root, cas.WithReadOnly())
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	rep, err := st.Verify(context.Background())
+	rep, err := st.Verify(ctx)
 	if err != nil {
 		return err
 	}
@@ -151,7 +154,34 @@ func verifyStore(root string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "nothing to verify: %s holds no sessions\n", root)
 		return errFailed
 	}
-	if !rep.OK() {
+	var ids []string
+	failing, anyEarly := 0, false
+	for sum, err := range st.List(ctx, agentsession.ListFilter{}) {
+		if err != nil {
+			fmt.Fprintf(stdout, "listing stopped: %v\n", err)
+			failing++
+			break
+		}
+		ids = append(ids, sum.Header.ID)
+	}
+	for _, id := range ids {
+		s, err := readSource(source{path: root, id: id})
+		if err != nil {
+			// The store's walk has reported why.
+			fmt.Fprintf(stdout, "%s: records not checked: %v\n", id, err)
+			failing++
+			continue
+		}
+		if problem, early := checkSession(s, id+": ", stdout, false); problem {
+			failing++
+			anyEarly = anyEarly || early
+		}
+	}
+	if anyEarly {
+		fmt.Fprintln(stdout, earlyNote)
+	}
+	fmt.Fprintf(stdout, "%d sessions' hashes and records checked, %d failed\n", len(ids), failing)
+	if !rep.OK() || failing > 0 {
 		return errFailed
 	}
 	return nil
