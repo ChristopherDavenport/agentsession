@@ -545,6 +545,13 @@ func (*InfoEntry) EntryType() string { return TypeInfo }
 // tools ran and what they saw. It applies from its position on the
 // path until the next one, and its CWD takes precedence over the
 // header's.
+//
+// What a harness records beyond these members, such as the identity of
+// a working tree's contents, goes in a namespaced member: one of the
+// entry, kept in Unknown (EntryBase), or one inside vcs, set with
+// [VCS.SetMember]. Only workspace is compared for a substitution, so a
+// change to any other member, those the format does not define
+// included, is not one: see [SameWorkspace].
 type EnvEntry struct {
 	EntryBase `json:"-"`
 	CWD       string            `json:"cwd,omitempty"`
@@ -559,11 +566,86 @@ type EnvEntry struct {
 // EntryType returns "env".
 func (*EnvEntry) EntryType() string { return TypeEnv }
 
-// VCS is the version-control state of the working directory.
+// VCS is the version-control state of the working directory. Revision
+// and Dirty cannot tell two dirty trees on one revision apart; a
+// harness that needs to, as one that restores files to a checkpoint
+// does, records the tree's identity in a namespaced member, such as
+// "cline:tree", with [VCS.SetMember]. A change to it is not a
+// substitution, since only workspace is compared.
 type VCS struct {
 	System   string `json:"system"`
 	Revision string `json:"revision,omitempty"`
 	Dirty    bool   `json:"dirty,omitempty"`
+	// Unknown holds the members of vcs the format does not define,
+	// encoded inline beside system, revision and dirty. It is nil when
+	// there are none.
+	Unknown map[string]json.RawMessage `json:"-"`
+}
+
+// vcsMembers are the members of vcs the format defines.
+var vcsMembers = map[string]bool{"system": true, "revision": true, "dirty": true}
+
+// SetMember sets a member of vcs the format does not define, which
+// should be namespaced, such as "cline:tree".
+func (v *VCS) SetMember(key string, val any) error {
+	if vcsMembers[key] {
+		return fmt.Errorf("agentsession: vcs member %q is defined; set the field", key)
+	}
+	data, err := jsonx.MarshalNoEscape(val)
+	if err != nil {
+		return fmt.Errorf("agentsession: vcs member %q: %w", key, err)
+	}
+	if v.Unknown == nil {
+		v.Unknown = make(map[string]json.RawMessage)
+	}
+	v.Unknown[key] = data
+	return nil
+}
+
+// MarshalJSON emits the defined members and the unknown ones as one
+// object.
+func (v VCS) MarshalJSON() ([]byte, error) {
+	for key := range v.Unknown {
+		if vcsMembers[key] {
+			return nil, fmt.Errorf("agentsession: vcs has %s both typed and unknown", key)
+		}
+	}
+	type plain VCS
+	b, err := jsonx.MarshalNoEscape(plain(v))
+	if err != nil {
+		return nil, err
+	}
+	return jsonx.JoinObjects(b, nil, v.Unknown), nil
+}
+
+// UnmarshalJSON takes system, revision and dirty, spelled exactly, and
+// keeps every other member in Unknown.
+func (v *VCS) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	*v = VCS{}
+	for key, raw := range all {
+		var err error
+		switch key {
+		case "system":
+			err = json.Unmarshal(raw, &v.System)
+		case "revision":
+			err = json.Unmarshal(raw, &v.Revision)
+		case "dirty":
+			err = json.Unmarshal(raw, &v.Dirty)
+		default:
+			if v.Unknown == nil {
+				v.Unknown = make(map[string]json.RawMessage)
+			}
+			v.Unknown[key] = raw
+		}
+		if err != nil {
+			return fmt.Errorf("vcs %s: %w", key, err)
+		}
+	}
+	return nil
 }
 
 // FileHashes maps paths to content hashes ("sha256:...") for files read

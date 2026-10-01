@@ -1122,6 +1122,13 @@ substitution rule below compares `workspace` alone. The envelope
 section says a rewriter preserves them. An `env` entry applies from its
 position on the path until the next one.
 
+`vcs` names a revision and whether the tree differs from it, so two
+different dirty trees on one revision compare equal. A harness that
+needs to tell them apart, as one that restores files to a checkpoint
+does, records the tree's identity in a namespaced member, beside the
+others in the entry (`"cline:tree"`) or inside `vcs`. The envelope
+section says a rewriter preserves either.
+
 A later `env` entry whose `workspace` differs from the one in force
 before it on the path is a **substitution**: from that entry on, the
 tools ran against another file system than the path recorded until
@@ -1129,9 +1136,10 @@ then, as when a session recorded in a container is resumed on a laptop.
 Two `workspace` members are compared member by member in their
 canonical form, as the entry hash writes them, every member this
 document does not define included, and an absent one equals only
-another absent one, an empty `kind` or `ref` being absent; a new
-`cwd`, `vcs` revision or file list in the same workspace is not a
-substitution. Recording the
+another absent one, an empty `kind` or `ref` being absent. A change to
+any member other than `workspace` in the same workspace, those this
+document does not define included, is not a substitution: a new `cwd`,
+`vcs` revision, file list or tree identity is not. Recording the
 substitution is the point, so a writer writes the entry and nothing
 refuses it. A reader that holds the environment fixed, such as a strict
 replay or an evaluation comparing runs, treats the path from that entry

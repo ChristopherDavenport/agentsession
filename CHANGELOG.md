@@ -167,6 +167,19 @@ which is harmless, and the next writing open puts it back.
   logprobs and no usage gets `metrics` holding them alone.
   `completion_token_ids` stays empty: Open Responses carries no token
   IDs. (#176)
+- **`VCS.Unknown` and `VCS.SetMember`** hold the members of `vcs` the
+  format does not define, as `Workspace`'s do, so a harness can write
+  and read a namespaced member inside `vcs`, such as the identity of a
+  working tree's contents, which `revision` and `dirty` cannot give:
+  two dirty trees on one revision compare equal. Such a member was
+  already kept as read and written back; it is now a field, and a
+  caller that replaces `VCS` whole drops it, as one that replaces
+  `Workspace` does. RFC 0001 and the Go docs say a harness records a
+  tree's identity in a namespaced member, in the entry or inside
+  `vcs`, and that a change to any `env` member other than `workspace`,
+  those the format does not define included, is not a substitution,
+  which the rule already implied. No 0.10 file means anything new.
+  (#177)
 
 ## v0.0.18 - 2026-10-01
 
