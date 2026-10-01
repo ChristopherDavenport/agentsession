@@ -63,7 +63,9 @@ func NewEnvEntry(cwd string) *EnvEntry {
 // SetGit records the git revision of dir, read from its .git directory
 // without running git, and whether the tree is known to be dirty. A
 // directory that is not a git checkout leaves VCS unset and returns
-// nil; other errors are returned.
+// nil; other errors are returned. Members of an existing VCS the
+// format does not define, set with [VCS.SetMember] or read from a
+// file, are kept.
 func (e *EnvEntry) SetGit(dir string, dirty bool) error {
 	rev, err := GitRevision(dir)
 	if err != nil {
@@ -72,7 +74,11 @@ func (e *EnvEntry) SetGit(dir string, dirty bool) error {
 		}
 		return err
 	}
-	e.VCS = &VCS{System: "git", Revision: rev, Dirty: dirty}
+	v := &VCS{System: "git", Revision: rev, Dirty: dirty}
+	if e.VCS != nil {
+		v.Unknown = e.VCS.Unknown
+	}
+	e.VCS = v
 	return nil
 }
 

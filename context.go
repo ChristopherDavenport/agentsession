@@ -634,7 +634,14 @@ type Context struct {
 	ItemEntries []Entry
 }
 
-// Request returns the canonical request for the context.
+// Request returns the canonical request for the context. It equals the
+// request the model was sent under canonical JSON (RFC 8785), not in
+// bytes: member order inside opaque JSON, such as a tool's parameter
+// schema, is what the store gives back. A jsonl file gives members as
+// they were written and a cas store gives them in canonical order, so
+// the same session rebuilds different bytes from each, with one request
+// hash. A renderer that turns the request into tokens passes it, and the
+// live request it compares with, through [CanonicalRequest] first.
 func (c Context) Request() (openresponses.Request, error) {
 	return c.Settings.Request(c.Items)
 }

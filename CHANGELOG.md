@@ -147,6 +147,41 @@ which is harmless, and the next writing open puts it back.
   appended entries the repair cannot name. While a `damaged-*` log is
   kept, a sweep keeps every object any well-formed hash in it names,
   not only what its readable records name. (#167)
+- **`CanonicalRequest`** returns a request as its canonical JSON (RFC
+  8785) decodes, every member inside opaque JSON in canonical order. A
+  rebuilt request equals the one sent under canonical JSON, not in
+  bytes: a cas store gives a tool's parameter schema back with its
+  members sorted, and jsonl gives them as written, with one request
+  hash. A renderer that turns a request into tokens passes the live
+  request and the rebuilt one through it alike to render the same
+  bytes from both. RFC 0001's Goals now say byte for byte in canonical
+  form, as its normative text already did; `Context.Request` and the
+  cas and jsonl package docs say which store gives which. (#175)
+- **ATIF export fills `metrics.logprobs`** from the step's
+  `output_text` logprobs, in item order and then part order, the order
+  its message is built in. ATIF gives one per completion token, so it
+  is filled only when the record covers them all: every output item of
+  the step a message, every part an `output_text` carrying logprobs,
+  no refusal, and no reasoning tokens. Otherwise it is left out, and
+  the raw items under `extra` keep what logprobs there are. A step with
+  logprobs and no usage gets `metrics` holding them alone.
+  `completion_token_ids` stays empty: Open Responses carries no token
+  IDs. (#176)
+- **`VCS.Unknown` and `VCS.SetMember`** hold the members of `vcs` the
+  format does not define, as `Workspace`'s do, so a harness can write
+  and read a namespaced member inside `vcs`, such as the identity of a
+  working tree's contents, which `revision` and `dirty` cannot give:
+  two dirty trees on one revision compare equal. Such a member was
+  already kept as read and written back; it is now a field, and a
+  caller that replaces `VCS` whole drops it, as one that replaces
+  `Workspace` does. RFC 0001 and the Go docs say a harness records a
+  tree's identity in a namespaced member, in the entry or inside
+  `vcs`, and that a change to any `env` member other than `workspace`,
+  those the format does not define included, is not a substitution,
+  which the rule already implied. No 0.10 file means anything new.
+  `EnvEntry.SetGit` keeps the members of the `VCS` it replaces, and the
+  ATIF export's env `extra` now carries a `vcs`'s namespaced members,
+  which it dropped before. (#177)
 - **`Reader`: a store reads a session without holding it.** The new
   optional interface's `Read(ctx, id)` is implemented by cas, jsonl,
   sqlite and `MemoryStore`. It takes no lock, writes nothing, the

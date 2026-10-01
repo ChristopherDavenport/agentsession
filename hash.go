@@ -30,6 +30,31 @@ func RequestHash(req openresponses.Request) (string, error) {
 	return HashRequestJSON(data)
 }
 
+// CanonicalRequest returns req as its canonical JSON (RFC 8785)
+// decodes: every member inside opaque JSON, such as a tool's parameter
+// schema, in canonical order and spelling. A request rebuilt from a
+// session equals the one sent under canonical JSON, not in bytes: a cas
+// store holds bodies in canonical form, while a jsonl file gives members
+// as they were written. A renderer that turns a request into tokens
+// passes the live request and the rebuilt one through CanonicalRequest
+// alike, and then renders the same bytes from either. It does not change
+// the request hash.
+func CanonicalRequest(req openresponses.Request) (openresponses.Request, error) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return openresponses.Request{}, fmt.Errorf("agentsession: encode request: %w", err)
+	}
+	canonical, err := jcs.Transform(data)
+	if err != nil {
+		return openresponses.Request{}, fmt.Errorf("agentsession: canonicalise request: %w", err)
+	}
+	var out openresponses.Request
+	if err := json.Unmarshal(canonical, &out); err != nil {
+		return openresponses.Request{}, fmt.Errorf("agentsession: decode canonical request: %w", err)
+	}
+	return out, nil
+}
+
 // HashText returns the hash of a string in the format's notation,
 // which is [HashBytes] over its UTF-8 bytes: [HashPrefix] and the
 // lowercase hexadecimal SHA-256. It is how a config delta names the
