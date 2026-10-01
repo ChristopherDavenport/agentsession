@@ -38,16 +38,20 @@ var ErrScanMigrated = errors.New("agentsession: a file before 0.5 has no hashed 
 // Scan reads a session file and verifies it as [Read] does, decoding no
 // entry: every line passes the I-JSON test, every entry's id is the hash
 // of its line's canonical bytes, its ts has the one spelling the format
-// admits, and its parent, and every predecessor it converges in this
-// session, is an entry earlier in the file. The header is read and
-// checked first and returned as the file declares it. A line met a
-// second time is yielded with Repeat set. A last line cut short, as a
-// crash mid-append leaves, ends the sequence with a [*TruncatedLine]
-// error; any other failure ends it with its error, and the header's
-// base not being in the file is reported once the file ends.
+// admits, its parent is null or an entry earlier in the file, its
+// parents keep the convergence rules, and the legacy_id and normalised
+// any entry may carry have their types. The header is read and checked
+// first and returned as the file declares it. A line met a second time
+// is yielded with Repeat set. A last line cut short, as a crash
+// mid-append leaves, ends the sequence with a [*TruncatedLine] error;
+// any other failure ends it with its error, and the header's base not
+// being in the file is reported once the file ends. Lines are numbered,
+// and empty ones skipped, as Read numbers and skips them.
 //
-// Scan checks no more of an entry than its envelope: what a core entry
-// type requires of its members is Decode's to check, as it is Read's.
+// Scan checks no more of an entry than that: what a core entry type
+// requires of its own members is Decode's to check, as it is Read's.
+// The sequence reads r as it goes, so it ranges once; a second range
+// yields an error.
 func Scan(r io.Reader) (Header, iter.Seq2[RawEntry, error], error) {
 	br := bufio.NewReader(r)
 	line := 0
@@ -55,14 +59,15 @@ func Scan(r io.Reader) (Header, iter.Seq2[RawEntry, error], error) {
 		for {
 			data, err := br.ReadBytes('\n')
 			if err != nil && !errors.Is(err, io.EOF) {
-				return nil, false, err
+				return nil, false, fmt.Errorf("agentsession: read line %d: %w", line+1, err)
 			}
 			atEOF := err != nil
 			data = bytes.TrimRight(data, "\r\n")
-			if len(bytes.TrimSpace(data)) == 0 {
+			if len(data) == 0 {
 				if atEOF {
 					return nil, true, nil
 				}
+				line++
 				continue
 			}
 			line++
@@ -76,8 +81,8 @@ func Scan(r io.Reader) (Header, iter.Seq2[RawEntry, error], error) {
 	if first == nil {
 		return Header{}, nil, errors.New("agentsession: empty input")
 	}
-	if err := ijson.Check(first); err != nil {
-		return Header{}, nil, fmt.Errorf("agentsession: line 1: %w", err)
+	if err := ijson.Check(first); err != nil && json.Valid(first) {
+		return Header{}, nil, fmt.Errorf("agentsession: line %d: %w", line, err)
 	}
 	var h Header
 	if err := json.Unmarshal(first, &h); err != nil {
@@ -89,7 +94,13 @@ func Scan(r io.Reader) (Header, iter.Seq2[RawEntry, error], error) {
 	if _, minor, _ := ParseFormat(h.Format); minor < hashedMinor {
 		return Header{}, nil, fmt.Errorf("%w: %s", ErrScanMigrated, h.Format)
 	}
+	used := false
 	seq := func(yield func(RawEntry, error) bool) {
+		if used {
+			yield(RawEntry{}, errors.New("agentsession: a Scan sequence ranges once"))
+			return
+		}
+		used = true
 		seen := map[string]bool{}
 		for !atEOF {
 			var data []byte
@@ -102,12 +113,16 @@ func Scan(r io.Reader) (Header, iter.Seq2[RawEntry, error], error) {
 			}
 			e, err := scanLine(data, h.ID, seen)
 			if err != nil {
-				// Only a last line that is not JSON is cut short.
-				if atEOF || isLast(br) {
-					if !json.Valid(data) {
-						yield(RawEntry{}, &TruncatedLine{Line: line, Data: append([]byte(nil), data...), Err: err})
+				// Only a last line that is not JSON is cut short, and a
+				// line is the last only when nothing at all follows it.
+				// The file ends there, so a base not yet met is not in it.
+				if (atEOF || nothingLeft(br)) && !json.Valid(data) {
+					if h.Base != "" && !seen[h.Base] {
+						yield(RawEntry{}, fmt.Errorf("%w: base %s is not in the file", ErrNoEntry, h.Base))
 						return
 					}
+					yield(RawEntry{}, &TruncatedLine{Line: line, Data: append([]byte(nil), data...), Err: err})
+					return
 				}
 				yield(RawEntry{}, fmt.Errorf("agentsession: line %d: %w", line, err))
 				return
@@ -123,18 +138,11 @@ func Scan(r io.Reader) (Header, iter.Seq2[RawEntry, error], error) {
 	return h, seq, nil
 }
 
-// isLast reports whether nothing but blank space is left to read.
-func isLast(br *bufio.Reader) bool {
-	for {
-		b, err := br.Peek(1)
-		if err != nil || len(b) == 0 {
-			return true
-		}
-		if b[0] != '\n' && b[0] != '\r' && b[0] != ' ' && b[0] != '\t' {
-			return false
-		}
-		br.ReadByte()
-	}
+// nothingLeft reports whether nothing at all is left to read, not even
+// a blank line, which is how Read decides a line is the last.
+func nothingLeft(br *bufio.Reader) bool {
+	b, _ := br.Peek(1)
+	return len(b) == 0
 }
 
 // scanLine verifies one entry line against the entries seen before it
@@ -147,25 +155,71 @@ func scanLine(data []byte, session string, seen map[string]bool) (RawEntry, erro
 	if err != nil {
 		return RawEntry{}, err
 	}
+	v, err := verifyLine(c)
+	if err != nil {
+		return RawEntry{}, err
+	}
+	e := RawEntry{ID: v.id, Parent: v.parent, Type: v.typ, Line: data}
+	if seen[e.ID] {
+		e.Repeat = true
+		return e, nil
+	}
+	if e.Parent != "" && !seen[e.Parent] {
+		return RawEntry{}, fmt.Errorf("entry %s: %w: parent %s", e.ID, ErrNoEntry, e.Parent)
+	}
+	if p := v.parents; p != nil && string(p) != "null" {
+		var refs []EntryRef
+		if err := json.Unmarshal(p, &refs); err != nil {
+			return RawEntry{}, fmt.Errorf("agentsession: entry %s: parents: %w", e.ID, err)
+		}
+		if err := checkRefs(e.ID, e.Parent, session, refs, func(id string) bool { return seen[id] }); err != nil {
+			return RawEntry{}, err
+		}
+	}
+	seen[e.ID] = true
+	return e, nil
+}
+
+// lineEnvelope is what verifyLine reads of a line: parents is the
+// member as the line holds it, which [EntryRef] decodes.
+type lineEnvelope struct {
+	id, parent, typ, content string
+	parents                  []byte
+}
+
+// verifyLine checks a 0.5 entry line in its canonical form c, as both
+// readers check it before they look at any other entry: the envelope's
+// members have their types and ts its one spelling, the body carries
+// none of the envelope's names, legacy_id and normalised have their
+// types, and the id is the hash of the line. A root's parent is null;
+// the empty string names no entry, so it is refused, not read as a root.
+func verifyLine(c []byte) (lineEnvelope, error) {
 	members, ok := canonicalMembers(c)
 	if !ok {
-		return RawEntry{}, errors.New("agentsession: entry is not an object")
+		return lineEnvelope{}, errors.New("agentsession: entry is not an object")
 	}
-	var env struct{ id, parent, parents, ts, typ, content []byte }
+	var (
+		e                                         lineEnvelope
+		id, parent, ts, typ, legacyID, normalised []byte
+	)
 	for _, m := range members {
 		switch m.key {
 		case "id":
-			env.id = m.val
+			id = m.val
 		case "parent":
-			env.parent = m.val
+			parent = m.val
 		case "parents":
-			env.parents = m.val
+			e.parents = m.val
 		case "ts":
-			env.ts = m.val
+			ts = m.val
 		case "type":
-			env.typ = m.val
+			typ = m.val
 		case "content":
-			env.content = m.val
+			return lineEnvelope{}, fmt.Errorf("%w: content", ErrReservedMember)
+		case "legacy_id":
+			legacyID = m.val
+		case "normalised":
+			normalised = m.val
 		}
 	}
 	str := func(k string, v []byte) (string, error) {
@@ -181,57 +235,37 @@ func scanLine(data []byte, session string, seen map[string]bool) (RawEntry, erro
 		}
 		return s, nil
 	}
-	var e RawEntry
-	if e.Type, err = str("type", env.typ); err != nil {
-		return RawEntry{}, err
+	var err error
+	if e.typ, err = str("type", typ); err != nil {
+		return lineEnvelope{}, err
 	}
-	if e.ID, err = str("id", env.id); err != nil {
-		return RawEntry{}, err
+	if e.id, err = str("id", id); err != nil {
+		return lineEnvelope{}, err
 	}
-	if e.Parent, err = str("parent", env.parent); err != nil {
-		return RawEntry{}, err
+	if e.parent, err = str("parent", parent); err != nil {
+		return lineEnvelope{}, err
 	}
-	ts, err := str("ts", env.ts)
+	tsStr, err := str("ts", ts)
 	if err != nil {
-		return RawEntry{}, err
+		return lineEnvelope{}, err
 	}
 	switch {
-	case e.Type == "":
-		return RawEntry{}, errors.New("agentsession: entry has no type")
-	case e.ID == "":
-		return RawEntry{}, fmt.Errorf("%w: missing id", ErrBadID)
-	case env.content != nil:
-		return RawEntry{}, fmt.Errorf("%w: entry %s carries the reserved member content", ErrBadID, e.ID)
+	case e.typ == "":
+		return lineEnvelope{}, errors.New("agentsession: entry has no type")
+	case e.id == "":
+		return lineEnvelope{}, fmt.Errorf("%w: missing id", ErrBadID)
+	case e.parent == "" && parent != nil && string(parent) != "null":
+		return lineEnvelope{}, fmt.Errorf("%w: entry %s: parent is the empty string; a root's parent is null", ErrBadID, e.id)
 	}
-	if _, ok := ParseCanonicalTime(ts); !ok {
-		return RawEntry{}, fmt.Errorf("%w: ts %q is not in the one form the format admits", ErrBadID, ts)
+	if _, ok := ParseCanonicalTime(tsStr); !ok {
+		return lineEnvelope{}, fmt.Errorf("%w: ts %q is not in the one form the format admits", ErrBadID, tsStr)
 	}
-	id, _, err := entryHashesCanonical(c)
-	if err != nil {
-		return RawEntry{}, err
+	if _, _, err := commonBody(legacyID, normalised); err != nil {
+		return lineEnvelope{}, fmt.Errorf("agentsession: entry %s: %w", e.id, err)
 	}
-	if id != e.ID {
-		return RawEntry{}, fmt.Errorf("%w: line says %s, hashes to %s", ErrBadID, e.ID, id)
+	var hashed string
+	if hashed, e.content = memberHashes(c, members); hashed != e.id {
+		return lineEnvelope{}, fmt.Errorf("%w: line says %s, hashes to %s", ErrBadID, e.id, hashed)
 	}
-	e.Line = data
-	if seen[e.ID] {
-		e.Repeat = true
-		return e, nil
-	}
-	if e.Parent != "" && !seen[e.Parent] {
-		return RawEntry{}, fmt.Errorf("entry %s: %w: parent %s", e.ID, ErrNoEntry, e.Parent)
-	}
-	if p := env.parents; p != nil {
-		var refs []EntryRef
-		if err := json.Unmarshal(p, &refs); err != nil {
-			return RawEntry{}, fmt.Errorf("%w: entry %s: parents: %v", ErrBadConvergence, e.ID, err)
-		}
-		for _, r := range refs {
-			if (r.Session == "" || r.Session == session) && !seen[r.Entry] {
-				return RawEntry{}, fmt.Errorf("%w: entry %s converges %s, which is not in this session yet", ErrBadConvergence, e.ID, r.Entry)
-			}
-		}
-	}
-	seen[e.ID] = true
 	return e, nil
 }

@@ -6,6 +6,7 @@ package storetest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -33,6 +34,7 @@ func Run(t *testing.T, opts Options) {
 	t.Run("CreateAndOpen", func(t *testing.T) { testCreateAndOpen(t, opts) })
 	t.Run("Append", func(t *testing.T) { testAppend(t, opts) })
 	t.Run("HeldAppend", func(t *testing.T) { testHeldAppend(t, opts) })
+	t.Run("ReadLine", func(t *testing.T) { testReadLine(t, opts) })
 	t.Run("List", func(t *testing.T) { testList(t, opts) })
 	t.Run("Continue", func(t *testing.T) { testContinue(t, opts) })
 	t.Run("Delete", func(t *testing.T) { testDelete(t, opts) })
@@ -92,6 +94,72 @@ func testHeldAppend(t *testing.T, opts Options) {
 	if s2.Len() != 2 || len(s2.Repeated()) != 0 {
 		t.Errorf("after reopening: %d entries, repeated %v; want 2 and none", s2.Len(), s2.Repeated())
 	}
+}
+
+// testReadLine appends entries read from lines whose members the typed
+// fields write back otherwise — a link with no session, a label with no
+// target, where the fields add "" — with the ids the lines hash to. The
+// id is the hash of the line, so a store writes the line back as read:
+// the append keeps the id, and so does every read of what it stored.
+func testReadLine(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	root, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("root")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for i, body := range []string{`"type":"link","rel":"subagent"`, `"type":"label","label":"x"`} {
+		line := fmt.Sprintf(`{%s,"parent":%q,"ts":"2026-09-17T16:00:0%dZ"}`, body, root, i+1)
+		want, _, err := agentsession.EntryHashes([]byte(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, err := agentsession.UnmarshalEntry([]byte(`{"id":"` + want + `",` + line[1:]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := st.Append(ctx, id, e)
+		if err != nil || got != want {
+			t.Fatalf("Append of a read %s = %s, %v; want %s", body, got, err, want)
+		}
+		ids = append(ids, want)
+	}
+	check := func(when string, s *agentsession.Session) {
+		t.Helper()
+		for _, want := range ids {
+			e, ok := s.Entry(want)
+			if !ok {
+				t.Errorf("%s: no entry %s", when, want)
+				continue
+			}
+			data, err := agentsession.MarshalEntry(e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, _, err := agentsession.EntryHashes(data); err != nil || got != want {
+				t.Errorf("%s: entry %s writes back as %s, %v", when, want, got, err)
+			}
+		}
+	}
+	again, err := st.Open(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("after Open", again)
+	if opts.Reopen == nil {
+		return
+	}
+	again, err = opts.Reopen(t, st).Open(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("after reopening", again)
 }
 
 // testConvergence appends an entry that converges a branch of this

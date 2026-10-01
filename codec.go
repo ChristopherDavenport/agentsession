@@ -89,7 +89,7 @@ func Read(r io.Reader) (*Session, error) {
 			s.migrated = m != nil
 			s.declared = declared
 		} else {
-			e, form, canonical, err := decodeLine(data)
+			e, c, err := decodeLine(data)
 			if err != nil {
 				// Only a last line that is not JSON is a truncated line,
 				// which a crash mid-append leaves behind. A last line
@@ -107,7 +107,7 @@ func Read(r io.Reader) (*Session, error) {
 				s.truncated = &TruncatedLine{Line: line, Data: append([]byte(nil), data...), Err: err}
 				break
 			}
-			if err := s.link(e, m, form, canonical); err != nil {
+			if err := s.link(e, m, data, c); err != nil {
 				return nil, fmt.Errorf("agentsession: line %d: %w", line, err)
 			}
 		}
@@ -138,49 +138,31 @@ type migration struct {
 }
 
 // link adds a decoded entry, checking the tree invariants. For a 0.5
-// line the id is verified against the hashes the format defines; for a
-// line of an earlier minor the entry is rewritten — references to the
-// hashes assigned earlier in the file, the old id to legacy_id, ts to
-// its one spelling — and hashed. A repeated id is the same entry, kept
-// once and reported.
-//
-// form is the entry's typed encoding as read, which a 0.5 line is
-// hashed from rather than encoded again; nil encodes it. canonical says
-// form is canonical and equal to the line, so it is hashed as it stands.
-func (s *Session) link(e Entry, m *migration, form []byte, canonical bool) error {
+// line the envelope and the id are verified from the line's canonical
+// bytes, c when decoding came by them and data canonicalised otherwise,
+// as Scan verifies them: the id is the hash of the line, not of what the
+// entry's fields encode. For a line of an earlier minor the entry is
+// rewritten — references to the hashes assigned earlier in the file, the
+// old id to legacy_id, ts to its one spelling — and hashed. A repeated
+// id is the same entry, kept once and reported.
+func (s *Session) link(e Entry, m *migration, data, c []byte) error {
 	b := e.Base()
 	if m != nil {
 		if err := m.rewrite(e, s); err != nil {
 			return err
 		}
 	} else {
-		if b.ID == "" {
-			return fmt.Errorf("%w: missing id", ErrBadID)
-		}
-		if _, ok := ParseCanonicalTime(b.tsRaw); !ok {
-			return fmt.Errorf("%w: ts %q is not in the one form the format admits", ErrBadID, b.tsRaw)
-		}
-		want := b.ID
-		if canonical {
-			id, content, err := entryHashesCanonical(form)
-			if err != nil {
-				return err
-			}
-			b.ID, b.content = id, content
-		} else {
-			if form != nil && len(b.kept) > 0 {
-				var err error
-				if form, err = restoreKept(form, b.kept); err != nil {
-					return err
-				}
-			}
-			if err := s.hashEntry(e, form); err != nil {
+		if c == nil {
+			var err error
+			if c, err = jcs.Transform(data); err != nil {
 				return err
 			}
 		}
-		if b.ID != want {
-			return fmt.Errorf("%w: line says %s, hashes to %s", ErrBadID, want, b.ID)
+		v, err := verifyLine(c)
+		if err != nil {
+			return err
 		}
+		b.ID, b.content = v.id, v.content
 	}
 	if _, taken := s.byID[b.ID]; taken {
 		s.repeated = append(s.repeated, b.ID)
@@ -206,6 +188,7 @@ func (s *Session) link(e Entry, m *migration, form []byte, canonical bool) error
 // only in its envelope and recorded as unresolved.
 func (m *migration) rewrite(e Entry, s *Session) error {
 	b := e.Base()
+	b.line = nil // the line is rewritten, so the fields write it
 	old := b.ID
 	if old == "" {
 		return fmt.Errorf("%w: missing id", ErrBadID)

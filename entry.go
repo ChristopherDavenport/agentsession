@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,12 +108,56 @@ type EntryBase struct {
 	// kept holds, for an entry that was read, each member the line held
 	// more of than the typed fields encode: see keepAsRead.
 	kept map[string]keptMember
+	// line is, for an entry that was read, the line itself when what
+	// the typed fields encode does not reproduce it: see keptLine.
+	line *keptLine
 }
 
 // keptMember is a member as the line held it, raw, which is nil when
 // the line did not have it, and as the typed fields encoded it when the
 // entry was read, seen, which is nil when they left it out.
 type keptMember struct{ raw, seen json.RawMessage }
+
+// keptLine is a read line's canonical bytes, kept for a core entry
+// whose typed fields, with what keepAsRead kept grafted back, encode
+// something else: a member the line leaves out that a field adds, or
+// spells in another form. The line's id is the hash of the line, so the
+// line is what marshalEntry writes back for as long as the fields
+// encode what they did at read; fp is the hash of that encoding with
+// the id left out, so a caller's change to any member drops the line
+// and an id assigned again does not.
+type keptLine struct {
+	c   []byte
+	id  string
+	fp  [sha256.Size]byte
+	set bool
+}
+
+// emit returns the kept line with id as its id.
+func (l *keptLine) emit(id string) ([]byte, error) {
+	if id == l.id {
+		return append([]byte(nil), l.c...), nil
+	}
+	members, ok := canonicalMembers(l.c)
+	if !ok {
+		return nil, errors.New("agentsession: kept line is not an object")
+	}
+	for _, m := range members {
+		if m.key != "id" {
+			continue
+		}
+		v, err := jsonx.MarshalNoEscape(id)
+		if err != nil {
+			return nil, err
+		}
+		at := cap(l.c) - cap(m.val) // m.val is a slice of l.c
+		out := make([]byte, 0, len(l.c)+len(v))
+		out = append(out, l.c[:at]...)
+		out = append(out, v...)
+		return append(out, l.c[at+len(m.val):]...), nil
+	}
+	return nil, errors.New("agentsession: kept line has no id")
+}
 
 // ContentHash returns the hash of the entry's body, the members outside
 // the envelope, as computed when the entry was appended or read. It is
@@ -145,6 +190,24 @@ type EntryRef struct {
 	Session string `json:"session,omitempty"`
 	// Entry is the ID of the entry referred to.
 	Entry string `json:"entry"`
+}
+
+// UnmarshalJSON decodes a reference by its members' exact names, as the
+// format names them: a key in another case is a member the format does
+// not define. An entry member that is missing or not a string decodes
+// as no entry, which the convergence rules refuse.
+func (r *EntryRef) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	*r = EntryRef{Entry: jsonx.PeekString(all["entry"])}
+	if raw, ok := all["session"]; ok && !isNull(raw) {
+		if err := json.Unmarshal(raw, &r.Session); err != nil {
+			return fmt.Errorf("session: %w", err)
+		}
+	}
+	return nil
 }
 
 // envelope is the wire form of the common members.
@@ -607,17 +670,8 @@ func (e *UnknownEntry) decodeMembers(data []byte, all map[string]json.RawMessage
 			e.tsRaw = s
 		}
 	}
-	e.LegacyID = ""
-	if raw, ok := all["legacy_id"]; ok && !isNull(raw) {
-		if err := json.Unmarshal(raw, &e.LegacyID); err != nil {
-			return fmt.Errorf("legacy_id: %w", err)
-		}
-	}
-	e.Normalised = nil
-	if raw, ok := all["normalised"]; ok && !isNull(raw) {
-		if err := json.Unmarshal(raw, &e.Normalised); err != nil {
-			return fmt.Errorf("normalised: %w", err)
-		}
+	if e.LegacyID, e.Normalised, err = commonBody(all["legacy_id"], all["normalised"]); err != nil {
+		return err
 	}
 	e.Raw = append(json.RawMessage(nil), data...)
 	return nil
@@ -655,67 +709,96 @@ func MarshalEntry(e Entry) ([]byte, error) {
 // UnmarshalEntry decodes one line, dispatching on its type. Types this
 // package does not define decode to [*UnknownEntry].
 func UnmarshalEntry(data []byte) (Entry, error) {
-	e, _, _, err := decodeLine(data)
+	e, _, err := decodeLine(data)
 	return e, err
 }
 
-// decodeLine is UnmarshalEntry that also returns the entry's typed
-// encoding as read, before kept members are restored, which Read
-// hashes rather than encoding the entry a second time; canonical says
-// it is already canonical and equal to the line. It is nil for an
-// extension entry.
-func decodeLine(data []byte) (e Entry, form []byte, canonical bool, err error) {
+// decodeLine is UnmarshalEntry that also returns the line's canonical
+// bytes when decoding came by them, which is what Read hashes: the id is
+// the hash of the line, never of what the entry's fields encode. It is
+// nil for an extension entry, and for a line that is not I-JSON.
+func decodeLine(data []byte) (e Entry, c []byte, err error) {
 	// The line is split into its members once; the envelope, the
 	// unknown-member check and, for item entries, the body all read
 	// from the split, so a large line is not parsed again for each.
 	all, err := splitMembers(data)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, err
 	}
 	env, err := envelopeFrom(all)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, err
 	}
 	if env.Type == "" {
-		return nil, nil, false, errors.New("agentsession: entry has no type")
+		return nil, nil, errors.New("agentsession: entry has no type")
 	}
 	if env.ID == "" {
-		return nil, nil, false, fmt.Errorf("agentsession: %s entry has no id", env.Type)
+		return nil, nil, fmt.Errorf("agentsession: %s entry has no id", env.Type)
 	}
-	if env.TS.IsZero() {
-		return nil, nil, false, fmt.Errorf("agentsession: entry %s has no ts", env.ID)
+	if raw, ok := all["ts"]; !ok || isNull(raw) {
+		return nil, nil, fmt.Errorf("agentsession: entry %s has no ts", env.ID)
+	}
+	if _, _, err := commonBody(all["legacy_id"], all["normalised"]); err != nil {
+		return nil, nil, fmt.Errorf("agentsession: entry %s: %w", env.ID, err)
 	}
 	var d memberDecoder = &UnknownEntry{}
 	if mk, ok := coreEntries[env.Type]; ok {
 		d = mk()
 	}
-	form, canonical, err = decodeForm(d, data, all)
+	c, err = decodeForm(d, data, all)
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("agentsession: entry %s (%s): %w", env.ID, env.Type, err)
+		return nil, nil, fmt.Errorf("agentsession: entry %s (%s): %w", env.ID, env.Type, &memberError{err})
 	}
-	return d, form, canonical, nil
+	return d, c, nil
+}
+
+// memberError is a decode error in what a core entry type holds of its
+// own members, which Scan leaves to Decode.
+type memberError struct{ err error }
+
+func (m *memberError) Error() string { return m.err.Error() }
+func (m *memberError) Unwrap() error { return m.err }
+
+// commonBody decodes the body members every entry type may carry, which
+// every reader checks whatever the type: legacy_id is a string and
+// normalised a list of changes.
+func commonBody(legacyID, normalised json.RawMessage) (string, []Normalisation, error) {
+	var (
+		id  string
+		out []Normalisation
+	)
+	if legacyID != nil && !isNull(legacyID) {
+		if err := json.Unmarshal(legacyID, &id); err != nil {
+			return "", nil, fmt.Errorf("legacy_id: %w", err)
+		}
+	}
+	if normalised != nil && !isNull(normalised) {
+		if err := json.Unmarshal(normalised, &out); err != nil {
+			return "", nil, fmt.Errorf("normalised: %w", err)
+		}
+	}
+	return id, out, nil
 }
 
 // finishDecode decodes a split line into e and, for a core entry,
 // remembers what its typed fields could not hold.
 func finishDecode(e memberDecoder, data []byte, all map[string]json.RawMessage) error {
-	_, _, err := decodeForm(e, data, all)
+	_, err := decodeForm(e, data, all)
 	return err
 }
 
-// decodeForm is finishDecode returning the typed encoding keepAsRead
-// compared the line with, nil for an extension entry, and whether that
-// encoding is canonical and the line's own bytes.
-func decodeForm(e memberDecoder, data []byte, all map[string]json.RawMessage) ([]byte, bool, error) {
+// decodeForm is finishDecode returning the line's canonical bytes when
+// keepAsRead came by them, nil for an extension entry.
+func decodeForm(e memberDecoder, data []byte, all map[string]json.RawMessage) ([]byte, error) {
 	if err := e.decodeMembers(data, all); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if _, unknown := e.(*UnknownEntry); unknown {
-		return nil, false, nil // written back from its raw line
+		return nil, nil // written back from its raw line
 	}
-	form, typed, suspect, canonical, err := keepAsRead(e, data, all)
+	c, typed, suspect, err := keepAsRead(e, data, all)
 	if err != nil || len(suspect) == 0 {
-		return form, canonical, err
+		return c, err
 	}
 	// A member did not reproduce, or held more than the fields encode.
 	// Where that is Go's decoder matching a key in another case to a
@@ -723,12 +806,12 @@ func decodeForm(e memberDecoder, data []byte, all map[string]json.RawMessage) ([
 	// such keys.
 	clean, folded, changed := unfold(all, typed, suspect, definedMembers(e))
 	if !changed {
-		return form, false, nil
+		return c, nil
 	}
 	rv := reflect.ValueOf(e).Elem()
 	rv.Set(reflect.Zero(rv.Type()))
 	if err := e.decodeMembers(jsonx.JoinObjects([]byte("{}"), []byte("{}"), clean), clean); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if len(folded) > 0 {
 		b := e.Base()
@@ -739,8 +822,8 @@ func decodeForm(e memberDecoder, data []byte, all map[string]json.RawMessage) ([
 			b.Unknown[k] = v
 		}
 	}
-	form, _, _, canonical, err = keepAsRead(e, data, all)
-	return form, canonical, err
+	c, _, _, err = keepAsRead(e, data, all)
+	return c, err
 }
 
 // definedMembers returns the member names an entry's type defines: its
@@ -801,30 +884,33 @@ var untracked = map[string]bool{"id": true, "type": true, "parent": true, "ts": 
 // cannot be told from a member no one defined: the entry still verifies
 // and writes back whole, and only the typed value is missing.
 //
-// Only extras are remembered. A member the typed encoding has and the
-// line lacks, or holds with a different value, is not: that is a line
-// the reader does not read as written, through a required member left
-// out or a decoder fault, and it stays refused, since its hash is then
-// computed from what the reader understood. suspect names every member
-// that did not reproduce exactly, remembered or not.
+// Only extras are remembered member by member. A member the typed
+// encoding has and the line lacks, or holds with a different value, such
+// as a member a field adds as "" where the line has none, is not; the
+// line is kept whole instead, and written back while the fields still
+// encode what they did here, since the id is the hash of the line and
+// not of what this reader made of it. suspect names every member that
+// did not reproduce exactly, remembered or not.
 //
-// A conforming writer's line is canonical, so the typed encoding
-// canonicalised once is usually the line's own bytes, and then there is
-// nothing to compare member by member: keepAsRead returns that canonical
-// encoding with canonical set, which Read hashes as it stands.
-func keepAsRead(e Entry, data []byte, all map[string]json.RawMessage) (form []byte, typed map[string]json.RawMessage, suspect map[string]bool, canonical bool, err error) {
+// c is the line's canonical bytes, which Read hashes. A conforming
+// writer's line is canonical, so the typed encoding canonicalised once
+// is usually the line's own bytes, and then there is nothing to compare
+// member by member. c is nil for a line that has no canonical form, which
+// is not I-JSON and which Read refuses.
+func keepAsRead(e Entry, data []byte, all map[string]json.RawMessage) (c []byte, typed map[string]json.RawMessage, suspect map[string]bool, err error) {
 	b := e.Base()
-	b.kept = nil
-	form, err = jsonx.MarshalNoEscape(e)
+	b.kept, b.line = nil, nil
+	form, err := jsonx.MarshalNoEscape(e)
 	if err != nil {
-		return nil, nil, nil, false, err
+		return nil, nil, nil, err
 	}
-	if c, err := jcs.Transform(form); err == nil && bytes.Equal(c, data) {
-		return c, nil, nil, true, nil
+	fc, ferr := jcs.Transform(form)
+	if ferr == nil && bytes.Equal(fc, data) {
+		return fc, nil, nil, nil
 	}
 	typed, err = splitMembers(form)
 	if err != nil {
-		return nil, nil, nil, false, err
+		return nil, nil, nil, err
 	}
 	mark := func(key string) {
 		if suspect == nil {
@@ -873,7 +959,28 @@ func keepAsRead(e Entry, data []byte, all map[string]json.RawMessage) (form []by
 			b.keep(key, nil, seen)
 		}
 	}
-	return form, typed, suspect, false, nil
+	c, err = jcs.Transform(data)
+	if err != nil {
+		return nil, typed, suspect, nil
+	}
+	restored := fc
+	if len(b.kept) > 0 || ferr != nil {
+		if form, err = restoreKept(form, b.kept); err == nil {
+			restored, err = jcs.Transform(form)
+		}
+		if err != nil {
+			restored = nil
+		}
+	}
+	if !bytes.Equal(restored, c) {
+		// The fields do not write the line back: keep it, and have
+		// marshalEntry note what the fields encode now.
+		b.line = &keptLine{c: c, id: b.ID}
+		if _, err := jsonx.MarshalNoEscape(e); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	return c, typed, suspect, nil
 }
 
 // foldKey is key under simple case folding, which is how Go's decoder
@@ -1367,11 +1474,34 @@ func marshalEntry(typ string, base *EntryBase, body any) ([]byte, error) {
 		return nil, err
 	}
 	extra := base.extraMembers()
+	if l := base.line; l != nil {
+		fp, err := lineFingerprint(env, b, extra)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case !l.set:
+			l.fp, l.set = fp, true // at read: what the fields encode
+		case fp == l.fp:
+			return l.emit(base.ID)
+		}
+	}
 	out := jsonx.JoinObjects(head, b, extra)
 	if len(base.kept) > 0 && !collides(head, b, extra) {
 		return restoreKept(out, base.kept)
 	}
 	return out, nil
+}
+
+// lineFingerprint hashes what an entry's fields encode, its id left
+// out, for keptLine.
+func lineFingerprint(env envelope, body []byte, extra map[string]json.RawMessage) ([sha256.Size]byte, error) {
+	env.ID = ""
+	head, err := jsonx.MarshalNoEscape(env)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return sha256.Sum256(jsonx.JoinObjects(head, body, extra)), nil
 }
 
 // collides reports whether an extra member repeats a member of the
@@ -1446,18 +1576,9 @@ func fillBase(all map[string]json.RawMessage, base *EntryBase, known map[string]
 			base.tsRaw = s
 		}
 	}
-	base.kept = nil
-	base.LegacyID = ""
-	if raw, ok := all["legacy_id"]; ok && !isNull(raw) {
-		if err := json.Unmarshal(raw, &base.LegacyID); err != nil {
-			return fmt.Errorf("legacy_id: %w", err)
-		}
-	}
-	base.Normalised = nil
-	if raw, ok := all["normalised"]; ok && !isNull(raw) {
-		if err := json.Unmarshal(raw, &base.Normalised); err != nil {
-			return fmt.Errorf("normalised: %w", err)
-		}
+	base.kept, base.line = nil, nil
+	if base.LegacyID, base.Normalised, err = commonBody(all["legacy_id"], all["normalised"]); err != nil {
+		return err
 	}
 	base.Unknown = jsonx.ExtraKeys(all, known, append(append([]string{}, envelopeKeys...), commonBodyKeys...)...)
 	return nil

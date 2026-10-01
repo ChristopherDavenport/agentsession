@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"BAse\":\"0\",\"CreAted_At\":\"0000-01-01T0:00:00Z\",\"formAt\":\"agentsession/0.10\",\"id\":\"0\",\"pAYloAd\":\"openresponses/\",\"type\":\"session\"}\nA")
