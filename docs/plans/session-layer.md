@@ -247,6 +247,7 @@ shape back reads it out of `extra`.
 | assistant message items and the `response` entry for one model call | one step `source: "agent"`: `message` from output text, `reasoning_content` from reasoning items, `tool_calls` from function calls, `metrics` from the response usage, `llm_call_count` from the response `attempts`, 1 when absent |
 | `function_call_output` items for that call | `observation.results[]` with `source_call_id` = `call_id` |
 | `response.usage` | `metrics.prompt_tokens`, `completion_tokens`, `cached_tokens` from the input token details; `cost_usd` only when a price source is configured |
+| `output_text` `logprobs` of the step's message items | `metrics.logprobs`, concatenated in item order then part order, only when they cover every completion token: every output item a message, every part an `output_text` carrying logprobs, and no reasoning tokens; otherwise omitted, the raw items in `extra` keeping what there is. `completion_token_ids` stays empty, since Open Responses carries no token IDs |
 | `compaction` | the ATIF context-management convention; steps before `first_kept_entry_id` are not emitted, the summary item becomes a `source: "system"` step with `is_copied_context: true` |
 | `branch_summary` | `source: "system"` step, `is_copied_context: true`, with `extra.branch_from` |
 | `custom_item` | step by its role, `extra.custom_type` |

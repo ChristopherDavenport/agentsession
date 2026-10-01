@@ -7,6 +7,11 @@
 // Each Append writes one line; a SyncPolicy decides when the file is
 // fsynced. Opening a session whose last line was cut short by a crash
 // drops that line so later appends produce a valid file.
+//
+// A session read back gives members as they were written, member order
+// inside opaque JSON such as a tool's parameter schema included. That
+// is a property of this store, not of the format: a cas store gives the
+// same members in canonical order. See [agentsession.CanonicalRequest].
 package jsonl
 
 import (

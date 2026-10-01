@@ -727,22 +727,58 @@ func TestNestedMembersReadAsWritten(t *testing.T) {
 		}
 	})
 	t.Run("a caller's change keeps what it did not touch", func(t *testing.T) {
-		line := hashed(`"type":"env","cwd":"/w","vcs":{"system":"git","revision":"ab","branch":"main"}`)
+		line := hashed(`"type":"env","cwd":"/w","files":{"written":{"a":"sha256:ab"},"removed":["b"]}`)
 		s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		env := s.Entries()[0].(*EnvEntry)
 		changed := *env
-		changed.VCS = &VCS{System: "git", Revision: "cd"}
+		changed.Files = &FileHashes{Written: map[string]string{"a": "sha256:cd"}}
 		changed.CWD = "/elsewhere"
 		data, err := MarshalEntry(&changed)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The caller's revision and the reader's branch: the change is
-		// the caller's, and the branch is a member no field of this
-		// package holds, which a rewriter preserves.
+		// The caller's hash and the reader's removed: the change is the
+		// caller's, and removed is a member no field of this package
+		// holds, which a rewriter preserves.
+		if !strings.Contains(string(data), `"removed":["b"]`) || !strings.Contains(string(data), `"sha256:cd"`) || strings.Contains(string(data), `"sha256:ab"`) {
+			t.Errorf("changed files written as %s", data)
+		}
+	})
+	t.Run("a vcs's own members are held by the vcs", func(t *testing.T) {
+		line := hashed(`"type":"env","cwd":"/w","vcs":{"system":"git","revision":"ab","branch":"main","System":"x"}`)
+		s, err := Read(strings.NewReader(head + "\n" + line + "\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := s.Entries()[0].(*EnvEntry)
+		v := env.VCS
+		if v.System != "git" || v.Revision != "ab" || string(v.Unknown["branch"]) != `"main"` || string(v.Unknown["System"]) != `"x"` {
+			t.Errorf("vcs = %+v", v)
+		}
+		var buf bytes.Buffer
+		if err := Write(&buf, s); err != nil {
+			t.Fatal(err)
+		}
+		again, err := Read(&buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := again.Entry(env.ID); !ok {
+			t.Errorf("rewrite changed the entry's id")
+		}
+		// A caller that changes the revision of the vcs it read keeps
+		// the members it did not touch.
+		changed := *env
+		vcs := *env.VCS
+		vcs.Revision = "cd"
+		changed.VCS = &vcs
+		data, err := MarshalEntry(&changed)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if !strings.Contains(string(data), `"branch":"main"`) || !strings.Contains(string(data), `"revision":"cd"`) || strings.Contains(string(data), `"ab"`) {
 			t.Errorf("changed vcs written as %s", data)
 		}

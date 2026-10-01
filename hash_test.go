@@ -73,6 +73,66 @@ func TestRequestHashVectors(t *testing.T) {
 	}
 }
 
+// TestCanonicalRequest: a tool schema's members come back in canonical
+// order, and the request hash does not move.
+func TestCanonicalRequest(t *testing.T) {
+	store := false
+	req := openresponses.Request{
+		Model: "m",
+		Store: &store,
+		Tools: openresponses.Tools{openresponses.NewFunctionTool("f", "d",
+			json.RawMessage(`{"type":"object", "properties":{"b":{},"a":{}}}`))},
+	}
+	got, err := CanonicalRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ft, ok := got.Tools[0].(*openresponses.FunctionTool)
+	if !ok {
+		t.Fatalf("tool = %T", got.Tools[0])
+	}
+	if want := `{"properties":{"a":{},"b":{}},"type":"object"}`; string(ft.Parameters) != want {
+		t.Errorf("parameters = %s, want %s", ft.Parameters, want)
+	}
+	h1, _ := RequestHash(req)
+	h2, _ := RequestHash(got)
+	if h1 != h2 {
+		t.Errorf("hash moved: %s to %s", h1, h2)
+	}
+	again, err := CanonicalRequest(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := json.Marshal(got)
+	b, _ := json.Marshal(again)
+	if !bytes.Equal(a, b) {
+		t.Errorf("not idempotent:\n%s\n%s", a, b)
+	}
+	// Two requests that differ only in the member order of a tool
+	// schema canonicalise to the same bytes, though they encode apart.
+	other := req
+	other.Tools = openresponses.Tools{openresponses.NewFunctionTool("f", "d",
+		json.RawMessage(`{"properties":{"a":{},"b":{}},"type":"object"}`))}
+	ra, _ := json.Marshal(req)
+	rb, _ := json.Marshal(other)
+	if bytes.Equal(ra, rb) {
+		t.Fatal("the two requests encode alike; the test proves nothing")
+	}
+	ca, err := CanonicalRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb, err := CanonicalRequest(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ea, _ := json.Marshal(ca)
+	eb, _ := json.Marshal(cb)
+	if !bytes.Equal(ea, eb) {
+		t.Errorf("canonical forms differ:\n%s\n%s", ea, eb)
+	}
+}
+
 func TestHashRequestJSONIsCanonical(t *testing.T) {
 	a := []byte(`{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"store":false,"temperature":1.0}`)
 	b := []byte(" {\n \"temperature\": 1, \"store\": false,\n \"input\": [ {\"content\": [ {\"text\": \"hi\", \"type\": \"input_text\"} ], \"role\": \"user\", \"type\": \"message\"} ],\n \"model\": \"m\" }\n")
