@@ -37,7 +37,8 @@ func (k keepSet) has(sp space, hash string) bool {
 // live writer may yet commit it, writing its objects again. One of an
 // append recovery recorded lost, gone for good, is not kept at all, so
 // a sweep removes what a crash left of it, as RFC 0002's retention
-// allows, and Verify stops reporting it.
+// allows, and Verify, which reports it as a leftover until then, as no
+// failure, stops reporting it.
 func (s *Store) keepEntry(k keepSet, id string, mode keepMode) error {
 	if k.entries[id] {
 		return nil

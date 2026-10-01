@@ -2021,6 +2021,23 @@ func TestLostObjectsSwept(t *testing.T) {
 	if s, err := r.Open(ctx, "p"); err != nil || s.Leaf() != after {
 		t.Fatalf("the durable append after the cut: %v", err)
 	}
+	// Before the sweep, what the cut left is reported as leftovers, which
+	// are no failure (#171), and a sweep within its grace keeps them.
+	if _, err := r.Sweep(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := r.Verify(ctx)
+	if err != nil || !rep.OK() {
+		t.Errorf("before a sweep past the grace: %v %v", err, rep.Problems)
+	}
+	if got := len(rep.Problems); got != 2*(len(tail)-1) {
+		t.Errorf("%d leftovers, want %d: %v", got, 2*(len(tail)-1), rep.Problems)
+	}
+	for _, p := range rep.Problems {
+		if p.Kind != KindLeftover {
+			t.Errorf("%v, want a leftover", p)
+		}
+	}
 	if _, err := r.Sweep(ctx, 0); err != nil {
 		t.Fatal(err)
 	}

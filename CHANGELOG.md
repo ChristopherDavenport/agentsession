@@ -36,6 +36,16 @@ versions may break the API.
   behind it for one batch. A fork's `Create` commits its origin's log
   before it takes `sweep.lock`, since it may wait there for the
   origin's writer. (#168)
+- **cas: `Verify` reports what a crash left of a lost append as a
+  leftover, not as corrupt.** A loose object that fails its name and
+  that a sweep would not keep, as what recovery recorded lost, is
+  reported with the new kind `KindLeftover` (`"leftover"`), which
+  `Report.OK` does not count: nothing reads it, and a sweep past its
+  grace removes it. Before, `Verify` and `agentsession verify` reported
+  corruption for that window after a power cut. An object a live log
+  names is still `corrupt`, and so is every such object when the keep
+  set cannot be worked out, as past a damaged log. `agentsession verify
+  <cas-root>` prints leftovers and does not fail on them. (#171)
 
 ## v0.0.18 - 2026-10-01
 

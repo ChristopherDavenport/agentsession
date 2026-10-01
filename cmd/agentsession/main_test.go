@@ -602,6 +602,31 @@ func TestCASVerifyFindsDamage(t *testing.T) {
 	}
 }
 
+// TestCASVerifyLeftover: verify of a cas root prints a loose object
+// that fails its name and that nothing the store holds needs, and does
+// not fail on it (#171).
+func TestCASVerifyLeftover(t *testing.T) {
+	root := t.TempDir()
+	casStore(t, root, "basic")
+	hex := strings.Repeat("ab", 32)
+	p := filepath.Join(root, "objects", "contents", hex[:2], hex[2:])
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"verify", root}, &stdout, &stderr); code != 0 {
+		t.Errorf("exit %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"leftover sha256:" + hex, "0 problems, 1 leftover objects nothing needs"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout lacks %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
 // TestCASVerifyChecksRecords: verify of a cas root runs each session's
 // request hash and records checks, as verify of one session does, and
 // fails on a session the store's own walk finds sound (#133).

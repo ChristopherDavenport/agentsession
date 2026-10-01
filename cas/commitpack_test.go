@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -299,12 +300,18 @@ func TestVerifyLooseBesidePack(t *testing.T) {
 	if rep, err := st.Verify(ctx); err != nil || !rep.OK() {
 		t.Errorf("a zeroed duplicate of a packed object: %v %v", rep.Problems, err)
 	}
-	bad := []byte("not what it is named")
-	q, _ := st.objs.loosePath(spaceContents, hashBytes([]byte("something else")))
-	os.MkdirAll(filepath.Dir(q), 0o755)
-	os.WriteFile(q, bad, 0o644)
-	if rep, _ := st.Verify(ctx); rep.OK() {
-		t.Error("a corrupt object with no good copy passed")
+	loose := mustAppend(t, st, "s", item("loose"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := st.contentOf(loose)
+	q, _ := st.objs.loosePath(spaceContents, c)
+	if err := os.WriteFile(q, []byte("not what it is named"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, _ := st.Verify(ctx)
+	if rep.OK() || !slices.ContainsFunc(rep.Problems, func(p Problem) bool { return p.Kind == "corrupt" && p.Object == c }) {
+		t.Errorf("a corrupt object a log needs, with no good copy: %v", rep.Problems)
 	}
 }
 
