@@ -145,6 +145,14 @@ func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions
 	if s.sameStore(to) {
 		return Exchange{}, ErrSameStore
 	}
+	// A handover ends with this store clearing its mark. One that cannot
+	// write could never do that, so it refuses before the receiver
+	// becomes the record rather than leave two.
+	if opts.Handover {
+		if err := s.writable(); err != nil {
+			return Exchange{}, fmt.Errorf("cas: handover: %w", err)
+		}
+	}
 	b, err := s.bundleOf(ctx, id)
 	if err != nil {
 		return Exchange{}, err

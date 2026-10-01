@@ -161,6 +161,33 @@ func TestHandover(t *testing.T) {
 	}
 }
 
+// TestHandoverReadOnly: a sender that cannot clear its mark refuses the
+// handover before the receiver becomes the record.
+func TestHandoverReadOnly(t *testing.T) {
+	ctx := context.Background()
+	a, b := twoStores(t)
+	fill(t, a, "s", 2)
+	a.Close()
+	ro, err := Open(a.Root(), WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	if _, err := ro.Push(ctx, b, "s", PushOptions{Handover: true}); !errors.Is(err, agentsession.ErrReadOnly) {
+		t.Fatalf("a handover from a read-only store: %v", err)
+	}
+	if _, err := b.Mark(ctx, "s"); err == nil {
+		t.Error("the receiver took the session")
+	}
+	if m, _ := ro.Mark(ctx, "s"); m != MarkRecord {
+		t.Errorf("sender mark %s", m)
+	}
+	// A plain push from a read-only store still serves what it holds.
+	if _, err := ro.Push(ctx, b, "s", PushOptions{}); err != nil {
+		t.Error(err)
+	}
+}
+
 // TestExchangeRefusals: a different session under the same ID, and an
 // own entry that does not hang from the union.
 func TestExchangeRefusals(t *testing.T) {
