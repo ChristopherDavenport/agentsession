@@ -187,7 +187,7 @@ func (s *Store) Verify(ctx context.Context) (Report, error) {
 		damaged, _ := filepath.Glob(filepath.Join(dir, damagedLogPrefix+"*"))
 		sort.Strings(damaged)
 		for _, d := range damaged {
-			add(Problem{Kind: "log", Session: id, Err: fmt.Errorf("a repair rewrote a damaged log; the damaged log is kept as %s, and a sweep keeps what its readable records name until it is removed", filepath.Base(d))})
+			add(Problem{Kind: "log", Session: id, Err: fmt.Errorf("a repair rewrote a damaged log; the damaged log is kept as %s, and a sweep keeps every object it names until it is removed", filepath.Base(d))})
 		}
 		if v.cutCommitted {
 			add(Problem{Kind: "log", Session: id, Err: errors.New("a block left unwritten is followed by a commit that had finished, which recovery will cut")})

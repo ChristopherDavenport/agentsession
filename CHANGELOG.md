@@ -46,6 +46,23 @@ versions may break the API.
   names is still `corrupt`, and so is every such object when the keep
   set cannot be worked out, as past a damaged log. `agentsession verify
   <cas-root>` prints leftovers and does not fail on them. (#171)
+- **cas: `Repair` salvages an entry only a damaged last append record
+  names.** The last append record has no child whose envelope names its
+  entry, so damage to it dropped that entry, committed and acknowledged
+  as durable, unreported, and the next sweep removed its objects. An
+  append record spells the entry's hash twice, as `entry` and `head`,
+  and one damaged byte spoils at most one: a damaged line after the
+  last readable append that still names the session and an append now
+  has each hash it spells salvaged when the entry's objects read and
+  hash to their names and its parent is the base or kept, reported in
+  the new `RepairReport.Salvaged`. It is the head only when the line
+  names it as its head. When a damaged line follows the last head the
+  repair could read, the new `RepairReport.Unread` is set and `Named`
+  is empty, and `agentsession repair` no longer says the head is "as
+  the log last named it", but that a damaged line may have moved it or
+  appended entries the repair cannot name. While a `damaged-*` log is
+  kept, a sweep keeps every object any well-formed hash in it names,
+  not only what its readable records name. (#167)
 
 ## v0.0.18 - 2026-10-01
 

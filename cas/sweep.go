@@ -246,13 +246,15 @@ func (s *Store) keepLogs(k keepSet, marks logMarks) error {
 	return nil
 }
 
-// keepDamaged adds what the readable records of a session's damaged
-// logs name, kept by a repair: each entry and head, and every ancestor
-// of one whose envelope still reads, since a parent the damage hid may
-// be among them. What only a damaged record named cannot be known; a
-// repair that dropped an entry does not let a sweep take what the log
-// it dropped it from named. Nothing need read whole: an object that is
-// missing or corrupt is what a repair dropped.
+// keepDamaged adds what a session's damaged logs, kept by a repair,
+// name: every well-formed hash any of their lines spells, readable
+// record or not, in either space, and as an entry, what it names and
+// every ancestor of one whose envelope still reads, since a parent the
+// damage hid may be among them. A hash a damaged record spells may be
+// what its damage made of another, and keeping it keeps more than is
+// needed, never less; a repair that dropped an entry does not let a
+// sweep take what the log it dropped it from named. Nothing need read
+// whole: an object that is missing or corrupt is what a repair dropped.
 func (s *Store) keepDamaged(k keepSet, dir string) error {
 	kept, err := filepath.Glob(filepath.Join(dir, damagedLogPrefix+"*"))
 	if err != nil {
@@ -263,32 +265,22 @@ func (s *Store) keepDamaged(k keepSet, dir string) error {
 		if info, err := os.Lstat(p); err == nil && !info.Mode().IsRegular() {
 			continue // not a log a repair kept
 		}
-		f, err := os.Open(p)
+		data, err := os.ReadFile(p)
 		if err != nil {
 			return err
 		}
-		info, err := f.Stat()
-		var l sessionLog
-		if err == nil {
-			l, err = parseSessionLog(f, 0, info.Size())
-		}
-		f.Close()
-		if err != nil {
-			return err
-		}
-		for _, r := range l.recs {
-			for _, id := range []string{r.Entry, r.Head, r.Base} {
-				for id != "" && !walked[id] {
-					walked[id] = true
-					if err := s.keepEntry(k, id, keepTorn); err != nil {
-						return err
-					}
-					parent, err := s.parentOf(id)
-					if err != nil {
-						break
-					}
-					id = parent
+		for _, h := range hashToken.FindAll(data, -1) {
+			k.contents[string(h)] = true
+			for id := string(h); id != "" && !walked[id]; {
+				walked[id] = true
+				if err := s.keepEntry(k, id, keepTorn); err != nil {
+					return err
 				}
+				parent, err := s.parentOf(id)
+				if err != nil {
+					break
+				}
+				id = parent
 			}
 		}
 	}

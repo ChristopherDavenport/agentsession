@@ -371,3 +371,181 @@ func TestSweepAfterRepairStopsAtCorruption(t *testing.T) {
 		t.Errorf("a sweep past a fork's corrupt prefix: %v", err)
 	}
 }
+
+// damageField changes one hex digit of the hash the last append record
+// of session id spells as field, keeping it well-formed.
+func damageField(t *testing.T, root, id, field string) {
+	t.Helper()
+	lines, appends := journalLines(t, root, id)
+	l := []byte(lines[appends[len(appends)-1]])
+	k := bytes.Index(l, []byte(`"`+field+`":"sha256:`))
+	if k < 0 {
+		t.Fatalf("the last append record has no %s", field)
+	}
+	at := k + len(`"`+field+`":"sha256:`) + 10
+	if l[at] == '0' {
+		l[at] = '1'
+	} else {
+		l[at] = '0'
+	}
+	lines[appends[len(appends)-1]] = string(l)
+	if err := os.WriteFile(filepath.Join(root, "sessions", id, logName), []byte(strings.Join(lines, "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRepairSalvagesLastAppend: damage to the last append record's
+// entry leaves its head naming the entry, which no child names; the
+// repair salvages it from the hash the line still spells, reports it,
+// and keeps it as the head, and a sweep after removes nothing of it
+// (#167).
+func TestRepairSalvagesLastAppend(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	ids := fill(t, st, "a", 28)
+	st.Close()
+	damageField(t, root, "a", "entry")
+
+	st2, _ := Open(root)
+	defer st2.Close()
+	rep, err := st2.Repair(ctx, "a", RepairOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rep.Kept, ids) || !slices.Equal(rep.Salvaged, ids[27:]) || len(rep.Dropped) != 0 {
+		t.Fatalf("kept %d, salvaged %v, dropped %v", len(rep.Kept), rep.Salvaged, rep.Dropped)
+	}
+	if rep.Head != ids[27] || rep.Named != ids[27] || rep.Unread {
+		t.Errorf("head %s named %s unread %v, want %s", rep.Head, rep.Named, rep.Unread, ids[27])
+	}
+	if _, err := st2.Sweep(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		if _, err := st2.loadLine(id); err != nil {
+			t.Errorf("entry %s after the sweep: %v", id, err)
+		}
+	}
+	s, err := st2.Open(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 28 || s.Leaf() != ids[27] {
+		t.Errorf("repaired: len %d leaf %s", s.Len(), s.Leaf())
+	}
+}
+
+// TestRepairLastAppendHeadDamaged: damage to the last append record's
+// head salvages the entry, which the line no longer names as the head;
+// the report says a damaged line follows the last head read, and does
+// not claim the head the log last named (#167).
+func TestRepairLastAppendHeadDamaged(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	ids := fill(t, st, "a", 5)
+	st.Close()
+	damageField(t, root, "a", "head")
+
+	st2, _ := Open(root)
+	defer st2.Close()
+	rep, err := st2.Repair(ctx, "a", RepairOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rep.Kept, ids) || !slices.Equal(rep.Salvaged, ids[4:]) {
+		t.Fatalf("kept %v, salvaged %v", rep.Kept, rep.Salvaged)
+	}
+	if !rep.Unread || rep.Named != "" || rep.Head != ids[3] {
+		t.Errorf("head %s named %q unread %v, want %s, unknown", rep.Head, rep.Named, rep.Unread, ids[3])
+	}
+}
+
+// TestRepairSalvageKeepsLaterHead: an entry salvaged from a damaged
+// append record is not the head when a readable head record after it
+// moved the head elsewhere.
+func TestRepairSalvageKeepsLaterHead(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	ids := fill(t, st, "a", 4)
+	if err := st.SetHead(ctx, "a", ids[3], ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	damageField(t, root, "a", "entry")
+
+	st2, _ := Open(root)
+	defer st2.Close()
+	rep, err := st2.Repair(ctx, "a", RepairOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rep.Salvaged, ids[3:]) || rep.Head != ids[1] || rep.Named != ids[1] || rep.Unread {
+		t.Errorf("salvaged %v head %s named %s unread %v, want the head at %s", rep.Salvaged, rep.Head, rep.Named, rep.Unread, ids[1])
+	}
+}
+
+// TestRepairSalvagesOnlyWhatReads: a damaged last record whose entry's
+// objects are gone salvages nothing, and the one entry of a session so
+// damaged is salvaged from its record alone.
+func TestRepairSalvagesOnlyWhatReads(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	ids := fill(t, st, "a", 3)
+	one := fill(t, st, "b", 1)
+	st.Close()
+	damageField(t, root, "a", "entry")
+	removeObject(t, st, ids[2], true)
+	damageField(t, root, "b", "entry")
+
+	st2, _ := Open(root)
+	defer st2.Close()
+	rep, err := st2.Repair(ctx, "a", RepairOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rep.Kept, ids[:2]) || len(rep.Salvaged) != 0 || !rep.Unread {
+		t.Errorf("kept %v, salvaged %v, unread %v", rep.Kept, rep.Salvaged, rep.Unread)
+	}
+	rep, err = st2.Repair(ctx, "b", RepairOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rep.Kept, one) || !slices.Equal(rep.Salvaged, one) || rep.Head != one[0] {
+		t.Errorf("kept %v, salvaged %v, head %s", rep.Kept, rep.Salvaged, rep.Head)
+	}
+}
+
+// TestSweepKeepsWhatDamagedLinesSpell: while a damaged log is kept, a
+// sweep keeps every object a hash in it names, though only a damaged
+// record names it and the repaired log does not (#167).
+func TestSweepKeepsWhatDamagedLinesSpell(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	ids := fill(t, st, "a", 3)
+	st.Close()
+	damageField(t, root, "a", "entry")
+	// The last entry's content goes, so the repair drops it; its
+	// envelope stays, named only by the damaged line.
+	removeObject(t, st, ids[2], true)
+
+	st2, _ := Open(root)
+	defer st2.Close()
+	rep, err := st2.Repair(ctx, "a", RepairOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(rep.Kept, ids[2]) {
+		t.Fatalf("kept %v", rep.Kept)
+	}
+	if _, err := st2.Sweep(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st2.objs.read(spaceEntries, ids[2]); err != nil {
+		t.Errorf("the envelope only a damaged line names, after the sweep: %v", err)
+	}
+}
