@@ -67,6 +67,36 @@ const (
 	reasonNote = "note: no release checks a run's end as it is written; the writer of this run computed its reason or pending list otherwise than ComputeReason and Run.Pending"
 )
 
+// emptyResumeNote follows a source mismatch that is a run written
+// resume that took up nothing; see emptyResume.
+const emptyResumeNote = "note: run %s was written resume and took up nothing: its writer meant to take up a call, and the run ended or was cut before it did; this is not corruption, and format 0.11 is expected to accept it"
+
+// emptyResume returns the run err reports, when err is VerifyRecords'
+// source mismatch on the path to leaf and the run is written resume
+// with an empty segment, or nil. It finds the run as VerifyRecords
+// does: the first whose end verifies and whose source does not.
+func emptyResume(s *agentsession.Session, leaf string, err error) *agentsession.Run {
+	if !errors.Is(err, agentsession.ErrSourceMismatch) {
+		return nil
+	}
+	runs, rerr := s.Runs(leaf)
+	if rerr != nil {
+		return nil
+	}
+	for _, r := range runs {
+		if r.Verify() != nil {
+			return nil
+		}
+		if src := r.Start.Source; (src == agentsession.SourceInput || src == agentsession.SourceResume) && src != agentsession.ComputeSource(r) {
+			if src == agentsession.SourceResume && r.Empty() {
+				return r
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
 // earlierNote follows such an error in a file of a minor before 0.9,
 // which did not forbid what failed; see noteFor.
 const earlierNote = "note: this file declares a minor before 0.9, which did not forbid what failed; it is checked here by 0.9's rules"
@@ -110,7 +140,9 @@ func checkSession(s *agentsession.Session, prefix string, stdout io.Writer, all 
 		if err := s.VerifyRecords(leaf); err != nil {
 			problem = true
 			fmt.Fprintf(stdout, "%srecords to %s  ERROR %v\n", prefix, shortID(leaf), err)
-			if n := noteFor(s.DeclaredFormat(), err); n != "" {
+			if r := emptyResume(s, leaf, err); r != nil {
+				note = fmt.Sprintf(emptyResumeNote, r.RunID())
+			} else if n := noteFor(s.DeclaredFormat(), err); n != "" {
 				note = n
 			}
 		}

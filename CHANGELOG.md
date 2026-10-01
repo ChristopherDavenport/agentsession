@@ -13,6 +13,14 @@ versions may break the API.
   0.10 included, now earns its own note: the writer of that run
   computed it otherwise than `ComputeSource`, or `ComputeReason` and
   `Run.Pending`. (#165)
+- **`Run.Empty`** reports whether a run's segment holds nothing but its
+  start and end, or nothing after its start for a run that was cut. A
+  run written `resume` that a subscriber refused, or that was killed,
+  before it took up its call is such a run; 0.10's `source` rule still
+  reports it with `ErrSourceMismatch`, and `verify` now notes that it
+  took up nothing, is not corruption, and that format 0.11 is expected
+  to accept it. A resume that adds a message keeps the ordinary note.
+  (#172)
 
 ## v0.0.18 - 2026-10-01
 
