@@ -109,6 +109,12 @@ func readSource(src source) (*agentsession.Session, error) {
 		return nil, err
 	}
 	defer st.Close()
+	return readFrom(st, src)
+}
+
+// readFrom loads a session from a cas store already open, as readSource
+// does.
+func readFrom(st *cas.Store, src source) (*agentsession.Session, error) {
 	var buf bytes.Buffer
 	if err := st.Project(context.Background(), &buf, src.id); err != nil {
 		return nil, fmt.Errorf("%s: %w", src, err)
@@ -154,24 +160,27 @@ func verifyStore(root string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "nothing to verify: %s holds no sessions\n", root)
 		return errFailed
 	}
+	// A session that fails to list or to open is one the store's walk
+	// has reported; it is named here as unchecked, and not counted
+	// again.
+	checked, failing, unchecked, anyEarly := 0, 0, 0, false
 	var ids []string
-	failing, anyEarly := 0, false
 	for sum, err := range st.List(ctx, agentsession.ListFilter{}) {
 		if err != nil {
-			fmt.Fprintf(stdout, "listing stopped: %v\n", err)
-			failing++
-			break
+			fmt.Fprintf(stdout, "records not checked: %v\n", err)
+			unchecked++
+			continue
 		}
 		ids = append(ids, sum.Header.ID)
 	}
 	for _, id := range ids {
-		s, err := readSource(source{path: root, id: id})
+		s, err := readFrom(st, source{path: root, id: id})
 		if err != nil {
-			// The store's walk has reported why.
 			fmt.Fprintf(stdout, "%s: records not checked: %v\n", id, err)
-			failing++
+			unchecked++
 			continue
 		}
+		checked++
 		if problem, early := checkSession(s, id+": ", stdout, false); problem {
 			failing++
 			anyEarly = anyEarly || early
@@ -180,8 +189,8 @@ func verifyStore(root string, stdout io.Writer) error {
 	if anyEarly {
 		fmt.Fprintln(stdout, earlyNote)
 	}
-	fmt.Fprintf(stdout, "%d sessions' hashes and records checked, %d failed\n", len(ids), failing)
-	if !rep.OK() || failing > 0 {
+	fmt.Fprintf(stdout, "%d sessions' hashes and records checked, %d failed, %d not checked\n", checked, failing, unchecked)
+	if !rep.OK() || failing > 0 || unchecked > 0 {
 		return errFailed
 	}
 	return nil

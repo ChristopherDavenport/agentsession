@@ -13,9 +13,11 @@ The format is unchanged. RFC 0002's exchange section gains a refusal.
   `call_id` is refused** with `ErrCallIDRepeated`, as RFC 0002 now
   says. Two stores each appending a branch cannot see the other's
   calls, so only the merge finds the collision; before, the push
-  landed and left a session that failed `VerifyRecords`. A repeat both
-  stores already hold, as a session written before the rule may, is
-  carried as it is. (#124)
+  landed and left a session that failed `VerifyRecords`. A repeat the
+  sender already holds, as a session written before the rule may, is
+  carried as it is. The refusal holds for every later exchange of that
+  session between the two stores, so one pushes its line as a session
+  with a base and deletes its copy. (#124)
 - **cas: a store that cannot write refuses a handover** with
   `ErrReadOnly` or `ErrStopped` before the receiver commits. Before,
   the receiver became the record and the sender could not clear its
@@ -30,7 +32,8 @@ The format is unchanged. RFC 0002's exchange section gains a refusal.
   prune. (#141)
 - **`agentsession verify <cas-root>` checks each session's request
   hashes and records** after the store's own walk, as `verify <root>
-  <id>` does, printing only what fails, and exits non-zero on any.
+  <id>` does, printing only what fails, and exits non-zero on any,
+  or on a session it could not check.
   Before, a store whose sessions broke the records rules reported no
   problems. (#133)
 

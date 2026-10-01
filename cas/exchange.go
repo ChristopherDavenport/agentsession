@@ -182,8 +182,11 @@ func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions
 // in the session with one call ID, as RFC 0001 forbids: a fresh
 // entry's call ID meeting one the receiver holds and the sender does
 // not. Two replicas each append a branch with a call the other cannot
-// see, so only the merge finds them; a repeat both sides already hold,
-// as a session written before the rule may, is carried as it is.
+// see, so only the merge finds them; a repeat the sender already holds,
+// as a session written before the rule may, is carried as it is. The
+// refusal holds for every later exchange of the session between the
+// two, since each carries the other's call: one store pushes its line
+// as a session with a base and deletes its copy, as RFC 0002 says.
 func callIDsMeet(held []agentsession.Entry, b *bundle, fresh []agentsession.Entry) error {
 	sent := map[string]bool{}
 	for _, es := range [][]agentsession.Entry{b.prefix, b.own} {
@@ -200,7 +203,7 @@ func callIDsMeet(held []agentsession.Entry, b *bundle, fresh []agentsession.Entr
 	for _, e := range fresh {
 		if c := callIDOf(e); c != "" {
 			if other, ok := at[c]; ok {
-				return fmt.Errorf("%w: exchange: %s at %s here and %s sent", agentsession.ErrCallIDRepeated, c, other, e.Base().ID)
+				return fmt.Errorf("%w: exchange: %s at %s here and %s sent; the stores no longer exchange this session until one pushes its line as a fork and deletes it", agentsession.ErrCallIDRepeated, c, other, e.Base().ID)
 			}
 		}
 	}

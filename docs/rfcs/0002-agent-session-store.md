@@ -645,8 +645,11 @@ apply here, where holding the session already is the usual case.
   and the sender does not, already carries: RFC 0001 makes a `call_id`
   unique in a session, and two stores each appending a branch cannot
   see the other's calls, so only the merge finds the collision. A
-  repeat both stores already hold, as a session written before that
-  rule may, is carried as it is. Two stores may hold one session with
+  repeat the sender already holds, as a session written before that
+  rule may, is carried as it is. The refusal holds for every later
+  exchange of the session between the two stores, since each still
+  carries the other's call; as with two records below, one store
+  pushes its line as a session with a base and deletes its copy. Two stores may hold one session with
   different log orders and both are correct: the order says which branch
   was written last in that store, and the head is the fact that travels.
   Sequence numbers are never synchronised.

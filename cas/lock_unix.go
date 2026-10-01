@@ -70,7 +70,9 @@ func lockShared(ctx context.Context, path string) (*dirLock, error) {
 		return nil, err
 	}
 	defer want.release()
-	return lockWait(ctx, path, syscall.LOCK_SH)
+	// The sweep waits on this writer before its next batch, so it polls
+	// at a short interval rather than lockWait's longest.
+	return lockPoll(ctx, path, syscall.LOCK_SH, 2*time.Millisecond)
 }
 
 // lockTry takes the lock at path if no other holder keeps it from
@@ -96,7 +98,7 @@ func lockTry(path string, how int) (*dirLock, bool, error) {
 // waiting in lockShared to take the lock shared, so a caller that takes
 // it again and again lets those waiting in between.
 func lockExclusive(ctx context.Context, path string) (*dirLock, error) {
-	want, err := lockWait(ctx, path+".want", syscall.LOCK_EX)
+	want, err := lockPoll(ctx, path+".want", syscall.LOCK_EX, 2*time.Millisecond)
 	if err != nil {
 		return nil, err
 	}
@@ -107,6 +109,11 @@ func lockExclusive(ctx context.Context, path string) (*dirLock, error) {
 // lockWait tries the lock without blocking and retries until ctx ends,
 // so a caller waits only as long as its own deadline allows.
 func lockWait(ctx context.Context, path string, how int) (*dirLock, error) {
+	return lockPoll(ctx, path, how, 50*time.Millisecond)
+}
+
+// lockPoll is lockWait backing off to at most longest between tries.
+func lockPoll(ctx context.Context, path string, how int, longest time.Duration) (*dirLock, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("cas: lock: %w", err)
@@ -127,8 +134,6 @@ func lockWait(ctx context.Context, path string, how int) (*dirLock, error) {
 			return nil, ctx.Err()
 		case <-time.After(wait):
 		}
-		if wait < 50*time.Millisecond {
-			wait *= 2
-		}
+		wait = min(2*wait, longest)
 	}
 }
