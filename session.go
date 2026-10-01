@@ -1256,10 +1256,13 @@ func Fork(origin *Session, at string, h Header) (*Session, error) {
 // carry their text, with the instructions their join, so parts the path
 // could not rebuild are left out and the instructions string stands
 // alone: the string a delta carried beside them when it did, and
-// otherwise the join the request was built from.
+// otherwise the join the request was built from. The parts that left
+// force are not carried: a reader starts from the checkpoint, so a
+// later hash resolves against what it holds.
 func checkpoint(settings Settings) Settings {
 	if unresolvedParts(settings.InstructionsParts) {
 		settings.InstructionsParts = nil
 	}
+	settings.left = nil
 	return settings
 }

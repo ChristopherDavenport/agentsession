@@ -1,14 +1,16 @@
 // Command agentsession inspects, verifies, exports and lists Agent
 // Session Format files, and the sessions of a cas store, from a shell,
-// and repairs a cas session whose log is damaged.
+// repairs a cas session whose log is damaged, and migrates a cas store
+// from before per-session logs.
 //
 //	agentsession show <file> | <cas-root> <id> [-leaf id] [-v]
 //	agentsession verify <file> | <cas-root> [id]
 //	agentsession export <file> | <cas-root> <id> -out dir [-redact-home] [-redact-env] [-secret VALUE]...
 //	agentsession list <root> [-cwd path] [-parent id] [-limit n]
 //	agentsession repair <cas-root> <id> [-dry-run]
+//	agentsession migrate <cas-root>
 //
-// Every command but repair opens what it reads read-only. show, verify
+// Every command but repair and migrate opens what it reads read-only. show, verify
 // and export read a file directly and never take its lock; given a cas
 // store and a session id, they open the store read-only and read the
 // session as the file its projection is. A path inside a cas store's
@@ -29,6 +31,14 @@
 // session's directory, which verify reports until it is removed. It
 // takes the session's lock, so it fails on a session a harness holds.
 // With -dry-run it opens the store read-only and writes nothing.
+//
+// migrate opens a cas store for writing and closes it, which is what
+// migrates a store v0.0.15 or earlier wrote; a read-only open, as every
+// other command makes, reads no session of such a store. It refuses
+// while a writer of the earlier release holds a session. On such a
+// store, stop every writer, take a copy of the store, run migrate, then
+// start the readers and writers of this release together: once it has
+// run, no release before v0.0.16 reads the store.
 package main
 
 import (
@@ -40,6 +50,7 @@ import (
 	"strings"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/cas"
 )
 
 const usage = `usage: agentsession <command> [flags] <arguments>
@@ -51,10 +62,11 @@ commands:
   export  <session> -out dir         write ATIF documents for every leaf
   list    <root>                     list the sessions of a jsonl or cas store
   repair  <cas-root> <id>            rewrite a damaged cas session log from what still reads
+  migrate <cas-root>                 migrate a cas store v0.0.15 or earlier wrote
 
 A <session> is a session file, or a cas store's root and a session id:
 "agentsession show ~/.agent/cas 01995b2a-...". Every command but
-repair reads without taking a lock.
+repair and migrate reads without taking a lock.
 
 Run "agentsession <command> -h" for a command's flags.
 `
@@ -83,6 +95,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = list(args[1:], stdout, stderr)
 	case "repair":
 		err = repair(args[1:], stdout, stderr)
+	case "migrate":
+		err = migrate(args[1:], stdout, stderr)
 	case "-h", "-help", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -103,9 +117,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	default:
 		fmt.Fprintf(stderr, "agentsession: %v\n", err)
+		if errors.Is(err, cas.ErrLegacyStore) {
+			fmt.Fprintln(stderr, legacyHint)
+		}
 		return 1
 	}
 }
+
+// legacyHint is what a command that met a store from before per-session
+// logs says to do about it.
+const legacyHint = "agentsession: the store is one v0.0.15 or earlier wrote; stop every writer, take a copy, and run agentsession migrate <cas-root>"
 
 // errUsage marks an argument error; errFailed marks a check that the
 // command reported on stdout, such as a hash mismatch.

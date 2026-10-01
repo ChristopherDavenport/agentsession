@@ -516,6 +516,22 @@ func ComputeSource(r *Run) string {
 	return SourceInput
 }
 
+// Empty reports whether the run's segment holds no entry but its start
+// and its end, or, for a run that was cut, none after its start: a run
+// refused, or killed, before it did anything. Such a run written
+// [SourceResume] is the shape of [SourceInput], and
+// [Session.VerifyRecords] reports it with [ErrSourceMismatch], though
+// all it shows is that its writer meant to take up a call and took up
+// nothing.
+func (r *Run) Empty() bool {
+	for _, e := range r.Segment {
+		if e != Entry(r.Start) && (r.End == nil || e != Entry(r.End)) {
+			return false
+		}
+	}
+	return true
+}
+
 // Pending returns the IDs of the run's calls with no output on the
 // path, a call made before the segment that the run took up among them;
 // see [Run.Calls].

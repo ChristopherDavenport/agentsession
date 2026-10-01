@@ -248,7 +248,7 @@ strips the raw items for a document a judge will read.
 
 `cmd/agentsession` reads session files without taking their lock, and
 opens a store with `jsonl.WithReadOnly` or `cas.WithReadOnly`, so every
-command but `repair` is safe to run beside a harness that is writing. Where a command
+command but `repair` and `migrate` is safe to run beside a harness that is writing. Where a command
 takes a file it also takes a cas store's root and a session id, and
 reads the session as the file it projects to; a path inside a cas
 session's directory, its one-line `header` file included, is read as
@@ -269,6 +269,7 @@ agentsession show ~/.agent/cas ID          # any command, on a session a cas sto
 agentsession verify ~/.agent/cas           # the whole store, as git fsck: journal, objects, sessions
 agentsession repair ~/.agent/cas ID -dry-run   # what a repair of a damaged session log would keep
 agentsession repair ~/.agent/cas ID        # rewrite it from the records that read, keeping the old log
+agentsession migrate ~/.agent/cas          # migrate a cas store v0.0.15 or earlier wrote
 ```
 
 `verify` exits 1 on a file with a header and no entries, since nothing
@@ -279,6 +280,15 @@ writes one ATIF document per leaf and embeds a linked subsession when
 its file is beside the exported one or in the same store. `repair`
 takes the session's lock and writes: it rewrites a cas session whose
 log has a record that fails its checksum, as `cas.Store.Repair` does.
+`migrate` opens a cas store for writing, which migrates a store v0.0.15
+or earlier wrote; no read-only open reads a session of such a store
+until one has, and no release before v0.0.16 reads it after. On such a
+store, stop every writer, take a copy, run `migrate`, then upgrade the
+readers and the writers together. A migrated store's `journal` is a
+dangling symbolic link by design, which keeps a writer of v0.0.15 or
+earlier from writing to it; a copy that follows links (`cp -L`, rsync
+without `-l`) reports or skips it, and the next writing open puts it
+back.
 
 ## Tracing
 

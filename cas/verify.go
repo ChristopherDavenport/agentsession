@@ -79,7 +79,7 @@ func (s *Store) Verify(ctx context.Context) (Report, error) {
 	for _, p := range kept {
 		add(Problem{Kind: "log", Err: fmt.Errorf("a migration retired a journal with damaged lines, kept as %s", filepath.Base(p))})
 	}
-	if _, err := os.Stat(filepath.Join(s.root, journalFile)); err == nil {
+	if legacyJournal(s.root) {
 		// Each session that failed to migrate is reported below.
 		add(Problem{Kind: "log", Err: errors.New("the journal of a store from before per-session logs is kept, as a session has not migrated; each writing open tries it again")})
 	}
