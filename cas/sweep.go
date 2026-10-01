@@ -762,6 +762,12 @@ func envelopeContent(env []byte) (string, bool) {
 // tests can lower it.
 var autoPackLoose = 4096
 
+// autoPackPacks is the count of packs past which a writing store packs
+// on its own, which merges the smallest geometrically: commits that
+// write their objects as packs add one each. A variable so tests can
+// lower it.
+var autoPackPacks = 64
+
 // autoPackEvery is how many appends a store makes between looks at
 // whether to pack.
 const autoPackEvery = 1024
@@ -778,11 +784,11 @@ func (s *Store) looseEstimate() int {
 }
 
 // maybePack packs when the loose objects look to have passed
-// autoPackLoose. A pack that cannot run, because a sweep, pack or
+// autoPackLoose, or the packs autoPackPacks. A pack that cannot run, because a sweep, pack or
 // another pack holds the gc lock, is left for the next look; its failure
 // is no failure of the caller's.
 func (s *Store) maybePack() {
-	if s.readOnly || s.looseEstimate() < autoPackLoose {
+	if s.readOnly || (s.looseEstimate() < autoPackLoose && len(s.objs.packList()) < autoPackPacks) {
 		return
 	}
 	_, _ = s.Pack(context.Background())

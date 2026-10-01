@@ -59,8 +59,11 @@
 // smallest packs, and [Store.Sweep] repacks everything the store holds
 // into one pack and removes what nothing needs. A store of small
 // entries otherwise pays a filesystem block for every envelope and
-// every body. A writing store packs on its own once its loose objects
-// look to pass a few thousand, as git's gc --auto does. Pack indexes are
+// every body. A commit owing more than a few dozen lazily written
+// objects writes them as one pack instead, in three fsyncs rather than
+// one for each object and its directory. A writing store packs on its
+// own once its loose objects look to pass a few thousand, as git's gc
+// --auto does, or its packs pass 64. Pack indexes are
 // mapped, not read, and a listing reads the summary kept beside each
 // session's log.
 //

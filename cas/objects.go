@@ -681,8 +681,11 @@ func (o *objects) hasQuick(sp space, hash string) bool {
 	return err == nil
 }
 
-// remember adds a file, when path is set, and its directory to what the
-// next flush of pend syncs, or of the store's own set when pend is nil.
+// remember adds a file, when path is set, or else a directory, to what
+// the next flush of pend syncs, or of the store's own set when pend is
+// nil. A file's directory is owed with the file: the flush syncs it
+// unless a commit pack takes the file, which leaves its loose copy and
+// directory owing nothing.
 func (o *objects) remember(pend *pendSet, path, dir string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -692,6 +695,7 @@ func (o *objects) remember(pend *pendSet, path, dir string) error {
 	}
 	if path != "" {
 		files[path] = true
+		return nil
 	}
 	dirs[dir] = true
 	return nil
@@ -745,6 +749,24 @@ func (o *objects) flushSet(pend *pendSet) error {
 			pd[d] = true
 		}
 	}
+	// Enough objects go into one pack, written durably, rather than
+	// each being fsynced with its directory. One the pack leaves out is
+	// fsynced below.
+	if len(files) >= commitPackMin {
+		packed, err := o.packPending(files)
+		if err != nil && o.stopped() != nil {
+			putBack(slices.Collect(maps.Keys(files)), slices.Collect(maps.Keys(dirs)))
+			return err
+		}
+		for _, f := range packed {
+			delete(files, f)
+		}
+	}
+	// Every object's rename is in a directory synced here, owed from now
+	// on whatever becomes of the file's own fsync.
+	for f := range files {
+		dirs[filepath.Dir(f)] = true
+	}
 	if failed, err := syncAll(files, func(f string) error {
 		fh, err := openSync(f)
 		if errors.Is(err, os.ErrNotExist) {
@@ -764,10 +786,6 @@ func (o *objects) flushSet(pend *pendSet) error {
 	}); err != nil {
 		putBack(failed, slices.Collect(maps.Keys(dirs)))
 		return err
-	}
-	// Every object's rename is in a directory synced here.
-	for f := range files {
-		dirs[filepath.Dir(f)] = true
 	}
 	failed, err := syncAll(dirs, func(d string) error {
 		var ids map[string]dirID
@@ -799,6 +817,82 @@ func (o *objects) flushSet(pend *pendSet) error {
 		putBack(nil, failed)
 	}
 	return err
+}
+
+// commitPackMin is how many objects a flush owes before it writes them
+// as one pack: three fsyncs, of the pack, its index and their directory,
+// in place of one for each object and one for each directory it is in.
+// A variable so tests can lower it.
+var commitPackMin = 32
+
+// packPending writes the loose objects at paths as one pack, removes
+// the loose copies the durable pack holds, and returns their paths. A
+// file gone since, or that fails its name, is left out, and left where
+// it is for the per-file flush, which finds a gone file packed and one
+// that fails its name for Verify. An error leaves every path to the
+// per-file flush, unless a failed fsync stopped the store.
+func (o *objects) packPending(paths map[string]bool) ([]string, error) {
+	var objs []packObject
+	at := map[objKey]string{}
+	for f := range paths {
+		sp, hash, ok := o.objectAt(f)
+		if !ok {
+			continue
+		}
+		// One gone since is packed already; the per-file flush finds it
+		// so, and leaving it out here spares a rewrite of the pack.
+		if _, err := os.Stat(f); err != nil {
+			continue
+		}
+		objs = append(objs, packObject{sp: sp, hash: hash, load: func() ([]byte, error) { return os.ReadFile(f) }})
+		at[objKey{sp, hash}] = f
+	}
+	if len(objs) < commitPackMin {
+		return nil, nil
+	}
+	name, skipped, err := writePackSkipping(o, o.packDir(), objs, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.reloadPacks(true); err != nil {
+		return nil, err
+	}
+	// A loose copy goes only once the pack is one a reader finds: a pack
+	// a sweep without grace removed as it was written, or that failed to
+	// open, leaves every copy to the per-file flush.
+	if !slices.ContainsFunc(o.packList(), func(p *pack) bool { return p.name == name }) {
+		return nil, nil
+	}
+	for _, x := range skipped {
+		delete(at, objKey{x.sp, x.hash})
+	}
+	// The pack is durable; a loose copy is now a duplicate, which Pack
+	// would remove as well, and a reader that finds it gone looks in the
+	// packs.
+	packed := make([]string, 0, len(at))
+	for _, f := range at {
+		os.Remove(f)
+		packed = append(packed, f)
+	}
+	return packed, nil
+}
+
+// objectAt names the object at a loose path.
+func (o *objects) objectAt(path string) (space, string, bool) {
+	for _, sp := range []space{spaceEntries, spaceContents} {
+		rel, err := filepath.Rel(o.spaceDir(sp), path)
+		if err != nil {
+			continue
+		}
+		fan, rest, ok := strings.Cut(rel, string(filepath.Separator))
+		if !ok || len(fan) != 2 || strings.ContainsRune(rest, filepath.Separator) {
+			continue
+		}
+		if hash := agentsession.HashPrefix + fan + rest; agentsession.ValidHash(hash) {
+			return sp, hash, true
+		}
+	}
+	return 0, "", false
 }
 
 // ErrStopped is returned by every write to a store after an fsync of
