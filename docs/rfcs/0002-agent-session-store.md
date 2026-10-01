@@ -649,10 +649,19 @@ apply here, where holding the session already is the usual case.
   rule may, is carried as it is. The refusal holds for every later
   exchange of the session between the two stores, since each still
   carries the other's call; as with two records below, one store
-  pushes its line as a session with a base and deletes its copy. Two stores may hold one session with
-  different log orders and both are correct: the order says which branch
-  was written last in that store, and the head is the fact that travels.
-  Sequence numbers are never synchronised.
+  pushes its line as a session with a base and deletes its copy. The
+  line takes the subsessions its calls spawned with it, each under an
+  ID derived from the new session's as RFC 0001 derives a
+  subsession's, and their own subsessions from theirs, recursively.
+  Every `subsession` link in the line and in the moved subsessions
+  names the new ID, which changes the ids of the entries from that
+  link on. Under the old IDs the subsessions would stay those of the
+  session the line left, and the one for the repeated `call_id` would
+  have the ID of the subsession the other store spawned for its own
+  call. Two stores may hold one session with different log orders
+  and both are correct: the order says which branch was written last
+  in that store, and the head is the fact that travels. Sequence
+  numbers are never synchronised.
 - **The entries land whether or not the head moves.** A push is two
   steps, admission and then the head, and only the second can fail.
   The head moves by compare-and-swap, with the expected value the

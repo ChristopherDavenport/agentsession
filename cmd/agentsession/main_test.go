@@ -742,3 +742,112 @@ func TestNoteDeclared(t *testing.T) {
 		t.Errorf("a hash mismatch in a 0.8 file earns %q", got)
 	}
 }
+
+// TestVerifyEmptyResume: a resume refused before it takes up its
+// call, or cut and closed on restart, fails VerifyRecords as 0.10 has
+// it, and verify notes that it took up nothing; a resume that adds a
+// message gets the ordinary note (#172).
+func TestVerifyEmptyResume(t *testing.T) {
+	tmp := t.TempDir()
+	// write records a held call and a run written resume, then has tail
+	// finish the session with an appender, an ender and the call.
+	type appender = func(agentsession.Entry) string
+	write := func(name string, tail func(must appender, end func(reason string), call string)) string {
+		t.Helper()
+		s := agentsession.New(agentsession.Header{})
+		must := func(e agentsession.Entry) string {
+			t.Helper()
+			id, err := s.Append(e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return id
+		}
+		end := func(reason string) {
+			t.Helper()
+			e, err := s.EndRun(reason, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			must(e)
+		}
+		must(agentsession.NewRunStart("run-1", agentsession.SourceInput, ""))
+		must(agentsession.NewItemEntry(openresponses.UserText("charge it")))
+		call := must(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "a", Name: "charge", Arguments: "{}"}, ResponseID: "resp-1"})
+		must(&agentsession.ResponseEntry{ResponseID: "resp-1", Status: "completed"})
+		must(agentsession.NewDecision("a", call, agentsession.VerdictHold, agentsession.ByPolicy))
+		end(agentsession.ReasonInputRequired)
+		must(agentsession.NewRunStart("run-2", agentsession.SourceResume, ""))
+		tail(must, end, call)
+		path := filepath.Join(tmp, name+".jsonl")
+		var buf bytes.Buffer
+		if err := agentsession.Write(&buf, s); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	// A subscriber refuses the resume.
+	refused := write("refused", func(_ appender, end func(string), _ string) {
+		end(agentsession.ReasonError)
+	})
+	// The process is killed after the resume's start; the restart closes
+	// the run error, and the next resume takes the call up.
+	cut := write("cut", func(must appender, end func(string), call string) {
+		end(agentsession.ReasonError)
+		must(agentsession.NewRunStart("run-3", agentsession.SourceResume, ""))
+		must(agentsession.NewDecision("a", call, agentsession.VerdictProceed, agentsession.ByPolicy))
+		must(agentsession.NewDispatch("a", call))
+		must(agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("a", "charged")))
+		must(&agentsession.ResponseEntry{ResponseID: "resp-2", Status: "completed"})
+		end(agentsession.ReasonDone)
+	})
+	// The resume adds a user message and takes up nothing.
+	message := write("message", func(must appender, end func(string), _ string) {
+		must(agentsession.NewItemEntry(openresponses.UserText("and another thing")))
+		must(&agentsession.ResponseEntry{ResponseID: "resp-2", Status: "completed"})
+		end(agentsession.ReasonDone)
+	})
+	for _, tt := range []struct {
+		path, note string
+	}{
+		{refused, fmt.Sprintf(emptyResumeNote, "run-2")},
+		{cut, fmt.Sprintf(emptyResumeNote, "run-2")},
+		{message, sourceNote},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{"verify", tt.path}, &stdout, &stderr); code != 1 {
+			t.Errorf("%s: exit %d, want 1\n%s", tt.path, code, stdout.String())
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "run source disagrees with its segment") || !strings.Contains(out, tt.note) {
+			t.Errorf("%s: stdout lacks the mismatch or %q:\n%s", tt.path, tt.note, out)
+		}
+		if tt.note == sourceNote && strings.Contains(out, "took up nothing") {
+			t.Errorf("%s: a resume that adds a message is noted as empty:\n%s", tt.path, out)
+		}
+	}
+}
+
+// TestNoteWriter: no release checks a run's source or end as it is
+// appended, so a mismatch earns a note naming the writer of the run in
+// a file of any minor, never the note on early 0.9 writers (#165).
+func TestNoteWriter(t *testing.T) {
+	for err, note := range map[error]string{
+		agentsession.ErrSourceMismatch: sourceNote,
+		agentsession.ErrReasonMismatch: reasonNote,
+	} {
+		wrapped := fmt.Errorf("%w: run r", err)
+		for declared, want := range map[string]string{
+			"agentsession/0.8":  earlierNote + "\n" + note,
+			"agentsession/0.9":  note,
+			agentsession.Format: note,
+		} {
+			if got := noteFor(declared, wrapped); got != want {
+				t.Errorf("%v in %s: note %q, want %q", err, declared, got, want)
+			}
+		}
+	}
+}

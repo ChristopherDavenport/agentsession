@@ -186,7 +186,8 @@ func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions
 // as a session written before the rule may, is carried as it is. The
 // refusal holds for every later exchange of the session between the
 // two, since each carries the other's call: one store pushes its line
-// as a session with a base and deletes its copy, as RFC 0002 says.
+// as a session with a base, its subsessions re-derived under the new
+// session's ID, and deletes its copy, as RFC 0002 says.
 func callIDsMeet(held []agentsession.Entry, b *bundle, fresh []agentsession.Entry) error {
 	sent := map[string]bool{}
 	for _, es := range [][]agentsession.Entry{b.prefix, b.own} {
@@ -203,7 +204,7 @@ func callIDsMeet(held []agentsession.Entry, b *bundle, fresh []agentsession.Entr
 	for _, e := range fresh {
 		if c := callIDOf(e); c != "" {
 			if other, ok := at[c]; ok {
-				return fmt.Errorf("%w: exchange: %s at %s here and %s sent; the stores no longer exchange this session until one pushes its line as a fork and deletes it", agentsession.ErrCallIDRepeated, c, other, e.Base().ID)
+				return fmt.Errorf("%w: exchange: %s at %s here and %s sent; the stores no longer exchange this session until one pushes its line as a fork, its subsessions re-derived under the fork's ID and its links pointed at them, and deletes it", agentsession.ErrCallIDRepeated, c, other, e.Base().ID)
 			}
 		}
 	}

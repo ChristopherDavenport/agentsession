@@ -913,3 +913,56 @@ func TestInstructionsTextAndHash(t *testing.T) {
 		t.Errorf("parts %+v", got.InstructionsParts)
 	}
 }
+
+// TestInstructionsHashLeftForce: a part named by hash takes the text
+// the path gave its id with that hash, in force or not, as a handoff
+// back to an agent whose parts left force names them; a hash no text
+// of the id has, the one in force included, resolves nothing; and a
+// replace starts the history afresh (#173).
+func TestInstructionsHashLeftForce(t *testing.T) {
+	cfg := func(parts string) string {
+		return `"type":"config","instructions_parts":[` + parts + `]`
+	}
+	part := func(id, text string) string {
+		return `{"id":"` + id + `","text":"` + text + `","source":"` + id + `-src"}`
+	}
+	hashed := func(id, text string) string { return `{"id":"` + id + `","hash":"` + HashText(text) + `"}` }
+	for _, tt := range []struct {
+		name    string
+		configs []string
+		want    string // "" for unresolved
+		source  string
+	}{
+		{"handed back", []string{cfg(part("a", "triage") + "," + part("m", "memory")), cfg(part("b", "billing")), cfg(hashed("a", "triage") + "," + hashed("m", "memory"))}, "triage\n\nmemory", "a-src"},
+		{"an earlier text", []string{cfg(part("a", "one")), cfg(`{"id":"a","text":"two"}`), cfg(part("b", "billing")), cfg(hashed("a", "one"))}, "one", "a-src"},
+		{"an earlier text of a part in force", []string{cfg(part("a", "one")), cfg(`{"id":"a","text":"two"}`), cfg(hashed("a", "one"))}, "one", "a-src"},
+		{"the text in force", []string{cfg(part("a", "one")), cfg(hashed("a", "one"))}, "one", "a-src"},
+		{"a wrong hash", []string{cfg(part("a", "triage")), cfg(part("b", "billing")), cfg(hashed("a", "other"))}, "", ""},
+		{"a wrong hash in force", []string{cfg(part("a", "triage")), cfg(hashed("a", "other"))}, "", ""},
+		{"another id's text", []string{cfg(part("a", "triage")), cfg(part("b", "billing")), cfg(hashed("c", "triage"))}, "", ""},
+		{"across a replace", []string{cfg(part("a", "triage")), `"type":"config","replace":true,"instructions_parts":[` + part("b", "billing") + `]`, cfg(hashed("a", "triage"))}, "", ""},
+		{"after a string", []string{cfg(part("a", "triage")), `"type":"config","instructions":"plain"`, cfg(hashed("a", "triage"))}, "triage", "a-src"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			in, _ := hashedLines(t, Format, tt.configs...)
+			s, err := Read(strings.NewReader(in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, err := s.Context()
+			if err != nil {
+				t.Fatal(err)
+			}
+			parts := ctx.Settings.InstructionsParts
+			if tt.want == "" {
+				if !unresolvedParts(parts) {
+					t.Errorf("resolved: %+v", parts)
+				}
+				return
+			}
+			if unresolvedParts(parts) || ctx.Settings.Instructions != tt.want || parts[0].Source != tt.source {
+				t.Errorf("instructions %q, parts %+v", ctx.Settings.Instructions, parts)
+			}
+		})
+	}
+}
