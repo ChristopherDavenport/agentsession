@@ -361,3 +361,49 @@ func TestDispatchNamingAnotherCall(t *testing.T) {
 		t.Errorf("an answer on a dispatch naming another call: %v", err)
 	}
 }
+
+// TestReadParentsKeepOrder: a read entry whose parents are not in the
+// order a writer owes keeps that order through Append, so its id holds;
+// an entry the caller builds is still sorted.
+func TestReadParentsKeepOrder(t *testing.T) {
+	bodies := []string{`"type":"info","name":"a"`, `"type":"info","name":"b"`, `"type":"info","name":"c"`}
+	_, ids := hashedLines(t, Format, bodies...)
+	first, second := ids[0], ids[1]
+	if first < second {
+		first, second = second, first // the later hash first: unsorted
+	}
+	converge := `"type":"info","name":"d","parents":[{"entry":"` + first + `"},{"entry":"` + second + `"}]`
+	in, all := hashedLines(t, Format, append(bodies, converge)...)
+	read, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again := New(read.Header())
+	for _, e := range read.Entries() {
+		id, err := again.Append(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if id != e.Base().ID {
+			t.Errorf("re-appended %s as %s", e.Base().ID, id)
+		}
+	}
+	var buf strings.Builder
+	if err := Write(&buf, again); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(strings.NewReader(buf.String())); err != nil {
+		t.Errorf("written back: %v", err)
+	}
+	if got := again.Leaf(); got != all[3] {
+		t.Errorf("leaf %s, want %s", got, all[3])
+	}
+	built := &InfoEntry{Name: "e"}
+	built.Parents = []EntryRef{{Entry: first}, {Entry: second}}
+	if _, err := again.Append(built); err != nil {
+		t.Fatal(err)
+	}
+	if built.Parents[0].Entry != second {
+		t.Errorf("a built entry's parents were not sorted: %v", built.Parents)
+	}
+}

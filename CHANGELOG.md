@@ -53,6 +53,11 @@ that a released minor's rules do not change. (#132)
   reference is read by its members' exact names, so `{"Entry": …}`
   names no entry and is refused, and `"parent": ""` is refused with
   `ErrBadID`: a root's parent is `null`. (#127)
+- **`Append` keeps a read entry's `parents` in the order its line
+  has them.** It sorted them as a writer must, which changed the id of
+  an entry read from a file that had them in another order, so a store
+  re-appending a read session refused it. An entry the caller builds is
+  still sorted.
 - **`export.ItemsFrom` makes up call IDs in the alphabet and length
   every provider takes**: a repeated native ID's characters outside
   letters, digits, `_` and `-` become `_`, and the made-up ID is at
