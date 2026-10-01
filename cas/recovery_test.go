@@ -875,9 +875,7 @@ func unwrite(t *testing.T, p, marker string, one bool) []string {
 // TestZeroedLineCutsTail: a block left unwritten, with committed records
 // after it, is the cut of an uncommitted tail: no fsync of the log
 // finished after it, so what follows, a commit that was in flight
-// included, was never committed. Records that read as committed after
-// it, which only the medium unwriting a committed sector leaves, are
-// kept aside and reported. Damage that changed a line's bytes is
+// included, was never committed. Damage that changed a line's bytes is
 // reported instead.
 func TestZeroedLineCutsTail(t *testing.T) {
 	ctx := context.Background()
@@ -914,13 +912,8 @@ func TestZeroedLineCutsTail(t *testing.T) {
 			t.Errorf("a changed line opened with %v, want its damage", err)
 		}
 		if zero {
-			// The cut dropped committed records, which no crash leaves
-			// after an unwritten block: their bytes are kept, and Verify
-			// reports them.
-			cuts, _ := filepath.Glob(filepath.Join(root, "sessions", "s", cutPrefix+"*"))
-			rep, err := r.Verify(ctx)
-			if err != nil || len(cuts) != 1 || len(rep.Problems) != 1 || !strings.Contains(rep.Problems[0].Err.Error(), filepath.Base(cuts[0])) {
-				t.Errorf("verify after a cut of committed records: %v %v, kept %v", err, rep.Problems, cuts)
+			if rep, err := r.Verify(ctx); err != nil || !rep.OK() {
+				t.Errorf("verify after the cut: %v %v", err, rep.Problems)
 			}
 		}
 		r.Close()
@@ -1756,6 +1749,58 @@ func TestDeleteReleasesPrefix(t *testing.T) {
 	st.Delete(ctx, "g")
 	if st.holds(ids[0]) {
 		t.Error("an entry on no remaining session's path is held")
+	}
+}
+
+// TestCutTrace: a cut that drops a commit a later write followed, which
+// only the medium unwriting a committed sector leaves after a block left
+// unwritten, keeps the bytes it cut and Verify reports them; a cut that
+// drops only the commit in flight at the log's end, whose own records a
+// crash can leave written, is a crash's loss and leaves none.
+func TestCutTrace(t *testing.T) {
+	ctx := context.Background()
+	for name, finished := range map[string]bool{"finished": true, "in flight": false} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			st, _ := Open(root, WithSync(SyncNever))
+			st.Create(ctx, agentsession.Header{ID: "s"})
+			mustAppend(t, st, "s", item("kept"))
+			st.Sync(ctx)
+			hole := mustAppend(t, st, "s", item("hole"))
+			for i := range 6 {
+				mustAppend(t, st, "s", item(fmt.Sprint("filler", i)))
+			}
+			p := filepath.Join(root, "sessions", "s", logName)
+			if finished {
+				st.Sync(ctx)
+				mustAppend(t, st, "s", item("after"))
+				crash(st)
+			} else {
+				crash(st)
+				// The commit's sync record reached the disk; its fsync
+				// had not finished when the machine went down.
+				line, _ := logRecord{Op: opSync, Session: "s"}.encode()
+				f, _ := os.OpenFile(p, os.O_WRONLY|os.O_APPEND, 0)
+				f.Write(line)
+				f.Close()
+			}
+			unwrite(t, p, hole, true)
+			w, _ := Open(root)
+			defer w.Close()
+			pending, _ := w.Verify(ctx)
+			if _, err := w.Open(ctx, "s"); err != nil {
+				t.Fatal(err)
+			}
+			cuts, _ := filepath.Glob(filepath.Join(root, "sessions", "s", cutPrefix+"*"))
+			after, _ := w.Verify(ctx)
+			if finished {
+				if len(pending.Problems) != 1 || len(cuts) != 1 || len(after.Problems) != 1 || !strings.Contains(after.Problems[0].Err.Error(), filepath.Base(cuts[0])) {
+					t.Errorf("a finished commit cut: pending %v, kept %v, after %v", pending.Problems, cuts, after.Problems)
+				}
+			} else if !pending.OK() || len(cuts) != 0 || !after.OK() {
+				t.Errorf("a crash's loss reported: pending %v, kept %v, after %v", pending.Problems, cuts, after.Problems)
+			}
+		})
 	}
 }
 

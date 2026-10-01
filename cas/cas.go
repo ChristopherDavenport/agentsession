@@ -1053,11 +1053,14 @@ type view struct {
 	// sync record after them does not bring them back.
 	dropped []string
 	// cutCommitted is set when a cut at a block a crash left unwritten
-	// drops a record that reads as committed: a sync, a durable append, a
-	// head move, a mark or a loss. No crash writes one there, as its
-	// fsync would have written the block; the medium unwriting a
-	// committed sector does, and recovery keeps the bytes it cuts so the
-	// loss leaves a trace.
+	// drops a commit that finished: one a later write followed. A
+	// session's records are written one call at a time, and a durable
+	// call returns only once its fsync has, which would have written the
+	// block; so a crash leaves after the block only the commit in flight,
+	// at the log's end, and the medium unwriting a committed sector
+	// leaves the rest. Recovery keeps the bytes it cuts so that loss
+	// leaves a trace. A run of durable appends at the end reads as one
+	// call, as a receive writes, and is taken for the commit in flight.
 	cutCommitted bool
 	// whole is where the log's whole lines end; a longer log has a torn
 	// tail, which the holder truncates, and an unterminated one a last
@@ -1117,11 +1120,7 @@ func (s *Store) reconcileAs(id, dir string, committedOnly bool) (view, error) {
 		// damaged line, as a crash's loss, and the holder truncates the
 		// log there.
 		cutAt, v.whole, v.unterminated, v.damage = l.lossRec, l.lossOff, false, nil
-		for _, r := range l.recs[l.lossRec:] {
-			if r.Op != opAppend || !r.Lazy {
-				v.cutCommitted = true
-			}
-		}
+		v.cutCommitted = finishedCommit(l.recs[l.lossRec:])
 		for _, d := range l.damage {
 			if d.Offset < l.lossOff {
 				v.damage = append(v.damage, d)
@@ -1279,7 +1278,29 @@ func (s *Store) emptyLoose(id string) bool {
 	return err == nil && check(spaceContents, c)
 }
 
-// cutPrefix names the bytes of a log recovery cut that read as committed.
+// finishedCommit reports whether records after a cut hold a commit that
+// finished: a sync record, which ends the call that writes it, with any
+// record after it; or a record that reads as committed with a lazy
+// append after it, which a later call wrote.
+func finishedCommit(recs []logRecord) bool {
+	committed := false
+	for i, r := range recs {
+		if r.Op == opAppend && r.Lazy {
+			if committed {
+				return true
+			}
+			continue
+		}
+		if r.Op == opSync && i < len(recs)-1 {
+			return true
+		}
+		committed = true
+	}
+	return false
+}
+
+// cutPrefix names the bytes of a log recovery cut that hold a commit
+// that finished.
 const cutPrefix = "cut-"
 
 // writeRecovered writes the log recovery found as a new file: its
@@ -1310,7 +1331,7 @@ func (s *Store) writeRecovered(id, dir string, v view) error {
 		return fmt.Errorf("the log is %d bytes, shorter than the %d recovery read", len(data), v.whole)
 	}
 	if v.cutCommitted {
-		// The cut drops what reads as committed: its bytes are kept, for
+		// The cut drops a commit that finished: its bytes are kept, for
 		// Verify to report and a person to read.
 		name := filepath.Join(dir, fmt.Sprintf("%s%d", cutPrefix, time.Now().UnixNano()))
 		if _, err := s.objs.writeFile(name, data[v.whole:], true); err != nil {
