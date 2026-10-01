@@ -640,7 +640,13 @@ apply here, where holding the session already is the usual case.
   admitting a parent before its child so that the merged log projects as
   a valid file, and MUST refuse a push whose own entries do not each
   name as `parent` the base, another own entry of the union, or, in a
-  session with no base, null. Two stores may hold one session with
+  session with no base, null. It MUST also refuse an exchange that
+  would admit a function call whose `call_id` a function call it holds,
+  and the sender does not, already carries: RFC 0001 makes a `call_id`
+  unique in a session, and two stores each appending a branch cannot
+  see the other's calls, so only the merge finds the collision. A
+  repeat both stores already hold, as a session written before that
+  rule may, is carried as it is. Two stores may hold one session with
   different log orders and both are correct: the order says which branch
   was written last in that store, and the head is the fact that travels.
   Sequence numbers are never synchronised.
