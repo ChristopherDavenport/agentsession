@@ -29,8 +29,10 @@ type Call struct {
 	Output *ItemEntry
 
 	// inPrefix is set by the session for a call made in a fork's
-	// prefix, which its header's promise does not cover.
-	inPrefix bool
+	// prefix, which its header's promise does not cover, and
+	// dispatchedElsewhere for a call with no dispatch on the path and
+	// one on another branch, which may have run.
+	inPrefix, dispatchedElsewhere bool
 
 	// ended is the decision that ended the call, a reject or an answer,
 	// that a dispatch follows on the path, which the format forbids.
@@ -213,8 +215,10 @@ func (s CallState) String() string {
 // dispatches is held, and may have run. The promise covers a call the
 // session made, after its base: one in a fork's prefix, from a call
 // [Session.Calls] or [Session.PendingCalls] returns, is unknown, since
-// its origin may have promised nothing. A call from [Calls] over a
-// bare path is taken to be the session's own.
+// its origin may have promised nothing. So is one with no dispatch on
+// the path and one on another branch of the session, which a rebase
+// above the dispatch leaves. A call from [Calls] over a bare path is
+// taken to be the session's own, with nothing beside the path.
 func (c *Call) State(h Header) CallState {
 	switch {
 	case c.Output != nil:
@@ -227,7 +231,7 @@ func (c *Call) State(h Header) CallState {
 		return CallHeld
 	case c.Dispatch != nil:
 		return CallInFlight
-	case h.HasRecord(TypeDispatch) && !c.inPrefix:
+	case h.HasRecord(TypeDispatch) && !c.inPrefix && !c.dispatchedElsewhere:
 		return CallNeverStarted
 	}
 	return CallUnknown
@@ -331,6 +335,7 @@ func (s *Session) Calls(leaf string) ([]*Call, error) {
 	calls := Calls(path)
 	for _, c := range calls {
 		c.inPrefix = s.Prefix(c.Entry.ID)
+		c.dispatchedElsewhere = c.Dispatch == nil && len(s.Dispatches(c.Entry.ID)) > 0
 	}
 	return calls, nil
 }
@@ -874,7 +879,7 @@ func (s *Session) VerifyRecords(leaf string) error {
 		if c.endAfterOutput != nil {
 			return fmt.Errorf("%w: %s %s follows the output of call %s", ErrCallCompleted, c.endAfterOutput.Verdict, c.endAfterOutput.ID, c.ID())
 		}
-		if c.Answered() && c.Dispatch == nil && promised(c.Entry.ID) {
+		if c.Answered() && c.Dispatch == nil && promised(c.Entry.ID) && len(s.Dispatches(c.Entry.ID)) == 0 {
 			return fmt.Errorf("%w: call %s", ErrAnswerNotDispatched, c.ID())
 		}
 		if c.Output != nil && c.Dispatch == nil && !c.Rejected() && !c.Answered() && promised(c.Output.ID) {

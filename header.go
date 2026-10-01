@@ -217,13 +217,15 @@ func (h *Header) fill(now time.Time) {
 // earlier minor is migrated in memory on read: from 0.5 an entry's id
 // is its envelope hash, so every earlier entry is rehashed and keeps
 // its old id in legacy_id. A 0.5 to 0.9 file reads as it stands, since
-// 0.6 to 0.9 only add optional members and elements and 0.10 changes no
-// rule, but for two rules 0.8 reads differently: instructions_omitted
+// 0.6 to 0.9 only add optional members and elements and 0.10 only lets
+// an answer follow a dispatch on another branch, but for two rules 0.8
+// reads differently: instructions_omitted
 // stays in force until a later config changes it, and a run whose
 // pending call is held after its dispatch ends input_required, not
 // aborted. 0.9 lets instructions_omitted name a run of the list in
-// force by keep, which no 0.8 omitted part could be. 0.10 marks a file
-// written under 0.9's rules as they stood when they stopped changing.
+// force by keep, which no 0.8 omitted part could be. 0.10 also marks a
+// file written under 0.9's rules as they stood when they stopped
+// changing.
 const FormatMinor = 10
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.

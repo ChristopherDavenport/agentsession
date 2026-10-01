@@ -7,16 +7,23 @@ versions may break the API.
 
 ## Unreleased
 
-**The format is 0.10**, which changes no rule: a 0.9 file is a 0.10
-file. 0.9's rules were amended in place after writers of it were
-released, so a 0.9 header could not say which a file was written
-under; a writer now raises a 0.9 file to 0.10 before it appends, so
+**The format is 0.10**, and a 0.9 file is a 0.10 file. 0.9's rules
+were amended in place after writers of it were released, so a 0.9
+header could not say which a file was written under; a writer now raises a 0.9 file to 0.10 before it appends, so
 every 0.9 reader, v0.0.12 to v0.0.17, refuses the file from then on,
 the early writers among them. **Upgrade every reader of a store,
 agentturn, agentkit and agenteval included, before any writer runs
 this release.** RFC 0001 is draft 0.10, and Versioning gains the rule
 that a released minor's rules do not change. (#132)
 
+- **An answer may end a call dispatched only on another branch.** A
+  writer that rebases to a point between a call and its `dispatch`
+  leaves a call that may have run; 0.10 lets an `answer` end it, where
+  0.9 left only a `reject`, which says the call never ran, or a second
+  `dispatch`. `Call.State` reads such a call as `CallUnknown`, not
+  `CallNeverStarted`, and the otel exporter likewise.
+  `Session.Dispatches` returns a call's dispatches on every branch.
+  (#157)
 - **`Session.DeclaredFormat`** returns the format a file's header named
   when it was read, before `Read` raised it in memory, and `verify`
   notes an early 0.9 writer only for a file that declared 0.9; for a
