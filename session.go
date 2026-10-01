@@ -46,6 +46,9 @@ type Session struct {
 	repeated   []string
 	unresolved []string
 	migrated   bool
+	// declared is the format the file's header named when Read met it,
+	// before the header was brought up to this package's.
+	declared string
 }
 
 // New creates an empty session. Header fields left empty are filled:
@@ -57,10 +60,24 @@ func New(h Header) *Session {
 	s := &Session{now: utcNow}
 	h.fill(s.now())
 	s.header = h
+	s.declared = h.Format
 	s.byID = map[string]Entry{}
 	s.callIDs = map[string]bool{}
 	s.children = map[string][]string{}
 	return s
+}
+
+// DeclaredFormat returns the format the session's file named in its
+// header when it was read, before Read brought the header up to the
+// format this package writes; for a session made here, the format it
+// writes. A reader that hedges on a rule a minor gained says so of the
+// minor the file declared. A store that raises the header before an
+// append leaves this as read; the session read again declares the
+// raised format.
+func (s *Session) DeclaredFormat() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.declared
 }
 
 // Header returns a copy of the header.

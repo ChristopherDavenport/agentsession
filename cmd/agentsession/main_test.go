@@ -647,3 +647,23 @@ func TestCASVerifyChecksRecords(t *testing.T) {
 		t.Errorf("a store's verify lists each response:\n%s", stdout.String())
 	}
 }
+
+// TestNoteDeclared: the note that an early 0.9 writer may have broken
+// a rule goes with a file that declared 0.9 when read; a file of an
+// earlier minor, which Read raised, is told its minor did not forbid
+// it; a 0.10 file earns none (#134).
+func TestNoteDeclared(t *testing.T) {
+	for declared, want := range map[string]string{
+		"agentsession/0.8":  earlierNote,
+		"agentsession/0.5":  earlierNote,
+		"agentsession/0.9":  earlyNote,
+		agentsession.Format: "",
+	} {
+		if got := noteFor(declared, agentsession.ErrCallIDRepeated); got != want {
+			t.Errorf("%s: note %q, want %q", declared, got, want)
+		}
+	}
+	if got := noteFor("agentsession/0.8", agentsession.ErrHashMismatch); got != "" {
+		t.Errorf("a hash mismatch in a 0.8 file earns %q", got)
+	}
+}

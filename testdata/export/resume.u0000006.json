@@ -283,7 +283,7 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.9",
+      "format": "agentsession/0.10",
       "leaf": "sha256:06ce3e510c451f2e99e05cc116becfe0ce1d295194db45cf5bea6d417b49c5b7",
       "main": true,
       "records": [

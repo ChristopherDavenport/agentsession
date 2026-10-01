@@ -857,7 +857,7 @@ func TestOmittedFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"format":"agentsession/0.9"`, `{"keep":12}`, `[{"keep":6},{"id":"memory/user/n-0010"`, `{"keep":5}]`} {
+	for _, want := range []string{`"format":"` + Format + `"`, `{"keep":12}`, `[{"keep":6},{"id":"memory/user/n-0010"`, `{"keep":5}]`} {
 		if !bytes.Contains(raw, []byte(want)) {
 			t.Errorf("the fixture lacks %s", want)
 		}
