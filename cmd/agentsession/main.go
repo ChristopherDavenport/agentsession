@@ -1,13 +1,15 @@
 // Command agentsession inspects, verifies, exports and lists Agent
-// Session Format files, and the sessions of a cas store, from a shell.
+// Session Format files, and the sessions of a cas store, from a shell,
+// and repairs a cas session whose log is damaged.
 //
 //	agentsession show <file> | <cas-root> <id> [-leaf id] [-v]
 //	agentsession verify <file> | <cas-root> [id]
 //	agentsession export <file> | <cas-root> <id> -out dir [-redact-home] [-redact-env] [-secret VALUE]...
 //	agentsession list <root> [-cwd path] [-parent id] [-limit n]
+//	agentsession repair <cas-root> <id> [-dry-run]
 //
-// Every command opens what it reads read-only. show, verify and
-// export read a file directly and never take its lock; given a cas
+// Every command but repair opens what it reads read-only. show, verify
+// and export read a file directly and never take its lock; given a cas
 // store and a session id, they open the store read-only and read the
 // session as the file its projection is. A path inside a cas store's
 // sessions/<id> directory, its one-line header file included, is read
@@ -18,6 +20,15 @@
 // store root read-only and prints its sessions, newest first. All four
 // are safe to run beside a harness that is writing, which is when an
 // operator most wants them.
+//
+// repair rewrites a cas session whose log has a record that fails its
+// checksum, which keeps the session from opening and the store from
+// sweeping, from the records that still read: it keeps the entries
+// whose objects are whole and whose parents are kept, prints what it
+// dropped and where the head went, and keeps the damaged log in the
+// session's directory, which verify reports until it is removed. It
+// takes the session's lock, so it fails on a session a harness holds.
+// With -dry-run it opens the store read-only and writes nothing.
 package main
 
 import (
@@ -39,10 +50,11 @@ commands:
   verify  <cas-root>                 check a whole cas store: logs, objects, sessions, records
   export  <session> -out dir         write ATIF documents for every leaf
   list    <root>                     list the sessions of a jsonl or cas store
+  repair  <cas-root> <id>            rewrite a damaged cas session log from what still reads
 
 A <session> is a session file, or a cas store's root and a session id:
-"agentsession show ~/.agent/cas 01995b2a-...". Every command reads
-without taking a lock.
+"agentsession show ~/.agent/cas 01995b2a-...". Every command but
+repair reads without taking a lock.
 
 Run "agentsession <command> -h" for a command's flags.
 `
@@ -69,6 +81,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = exportCmd(args[1:], stdout, stderr)
 	case "list":
 		err = list(args[1:], stdout, stderr)
+	case "repair":
+		err = repair(args[1:], stdout, stderr)
 	case "-h", "-help", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0

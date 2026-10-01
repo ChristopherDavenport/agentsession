@@ -9,7 +9,8 @@ versions may break the API.
 
 **The format is 0.10**, and a 0.9 file is a 0.10 file. 0.9's rules
 were amended in place after writers of it were released, so a 0.9
-header could not say which a file was written under; a writer now raises a 0.9 file to 0.10 before it appends, so
+header could not say which a file was written under; a writer now
+raises a 0.9 file to 0.10 before it appends, so
 every 0.9 reader, v0.0.12 to v0.0.17, refuses the file from then on,
 the early writers among them. **Upgrade every reader of a store,
 agentturn, agentkit and agenteval included, before any writer runs
@@ -56,6 +57,28 @@ that a released minor's rules do not change. (#132)
   every provider takes**: a repeated native ID's characters outside
   letters, digits, `_` and `-` become `_`, and the made-up ID is at
   most 64 characters, as agentturn's renamer has it. (#136)
+- **cas: `Store.Repair` rewrites a session's damaged log, and
+  `agentsession repair <cas-root> <id>` runs it.** A log record that
+  fails its checksum keeps the session from opening and every sweep of
+  the store from running; before, `Delete` was the only way past it.
+  Holding the session's lock, a repair keeps every record that still
+  reads and, of the entries those append, the ones whose objects are
+  whole and whose parent is the base or a kept entry. A parent whose
+  record the damage hid is kept when its objects, and its ancestors',
+  are whole: the child's envelope names it by its hash. An entry
+  hanging from a dropped one, or converging one, is dropped and
+  reported. The head is the kept entry the last readable head record
+  names, or else the latest kept leaf, and the report says which. The new log is written
+  durably and renamed into place, and the damaged one is kept in the
+  session's directory as `damaged-<time>`, which `Verify` reports until
+  it is removed. `RepairOptions.DryRun` reports what would be kept and
+  dropped and writes nothing, on a read-only store too. A repair
+  refuses a log whose damage cost no record with `ErrNotDamaged`, and one that would
+  keep nothing with `ErrUnrecoverable`, which points at `Delete`. While
+  a `damaged-*` file is there, a sweep keeps every object its readable
+  records name and the ancestors those hang from; what only a damaged
+  record named cannot be known, and is swept once nothing else names
+  it. (#153)
 
 ## v0.0.17 - 2026-10-01
 

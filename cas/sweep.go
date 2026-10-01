@@ -181,6 +181,11 @@ func (s *Store) keepLogs(k keepSet, marks logMarks) error {
 	if err != nil {
 		return fmt.Errorf("cas: %w", err)
 	}
+	// What damaged logs name is gathered apart and added last: it is
+	// kept whether or not it reads, and an entry marked kept is not read
+	// again, so added first it would let a live log or prefix needing
+	// the same entry whole pass over its corruption.
+	damaged := keepSet{entries: map[string]bool{}, contents: map[string]bool{}}
 	for _, d := range dirs {
 		if !d.IsDir() || !validSessionID(d.Name()) {
 			continue
@@ -209,7 +214,8 @@ func (s *Store) keepLogs(k keepSet, marks logMarks) error {
 		if err == nil && l.lost {
 			// What a damaged record named cannot be known, and a sweep
 			// that guessed would remove it: RFC 0002 forbids deleting an
-			// entry any log references.
+			// entry any log references. Repair rewrites the log, keeping
+			// the damaged one, whose readable records the sweep then keeps.
 			err = firstLoss(l)
 		}
 		if err != nil {
@@ -224,8 +230,66 @@ func (s *Store) keepLogs(k keepSet, marks logMarks) error {
 					return fmt.Errorf("cas: sweep: %w", err)
 				}
 			}
+			if err := s.keepDamaged(damaged, dir); err != nil {
+				return fmt.Errorf("cas: session %s: %w", id, err)
+			}
 		}
 		marks[id] = logMark{off: l.whole, file: info}
+	}
+	for h := range damaged.entries {
+		k.entries[h] = true
+	}
+	for h := range damaged.contents {
+		k.contents[h] = true
+	}
+	return nil
+}
+
+// keepDamaged adds what the readable records of a session's damaged
+// logs name, kept by a repair: each entry and head, and every ancestor
+// of one whose envelope still reads, since a parent the damage hid may
+// be among them. What only a damaged record named cannot be known; a
+// repair that dropped an entry does not let a sweep take what the log
+// it dropped it from named. Nothing need read whole: an object that is
+// missing or corrupt is what a repair dropped.
+func (s *Store) keepDamaged(k keepSet, dir string) error {
+	kept, err := filepath.Glob(filepath.Join(dir, damagedLogPrefix+"*"))
+	if err != nil {
+		return err
+	}
+	walked := map[string]bool{}
+	for _, p := range kept {
+		if info, err := os.Lstat(p); err == nil && !info.Mode().IsRegular() {
+			continue // not a log a repair kept
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		info, err := f.Stat()
+		var l sessionLog
+		if err == nil {
+			l, err = parseSessionLog(f, 0, info.Size())
+		}
+		f.Close()
+		if err != nil {
+			return err
+		}
+		for _, r := range l.recs {
+			for _, id := range []string{r.Entry, r.Head, r.Base} {
+				for id != "" && !walked[id] {
+					walked[id] = true
+					if err := s.keepEntry(k, id, keepTorn); err != nil {
+						return err
+					}
+					parent, err := s.parentOf(id)
+					if err != nil {
+						break
+					}
+					id = parent
+				}
+			}
+		}
 	}
 	return nil
 }
