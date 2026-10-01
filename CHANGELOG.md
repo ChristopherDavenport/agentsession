@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.17 - 2026-10-01
 
 The format is unchanged. RFC 0002's exchange section gains a refusal,
 and RFC 0001's conformance list names three cases `VerifyRecords`
