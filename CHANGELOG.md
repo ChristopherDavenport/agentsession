@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.19 - 2026-10-01
 
 **On a cas store v0.0.15 or earlier wrote, stop every writer, take a
 copy of the store, run `agentsession migrate <root>`, then upgrade the
