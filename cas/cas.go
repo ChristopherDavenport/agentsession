@@ -16,6 +16,7 @@
 //	  trash/                              sessions a delete renamed away, being removed
 //	  layout                              the layout the store is in, which an open checks
 //	  sweep.lock                          held shared by writers, exclusive by a sweep's last step
+//	  sweep.lock.want                     held shared by writers waiting for sweep.lock
 //	  gc.lock                             the lock of a running sweep or pack
 //
 // An entry is stored as two objects, its body under the content hash
