@@ -46,6 +46,9 @@ type objects struct {
 	// seen made durable; fanning makes them, one space at a time.
 	fanned  map[string]bool
 	fanning sync.Mutex
+	// noLink is set once the filesystem has refused a hard link, after
+	// which every object is written durably.
+	noLink atomic.Bool
 	// failure is the first fsync of the store's data that failed, after
 	// which the store writes nothing; syncing holds this process's lock
 	// on fsyncs of each path in flight.
@@ -317,9 +320,16 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 		return err
 	}
 	dir := filepath.Dir(path)
+	// replacing is set when a file is in the object's place, which may be
+	// one another session committed: a copy put over it is written
+	// durably, since a rename can reach the disk before an unsynced
+	// file's bytes do, and a crash would leave the committed object
+	// zeros.
+	replacing := false
 	if info, err := os.Stat(path); err == nil && info.Size() == int64(len(data)) {
 		ok, err := o.reuse(path, len(data))
 		if err == nil && !ok {
+			replacing = true
 			goto write
 		}
 		if err == nil {
@@ -335,6 +345,7 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 	} else if err == nil {
 		// A loose copy of the wrong length is written again below: this
 		// write holds its right bytes.
+		replacing = true
 		goto write
 	}
 	if _, lp, _, _, lerr := o.locate(sp, hash, false); lerr == nil && lp != nil {
@@ -350,7 +361,25 @@ write:
 	if err := o.fanOut(filepath.Dir(dir)); err != nil {
 		return err
 	}
-	info, err := o.writeFile(path, data, durable)
+	var info os.FileInfo
+	if !durable && !replacing && !o.noLink.Load() {
+		// A new object, written lazily, takes its place only if nothing
+		// has since: one another process wrote meanwhile is replaced
+		// durably instead. So is the object where the filesystem makes
+		// no hard link, from then on, which is slower but as sound.
+		info, err = writeFileWith(path, data, nil, false)
+		if errors.Is(err, errNoLink) {
+			o.noLink.Store(true)
+		}
+		if errors.Is(err, os.ErrExist) || errors.Is(err, errNoLink) {
+			durable = true
+		}
+	} else if !durable {
+		durable = true
+	}
+	if durable {
+		info, err = o.writeFile(path, data, true)
+	}
 	if err != nil {
 		return err
 	}
@@ -655,11 +684,11 @@ func (o *objects) fsyncFile(path string) error {
 // durable, is the store's.
 func (o *objects) writeFile(path string, data []byte, durable bool) (os.FileInfo, error) {
 	if !durable {
-		return writeFileWith(path, data, nil)
+		return writeFileWith(path, data, nil, true)
 	}
 	return writeFileWith(path, data, func(f *os.File) error {
 		return o.fsync(f.Name(), f, syncFile)
-	})
+	}, true)
 }
 
 // lockPath takes this process's lock on fsyncs of path.

@@ -1555,6 +1555,68 @@ func TestSweepStops(t *testing.T) {
 	}
 }
 
+// TestLazyCopyNeverReplaces: a lazy append of content another store
+// committed puts its own copy in place durably, never an unsynced file
+// over the committed one, whose bytes a crash could otherwise leave
+// zeros; and a lazy write of a new object does not take the place of
+// one written there meanwhile.
+func TestLazyCopyNeverReplaces(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	st.Create(ctx, agentsession.Header{ID: "a"})
+	e := mustAppend(t, st, "a", item("shared tool output"))
+	c, _ := st.contentOf(e)
+	st.Close()
+	p, _ := st.objs.loosePath(spaceContents, c)
+	before, _ := os.Stat(p)
+	lazy, _ := Open(root, WithSync(SyncNever))
+	defer lazy.Close()
+	lazy.Create(ctx, agentsession.Header{ID: "b"})
+	mustAppend(t, lazy, "b", item("shared tool output"))
+	after, _ := os.Stat(p)
+	if !os.SameFile(before, after) && lazy.open["b"].pend.files[p] {
+		t.Error("an unsynced copy took the place of a committed object")
+	}
+	other := filepath.Join(t.TempDir(), "o")
+	os.WriteFile(other, []byte("there first"), 0o600)
+	if _, err := writeFileWith(other, []byte("late"), nil, false); !errors.Is(err, os.ErrExist) {
+		t.Errorf("a write that must not replace, over a file: %v", err)
+	}
+	if got, _ := os.ReadFile(other); string(got) != "there first" {
+		t.Errorf("the file there first is now %q", got)
+	}
+}
+
+// TestNoHardLinks: on a filesystem that makes no hard links, a lazy
+// write of a new object is written durably instead, and the store goes
+// on writing.
+func TestNoHardLinks(t *testing.T) {
+	ctx := context.Background()
+	old := linkFile
+	defer func() { linkFile = old }()
+	links := 0
+	linkFile = func(string, string) error {
+		links++
+		return &os.LinkError{Op: "link", Err: errors.ErrUnsupported}
+	}
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	for i := range 3 {
+		mustAppend(t, st, "s", item(fmt.Sprint("on vfat ", i)))
+	}
+	if links != 1 {
+		t.Errorf("tried %d links, want 1 and then none", links)
+	}
+	st.Close()
+	r, _ := Open(root)
+	defer r.Close()
+	if s, err := r.Open(ctx, "s"); err != nil || s.Len() != 3 {
+		t.Errorf("reopened: %v", err)
+	}
+}
+
 // TestForkRefusesDoomedBase: a fork of a base another process holds as
 // working state, after an earlier uncommitted append of that session
 // whose objects are gone, is refused: recovery would cut the origin's

@@ -93,7 +93,13 @@
 // wrote lazily, whose writeback failed and whose failure another
 // process's fsync took, is fsynced here successfully. A pack another
 // process wrote is trusted as written durably. A fork's commit of a
-// log another process holds is an fsync of that process's file. Each
+// log another process holds is an fsync of that process's file. And a
+// directory every process writes into, an object's fan-out directory
+// or sessions, is fsynced by each: one process's failed fsync of it is
+// reported to that process, and another's later fsync of it can
+// succeed though a rename the first depended on never reached the
+// disk; on ext4 and XFS a directory's changes go through the journal,
+// whose failure usually takes the whole filesystem read-only. Each
 // needs a failed fsync in one process and a commit by another before
 // the machine restarts; a host that wants none of them restarts the
 // machine, or drops the page cache, before a store stopped by a failed
@@ -437,13 +443,16 @@ func writeFile(path string, data []byte, durable bool) error {
 	if durable {
 		sync = func(f *os.File) error { return f.Sync() }
 	}
-	_, err := writeFileWith(path, data, sync)
+	_, err := writeFileWith(path, data, sync, true)
 	return err
 }
 
 // writeFileWith is writeFile, fsyncing with sync when it is set, and
 // returning the file it wrote, as a rename over it since cannot change.
-func writeFileWith(path string, data []byte, sync func(*os.File) error) (os.FileInfo, error) {
+// Unless replace is set, the file takes its place only if none is there,
+// by a hard link: an error wrapping os.ErrExist says one was, and one
+// wrapping errNoLink that the filesystem made no link.
+func writeFileWith(path string, data []byte, sync func(*os.File) error, replace bool) (os.FileInfo, error) {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
 		return nil, err
@@ -452,10 +461,26 @@ func writeFileWith(path string, data []byte, sync func(*os.File) error) (os.File
 	if sync != nil && werr == nil {
 		werr = sync(tmp)
 	}
+	// place puts the file at path: by a rename, or, when it must not
+	// replace one, by a link, which fails if a file is there, and the
+	// temporary name removed after.
+	place := func() error {
+		if replace {
+			return os.Rename(tmp.Name(), path)
+		}
+		if err := linkFile(tmp.Name(), path); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return err
+			}
+			return fmt.Errorf("%w: %v", errNoLink, err)
+		}
+		return os.Remove(tmp.Name())
+	}
 	if werr == nil && renameOpen {
-		// Renamed while open, so the file's version, which a rename may
-		// change, is read after it from the descriptor holding the file.
-		if werr = os.Rename(tmp.Name(), path); werr == nil {
+		// Placed while open, so the file's version, which a rename or a
+		// link may change, is read after it from the descriptor holding
+		// the file.
+		if werr = place(); werr == nil {
 			info, serr := tmp.Stat()
 			if cerr := tmp.Close(); serr == nil {
 				serr = cerr
@@ -470,16 +495,22 @@ func writeFileWith(path string, data []byte, sync func(*os.File) error) (os.File
 	if cerr := tmp.Close(); werr == nil {
 		werr = cerr
 	}
+	if werr == nil {
+		werr = place()
+	}
 	if werr != nil {
 		os.Remove(tmp.Name())
 		return nil, werr
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		os.Remove(tmp.Name())
-		return nil, err
-	}
 	return info, nil
 }
+
+// errNoLink is a hard link a filesystem would not make: vfat and exFAT
+// make none, nor do some FUSE, network and sandboxed mounts.
+var errNoLink = errors.New("cas: the filesystem made no hard link")
+
+// linkFile makes a hard link; a variable so a test can fail it.
+var linkFile = os.Link
 
 // writeAtomic replaces the file at path with data durably: through a
 // temporary file, an fsync, a rename and an fsync of the directory.
