@@ -706,12 +706,36 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		lk.release()
 		return 0, err
 	}
+	// A pack written since the sweep listed its packs, as a commit
+	// writes one, stays: what it holds needs no rescue. Only this sweep,
+	// under the gc lock, removes a pack.
+	if err := s.objs.reloadPacks(true); err != nil {
+		lk.release()
+		return 0, err
+	}
+	replaced := map[string]bool{}
+	for _, p := range old {
+		replaced[p.name] = true
+	}
+	var stay []*pack
+	for _, p := range s.objs.packList() {
+		if !replaced[p.name] && p.name != newPack {
+			stay = append(stay, p)
+		}
+	}
+	inStaying := func(sp space, hash string) bool {
+		d, err := digestOf(hash)
+		if err != nil {
+			return false
+		}
+		return slices.ContainsFunc(stay, func(p *pack) bool { _, _, ok := p.find(sp, d); return ok })
+	}
 	for _, pair := range []struct {
 		sp  space
 		set map[string]bool
 	}{{spaceEntries, since.entries}, {spaceContents, since.contents}} {
 		for hash := range pair.set {
-			if inNew[pair.sp][hash] {
+			if inNew[pair.sp][hash] || inStaying(pair.sp, hash) {
 				continue
 			}
 			if lp, err := s.objs.loosePath(pair.sp, hash); err == nil {

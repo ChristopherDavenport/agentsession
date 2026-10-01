@@ -64,10 +64,12 @@ type RepairReport struct {
 	// set.
 	Head, Named string
 	// Unread is set when a damaged line follows the last head the
-	// repair could read. That line may have moved the head or appended
-	// entries the repair cannot name, so the head the log last named is
-	// not known; Head is then the last head read, or the latest kept
-	// leaf when that was dropped.
+	// repair could read: that of the last readable head record, or of a
+	// damaged append record salvaged with its entry, whichever is later
+	// in the log. That line may have moved the head or appended entries
+	// the repair cannot name, so the head the log last named is not
+	// known; Head is then that last head read, the salvaged entry when
+	// it is the later, or the latest kept leaf when that was dropped.
 	Unread bool
 	// Mark is the record mark, as the last readable mark record says.
 	Mark string

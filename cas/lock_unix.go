@@ -119,6 +119,8 @@ func lockExclusive(ctx context.Context, path string) (*dirLock, error) {
 		return nil, err
 	}
 	defer next.release()
+	// The want lock stays, though next covers this release's writers:
+	// writers of v0.0.17 and v0.0.18 sharing the store know only it.
 	want, err := lockPoll(ctx, path+".want", syscall.LOCK_EX, 2*time.Millisecond)
 	if err != nil {
 		return nil, err
