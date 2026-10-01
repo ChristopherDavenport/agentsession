@@ -7,6 +7,60 @@ versions may break the API.
 
 ## Unreleased
 
+**On a cas store v0.0.15 or earlier wrote, stop every writer, take a
+copy of the store, run `agentsession migrate <root>`, then upgrade the
+readers and the writers together.** The reader-first order v0.0.18
+gave cannot be followed there: a read-only open of v0.0.16 or later
+reads no session of such a store until a writing open has migrated it,
+and once one has, no release before v0.0.16 reads it. The order
+v0.0.18 gave stands for jsonl and for a cas store already migrated.
+A v0.0.16 to v0.0.18 writer opening the store while `migrate` runs may
+fail once with `not a directory`; open it again. The `journal` a
+migrated store holds is a dangling symbolic link by design: a copy
+that follows links (`cp -L`, rsync without `-l`) reports or skips it,
+which is harmless, and the next writing open puts it back.
+
+- **`agentsession migrate <cas-root>`** opens a cas store for writing
+  and closes it, which migrates a store v0.0.15 or earlier wrote, with
+  no harness started to do it. It refuses with `ErrMigrationBusy` while
+  a writer of the earlier release holds a session, and exits non-zero
+  when a session failed to migrate. A command that meets an unmigrated
+  session, and `verify` of a store holding a journal still to migrate,
+  now say to run it. `cas.NeedsMigration` reports whether a store holds
+  one. (#164)
+- **cas: a migrated store refuses a writer of v0.0.15 and earlier
+  that the migration did not find.** The migration finds such a writer
+  only while it holds a session; one idle between sessions went on
+  after it, made the journal again at its next commit and wrote
+  sessions in the old layout, which every store open since, and every
+  read-only open, refused with `ErrLegacyStore` until the next writing
+  open. The migration now leaves a tombstone where the journal was, a
+  symbolic link `journal -> layout/journal`, which no open can follow
+  since `layout` is a file: that writer's every commit fails (`not a
+  directory` on unix; elsewhere its open may succeed and its writes
+  fail), and it writes nothing. v0.0.16 to v0.0.18 take the tombstone
+  for no journal, except a writing open of theirs that found the
+  journal and waited while this release migrated: it fails once with
+  `cas: migrate: open …/journal: not a directory`, losing nothing, and
+  a retry opens the store. A migration that keeps a damaged journal
+  aside now hard-links it there, so the journal is in place until the
+  tombstone replaces it. Every writing open puts one in a store that
+  has its layout and no journal, a store those releases migrated and a
+  new store included. On a filesystem that makes no symbolic link, as
+  Windows without the right to make one, there is no tombstone, and
+  such a writer still makes the journal again. (#166)
+- **cas: the migration holds `sweep.lock` exclusive from before it
+  reads the journal until the tombstone is in place.** A v0.0.15 writer
+  holds it shared through each commit. Before, a session such a writer
+  created while the migration ran, once the sessions were listed, was
+  acknowledged with its records in the journal, and the migration then
+  removed the journal: the session was left in the old layout with no
+  journal for any later open to migrate it from, refused with
+  `ErrLegacyStore` by every open, and its entries held only by an old
+  log the writer had not synced. Now that writer waits for the
+  migration, and its commit then meets the tombstone. On a platform
+  without flock the lock is nothing, as it is for sweeps. A migration
+  that waits a minute for the lock returns `ErrMigrationBusy`. (#166)
 - **`verify` no longer blames early 0.9 writers for a run's source or
   end.** No release checks either as it is appended, only
   `VerifyRecords` afterwards, so a mismatch in a file of any minor,
@@ -47,7 +101,11 @@ raises a 0.9 file to 0.10 before it appends, so
 every 0.9 reader, v0.0.12 to v0.0.17, refuses the file from then on,
 the early writers among them. **Upgrade every reader of a store,
 agentturn, agentkit and agenteval included, before any writer runs
-this release.** RFC 0001 is draft 0.10, and Versioning gains the rule
+this release.** A cas store v0.0.15 or earlier wrote is the exception:
+no reader of v0.0.16 or later reads it until a writing open has
+migrated it, so stop every writer, take a copy, open it for writing
+once with this release, then upgrade the readers and writers together
+(#164). RFC 0001 is draft 0.10, and Versioning gains the rule
 that a released minor's rules do not change. (#132)
 
 - **An answer may end a call dispatched only elsewhere in the

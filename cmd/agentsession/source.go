@@ -195,6 +195,9 @@ func verifyStore(root string, stdout io.Writer) error {
 		}
 	}
 	fmt.Fprintf(stdout, "%d sessions' hashes and records checked, %d failed, %d not checked\n", checked, failing, unchecked)
+	if cas.NeedsMigration(root) {
+		fmt.Fprintf(stdout, "the store holds a journal from before per-session logs; stop every writer, take a copy, and run agentsession migrate %s\n", root)
+	}
 	if !rep.OK() || failing > 0 || unchecked > 0 {
 		return errFailed
 	}
