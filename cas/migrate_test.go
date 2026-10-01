@@ -124,7 +124,7 @@ func TestMigrate(t *testing.T) {
 // sessions finishes at the next writing open.
 func TestMigrateResumes(t *testing.T) {
 	root, want := legacyStore(t)
-	st := &Store{root: root, objs: newObjects(root), open: map[string]*handle{}, owners: map[string]map[string]bool{}, prefix: map[string]bool{}, faulty: map[string]error{}}
+	st := &Store{root: root, objs: newObjects(root), open: map[string]*handle{}, faulty: map[string]error{}}
 	scan, err := readJournal(root)
 	if err != nil {
 		t.Fatal(err)

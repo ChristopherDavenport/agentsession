@@ -29,7 +29,9 @@ session is a ref, and its log is its own write-ahead log.
   `LogDamage`. Blocks a crash left unwritten are cut, from the first,
   as the loss of an uncommitted tail instead, since no fsync of the
   log finished after them; a zero byte that is no such block is
-  damage. After any fsync of its data fails, a store writes nothing
+  damage. A cut that drops records reading as committed, which only
+  the medium unwriting a committed sector leaves, keeps their bytes
+  beside the log as `cut-<time>`, and `Verify` reports them. After any fsync of its data fails, a store writes nothing
   more and returns `ErrStopped` until it is opened again; it still
   reads. Linux reports a failed writeback once and keeps the pages it
   failed to write in memory as though written, so recovery that keeps

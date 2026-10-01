@@ -458,10 +458,13 @@ are no record, is damage, reported rather than skipped, since the log is
 the session's only record. The one damage the bytes cannot tell from a
 crash's is a committed record the medium itself unwrote: it reads as an
 uncommitted tail, and is cut as one, unless a store keeps where its
-commits end. The head, the record mark and any other index are rebuilt
-from the log and never read over it, so a crash that leaves one behind
-or ahead of the log changes nothing. Recovery reads one session's log,
-when the session is opened, so what a store pays to recover a session is
+commits end. A cut that drops a record reading as committed, which no
+crash leaves after an unwritten block, SHOULD leave a trace: the
+reference store keeps the bytes it cut, and reports them when it
+verifies. The head, the record mark and any other index are rebuilt from
+the log and never read over it, so a crash that leaves one behind or
+ahead of the log changes nothing. Recovery reads one session's log, when
+the session is opened, so what a store pays to recover a session is
 proportional to that session's log, however large the store has grown. A
 session's log is deleted with the session and holds nothing of any
 other, so there is nothing store-wide to compact.

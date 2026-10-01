@@ -872,11 +872,13 @@ func unwrite(t *testing.T, p, marker string, one bool) []string {
 	return kept
 }
 
-// TestZeroedLineCutsTail: a block a crash left unwritten, with
-// committed records after it, is the cut of an uncommitted tail: no
-// fsync of the log finished after it, so what follows, a commit that
-// was in flight included, was never committed. Damage that changed a
-// line's bytes is reported instead.
+// TestZeroedLineCutsTail: a block left unwritten, with committed records
+// after it, is the cut of an uncommitted tail: no fsync of the log
+// finished after it, so what follows, a commit that was in flight
+// included, was never committed. Records that read as committed after
+// it, which only the medium unwriting a committed sector leaves, are
+// kept aside and reported. Damage that changed a line's bytes is
+// reported instead.
 func TestZeroedLineCutsTail(t *testing.T) {
 	ctx := context.Background()
 	for _, zero := range []bool{true, false} {
@@ -912,8 +914,13 @@ func TestZeroedLineCutsTail(t *testing.T) {
 			t.Errorf("a changed line opened with %v, want its damage", err)
 		}
 		if zero {
-			if rep, err := r.Verify(ctx); err != nil || !rep.OK() {
-				t.Errorf("verify after the cut: %v %v", err, rep.Problems)
+			// The cut dropped committed records, which no crash leaves
+			// after an unwritten block: their bytes are kept, and Verify
+			// reports them.
+			cuts, _ := filepath.Glob(filepath.Join(root, "sessions", "s", cutPrefix+"*"))
+			rep, err := r.Verify(ctx)
+			if err != nil || len(cuts) != 1 || len(rep.Problems) != 1 || !strings.Contains(rep.Problems[0].Err.Error(), filepath.Base(cuts[0])) {
+				t.Errorf("verify after a cut of committed records: %v %v, kept %v", err, rep.Problems, cuts)
 			}
 		}
 		r.Close()
@@ -1719,6 +1726,36 @@ func TestDamageAfterCut(t *testing.T) {
 	}
 	if s.Len() != len(kept) {
 		t.Errorf("after the cut: %d entries, want %d", s.Len(), len(kept))
+	}
+}
+
+// TestDeleteReleasesPrefix: a fork's base path is held while the fork
+// is, and no longer once it is deleted and no other session holds it.
+func TestDeleteReleasesPrefix(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	ids := fill(t, st, "o", 2)
+	if _, err := st.Create(ctx, agentsession.Header{ID: "f", ParentSession: "o", Base: ids[1]}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "g", ParentSession: "f", Base: ids[1]}); err != nil {
+		t.Fatal(err)
+	}
+	st.ensureIndex()
+	if err := st.Delete(ctx, "o"); err != nil {
+		t.Fatal(err)
+	}
+	if !st.holds(ids[0]) {
+		t.Error("the origin's entry, on two forks' paths, is not held once the origin is deleted")
+	}
+	st.Delete(ctx, "f")
+	if !st.holds(ids[0]) {
+		t.Error("an entry on a remaining fork's path is not held")
+	}
+	st.Delete(ctx, "g")
+	if st.holds(ids[0]) {
+		t.Error("an entry on no remaining session's path is held")
 	}
 }
 

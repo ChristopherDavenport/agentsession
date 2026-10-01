@@ -254,16 +254,11 @@ type Store struct {
 	idx      sync.Mutex
 	indexing sync.Mutex
 	building bool
-	deltas   []func(owners map[string]map[string]bool, prefix map[string]bool)
-	// owners maps each committed own entry to the sessions whose logs
-	// hold it — one entry can be in two, when two sessions append the
-	// same entry under the same parent — and prefix holds the entries
-	// some session's base path needs. Together they are what the store
-	// holds: an object written ahead of its log record is in neither.
-	// They cost a read of every session, so they are built only when a
-	// lookup needs them, and kept from then on; indexed says they are.
-	owners  map[string]map[string]bool
-	prefix  map[string]bool
+	deltas   []func(*entryIndex)
+	// entries is what the store holds. It costs a read of every session,
+	// so it is built only when a lookup needs it, and kept from then on;
+	// indexed says it is.
+	entries *entryIndex
 	indexed bool
 	// faulty records sessions the index could not read, with why, so
 	// one fault is reported at that session's Open and hides no other.
@@ -315,7 +310,7 @@ type handle struct {
 // from before per-session logs is migrated here, and a read-only store
 // must exist already.
 func Open(root string, opts ...Option) (*Store, error) {
-	s := &Store{root: root, objs: newObjects(root), open: map[string]*handle{}, owners: map[string]map[string]bool{}, prefix: map[string]bool{}, faulty: map[string]error{}}
+	s := &Store{root: root, objs: newObjects(root), open: map[string]*handle{}, faulty: map[string]error{}}
 	for _, o := range opts {
 		o(s)
 	}
@@ -810,7 +805,8 @@ func (s *Store) holds(id string) bool {
 	}
 	s.idx.Lock()
 	defer s.idx.Unlock()
-	return len(s.owners[id]) > 0 || s.prefix[id]
+	_, ok := s.entries.holder(id)
+	return ok
 }
 
 // ensureIndex builds the index once.
@@ -865,8 +861,7 @@ func (s *Store) holderOf(entry, parent string) (owner string, held bool, err err
 	lookup := func() (string, bool) {
 		s.idx.Lock()
 		defer s.idx.Unlock()
-		owner, ok := s.anyOwner(entry)
-		return owner, ok || s.prefix[entry]
+		return s.entries.holder(entry)
 	}
 	if owner, ok := lookup(); ok {
 		return owner, true, nil
@@ -895,57 +890,92 @@ func (s *Store) onPath(entry, tip string) (bool, error) {
 	return false, nil
 }
 
-// own records that session's log holds entry, in the index once there
-// is one.
-func (s *Store) own(entry, session string) {
-	s.idx.Lock()
-	defer s.idx.Unlock()
-	if s.building {
-		s.deltas = append(s.deltas, func(owners map[string]map[string]bool, _ map[string]bool) {
-			addOwner(owners, entry, session)
-		})
-	}
-	if s.indexed {
-		addOwner(s.owners, entry, session)
-	}
+// entryIndex is what the store holds: owners maps each committed own
+// entry to the sessions whose logs hold it, one entry being in two when
+// two sessions append it under the same parent; paths holds each
+// session's base path, and onPaths how many of those hold each entry.
+// An object written ahead of its log record is in none of them.
+type entryIndex struct {
+	owners  map[string]map[string]bool
+	paths   map[string][]string
+	onPaths map[string]int
 }
 
-func addOwner(owners map[string]map[string]bool, entry, session string) {
-	set := owners[entry]
+func newEntryIndex() *entryIndex {
+	return &entryIndex{owners: map[string]map[string]bool{}, paths: map[string][]string{}, onPaths: map[string]int{}}
+}
+
+func (x *entryIndex) own(entry, session string) {
+	set := x.owners[entry]
 	if set == nil {
 		set = map[string]bool{}
-		owners[entry] = set
+		x.owners[entry] = set
 	}
 	set[session] = true
 }
 
-// disown takes a deleted session out of the index.
-func (s *Store) disown(session string) {
-	drop := func(owners map[string]map[string]bool, _ map[string]bool) {
-		for e, set := range owners {
-			delete(set, session)
-			if len(set) == 0 {
-				delete(owners, e)
-			}
-		}
+// setPath records a session's base path, once however often it is told.
+func (x *entryIndex) setPath(session string, path []string) {
+	if _, ok := x.paths[session]; ok {
+		return
 	}
-	s.idx.Lock()
-	defer s.idx.Unlock()
-	if s.building {
-		s.deltas = append(s.deltas, drop)
-	}
-	if s.indexed {
-		drop(s.owners, s.prefix)
+	x.paths[session] = path
+	for _, e := range path {
+		x.onPaths[e]++
 	}
 }
 
-// anyOwner returns one session whose log holds the entry, or "". The
-// caller holds idx.
-func (s *Store) anyOwner(entry string) (string, bool) {
-	for id := range s.owners[entry] {
+// drop takes a deleted session out: its log's entries, and its path,
+// which an entry stops being held on when no other session's holds it.
+func (x *entryIndex) drop(session string) {
+	for e, set := range x.owners {
+		delete(set, session)
+		if len(set) == 0 {
+			delete(x.owners, e)
+		}
+	}
+	for _, e := range x.paths[session] {
+		if x.onPaths[e]--; x.onPaths[e] <= 0 {
+			delete(x.onPaths, e)
+		}
+	}
+	delete(x.paths, session)
+}
+
+// holder returns a session whose log holds the entry, or "" when only a
+// prefix does, and whether any does.
+func (x *entryIndex) holder(entry string) (string, bool) {
+	if x == nil {
+		return "", false
+	}
+	for id := range x.owners[entry] {
 		return id, true
 	}
-	return "", false
+	return "", x.onPaths[entry] > 0
+}
+
+// change applies a change to the index once there is one, and to the
+// one being built, if one is.
+func (s *Store) change(f func(*entryIndex)) {
+	s.idx.Lock()
+	defer s.idx.Unlock()
+	if s.building {
+		s.deltas = append(s.deltas, f)
+	}
+	if s.indexed {
+		f(s.entries)
+	}
+}
+
+// own records that session's log holds entry, in the index once there
+// is one.
+func (s *Store) own(entry, session string) {
+	s.change(func(x *entryIndex) { x.own(entry, session) })
+}
+
+// disown takes a deleted session out of the index.
+func (s *Store) disown(session string) {
+	s.change(func(x *entryIndex) { x.drop(session) })
 }
 
 // --- media blobs ---
@@ -1022,6 +1052,13 @@ type view struct {
 	// yet: a writing store that recovers the session records each, so a
 	// sync record after them does not bring them back.
 	dropped []string
+	// cutCommitted is set when a cut at a block a crash left unwritten
+	// drops a record that reads as committed: a sync, a durable append, a
+	// head move, a mark or a loss. No crash writes one there, as its
+	// fsync would have written the block; the medium unwriting a
+	// committed sector does, and recovery keeps the bytes it cuts so the
+	// loss leaves a trace.
+	cutCommitted bool
 	// whole is where the log's whole lines end; a longer log has a torn
 	// tail, which the holder truncates, and an unterminated one a last
 	// record without its newline, which the holder ends.
@@ -1080,6 +1117,11 @@ func (s *Store) reconcileAs(id, dir string, committedOnly bool) (view, error) {
 		// damaged line, as a crash's loss, and the holder truncates the
 		// log there.
 		cutAt, v.whole, v.unterminated, v.damage = l.lossRec, l.lossOff, false, nil
+		for _, r := range l.recs[l.lossRec:] {
+			if r.Op != opAppend || !r.Lazy {
+				v.cutCommitted = true
+			}
+		}
 		for _, d := range l.damage {
 			if d.Offset < l.lossOff {
 				v.damage = append(v.damage, d)
@@ -1237,6 +1279,9 @@ func (s *Store) emptyLoose(id string) bool {
 	return err == nil && check(spaceContents, c)
 }
 
+// cutPrefix names the bytes of a log recovery cut that read as committed.
+const cutPrefix = "cut-"
+
 // writeRecovered writes the log recovery found as a new file: its
 // whole lines, a torn tail cut, a lost record for each append it found
 // lost and, when it keeps working state, a sync record, after the
@@ -1264,6 +1309,14 @@ func (s *Store) writeRecovered(id, dir string, v view) error {
 	if int64(len(data)) < v.whole {
 		return fmt.Errorf("the log is %d bytes, shorter than the %d recovery read", len(data), v.whole)
 	}
+	if v.cutCommitted {
+		// The cut drops what reads as committed: its bytes are kept, for
+		// Verify to report and a person to read.
+		name := filepath.Join(dir, fmt.Sprintf("%s%d", cutPrefix, time.Now().UnixNano()))
+		if _, err := s.objs.writeFile(name, data[v.whole:], true); err != nil {
+			return err
+		}
+	}
 	data = data[:v.whole:v.whole]
 	if l, err := parseSessionLog(bytes.NewReader(data), 0, v.whole); err != nil || l.lost || l.whole != v.whole {
 		return errors.New("the log changed as recovery read it")
@@ -1287,8 +1340,6 @@ func (s *Store) writeRecovered(id, dir string, v view) error {
 	return s.objs.writeAtomic(path, append(data, more...))
 }
 
-// index builds what the store holds from every session's log and base.
-// It reads every session, so it is built only when a lookup needs it.
 // index builds the index by reading every session, with no lock held,
 // so appends and opens of every session go on meanwhile; what they
 // record while it runs is applied to what it built. Unless force is
@@ -1303,7 +1354,7 @@ func (s *Store) index(force bool) error {
 	}
 	s.building, s.deltas = true, nil
 	s.idx.Unlock()
-	owners, prefix, err := s.scanIndex()
+	built, err := s.scanIndex()
 	s.idx.Lock()
 	defer s.idx.Unlock()
 	deltas := s.deltas
@@ -1312,9 +1363,9 @@ func (s *Store) index(force bool) error {
 		return err
 	}
 	for _, d := range deltas {
-		d(owners, prefix)
+		d(built)
 	}
-	s.owners, s.prefix, s.indexed = owners, prefix, true
+	s.entries, s.indexed = built, true
 	return nil
 }
 
@@ -1324,11 +1375,11 @@ var scanning func()
 
 // scanIndex reads what every session's log holds and every session's
 // prefix.
-func (s *Store) scanIndex() (map[string]map[string]bool, map[string]bool, error) {
-	owners, prefix := map[string]map[string]bool{}, map[string]bool{}
+func (s *Store) scanIndex() (*entryIndex, error) {
+	x := newEntryIndex()
 	dirs, err := os.ReadDir(filepath.Join(s.root, "sessions"))
 	if err != nil {
-		return nil, nil, fmt.Errorf("cas: %w", err)
+		return nil, fmt.Errorf("cas: %w", err)
 	}
 	for _, d := range dirs {
 		if !d.IsDir() || !validSessionID(d.Name()) {
@@ -1347,7 +1398,7 @@ func (s *Store) scanIndex() (map[string]map[string]bool, map[string]bool, error)
 			continue
 		}
 		for _, h := range heldEntries(l.recs) {
-			addOwner(owners, h, d.Name())
+			x.own(h, d.Name())
 		}
 		h, err := readHeader(dir)
 		if err != nil {
@@ -1359,13 +1410,11 @@ func (s *Store) scanIndex() (map[string]map[string]bool, map[string]bool, error)
 				s.setFaulty(d.Name(), err)
 				continue
 			}
-			for _, e := range path {
-				prefix[e] = true
-			}
+			x.setPath(d.Name(), path)
 		}
 		s.setFaulty(d.Name(), nil)
 	}
-	return owners, prefix, nil
+	return x, nil
 }
 
 // setFaulty records why a session could not be read, or with nil that
@@ -1382,24 +1431,12 @@ func (s *Store) setFaulty(id string, err error) {
 
 // notePrefix records the path to a new session's base in the index,
 // once there is one; the path is read with no lock held.
-func (s *Store) notePrefix(base string) error {
+func (s *Store) notePrefix(session, base string) error {
 	path, err := s.pathTo(base)
 	if err != nil {
 		return err
 	}
-	mark := func(_ map[string]map[string]bool, prefix map[string]bool) {
-		for _, e := range path {
-			prefix[e] = true
-		}
-	}
-	s.idx.Lock()
-	defer s.idx.Unlock()
-	if s.building {
-		s.deltas = append(s.deltas, mark)
-	}
-	if s.indexed {
-		mark(s.owners, s.prefix)
-	}
+	s.change(func(x *entryIndex) { x.setPath(session, path) })
 	return nil
 }
 
@@ -1617,7 +1654,7 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		return fail(err)
 	}
 	if h.Base != "" {
-		if err := s.notePrefix(h.Base); err != nil {
+		if err := s.notePrefix(h.ID, h.Base); err != nil {
 			return fail(err)
 		}
 	}
@@ -2898,7 +2935,7 @@ func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header,
 		s.own(id, h.ID)
 	}
 	if h.Base != "" {
-		if err := s.notePrefix(h.Base); err != nil {
+		if err := s.notePrefix(h.ID, h.Base); err != nil {
 			return fail(err)
 		}
 	}

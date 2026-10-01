@@ -136,6 +136,14 @@ func (s *Store) Verify(ctx context.Context) (Report, error) {
 			continue
 		}
 		rep.Sessions++
+		cuts, _ := filepath.Glob(filepath.Join(dir, cutPrefix+"*"))
+		sort.Strings(cuts)
+		for _, c := range cuts {
+			add(Problem{Kind: "log", Session: id, Err: fmt.Errorf("recovery cut records that read as committed after a block left unwritten; their bytes are kept as %s", filepath.Base(c))})
+		}
+		if v.cutCommitted {
+			add(Problem{Kind: "log", Session: id, Err: errors.New("a block left unwritten is followed by records that read as committed, which recovery will cut")})
+		}
 		for _, d := range v.damage {
 			add(Problem{Kind: "log", Session: id, Err: d})
 		}
