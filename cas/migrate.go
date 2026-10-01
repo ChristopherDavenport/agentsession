@@ -29,15 +29,19 @@ import (
 //
 // The journal is retired by putting a tombstone in its place: a
 // symbolic link, journal -> layout/journal, through the layout file,
-// which is a regular file, so opening, creating or stat'ing the journal
-// through it fails with ENOTDIR. A writer of the earlier library
-// appends every commit to the journal, creating it when it is missing;
-// through the tombstone each commit fails, so a writer the migration
-// did not find, one holding no session while it ran, refuses every
-// later write rather than write sessions in the old layout into a store
-// that no longer reads them. Releases from v0.0.16 to v0.0.18 test for
-// the journal with os.Stat, which fails the same way, and take it as
-// gone. On a filesystem that makes no symbolic link, as Windows without
+// which is a regular file, so no write to the journal can be made
+// through it (on unix, opening, creating or stat'ing it fails with
+// ENOTDIR; elsewhere an open may succeed, but every write fails). A
+// writer of the earlier library appends every commit to the journal,
+// creating it when it is missing; through the tombstone each commit
+// fails, so a writer the migration did not find, one holding no session
+// while it ran, refuses every later write rather than write sessions in
+// the old layout into a store that no longer reads them. Releases from
+// v0.0.16 to v0.0.18 test for the journal with os.Stat, which fails the
+// same way, and take it as gone, apart from a writing open of theirs
+// that found the journal and waited on the gc lock while this release
+// migrated: it reads through the tombstone, fails once, and the next
+// open of that release succeeds. On a filesystem that makes no symbolic link, as Windows without
 // the right to make one, the journal is only removed, and a writer of
 // the earlier library still running there makes it again at its next
 // commit.
@@ -479,6 +483,11 @@ func headIn(head string, log []string, base string) bool {
 // and locked the sessions it migrates, so a test can act part way.
 var migrating func()
 
+// retiring, when set, is called just before the tombstone replaces the
+// journal, and an error it returns stops the migration there, as a
+// crash would.
+var retiring func() error
+
 // migrate rewrites a legacy store's sessions as per-session logs and
 // retires its journal. It runs at the first writing open, under the gc
 // lock, and holds the sweep's lock exclusive from before it reads the
@@ -508,6 +517,9 @@ func (s *Store) migrate() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	sweep, err := s.sweepLock(ctx)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: a writer held sweep.lock for a minute", ErrMigrationBusy)
+	}
 	if err != nil {
 		return fmt.Errorf("cas: migrate: %w", err)
 	}
@@ -606,11 +618,23 @@ func (s *Store) migrate() error {
 		return err
 	}
 	if len(scan.damage) > 0 {
-		// The damage is what Verify reports; the journal is kept for it.
-		// A crash before the tombstone leaves no journal, and the next
-		// writing open puts the tombstone in place.
+		// The damage is what Verify reports; the journal is kept for it,
+		// as a hard link, so the journal stays until the tombstone
+		// replaces it and a crash between leaves the journal for the
+		// next open to migrate again. Where the filesystem makes no hard
+		// link it is renamed aside, and a crash before the tombstone
+		// leaves neither, until the next writing open of this release
+		// puts the tombstone in place.
+		journal := filepath.Join(s.root, journalFile)
 		aside := filepath.Join(s.root, fmt.Sprintf("%s%d", damagedPrefix, time.Now().UnixNano()))
-		if err := os.Rename(filepath.Join(s.root, journalFile), aside); err != nil {
+		if err := linkFile(journal, aside); err != nil {
+			if err := os.Rename(journal, aside); err != nil {
+				return err
+			}
+		}
+	}
+	if retiring != nil {
+		if err := retiring(); err != nil {
 			return err
 		}
 	}

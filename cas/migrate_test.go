@@ -351,3 +351,44 @@ func TestMigrateDamagedJournalKeepsSession(t *testing.T) {
 		t.Errorf("a session a damaged journal says was deleted: %v", err)
 	}
 }
+
+// TestMigrateDamagedJournalCrash: a migration that keeps a damaged
+// journal aside and stops before the tombstone leaves the journal in
+// place for the next open, never neither; where no hard link can be
+// made, the next writing open puts the tombstone in place.
+func TestMigrateDamagedJournalCrash(t *testing.T) {
+	for _, links := range []bool{true, false} {
+		root, want := legacyStore(t)
+		j, _ := os.OpenFile(filepath.Join(root, journalFile), os.O_WRONLY|os.O_APPEND, 0)
+		j.Write([]byte("{\"op\":\"append\",\"crc\":\"0\"}\n"))
+		j.Close()
+		if !links {
+			linkFile = func(string, string) error { return errors.New("no hard links here") }
+		}
+		retiring = func() error { return errors.New("crash") }
+		_, err := Open(root)
+		retiring, linkFile = nil, os.Link
+		if err == nil {
+			t.Fatal("the crash did not stop the migration")
+		}
+		kept, _ := filepath.Glob(filepath.Join(root, damagedPrefix+"*"))
+		if len(kept) == 0 {
+			t.Errorf("links %v: the damaged journal was not kept aside", links)
+		}
+		if links != legacyJournal(root) {
+			t.Errorf("links %v: a journal after the crash: %v", links, legacyJournal(root))
+		}
+		st, err := Open(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := st.Open(context.Background(), "a")
+		if err != nil || s.Len() != len(want) {
+			t.Errorf("links %v: session a after the next open: %v", links, err)
+		}
+		st.Close()
+		if got, err := os.Readlink(filepath.Join(root, journalFile)); legacyJournal(root) || err != nil || got != tombstone {
+			t.Errorf("links %v: the journal after the next open: %q %v", links, got, err)
+		}
+	}
+}

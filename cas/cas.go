@@ -15,7 +15,7 @@
 //	  tmp/                                sessions being created, renamed into place whole
 //	  trash/                              sessions a delete renamed away, being removed
 //	  layout                              the layout the store is in, which an open checks
-//	  journal                             the old journal's tombstone: a link to layout/journal, which no open follows
+//	  journal                             the old journal's tombstone: a link to layout/journal, nothing writable
 //	  sweep.lock                          held shared by writers, exclusive by a sweep's last step
 //	  sweep.lock.want                     held shared by writers waiting for sweep.lock
 //	  gc.lock                             the lock of a running sweep or pack

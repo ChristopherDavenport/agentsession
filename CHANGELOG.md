@@ -14,6 +14,11 @@ gave cannot be followed there: a read-only open of v0.0.16 or later
 reads no session of such a store until a writing open has migrated it,
 and once one has, no release before v0.0.16 reads it. The order
 v0.0.18 gave stands for jsonl and for a cas store already migrated.
+A v0.0.16 to v0.0.18 writer opening the store while `migrate` runs may
+fail once with `not a directory`; open it again. The `journal` a
+migrated store holds is a dangling symbolic link by design: a copy
+that follows links (`cp -L`, rsync without `-l`) reports or skips it,
+which is harmless, and the next writing open puts it back.
 
 - **`agentsession migrate <cas-root>`** opens a cas store for writing
   and closes it, which migrates a store v0.0.15 or earlier wrote, with
@@ -31,9 +36,15 @@ v0.0.18 gave stands for jsonl and for a cas store already migrated.
   read-only open, refused with `ErrLegacyStore` until the next writing
   open. The migration now leaves a tombstone where the journal was, a
   symbolic link `journal -> layout/journal`, which no open can follow
-  since `layout` is a file: that writer's every commit fails with
-  `not a directory`, and it writes nothing. v0.0.16 to v0.0.18 take the
-  tombstone for no journal. Every writing open puts one in a store that
+  since `layout` is a file: that writer's every commit fails (`not a
+  directory` on unix; elsewhere its open may succeed and its writes
+  fail), and it writes nothing. v0.0.16 to v0.0.18 take the tombstone
+  for no journal, except a writing open of theirs that found the
+  journal and waited while this release migrated: it fails once with
+  `cas: migrate: open …/journal: not a directory`, losing nothing, and
+  a retry opens the store. A migration that keeps a damaged journal
+  aside now hard-links it there, so the journal is in place until the
+  tombstone replaces it. Every writing open puts one in a store that
   has its layout and no journal, a store those releases migrated and a
   new store included. On a filesystem that makes no symbolic link, as
   Windows without the right to make one, there is no tombstone, and
@@ -48,7 +59,8 @@ v0.0.18 gave stands for jsonl and for a cas store already migrated.
   `ErrLegacyStore` by every open, and its entries held only by an old
   log the writer had not synced. Now that writer waits for the
   migration, and its commit then meets the tombstone. On a platform
-  without flock the lock is nothing, as it is for sweeps. (#166)
+  without flock the lock is nothing, as it is for sweeps. A migration
+  that waits a minute for the lock returns `ErrMigrationBusy`. (#166)
 
 ## v0.0.18 - 2026-10-01
 

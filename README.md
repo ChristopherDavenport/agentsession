@@ -284,7 +284,11 @@ log has a record that fails its checksum, as `cas.Store.Repair` does.
 or earlier wrote; no read-only open reads a session of such a store
 until one has, and no release before v0.0.16 reads it after. On such a
 store, stop every writer, take a copy, run `migrate`, then upgrade the
-readers and the writers together.
+readers and the writers together. A migrated store's `journal` is a
+dangling symbolic link by design, which keeps a writer of v0.0.15 or
+earlier from writing to it; a copy that follows links (`cp -L`, rsync
+without `-l`) reports or skips it, and the next writing open puts it
+back.
 
 ## Tracing
 
