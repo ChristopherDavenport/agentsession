@@ -85,16 +85,6 @@ func (c *Call) Rejected() bool { return c.hasVerdict(VerdictReject) }
 // run, answered without being handed to its tool again.
 func (c *Call) Answered() bool { return c.hasVerdict(VerdictAnswer) }
 
-// answer returns the call's first answer, or nil.
-func (c *Call) answer() *DecisionEntry {
-	for _, d := range c.Decisions {
-		if d.Verdict == VerdictAnswer {
-			return d
-		}
-	}
-	return nil
-}
-
 func (c *Call) hasVerdict(verdict string) bool {
 	for _, d := range c.Decisions {
 		if d.Verdict == verdict {
@@ -487,6 +477,13 @@ func ComputeSource(r *Run) string {
 	for _, e := range r.Segment {
 		c, ok := part[e.Base().ID]
 		if !ok {
+			// An output no call on the path is owed takes up nothing,
+			// and is still the segment's first output.
+			if it, isItem := e.(*ItemEntry); isItem {
+				if _, isOut := it.Item.(*openresponses.FunctionCallOutput); isOut {
+					return SourceInput
+				}
+			}
 			continue
 		}
 		if before[c.Entry.ID] && (c.Output == nil || !before[c.Output.ID]) {
@@ -831,7 +828,12 @@ func (s *Session) VerifyRecords(leaf string) error {
 	}
 	h := s.Header()
 	// promised says the header's records promise covers the entry: one
-	// the session wrote, after its base.
+	// the session wrote, after its base. An answer is owed a dispatch
+	// when its call was made here, since one made in a prefix that
+	// promised nothing may have run unrecorded, and the answer says the
+	// outcome is unknown; an output is owed one when it was written
+	// here, since this writer ran the tool, unless an answer stood for
+	// the run.
 	promised := func(id string) bool { return h.HasRecord(TypeDispatch) && !s.Prefix(id) }
 	for _, c := range calls {
 		if c.ended != nil {
@@ -855,10 +857,10 @@ func (s *Session) VerifyRecords(leaf string) error {
 		if c.endAfterOutput != nil {
 			return fmt.Errorf("%w: %s %s follows the output of call %s", ErrCallCompleted, c.endAfterOutput.Verdict, c.endAfterOutput.ID, c.ID())
 		}
-		if c.Answered() && c.Dispatch == nil && promised(c.answer().ID) {
+		if c.Answered() && c.Dispatch == nil && promised(c.Entry.ID) {
 			return fmt.Errorf("%w: call %s", ErrAnswerNotDispatched, c.ID())
 		}
-		if c.Output != nil && c.Dispatch == nil && !c.Rejected() && promised(c.Output.ID) {
+		if c.Output != nil && c.Dispatch == nil && !c.Rejected() && !c.Answered() && promised(c.Output.ID) {
 			return fmt.Errorf("%w: call %s has an output and no dispatch", ErrRecordMissing, c.ID())
 		}
 	}

@@ -8,7 +8,8 @@ versions may break the API.
 ## Unreleased
 
 The format is unchanged. RFC 0002's exchange section gains a refusal,
-and RFC 0001's conformance list three cases `VerifyRecords` now checks.
+and RFC 0001's conformance list names three cases `VerifyRecords`
+now checks.
 
 - **`VerifyRecords` holds a session to the rest of RFC 0001's records
   rules.** A function call with an empty `call_id` is reported with
@@ -19,7 +20,11 @@ and RFC 0001's conformance list three cases `VerifyRecords` now checks.
   `ErrSourceMismatch`; `ComputeSource` gives the shape (#147). The rules
   that rest on the header's `records` promise apply to the entries
   after a fork's `base`, as the RFC says, so a fork promising
-  `dispatch` of a session that promised nothing verifies (#144).
+  `dispatch` of a session that promised nothing verifies (#144). An
+  output the fork writes is owed a dispatch, whoever made the call,
+  since the fork ran the tool, unless the call was answered; a fork
+  may answer a call its prefix made without one, since a dispatch in
+  that prefix may have gone unrecorded.
   `verify` notes both new errors in a 0.9 file as ones v0.0.12 to
   v0.0.14 may have written.
 
