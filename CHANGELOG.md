@@ -31,6 +31,12 @@ versions may break the API.
   starts the history afresh. Every file this library wrote reads as
   before; `InstructionsDelta` still names only parts in force, since a
   v0.0.18 reader could not resolve the rest. (#173)
+- **RFC 0002 and cas's `ErrCallIDRepeated` exchange error say that a
+  line pushed as a session with a base takes its subsessions with it**,
+  each under an ID derived from the new session's, as `SubsessionID`
+  derives one, theirs in turn likewise, with its `subsession` links
+  pointed at them. Left under the old IDs, the subsession for the
+  repeated call had the ID of the receiver's own. (#163)
 
 ## v0.0.18 - 2026-10-01
 
