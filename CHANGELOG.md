@@ -25,6 +25,12 @@ now checks.
   since the fork ran the tool, unless the call was answered; a fork
   may answer a call its prefix made without one, since a dispatch in
   that prefix may have gone unrecorded.
+- **`Call.State` reads a call a fork's prefix made, with no dispatch,
+  as `CallUnknown`**, not `CallNeverStarted`: the fork's promise covers
+  what the fork wrote, and the origin may have run the call unrecorded.
+  A call from `Session.Calls` or `Session.PendingCalls` knows whether
+  it is in the prefix; one from `Calls` over a bare path is taken to be
+  the session's own. The otel exporter reads it the same way.
   `verify` notes both new errors in a 0.9 file as ones v0.0.12 to
   v0.0.14 may have written.
 

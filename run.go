@@ -28,6 +28,10 @@ type Call struct {
 	// when the call is pending.
 	Output *ItemEntry
 
+	// inPrefix is set by the session for a call made in a fork's
+	// prefix, which its header's promise does not cover.
+	inPrefix bool
+
 	// ended is the decision that ended the call, a reject or an answer,
 	// that a dispatch follows on the path, which the format forbids.
 	ended *DecisionEntry
@@ -160,11 +164,14 @@ const (
 	// CallInFlight: the call was dispatched and no output arrived, so
 	// its side effect may have happened.
 	CallInFlight
-	// CallNeverStarted: no dispatch and no output, in a file whose
-	// header promises dispatches are recorded.
+	// CallNeverStarted: no dispatch and no output, for a call the
+	// session made under a header that promises dispatches are recorded
+	// before the tool runs, so the tool never ran.
+	// A call in a fork's prefix was made under its origin's promise,
+	// which this header does not vouch for, and is CallUnknown.
 	CallNeverStarted
-	// CallUnknown: no dispatch and no output, in a file that makes no
-	// such promise, so the file does not say whether the tool ran.
+	// CallUnknown: no dispatch and no output, where no promise covers
+	// the call, so the file does not say whether the tool ran.
 	CallUnknown
 	// CallAnswered: an answer decision ended the call and its output is
 	// not on the path yet, since the record stopped between the two.
@@ -203,7 +210,11 @@ func (s CallState) String() string {
 // State returns what the path says happened to the call, reading the
 // header's records to decide whether a missing dispatch means the
 // call never started or means the file does not say. A held call with
-// dispatches is held, and may have run.
+// dispatches is held, and may have run. The promise covers a call the
+// session made, after its base: one in a fork's prefix, from a call
+// [Session.Calls] or [Session.PendingCalls] returns, is unknown, since
+// its origin may have promised nothing. A call from [Calls] over a
+// bare path is taken to be the session's own.
 func (c *Call) State(h Header) CallState {
 	switch {
 	case c.Output != nil:
@@ -216,7 +227,7 @@ func (c *Call) State(h Header) CallState {
 		return CallHeld
 	case c.Dispatch != nil:
 		return CallInFlight
-	case h.HasRecord(TypeDispatch):
+	case h.HasRecord(TypeDispatch) && !c.inPrefix:
 		return CallNeverStarted
 	}
 	return CallUnknown
@@ -309,13 +320,19 @@ func (c *Call) endingDecision() *DecisionEntry {
 	return nil
 }
 
-// Calls returns the calls on the path to leaf; see [Calls].
+// Calls returns the calls on the path to leaf; see [Calls]. A call
+// made in a fork's prefix is known as one, so its State reads the
+// header's promise as not covering it.
 func (s *Session) Calls(leaf string) ([]*Call, error) {
 	path := s.Path(leaf)
 	if path == nil {
 		return nil, fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
 	}
-	return Calls(path), nil
+	calls := Calls(path)
+	for _, c := range calls {
+		c.inPrefix = s.Prefix(c.Entry.ID)
+	}
+	return calls, nil
 }
 
 // PendingCalls returns the calls on the path to leaf that have no

@@ -243,3 +243,42 @@ func TestSourceOrphanOutput(t *testing.T) {
 		t.Errorf("VerifyRecords = %v, want ErrSourceMismatch", err)
 	}
 }
+
+// TestForkCallState: a call the fork's prefix made, with no dispatch,
+// is unknown, since the origin may have promised nothing and run it
+// unrecorded; a call the fork made under its own promise with no
+// dispatch never started.
+func TestForkCallState(t *testing.T) {
+	origin := New(Header{})
+	call, err := origin.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fa", CallID: "a", Name: "t", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fork, err := Fork(origin, call, Header{Records: []string{TypeDispatch}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fork.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fb", CallID: "b", Name: "t", Arguments: "{}"}}); err != nil {
+		t.Fatal(err)
+	}
+	var buf strings.Builder
+	if err := Write(&buf, fork); err != nil {
+		t.Fatal(err)
+	}
+	read, err := Read(strings.NewReader(buf.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, s := range map[string]*Session{"in memory": fork, "read back": read} {
+		pending, err := s.PendingCalls(s.Leaf())
+		if err != nil || len(pending) != 2 {
+			t.Fatalf("%s: PendingCalls = %v, %v", name, pending, err)
+		}
+		want := map[string]CallState{"a": CallUnknown, "b": CallNeverStarted}
+		for _, c := range pending {
+			if got := c.State(s.Header()); got != want[c.ID()] {
+				t.Errorf("%s: call %s is %s, want %s", name, c.ID(), got, want[c.ID()])
+			}
+		}
+	}
+}

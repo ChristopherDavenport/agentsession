@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // hashedFile builds a session file from entry bodies, each the child
@@ -114,5 +115,27 @@ func TestDispatchAfterOutputEndsEverySpan(t *testing.T) {
 	}
 	if started, ended := len(sr.Started()), len(sr.Ended()); started != ended {
 		t.Errorf("%d spans started, %d ended", started, ended)
+	}
+}
+
+// TestForkPrefixCallUnknown: the exporter reads a call the fork's
+// prefix made, with no dispatch, as unknown, as the library does, and
+// the fork's own as never started.
+func TestForkPrefixCallUnknown(t *testing.T) {
+	origin := agentsession.New(agentsession.Header{})
+	call, err := origin.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fa", CallID: "a", Name: "alpha", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fork, err := agentsession.Fork(origin, call, agentsession.Header{Records: []string{agentsession.TypeDispatch}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fork.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fb", CallID: "b", Name: "beta", Arguments: "{}"}}); err != nil {
+		t.Fatal(err)
+	}
+	got := callStates(t, fork)
+	if got["execute_tool alpha"] != agentsession.CallUnknown.String() || got["execute_tool beta"] != agentsession.CallNeverStarted.String() {
+		t.Errorf("span states %v", got)
 	}
 }
