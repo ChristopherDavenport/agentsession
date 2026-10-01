@@ -3,6 +3,8 @@ package agentsession
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -57,6 +59,30 @@ func TestVCSMembers(t *testing.T) {
 	// The tree moved and the workspace did not: no substitution.
 	if !SameWorkspace(first.Workspace, second.Workspace) {
 		t.Error("a change inside vcs reads as a substitution")
+	}
+
+	// SetGit keeps a member set before it, and one read from a file.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte(sha+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	set := &EnvEntry{CWD: dir, VCS: &VCS{}}
+	if err := set.VCS.SetMember("cline:tree", "sha1:t3"); err != nil {
+		t.Fatal(err)
+	}
+	read, _ := back.Entry(first.ID)
+	for name, e := range map[string]*EnvEntry{"set": set, "read": read.(*EnvEntry)} {
+		want := string(e.VCS.Unknown["cline:tree"])
+		if err := e.SetGit(dir, false); err != nil {
+			t.Fatal(err)
+		}
+		if e.VCS.Revision != sha || e.VCS.Dirty || string(e.VCS.Unknown["cline:tree"]) != want || want == "" {
+			t.Errorf("%s: after SetGit vcs = %+v, want cline:tree %s", name, e.VCS, want)
+		}
 	}
 
 	var v VCS

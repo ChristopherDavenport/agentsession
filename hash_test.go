@@ -108,6 +108,29 @@ func TestCanonicalRequest(t *testing.T) {
 	if !bytes.Equal(a, b) {
 		t.Errorf("not idempotent:\n%s\n%s", a, b)
 	}
+	// Two requests that differ only in the member order of a tool
+	// schema canonicalise to the same bytes, though they encode apart.
+	other := req
+	other.Tools = openresponses.Tools{openresponses.NewFunctionTool("f", "d",
+		json.RawMessage(`{"properties":{"a":{},"b":{}},"type":"object"}`))}
+	ra, _ := json.Marshal(req)
+	rb, _ := json.Marshal(other)
+	if bytes.Equal(ra, rb) {
+		t.Fatal("the two requests encode alike; the test proves nothing")
+	}
+	ca, err := CanonicalRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb, err := CanonicalRequest(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ea, _ := json.Marshal(ca)
+	eb, _ := json.Marshal(cb)
+	if !bytes.Equal(ea, eb) {
+		t.Errorf("canonical forms differ:\n%s\n%s", ea, eb)
+	}
 }
 
 func TestHashRequestJSONIsCanonical(t *testing.T) {

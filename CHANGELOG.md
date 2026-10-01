@@ -179,7 +179,9 @@ which is harmless, and the next writing open puts it back.
   `vcs`, and that a change to any `env` member other than `workspace`,
   those the format does not define included, is not a substitution,
   which the rule already implied. No 0.10 file means anything new.
-  (#177)
+  `EnvEntry.SetGit` keeps the members of the `VCS` it replaces, and the
+  ATIF export's env `extra` now carries a `vcs`'s namespaced members,
+  which it dropped before. (#177)
 
 ## v0.0.18 - 2026-10-01
 

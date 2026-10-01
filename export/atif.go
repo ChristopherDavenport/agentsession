@@ -707,7 +707,9 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 // it is filled only when the record covers every one: each item is a
 // message, each of its parts an output_text carrying logprobs, and no
 // token went to reasoning. Otherwise it is nil, and the raw items under
-// extra keep whatever logprobs there are.
+// extra keep whatever logprobs there are. An output_text with no text
+// carries no tokens, so it needs none. Coverage is judged part by part;
+// the count is not checked against usage.output_tokens.
 func stepLogprobs(entries []*agentsession.ItemEntry, usage *openresponses.Usage) []float64 {
 	if usage != nil && usage.OutputTokensDetails.ReasoningTokens != 0 {
 		return nil
@@ -720,7 +722,7 @@ func stepLogprobs(entries []*agentsession.ItemEntry, usage *openresponses.Usage)
 		}
 		for _, p := range m.Content {
 			t, ok := p.(*openresponses.OutputText)
-			if !ok || len(t.Logprobs) == 0 {
+			if !ok || len(t.Logprobs) == 0 && t.Text != "" {
 				return nil
 			}
 			for _, lp := range t.Logprobs {

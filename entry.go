@@ -571,7 +571,9 @@ func (*EnvEntry) EntryType() string { return TypeEnv }
 // harness that needs to, as one that restores files to a checkpoint
 // does, records the tree's identity in a namespaced member, such as
 // "cline:tree", with [VCS.SetMember]. A change to it is not a
-// substitution, since only workspace is compared.
+// substitution, since only workspace is compared. Replacing an entry's
+// VCS whole drops such members; a caller changing a field edits the VCS
+// it has, or a copy of it, which keeps them.
 type VCS struct {
 	System   string `json:"system"`
 	Revision string `json:"revision,omitempty"`

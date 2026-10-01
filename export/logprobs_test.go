@@ -38,6 +38,7 @@ func TestLogprobs(t *testing.T) {
 		{"no usage", []openresponses.Item{msg(text("hi", -0.5))}, nil, []float64{-0.5}},
 		{"two messages", []openresponses.Item{msg(text("a", -1), text("b", -2)), msg(text("c", -3))}, usage(0), []float64{-1, -2, -3}},
 		{"function call", []openresponses.Item{msg(text("hi", -0.1)), call}, usage(0), nil},
+		{"empty part without logprobs", []openresponses.Item{msg(text("a", -1), text("")), msg(text(""))}, usage(0), []float64{-1}},
 		{"message lacking logprobs", []openresponses.Item{msg(text("a", -1)), msg(text("b"))}, usage(0), nil},
 		{"refusal", []openresponses.Item{msg(text("a", -1), &openresponses.Refusal{Refusal: "no"})}, usage(0), nil},
 		{"reasoning tokens", []openresponses.Item{msg(text("a", -1))}, usage(4), nil},
