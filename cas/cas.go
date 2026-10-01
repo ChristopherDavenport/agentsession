@@ -74,6 +74,31 @@
 // grace period, as git's collector spares a young loose object, so an
 // object written ahead of its record is safe.
 //
+// A failed fsync stops the store. Linux reports a failed writeback once
+// to each file opened before it, marks the pages it failed to write
+// clean, and keeps them in memory, so an fsync of the same file opened
+// later succeeds and a read returns bytes the disk does not hold.
+// After any fsync of its data fails, a store runs no more fsyncs and
+// writes nothing, returning [ErrStopped], until it is opened again; it
+// still reads. Three rules keep what such pages hold from being
+// committed later, by a reopened store or another process. One fsync of
+// a file runs at a time in a process, and a failure stops the store
+// before the next. A commit fsyncs only files its own process wrote: an
+// object this process did not write is written again as a file of its
+// own rather than reused. And recovery that changes a
+// session's log, or keeps its working state, writes the log, and the
+// objects of that state, as new files rather than fsync what it found.
+//
+// What these leave open lies between processes. A file this process
+// wrote lazily, whose writeback failed and whose failure another
+// process's fsync took, is fsynced here successfully. A pack another
+// process wrote is trusted as written durably. A fork's commit of a
+// log another process holds is an fsync of that process's file. Each
+// needs a failed fsync in one process and a commit by another before
+// the machine restarts; a host that wants none of them restarts the
+// machine, or drops the page cache, before a store stopped by a failed
+// fsync is opened again.
+//
 // A store from before logs were per session kept a store-wide journal.
 // Its first writing open migrates it, holding every session's lock so a
 // writer of the earlier version still running is found rather than
@@ -1138,28 +1163,14 @@ func (s *Store) reconcileAs(id, dir string, committedOnly bool) (view, error) {
 // mark are rewritten. A read-only store writes nothing.
 func (s *Store) recoverSession(id, dir string) (view, error) {
 	v, err := s.reconcile(id, dir)
-	if err != nil || s.readOnly || !v.exists {
+	if err != nil || s.readOnly || !v.exists || s.objs.stopped() != nil {
+		// A read-only store, and one stopped by a failed fsync, recover
+		// in memory and write nothing.
 		return v, err
 	}
-	if v.whole < v.size || v.unterminated {
-		if err := mendTail(s.objs, dir, v.whole, v.unterminated); err != nil {
+	if v.whole < v.size || v.unterminated || len(v.dropped) > 0 || len(v.adopt) > 0 {
+		if err := s.writeRecovered(id, dir, v); err != nil {
 			return v, fmt.Errorf("cas: session %s: %w", id, err)
-		}
-	}
-	if len(v.dropped) > 0 {
-		// Before the sync record adopt writes, which would otherwise
-		// say the lost appends were durable.
-		recs := make([]logRecord, len(v.dropped))
-		for i, e := range v.dropped {
-			recs[i] = logRecord{Op: opLost, Session: id, Entry: e}
-		}
-		if err := s.appendRecords(nil, dir, true, recs...); err != nil {
-			return v, err
-		}
-	}
-	if len(v.adopt) > 0 {
-		if err := s.adopt(id, dir, v.adopt); err != nil {
-			return v, err
 		}
 	}
 	if v.headChanged {
@@ -1192,22 +1203,54 @@ func (s *Store) emptyLoose(id string) bool {
 	return err == nil && check(spaceContents, c)
 }
 
-// adopt makes durable the objects of lazy appends a session holds that
-// its log does not yet say are durable, as the holder recovering it, and
-// commits a sync record saying so. A process that wrote them and crashed
-// synced nothing; without this, the next durable append made here could
-// be cut with them by a later crash.
-func (s *Store) adopt(id, dir string, entries []string) error {
+// writeRecovered writes the log recovery found as a new file: its
+// whole lines, a torn tail cut, a lost record for each append it found
+// lost and, when it keeps working state, a sync record, after the
+// objects of that state are written afresh. Nothing is fsynced where it
+// lies. A process whose fsync of the log or an object failed was told
+// so once, and the pages it failed to write stay in memory marked
+// written: an fsync of the old file now would succeed for them, and a
+// sync record after it would claim them. Written again, they reach the
+// disk, or this store stops.
+func (s *Store) writeRecovered(id, dir string, v view) error {
 	pend := newPendSet()
-	for _, e := range entries {
+	for _, e := range v.adopt {
 		if err := s.freshenEntry(e, pend); err != nil {
-			return fmt.Errorf("cas: session %s: %w", id, err)
+			return err
 		}
 	}
 	if err := s.objs.flushSet(pend); err != nil {
-		return fmt.Errorf("cas: session %s: %w", id, err)
+		return err
 	}
-	return s.appendRecords(nil, dir, true, logRecord{Op: opSync, Session: id})
+	path := filepath.Join(dir, logName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) < v.whole {
+		return fmt.Errorf("the log is %d bytes, shorter than the %d recovery read", len(data), v.whole)
+	}
+	data = data[:v.whole:v.whole]
+	if l, err := parseSessionLog(bytes.NewReader(data), 0, v.whole); err != nil || l.lost || l.whole != v.whole {
+		return errors.New("the log changed as recovery read it")
+	}
+	if v.unterminated {
+		data = append(data, '\n')
+	}
+	var recs []logRecord
+	for _, e := range v.dropped {
+		// Before the sync record, which would otherwise say the lost
+		// appends were durable.
+		recs = append(recs, logRecord{Op: opLost, Session: id, Entry: e})
+	}
+	if len(v.adopt) > 0 {
+		recs = append(recs, logRecord{Op: opSync, Session: id})
+	}
+	more, err := encodeRecords(true, recs)
+	if err != nil {
+		return err
+	}
+	return s.objs.writeAtomic(path, append(data, more...))
 }
 
 // index builds what the store holds from every session's log and base.
@@ -2436,7 +2479,9 @@ func (s *Store) summarize(id, dir string, v view, withMeta bool) (agentsession.S
 // read, so a later session under the same ID starts from nothing, and
 // then removes it. Objects stay; what no log and no prefix needs is
 // swept by Sweep. A directory a crash left in the trash is removed by
-// the next sweep.
+// the next sweep. A Delete that returns ErrStopped may have renamed the
+// session away; the next open of the store finds it gone or not, as
+// the disk holds it.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err

@@ -588,7 +588,12 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		os.Remove(filepath.Join(s.objs.packDir(), p.name+".idx"))
 		os.Remove(p.path)
 	}
-	s.objs.fsyncDir(s.objs.packDir()) // a failure stops the store
+	if err := s.objs.fsyncDir(s.objs.packDir()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// The store has stopped; what the new pack holds stays loose
+		// too, and nothing more is removed.
+		lk.release()
+		return 0, err
+	}
 	lk.release()
 	if err := s.objs.reloadPacks(true); err != nil {
 		return 0, err

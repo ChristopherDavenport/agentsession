@@ -801,8 +801,8 @@ func TestSweepGrace(t *testing.T) {
 	if n, _ := st.Sweep(ctx, time.Hour); n != 0 {
 		t.Errorf("swept %d young objects", n)
 	}
-	if n, _ := st.Sweep(ctx, 0); n != 2 {
-		t.Errorf("swept %d old objects, want 2", n)
+	if n, err := st.Sweep(ctx, 0); n != 2 {
+		t.Errorf("swept %d old objects, want 2: %v", n, err)
 	}
 }
 

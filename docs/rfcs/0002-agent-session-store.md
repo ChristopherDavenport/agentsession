@@ -426,16 +426,18 @@ written that never reached the disk, and a later fsync of the same file
 can succeed without writing them, so after a failed fsync a store MUST
 NOT count what it covered as committed until it has written those bytes
 again, to a new file, or recovered the session from what the disk holds.
-The reference store does the second: after any fsync of its data fails
-it writes nothing more until it is opened again, and it runs one fsync
-of a file at a time, so no commit takes the word of an fsync that
-followed another's failure on the same file. A store appends to a
-session's log under the session's own lock, as git updates a ref under
-its lock file and as the ordering section requires, so appends to
-different sessions commit independently and at once, and a filesystem
-that journals its metadata joins their fsyncs into one of its own. The
-header is a file of its own, written at creation and replaced, durably,
-when its `format` is raised.
+Since the pages a failed fsync left unwritten stay in memory, read back
+as though written, recovery that keeps them writes them again too. The
+reference store stops writing after any fsync of its data fails, until
+it is opened again; runs one fsync of a file at a time; commits no file
+another process wrote without writing its own copy; and recovers by
+writing the log, and the objects of the working state it keeps, as new
+files. A store appends to a session's log under the session's own lock,
+as git updates a ref under its lock file and as the ordering section
+requires, so appends to different sessions commit independently and at
+once, and a filesystem that journals its metadata joins their fsyncs
+into one of its own. The header is a file of its own, written at
+creation and replaced, durably, when its `format` is raised.
 
 A session is created by writing its header and its first records where
 no session is, and making them visible under its ID in one step that

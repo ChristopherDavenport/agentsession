@@ -752,10 +752,10 @@ func TestMendFsyncFailureStops(t *testing.T) {
 	f.Close()
 	w, _ := Open(root)
 	defer w.Close()
-	old := syncLog
-	syncLog = func(*os.File) error { return errors.New("injected fsync failure") }
+	old := syncFile
+	syncFile = func(*os.File) error { return errors.New("injected fsync failure") }
 	_, err := w.Open(ctx, "s")
-	syncLog = old
+	syncFile = old
 	if !errors.Is(err, ErrStopped) {
 		t.Fatalf("recovery: %v", err)
 	}
@@ -832,11 +832,51 @@ func TestSweepPastTornLazyAppend(t *testing.T) {
 	}
 }
 
-// TestZeroedLineCutsTail: a line a crash left unwritten, zeros run
-// into the next line, with committed records after it, is the cut of
-// an uncommitted tail: no fsync of the log finished after it, so what
-// follows, a commit that was in flight included, was never committed.
-// Damage that changed a line's bytes is reported instead.
+// unwrite leaves unwritten, as a crash can on a filesystem that writes
+// a file out of order, the log's blocks from the first block boundary
+// at or after the start of the line holding marker: one block, when one
+// is set, or to the log's end. It returns the entries of the appends
+// whose lines end before the zeros, which recovery keeps.
+func unwrite(t *testing.T, p, marker string, one bool) []string {
+	t.Helper()
+	data, _ := os.ReadFile(p)
+	line := bytes.Index(data, []byte(marker))
+	if line < 0 {
+		t.Fatal("no such record")
+	}
+	line = bytes.LastIndexByte(data[:line], '\n') + 1
+	from := (line + blockSize - 1) / blockSize * blockSize
+	to := len(data)
+	if one {
+		to = min(from+blockSize, len(data))
+	}
+	if from >= to || (one && to == len(data)) {
+		t.Fatalf("the log is too short: %d bytes, zeros from %d", len(data), from)
+	}
+	var kept []string
+	off := 0
+	for _, l := range bytes.SplitAfter(data, []byte("\n")) {
+		if off+len(l) > from {
+			break
+		}
+		recs, _ := decodeLine(l)
+		for _, r := range recs {
+			if r.Op == opAppend {
+				kept = append(kept, r.Entry)
+			}
+		}
+		off += len(l)
+	}
+	clear(data[from:to])
+	os.WriteFile(p, data, 0o600)
+	return kept
+}
+
+// TestZeroedLineCutsTail: a block a crash left unwritten, with
+// committed records after it, is the cut of an uncommitted tail: no
+// fsync of the log finished after it, so what follows, a commit that
+// was in flight included, was never committed. Damage that changed a
+// line's bytes is reported instead.
 func TestZeroedLineCutsTail(t *testing.T) {
 	ctx := context.Background()
 	for _, zero := range []bool{true, false} {
@@ -848,27 +888,26 @@ func TestZeroedLineCutsTail(t *testing.T) {
 		if err := st.SetHead(ctx, "s", b, a); err != nil {
 			t.Fatal(err)
 		}
-		mustAppend(t, st, "s", item("c"))
+		for i := range 8 {
+			mustAppend(t, st, "s", item(fmt.Sprint("c", i)))
+		}
 		st.Close()
 		p := filepath.Join(root, "sessions", "s", logName)
-		data, _ := os.ReadFile(p)
-		var out []byte
-		for _, line := range bytes.SplitAfter(data, []byte("\n")) {
-			if bytes.Contains(line, []byte(`"op":"append"`)) && bytes.Contains(line, []byte(b)) {
-				if zero {
-					line = make([]byte, len(line))
-				} else {
-					line = bytes.Replace(line, []byte(`"append"`), []byte(`"appenx"`), 1)
-				}
-			}
-			out = append(out, line...)
+		var kept []string
+		if zero {
+			kept = unwrite(t, p, b, true)
+		} else {
+			data, _ := os.ReadFile(p)
+			i := bytes.Index(data, []byte(b))
+			os.WriteFile(p, append(data[:i:i], bytes.Replace(data[i:], []byte(`"append"`), []byte(`"appenx"`), 1)...), 0o600)
 		}
-		os.WriteFile(p, out, 0o600)
 		r, _ := Open(root)
 		s, err := r.Open(ctx, "s")
 		switch {
-		case zero && (err != nil || s.Len() != 1 || s.Leaf() != a):
-			t.Errorf("an unwritten line: %v", err)
+		case zero && err != nil:
+			t.Errorf("an unwritten block: %v", err)
+		case zero && s.Len() != len(kept):
+			t.Errorf("after the cut: %d entries, want the %d before the zeros", s.Len(), len(kept))
 		case !zero && !errors.As(err, new(LogDamage)):
 			t.Errorf("a changed line opened with %v, want its damage", err)
 		}
@@ -882,36 +921,44 @@ func TestZeroedLineCutsTail(t *testing.T) {
 }
 
 // TestUnterminatedLineChecked: a last line without its newline is read
-// as any other line is: zeros ahead of the record it holds make it a
-// torn write, cut whole, not a record with the bytes before it passed
-// over.
+// as any other line is. A record a crash cut short is a torn write, cut
+// by the holder; a whole record whose newline became another byte, or
+// one that fails its checksum, cannot come of a crash, and is damage.
 func TestUnterminatedLineChecked(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
-	st, _ := Open(root, WithSync(SyncNever))
-	st.Create(ctx, agentsession.Header{ID: "s"})
-	kept := mustAppend(t, st, "s", item("kept"))
-	st.Sync(ctx)
-	a := mustAppend(t, st, "s", item("a"))
-	mustAppend(t, st, "s", item("b")) // a child of a
-	crash(st)
-	p := filepath.Join(root, "sessions", "s", logName)
-	data, _ := os.ReadFile(p)
-	lines := bytes.SplitAfter(data, []byte("\n"))
-	var out []byte
-	for _, line := range lines {
-		if bytes.Contains(line, []byte(a)) && bytes.Contains(line, []byte(`"op":"append"`)) {
-			line = make([]byte, len(line))
-		}
-		out = append(out, line...)
-	}
-	out = bytes.TrimSuffix(out, []byte("\n"))
-	os.WriteFile(p, out, 0o600)
-	w, _ := Open(root)
-	defer w.Close()
-	s, err := w.Open(ctx, "s")
-	if err != nil || s.Len() != 1 || s.Leaf() != kept {
-		t.Errorf("a torn last line with zeros ahead: %v", err)
+	for name, tc := range map[string]struct {
+		mangle func([]byte) []byte
+		damage bool
+	}{
+		"cut short": {func(d []byte) []byte { return d[:len(d)-20] }, false},
+		"newline":   {func(d []byte) []byte { d[len(d)-1] = 'x'; return d }, true},
+		"checksum": {func(d []byte) []byte {
+			d = d[:len(d)-1]
+			i := bytes.LastIndex(d, []byte(`"seq":`)) + len(`"seq":`)
+			d[i]++
+			return d
+		}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			st, _ := Open(root)
+			st.Create(ctx, agentsession.Header{ID: "s"})
+			kept := mustAppend(t, st, "s", item("kept"))
+			mustAppend(t, st, "s", item("last"))
+			st.Close()
+			p := filepath.Join(root, "sessions", "s", logName)
+			data, _ := os.ReadFile(p)
+			os.WriteFile(p, tc.mangle(data), 0o600)
+			w, _ := Open(root)
+			defer w.Close()
+			s, err := w.Open(ctx, "s")
+			switch {
+			case tc.damage && !errors.As(err, new(LogDamage)):
+				t.Errorf("opened with %v, want its damage", err)
+			case !tc.damage && (err != nil || s.Leaf() != kept):
+				t.Errorf("a torn write: %v", err)
+			}
+		})
 	}
 }
 
@@ -926,20 +973,18 @@ func TestSweepAfterTailCut(t *testing.T) {
 	mustAppend(t, st, "s", item("kept"))
 	st.Sync(ctx)
 	hole := mustAppend(t, st, "s", item("hole"))
+	for i := range 6 {
+		mustAppend(t, st, "s", item(fmt.Sprint("filler", i)))
+	}
 	torn := mustAppend(t, st, "s", item("torn"))
 	crash(st)
 	ep, _ := st.objs.loosePath(spaceEntries, torn)
 	os.WriteFile(ep, []byte("x"), 0o600)
 	p := filepath.Join(root, "sessions", "s", logName)
-	data, _ := os.ReadFile(p)
-	var out []byte
-	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
-		if bytes.Contains(line, []byte(hole)) {
-			line = make([]byte, len(line))
-		}
-		out = append(out, line...)
+	unwrite(t, p, hole, true)
+	if data, _ := os.ReadFile(p); !bytes.Contains(data, []byte(torn)) {
+		t.Fatal("the torn append's record is not after the zeros")
 	}
-	os.WriteFile(p, out, 0o600)
 	w, _ := Open(root)
 	defer w.Close()
 	if _, err := w.Open(ctx, "s"); err != nil {
@@ -953,38 +998,31 @@ func TestSweepAfterTailCut(t *testing.T) {
 }
 
 // TestUnwrittenTailCut: blocks a crash left unwritten in a log's
-// uncommitted tail, with lazy appends after them, are the loss of that
-// tail, cut as such, and not damage that closes the session.
+// uncommitted tail are the loss of that tail, cut as such, and not
+// damage that closes the session.
 func TestUnwrittenTailCut(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, _ := Open(root, WithSync(SyncNever))
 	st.Create(ctx, agentsession.Header{ID: "s"})
-	kept := mustAppend(t, st, "s", item("kept"))
+	mustAppend(t, st, "s", item("kept"))
 	if err := st.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
 	hole := mustAppend(t, st, "s", item("hole"))
-	mustAppend(t, st, "s", item("after"))
-	crash(st)
-	p := filepath.Join(root, "sessions", "s", logName)
-	data, _ := os.ReadFile(p)
-	var out []byte
-	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
-		if bytes.Contains(line, []byte(hole)) {
-			line = make([]byte, len(line))
-		}
-		out = append(out, line...)
+	for i := range 6 {
+		mustAppend(t, st, "s", item(fmt.Sprint("after", i)))
 	}
-	os.WriteFile(p, out, 0o600)
+	crash(st)
+	kept := unwrite(t, filepath.Join(root, "sessions", "s", logName), hole, false)
 	w, _ := Open(root)
 	defer w.Close()
 	s, err := w.Open(ctx, "s")
 	if err != nil {
 		t.Fatalf("a crash's unwritten tail: %v", err)
 	}
-	if s.Len() != 1 || s.Leaf() != kept {
-		t.Errorf("after the cut: %d entries at %s, want 1 at %s", s.Len(), s.Leaf(), kept)
+	if s.Len() != len(kept) || s.Leaf() != kept[len(kept)-1] {
+		t.Errorf("after the cut: %d entries at %s, want %d at %s", s.Len(), s.Leaf(), len(kept), kept[len(kept)-1])
 	}
 	if rep, err := w.Verify(ctx); err != nil || !rep.OK() {
 		t.Errorf("verify after the cut: %v %v", err, rep.Problems)
@@ -1136,7 +1174,7 @@ func TestLazyLargeObjectNotTrusted(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, _ := Open(root, WithSync(SyncNever))
-	big := strings.Repeat("large content ", (checkedSize/14)+1)
+	big := strings.Repeat("large content ", (64<<10)/14+1)
 	st.Create(ctx, agentsession.Header{ID: "a"})
 	e := mustAppend(t, st, "a", item(big))
 	c, _ := st.contentOf(e)
@@ -1205,18 +1243,11 @@ func TestSweepPastUnwrittenTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	hole := mustAppend(t, st, "s", item("hole"))
-	mustAppend(t, st, "s", item("after"))
-	crash(st)
-	p := filepath.Join(root, "sessions", "s", logName)
-	data, _ := os.ReadFile(p)
-	var out []byte
-	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
-		if bytes.Contains(line, []byte(hole)) {
-			line = make([]byte, len(line))
-		}
-		out = append(out, line...)
+	for i := range 6 {
+		mustAppend(t, st, "s", item(fmt.Sprint("after", i)))
 	}
-	os.WriteFile(p, out, 0o600)
+	crash(st)
+	unwrite(t, filepath.Join(root, "sessions", "s", logName), hole, false)
 	w, _ := Open(root)
 	defer w.Close()
 	if _, err := w.Sweep(ctx, 0); err != nil {
@@ -1308,7 +1339,7 @@ func TestCheckedFileChangedInPlace(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, _ := Open(root)
-	big := strings.Repeat("large content ", (checkedSize/14)+1)
+	big := strings.Repeat("large content ", (64<<10)/14+1)
 	st.Create(ctx, agentsession.Header{ID: "a"})
 	e := mustAppend(t, st, "a", item(big))
 	c, _ := st.contentOf(e)
@@ -1374,6 +1405,153 @@ func TestPushKeepsMedia(t *testing.T) {
 	b := &bundle{header: hdr, mark: MarkRecord, head: ids[1], blobs: map[string][]byte{}}
 	if _, err := mir.receive(ctx, b, receiveOptions{push: true, expected: ids[1]}); err == nil || !strings.Contains(err.Error(), "media") {
 		t.Errorf("a push of a fork whose media differs from its origin's: %v", err)
+	}
+}
+
+// TestSingleZeroByteIsDamage: one byte of a committed record changed to
+// zero is damage, not a block a crash left unwritten, and the log is
+// left as it is.
+func TestSingleZeroByteIsDamage(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, st, "s", item("a"))
+	b := mustAppend(t, st, "s", item("b"))
+	mustAppend(t, st, "s", item("c"))
+	st.Close()
+	p := filepath.Join(root, "sessions", "s", logName)
+	data, _ := os.ReadFile(p)
+	i := bytes.Index(data, []byte(b)) + 10
+	for i%blockSize == 0 || (i+1)%blockSize == 0 {
+		i++
+	}
+	data[i] = 0
+	os.WriteFile(p, data, 0o600)
+	r, _ := Open(root)
+	defer r.Close()
+	if _, err := r.Open(ctx, "s"); !errors.As(err, new(LogDamage)) {
+		t.Errorf("a committed record with one byte zeroed: %v", err)
+	}
+	if after, _ := os.ReadFile(p); !bytes.Equal(after, data) {
+		t.Error("the open changed the damaged log")
+	}
+}
+
+// TestRecoveryWritesAfresh: recovery that keeps working state writes
+// the log, and the objects of that state, as new files, rather than
+// fsync what it found: after a failed fsync, a process's pages it never
+// wrote stay in memory marked written, and an fsync of them now would
+// succeed. So does recovery after the store stopped and was reopened.
+func TestRecoveryWritesAfresh(t *testing.T) {
+	ctx := context.Background()
+	for _, stopped := range []bool{false, true} {
+		root := t.TempDir()
+		st, _ := Open(root, WithSync(SyncNever))
+		st.Create(ctx, agentsession.Header{ID: "s"})
+		mustAppend(t, st, "s", item("kept"))
+		st.Sync(ctx)
+		x := mustAppend(t, st, "s", item("working"))
+		p := filepath.Join(root, "sessions", "s", logName)
+		ep, _ := st.objs.loosePath(spaceEntries, x)
+		if stopped {
+			old := syncLog
+			syncLog = func(*os.File) error { return errors.New("injected fsync failure") }
+			// The commit fails, and its sync record is cut back out.
+			if err := st.Sync(ctx); !errors.Is(err, ErrStopped) {
+				t.Fatalf("the commit: %v", err)
+			}
+			syncLog = old
+			st.Close()
+		} else {
+			crash(st)
+		}
+		logBefore, _ := os.Stat(p)
+		objBefore, _ := os.Stat(ep)
+		w, _ := Open(root)
+		s, err := w.Open(ctx, "s")
+		if err != nil || s.Leaf() != x {
+			t.Fatalf("recovery: %v", err)
+		}
+		if now, _ := os.Stat(p); os.SameFile(logBefore, now) {
+			t.Errorf("stopped %v: recovery fsynced the log it found", stopped)
+		}
+		if now, _ := os.Stat(ep); os.SameFile(objBefore, now) {
+			t.Errorf("stopped %v: recovery fsynced an object it found", stopped)
+		}
+		w.Close()
+	}
+}
+
+// TestStoppedStoreReads: a stopped store still reads, a session whose
+// commit failed included, and an open of one with a torn tail recovers
+// it in memory and writes nothing.
+func TestStoppedStoreReads(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "b"})
+	mustAppend(t, st, "b", item("b"))
+	st.Release("b")
+	bp := filepath.Join(root, "sessions", "b", logName)
+	f, _ := os.OpenFile(bp, os.O_WRONLY|os.O_APPEND, 0)
+	f.WriteString(`{"op":"app`)
+	f.Close()
+	torn, _ := os.ReadFile(bp)
+	st.Create(ctx, agentsession.Header{ID: "a"})
+	a := mustAppend(t, st, "a", item("a"))
+	old := syncLog
+	syncLog = func(*os.File) error { return errors.New("injected fsync failure") }
+	err := st.Sync(ctx)
+	syncLog = old
+	if !errors.Is(err, ErrStopped) {
+		t.Fatalf("the commit: %v", err)
+	}
+	defer st.Close()
+	if s, err := st.Open(ctx, "a"); err != nil || s.Leaf() != a {
+		t.Errorf("reading the session whose commit failed: %v", err)
+	}
+	if _, err := st.Open(ctx, "b"); err != nil {
+		t.Errorf("reading a session with a torn tail: %v", err)
+	}
+	if after, _ := os.ReadFile(bp); !bytes.Equal(after, torn) {
+		t.Error("a stopped store changed a log")
+	}
+}
+
+// TestSweepStops: a sweep whose last fsync fails reports the stop, and
+// removes nothing more.
+func TestSweepStops(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	defer st.Close()
+	fill(t, st, "s", 3)
+	old := syncDirFile
+	defer func() { syncDirFile = old }()
+	pack := string(filepath.Separator) + "pack"
+	calls := 0
+	syncDirFile = func(d *os.File) error {
+		if strings.HasSuffix(d.Name(), pack) {
+			if calls++; calls > 1 {
+				return errors.New("injected directory fsync failure")
+			}
+		}
+		return d.Sync()
+	}
+	loose := func() int {
+		n := 0
+		for _, sp := range []space{spaceEntries, spaceContents} {
+			st.objs.eachLoose(sp, func(string, string, os.FileInfo, bool) error { n++; return nil })
+		}
+		return n
+	}
+	before := loose()
+	if _, err := st.Sweep(ctx, 0); !errors.Is(err, ErrStopped) {
+		t.Errorf("the sweep: %v", err)
+	}
+	if loose() != before {
+		t.Error("a sweep went on removing after the store stopped")
 	}
 }
 

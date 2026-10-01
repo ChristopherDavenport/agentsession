@@ -75,8 +75,9 @@ func TestPutBlobFreshensPack(t *testing.T) {
 	}
 }
 
-// TestReusedObjectIsSynced: a durable append that reuses a loose object
-// another writer left unsynced makes it durable with its own commit.
+// TestReusedObjectIsSynced: a durable write of a loose object another
+// writer left unsynced writes a copy of its own, durably, rather than
+// take the other's file on the word of an fsync of it.
 func TestReusedObjectIsSynced(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -88,12 +89,16 @@ func TestReusedObjectIsSynced(t *testing.T) {
 	d, _ := Open(root)
 	defer d.Close()
 	path, _ := d.objs.loosePath(spaceContents, e.Base().ContentHash())
+	before, _ := os.Stat(path)
 	body, _ := d.objs.read(spaceContents, e.Base().ContentHash())
 	if err := d.objs.write(spaceContents, e.Base().ContentHash(), body, true); err != nil {
 		t.Fatal(err)
 	}
-	if !d.objs.pendFiles[path] || !d.objs.pendDirs[filepath.Dir(path)] {
-		t.Error("a reused loose object is not in what the next durable commit syncs")
+	if after, _ := os.Stat(path); os.SameFile(before, after) {
+		t.Error("another writer's unsynced object was taken rather than written again")
+	}
+	if !d.objs.pendDirs[filepath.Dir(path)] {
+		t.Error("the object's directory is not in what the next durable commit syncs")
 	}
 }
 

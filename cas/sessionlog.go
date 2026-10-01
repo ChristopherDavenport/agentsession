@@ -116,13 +116,27 @@ func parseSessionLog(r interface {
 			return l, nil
 		}
 		if line[len(line)-1] != '\n' {
-			// A last line without its newline: a torn write, cut by the
-			// holder, unless it is whole records and nothing else, each
-			// passing its checksum, as any other line must be.
+			// A last line without its newline: whole records, each
+			// passing its checksum, as any other line must be; or what a
+			// crash leaves at the end of a write, cut by the holder; or
+			// damage, as on any other line.
 			if recs, err := decodeLine(line); err == nil && wholeRecords(line, recs) {
 				l.recs = append(l.recs, recs...)
 				l.unterminated = true
 				l.whole += int64(len(line))
+			} else if !tornWrite(line, l.whole) {
+				if err == nil {
+					err = errSkipped
+				} else if errors.Is(err, errNewline) {
+					// A record then one byte where its newline was, with
+					// no record after it: no crash writes that.
+					err = errors.New("a record ends the log with another byte where its newline was")
+				}
+				l.damage = append(l.damage, LogDamage{Line: lineNo + 1, Offset: l.whole, Err: err})
+				if !l.lost {
+					l.lost, l.lossRec, l.lossOff = true, len(l.recs), l.whole
+				}
+				l.unwritten = false
 			}
 			return l, nil
 		}
@@ -144,7 +158,7 @@ func parseSessionLog(r interface {
 				if !l.lost {
 					l.lost, l.lossRec, l.lossOff, l.unwritten = true, len(l.recs), start, true
 				}
-				if bytes.IndexByte(line, 0) < 0 {
+				if !unwrittenBlock(line, start) {
 					l.unwritten = false
 				}
 			}
@@ -196,6 +210,11 @@ func (s *Store) appendRecords(h *handle, dir string, durable bool, recs ...logRe
 		// and no other caller's: a flush of a set another caller shares
 		// could return before that caller's fsyncs had.
 		if err := s.objs.flushSet(h.pend); err != nil {
+			if errors.Is(err, ErrStopped) {
+				// As after a failed fsync of the log: the next open of
+				// the store recovers the session from the disk.
+				s.dropHandle(recs[0].Session, h)
+			}
 			return fmt.Errorf("cas: flush: %w", err)
 		}
 	}
@@ -270,24 +289,64 @@ var errLogUncertain = errors.New("cas: a failed append could not be taken out of
 // syncLog fsyncs a session's log; a variable so a test can fail it.
 var syncLog = func(f *os.File) error { return f.Sync() }
 
-// mendTail cuts a torn last line from a session's log, and ends one a
-// crash left whole but without its newline, which only the session's
-// holder does, so the next record starts a line of its own.
-func mendTail(o *objects, dir string, whole int64, unterminated bool) error {
-	f, err := os.OpenFile(filepath.Join(dir, logName), os.O_WRONLY, 0)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if err := f.Truncate(whole); err != nil {
-		return err
-	}
-	if unterminated {
-		if _, err := f.WriteAt([]byte{'\n'}, whole); err != nil {
-			return err
+// blockSize is the least a filesystem writes in one piece: a block a
+// crash leaves unwritten is zeros from one multiple of it to another.
+const blockSize = 512
+
+// unwrittenBlock reports whether a line, starting at the byte offset
+// start, holds what a block a crash left unwritten leaves: a run of
+// zeros from the line's start or a block's to the line's end or a
+// block's. A zero byte elsewhere, alone in a line of other bytes, is a
+// byte changed, which is damage.
+func unwrittenBlock(line []byte, start int64) bool {
+	for i := 0; i < len(line); {
+		if line[i] != 0 {
+			i++
+			continue
 		}
+		j := i
+		for j < len(line) && line[j] == 0 {
+			j++
+		}
+		if (i == 0 || (start+int64(i))%blockSize == 0) && (j == len(line) || (start+int64(j))%blockSize == 0) {
+			return true
+		}
+		i = j
 	}
-	return o.fsync(f.Name(), f, syncLog)
+	return false
+}
+
+// tornWrite reports whether a last line without its newline, starting
+// at the byte offset start, is what a crash leaves at the end of a
+// write: whole records, then one cut short before its closing brace,
+// which no record holds elsewhere; or a block left unwritten. A record
+// whole but for its newline, or one that fails its checksum, is not.
+func tornWrite(line []byte, start int64) bool {
+	if unwrittenBlock(line, start) {
+		return true
+	}
+	if !bytes.HasPrefix(line, recordOpening) {
+		return bytes.HasPrefix(recordOpening, line)
+	}
+	var starts []int
+	for i := 0; ; {
+		k := bytes.Index(line[i:], recordOpening)
+		if k < 0 {
+			break
+		}
+		starts = append(starts, i+k)
+		i += k + 1
+	}
+	for n, st := range starts {
+		if n+1 < len(starts) {
+			if r, _, err := decodeRecord(line[st:starts[n+1]]); err != nil || !r.checked {
+				return false
+			}
+			continue
+		}
+		return bytes.IndexByte(line[st:], '}') < 0
+	}
+	return false
 }
 
 // tailLoss reports whether a log's lossy damage is what a crash leaves

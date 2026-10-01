@@ -1,10 +1,8 @@
 package cas
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -53,15 +51,14 @@ type objects struct {
 	// on fsyncs of each path in flight.
 	failure atomic.Pointer[error]
 	syncing map[string]*pathLock
-	// checked holds the large loose files this store fsynced, after
-	// writing them or finding them to hold their object's bytes. Their
-	// bytes are on the disk, so an eviction since reads them back; and
-	// an object's file is replaced only by renaming a new one over it,
-	// so the same file still holds them. A file not yet fsynced is not taken on trust: its
-	// writeback may fail in the background, and its pages be evicted
-	// and read back as zeros, before any fsync reports it. A file is
-	// known by its version, change time included, since a file made
-	// after it is removed may take over its inode.
+	// checked holds the loose files this store wrote. An object's file
+	// is replaced only by renaming a new one over it, so the same file
+	// still holds this store's bytes; one not yet fsynced is fsynced by
+	// this store alone, since no other process fsyncs a file it did not
+	// write, so a failure of its writeback is reported here, at the next
+	// commit, and stops the store. A file is known by its version, change
+	// time included, since a file made after it is removed may take over
+	// its inode.
 	checked map[string]fileVersion
 }
 
@@ -71,9 +68,8 @@ type fileVersion struct {
 	ctime, size int64
 }
 
-// checkedSize is the least size of a loose object whose check is
-// remembered; a smaller one is read and compared in microseconds.
-const checkedSize = 64 << 10
+// checkedLimit bounds the files checked remembers.
+const checkedLimit = 1 << 16
 
 func newObjects(root string) *objects {
 	return &objects{root: root, pendFiles: map[string]bool{}, pendDirs: map[string]bool{}, fanned: map[string]bool{}, syncing: map[string]*pathLock{}, checked: map[string]fileVersion{}}
@@ -322,7 +318,7 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 	}
 	dir := filepath.Dir(path)
 	if info, err := os.Stat(path); err == nil && info.Size() == int64(len(data)) {
-		ok, err := o.reuse(path, data)
+		ok, err := o.reuse(path, len(data))
 		if err == nil && !ok {
 			goto write
 		}
@@ -358,10 +354,10 @@ write:
 	if err != nil {
 		return err
 	}
+	o.check(path, info)
 	if !durable {
 		return o.remember(pend, path, dir)
 	}
-	o.check(path, info)
 	return o.remember(pend, "", dir)
 }
 
@@ -413,12 +409,16 @@ func (o *objects) fanOut(space string) error {
 	return nil
 }
 
-// reuse takes the loose file at path for a copy of data, and freshens
-// it, when it holds data's bytes: it is read and compared, unless it is
-// the version this store fsynced. The file is opened once, and read,
-// compared and freshened through that one descriptor, so a file put in
-// its place meanwhile is not taken for it.
-func (o *objects) reuse(path string, data []byte) (bool, error) {
+// reuse freshens the loose file at path and takes it for data's copy
+// when it is a version of the file this store wrote, and otherwise
+// reports false, for the caller to write a copy of its own. A file this
+// store did not write is not trusted: a crash may have left it zeros,
+// and another process's fsync of it may have failed and been reported
+// to that process alone, after which an fsync of it here succeeds for
+// bytes the disk does not hold. The file is opened once, and checked
+// and freshened through that one descriptor, so a file put in its place
+// meanwhile is not taken for it.
+func (o *objects) reuse(path string, size int) (bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return false, err
@@ -428,48 +428,42 @@ func (o *objects) reuse(path string, data []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if pre.Size() != int64(len(data)) {
-		return false, nil
-	}
-	v, known := versionOf(pre)
+	v, ok := versionOf(pre)
 	o.mu.Lock()
-	known = known && o.checked[path] == v
+	ok = ok && pre.Size() == int64(size) && o.checked[path] == v
 	o.mu.Unlock()
-	if !known {
-		have, err := io.ReadAll(f)
-		if err != nil {
-			return false, err
-		}
-		if !bytes.Equal(have, data) {
-			return false, nil
-		}
+	if !ok {
+		return false, nil
 	}
 	if err := touchFile(f, time.Now()); err != nil {
 		return false, err
 	}
-	if known {
-		// Freshening changed the file's change time; the version this
-		// store knows follows it.
-		if post, err := f.Stat(); err == nil {
-			if pv, ok := versionOf(post); ok {
-				o.mu.Lock()
-				if o.checked[path] == v {
-					o.checked[path] = pv
-				}
-				o.mu.Unlock()
+	// Freshening changed the file's change time; the version this
+	// store knows follows it.
+	if post, err := f.Stat(); err == nil {
+		if pv, ok := versionOf(post); ok {
+			o.mu.Lock()
+			if o.checked[path] == v {
+				o.checked[path] = pv
 			}
+			o.mu.Unlock()
 		}
 	}
 	return true, nil
 }
 
-// check remembers a large loose file this store fsynced.
+// check remembers a loose file this store wrote. Past checkedLimit
+// files the memory starts again, and a file forgotten is written again
+// at its next use.
 func (o *objects) check(path string, info os.FileInfo) {
 	v, ok := versionOf(info)
-	if !ok || v.size < checkedSize {
+	if !ok {
 		return
 	}
 	o.mu.Lock()
+	if len(o.checked) >= checkedLimit {
+		o.checked = map[string]fileVersion{}
+	}
 	o.checked[path] = v
 	o.mu.Unlock()
 }
@@ -595,12 +589,8 @@ func (o *objects) flushSet(pend *pendSet) error {
 }
 
 // ErrStopped is returned by every write to a store after an fsync of
-// its data failed, until it is opened again. Linux reports a failed
-// writeback once, to one fsync, and marks the pages clean, so a later
-// fsync of the same file, by this process or another, can succeed for
-// bytes that never reached the disk; the store stops rather than take
-// its word, and the next open recovers each session from what the disk
-// holds, as PostgreSQL does after a failed fsync.
+// its data failed, until it is opened again; the package documentation
+// says why, and what an open after it guarantees. Reads go on.
 var ErrStopped = errors.New("cas: the store stopped writing after an fsync failed; open it again")
 
 // stopped returns ErrStopped, with the fsync that failed, once one has.
@@ -658,7 +648,7 @@ func (o *objects) fsyncFile(path string) error {
 		return err
 	}
 	defer f.Close()
-	return o.fsync(path, f, func(f *os.File) error { return f.Sync() })
+	return o.fsync(path, f, syncFile)
 }
 
 // writeFile is writeFile for a file of the store's, whose fsync, when
@@ -668,7 +658,7 @@ func (o *objects) writeFile(path string, data []byte, durable bool) (os.FileInfo
 		return writeFileWith(path, data, nil)
 	}
 	return writeFileWith(path, data, func(f *os.File) error {
-		return o.fsync(f.Name(), f, func(f *os.File) error { return f.Sync() })
+		return o.fsync(f.Name(), f, syncFile)
 	})
 }
 
@@ -697,6 +687,10 @@ type pathLock struct {
 	mu    sync.Mutex
 	users int
 }
+
+// syncFile fsyncs a file of the store's other than a log or a loose
+// object; a variable so a test can fail it.
+var syncFile = func(f *os.File) error { return f.Sync() }
 
 // syncDirFile fsyncs a directory; a variable so a test can fail it.
 var syncDirFile = func(d *os.File) error { return d.Sync() }
