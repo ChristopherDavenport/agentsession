@@ -40,40 +40,9 @@ func verify(args []string, stdout, stderr io.Writer) error {
 	} else {
 		fmt.Fprintf(stdout, "%d entries read, each id checked against its hash\n", s.Len())
 	}
-	var checked, unhashed, failed int
-	for _, e := range s.Entries() {
-		r, ok := e.(*agentsession.ResponseEntry)
-		if !ok {
-			continue
-		}
-		id := shortID(r.ID)
-		switch err := s.Verify(r.ID); {
-		case errors.Is(err, agentsession.ErrNoHash):
-			unhashed++
-			fmt.Fprintf(stdout, "%s  no hash recorded\n", id)
-		case err == nil:
-			checked++
-			fmt.Fprintf(stdout, "%s  ok\n", id)
-		case errors.Is(err, agentsession.ErrHashMismatch):
-			failed++
-			fmt.Fprintf(stdout, "%s  MISMATCH recorded %s\n", id, r.RequestHash)
-		default:
-			failed++
-			fmt.Fprintf(stdout, "%s  ERROR %v\n", id, err)
-		}
-	}
-	fmt.Fprintf(stdout, "%d verified, %d without hash, %d failed\n", checked, unhashed, failed)
-	problem := failed > 0
-	early := false
-	for _, leaf := range s.Leaves() {
-		if err := s.VerifyRecords(leaf); err != nil {
-			problem = true
-			fmt.Fprintf(stdout, "records to %s  ERROR %v\n", shortID(leaf), err)
-			early = early || amended09(s.Header(), err)
-		}
-	}
+	problem, early := checkSession(s, "", stdout, true)
 	if early {
-		fmt.Fprintln(stdout, "note: draft 0.9 gained these rules after v0.0.12, v0.0.13 and v0.0.14 wrote it; a 0.9 file one of them wrote, or appended to, may break them without being corrupt")
+		fmt.Fprintln(stdout, earlyNote)
 	}
 	if t := s.Truncated(); t != nil {
 		problem = true
@@ -83,6 +52,56 @@ func verify(args []string, stdout, stderr io.Writer) error {
 		return errFailed
 	}
 	return nil
+}
+
+// earlyNote follows a records error a 0.9 file of an early writer may
+// carry; see amended09.
+const earlyNote = "note: draft 0.9 gained these rules after v0.0.12, v0.0.13 and v0.0.14 wrote it; a 0.9 file one of them wrote, or appended to, may break them without being corrupt"
+
+// checkSession checks each response's request hash and the records to
+// each leaf, printing each line under prefix: every response's result
+// when all is set, else only the failures. It reports whether anything
+// failed, and whether a failure is one an early 0.9 writer may have
+// left.
+func checkSession(s *agentsession.Session, prefix string, stdout io.Writer, all bool) (problem, early bool) {
+	var checked, unhashed, failed int
+	for _, e := range s.Entries() {
+		r, ok := e.(*agentsession.ResponseEntry)
+		if !ok {
+			continue
+		}
+		id := prefix + shortID(r.ID)
+		switch err := s.Verify(r.ID); {
+		case errors.Is(err, agentsession.ErrNoHash):
+			unhashed++
+			if all {
+				fmt.Fprintf(stdout, "%s  no hash recorded\n", id)
+			}
+		case err == nil:
+			checked++
+			if all {
+				fmt.Fprintf(stdout, "%s  ok\n", id)
+			}
+		case errors.Is(err, agentsession.ErrHashMismatch):
+			failed++
+			fmt.Fprintf(stdout, "%s  MISMATCH recorded %s\n", id, r.RequestHash)
+		default:
+			failed++
+			fmt.Fprintf(stdout, "%s  ERROR %v\n", id, err)
+		}
+	}
+	if all {
+		fmt.Fprintf(stdout, "%d verified, %d without hash, %d failed\n", checked, unhashed, failed)
+	}
+	problem = failed > 0
+	for _, leaf := range s.Leaves() {
+		if err := s.VerifyRecords(leaf); err != nil {
+			problem = true
+			fmt.Fprintf(stdout, "%srecords to %s  ERROR %v\n", prefix, shortID(leaf), err)
+			early = early || amended09(s.Header(), err)
+		}
+	}
+	return problem, early
 }
 
 // amended09 reports whether err breaks a rule draft 0.9 gained after

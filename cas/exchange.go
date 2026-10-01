@@ -10,6 +10,7 @@ import (
 	"reflect"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // ErrNotRecord is returned by Push from a store that is not the record
@@ -145,6 +146,14 @@ func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions
 	if s.sameStore(to) {
 		return Exchange{}, ErrSameStore
 	}
+	// A handover ends with this store clearing its mark. One that cannot
+	// write could never do that, so it refuses before the receiver
+	// becomes the record rather than leave two.
+	if opts.Handover {
+		if err := s.writable(); err != nil {
+			return Exchange{}, fmt.Errorf("cas: handover: %w", err)
+		}
+	}
 	b, err := s.bundleOf(ctx, id)
 	if err != nil {
 		return Exchange{}, err
@@ -167,6 +176,48 @@ func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions
 	}
 	x.Handover = true
 	return x, nil
+}
+
+// callIDsMeet refuses an exchange that would leave two function calls
+// in the session with one call ID, as RFC 0001 forbids: a fresh
+// entry's call ID meeting one the receiver holds and the sender does
+// not. Two replicas each append a branch with a call the other cannot
+// see, so only the merge finds them; a repeat the sender already holds,
+// as a session written before the rule may, is carried as it is. The
+// refusal holds for every later exchange of the session between the
+// two, since each carries the other's call: one store pushes its line
+// as a session with a base and deletes its copy, as RFC 0002 says.
+func callIDsMeet(held []agentsession.Entry, b *bundle, fresh []agentsession.Entry) error {
+	sent := map[string]bool{}
+	for _, es := range [][]agentsession.Entry{b.prefix, b.own} {
+		for _, e := range es {
+			sent[e.Base().ID] = true
+		}
+	}
+	at := map[string]string{}
+	for _, e := range held {
+		if c := callIDOf(e); c != "" && !sent[e.Base().ID] {
+			at[c] = e.Base().ID
+		}
+	}
+	for _, e := range fresh {
+		if c := callIDOf(e); c != "" {
+			if other, ok := at[c]; ok {
+				return fmt.Errorf("%w: exchange: %s at %s here and %s sent; the stores no longer exchange this session until one pushes its line as a fork and deletes it", agentsession.ErrCallIDRepeated, c, other, e.Base().ID)
+			}
+		}
+	}
+	return nil
+}
+
+// callIDOf is the call ID of a function call item, or empty.
+func callIDOf(e agentsession.Entry) string {
+	if it, ok := e.(*agentsession.ItemEntry); ok {
+		if fc, ok := it.Item.(*openresponses.FunctionCall); ok {
+			return fc.CallID
+		}
+	}
+	return ""
 }
 
 // Fetch takes a session from another store that holds it, a mirror
@@ -351,6 +402,9 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 		}
 		held[eid] = true
 		fresh = append(fresh, e)
+	}
+	if err := callIDsMeet(h.session.Entries(), b, fresh); err != nil {
+		return Exchange{}, err
 	}
 	x := Exchange{Admitted: len(fresh), Head: h.head}
 	failedHandover := false

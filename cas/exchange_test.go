@@ -3,6 +3,7 @@ package cas
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -158,6 +159,80 @@ func TestHandover(t *testing.T) {
 	defer a2.Close()
 	if m, _ := a2.Mark(ctx, "s"); m != MarkRecord {
 		t.Errorf("after reopening, the mark is %s", m)
+	}
+}
+
+// TestHandoverReadOnly: a sender that cannot clear its mark refuses the
+// handover before the receiver becomes the record.
+func TestHandoverReadOnly(t *testing.T) {
+	ctx := context.Background()
+	a, b := twoStores(t)
+	fill(t, a, "s", 2)
+	a.Close()
+	ro, err := Open(a.Root(), WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	if _, err := ro.Push(ctx, b, "s", PushOptions{Handover: true}); !errors.Is(err, agentsession.ErrReadOnly) {
+		t.Fatalf("a handover from a read-only store: %v", err)
+	}
+	if _, err := b.Mark(ctx, "s"); err == nil {
+		t.Error("the receiver took the session")
+	}
+	if m, _ := ro.Mark(ctx, "s"); m != MarkRecord {
+		t.Errorf("sender mark %s", m)
+	}
+	// A plain push from a read-only store still serves what it holds.
+	if _, err := ro.Push(ctx, b, "s", PushOptions{}); err != nil {
+		t.Error(err)
+	}
+}
+
+// TestExchangeCallIDMeets: two copies of a store each append a function
+// call with one call ID on a branch from a shared head; the push that
+// would merge them is refused, and the receiver keeps what it held.
+func TestExchangeCallIDMeets(t *testing.T) {
+	ctx := context.Background()
+	a, _ := twoStores(t)
+	ids := fill(t, a, "s", 2)
+	a.Close()
+	root := t.TempDir()
+	if err := os.CopyFS(root, os.DirFS(a.Root())); err != nil {
+		t.Fatal(err)
+	}
+	a, err := Open(a.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	call := func(text string) agentsession.Entry {
+		return agentsession.NewItemEntry(&openresponses.FunctionCall{CallID: "call_0", Name: text, Arguments: "{}"})
+	}
+	mustAppend(t, a, "s", call("a"))
+	mustAppend(t, b, "s", call("b"))
+	if _, err := a.Push(ctx, b, "s", PushOptions{Expected: ids[1]}); !errors.Is(err, agentsession.ErrCallIDRepeated) {
+		t.Fatalf("a push meeting a call ID: %v", err)
+	}
+	s, err := b.Open(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 3 {
+		t.Errorf("the receiver holds %d entries, want 3", s.Len())
+	}
+	if _, err := b.Fetch(ctx, a, "s"); !errors.Is(err, agentsession.ErrCallIDRepeated) {
+		t.Errorf("a fetch meeting a call ID: %v", err)
+	}
+	// Force moves a head; it does not admit the call.
+	mustAppend(t, a, "s", item("more"))
+	if _, err := a.Push(ctx, b, "s", PushOptions{Force: true}); !errors.Is(err, agentsession.ErrCallIDRepeated) {
+		t.Errorf("a forced push meeting a call ID: %v", err)
 	}
 }
 

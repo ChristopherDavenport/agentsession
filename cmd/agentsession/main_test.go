@@ -600,3 +600,50 @@ func TestCASVerifyFindsDamage(t *testing.T) {
 		t.Errorf("stdout names no corrupt object:\n%s", stdout.String())
 	}
 }
+
+// TestCASVerifyChecksRecords: verify of a cas root runs each session's
+// request hash and records checks, as verify of one session does, and
+// fails on a session the store's own walk finds sound (#133).
+func TestCASVerifyChecksRecords(t *testing.T) {
+	tmp := t.TempDir()
+	tampered := filepath.Join(tmp, "tampered.jsonl")
+	replayFixture(t, "basic", tampered, func(e agentsession.Entry) {
+		if r, ok := e.(*agentsession.ResponseEntry); ok && r.RequestHash != "" {
+			r.RequestHash = "sha256:" + strings.Repeat("0", 64)
+		}
+	})
+	root := filepath.Join(tmp, "store")
+	st, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(tampered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.Import(context.Background(), f, true)
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"verify", root}, &stdout, &stderr); code != 1 {
+		t.Errorf("exit %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "MISMATCH") || !strings.Contains(stdout.String(), "1 failed") {
+		t.Errorf("stdout names no failing session:\n%s", stdout.String())
+	}
+	// A sound store still passes, and lists no response.
+	clean := filepath.Join(tmp, "clean")
+	casStore(t, clean, "basic")
+	stdout.Reset()
+	if code := run([]string{"verify", clean}, &stdout, &stderr); code != 0 {
+		t.Errorf("a sound store: exit %d\n%s", code, stdout.String())
+	}
+	if strings.Contains(stdout.String(), " ok\n") {
+		t.Errorf("a store's verify lists each response:\n%s", stdout.String())
+	}
+}

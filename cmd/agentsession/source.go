@@ -109,6 +109,12 @@ func readSource(src source) (*agentsession.Session, error) {
 		return nil, err
 	}
 	defer st.Close()
+	return readFrom(st, src)
+}
+
+// readFrom loads a session from a cas store already open, as readSource
+// does.
+func readFrom(st *cas.Store, src source) (*agentsession.Session, error) {
 	var buf bytes.Buffer
 	if err := st.Project(context.Background(), &buf, src.id); err != nil {
 		return nil, fmt.Errorf("%s: %w", src, err)
@@ -132,14 +138,17 @@ func casResolver(root string) func(id string) (*agentsession.Session, error) {
 }
 
 // verifyStore checks a whole cas store as git fsck does: logs,
-// objects, packs and every session's entries.
+// objects, packs and every session's entries, and then each session as
+// verify of one session does, its request hashes and records, printing
+// only what fails.
 func verifyStore(root string, stdout io.Writer) error {
+	ctx := context.Background()
 	st, err := cas.Open(root, cas.WithReadOnly())
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	rep, err := st.Verify(context.Background())
+	rep, err := st.Verify(ctx)
 	if err != nil {
 		return err
 	}
@@ -151,7 +160,37 @@ func verifyStore(root string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "nothing to verify: %s holds no sessions\n", root)
 		return errFailed
 	}
-	if !rep.OK() {
+	// A session that fails to list or to open is one the store's walk
+	// has reported; it is named here as unchecked, and not counted
+	// again.
+	checked, failing, unchecked, anyEarly := 0, 0, 0, false
+	var ids []string
+	for sum, err := range st.List(ctx, agentsession.ListFilter{}) {
+		if err != nil {
+			fmt.Fprintf(stdout, "records not checked: %v\n", err)
+			unchecked++
+			continue
+		}
+		ids = append(ids, sum.Header.ID)
+	}
+	for _, id := range ids {
+		s, err := readFrom(st, source{path: root, id: id})
+		if err != nil {
+			fmt.Fprintf(stdout, "%s: records not checked: %v\n", id, err)
+			unchecked++
+			continue
+		}
+		checked++
+		if problem, early := checkSession(s, id+": ", stdout, false); problem {
+			failing++
+			anyEarly = anyEarly || early
+		}
+	}
+	if anyEarly {
+		fmt.Fprintln(stdout, earlyNote)
+	}
+	fmt.Fprintf(stdout, "%d sessions' hashes and records checked, %d failed, %d not checked\n", checked, failing, unchecked)
+	if !rep.OK() || failing > 0 || unchecked > 0 {
 		return errFailed
 	}
 	return nil

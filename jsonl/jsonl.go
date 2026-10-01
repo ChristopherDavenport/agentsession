@@ -42,7 +42,10 @@ const (
 	// effect it precedes.
 	SyncOnResponse
 	// SyncNever leaves syncing to the operating system and to explicit
-	// calls to Store.Sync.
+	// calls to Store.Sync, apart from a record entry whose type the
+	// header names in records, which the format requires to be durable
+	// before the side effect it precedes and which this policy too
+	// fsyncs.
 	SyncNever
 )
 
@@ -470,7 +473,7 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 		return "", fmt.Errorf("jsonl: write entry %s: %w", id, err)
 	}
 	if s.shouldSync(h.session.Header(), e) {
-		if err := h.file.Sync(); err != nil {
+		if err := syncEntry(h.file); err != nil {
 			return "", fmt.Errorf("jsonl: sync entry %s: %w", id, err)
 		}
 	}
@@ -578,6 +581,8 @@ func (s *Store) shouldSync(hdr agentsession.Header, e agentsession.Entry) bool {
 			_, ok := v.Item.(*openresponses.FunctionCallOutput)
 			return ok
 		}
+		return hdr.HasRecord(e.EntryType())
+	case SyncNever:
 		return hdr.HasRecord(e.EntryType())
 	}
 	return false
@@ -815,3 +820,7 @@ func writeLine(w io.Writer, v any) error {
 }
 
 var _ agentsession.Store = (*Store)(nil)
+
+// syncEntry fsyncs a session's file after an append the policy makes
+// durable; a test counts its calls.
+var syncEntry = (*os.File).Sync

@@ -5,6 +5,38 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+The format is unchanged. RFC 0002's exchange section gains a refusal.
+
+- **cas: an exchange that would merge two function calls with one
+  `call_id` is refused** with `ErrCallIDRepeated`, as RFC 0002 now
+  says. Two stores each appending a branch cannot see the other's
+  calls, so only the merge finds the collision; before, the push
+  landed and left a session that failed `VerifyRecords`. A repeat the
+  sender already holds, as a session written before the rule may, is
+  carried as it is. The refusal holds for every later exchange of that
+  session between the two stores, so one pushes its line as a session
+  with a base and deletes its copy. (#124)
+- **cas: a store that cannot write refuses a handover** with
+  `ErrReadOnly` or `ErrStopped` before the receiver commits. Before,
+  the receiver became the record and the sender could not clear its
+  own mark, leaving two records. (#143)
+- **jsonl: `SyncNever` fsyncs an entry whose type the header names in
+  `records`**, as RFC 0001 requires before the side effect it
+  precedes, as cas has since v0.0.16. (#146)
+- **cas: a sweep lets waiting writers in between its batches.** A
+  writer that finds `sweep.lock` taken holds `sweep.lock.want` shared
+  until it has the lock, and the sweep waits for those writers before
+  retaking it. Before, one append could wait through nearly the whole
+  prune. (#141)
+- **`agentsession verify <cas-root>` checks each session's request
+  hashes and records** after the store's own walk, as `verify <root>
+  <id>` does, printing only what fails, and exits non-zero on any,
+  or on a session it could not check.
+  Before, a store whose sessions broke the records rules reported no
+  problems. (#133)
+
 ## v0.0.16 - 2026-10-01
 
 The format is unchanged. RFC 0002's durability section is rewritten: a
