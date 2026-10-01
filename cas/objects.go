@@ -44,10 +44,11 @@ type objects struct {
 	// the directories they were renamed into.
 	pendFiles map[string]bool
 	pendDirs  map[string]bool
-	// fanned holds the spaces whose fan-out directories this store has
-	// seen made durable; fanning makes them, one space at a time.
-	fanned  map[string]bool
-	fanning sync.Mutex
+	// known holds the object directories this store has seen made
+	// durable, by the fsync of their space's directory, as the files
+	// they were: one removed and made again since, by a sweep and
+	// another writer, is not taken for them.
+	known map[string]os.FileInfo
 	// noLink is set once the filesystem has refused a hard link, after
 	// which every object is written durably.
 	noLink atomic.Bool
@@ -77,7 +78,7 @@ type fileVersion struct {
 const checkedLimit = 1 << 16
 
 func newObjects(root string) *objects {
-	return &objects{root: root, pendFiles: map[string]bool{}, pendDirs: map[string]bool{}, fanned: map[string]bool{}, syncing: map[string]*pathLock{}, checked: map[string]fileVersion{}}
+	return &objects{root: root, pendFiles: map[string]bool{}, pendDirs: map[string]bool{}, known: map[string]os.FileInfo{}, syncing: map[string]*pathLock{}, checked: map[string]fileVersion{}}
 }
 
 func (o *objects) packDir() string { return filepath.Join(o.root, "objects", "pack") }
@@ -360,27 +361,36 @@ func (o *objects) writeTo(sp space, hash string, data []byte, durable bool, pend
 		// The pack was removed by a sweep; write the object loose.
 	}
 write:
-	if err := o.fanOut(filepath.Dir(dir)); err != nil {
-		return err
-	}
 	var info os.FileInfo
-	if !durable && !replacing && !o.noLink.Load() {
-		// A new object, written lazily, takes its place only if nothing
-		// has since: one another process wrote meanwhile is replaced
-		// durably instead. So is the object where the filesystem makes
-		// no hard link, from then on, which is slower but as sound.
-		info, err = writeFileWith(path, data, nil, false)
-		if errors.Is(err, errNoLink) {
-			o.noLink.Store(true)
+	for attempt := 0; ; attempt++ {
+		if err := o.objectDir(dir, pend); err != nil {
+			return err
 		}
-		if errors.Is(err, os.ErrExist) || errors.Is(err, errNoLink) {
+		if !durable && !replacing && !o.noLink.Load() {
+			// A new object, written lazily, takes its place only if
+			// nothing has since: one another process wrote meanwhile is
+			// replaced durably instead. So is the object where the
+			// filesystem makes no hard link, from then on, which is
+			// slower but as sound.
+			info, err = writeFileWith(path, data, nil, false)
+			if errors.Is(err, errNoLink) {
+				o.noLink.Store(true)
+			}
+			if errors.Is(err, os.ErrExist) || errors.Is(err, errNoLink) {
+				durable = true
+			}
+		} else if !durable {
 			durable = true
 		}
-	} else if !durable {
-		durable = true
-	}
-	if durable {
-		info, err = o.writeFile(path, data, true)
+		if durable {
+			info, err = o.writeFile(path, data, true)
+		}
+		if errors.Is(err, os.ErrNotExist) && attempt == 0 {
+			// A sweep removed the directory, empty, after it was found:
+			// it is made again.
+			continue
+		}
+		break
 	}
 	if err != nil {
 		return err
@@ -392,51 +402,88 @@ write:
 	return o.remember(pend, "", dir)
 }
 
-// fanOut makes a space's fan-out directories, all of them at once, and
-// syncs the space's directory, the first time this store writes into
-// the space; no object is renamed into a directory a crash could take.
-// A failed sync stops the store; the directories made here are removed,
-// since no write has used them: none writes into a space before its
-// fan-out is durable.
-func (o *objects) fanOut(space string) error {
-	o.mu.Lock()
-	done := o.fanned[space]
-	o.mu.Unlock()
-	if done {
-		return nil
-	}
-	o.fanning.Lock()
-	defer o.fanning.Unlock()
-	o.mu.Lock()
-	done = o.fanned[space]
-	o.mu.Unlock()
-	if done {
-		return nil
-	}
-	if err := os.MkdirAll(space, 0o755); err != nil {
-		return err
-	}
-	var made []string
-	for i := range 256 {
-		d := filepath.Join(space, fmt.Sprintf("%02x", i))
-		if err := os.Mkdir(d, 0o755); err == nil {
-			made = append(made, d)
-		} else if !errors.Is(err, os.ErrExist) {
-			for _, m := range made {
-				os.Remove(m)
-			}
+// objectDir makes an object's directory when it is not there, as git
+// makes a fan-out directory on its first object, so a store holds the
+// directories its objects need and no more. A directory not known
+// durable has its space's directory synced by the commit that names
+// what goes in it, beside the fsyncs of the object directories it
+// already makes, so no object is committed into a directory a crash
+// could take; once a space's directory is synced, every directory then
+// in it is known, and later commits pay nothing for it. A failed sync
+// stops the store, so a directory made here is never left to the word
+// of a later sync.
+func (o *objects) objectDir(dir string, pend *pendSet) error {
+	info, err := os.Stat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			return err
 		}
-	}
-	if err := o.fsyncDir(space); err != nil {
-		for _, m := range made {
-			os.Remove(m)
+		if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
 		}
+		info, err = os.Stat(dir)
+	}
+	if err != nil {
 		return err
 	}
 	o.mu.Lock()
-	o.fanned[space] = true
+	known := o.known[dir]
 	o.mu.Unlock()
+	if known != nil && os.SameFile(known, info) {
+		return nil
+	}
+	return o.remember(pend, "", filepath.Dir(dir))
+}
+
+// learnSpace records, after a fsync of a space's directory, the object
+// directories it held when the fsync began, as known durable.
+func (o *objects) learnSpace(names []os.FileInfo, space string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, fi := range names {
+		if fi.IsDir() {
+			o.known[filepath.Join(space, fi.Name())] = fi
+		}
+	}
+}
+
+// isSpace reports whether a directory is a space's, which holds the
+// object directories.
+func (o *objects) isSpace(dir string) bool {
+	return dir == o.spaceDir(spaceEntries) || dir == o.spaceDir(spaceContents)
+}
+
+// prune removes the object directories left empty, as a pack or sweep
+// leaves them, and syncs the spaces it removed from. A directory a
+// writer is putting an object in holds its temporary file, so it is not
+// empty and stays; one removed under a writer that found it a moment
+// before is made again by that writer. It runs under the gc lock.
+func (o *objects) prune() error {
+	for _, sp := range []space{spaceEntries, spaceContents} {
+		space := o.spaceDir(sp)
+		ents, err := os.ReadDir(space)
+		if err != nil {
+			continue
+		}
+		removed := false
+		for _, e := range ents {
+			if !e.IsDir() {
+				continue
+			}
+			d := filepath.Join(space, e.Name())
+			if os.Remove(d) == nil {
+				removed = true
+				o.mu.Lock()
+				delete(o.known, d)
+				o.mu.Unlock()
+			}
+		}
+		if removed {
+			if err := o.fsyncDir(space); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -629,9 +676,23 @@ func (o *objects) flushSet(pend *pendSet) error {
 		dirs[filepath.Dir(f)] = true
 	}
 	failed, err := syncAll(dirs, func(d string) error {
+		var names []os.FileInfo
+		if o.isSpace(d) {
+			// What the sync makes durable is what the space held when it
+			// began.
+			ents, _ := os.ReadDir(d)
+			for _, e := range ents {
+				if fi, err := e.Info(); err == nil {
+					names = append(names, fi)
+				}
+			}
+		}
 		err := o.fsyncDir(d)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
+		}
+		if err == nil && names != nil {
+			o.learnSpace(names, d)
 		}
 		return err
 	})

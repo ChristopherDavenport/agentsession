@@ -84,6 +84,8 @@ func legacyStore(t *testing.T) (string, []string) {
 		os.WriteFile(filepath.Join(dir, "record"), []byte(MarkRecord+"\n"), 0o600)
 	}
 	os.MkdirAll(filepath.Join(root, "sessions", "half"), 0o755)
+	// A release with a journal wrote no layout file.
+	os.Remove(filepath.Join(root, layoutFile))
 	return root, []string{id(0), id(1), id(2)}
 }
 

@@ -67,6 +67,21 @@ session is a ref, and its log is its own write-ahead log.
   comes back. A read-only open reads the migrated sessions and reports
   `ErrLegacyStore` for the rest.
 
+  A writing open records the store's layout in a `layout` file at its
+  root, once nothing is left to migrate, and an open refuses a store
+  whose file names a layout it does not read with `ErrLayout`. **v0.0.15
+  and earlier cannot read a store this release has migrated or
+  written**, and do not know the file: they fail every session with
+  "not a usable name". Keep a copy of the store from before the first
+  writing open if rolling back may be needed.
+
+  Object directories are made as their first object needs them, and
+  `Pack` and `Sweep` remove the ones they leave empty, so a small store
+  holds no more than its objects use; the commit that names an object
+  in a directory not yet known durable syncs its space's directory too.
+  A sweep removes what a crash left of an append recovery recorded
+  lost, so `Verify` stops reporting it as corrupt.
+
   `Sweep` refuses while any session's log has a record it cannot read,
   since that record could name what the sweep would remove: one damaged
   log holds up sweeps of the whole store until that session is repaired

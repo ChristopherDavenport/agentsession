@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1166,11 +1167,16 @@ func TestConcurrentWriters(t *testing.T) {
 	}
 }
 
-// TestLazyLargeObjectNotTrusted: a large object written lazily, whose
-// writeback failed in the background and whose pages were evicted
-// before any fsync, is read and compared at its next reuse, not taken
-// on the trust its write earned, and written again.
-func TestLazyLargeObjectNotTrusted(t *testing.T) {
+// TestLazyObjectWritebackFailure: an object this store wrote lazily,
+// whose writeback failed in the background and whose pages were then
+// evicted to zeros, is reused as this store's own file, and the failure
+// reaches the fsync of the commit that names it, which stops the store
+// rather than commit over the zeros; a store opened after never takes
+// the zeros for the object, and a sweep removes them. Whether the second session reused the file,
+// or wrote a copy of its own, turns on whether the zeros changed the
+// file's change time within the clock's tick: either way what opens
+// reads whole.
+func TestLazyObjectWritebackFailure(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st, _ := Open(root, WithSync(SyncNever))
@@ -1181,18 +1187,38 @@ func TestLazyLargeObjectNotTrusted(t *testing.T) {
 	p, _ := st.objs.loosePath(spaceContents, c)
 	info, _ := os.Stat(p)
 	f, _ := os.OpenFile(p, os.O_WRONLY, 0)
-	f.WriteAt(make([]byte, info.Size()), 0) // the same file, zeros
+	f.WriteAt(make([]byte, info.Size()), 0) // what the disk holds
 	f.Close()
+	old := syncObject
+	syncObject = func(f *os.File) error {
+		if f.Name() == p {
+			return errors.New("injected writeback failure")
+		}
+		return f.Sync()
+	}
 	st.Create(ctx, agentsession.Header{ID: "b"})
 	mustAppend(t, st, "b", item(big))
-	if err := st.Sync(ctx); err != nil {
-		t.Fatal(err)
+	err := st.Sync(ctx)
+	syncObject = old
+	if !errors.Is(err, ErrStopped) {
+		t.Fatalf("a commit over an object whose writeback failed: %v", err)
 	}
 	st.Close()
 	r, _ := Open(root)
 	defer r.Close()
-	if _, err := r.Open(ctx, "b"); err != nil {
-		t.Errorf("a session committed over a large object gone to zeros: %v", err)
+	// Recovery cuts what names the zeros as lost, or the session holds a
+	// copy of its own; a sweep then takes what the lost appends left,
+	// and nothing that reads wrong remains.
+	for _, id := range []string{"a", "b"} {
+		if _, err := r.Open(ctx, id); err != nil {
+			t.Fatalf("session %s: %v", id, err)
+		}
+	}
+	if _, err := r.Sweep(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if rep, err := r.Verify(ctx); err != nil || !rep.OK() {
+		t.Errorf("after recovery and a sweep: %v %v", err, rep.Problems)
 	}
 }
 
@@ -1801,6 +1827,190 @@ func TestCutTrace(t *testing.T) {
 				t.Errorf("a crash's loss reported: pending %v, kept %v, after %v", pending.Problems, cuts, after.Problems)
 			}
 		})
+	}
+}
+
+// objectDirs counts a store's object directories.
+func objectDirs(st *Store) int {
+	n := 0
+	for _, sp := range []space{spaceEntries, spaceContents} {
+		ents, _ := os.ReadDir(st.objs.spaceDir(sp))
+		for _, e := range ents {
+			if e.IsDir() {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// TestObjectDirsAsNeeded: a store makes the object directories its
+// objects need, not all of them, and a pack takes the ones it empties.
+func TestObjectDirsAsNeeded(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir())
+	defer st.Close()
+	fill(t, st, "s", 3)
+	if n := objectDirs(st); n == 0 || n > 6 {
+		t.Errorf("%d object directories for 3 entries' 6 objects", n)
+	}
+	if _, err := st.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := objectDirs(st); n != 0 {
+		t.Errorf("%d object directories left after a pack took every loose object", n)
+	}
+	mustAppend(t, st, "s", item("after the pack"))
+	st.Release("s")
+	if r, _ := Open(st.Root()); r != nil {
+		defer r.Close()
+		if s, err := r.Open(ctx, "s"); err != nil || s.Len() != 4 {
+			t.Errorf("after the pack: %v", err)
+		}
+	}
+}
+
+// TestObjectDirDurable: the commit that names an object in a directory
+// not yet known durable syncs its space's directory too, so the object
+// is not committed into a directory a crash could take; a commit into
+// known directories does not; and a directory another store's pack
+// removed and this store made again is synced again.
+func TestObjectDirDurable(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	old := syncDirFile
+	defer func() { syncDirFile = old }()
+	var spaces atomic.Int64
+	syncDirFile = func(d *os.File) error {
+		if st.objs.isSpace(d.Name()) {
+			spaces.Add(1)
+		}
+		return d.Sync()
+	}
+	commit := func(text string) int64 {
+		spaces.Store(0)
+		mustAppend(t, st, "s", item(text))
+		if err := st.Sync(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return spaces.Load()
+	}
+	if n := commit("first"); n != 2 {
+		t.Errorf("the first commit synced %d space directories, want both", n)
+	}
+	// Entries are named by their parent, so a later one may land in a
+	// directory not yet made; one that lands in known ones syncs none.
+	e := mustAppend(t, st, "s", item("again"))
+	c, _ := st.contentOf(e)
+	ed, _ := st.objs.loosePath(spaceEntries, e)
+	cd, _ := st.objs.loosePath(spaceContents, c)
+	st.Sync(ctx)
+	_, ek := st.objs.known[filepath.Dir(ed)]
+	_, ck := st.objs.known[filepath.Dir(cd)]
+	if !ek || !ck {
+		t.Error("a synced space's directories are not known durable")
+	}
+	other, _ := Open(root)
+	if _, err := other.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	other.Close()
+	if n := commit("after another store's pack"); n == 0 {
+		t.Error("a directory made again after another store pruned it was not synced into its space")
+	}
+}
+
+// TestLayout: a writing open records the store's layout, a migration
+// once it has finished; a store whose layout file names another layout
+// is refused by name, read-only too.
+func TestLayout(t *testing.T) {
+	root := t.TempDir()
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	if got, _ := os.ReadFile(filepath.Join(root, layoutFile)); strings.TrimSpace(string(got)) != layout {
+		t.Errorf("a new store's layout file: %q", got)
+	}
+	os.WriteFile(filepath.Join(root, layoutFile), []byte("cas 3\n"), 0o600)
+	for _, opts := range [][]Option{nil, {WithReadOnly()}} {
+		if _, err := Open(root, opts...); !errors.Is(err, ErrLayout) {
+			t.Errorf("a later layout, options %d: %v", len(opts), err)
+		}
+	}
+
+	legacy, _ := legacyStore(t)
+	if _, err := os.Stat(filepath.Join(legacy, layoutFile)); err == nil {
+		t.Fatal("a store with a journal has a layout file")
+	}
+	m, err := Open(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Close()
+	if got, _ := os.ReadFile(filepath.Join(legacy, layoutFile)); strings.TrimSpace(string(got)) != layout {
+		t.Errorf("a migrated store's layout file: %q", got)
+	}
+
+	partial, _ := partialStore(t)
+	p, err := Open(partial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Close()
+	if _, err := os.Stat(filepath.Join(partial, layoutFile)); err == nil {
+		t.Error("a store whose migration kept the journal has a layout file")
+	}
+}
+
+// TestLostObjectsSwept: what a power cut left of a lazy tail, objects
+// emptied or gone, is recorded lost by recovery; a durable append after
+// it survives the next open; and a sweep removes the lost objects, so
+// Verify reports nothing of them.
+func TestLostObjectsSwept(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "p"})
+	var tail []string
+	for i := range 6 {
+		tail = append(tail, mustAppend(t, st, "p", item(fmt.Sprint("turn ", i))))
+	}
+	crash(st)
+	for i, e := range tail {
+		c, _ := st.contentOf(e)
+		for _, obj := range []struct {
+			sp   space
+			hash string
+		}{{spaceEntries, e}, {spaceContents, c}} {
+			p, _ := st.objs.loosePath(obj.sp, obj.hash)
+			if i == len(tail)-1 {
+				os.Remove(p)
+			} else {
+				os.WriteFile(p, nil, 0o600)
+			}
+		}
+	}
+	w, _ := Open(root)
+	if s, err := w.Open(ctx, "p"); err != nil || s.Len() != 0 {
+		t.Fatalf("recovery: %v", err)
+	}
+	after := mustAppend(t, w, "p", item("after the power cut"))
+	w.Close()
+	r, _ := Open(root)
+	defer r.Close()
+	if s, err := r.Open(ctx, "p"); err != nil || s.Leaf() != after {
+		t.Fatalf("the durable append after the cut: %v", err)
+	}
+	if _, err := r.Sweep(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if rep, err := r.Verify(ctx); err != nil || !rep.OK() {
+		t.Errorf("after a sweep: %v %v", err, rep.Problems)
 	}
 }
 
