@@ -65,6 +65,9 @@ func legacyStore(t *testing.T) (string, []string) {
 		}
 		journal = append(journal, line...)
 	}
+	// The store was opened by this release, which left its tombstone
+	// where the journal goes.
+	os.Remove(filepath.Join(root, journalFile))
 	if err := os.WriteFile(filepath.Join(root, journalFile), journal, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -145,8 +148,11 @@ func TestMigrateResumes(t *testing.T) {
 
 func checkMigrated(t *testing.T, root string, want []string) {
 	t.Helper()
-	if _, err := os.Stat(filepath.Join(root, journalFile)); !errors.Is(err, os.ErrNotExist) {
+	if legacyJournal(root) {
 		t.Error("the journal outlived the migration")
+	}
+	if got, err := os.Readlink(filepath.Join(root, journalFile)); err != nil || got != tombstone {
+		t.Errorf("the journal's tombstone: %q %v", got, err)
 	}
 	for _, gone := range []string{"gone", "half"} {
 		if _, err := os.Stat(filepath.Join(root, "sessions", gone)); !errors.Is(err, os.ErrNotExist) {

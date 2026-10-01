@@ -3,6 +3,7 @@ package cas
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,21 @@ import (
 // part way leaves the journal, and the next open finishes, passing over
 // the sessions already rewritten. A store is migrated with no writer of
 // the earlier library running on it.
+//
+// The journal is retired by putting a tombstone in its place: a
+// symbolic link, journal -> layout/journal, through the layout file,
+// which is a regular file, so opening, creating or stat'ing the journal
+// through it fails with ENOTDIR. A writer of the earlier library
+// appends every commit to the journal, creating it when it is missing;
+// through the tombstone each commit fails, so a writer the migration
+// did not find, one holding no session while it ran, refuses every
+// later write rather than write sessions in the old layout into a store
+// that no longer reads them. Releases from v0.0.16 to v0.0.18 test for
+// the journal with os.Stat, which fails the same way, and take it as
+// gone. On a filesystem that makes no symbolic link, as Windows without
+// the right to make one, the journal is only removed, and a writer of
+// the earlier library still running there makes it again at its next
+// commit.
 
 // ErrLegacyStore is returned for a store, or a session, in the layout of
 // a store from before logs were per session, where the operation cannot
@@ -42,6 +58,62 @@ const (
 	opSettled   = "settled"
 	journalFile = "journal"
 )
+
+// tombstone is where the journal's tombstone points: a path through the
+// layout file, which no open can follow.
+var tombstone = filepath.Join(layoutFile, journalFile)
+
+// legacyJournal reports whether root holds a journal still to migrate: a
+// regular file. The tombstone a migration leaves is a symbolic link, and
+// is not one.
+func legacyJournal(root string) bool {
+	info, err := os.Lstat(filepath.Join(root, journalFile))
+	return err == nil && info.Mode().IsRegular()
+}
+
+// retireJournal puts the tombstone in the journal's place in one rename,
+// so a crash leaves the journal or the tombstone and never neither. It
+// runs with the sweep's lock held exclusive, which a writer of the
+// earlier library takes shared through each commit, so no commit lands
+// in the journal it replaces. Where no symbolic link can be made the
+// journal is removed instead.
+func (s *Store) retireJournal() error {
+	journal := filepath.Join(s.root, journalFile)
+	tmp := journal + ".tmp-tombstone"
+	os.Remove(tmp)
+	if err := os.Symlink(tombstone, tmp); err != nil {
+		if err := os.Remove(journal); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	if err := os.Rename(tmp, journal); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// markTombstone puts the tombstone in place in a store with its layout
+// file and no journal: one a release before the tombstone migrated, or
+// whose migration a crash stopped between setting a damaged journal
+// aside and retiring it, or a new store, which a writer of the earlier
+// library would otherwise give a journal. It never replaces what is
+// there, so a journal a writer of the earlier library made a moment ago
+// is left for the next writing open to migrate.
+func (s *Store) markTombstone() error {
+	journal := filepath.Join(s.root, journalFile)
+	if _, err := os.Lstat(journal); !errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(s.root, layoutFile)); err != nil {
+		return nil
+	}
+	if err := os.Symlink(tombstone, journal); err != nil {
+		return nil // no symbolic links here, or something made the journal first
+	}
+	return s.objs.fsyncDir(s.root)
+}
 
 // readLegacyLog reads a session's log as a store kept it before logs
 // were per session: each line an entry hash, followed by the entry's
@@ -395,11 +467,21 @@ func headIn(head string, log []string, base string) bool {
 	return false
 }
 
+// migrating, when set, is called once a migration has read the journal
+// and locked the sessions it migrates, so a test can act part way.
+var migrating func()
+
 // migrate rewrites a legacy store's sessions as per-session logs and
 // retires its journal. It runs at the first writing open, under the gc
-// lock.
+// lock, and holds the sweep's lock exclusive from before it reads the
+// journal until the tombstone is in place: a writer of the earlier
+// library holds that lock shared from its object writes through its
+// commit, so none commits to the journal between the read and the
+// retirement, where the commit would be acknowledged and then removed
+// with the journal. On a platform without flock the lock is nothing,
+// and that window is open.
 func (s *Store) migrate() error {
-	if _, err := os.Stat(filepath.Join(s.root, journalFile)); errors.Is(err, os.ErrNotExist) {
+	if !legacyJournal(s.root) {
 		return nil
 	}
 	var gc *dirLock
@@ -415,7 +497,14 @@ func (s *Store) migrate() error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	defer gc.release()
-	if _, err := os.Stat(filepath.Join(s.root, journalFile)); errors.Is(err, os.ErrNotExist) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	sweep, err := s.sweepLock(ctx)
+	if err != nil {
+		return fmt.Errorf("cas: migrate: %w", err)
+	}
+	defer sweep.release()
+	if !legacyJournal(s.root) {
 		return nil // another process migrated it first
 	}
 	scan, err := readJournal(s.root)
@@ -479,6 +568,9 @@ func (s *Store) migrate() error {
 		}
 		locks = append(locks, lk)
 	}
+	if migrating != nil {
+		migrating()
+	}
 	// A session that fails to migrate is left as it was and reported
 	// when it is opened; the others go on, and the journal is kept for
 	// the next writing open to try that session again.
@@ -499,14 +591,22 @@ func (s *Store) migrate() error {
 	if failed {
 		return nil
 	}
-	journal := filepath.Join(s.root, journalFile)
+	// The layout goes first, so the tombstone never points through a
+	// path that is not there yet; a store with its layout and a journal
+	// is migrated again by the next writing open.
+	if err := s.writeLayout(); err != nil {
+		return err
+	}
 	if len(scan.damage) > 0 {
 		// The damage is what Verify reports; the journal is kept for it.
+		// A crash before the tombstone leaves no journal, and the next
+		// writing open puts the tombstone in place.
 		aside := filepath.Join(s.root, fmt.Sprintf("%s%d", damagedPrefix, time.Now().UnixNano()))
-		if err := os.Rename(journal, aside); err != nil {
+		if err := os.Rename(filepath.Join(s.root, journalFile), aside); err != nil {
 			return err
 		}
-	} else if err := os.Remove(journal); err != nil {
+	}
+	if err := s.retireJournal(); err != nil {
 		return err
 	}
 	for _, name := range []string{"checkpoint", "journal.lock", "journal.gate"} {

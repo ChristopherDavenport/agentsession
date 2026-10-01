@@ -5,6 +5,35 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **cas: a migrated store refuses a writer of v0.0.15 and earlier
+  that the migration did not find.** The migration finds such a writer
+  only while it holds a session; one idle between sessions went on
+  after it, made the journal again at its next commit and wrote
+  sessions in the old layout, which every store open since, and every
+  read-only open, refused with `ErrLegacyStore` until the next writing
+  open. The migration now leaves a tombstone where the journal was, a
+  symbolic link `journal -> layout/journal`, which no open can follow
+  since `layout` is a file: that writer's every commit fails with
+  `not a directory`, and it writes nothing. v0.0.16 to v0.0.18 take the
+  tombstone for no journal. Every writing open puts one in a store that
+  has its layout and no journal, a store those releases migrated and a
+  new store included. On a filesystem that makes no symbolic link, as
+  Windows without the right to make one, there is no tombstone, and
+  such a writer still makes the journal again. (#166)
+- **cas: the migration holds `sweep.lock` exclusive from before it
+  reads the journal until the tombstone is in place.** A v0.0.15 writer
+  holds it shared through each commit. Before, a session such a writer
+  created while the migration ran, once the sessions were listed, was
+  acknowledged with its records in the journal, and the migration then
+  removed the journal: the session was left in the old layout with no
+  journal for any later open to migrate it from, refused with
+  `ErrLegacyStore` by every open, and its entries held only by an old
+  log the writer had not synced. Now that writer waits for the
+  migration, and its commit then meets the tombstone. On a platform
+  without flock the lock is nothing, as it is for sweeps. (#166)
+
 ## v0.0.18 - 2026-10-01
 
 **The format is 0.10**, and a 0.9 file is a 0.10 file. 0.9's rules

@@ -15,6 +15,7 @@
 //	  tmp/                                sessions being created, renamed into place whole
 //	  trash/                              sessions a delete renamed away, being removed
 //	  layout                              the layout the store is in, which an open checks
+//	  journal                             the old journal's tombstone: a link to layout/journal, which no open follows
 //	  sweep.lock                          held shared by writers, exclusive by a sweep's last step
 //	  sweep.lock.want                     held shared by writers waiting for sweep.lock
 //	  gc.lock                             the lock of a running sweep or pack
@@ -111,10 +112,16 @@
 // cache, before a store stopped by a failed fsync is opened again.
 //
 // A store from before logs were per session kept a store-wide journal.
-// Its first writing open migrates it, holding every session's lock so a
-// writer of the earlier version still running is found rather than
-// raced; a read-only open reads the sessions already migrated and
-// reports [ErrLegacyStore] for the rest.
+// Its first writing open migrates it, and refuses with
+// [ErrMigrationBusy] while a writer of the earlier version holds a
+// session. A writer of the earlier version holding no session is not
+// found; the migration leaves a tombstone where the journal was, so
+// that writer's next commit fails rather than write a session this
+// release cannot read, except on a filesystem that makes no symbolic
+// link. A read-only open migrates nothing: it reads the sessions
+// already migrated and reports [ErrLegacyStore] for the rest, so on a
+// store of the earlier version the writers are stopped and the store
+// migrated before any reader is moved to this release.
 package cas
 
 import (
@@ -351,13 +358,16 @@ func Open(root string, opts ...Option) (*Store, error) {
 	// A store from before per-session logs is migrated by its first
 	// writing open; a read-only open reads the sessions already migrated,
 	// and reports ErrLegacyStore for the rest.
-	if _, err := os.Stat(filepath.Join(root, journalFile)); err == nil && !s.readOnly {
+	if legacyJournal(root) && !s.readOnly {
 		if err := s.migrate(); err != nil {
 			return nil, err
 		}
 	}
 	if !s.readOnly {
 		if err := s.markLayout(); err != nil {
+			return nil, err
+		}
+		if err := s.markTombstone(); err != nil {
 			return nil, err
 		}
 	}
@@ -405,12 +415,17 @@ func checkLayout(root string) error {
 // journal left to migrate, durably, with the store's own directories:
 // the open that made them did not sync them.
 func (s *Store) markLayout() error {
+	if legacyJournal(s.root) {
+		return nil // a migration left part way; the next open finishes it
+	}
+	return s.writeLayout()
+}
+
+// writeLayout writes the layout file if the store has none.
+func (s *Store) writeLayout() error {
 	p := filepath.Join(s.root, layoutFile)
 	if _, err := os.Stat(p); err == nil {
 		return nil
-	}
-	if _, err := os.Stat(filepath.Join(s.root, journalFile)); err == nil {
-		return nil // a migration left part way; the next open finishes it
 	}
 	if err := s.objs.fsyncDir(filepath.Join(s.root, "objects")); err != nil {
 		return err
