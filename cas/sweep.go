@@ -312,10 +312,13 @@ func (s *Store) sweepLock(ctx context.Context) (*dirLock, error) {
 // Pack moves the store's loose objects into one new pack and removes the
 // loose copies, as git's repack does without -a: nothing is dropped, so
 // it needs no grace and takes no lock a writer waits on. Then it merges
-// the smallest packs, as git's geometric repack does, until each pack
-// is at least twice the size of all the packs smaller than it together,
-// so a store holds a number of packs that grows with the logarithm of
-// its size and each object is rewritten a logarithmic number of times.
+// packs as git's repack --geometric=2 does: working down from the
+// largest, it leaves the packs that each hold at least twice the size
+// of the next smaller, merges the rest, and takes in any it left that
+// is under twice the merged size, so each pack is at least twice the
+// next smaller, and larger than all the smaller ones together, and a
+// store holds a number of packs that grows with the logarithm of its
+// size and each object is rewritten a logarithmic number of times.
 // It returns how many loose objects it packed.
 func (s *Store) Pack(ctx context.Context) (int, error) {
 	return s.pack(ctx, true)
@@ -399,8 +402,42 @@ func (s *Store) packLoose(ctx context.Context) (int, error) {
 	return len(paths), nil
 }
 
-// consolidate merges the smallest packs into one while the next is less
-// than twice their size together, under the gc lock. The merged pack
+// geometricSplit is how many of the packs, their sizes sorted
+// ascending, a merge takes, as git's repack --geometric=2 splits them:
+// the largest packs that already at least double from one to the next
+// are left, and the rest merge, with any of those left that is under
+// twice their size together. It works down from the largest, so one
+// small pack under half the next does not keep the packs above it from
+// merging.
+func geometricSplit(sizes []int64) int {
+	n := len(sizes)
+	if n == 0 {
+		return 0
+	}
+	i := n - 1
+	for ; i > 0; i-- {
+		if sizes[i] < 2*sizes[i-1] {
+			break
+		}
+	}
+	split := i
+	if split > 0 {
+		split++ // the larger of the pair that broke the progression
+	}
+	var acc int64
+	for _, s := range sizes[:split] {
+		acc += s
+	}
+	for split < n && sizes[split] < 2*acc {
+		acc += sizes[split]
+		split++
+	}
+	return split
+}
+
+// consolidate merges packs as geometricSplit splits them, under the gc
+// lock, so each pack is at least twice the size of the next smaller.
+// The merged pack
 // holds every object the packs it replaces did, so a reader holding one
 // of those still reads, and one that looks again finds the merged pack.
 // A pack holding an object that fails its name is not removed.
@@ -416,14 +453,11 @@ func (s *Store) consolidate(ctx context.Context) error {
 		}
 	}
 	sort.Slice(packs, func(i, j int) bool { return packs[i].size < packs[j].size })
-	m, acc := 1, int64(0)
-	if len(packs) > 0 {
-		acc = packs[0].size
+	sizes := make([]int64, len(packs))
+	for i, p := range packs {
+		sizes[i] = p.size
 	}
-	for m < len(packs) && packs[m].size < 2*acc {
-		acc += packs[m].size
-		m++
-	}
+	m := geometricSplit(sizes)
 	if m < 2 {
 		return nil
 	}

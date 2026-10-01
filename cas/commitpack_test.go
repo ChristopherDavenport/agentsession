@@ -367,3 +367,103 @@ func TestPackCountReloads(t *testing.T) {
 		t.Errorf("after a look, the store still counts %d packs", n)
 	}
 }
+
+// TestGeometricSplit: the split is taken from the largest pack down, as
+// git's repack --geometric=2 takes it.
+func TestGeometricSplit(t *testing.T) {
+	for _, c := range []struct {
+		sizes []int64
+		want  int
+	}{
+		{nil, 0},
+		{[]int64{5}, 0},
+		{[]int64{1, 2, 4, 8}, 0},
+		{[]int64{1, 1}, 2},
+		{[]int64{1, 1, 4, 8}, 2},
+		{[]int64{1, 1, 3, 8}, 4},
+		{[]int64{1, 1, 3, 16}, 3},
+		// One small pack under half the next stopped a merge walking up
+		// from the smallest at its first step.
+		{[]int64{2044, 7769, 7834, 7900, 7950}, 5},
+		{[]int64{100, 1000, 1000, 1000, 100000}, 4},
+	} {
+		if got := geometricSplit(c.sizes); got != c.want {
+			t.Errorf("geometricSplit(%v) = %d, want %d", c.sizes, got, c.want)
+		}
+	}
+}
+
+// smallPackThenCommits writes one small pack, by a Pack of a single
+// append's objects, then commits commit packs, with st's automatic pack
+// as it stands, and returns the most packs the store held after any
+// commit.
+func smallPackThenCommits(t *testing.T, st *Store, commits int) int {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := st.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, st, "s", item("small"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	most := 0
+	for c := range commits {
+		for i := range commitPackMin {
+			mustAppend(t, st, "s", item(fmt.Sprintf("commit %d lazy %d", c, i)))
+		}
+		if err := st.Sync(ctx); err != nil {
+			t.Fatal(err)
+		}
+		st.background.Wait()
+		most = max(most, st.objs.packCount())
+	}
+	return most
+}
+
+// TestPackMergesPastSmallPack: one small pack, under half the size of
+// the commit packs after it, does not keep Pack from merging them
+// (#169).
+func TestPackMergesPastSmallPack(t *testing.T) {
+	old := autoPackPacks
+	autoPackPacks = 1 << 30
+	defer func() { autoPackPacks = old }()
+	st, err := Open(t.TempDir(), WithSync(SyncNever))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	const commits = 70
+	smallPackThenCommits(t, st, commits)
+	if n := st.objs.packCount(); n != commits+1 {
+		t.Fatalf("%d packs before Pack, want %d", n, commits+1)
+	}
+	if _, err := st.Pack(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := st.objs.packCount(); n >= 64 {
+		t.Errorf("%d packs after Pack", n)
+	}
+}
+
+// TestAutoPackMergesPastSmallPack: nor does it keep the pack the store
+// starts on its count from bringing the count down (#169).
+func TestAutoPackMergesPastSmallPack(t *testing.T) {
+	old := autoPackPacks
+	autoPackPacks = 8
+	defer func() { autoPackPacks = old }()
+	st, err := Open(t.TempDir(), WithSync(SyncNever))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if most := smallPackThenCommits(t, st, 4*autoPackPacks); most > autoPackPacks {
+		t.Errorf("the store reached %d packs, past %d", most, autoPackPacks)
+	}
+	if st.packStuck.Load() {
+		t.Error("the store's own pack is stuck")
+	}
+}

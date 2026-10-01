@@ -5,6 +5,18 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **cas: packs merge past one small pack.** A merge walked up from the
+  smallest pack and stopped at the first at least twice the packs
+  below it, so one small pack, from a `Pack` of a quiet store or a
+  background pack that caught a commit in flight, kept every later
+  commit pack from merging: neither `Pack` nor the 64-pack trigger
+  brought the count down, and a store committing lazily gained a pack
+  per commit. The split is now taken from the largest pack down, as
+  git's `repack --geometric=2` takes it, weighing packs by their size.
+  (#169)
+
 ## v0.0.18 - 2026-10-01
 
 **The format is 0.10**, and a 0.9 file is a 0.10 file. 0.9's rules
