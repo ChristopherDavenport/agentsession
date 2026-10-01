@@ -378,7 +378,12 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 		b.Timestamp = s.now()
 	}
 	b.Timestamp = b.Timestamp.UTC()
-	sortParents(b.Parents)
+	// A read entry's parents stay in the order its line has them, as its
+	// id does; only an entry the caller built is put in the order a
+	// writer owes.
+	if b.tsRaw == "" {
+		sortParents(b.Parents)
+	}
 	if err := s.checkParents(b); err != nil {
 		return Result{}, err
 	}
