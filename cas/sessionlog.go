@@ -54,9 +54,9 @@ type sessionLog struct {
 	lost    bool
 	lossRec int
 	lossOff int64
-	// unwritten is set while every line whose damage cost a record
-	// holds zero bytes: a block a crash left unwritten, not bytes
-	// changed after they were written.
+	// unwritten is set when the first line whose damage cost a record
+	// is a block a crash left unwritten, not bytes changed after they
+	// were written.
 	unwritten bool
 	// unterminated is set when the last line is a whole record, its
 	// checksum good, that a crash left without its newline: it counts,
@@ -134,9 +134,8 @@ func parseSessionLog(r interface {
 				}
 				l.damage = append(l.damage, LogDamage{Line: lineNo + 1, Offset: l.whole, Err: err})
 				if !l.lost {
-					l.lost, l.lossRec, l.lossOff = true, len(l.recs), l.whole
+					l.lost, l.lossRec, l.lossOff, l.unwritten = true, len(l.recs), l.whole, false
 				}
-				l.unwritten = false
 			}
 			return l, nil
 		}
@@ -154,13 +153,13 @@ func parseSessionLog(r interface {
 		}
 		if derr != nil {
 			l.damage = append(l.damage, LogDamage{Line: lineNo, Offset: start, Err: derr})
-			if !errors.Is(derr, errNewline) {
-				if !l.lost {
-					l.lost, l.lossRec, l.lossOff, l.unwritten = true, len(l.recs), start, true
-				}
-				if !unwrittenBlock(line, start) {
-					l.unwritten = false
-				}
+			if !errors.Is(derr, errNewline) && !l.lost {
+				// The first line whose damage cost a record decides: a
+				// block a crash left unwritten is where the crash cut the
+				// log, and nothing after it was committed, so nothing
+				// after it is damage that keeps the session closed.
+				l.lost, l.lossRec, l.lossOff = true, len(l.recs), start
+				l.unwritten = unwrittenBlock(line, start)
 			}
 		}
 		l.recs = append(l.recs, recs...)

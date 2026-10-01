@@ -453,18 +453,18 @@ fsync of the log finished after a block of it was left unwritten, so
 from the first such block on nothing was committed, whatever records
 follow, a commit whose fsync was in flight included, and what the crash
 took there is working state, dropped as a crash's loss. Anything else
-that fails its checksum, a record or bytes that are no record, is
-damage, reported rather than skipped, since the log is the session's
-only record. The one damage the bytes cannot tell from a crash's is a
-committed record the medium itself unwrote: it reads as an uncommitted
-tail, and is cut as one, unless a store keeps where its commits end. The
-head, the record mark and any other index are rebuilt from the log and
-never read over it, so a crash that leaves one behind or ahead of the
-log changes nothing. Recovery reads one session's log, when the session
-is opened, so what a store pays to recover a session is proportional to
-that session's log, however large the store has grown. A session's log
-is deleted with the session and holds nothing of any other, so there is
-nothing store-wide to compact.
+that fails its checksum ahead of such a block, a record or bytes that
+are no record, is damage, reported rather than skipped, since the log is
+the session's only record. The one damage the bytes cannot tell from a
+crash's is a committed record the medium itself unwrote: it reads as an
+uncommitted tail, and is cut as one, unless a store keeps where its
+commits end. The head, the record mark and any other index are rebuilt
+from the log and never read over it, so a crash that leaves one behind
+or ahead of the log changes nothing. Recovery reads one session's log,
+when the session is opened, so what a store pays to recover a session is
+proportional to that session's log, however large the store has grown. A
+session's log is deleted with the session and holds nothing of any
+other, so there is nothing store-wide to compact.
 
 A store built on a database that has its own write-ahead log gets
 atomicity and recovery from the database. Durability it must still ask

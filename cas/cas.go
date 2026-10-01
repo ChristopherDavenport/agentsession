@@ -82,28 +82,28 @@
 // writes nothing, returning [ErrStopped], until it is opened again; it
 // still reads. Three rules keep what such pages hold from being
 // committed later, by a reopened store or another process. One fsync of
-// a file runs at a time in a process, and a failure stops the store
-// before the next. A commit fsyncs only files its own process wrote: an
-// object this process did not write is written again as a file of its
+// a file runs at a time in a store, and a failure stops the store
+// before the next. A commit fsyncs only files its own store wrote: an
+// object this store did not write is written again as a file of its
 // own rather than reused. And recovery that changes a
 // session's log, or keeps its working state, writes the log, and the
 // objects of that state, as new files rather than fsync what it found.
 //
-// What these leave open lies between processes. A file this process
-// wrote lazily, whose writeback failed and whose failure another
-// process's fsync took, is fsynced here successfully. A pack another
-// process wrote is trusted as written durably. A fork's commit of a
-// log another process holds is an fsync of that process's file. And a
-// directory every process writes into, an object's fan-out directory
-// or sessions, is fsynced by each: one process's failed fsync of it is
-// reported to that process, and another's later fsync of it can
-// succeed though a rename the first depended on never reached the
-// disk; on ext4 and XFS a directory's changes go through the journal,
-// whose failure usually takes the whole filesystem read-only. Each
-// needs a failed fsync in one process and a commit by another before
-// the machine restarts; a host that wants none of them restarts the
-// machine, or drops the page cache, before a store stopped by a failed
-// fsync is opened again.
+// What these leave open lies between stores: between processes, and
+// between two Stores open on one directory in one process. A file this
+// store wrote lazily, whose writeback failed and whose failure another
+// store's fsync took, is fsynced here successfully. A pack another
+// store wrote is trusted as written durably. A fork's commit of a log
+// another store holds is an fsync of that store's file. And a directory
+// every store writes into, an object's fan-out directory or sessions,
+// is fsynced by each: one store's failed fsync of it is reported to
+// that store, and another's later fsync of it can succeed though a
+// rename the first depended on never reached the disk; on ext4 and XFS
+// a directory's changes go through the journal, whose failure usually
+// takes the whole filesystem read-only. Each needs a failed fsync in
+// one store and a commit by another before the machine restarts; a host
+// that wants none of them restarts the machine, or drops the page
+// cache, before a store stopped by a failed fsync is opened again.
 //
 // A store from before logs were per session kept a store-wide journal.
 // Its first writing open migrates it, holding every session's lock so a
@@ -426,6 +426,9 @@ func objectPath(dir, hash string) (string, error) {
 // syncDir fsyncs a directory, so a rename or a creation in it survives
 // a power loss once the call returns.
 func syncDir(dir string) error {
+	if !dirSync {
+		return nil
+	}
 	d, err := os.Open(dir)
 	if err != nil {
 		return err
@@ -1992,7 +1995,11 @@ func (s *Store) openHeld(id, dir string, lk *dirLock) (*handle, error) {
 			return fail(fmt.Errorf("cas: log: %w", err))
 		}
 	}
-	return &handle{session: sess, dir: dir, lock: lk, logf: logf, pend: newPendSet(), mark: v.mark, head: v.head, count: sess.Len(), diskFormat: diskFormat, own: committed}, nil
+	// A stopped store recovered in memory: the working state it kept is
+	// still uncommitted, and its commit, which serving it needs, is
+	// refused.
+	lazy := s.objs.stopped() != nil && len(v.adopt) > 0
+	return &handle{session: sess, dir: dir, lock: lk, logf: logf, pend: newPendSet(), mark: v.mark, head: v.head, count: sess.Len(), diskFormat: diskFormat, own: committed, lazy: lazy}, nil
 }
 
 // build assembles the session a view says: the path to its base, then
@@ -2432,7 +2439,7 @@ func (s *Store) List(ctx context.Context, f agentsession.ListFilter) iter.Seq2[a
 			// A summary is kept only of what is committed: working state a
 			// crash may take would otherwise outlive the crash in it,
 			// the log's stamp unchanged until the session is next opened.
-			if !s.readOnly && len(v.adopt) == 0 {
+			if s.writable() == nil && len(v.adopt) == 0 {
 				keepSummary(dir, size, modified, sum, meta)
 			}
 			if f.Keep(sum) {
@@ -2579,7 +2586,7 @@ func (s *Store) releaseHandle(id string, h *handle) error {
 	var err error
 	if !s.readOnly {
 		err = s.commitHandle(id, h)
-		if err == nil {
+		if err == nil && s.objs.stopped() == nil {
 			// Indexes of what was committed; after a failed commit, the
 			// next open rebuilds them from the log.
 			_ = writeHead(h.dir, h.head)

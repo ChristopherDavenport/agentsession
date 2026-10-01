@@ -36,7 +36,9 @@ session is a ref, and its log is its own write-ahead log.
   working state writes it, and the log, as new files, and a commit
   writes its own copy of an object it did not write rather than fsync
   another's; a copy that takes the place of an existing file is
-  written durably. The package documentation says what is left between
+  written durably. On Windows a file is opened for writing to be
+  fsynced, as FlushFileBuffers requires, and a directory is not
+  fsynced, which NTFS has no call for. The package documentation says what is left between
   processes. A
   read-only store serves exchange only what the session's writer's log
   shows committed. Exchange between a store and itself returns

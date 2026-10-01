@@ -8,7 +8,8 @@ import (
 )
 
 // versionOf reports no version where the change time is not read, so no
-// file is taken on trust and each reuse reads and compares it.
+// file is taken on trust: an object found in place gets a copy of this
+// store's own, written durably.
 func versionOf(os.FileInfo) (fileVersion, bool) { return fileVersion{}, false }
 
 func touchFile(f *os.File, t time.Time) error { return os.Chtimes(f.Name(), t, t) }

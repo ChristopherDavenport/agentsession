@@ -3,8 +3,10 @@ package cas
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -584,8 +586,26 @@ func (o *objects) flushSet(pend *pendSet) error {
 	if err := o.stopped(); err != nil {
 		return err
 	}
-	if _, err := syncAll(files, func(f string) error {
-		fh, err := os.Open(f)
+	// What a flush could not sync, for a reason that is no failed fsync,
+	// as a file it could not open, stays owed, and every directory with
+	// it, for the next commit to sync: no fsync failed, so none of it
+	// has been reported written. A failed fsync stops the store.
+	putBack := func(fs, ds []string) {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		pf, pd := o.pendFiles, o.pendDirs
+		if pend != nil {
+			pf, pd = pend.files, pend.dirs
+		}
+		for _, f := range fs {
+			pf[f] = true
+		}
+		for _, d := range ds {
+			pd[d] = true
+		}
+	}
+	if failed, err := syncAll(files, func(f string) error {
+		fh, err := openSync(f)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil // packed since, and a pack is written durably
 		}
@@ -601,19 +621,23 @@ func (o *objects) flushSet(pend *pendSet) error {
 		}
 		return nil
 	}); err != nil {
+		putBack(failed, slices.Collect(maps.Keys(dirs)))
 		return err
 	}
 	// Every object's rename is in a directory synced here.
 	for f := range files {
 		dirs[filepath.Dir(f)] = true
 	}
-	_, err := syncAll(dirs, func(d string) error {
+	failed, err := syncAll(dirs, func(d string) error {
 		err := o.fsyncDir(d)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return err
 	})
+	if err != nil {
+		putBack(nil, failed)
+	}
 	return err
 }
 
@@ -654,6 +678,9 @@ func (o *objects) fsync(path string, f *os.File, sync func(*os.File) error) erro
 
 // fsyncDir fsyncs a directory of the store's, as fsync does a file.
 func (o *objects) fsyncDir(dir string) error {
+	if !dirSync {
+		return nil
+	}
 	d, err := os.Open(dir)
 	if err != nil {
 		return err
@@ -672,7 +699,7 @@ func (o *objects) writeAtomic(path string, data []byte) error {
 
 // fsyncFile fsyncs a file of the store's by its path.
 func (o *objects) fsyncFile(path string) error {
-	f, err := os.Open(path)
+	f, err := openSync(path)
 	if err != nil {
 		return err
 	}

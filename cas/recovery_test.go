@@ -1617,6 +1617,111 @@ func TestNoHardLinks(t *testing.T) {
 	}
 }
 
+// TestUnsyncedStaysOwed: an object a commit could not open to fsync,
+// for a reason that is no failed fsync, stays owed: the commit fails,
+// the store goes on, and the next commit fsyncs it before its sync
+// record says it is durable.
+func TestUnsyncedStaysOwed(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(t.TempDir(), WithSync(SyncNever))
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	e := mustAppend(t, st, "s", item("one"))
+	p, _ := st.objs.loosePath(spaceEntries, e)
+	os.Chmod(p, 0)
+	err := st.Sync(ctx)
+	os.Chmod(p, 0o644)
+	if err == nil {
+		t.Skip("running as a user that can read a mode-0 file")
+	}
+	if errors.Is(err, ErrStopped) {
+		t.Fatalf("a file that would not open stopped the store: %v", err)
+	}
+	old := syncObject
+	defer func() { syncObject = old }()
+	synced := false
+	syncObject = func(f *os.File) error {
+		if f.Name() == p {
+			synced = true
+		}
+		return f.Sync()
+	}
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !synced {
+		t.Error("the next commit's sync record claims an object it never fsynced")
+	}
+}
+
+// TestStoppedStoreServesCommitted: a stopped store recovering a session
+// in memory keeps its working state uncommitted, so it serves none of
+// it, and writes no index of it when it lets the session go.
+func TestStoppedStoreServesCommitted(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, st, "s", item("kept"))
+	st.Sync(ctx)
+	mustAppend(t, st, "s", item("working"))
+	crash(st)
+	head := filepath.Join(root, "sessions", "s", "HEAD")
+	before, _ := os.ReadFile(head)
+	w, _ := Open(root)
+	old := syncFile
+	syncFile = func(*os.File) error { return errors.New("injected fsync failure") }
+	_, err := w.PutBlob(ctx, []byte("blob"))
+	syncFile = old
+	if !errors.Is(err, ErrStopped) {
+		t.Fatalf("the blob: %v", err)
+	}
+	if _, err := w.Open(ctx, "s"); err != nil {
+		t.Fatalf("reading the session: %v", err)
+	}
+	r, _ := Open(t.TempDir())
+	defer r.Close()
+	if _, err := r.Fetch(ctx, w, "s"); !errors.Is(err, ErrStopped) {
+		t.Errorf("a fetch of uncommitted state from a stopped store: %v", err)
+	}
+	w.Close()
+	if after, _ := os.ReadFile(head); !bytes.Equal(before, after) {
+		t.Errorf("a stopped store rewrote HEAD: %q to %q", before, after)
+	}
+}
+
+// TestDamageAfterCut: bytes changed after a block a crash left
+// unwritten are in the uncommitted tail the block cuts, and keep the
+// session closed no more than the block does.
+func TestDamageAfterCut(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, st, "s", item("kept"))
+	st.Sync(ctx)
+	hole := mustAppend(t, st, "s", item("hole"))
+	for i := range 6 {
+		mustAppend(t, st, "s", item(fmt.Sprint("after", i)))
+	}
+	crash(st)
+	p := filepath.Join(root, "sessions", "s", logName)
+	kept := unwrite(t, p, hole, true)
+	data, _ := os.ReadFile(p)
+	i := bytes.LastIndex(data, []byte(`"seq":`)) + len(`"seq":`)
+	data[i]++
+	os.WriteFile(p, data, 0o600)
+	w, _ := Open(root)
+	defer w.Close()
+	s, err := w.Open(ctx, "s")
+	if err != nil {
+		t.Fatalf("damage after the cut: %v", err)
+	}
+	if s.Len() != len(kept) {
+		t.Errorf("after the cut: %d entries, want %d", s.Len(), len(kept))
+	}
+}
+
 // TestForkRefusesDoomedBase: a fork of a base another process holds as
 // working state, after an earlier uncommitted append of that session
 // whose objects are gone, is refused: recovery would cut the origin's
