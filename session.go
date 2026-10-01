@@ -71,7 +71,9 @@ func New(h Header) *Session {
 // header when it was read, before Read brought the header up to the
 // format this package writes; for a session made here, the format it
 // writes. A reader that hedges on a rule a minor gained says so of the
-// minor the file declared.
+// minor the file declared. A store that raises the header before an
+// append leaves this as read; the session read again declares the
+// raised format.
 func (s *Session) DeclaredFormat() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -1461,19 +1461,20 @@ earlier than 0.5 is out of scope: no writer of such files remains, a
 reader migrates one only to read it, and a raised header would have
 its entries read as hashed.
 
+A minor's rules do not change once a writer of it is released, in 0.x
+as after it: what a file of that minor may hold, and how a reader reads
+it, stay as they were, and a change to either is a new minor. A writer
+that appends raises the header to its own minor, as above, so a 0.x
+writer of the earlier minor, which refuses a minor it does not name,
+then refuses the file rather than append what the later one forbids,
+and a reader can tell which rules a file was written under from its
+header. A minor cut only to mark that an earlier one's rules were
+amended in place after release, as 0.10 is for 0.9, changes no rule.
+
 Adding an optional member to the envelope is a minor change. Changing
 what an existing member means, or what the context algorithm does with
 any member, is major — which is the line an addition has to stay behind
 to arrive in a minor version at all.
-
-A minor's rules do not change once a writer of it is released: what a
-file of that minor may hold, and how a reader reads it, stay as they
-were, and a change to either is a new minor. A writer that appends
-raises the header to its own minor, as above, so a writer of the
-earlier minor then refuses the file rather than append what the later
-one forbids, and a reader can tell which rules a file was written
-under from its header. A minor that only fixes the rules of one
-amended in place, as 0.10 does 0.9's, changes nothing else.
 
 The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
@@ -1573,10 +1574,12 @@ None to what a file may hold or how a reader reads it: a 0.9 file is a
 writers of it were released, so a 0.9 header does not say which of
 them a file was written under, and a writer of an early 0.9 appended
 what later ones forbid without complaint. A writer of 0.10 raises a
-0.9 file's header before it appends, so an early 0.9 writer refuses
-the file from then on, and a 0.10 file was written under the rules
-this draft states. Versioning gains the rule that a released minor's
-rules do not change.
+0.9 file's header before it appends, so every reader of 0.9, which
+refuses a minor it does not name, refuses the file from then on, an
+early 0.9 writer among them, and every entry appended after the raise
+was written under the rules this draft states. Readers of 0.9 are
+upgraded before writers of 0.10 reach the files they read. Versioning
+gains the rule that a released minor's rules do not change.
 
 A file raised from 0.9 may still hold entries an early 0.9 writer
 appended before the raise; a reader that finds one of the rules below
@@ -1600,7 +1603,7 @@ an output, a `target` that names another call, or a repeated or empty
 
 These rules were added to 0.9 after the reference library first wrote
 it, in the same draft, while 0.9 had been public for less than a day.
-A 0.9 file an earlier writer of this draft produced, or a file such a
+A 0.9 file an earlier writer of 0.9 produced, or a file such a
 writer appended to and raised to 0.9, may break them, and nothing in
 the file says which rules it was written under; a reader that finds
 one broken in a 0.9 file SHOULD say it may come from such a writer

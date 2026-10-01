@@ -40,9 +40,9 @@ func verify(args []string, stdout, stderr io.Writer) error {
 	} else {
 		fmt.Fprintf(stdout, "%d entries read, each id checked against its hash\n", s.Len())
 	}
-	problem, early := checkSession(s, "", stdout, true)
-	if early {
-		fmt.Fprintln(stdout, earlyNote)
+	problem, note := checkSession(s, "", stdout, true)
+	if note != "" {
+		fmt.Fprintln(stdout, note)
 	}
 	if t := s.Truncated(); t != nil {
 		problem = true
@@ -58,12 +58,15 @@ func verify(args []string, stdout, stderr io.Writer) error {
 // carry; see amended09.
 const earlyNote = "note: draft 0.9 gained these rules after v0.0.12, v0.0.13 and v0.0.14 wrote it; a 0.9 file one of them wrote, or appended to, may break them without being corrupt"
 
+// earlierNote follows such an error in a file of a minor before 0.9,
+// which did not forbid what failed; see noteFor.
+const earlierNote = "note: this file declares a minor before 0.9, which did not forbid what failed; it is checked here by 0.9's rules"
+
 // checkSession checks each response's request hash and the records to
 // each leaf, printing each line under prefix: every response's result
 // when all is set, else only the failures. It reports whether anything
-// failed, and whether a failure is one an early 0.9 writer may have
-// left.
-func checkSession(s *agentsession.Session, prefix string, stdout io.Writer, all bool) (problem, early bool) {
+// failed, and the note a failure earns, as noteFor gives it.
+func checkSession(s *agentsession.Session, prefix string, stdout io.Writer, all bool) (problem bool, note string) {
 	var checked, unhashed, failed int
 	for _, e := range s.Entries() {
 		r, ok := e.(*agentsession.ResponseEntry)
@@ -98,21 +101,17 @@ func checkSession(s *agentsession.Session, prefix string, stdout io.Writer, all 
 		if err := s.VerifyRecords(leaf); err != nil {
 			problem = true
 			fmt.Fprintf(stdout, "%srecords to %s  ERROR %v\n", prefix, shortID(leaf), err)
-			early = early || amended09(s.DeclaredFormat(), err)
+			if n := noteFor(s.DeclaredFormat(), err); n != "" {
+				note = n
+			}
 		}
 	}
-	return problem, early
+	return problem, note
 }
 
-// amended09 reports whether err breaks a rule draft 0.9 gained after
-// v0.0.12, v0.0.13 and v0.0.14 wrote it, in a file whose header said
-// 0.9 when it was read: such a file may be one of theirs, or one they
-// appended to, rather than corrupt. A file of an earlier minor, which
-// Read brings up to the current one, never had these rules.
-func amended09(declared string, err error) bool {
-	if declared != "agentsession/0.9" {
-		return false
-	}
+// gained09 reports whether err breaks a rule draft 0.9 gained, after
+// 0.8 and after v0.0.12 first wrote 0.9.
+func gained09(err error) bool {
 	for _, e := range []error{
 		agentsession.ErrReasonMismatch,
 		agentsession.ErrCallRejected,
@@ -128,4 +127,26 @@ func amended09(declared string, err error) bool {
 		}
 	}
 	return false
+}
+
+// amended09 reports whether err breaks a rule draft 0.9 gained after
+// v0.0.12, v0.0.13 and v0.0.14 wrote it, in a file whose header said
+// 0.9 when it was read: such a file may be one of theirs, or one they
+// appended to, rather than corrupt.
+func amended09(declared string, err error) bool {
+	return declared == "agentsession/0.9" && gained09(err)
+}
+
+// noteFor is the note a records error in a file that declared the
+// given format earns, or "": a 0.9 file may come from an early writer
+// of it, and a file of an earlier minor was written before 0.9 forbade
+// what failed. A file of the current minor earns none.
+func noteFor(declared string, err error) string {
+	if amended09(declared, err) {
+		return earlyNote
+	}
+	if _, minor, perr := agentsession.ParseFormat(declared); perr == nil && minor < 9 && gained09(err) {
+		return earlierNote
+	}
+	return ""
 }
