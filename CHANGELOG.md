@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.18 - 2026-10-01
 
 **The format is 0.10**, and a 0.9 file is a 0.10 file. 0.9's rules
 were amended in place after writers of it were released, so a 0.9
