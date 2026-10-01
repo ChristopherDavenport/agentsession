@@ -5,6 +5,46 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+The format is unchanged.
+
+- **cas: an append recovery found lost stays lost.** Recovery that cut a
+  lost lazy append wrote a sync record, which the next open took to mean
+  the lost append was durable: it came back into the log and the session
+  failed to open on the objects the crash took. Without the sync record,
+  a durable append made after recovery would have been cut instead.
+  Recovery now journals a `lost` record for each append it cuts before
+  the sync record. A store left by v0.0.15 in that state still fails to
+  open that session.
+- **cas: opening a session costs what the session holds, not the
+  store.** Each open and each `List` replayed the journal from the start.
+  The store now reads on from where it last stopped: opening a
+  101-entry session in a store of 1000 takes 6 ms, down from 206 ms.
+  `Verify` still reads the whole journal.
+- **cas: a store says when a held session's lazy appends are durable.**
+  Only recovery wrote a sync record, so every open, `List` included,
+  read and hashed each lazy append's objects to find them present. A
+  durable append, `Sync`, `Release` and `Close` now write one for each
+  session they make durable. Listing a store of 1000 sessions takes
+  55 ms, down from 1.5 s.
+- **cas: opening a store starts from a checkpoint.** A writing store
+  saves the journal scan as `checkpoint` once the journal has grown
+  256 KiB past the last one, and on `Close`; the next open reads it and
+  the records after it. It is checked against the journal's bytes and
+  its own checksum, and ignored when either fails. Journal records are
+  also read without reflection. Opening a store of 1000 sessions takes
+  about 130 ms, down from 270 ms.
+- **cas: a flush fsyncs its objects concurrently**, so releasing a
+  session of 101 lazy appends waits on a few filesystem commits rather
+  than 200 fsyncs in turn: 119 ms, down from 1.45 s.
+- **`Read` is a quarter faster on small lines and allocates 60% less.**
+  Canonical form, the I-JSON check and member splitting walk the bytes
+  rather than decoding through `encoding/json`, handing what they do
+  not handle to the decoder path, and each line is tested once.
+- `BenchmarkRead` runs again (it reused one call ID), and cas has
+  benchmarks for appends, opens and listings.
+
 ## v0.0.15 - 2026-09-29
 
 Draft 0.9 is amended in place again.

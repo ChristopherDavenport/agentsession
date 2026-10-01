@@ -198,6 +198,15 @@ type Store struct {
 	faulty map[string]error
 	// journalDirty is set while a lazy commit's record is unsynced.
 	journalDirty bool
+
+	// scan is the journal as far as this store has read it, which
+	// replay reads on from. scanMu guards it apart from mu, since List,
+	// Verify and a sweep replay without holding mu.
+	scanMu sync.Mutex
+	scan   *journalScan
+	// checkpointed is the journal offset of the checkpoint the scan
+	// started from or last saved.
+	checkpointed int64
 }
 
 type handle struct {
@@ -208,6 +217,12 @@ type handle struct {
 	head       string // the head as the HEAD file has it
 	count      int    // entries the store has committed into the session
 	diskFormat string // the format the header file names
+	// lazy is set while the session holds a lazy append of this store's
+	// that no sync record covers. The store holds the session's lock,
+	// so every lazy record in it is this store's or was adopted at open,
+	// and the commit that makes them durable says so with a sync record;
+	// otherwise every later open checks each one's objects again.
+	lazy bool
 }
 
 // Open opens or creates the store at root, and replays the journal
@@ -435,18 +450,18 @@ func join(id string, env, body []byte) ([]byte, error) {
 
 // storeEntry writes an entry's two objects loose and returns their
 // combined size.
-func (s *Store) storeEntry(e agentsession.Entry, durable bool) (int64, error) {
+func (s *Store) storeEntry(e agentsession.Entry, durable bool) (int64, []byte, error) {
 	env, body, err := split(e)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if err := s.objs.write(spaceContents, e.Base().ContentHash(), body, durable); err != nil {
-		return 0, fmt.Errorf("cas: store content: %w", err)
+		return 0, nil, fmt.Errorf("cas: store content: %w", err)
 	}
 	if err := s.objs.write(spaceEntries, e.Base().ID, env, durable); err != nil {
-		return 0, fmt.Errorf("cas: store entry: %w", err)
+		return 0, nil, fmt.Errorf("cas: store entry: %w", err)
 	}
-	return int64(len(env) + len(body)), nil
+	return int64(len(env) + len(body)), body, nil
 }
 
 // unpackLimit is how many objects a transfer brings before they arrive
@@ -738,6 +753,11 @@ type view struct {
 	// their objects and says so, since a durable append it makes next
 	// must not be cut with them by a later crash.
 	adopt []string
+	// dropped lists the appends found lost that no lost record names
+	// yet: a writing store that recovers the session commits one for
+	// each, so a sync record after them, or a durable append that goes
+	// on from what survived, does not bring them back or cut with them.
+	dropped []string
 
 	logChanged, headChanged, markChanged bool
 }
@@ -780,22 +800,41 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 	lost := map[string]bool{}
 	jHead, hasJHead := "", false
 	cut := false
-	// A sync record says every lazy record before it is durable.
+	// A sync record says every lazy record before it is durable, apart
+	// from the ones a lost record already said were lost.
 	synced := -1
+	// lostAt is where the last lost record naming each entry is: an
+	// append of it before that is gone, one after it is kept.
+	lostAt := map[string]int{}
 	for i, r := range st.recs {
-		if r.Op == "sync" {
+		switch r.Op {
+		case "sync":
 			synced = i
+		case "lost":
+			lostAt[r.Entry] = i
 		}
 	}
+	gone := func(entry string, i int) bool {
+		at, ok := lostAt[entry]
+		return ok && at > i
+	}
+	var dropped []string
 	for i, r := range st.recs {
 		if cut {
 			if r.Op == "append" && r.Entry != "" {
 				lost[r.Entry] = true
+				if !gone(r.Entry, i) {
+					dropped = append(dropped, r.Entry)
+				}
 			}
 			continue
 		}
 		switch r.Op {
 		case "append":
+			if r.Entry != "" && gone(r.Entry, i) {
+				lost[r.Entry] = true // lost, and recorded so, earlier
+				continue
+			}
 			if r.Lazy && r.Entry != "" && i > synced {
 				ok, err := s.present(r.Entry)
 				if errors.Is(err, ErrCorrupt) {
@@ -807,6 +846,7 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 				if !ok {
 					cut = true
 					lost[r.Entry] = true
+					dropped = append(dropped, r.Entry)
 					continue
 				}
 				v.adopt = append(v.adopt, r.Entry)
@@ -822,11 +862,19 @@ func (s *Store) reconcile(id, dir string, scan *journalScan) (view, error) {
 				jHead, hasJHead = r.Head, true
 			}
 		case "head":
+			if gone(r.Head, i) {
+				continue
+			}
 			jHead, hasJHead = r.Head, true
 		}
 	}
 	for _, e := range jEntries {
 		delete(lost, e) // appended again after the loss, and kept
+	}
+	for _, e := range dropped {
+		if lost[e] {
+			v.dropped = append(v.dropped, e)
+		}
 	}
 	inLog := map[string]bool{}
 	for _, e := range have {
@@ -940,6 +988,17 @@ func (s *Store) recoverSession(id, dir string) (view, error) {
 	}
 	if v.markChanged {
 		if err := writeIndex(filepath.Join(dir, "record"), []byte(v.mark+"\n")); err != nil {
+			return v, err
+		}
+	}
+	if len(v.dropped) > 0 {
+		// Before the sync record adopt writes, which would otherwise
+		// say the lost appends were durable.
+		recs := make([]journalRecord, len(v.dropped))
+		for i, e := range v.dropped {
+			recs[i] = journalRecord{Op: "lost", Session: id, Entry: e}
+		}
+		if err := s.commit(true, recs...); err != nil {
 			return v, err
 		}
 	}
@@ -1537,7 +1596,7 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	if err != nil {
 		return agentsession.Result{}, err
 	}
-	size, err := s.storeEntry(e, durable)
+	size, body, err := s.storeEntry(e, durable)
 	if err != nil {
 		guard.release()
 		return agentsession.Result{}, err
@@ -1549,11 +1608,9 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	// One the store does not hold is reported, as the format allows,
 	// rather than refused; a projection of the session will fail until
 	// it arrives.
-	if _, body, err := split(e); err == nil {
-		for _, b := range blobsNamedBy(body) {
-			if err := s.objs.freshen(spaceContents, b); err != nil {
-				r.Unresolved = append(r.Unresolved, b)
-			}
+	for _, b := range blobsNamedBy(body) {
+		if err := s.objs.freshen(spaceContents, b); err != nil {
+			r.Unresolved = append(r.Unresolved, b)
 		}
 	}
 	head := ""
@@ -1563,11 +1620,17 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	case agentsession.LeafMoved:
 		head = e.(*agentsession.LabelEntry).Target
 	}
-	err = s.commit(durable, journalRecord{Op: "append", Session: sessionID, Entry: r.ID, Head: head, Seq: h.session.Len() + 1, Size: size})
+	recs := []journalRecord{{Op: "append", Session: sessionID, Entry: r.ID, Head: head, Seq: h.session.Len() + 1, Size: size}}
+	if durable && h.lazy {
+		// The commit flushes the lazy appends before it, objects first.
+		recs = append(recs, journalRecord{Op: "sync", Session: sessionID})
+	}
+	err = s.commit(durable, recs...)
 	guard.release()
 	if err != nil {
 		return agentsession.Result{}, err
 	}
+	h.lazy = !durable
 	r.Durable = durable
 	// The append is committed from here. The log and the head are
 	// indexes the next open rebuilds from the journal, so a failure to
@@ -1982,6 +2045,14 @@ func (s *Store) Close() error {
 	var first error
 	if !s.readOnly {
 		first = s.syncJournal()
+		// A store that only appended never replayed what it wrote; the
+		// next open's checkpoint should hold it. A failure only costs
+		// that open a longer replay.
+		if _, err := s.replay(); err == nil {
+			s.scanMu.Lock()
+			s.saveCheckpoint()
+			s.scanMu.Unlock()
+		}
 	}
 	for id, h := range s.open {
 		if err := h.lock.release(); err != nil && first == nil {

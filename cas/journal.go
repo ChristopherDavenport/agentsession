@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 )
 
@@ -23,7 +24,7 @@ import (
 // that reads is damage, never a torn write. A record written before the
 // checksum existed has none and is taken as it reads.
 type journalRecord struct {
-	Op      string `json:"op"` // create, append, head, mark, delete
+	Op      string `json:"op"` // create, append, head, mark, delete, sync, lost
 	Session string `json:"session"`
 	Entry   string `json:"entry,omitempty"`
 	Head    string `json:"head,omitempty"`
@@ -84,7 +85,9 @@ func decodeRecord(seg []byte) (rec journalRecord, torn bool, err error) {
 			return rec, false, errors.New("checksum mismatch")
 		}
 	}
-	if err := json.Unmarshal(seg, &rec); err != nil {
+	if r, ok := parseRecord(seg); ok {
+		rec = r
+	} else if err := json.Unmarshal(seg, &rec); err != nil {
 		return rec, false, err
 	}
 	rec.checked = bytes.Contains(seg, []byte(crcMember))
@@ -92,6 +95,119 @@ func decodeRecord(seg []byte) (rec journalRecord, torn bool, err error) {
 		return rec, false, errors.New("record names no operation or session")
 	}
 	return rec, false, nil
+}
+
+// parseRecord reads a record in the shape encode writes it: one flat
+// object of known lower-case members, strings without escapes, whole
+// numbers and true. It reports false for anything else, which the
+// caller hands to encoding/json, so a record read here reads as that
+// would read it; replay is mostly this, and the decoder's reflection
+// was most of what opening a store cost.
+func parseRecord(seg []byte) (journalRecord, bool) {
+	var r journalRecord
+	if len(seg) < 2 || seg[0] != '{' || seg[len(seg)-1] != '}' {
+		return r, false
+	}
+	i := 1
+	str := func() (string, bool) {
+		if i >= len(seg) || seg[i] != '"' {
+			return "", false
+		}
+		start := i + 1
+		for j := start; j < len(seg); j++ {
+			switch c := seg[j]; {
+			case c == '"':
+				i = j + 1
+				return string(seg[start:j]), true
+			case c == '\\' || c < 0x20 || c >= 0x80:
+				return "", false
+			}
+		}
+		return "", false
+	}
+	num := func() (int64, bool) {
+		start, neg := i, false
+		if i < len(seg) && seg[i] == '-' {
+			neg = true
+			i++
+		}
+		digits := i
+		var n int64
+		for i < len(seg) && seg[i] >= '0' && seg[i] <= '9' {
+			if i-digits >= 18 {
+				return 0, false
+			}
+			n = n*10 + int64(seg[i]-'0')
+			i++
+		}
+		if i == digits || (seg[digits] == '0' && i-digits > 1) || i-start == 0 {
+			return 0, false
+		}
+		if neg {
+			n = -n
+		}
+		return n, true
+	}
+	if seg[i] == '}' {
+		return r, i == len(seg)-1
+	}
+	for {
+		key, ok := str()
+		if !ok || i >= len(seg) || seg[i] != ':' {
+			return r, false
+		}
+		i++
+		switch key {
+		case "op", "session", "entry", "head", "base", "mark", "crc":
+			v, ok := str()
+			if !ok {
+				return r, false
+			}
+			switch key {
+			case "op":
+				r.Op = v
+			case "session":
+				r.Session = v
+			case "entry":
+				r.Entry = v
+			case "head":
+				r.Head = v
+			case "base":
+				r.Base = v
+			case "mark":
+				r.Mark = v
+			}
+		case "seq", "size":
+			n, ok := num()
+			if !ok {
+				return r, false
+			}
+			if key == "seq" {
+				r.Seq = int(n)
+			} else {
+				r.Size = n
+			}
+		case "lazy":
+			if !bytes.HasPrefix(seg[i:], []byte("true")) {
+				return r, false
+			}
+			r.Lazy = true
+			i += len("true")
+		default:
+			return r, false
+		}
+		if i >= len(seg) {
+			return r, false
+		}
+		switch seg[i] {
+		case ',':
+			i++
+		case '}':
+			return r, i == len(seg)-1
+		default:
+			return r, false
+		}
+	}
 }
 
 // JournalDamage is a journal record that was written whole and no
@@ -147,6 +263,7 @@ type journalScan struct {
 	states map[string]*sessionState
 	damage []JournalDamage
 	end    int64 // where the read stopped: the next record's offset
+	lines  int   // the whole lines read, for damage line numbers
 }
 
 // replay reads the journal from the start and returns each session's
@@ -157,60 +274,64 @@ type journalScan struct {
 // record is reported and skipped. Nothing is ever truncated: the
 // journal is shared, and a record another process fsynced is not this
 // process's to remove.
+//
+// The journal only grows, so the store keeps what it has read and each
+// replay reads only the records written since, by this process or any
+// other. The first starts from the store's checkpoint when it matches
+// the journal, and a writing store saves another once the journal has
+// grown checkpointEvery past the last. What replay returns is the
+// caller's own, unchanged by later replays.
 func (s *Store) replay() (*journalScan, error) {
-	return s.replayFrom(0)
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
+	if s.scan == nil || s.journalShrank(s.scan.end) {
+		s.scan = s.loadCheckpoint()
+		if s.scan == nil {
+			s.scan = &journalScan{states: map[string]*sessionState{}}
+		}
+		s.checkpointed = s.scan.end
+	}
+	tail, err := s.scan.read(s.root)
+	if err != nil {
+		return nil, err
+	}
+	s.saveCheckpoint()
+	snap := s.scan.snapshot()
+	for _, rec := range tail {
+		snap.apply(rec)
+	}
+	return snap, nil
 }
 
+// saveCheckpoint writes the scan as the store's checkpoint once the
+// journal has grown checkpointEvery past the last, under scanMu.
+func (s *Store) saveCheckpoint() {
+	if s.readOnly || s.scan == nil || s.scan.end-s.checkpointed < checkpointEvery {
+		return
+	}
+	if s.writeCheckpoint(s.scan) == nil {
+		s.checkpointed = s.scan.end
+	}
+}
+
+// journalShrank reports whether the journal is shorter than end, which
+// only replacing the store's files behind its back can cause; the
+// journal is then read again from the start.
+func (s *Store) journalShrank(end int64) bool {
+	info, err := os.Stat(filepath.Join(s.root, "journal"))
+	return err == nil && info.Size() < end
+}
+
+// replayFrom reads the journal from an offset on its own, for a caller
+// that wants only the records written after it.
 func (s *Store) replayFrom(from int64) (*journalScan, error) {
 	scan := &journalScan{states: map[string]*sessionState{}, end: from}
-	f, err := os.Open(filepath.Join(s.root, "journal"))
-	if errors.Is(err, os.ErrNotExist) {
-		return scan, nil
-	}
+	tail, err := scan.read(s.root)
 	if err != nil {
-		return nil, fmt.Errorf("cas: journal: %w", err)
+		return nil, err
 	}
-	defer f.Close()
-	if _, err := f.Seek(from, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("cas: journal: %w", err)
-	}
-	br := bufio.NewReaderSize(f, 1<<20)
-	off := from
-	lineNo := 0
-	for {
-		line, err := br.ReadBytes('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return nil, fmt.Errorf("cas: journal: %w", err)
-		}
-		if len(line) == 0 {
-			break
-		}
-		if line[len(line)-1] != '\n' {
-			// The journal's end without a newline: a record still being
-			// written, one a crash cut short, or a whole record whose
-			// newline was damaged. Only whole records that pass their
-			// checksum count, and nothing is reported: the rest may be a
-			// write in flight.
-			if recs, _ := decodeLine(line); len(recs) > 0 {
-				for _, rec := range recs {
-					if rec.checked {
-						scan.apply(rec)
-					}
-				}
-			}
-			break
-		}
-		lineNo++
-		start := off
-		off += int64(len(line))
-		scan.end = off
-		recs, derr := decodeLine(line)
-		if derr != nil {
-			scan.damage = append(scan.damage, JournalDamage{Line: lineNo, Offset: start, Err: derr})
-		}
-		for _, rec := range recs {
-			scan.apply(rec)
-		}
+	for _, rec := range tail {
+		scan.apply(rec)
 	}
 	if from > 0 {
 		// Line numbers from an offset are relative; say so in the offset.
@@ -219,6 +340,78 @@ func (s *Store) replayFrom(from int64) (*journalScan, error) {
 		}
 	}
 	return scan, nil
+}
+
+// read takes into the scan every whole line from its end on, and
+// returns the checked records of a last line without its newline
+// unapplied: that line may be a write in flight, which a later read
+// reads again once it is whole.
+func (scan *journalScan) read(root string) ([]journalRecord, error) {
+	f, err := os.Open(filepath.Join(root, "journal"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cas: journal: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.Seek(scan.end, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("cas: journal: %w", err)
+	}
+	br := bufio.NewReaderSize(f, 1<<20)
+	for {
+		line, err := br.ReadBytes('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("cas: journal: %w", err)
+		}
+		if len(line) == 0 {
+			return nil, nil
+		}
+		if line[len(line)-1] != '\n' {
+			// The journal's end without a newline: a record still being
+			// written, one a crash cut short, or a whole record whose
+			// newline was damaged. Only whole records that pass their
+			// checksum count, and nothing is reported: the rest may be a
+			// write in flight.
+			var tail []journalRecord
+			recs, _ := decodeLine(line)
+			for _, rec := range recs {
+				if rec.checked {
+					tail = append(tail, rec)
+				}
+			}
+			return tail, nil
+		}
+		scan.lines++
+		start := scan.end
+		scan.end += int64(len(line))
+		recs, derr := decodeLine(line)
+		if derr != nil {
+			scan.damage = append(scan.damage, JournalDamage{Line: scan.lines, Offset: start, Err: derr})
+		}
+		for _, rec := range recs {
+			scan.apply(rec)
+		}
+	}
+}
+
+// snapshot returns a copy of the scan that later reads into the scan do
+// not change: each state is copied, and each slice is capped at its
+// length, so an append on either side reallocates rather than writing
+// where the other reads.
+func (scan *journalScan) snapshot() *journalScan {
+	snap := &journalScan{
+		states: make(map[string]*sessionState, len(scan.states)),
+		damage: scan.damage[:len(scan.damage):len(scan.damage)],
+		end:    scan.end,
+		lines:  scan.lines,
+	}
+	for id, st := range scan.states {
+		c := *st
+		c.recs = st.recs[:len(st.recs):len(st.recs)]
+		snap.states[id] = &c
+	}
+	return snap
 }
 
 // decodeLine reads the records of one journal line. A line normally
@@ -351,10 +544,27 @@ func (s *Store) commit(durable bool, recs ...journalRecord) error {
 }
 
 // syncJournal fsyncs what lazy commits left: the objects, then the
-// journal.
+// journal, with a sync record for each held session that has lazy
+// appends, so a later open need not check their objects.
 func (s *Store) syncJournal() error {
 	if err := s.objs.flush(); err != nil {
 		return err
+	}
+	var syncs []journalRecord
+	for id, h := range s.open {
+		if h.lazy {
+			syncs = append(syncs, journalRecord{Op: "sync", Session: id})
+		}
+	}
+	if len(syncs) > 0 {
+		sort.Slice(syncs, func(i, j int) bool { return syncs[i].Session < syncs[j].Session })
+		if err := s.commit(true, syncs...); err != nil {
+			return err
+		}
+		for _, r := range syncs {
+			s.open[r.Session].lazy = false
+		}
+		return nil
 	}
 	if !s.journalDirty {
 		return nil

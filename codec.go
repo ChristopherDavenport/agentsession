@@ -60,14 +60,14 @@ func Read(r io.Reader) (*Session, error) {
 			continue // blank lines are not part of the format but cost nothing to skip
 		}
 		line++
-		if json.Valid(data) {
-			// A line that is JSON but not I-JSON is refused as written,
-			// before the decoder can repair it. A line that is not JSON
-			// at all is left to the decoder below, which knows a
-			// truncated last line from a broken middle one.
-			if err := ijson.Check(data); err != nil {
-				return nil, fmt.Errorf("agentsession: line %d: %w", line, err)
-			}
+		// A line that is JSON but not I-JSON is refused as written,
+		// before the decoder can repair it. A line that is not JSON at
+		// all is left to the decoder below, which knows a truncated last
+		// line from a broken middle one. The check passes almost every
+		// line, and one it passes is JSON, so validity is asked only of
+		// a line it fails.
+		if err := ijson.Check(data); err != nil && json.Valid(data) {
+			return nil, fmt.Errorf("agentsession: line %d: %w", line, err)
 		}
 		if s == nil {
 			var h Header

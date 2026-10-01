@@ -27,6 +27,16 @@ var ErrNotIJSON = errors.New("ijson: not I-JSON")
 
 // Check reports the first way data fails the test, or nil.
 func Check(data []byte) error {
+	if checkFast(data) {
+		return nil
+	}
+	return checkTokens(data)
+}
+
+// checkTokens is Check by way of encoding/json's tokenizer: the
+// reference the byte-level path must agree with, and what finds and
+// names what is wrong.
+func checkTokens(data []byte) error {
 	if !utf8.Valid(data) {
 		return fmt.Errorf("%w: invalid UTF-8", ErrNotIJSON)
 	}

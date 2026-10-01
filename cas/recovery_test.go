@@ -3,6 +3,7 @@ package cas
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -29,6 +30,16 @@ func journalLines(t *testing.T, root, id string) ([]string, []int) {
 		}
 	}
 	return lines, appends
+}
+
+// die ends a store as a crash does: its locks go, and nothing it left
+// lazy is flushed or said to be durable.
+func die(st *Store) {
+	for id, h := range st.open {
+		h.lock.release()
+		delete(st.open, id)
+	}
+	st.objs.close()
 }
 
 // TestJournalRecord round-trips a record through its checksum, finds a
@@ -127,7 +138,7 @@ func TestLazyAppends(t *testing.T) {
 	if strings.Contains(lines[appends[0]], `"lazy"`) || !strings.Contains(lines[appends[1]], `"lazy":true`) {
 		t.Errorf("journal:\n%s", strings.Join(lines, ""))
 	}
-	st.Close()
+	die(st)
 	// A crash took the lazy entry's envelope; the log line survived.
 	p, _ := st.objs.loosePath(spaceEntries, lost.ID)
 	os.Remove(p)
@@ -340,4 +351,264 @@ func TestFormatRaised(t *testing.T) {
 	if again, _ := os.Stat(hp); !again.ModTime().Equal(info.ModTime()) {
 		t.Error("a current header was rewritten")
 	}
+}
+
+// TestReplayReadsOn: a store reads the journal on from where it last
+// stopped, so records another process commits later, a torn record's
+// line a later record completes, and a scan already handed out all come
+// out as a replay from the start would have them.
+func TestReplayReadsOn(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	a, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	for range a.List(ctx, agentsession.ListFilter{}) {
+	}
+	if _, err := b.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		mustAppend(t, b, "s", agentsession.NewItemEntry(openresponses.UserText("b")))
+	}
+	before, err := a.replay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(before.states["s"].entries()); n != 3 {
+		t.Fatalf("a read %d of b's appends, want 3", n)
+	}
+
+	// A record a crashed process cut short, which the next record lands
+	// after on the same line.
+	f, err := os.OpenFile(filepath.Join(root, "journal"), os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"op":"append","sess`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if _, err := a.replay(); err != nil {
+		t.Fatal(err)
+	}
+	last := mustAppend(t, b, "s", agentsession.NewItemEntry(openresponses.UserText("b")))
+	if err := b.Release("s"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(before.states["s"].entries()); n != 3 {
+		t.Errorf("a scan handed out changed: %d entries, want 3", n)
+	}
+
+	// The log lost the appends, as a crash after the commit point leaves
+	// it; a rebuilds it from what it read of the journal.
+	if err := os.WriteFile(filepath.Join(root, "sessions", "s", "log"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := a.Open(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Len() != 4 || sess.Leaf() != last {
+		t.Errorf("a opened %d entries at %s, want 4 at %s", sess.Len(), sess.Leaf(), last)
+	}
+	fresh, err := a.replayFrom(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := a.replay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached.end != fresh.end || len(cached.damage) != len(fresh.damage) || len(cached.states) != len(fresh.states) {
+		t.Errorf("read on: end %d, %d damaged, %d sessions; from the start: end %d, %d damaged, %d sessions",
+			cached.end, len(cached.damage), len(cached.states), fresh.end, len(fresh.damage), len(fresh.states))
+	}
+	for id, st := range fresh.states {
+		if got, want := len(cached.states[id].recs), len(st.recs); got != want {
+			t.Errorf("session %s: %d records read on, %d from the start", id, got, want)
+		}
+	}
+}
+
+// TestLostAppendStaysLost: recovery that finds a lazy append lost
+// journals the loss before the sync record it writes, so a later open
+// neither brings the lost appends back, which would name objects the
+// store does not hold, nor cuts the durable appends made after it.
+func TestLostAppendStaysLost(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "l"})
+	kept, _ := st.Write(ctx, "l", agentsession.NewItemEntry(openresponses.UserText("kept")))
+	lost, _ := st.Write(ctx, "l", agentsession.NewItemEntry(openresponses.UserText("lost")))
+	after, _ := st.Write(ctx, "l", agentsession.NewItemEntry(openresponses.UserText("after")))
+	die(st)
+	// A crash took the lost entry's envelope.
+	p, _ := st.objs.loosePath(spaceEntries, lost.ID)
+	os.Remove(p)
+
+	st2, _ := Open(root)
+	s, err := st2.Open(ctx, "l")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 1 || s.Leaf() != kept.ID {
+		t.Fatalf("recovered: len %d leaf %s, want 1 %s", s.Len(), s.Leaf(), kept.ID)
+	}
+	again := mustAppend(t, st2, "l", agentsession.NewItemEntry(openresponses.UserText("again")))
+	st2.Close()
+
+	lines, _ := journalLines(t, root, "l")
+	var lostRecs int
+	for _, l := range lines {
+		if strings.Contains(l, `"op":"lost"`) {
+			lostRecs++
+		}
+	}
+	if lostRecs != 2 {
+		t.Errorf("%d lost records, want 2:\n%s", lostRecs, strings.Join(lines, ""))
+	}
+
+	for i := range 2 {
+		st3, err := Open(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err = st3.Open(ctx, "l")
+		if err != nil {
+			t.Fatalf("open %d after recovery: %v", i+1, err)
+		}
+		if s.Len() != 2 || s.Leaf() != again {
+			t.Errorf("open %d after recovery: len %d leaf %s, want 2 %s", i+1, s.Len(), s.Leaf(), again)
+		}
+		for _, id := range []string{lost.ID, after.ID} {
+			if _, ok := s.Entry(id); ok {
+				t.Errorf("open %d after recovery: lost append %s came back", i+1, id)
+			}
+		}
+		st3.Close()
+	}
+}
+
+// TestSyncRecords: making a held session's lazy appends durable says so
+// in the journal, on Sync, on Close and with a durable append, so a
+// later open does not read their objects again to find them present.
+func TestSyncRecords(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncOnResponse))
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	syncs := func() int {
+		lines, _ := journalLines(t, root, "s")
+		n := 0
+		for _, l := range lines {
+			if strings.Contains(l, `"op":"sync"`) && strings.Contains(l, `"session":"s"`) {
+				n++
+			}
+		}
+		return n
+	}
+	mustAppend(t, st, "s", item("lazy"))
+	if _, err := st.Write(ctx, "s", &agentsession.ResponseEntry{ResponseID: "r", Status: openresponses.ResponseStatusCompleted}); err != nil {
+		t.Fatal(err)
+	}
+	if n := syncs(); n != 1 {
+		t.Errorf("after a durable append: %d sync records, want 1", n)
+	}
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := syncs(); n != 1 {
+		t.Errorf("Sync with nothing lazy: %d sync records, want 1", n)
+	}
+	mustAppend(t, st, "s", item("lazy again"))
+	st.Close()
+	if n := syncs(); n != 2 {
+		t.Errorf("after Close: %d sync records, want 2", n)
+	}
+	// Every lazy append is covered, so an open reads no object to check.
+	ro, err := Open(root, WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	scan, _ := ro.replay()
+	v, err := ro.reconcile("s", filepath.Join(root, "sessions", "s"), scan)
+	if err != nil || len(v.adopt) != 0 {
+		t.Errorf("reconcile after Close: adopt %v, %v", v.adopt, err)
+	}
+}
+
+// TestParseRecord: a record the fast path reads reads as encoding/json
+// reads it, and one it declines is left to encoding/json.
+func TestParseRecord(t *testing.T) {
+	h := "sha256:" + strings.Repeat("ab", 32)
+	for _, r := range []journalRecord{
+		{Op: "append", Session: "s-1_x.y", Entry: h, Head: h, Seq: 3, Size: 1234, Lazy: true},
+		{Op: "create", Session: "s", Base: h},
+		{Op: "mark", Session: "s", Mark: "mirror"},
+		{Op: "sync", Session: "s"},
+		{Op: "head", Session: "s", Head: h, Seq: 0},
+	} {
+		line, err := r.encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		seg := bytes.TrimRight(line, "\n")
+		fast, ok := parseRecord(seg)
+		if !ok {
+			t.Errorf("fast path declined %s", seg)
+			continue
+		}
+		var slow journalRecord
+		if err := json.Unmarshal(seg, &slow); err != nil {
+			t.Fatal(err)
+		}
+		if fast != slow {
+			t.Errorf("%s: fast %+v, encoding/json %+v", seg, fast, slow)
+		}
+	}
+	for _, seg := range []string{
+		`{"op":"append","session":"s","seq":1.5}`,
+		`{"op":"append","session":"s","seq":01}`,
+		`{"op":"append","session":"s","Seq":1}`,
+		`{"op":"append","session":"s\u0041"}`,
+		`{"op":"append", "session":"s"}`,
+		`{"op":"append","session":"s","lazy":false}`,
+		`{"op":"append","session":"s","extra":1}`,
+		`{"op":"append","session":"s","seq":-}`,
+		`{"op":"append","session":"s","seq":12345678901234567890}`,
+		`{"op":"append","session":"s"}x`,
+		`{"op":"append","session":null}`,
+	} {
+		if r, ok := parseRecord([]byte(seg)); ok {
+			t.Errorf("fast path read %s as %+v", seg, r)
+		}
+	}
+}
+
+func FuzzParseRecord(f *testing.F) {
+	f.Add([]byte(`{"op":"append","session":"s","entry":"e","seq":1,"size":2,"lazy":true,"crc":"ff"}`))
+	f.Add([]byte(`{"op":"sync","session":"s"}`))
+	f.Fuzz(func(t *testing.T, seg []byte) {
+		fast, ok := parseRecord(seg)
+		if !ok {
+			return
+		}
+		var slow journalRecord
+		if err := json.Unmarshal(seg, &slow); err != nil {
+			t.Fatalf("fast path read %q, encoding/json refused it: %v", seg, err)
+		}
+		if fast != slow {
+			t.Fatalf("%q: fast %+v, encoding/json %+v", seg, fast, slow)
+		}
+	})
 }

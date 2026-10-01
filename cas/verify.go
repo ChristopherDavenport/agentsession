@@ -58,7 +58,10 @@ func (s *Store) Verify(ctx context.Context) (Report, error) {
 	var rep Report
 	add := func(p Problem) { rep.Problems = append(rep.Problems, p) }
 
-	scan, err := s.replay()
+	// Read the whole journal afresh rather than from what the store has
+	// read already: damage to records read earlier is what this looks
+	// for.
+	scan, err := s.replayFrom(0)
 	if err != nil {
 		return rep, err
 	}

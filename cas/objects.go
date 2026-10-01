@@ -351,27 +351,71 @@ func (o *objects) syncOrDefer(path string, isDir, now bool) error {
 // files first, then the directories they were renamed into, each once.
 // A file gone since, packed and removed, needs nothing: the pack that
 // holds it was written durably.
+//
+// The fsyncs of each group run concurrently. A journaling filesystem
+// commits concurrent fsyncs together, so a flush of many small objects
+// waits for a few commits rather than one per object, as git's batch
+// fsync does; each file is still fsynced, and every file before any
+// directory.
 func (o *objects) flush() error {
 	o.mu.Lock()
 	files, dirs := o.pendFiles, o.pendDirs
 	o.pendFiles, o.pendDirs = map[string]bool{}, map[string]bool{}
 	o.mu.Unlock()
-	for f := range files {
+	if err := syncAll(files, func(f string) error {
 		fh, err := os.Open(f)
 		if errors.Is(err, os.ErrNotExist) {
-			continue
+			return nil
 		}
 		if err != nil {
 			return err
 		}
 		err = fh.Sync()
 		fh.Close()
-		if err != nil {
+		return err
+	}); err != nil {
+		return err
+	}
+	return syncAll(dirs, func(d string) error {
+		if err := syncDir(d); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		return nil
+	})
+}
+
+// flushWorkers bounds the fsyncs a flush has in flight.
+const flushWorkers = 32
+
+// syncAll calls fsync for every path, flushWorkers at a time, and
+// returns the first error once all have finished.
+func syncAll(paths map[string]bool, fsync func(string) error) error {
+	if len(paths) <= 1 {
+		for p := range paths {
+			return fsync(p)
+		}
+		return nil
 	}
-	for d := range dirs {
-		if err := syncDir(d); err != nil && !errors.Is(err, os.ErrNotExist) {
+	work := make(chan string)
+	errs := make(chan error, len(paths))
+	var wg sync.WaitGroup
+	for range min(flushWorkers, len(paths)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := range work {
+				errs <- fsync(p)
+			}
+		}()
+	}
+	for p := range paths {
+		work <- p
+	}
+	close(work)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
 			return err
 		}
 	}
