@@ -246,7 +246,10 @@ func WithSync(p SyncPolicy) Option {
 // read while another process appends to it shows what it held when it
 // was opened; call [Store.Release] and open it again to see the rest.
 // [Store.Read], on any store, reads a session without a hold and
-// caches nothing, so it reads what the store holds at each call.
+// caches nothing, so it reads what the store holds at each call. Both
+// read the writer's working state, as [Store.Read] says: what they show
+// can include appends the writer has not made durable, which a crash
+// can take back.
 func WithReadOnly() Option {
 	return func(s *Store) { s.readOnly = true }
 }
@@ -2030,9 +2033,23 @@ func (s *Store) Open(ctx context.Context, id string) (*agentsession.Session, err
 // one whose objects are not is cut, with every record after it. A
 // record being written as the log is read is a torn tail, and cut. The
 // head is the last the log records, so a leaf moved through
-// Session.Branch since the last append is not there. Objects a pack or
-// a sweep moves while Read loads them are looked for again; a session
-// deleted while it is read is [agentsession.ErrNoSession].
+// Session.Branch since the last append is not there.
+//
+// So Read, like a read-only Open, can show an append its writer has not
+// made durable: a lazy one no commit has covered yet, or a durable one
+// whose fsync is still running, which the writer takes back if the
+// fsync fails. A crash, or that failure, can take back what Read
+// showed. Neither offers a read of the committed entries alone. The
+// nearest is [Store.Fetch] from a read-only store into a store of the
+// caller's, which takes only what the log shows committed, though that
+// includes a durable append whose fsync is still running; or the
+// writer's own
+// [Store.Sync] before the read, where the writer is the caller.
+//
+// Objects a pack or a sweep moves while Read loads them are looked for
+// again. A session deleted while it is read is
+// [agentsession.ErrNoSession], and one deleted and created again under
+// the same ID is read again.
 func (s *Store) Read(ctx context.Context, id string) (*agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -2047,11 +2064,65 @@ func (s *Store) Read(ctx context.Context, id string) (*agentsession.Session, err
 	if faulty {
 		return nil, fmt.Errorf("cas: session %s could not be indexed: %w", id, ferr)
 	}
-	sess, err := s.readSession(id, dir)
-	if err != nil && s.deleted(dir) {
-		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
+	return readStable(id, dir, func() (*agentsession.Session, error) { return s.readSession(id, dir) })
+}
+
+// sessionStamp tells a session from one created at its path after it
+// was deleted: by its directory's identity and its header's bytes.
+type sessionStamp struct {
+	id     dirID
+	idOK   bool
+	info   os.FileInfo
+	header []byte
+}
+
+func stampOf(dir string) (sessionStamp, bool) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return sessionStamp{}, false
 	}
-	return sess, err
+	hdr, err := os.ReadFile(filepath.Join(dir, "header"))
+	if err != nil {
+		return sessionStamp{}, false
+	}
+	id, ok := dirIdentity(dir)
+	return sessionStamp{id: id, idOK: ok, info: info, header: hdr}, true
+}
+
+func (a sessionStamp) same(b sessionStamp) bool {
+	if a.idOK && b.idOK {
+		if a.id != b.id {
+			return false
+		}
+	} else if !os.SameFile(a.info, b.info) {
+		return false
+	}
+	return bytes.Equal(a.header, b.header)
+}
+
+// readStable runs read, which reads a session with no lock held, and
+// checks the session was the same one throughout: a delete can take it
+// part way, which is ErrNoSession, and a Create can put another in its
+// place, which is read again. A header a writer rewrote, raising its
+// format, reads as another session and is read again too.
+func readStable[T any](id, dir string, read func() (T, error)) (T, error) {
+	var zero T
+	gone := fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
+	for attempt := 0; attempt < 3; attempt++ {
+		before, ok := stampOf(dir)
+		if !ok {
+			return zero, gone
+		}
+		v, err := read()
+		after, ok := stampOf(dir)
+		if !ok {
+			return zero, gone
+		}
+		if before.same(after) {
+			return v, err
+		}
+	}
+	return zero, fmt.Errorf("cas: session %s was replaced each time it was read", id)
 }
 
 // readSession builds a session from what its log says, recovering it
@@ -2067,13 +2138,6 @@ func (s *Store) readSession(id, dir string) (*agentsession.Session, error) {
 	}
 	sess, _, err := s.build(id, dir, v)
 	return sess, err
-}
-
-// deleted reports whether a session's directory has gone, as a delete
-// renames it away: one read with no lock held can lose it part way.
-func (s *Store) deleted(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, "header"))
-	return errors.Is(err, os.ErrNotExist)
 }
 
 // hold returns the handle of a session, opening it if this store does
@@ -2197,12 +2261,11 @@ func (s *Store) openSession(id string) (*handle, error) {
 	if err != nil {
 		return nil, err
 	}
-	n, err := s.openHeld(id, dir, lk)
-	if err != nil && s.readOnly && s.deleted(dir) {
-		// A read-only open holds no lock a delete waits on.
-		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
+	if s.readOnly {
+		// A read-only open holds no lock a delete or a create waits on.
+		return readStable(id, dir, func() (*handle, error) { return s.openHeld(id, dir, nil) })
 	}
-	return n, err
+	return s.openHeld(id, dir, lk)
 }
 
 // openHeld recovers and opens a session whose lock the caller has

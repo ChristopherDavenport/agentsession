@@ -165,6 +165,67 @@ func TestReadDeletedPartWay(t *testing.T) {
 	}
 }
 
+// TestReadRecreatedPartWay deletes a session, sweeps its objects and
+// creates another under its ID after a Read, or a read-only Open, has
+// read the old one's log and before it loads its entries: the read
+// sees the session change and reads the new one, rather than failing
+// on the old one's objects or mixing the two.
+func TestReadRecreatedPartWay(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ro, err := Open(root, WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	defer func() { loading = nil }()
+	for _, tt := range []struct {
+		name string
+		read func(id string) (*agentsession.Session, error)
+	}{
+		{"Read", func(id string) (*agentsession.Session, error) { return st.Read(ctx, id) }},
+		{"read-only Open", func(id string) (*agentsession.Session, error) { return ro.Open(ctx, id) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			id := "r" + fmt.Sprint(len(tt.name))
+			if _, err := st.Create(ctx, agentsession.Header{ID: id}); err != nil {
+				t.Fatal(err)
+			}
+			mustAppend(t, st, id, agentsession.NewItemEntry(openresponses.UserText("old a")))
+			mustAppend(t, st, id, agentsession.NewItemEntry(openresponses.UserText("old b")))
+			if err := st.Release(id); err != nil {
+				t.Fatal(err)
+			}
+			var fresh string
+			loading = func() {
+				loading = nil
+				if err := st.Delete(ctx, id); err != nil {
+					t.Error(err)
+				}
+				if _, err := st.Sweep(ctx, 0); err != nil {
+					t.Error(err)
+				}
+				if _, err := st.Create(ctx, agentsession.Header{ID: id}); err != nil {
+					t.Error(err)
+				}
+				fresh = mustAppend(t, st, id, agentsession.NewItemEntry(openresponses.UserText("new")))
+			}
+			got, err := tt.read(id)
+			if err != nil {
+				t.Fatalf("%s of a session created again part way: %v", tt.name, err)
+			}
+			if got.Len() != 1 || got.Leaf() != fresh {
+				t.Errorf("%s: %d entries at %s, want the new session's 1 at %s", tt.name, got.Len(), got.Leaf(), fresh)
+			}
+		})
+	}
+}
+
 // TestReadBesideWriter reads a session again and again while this store
 // appends to it, lazily, and packs and sweeps the store: each Read is
 // whole, and holds no fewer entries than the one before.

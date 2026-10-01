@@ -111,6 +111,10 @@ func testRead(t *testing.T, opts Options) {
 	if snap.Leaf() != "" {
 		t.Errorf("moving the writer's leaf moved the copy's to %q", snap.Leaf())
 	}
+	// A leaf the writer moved and has not recorded is not read.
+	if moved, err := r.Read(ctx, id); err != nil || moved.Leaf() != leaf {
+		t.Errorf("Read after an unrecorded Branch: leaf %v (%v), want the recorded %s", leafOf(moved), err, leaf)
+	}
 	if err := s.Branch(leaf); err != nil {
 		t.Fatal(err)
 	}
@@ -176,6 +180,13 @@ func testRead(t *testing.T, opts Options) {
 	if got, err := r.Read(ctx, id); err != nil || got.Len() != 6 {
 		t.Errorf("Read of a session another store holds: %v", err)
 	}
+}
+
+func leafOf(s *agentsession.Session) string {
+	if s == nil {
+		return ""
+	}
+	return s.Leaf()
 }
 
 func entryIDs(s *agentsession.Session) []string {

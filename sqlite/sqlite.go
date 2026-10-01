@@ -503,6 +503,11 @@ func (s *Store) openLocked(ctx context.Context, id string) (*agentsession.Sessio
 	}
 	sess, header, err := s.load(ctx, id)
 	if err != nil {
+		if !s.readOnly {
+			// The session is not open here, so nothing else would let
+			// the hold go before Close.
+			_, _ = s.w.Exec(`DELETE FROM holders WHERE session_id = ? AND token = ?`, id, s.token)
+		}
 		return nil, err
 	}
 	var stored agentsession.Header
@@ -613,7 +618,9 @@ func (s *Store) load(ctx context.Context, id string) (*agentsession.Session, str
 // the session open, and even when this store has refused it with
 // [ErrConcurrentWriter]. An entry is there once the Append that wrote it
 // has returned; a leaf moved through Session.Branch is not stored, and
-// is not there.
+// is not there. The database runs with synchronous=NORMAL, so a
+// transaction a power loss takes back may have been read; a process
+// crash takes back none.
 func (s *Store) Read(ctx context.Context, id string) (*agentsession.Session, error) {
 	sess, _, err := s.load(ctx, id)
 	return sess, err

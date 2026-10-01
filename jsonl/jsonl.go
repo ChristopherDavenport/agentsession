@@ -380,7 +380,10 @@ func (s *Store) Open(ctx context.Context, id string) (*agentsession.Session, err
 // the session open. A line an append is writing as the file is read is
 // reported through Session.Truncated, as a crash's would be; an entry
 // is in the file once the Append that wrote it has returned, and a
-// leaf moved through Session.Branch is never in it.
+// leaf moved through Session.Branch is never in it. Under
+// [SyncOnResponse] or [SyncNever] such an entry may not be durable yet,
+// and a power loss can take back what Read showed; nothing here reads only
+// what is durable, short of the writer calling [Store.Sync] first.
 func (s *Store) Read(ctx context.Context, id string) (*agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

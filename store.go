@@ -83,6 +83,10 @@ type Store interface {
 // What Read sees of a session being written is what the store held
 // when it read: an append in flight may not be there yet, and a leaf a
 // writer moved through Session.Branch and has not recorded is not.
+// Nor need what it sees be durable: Read can show an append its writer
+// has not yet made durable, under a lazy sync policy or while its
+// fsync runs, which a crash can take back. Each store says what, if
+// anything, reads only what is durable.
 type Reader interface {
 	Read(ctx context.Context, id string) (*Session, error)
 }
@@ -236,30 +240,19 @@ func (m *MemoryStore) Open(_ context.Context, id string) (*Session, error) {
 }
 
 // Read implements [Reader]: a copy of the session, rebuilt from its
-// encoding, with its leaf where the session has it.
+// encoding. Its leaf is the one the entries record, as a store reading
+// a file finds it: a leaf moved through Session.Branch and not recorded
+// is not there.
 func (m *MemoryStore) Read(ctx context.Context, id string) (*Session, error) {
 	live, err := m.Open(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	live.mu.RLock()
 	var buf bytes.Buffer
-	err = writeLocked(&buf, live)
-	leaf := live.leaf
-	live.mu.RUnlock()
-	if err != nil {
+	if err := Write(&buf, live); err != nil {
 		return nil, err
 	}
-	s, err := Read(&buf)
-	if err != nil {
-		return nil, err
-	}
-	if leaf == "" {
-		s.ResetLeaf()
-	} else if err := s.Branch(leaf); err != nil {
-		return nil, err
-	}
-	return s, nil
+	return Read(&buf)
 }
 
 // Append implements Store.
