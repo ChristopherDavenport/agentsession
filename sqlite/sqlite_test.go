@@ -41,6 +41,14 @@ func TestStoreSuite(t *testing.T) {
 			paths[st] = paths[old]
 			return st
 		},
+		Second: func(t *testing.T, s agentsession.Store) agentsession.Store {
+			st, err := sqlite.Open(paths[s])
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		},
 	})
 }
 

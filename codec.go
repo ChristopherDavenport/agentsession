@@ -285,6 +285,11 @@ func (m *migration) rewrite(e Entry, s *Session) error {
 func Write(w io.Writer, s *Session) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return writeLocked(w, s)
+}
+
+// writeLocked is Write; the caller holds s.mu.
+func writeLocked(w io.Writer, s *Session) error {
 	if s.migrated && len(s.unresolved) > 0 {
 		return fmt.Errorf("%w: %d entries the migration could not rewrite", ErrUnresolvedMigration, len(s.unresolved))
 	}

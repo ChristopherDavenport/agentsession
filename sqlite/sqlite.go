@@ -98,6 +98,8 @@ type Option func(*Store)
 // session read while another process appends to it shows what it held
 // when it was opened; call [Store.Release] and open it again to see
 // the rest.
+// [Store.Read], on any store, reads a session without a hold and
+// caches nothing, so it reads what the store holds at each call.
 func WithReadOnly() Option {
 	return func(s *Store) { s.readOnly = true }
 }
@@ -458,6 +460,13 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 
 // Open implements agentsession.Store. A session already open in this
 // store is returned as is.
+//
+// The hold is the store's, not the caller's: it is kept until
+// [Store.Release], [Store.Delete] or [Store.Close], and a Release frees
+// it whoever opened the session. A process that reads sessions it does
+// not write uses [Store.Read], or a second store opened with
+// [WithReadOnly], so that it neither keeps them from other processes
+// nor frees one its own writer is using.
 func (s *Store) Open(ctx context.Context, id string) (*agentsession.Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -471,8 +480,8 @@ func (s *Store) openLocked(ctx context.Context, id string) (*agentsession.Sessio
 	if sess, ok := s.open[id]; ok {
 		return sess, nil
 	}
-	var header string
-	err := s.r.QueryRowContext(ctx, `SELECT header FROM sessions WHERE id = ?`, id).Scan(&header)
+	var one int
+	err := s.r.QueryRowContext(ctx, `SELECT 1 FROM sessions WHERE id = ?`, id).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
 	}
@@ -492,7 +501,7 @@ func (s *Store) openLocked(ctx context.Context, id string) (*agentsession.Sessio
 			return nil, fmt.Errorf("sqlite: hold session: %w", err)
 		}
 	}
-	sess, err := s.load(ctx, id, header)
+	sess, header, err := s.load(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -547,36 +556,67 @@ func raiseFormat(ctx context.Context, tx *sql.Tx, id string) error {
 	return nil
 }
 
-// load rebuilds a session from its rows without claiming it.
-func (s *Store) load(ctx context.Context, id, header string) (*agentsession.Session, error) {
+// load rebuilds a session from its rows without claiming it, and
+// returns the header row as stored. The header and the entries are read
+// in one read transaction, so they are one state of the database: an
+// append, a raised header or a delete another connection commits
+// meanwhile is wholly in it or wholly not.
+func (s *Store) load(ctx context.Context, id string) (*agentsession.Session, string, error) {
+	tx, err := s.r.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, "", fmt.Errorf("sqlite: begin: %w", err)
+	}
+	defer tx.Rollback()
+	var header string
+	err = tx.QueryRowContext(ctx, `SELECT header FROM sessions WHERE id = ?`, id).Scan(&header)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, "", fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("sqlite: load session: %w", err)
+	}
 	// Rebuild the JSONL form and let the library validate the tree.
 	var buf bytes.Buffer
 	buf.WriteString(header)
 	buf.WriteByte('\n')
-	rows, err := s.r.QueryContext(ctx, `SELECT line FROM entries WHERE session_id = ? ORDER BY seq`, id)
+	rows, err := tx.QueryContext(ctx, `SELECT line FROM entries WHERE session_id = ? ORDER BY seq`, id)
 	if err != nil {
-		return nil, fmt.Errorf("sqlite: load entries: %w", err)
+		return nil, "", fmt.Errorf("sqlite: load entries: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var line string
 		if err := rows.Scan(&line); err != nil {
-			return nil, fmt.Errorf("sqlite: load entries: %w", err)
+			return nil, "", fmt.Errorf("sqlite: load entries: %w", err)
 		}
 		buf.WriteString(line)
 		buf.WriteByte('\n')
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sqlite: load entries: %w", err)
+		return nil, "", fmt.Errorf("sqlite: load entries: %w", err)
 	}
 	sess, err := agentsession.Read(&buf)
 	if err != nil {
-		return nil, fmt.Errorf("sqlite: session %s: %w", id, err)
+		return nil, "", fmt.Errorf("sqlite: session %s: %w", id, err)
 	}
 	if sess.ID() != id {
-		return nil, fmt.Errorf("sqlite: row %s holds session %s", id, sess.ID())
+		return nil, "", fmt.Errorf("sqlite: row %s holds session %s", id, sess.ID())
 	}
-	return sess, nil
+	return sess, header, nil
+}
+
+// Read implements [agentsession.Reader]: it reads the session's rows as
+// a read-only store's Open does, taking no hold and keeping nothing, so
+// a session this store or another process is writing is read and stays
+// the writer's. The session returned is the caller's own, read afresh
+// from the database in one read transaction, even when this store holds
+// the session open, and even when this store has refused it with
+// [ErrConcurrentWriter]. An entry is there once the Append that wrote it
+// has returned; a leaf moved through Session.Branch is not stored, and
+// is not there.
+func (s *Store) Read(ctx context.Context, id string) (*agentsession.Session, error) {
+	sess, _, err := s.load(ctx, id)
+	return sess, err
 }
 
 // forkOrigin returns the session a fork at base continues from: named, when
@@ -589,12 +629,8 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 		if sess, ok := s.open[id]; ok {
 			return sess, nil
 		}
-		var header string
-		err := s.r.QueryRowContext(ctx, `SELECT header FROM sessions WHERE id = ?`, id).Scan(&header)
-		if err != nil {
-			return nil, err
-		}
-		return s.load(ctx, id, header)
+		sess, _, err := s.load(ctx, id)
+		return sess, err
 	}
 	if named != "" {
 		if sess, err := read(named); err == nil {
@@ -833,6 +869,12 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 // database, and drops the hold when the store has one. On a read-only
 // store it is how a reader sees what another process has appended
 // since it opened the session.
+//
+// The store holds a session once, however many callers opened it, so
+// Release lets it go for all of them: a writer still appending through
+// this store has the session loaded again at its next append, or is
+// refused with ErrSessionLocked if another process took it meanwhile,
+// and the Session it was handed no longer follows the store.
 func (s *Store) Release(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -952,4 +994,7 @@ func isConstraint(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "constraint")
 }
 
-var _ agentsession.Store = (*Store)(nil)
+var (
+	_ agentsession.Store  = (*Store)(nil)
+	_ agentsession.Reader = (*Store)(nil)
+)

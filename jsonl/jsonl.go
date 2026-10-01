@@ -69,6 +69,8 @@ func WithSync(p SyncPolicy) Option {
 // An open session is cached as it is in a writing store, so a session
 // read while another process appends to it shows what it held when it
 // was opened; call [Store.Release] and open it again to see the rest.
+// [Store.Read], on any store, reads a session without a hold and
+// caches nothing, so it reads what the store holds at each call.
 func WithReadOnly() Option {
 	return func(s *Store) { s.readOnly = true }
 }
@@ -350,6 +352,13 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 // continue a valid file. Open returns ErrSessionLocked when another
 // process holds the session; a store opened with [WithReadOnly]
 // claims nothing and so is never refused.
+//
+// The lock is the store's, not the caller's: it is kept until
+// [Store.Release], [Store.Delete] or [Store.Close], and a Release frees
+// it whoever opened the session. A process that reads sessions it does
+// not write uses [Store.Read], or a second store opened with
+// [WithReadOnly], so that it neither keeps them from other processes
+// nor frees one its own writer is using.
 func (s *Store) Open(ctx context.Context, id string) (*agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -357,6 +366,34 @@ func (s *Store) Open(ctx context.Context, id string) (*agentsession.Session, err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, err := s.openLocked(id)
+	if err != nil {
+		return nil, err
+	}
+	return h.session, nil
+}
+
+// Read implements [agentsession.Reader]: it reads the session's file as
+// a read-only store's Open does, taking no lock, trimming nothing and
+// keeping nothing, so a session this store or another process is
+// writing is read and stays the writer's. The session returned is the
+// caller's own, read afresh from the file, even when this store holds
+// the session open. A line an append is writing as the file is read is
+// reported through Session.Truncated, as a crash's would be; an entry
+// is in the file once the Append that wrote it has returned, and a
+// leaf moved through Session.Branch is never in it.
+func (s *Store) Read(ctx context.Context, id string) (*agentsession.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	path, err := s.find(id)
+	if err != nil {
+		return nil, err
+	}
+	h, err := loadHandle(path, id, true)
+	if errors.Is(err, os.ErrNotExist) {
+		// Deleted since it was found.
+		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -758,6 +795,12 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 // or another process. On a read-only store there is no lock and
 // nothing to sync, and Release is how a reader drops a session it has
 // cached so the next Open reads what has been appended since.
+//
+// The store holds a session once, however many callers opened it, so
+// Release lets it go for all of them: a writer still appending through
+// this store has the session read again at its next append, or is
+// refused with ErrSessionLocked if another process took it meanwhile,
+// and the Session it was handed no longer follows the store.
 func (s *Store) Release(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -819,7 +862,10 @@ func writeLine(w io.Writer, v any) error {
 	return err
 }
 
-var _ agentsession.Store = (*Store)(nil)
+var (
+	_ agentsession.Store  = (*Store)(nil)
+	_ agentsession.Reader = (*Store)(nil)
+)
 
 // syncEntry fsyncs a session's file after an append the policy makes
 // durable; a test counts its calls.

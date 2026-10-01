@@ -147,6 +147,33 @@ which is harmless, and the next writing open puts it back.
   appended entries the repair cannot name. While a `damaged-*` log is
   kept, a sweep keeps every object any well-formed hash in it names,
   not only what its readable records name. (#167)
+- **`Reader`: a store reads a session without holding it.** The new
+  optional interface's `Read(ctx, id)` is implemented by cas, jsonl,
+  sqlite and `MemoryStore`. It takes no lock, writes nothing, the
+  recovery an `Open` would write included, and keeps nothing, and it
+  returns a session of the caller's own, read afresh from storage even
+  when the store holds the session open, so moving its leaf moves no
+  writer's and no append reaches it. A session being written is read
+  as a read-only store reads it: what the store has recorded, a torn
+  tail cut in memory, and on cas a lazy append whose objects are
+  present. A process that searches sessions beside the harness writing
+  them, in the same store, used to have to `Open` each and `Release`
+  it, which kept every session it read from other processes, or freed
+  ones its own writers were using, since `Release` frees the store's
+  one hold whoever opened the session; it now calls `Read`, or opens a
+  second store read-only. `Open` and `Release` on the `Store` interface
+  and on each store say so. `storetest.Options.Second`, a second
+  writing store beside the first, lets the new `Read` case show that a
+  read takes no hold. (#174)
+- **cas: a read-only `Open`, and `Read`, of a session deleted part way
+  through report `ErrNoSession`.** Neither holds a lock a delete waits
+  on, so a delete, and a sweep of the session's objects, could land
+  between reading the log and loading the entries, and the read failed
+  with the missing file's error. (#174)
+- **sqlite: a session is loaded in one read transaction.** Its header
+  and its entries were two reads, so a read-only `Open` beside a delete
+  could return the session's header with none of its entries, and no
+  error. (#174)
 
 ## v0.0.18 - 2026-10-01
 
