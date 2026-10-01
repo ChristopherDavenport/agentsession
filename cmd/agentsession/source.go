@@ -152,10 +152,20 @@ func verifyStore(root string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// A leftover is printed and is no failure: nothing reads it, and a
+	// sweep removes it.
+	leftovers := 0
 	for _, p := range rep.Problems {
 		fmt.Fprintf(stdout, "%s\n", p)
+		if p.Kind == cas.KindLeftover {
+			leftovers++
+		}
 	}
-	fmt.Fprintf(stdout, "%d sessions, %d entries, %d objects checked, %d problems\n", rep.Sessions, rep.Entries, rep.Objects, len(rep.Problems))
+	fmt.Fprintf(stdout, "%d sessions, %d entries, %d objects checked, %d problems", rep.Sessions, rep.Entries, rep.Objects, len(rep.Problems)-leftovers)
+	if leftovers > 0 {
+		fmt.Fprintf(stdout, ", %d leftover objects nothing needs", leftovers)
+	}
+	fmt.Fprintln(stdout)
 	if rep.Sessions == 0 && rep.OK() {
 		fmt.Fprintf(stdout, "nothing to verify: %s holds no sessions\n", root)
 		return errFailed

@@ -13,10 +13,11 @@ import (
 type Problem struct {
 	// Kind is "log" for a damaged log record, "corrupt" for an object or
 	// pack whose bytes fail their name or checksum, "missing" for an
-	// object something the store holds names and the store lacks, and
-	// "session" for a session that cannot be opened.
+	// object something the store holds names and the store lacks,
+	// "session" for a session that cannot be opened, and KindLeftover.
 	Kind string
-	// Object is the object's hash, for "corrupt" and "missing".
+	// Object is the object's hash, for "corrupt", "missing" and
+	// KindLeftover.
 	Object string
 	// Session is the session concerned, when there is one.
 	Session string
@@ -43,8 +44,21 @@ type Report struct {
 	Problems []Problem
 }
 
-// OK reports whether Verify found nothing wrong.
-func (r Report) OK() bool { return len(r.Problems) == 0 }
+// KindLeftover is the Kind of a loose object whose bytes fail its name
+// and which nothing the store holds needs, such as what a crash left of
+// an append recovery recorded lost. It is no failure: a sweep removes
+// it once it is older than the sweep's grace.
+const KindLeftover = "leftover"
+
+// OK reports whether Verify found nothing wrong, a leftover aside.
+func (r Report) OK() bool {
+	for _, p := range r.Problems {
+		if p.Kind != KindLeftover {
+			return false
+		}
+	}
+	return true
+}
 
 // Verify walks the whole store as git fsck does and reports what is
 // wrong with it: every log record's checksum, every loose object
@@ -52,7 +66,9 @@ func (r Report) OK() bool { return len(r.Problems) == 0 }
 // store holds for its two objects and the blobs its content names, and
 // every session by building it as Open does, which checks each entry's
 // hashes and its parent. It changes nothing, takes no session lock, and
-// runs on a read-only store. An error is returned only when the walk
+// runs on a read-only store. A loose object that fails its name and
+// that a sweep would not keep is reported as KindLeftover, not as
+// corrupt: nothing reads it. An error is returned only when the walk
 // itself cannot proceed; what it finds is in the report.
 func (s *Store) Verify(ctx context.Context) (Report, error) {
 	var rep Report
@@ -85,6 +101,21 @@ func (s *Store) Verify(ctx context.Context) (Report, error) {
 		}
 		rep.Objects += len(p.idx) / idxRecord
 	}
+	// Whether a loose object that fails its name is needed is whether a
+	// sweep would keep it, worked out once, on the first such object.
+	// Where a sweep could not work it out, as past a damaged log, every
+	// such object is needed and reported corrupt.
+	var keep *keepSet
+	needed := func(sp space, hash string) bool {
+		if keep == nil {
+			k, _, err := s.keepAll()
+			if err != nil {
+				k = keepSet{}
+			}
+			keep = &k
+		}
+		return keep.entries == nil || keep.has(sp, hash)
+	}
 	for _, sp := range []space{spaceEntries, spaceContents} {
 		err := s.objs.eachLoose(sp, func(hash, path string, _ os.FileInfo, tmp bool) error {
 			if tmp {
@@ -103,7 +134,12 @@ func (s *Store) Verify(ctx context.Context) (Report, error) {
 				if _, p, _, _, err := s.objs.locate(sp, hash, true); err == nil && p != nil {
 					return ctx.Err()
 				}
-				add(Problem{Kind: "corrupt", Object: hash, Err: fmt.Errorf("%w: %s object (%s)", ErrCorrupt, sp, s.objs.rel(path))})
+				err := fmt.Errorf("%w: %s object (%s)", ErrCorrupt, sp, s.objs.rel(path))
+				if !needed(sp, hash) {
+					add(Problem{Kind: KindLeftover, Object: hash, Err: fmt.Errorf("%w; nothing the store holds needs it, and a sweep removes it once it is older than the sweep's grace", err)})
+					return ctx.Err()
+				}
+				add(Problem{Kind: "corrupt", Object: hash, Err: err})
 			}
 			return ctx.Err()
 		})
@@ -151,7 +187,7 @@ func (s *Store) Verify(ctx context.Context) (Report, error) {
 		damaged, _ := filepath.Glob(filepath.Join(dir, damagedLogPrefix+"*"))
 		sort.Strings(damaged)
 		for _, d := range damaged {
-			add(Problem{Kind: "log", Session: id, Err: fmt.Errorf("a repair rewrote a damaged log; the damaged log is kept as %s, and a sweep keeps what its readable records name until it is removed", filepath.Base(d))})
+			add(Problem{Kind: "log", Session: id, Err: fmt.Errorf("a repair rewrote a damaged log; the damaged log is kept as %s, and a sweep keeps every object it names until it is removed", filepath.Base(d))})
 		}
 		if v.cutCommitted {
 			add(Problem{Kind: "log", Session: id, Err: errors.New("a block left unwritten is followed by a commit that had finished, which recovery will cut")})

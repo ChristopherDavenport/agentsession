@@ -37,7 +37,8 @@ func (k keepSet) has(sp space, hash string) bool {
 // live writer may yet commit it, writing its objects again. One of an
 // append recovery recorded lost, gone for good, is not kept at all, so
 // a sweep removes what a crash left of it, as RFC 0002's retention
-// allows, and Verify stops reporting it.
+// allows, and Verify, which reports it as a leftover until then, as no
+// failure, stops reporting it.
 func (s *Store) keepEntry(k keepSet, id string, mode keepMode) error {
 	if k.entries[id] {
 		return nil
@@ -245,13 +246,15 @@ func (s *Store) keepLogs(k keepSet, marks logMarks) error {
 	return nil
 }
 
-// keepDamaged adds what the readable records of a session's damaged
-// logs name, kept by a repair: each entry and head, and every ancestor
-// of one whose envelope still reads, since a parent the damage hid may
-// be among them. What only a damaged record named cannot be known; a
-// repair that dropped an entry does not let a sweep take what the log
-// it dropped it from named. Nothing need read whole: an object that is
-// missing or corrupt is what a repair dropped.
+// keepDamaged adds what a session's damaged logs, kept by a repair,
+// name: every well-formed hash any of their lines spells, readable
+// record or not, in either space, and as an entry, what it names and
+// every ancestor of one whose envelope still reads, since a parent the
+// damage hid may be among them. A hash a damaged record spells may be
+// what its damage made of another, and keeping it keeps more than is
+// needed, never less; a repair that dropped an entry does not let a
+// sweep take what the log it dropped it from named. Nothing need read
+// whole: an object that is missing or corrupt is what a repair dropped.
 func (s *Store) keepDamaged(k keepSet, dir string) error {
 	kept, err := filepath.Glob(filepath.Join(dir, damagedLogPrefix+"*"))
 	if err != nil {
@@ -262,32 +265,22 @@ func (s *Store) keepDamaged(k keepSet, dir string) error {
 		if info, err := os.Lstat(p); err == nil && !info.Mode().IsRegular() {
 			continue // not a log a repair kept
 		}
-		f, err := os.Open(p)
+		data, err := os.ReadFile(p)
 		if err != nil {
 			return err
 		}
-		info, err := f.Stat()
-		var l sessionLog
-		if err == nil {
-			l, err = parseSessionLog(f, 0, info.Size())
-		}
-		f.Close()
-		if err != nil {
-			return err
-		}
-		for _, r := range l.recs {
-			for _, id := range []string{r.Entry, r.Head, r.Base} {
-				for id != "" && !walked[id] {
-					walked[id] = true
-					if err := s.keepEntry(k, id, keepTorn); err != nil {
-						return err
-					}
-					parent, err := s.parentOf(id)
-					if err != nil {
-						break
-					}
-					id = parent
+		for _, h := range hashToken.FindAll(data, -1) {
+			k.contents[string(h)] = true
+			for id := string(h); id != "" && !walked[id]; {
+				walked[id] = true
+				if err := s.keepEntry(k, id, keepTorn); err != nil {
+					return err
 				}
+				parent, err := s.parentOf(id)
+				if err != nil {
+					break
+				}
+				id = parent
 			}
 		}
 	}
@@ -312,10 +305,13 @@ func (s *Store) sweepLock(ctx context.Context) (*dirLock, error) {
 // Pack moves the store's loose objects into one new pack and removes the
 // loose copies, as git's repack does without -a: nothing is dropped, so
 // it needs no grace and takes no lock a writer waits on. Then it merges
-// the smallest packs, as git's geometric repack does, until each pack
-// is at least twice the size of all the packs smaller than it together,
-// so a store holds a number of packs that grows with the logarithm of
-// its size and each object is rewritten a logarithmic number of times.
+// packs as git's repack --geometric=2 does: working down from the
+// largest, it leaves the packs that each hold at least twice the size
+// of the next smaller, merges the rest, and takes in any it left that
+// is under twice the merged size, so each pack is at least twice the
+// next smaller, and larger than all the smaller ones together, and a
+// store holds a number of packs that grows with the logarithm of its
+// size and each object is rewritten a logarithmic number of times.
 // It returns how many loose objects it packed.
 func (s *Store) Pack(ctx context.Context) (int, error) {
 	return s.pack(ctx, true)
@@ -399,8 +395,42 @@ func (s *Store) packLoose(ctx context.Context) (int, error) {
 	return len(paths), nil
 }
 
-// consolidate merges the smallest packs into one while the next is less
-// than twice their size together, under the gc lock. The merged pack
+// geometricSplit is how many of the packs, their sizes sorted
+// ascending, a merge takes, as git's repack --geometric=2 splits them:
+// the largest packs that already at least double from one to the next
+// are left, and the rest merge, with any of those left that is under
+// twice their size together. It works down from the largest, so one
+// small pack under half the next does not keep the packs above it from
+// merging.
+func geometricSplit(sizes []int64) int {
+	n := len(sizes)
+	if n == 0 {
+		return 0
+	}
+	i := n - 1
+	for ; i > 0; i-- {
+		if sizes[i] < 2*sizes[i-1] {
+			break
+		}
+	}
+	split := i
+	if split > 0 {
+		split++ // the larger of the pair that broke the progression
+	}
+	var acc int64
+	for _, s := range sizes[:split] {
+		acc += s
+	}
+	for split < n && sizes[split] < 2*acc {
+		acc += sizes[split]
+		split++
+	}
+	return split
+}
+
+// consolidate merges packs as geometricSplit splits them, under the gc
+// lock, so each pack is at least twice the size of the next smaller.
+// The merged pack
 // holds every object the packs it replaces did, so a reader holding one
 // of those still reads, and one that looks again finds the merged pack.
 // A pack holding an object that fails its name is not removed.
@@ -416,14 +446,11 @@ func (s *Store) consolidate(ctx context.Context) error {
 		}
 	}
 	sort.Slice(packs, func(i, j int) bool { return packs[i].size < packs[j].size })
-	m, acc := 1, int64(0)
-	if len(packs) > 0 {
-		acc = packs[0].size
+	sizes := make([]int64, len(packs))
+	for i, p := range packs {
+		sizes[i] = p.size
 	}
-	for m < len(packs) && packs[m].size < 2*acc {
-		acc += packs[m].size
-		m++
-	}
+	m := geometricSplit(sizes)
 	if m < 2 {
 		return nil
 	}
@@ -679,12 +706,36 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		lk.release()
 		return 0, err
 	}
+	// A pack written since the sweep listed its packs, as a commit
+	// writes one, stays: what it holds needs no rescue. Only this sweep,
+	// under the gc lock, removes a pack.
+	if err := s.objs.reloadPacks(true); err != nil {
+		lk.release()
+		return 0, err
+	}
+	replaced := map[string]bool{}
+	for _, p := range old {
+		replaced[p.name] = true
+	}
+	var stay []*pack
+	for _, p := range s.objs.packList() {
+		if !replaced[p.name] && p.name != newPack {
+			stay = append(stay, p)
+		}
+	}
+	inStaying := func(sp space, hash string) bool {
+		d, err := digestOf(hash)
+		if err != nil {
+			return false
+		}
+		return slices.ContainsFunc(stay, func(p *pack) bool { _, _, ok := p.find(sp, d); return ok })
+	}
 	for _, pair := range []struct {
 		sp  space
 		set map[string]bool
 	}{{spaceEntries, since.entries}, {spaceContents, since.contents}} {
 		for hash := range pair.set {
-			if inNew[pair.sp][hash] {
+			if inNew[pair.sp][hash] || inStaying(pair.sp, hash) {
 				continue
 			}
 			if lp, err := s.objs.loosePath(pair.sp, hash); err == nil {

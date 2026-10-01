@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -92,18 +93,51 @@ func TestCommitPackBelowMin(t *testing.T) {
 	if _, err := st.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
 		t.Fatal(err)
 	}
-	for i := range 3 {
-		mustAppend(t, st, "s", item(fmt.Sprintf("lazy %d", i)))
-	}
+	mustAppend(t, st, "s", item("lazy"))
 	objects, _ := countSyncs(t)
 	if err := st.Sync(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := objects.Load(); got != 6 {
-		t.Errorf("%d object fsyncs, want 6", got)
+	if got := objects.Load(); got != 2 {
+		t.Errorf("%d object fsyncs, want 2", got)
 	}
 	if got := len(st.objs.packList()); got != 0 {
 		t.Errorf("%d packs", got)
+	}
+}
+
+// TestCommitPackUnderRecords: under a header whose records name runs, a
+// lazy policy commits at each run, owing only the few objects since the
+// last, and those still go as one pack (#170).
+func TestCommitPackUnderRecords(t *testing.T) {
+	ctx := context.Background()
+	old := autoPackPacks
+	autoPackPacks = 1 << 30
+	defer func() { autoPackPacks = old }()
+	st, err := Open(t.TempDir(), WithSync(SyncNever))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Create(ctx, agentsession.Header{ID: "s", Records: agentsession.AllRecords}); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, st, "s", item("lazy 0"))
+	mustAppend(t, st, "s", item("lazy 1"))
+	objects, _ := countSyncs(t)
+	r, err := st.Write(ctx, "s", agentsession.NewRunStart("run-1", agentsession.SourceInput, ""))
+	if err != nil || !r.Durable {
+		t.Fatalf("a run the header records: durable %v, %v", r.Durable, err)
+	}
+	if got := objects.Load(); got > 1 {
+		t.Errorf("%d object fsyncs; want the pack's index alone", got)
+	}
+	if got := len(st.objs.packList()); got != 1 {
+		t.Errorf("%d packs after the run's commit, want 1", got)
+	}
+	// The run's own objects, written durably, stay loose.
+	if got := looseCount(t, st); got != 2 {
+		t.Errorf("%d loose objects left beside the pack, want the run's 2", got)
 	}
 }
 
@@ -266,12 +300,18 @@ func TestVerifyLooseBesidePack(t *testing.T) {
 	if rep, err := st.Verify(ctx); err != nil || !rep.OK() {
 		t.Errorf("a zeroed duplicate of a packed object: %v %v", rep.Problems, err)
 	}
-	bad := []byte("not what it is named")
-	q, _ := st.objs.loosePath(spaceContents, hashBytes([]byte("something else")))
-	os.MkdirAll(filepath.Dir(q), 0o755)
-	os.WriteFile(q, bad, 0o644)
-	if rep, _ := st.Verify(ctx); rep.OK() {
-		t.Error("a corrupt object with no good copy passed")
+	loose := mustAppend(t, st, "s", item("loose"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := st.contentOf(loose)
+	q, _ := st.objs.loosePath(spaceContents, c)
+	if err := os.WriteFile(q, []byte("not what it is named"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, _ := st.Verify(ctx)
+	if rep.OK() || !slices.ContainsFunc(rep.Problems, func(p Problem) bool { return p.Kind == "corrupt" && p.Object == c }) {
+		t.Errorf("a corrupt object a log needs, with no good copy: %v", rep.Problems)
 	}
 }
 
@@ -365,5 +405,105 @@ func TestPackCountReloads(t *testing.T) {
 	a.background.Wait()
 	if n := a.objs.packCount(); n >= autoPackPacks {
 		t.Errorf("after a look, the store still counts %d packs", n)
+	}
+}
+
+// TestGeometricSplit: the split is taken from the largest pack down, as
+// git's repack --geometric=2 takes it.
+func TestGeometricSplit(t *testing.T) {
+	for _, c := range []struct {
+		sizes []int64
+		want  int
+	}{
+		{nil, 0},
+		{[]int64{5}, 0},
+		{[]int64{1, 2, 4, 8}, 0},
+		{[]int64{1, 1}, 2},
+		{[]int64{1, 1, 4, 8}, 2},
+		{[]int64{1, 1, 3, 8}, 4},
+		{[]int64{1, 1, 3, 16}, 3},
+		// One small pack under half the next stopped a merge walking up
+		// from the smallest at its first step.
+		{[]int64{2044, 7769, 7834, 7900, 7950}, 5},
+		{[]int64{100, 1000, 1000, 1000, 100000}, 4},
+	} {
+		if got := geometricSplit(c.sizes); got != c.want {
+			t.Errorf("geometricSplit(%v) = %d, want %d", c.sizes, got, c.want)
+		}
+	}
+}
+
+// smallPackThenCommits writes one small pack, by a Pack of a single
+// append's objects, then commits commit packs, with st's automatic pack
+// as it stands, and returns the most packs the store held after any
+// commit.
+func smallPackThenCommits(t *testing.T, st *Store, commits int) int {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := st.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, st, "s", item("small"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	most := 0
+	for c := range commits {
+		for i := range commitPackMin {
+			mustAppend(t, st, "s", item(fmt.Sprintf("commit %d lazy %d", c, i)))
+		}
+		if err := st.Sync(ctx); err != nil {
+			t.Fatal(err)
+		}
+		st.background.Wait()
+		most = max(most, st.objs.packCount())
+	}
+	return most
+}
+
+// TestPackMergesPastSmallPack: one small pack, under half the size of
+// the commit packs after it, does not keep Pack from merging them
+// (#169).
+func TestPackMergesPastSmallPack(t *testing.T) {
+	old := autoPackPacks
+	autoPackPacks = 1 << 30
+	defer func() { autoPackPacks = old }()
+	st, err := Open(t.TempDir(), WithSync(SyncNever))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	const commits = 70
+	smallPackThenCommits(t, st, commits)
+	if n := st.objs.packCount(); n != commits+1 {
+		t.Fatalf("%d packs before Pack, want %d", n, commits+1)
+	}
+	if _, err := st.Pack(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := st.objs.packCount(); n >= 64 {
+		t.Errorf("%d packs after Pack", n)
+	}
+}
+
+// TestAutoPackMergesPastSmallPack: nor does it keep the pack the store
+// starts on its count from bringing the count down (#169).
+func TestAutoPackMergesPastSmallPack(t *testing.T) {
+	old := autoPackPacks
+	autoPackPacks = 8
+	defer func() { autoPackPacks = old }()
+	st, err := Open(t.TempDir(), WithSync(SyncNever))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if most := smallPackThenCommits(t, st, 4*autoPackPacks); most > autoPackPacks {
+		t.Errorf("the store reached %d packs, past %d", most, autoPackPacks)
+	}
+	if st.packStuck.Load() {
+		t.Error("the store's own pack is stuck")
 	}
 }

@@ -91,6 +91,62 @@ which is harmless, and the next writing open puts it back.
   derives one, theirs in turn likewise, with its `subsession` links
   pointed at them. Left under the old IDs, the subsession for the
   repeated call had the ID of the receiver's own. (#163)
+- **cas: packs merge past one small pack.** A merge walked up from the
+  smallest pack and stopped at the first at least twice the packs
+  below it, so one small pack, from a `Pack` of a quiet store or a
+  background pack that caught a commit in flight, kept every later
+  commit pack from merging: neither `Pack` nor the 64-pack trigger
+  brought the count down, and a store committing lazily gained a pack
+  per commit. The split is now taken from the largest pack down, as
+  git's `repack --geometric=2` takes it, weighing packs by their size.
+  (#169)
+- **cas: a commit owing 4 lazily written objects writes them as a
+  pack**, down from 32. A header whose `records` name runs and
+  dispatches, as agentturn's recorder's does, makes `SyncNever` and
+  `SyncOnResponse` commit at every run and dispatch, each owing only
+  the few objects written since the last, so the commit pack never
+  fired for them. A turn of a run start and four lazy items now takes
+  about 7 fsyncs, down from 20; one of two items, 7, down from 13.
+  `SyncPolicy`'s doc says that records make the lazy policies commit.
+  (#170)
+- **cas: a sweep beside steady writers is no longer starved.** A
+  writer that found `sweep.lock` free took it shared at once, and
+  durable appends hold it through their commit's fsyncs, so back-to-back
+  writers left a sweep waiting for its exclusive hold almost without
+  end: a sweep of 60,000 unneeded objects removed a few thousand a
+  minute. A sweep waiting for the lock now holds a third lock,
+  `sweep.lock.next`, exclusive, and a writer holds it shared while it
+  takes `sweep.lock`, so a writer arriving once a sweep waits queues
+  behind it for one batch. A fork's `Create` commits its origin's log
+  before it takes `sweep.lock`, since it may wait there for the
+  origin's writer. (#168)
+- **cas: `Verify` reports what a crash left of a lost append as a
+  leftover, not as corrupt.** A loose object that fails its name and
+  that a sweep would not keep, as what recovery recorded lost, is
+  reported with the new kind `KindLeftover` (`"leftover"`), which
+  `Report.OK` does not count: nothing reads it, and a sweep past its
+  grace removes it. Before, `Verify` and `agentsession verify` reported
+  corruption for that window after a power cut. An object a live log
+  names is still `corrupt`, and so is every such object when the keep
+  set cannot be worked out, as past a damaged log. `agentsession verify
+  <cas-root>` prints leftovers and does not fail on them. (#171)
+- **cas: `Repair` salvages an entry only a damaged last append record
+  names.** The last append record has no child whose envelope names its
+  entry, so damage to it dropped that entry, committed and acknowledged
+  as durable, unreported, and the next sweep removed its objects. An
+  append record spells the entry's hash twice, as `entry` and `head`,
+  and one damaged byte spoils at most one: a damaged line after the
+  last readable append that still names the session and an append now
+  has each hash it spells salvaged when the entry's objects read and
+  hash to their names and its parent is the base or kept, reported in
+  the new `RepairReport.Salvaged`. It is the head only when the line
+  names it as its head. When a damaged line follows the last head the
+  repair could read, the new `RepairReport.Unread` is set and `Named`
+  is empty, and `agentsession repair` no longer says the head is "as
+  the log last named it", but that a damaged line may have moved it or
+  appended entries the repair cannot name. While a `damaged-*` log is
+  kept, a sweep keeps every object any well-formed hash in it names,
+  not only what its readable records name. (#167)
 
 ## v0.0.18 - 2026-10-01
 

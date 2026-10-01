@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -199,28 +201,44 @@ func TestSweepWaitsForWriter(t *testing.T) {
 		t.Errorf("sweep after the writer committed: %v", err)
 	}
 	// The sweep does not hold the store's mutex while it builds its
-	// keep set and pack; an append beside a waiting sweep completes.
+	// keep set and pack; an open beside a waiting sweep completes. An
+	// append queues behind the sweep, which goes first once the writer
+	// commits (#168).
 	writer, _ = lockShared(ctx, filepath.Join(st.Root(), "sweep.lock"))
 	go func() {
 		_, err := st.Sweep(ctx, 0)
 		done <- err
 	}()
 	time.Sleep(50 * time.Millisecond)
+	opened := make(chan error, 1)
+	go func() {
+		_, err := st.Open(ctx, "s")
+		opened <- err
+	}()
+	select {
+	case err := <-opened:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("an open waited on a sweep that was waiting on a writer")
+	}
 	appended := make(chan error, 1)
 	go func() {
 		_, err := st.Append(ctx, "s", agentsession.NewItemEntry(openresponses.UserText("beside a sweep")))
 		appended <- err
 	}()
+	time.Sleep(50 * time.Millisecond)
 	select {
 	case err := <-appended:
-		if err != nil {
-			t.Error(err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Error("an append waited on a sweep that was waiting on a writer")
+		t.Errorf("an append went ahead of a waiting sweep: %v", err)
+	default:
 	}
 	writer.release()
 	if err := <-done; err != nil {
+		t.Error(err)
+	}
+	if err := <-appended; err != nil {
 		t.Error(err)
 	}
 	// Cancelled while waiting: the context's error, nothing removed.
@@ -280,6 +298,77 @@ func TestSweepRescuesCommittedSince(t *testing.T) {
 	}
 	if s.Len() != 1 {
 		t.Errorf("len %d", s.Len())
+	}
+}
+
+// TestSweepLeavesPacksWrittenSince: what a commit packs while a sweep
+// writes its pack stays in that pack, which the sweep does not replace,
+// and is not written back loose under the sweep's lock; an object
+// accepted since that only a replaced pack holds is still rescued.
+func TestSweepLeavesPacksWrittenSince(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root)
+	defer st.Close()
+	fill(t, st, "gone", 1)
+	fill(t, st, "s", 1)
+	if _, err := st.Pack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Delete(ctx, "gone"); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := Open(root, WithSync(SyncNever))
+	defer other.Close()
+	other.Create(ctx, agentsession.Header{ID: "c"})
+	var committed []string
+	var rescued string
+	var fired atomic.Bool
+	oldDir := syncDirFile
+	defer func() { syncDirFile = oldDir }()
+	syncDirFile = func(d *os.File) error {
+		err := oldDir(d)
+		if filepath.Base(d.Name()) != "pack" || fired.Load() {
+			return err
+		}
+		// Only while the sweep writes its pack, not under its lock.
+		lk, free, _ := lockTry(filepath.Join(root, "sweep.lock"), syscall.LOCK_SH)
+		if !free {
+			return err
+		}
+		lk.release()
+		fired.Store(true)
+		// The sweep's pack is written: commits pack beside it, and an
+		// append reuses a body only the old pack holds.
+		for c := range 3 {
+			for i := range commitPackMin {
+				committed = append(committed, mustAppend(t, other, "c", item(fmt.Sprintf("commit %d lazy %d", c, i))))
+			}
+			if err := other.Sync(ctx); err != nil {
+				t.Error(err)
+			}
+		}
+		rescued = mustAppend(t, st, "s", agentsession.NewItemEntry(openresponses.UserText("gone 0")))
+		return err
+	}
+	if _, err := st.Sweep(ctx, -time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	syncDirFile = oldDir
+	if !fired.Load() {
+		t.Fatal("the hook never ran")
+	}
+	for _, id := range committed {
+		p, _ := st.objs.loosePath(spaceEntries, id)
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("entry %s of a pack written during the sweep was written back loose", id)
+		}
+		if _, err := st.loadLine(id); err != nil {
+			t.Errorf("entry %s after the sweep: %v", id, err)
+		}
+	}
+	if _, err := st.loadLine(rescued); err != nil {
+		t.Errorf("the entry only a replaced pack held: %v", err)
 	}
 }
 

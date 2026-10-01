@@ -43,10 +43,16 @@ func repair(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "kept     %d entries, %d of them recovered from what the damage hid\n", len(rep.Kept), len(rep.Hidden))
-	if rep.Head == rep.Named {
+	fmt.Fprintf(stdout, "kept     %d entries, %d of them recovered from what the damage hid\n", len(rep.Kept), len(rep.Hidden)+len(rep.Salvaged))
+	for _, e := range rep.Salvaged {
+		fmt.Fprintf(stdout, "salvaged %s: named only by a damaged record, and its objects whole\n", shortID(e))
+	}
+	switch {
+	case rep.Unread:
+		fmt.Fprintf(stdout, "head     %s, the last head the repair could read; a damaged line after it may have moved the head or appended entries the repair cannot name\n", orNone(shortID(rep.Head)))
+	case rep.Head == rep.Named:
 		fmt.Fprintf(stdout, "head     %s, as the log last named it\n", orNone(shortID(rep.Head)))
-	} else {
+	default:
 		fmt.Fprintf(stdout, "head     %s, the latest kept leaf; the log last named %s, which is not kept\n", orNone(shortID(rep.Head)), shortID(rep.Named))
 	}
 	fmt.Fprintf(stdout, "mark     %s\n", rep.Mark)
