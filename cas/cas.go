@@ -18,7 +18,7 @@
 //	  journal                             the old journal's tombstone: a link to layout/journal, nothing writable
 //	  sweep.lock                          held shared by writers, exclusive by a sweep's last step
 //	  sweep.lock.want                     held shared by writers waiting for sweep.lock
-//	  sweep.lock.next                     held shared by writers taking sweep.lock, exclusive by a sweep waiting for it
+//	  sweep.lock.next                     held shared by writers taking sweep.lock, exclusive by a sweep waiting for it, two seconds at a time
 //	  gc.lock                             the lock of a running sweep or pack
 //
 // A body is held as its canonical bytes (RFC 8785), so what a session
@@ -89,6 +89,20 @@
 // keeps everything a log names and every loose object younger than a
 // grace period, as git's collector spares a young loose object, so an
 // object written ahead of its record is safe.
+//
+// A writer holds sweep.lock shared from an object write through the
+// commit that names it, and a sweep's last step takes it exclusive, so
+// the sweep waits for the writers inside their commits. A writer that
+// stays alive and makes no progress there, a process stopped by SIGSTOP
+// or Ctrl-Z, a debugger or a paused container, keeps the sweep waiting
+// until it goes on or is killed; the kernel drops a dead writer's lock.
+// A waiting sweep holds sweep.lock.next exclusive, so that writers
+// arriving queue behind it rather than keep the lock shared without
+// end, but for two seconds at a time, after which it lets them through
+// and waits off the turnstile before it tries again: writers are held
+// behind a sweep for no longer than that, however long the sweep waits.
+// A sweep of v0.0.19 on the same store holds sweep.lock.next for as long
+// as it waits, and a stopped writer then holds every writer behind it.
 //
 // A failed fsync stops the store. Linux reports a failed writeback once
 // to each file opened before it, marks the pages it failed to write

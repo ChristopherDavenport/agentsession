@@ -526,7 +526,9 @@ func (s *Store) consolidate(ctx context.Context) error {
 // and the new pack are built without any lock a writer waits on and
 // without the store's own mutex. Then the sweep's lock is taken
 // exclusive, waiting until ctx ends for writers between an object write
-// and its acceptance, and held only for a short last step: each log is
+// and its acceptance, a writer stopped there included, which keeps the
+// sweep waiting while the other writers go on, and held only for a
+// short last step: each log is
 // read from where the keep set stopped, anything accepted since that
 // lies only in a replaced pack is written back loose, and the replaced
 // packs go. Loose objects nothing needs are removed after, a batch at a
