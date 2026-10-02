@@ -270,6 +270,23 @@ func TestRegenerateFixtures(t *testing.T) {
 		}
 	}
 
+	// omit, omit-absent and bad-omit: the 0.11 conformance vectors for
+	// the omit setting, appended natively. A session that switches
+	// model and back under reasoning: the first writes omit and hashes
+	// every response; the second is the same session as 0.10 writes
+	// it, with no omit and no hash after the first switch; the third
+	// records a hash over the request the omit in force says was not
+	// sent.
+	for name, variant := range map[string]switchVariant{"omit": switchOmit, "omit-absent": switchAbsent, "bad-omit": switchBad} {
+		var buf bytes.Buffer
+		if err := Write(&buf, switchFixture(t, variant)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join("testdata", "sessions", name+".jsonl"), buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	// judged: the 0.11 conformance vector for a judge's link, appended
 	// natively: a session that answered a task and records the session
 	// that judged it, and the entry the judgement is about.
@@ -1439,4 +1456,223 @@ func handbackFixture(t *testing.T, bad bool) *Session {
 	turn(4, "gpt-5-mini", agentB, omittedB, "Which invoice was it?")
 	turn(5, "gpt-5", agentA([]int{0, 1, 2, 20}), factsOmitted(append([]int{3}, seq(4, 19)...)...), "Back to triage.")
 	return s
+}
+
+// A switchVariant is the way switchFixture writes its session.
+type switchVariant int
+
+const (
+	// switchOmit writes omit and hashes every response.
+	switchOmit switchVariant = iota
+	// switchAbsent writes as 0.10 does: no omit, and a response whose
+	// request left items out carries no hash.
+	switchAbsent
+	// switchBad writes omit, and hashes the third response over the
+	// request with the other model's reasoning in it.
+	switchBad
+)
+
+// switchFixture builds the session omit.jsonl holds, or with another
+// variant omit-absent.jsonl or bad-omit.jsonl. One conversation, four
+// requests, reasoning in each response:
+//
+//  1. gpt-5 answers, and reasons. Its response entry names the model
+//     under a dated snapshot name, as a provider does.
+//  2. The session switches to gpt-5-mini, and the config entry that
+//     changes the model writes omit reasoning other_models: the request
+//     leaves out gpt-5's reasoning, which gpt-5-mini would refuse.
+//  3. The session switches back and the config writes the rule again,
+//     which changes nothing: gpt-5's reasoning is in the request, and
+//     gpt-5-mini's is out.
+//  4. A host drops gpt-5-mini's message by listing its entry in omit
+//     items, beside the rule still in force.
+func switchFixture(t *testing.T, variant switchVariant) *Session {
+	t.Helper()
+	id := map[switchVariant]string{
+		switchOmit:   "01995b2a-0000-7000-8000-00000000001b",
+		switchAbsent: "01995b2a-0000-7000-8000-00000000001c",
+		switchBad:    "01995b2a-0000-7000-8000-00000000001d",
+	}[variant]
+	at, _ := time.Parse(time.RFC3339, "2026-10-01T14:00:00Z")
+	s := New(Header{ID: id, CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must := func(e Entry) string {
+		t.Helper()
+		got, err := s.Append(e)
+		if err != nil {
+			t.Fatalf("append %T: %v", e, err)
+		}
+		return got
+	}
+	// sent is the hash of the request the next call is sent: what the
+	// context at the leaf rebuilds, or, with bare set, what it would
+	// rebuild had nothing been left out.
+	sent := func(bare bool) string {
+		t.Helper()
+		ctx, err := buildContext(s.Path(s.Leaf()), !bare)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := ctx.Request()
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := RequestHash(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	// call appends the user message, then the output of the call and
+	// its response, which carries the hash unless the writer cannot
+	// stand behind one. It returns the message's entry.
+	call := func(n int, model, snapshot, user string, hash func() string) (message string) {
+		t.Helper()
+		must(NewItemEntry(openresponses.UserText(user)))
+		h := hash()
+		respID := fmt.Sprintf("resp_%d", n)
+		reasoning := NewItemEntry(&openresponses.ReasoningItem{ID: fmt.Sprintf("rs_%d", n), Summary: openresponses.Contents{&openresponses.SummaryText{Text: "thinking about " + user}}, EncryptedContent: fmt.Sprintf("enc-%s-%d", model, n)})
+		reasoning.ResponseID = respID
+		must(reasoning)
+		answer := NewItemEntry(&openresponses.Message{ID: "msg_" + respID, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: "Answer " + respID + ".", Annotations: []openresponses.Annotation{}}}})
+		answer.ResponseID = respID
+		message = must(answer)
+		must(&ResponseEntry{ResponseID: respID, Model: snapshot, Status: openresponses.ResponseStatusCompleted, RequestHash: h})
+		return message
+	}
+	hashed := func() string { return sent(false) }
+	// afterSwitch is the hash a writer of 0.10 could record for a request
+	// that left items out of what the path shows: none.
+	afterSwitch := func() string {
+		if variant == switchAbsent {
+			return ""
+		}
+		return sent(false)
+	}
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	call(1, "gpt-5", "gpt-5-2026-08-07", "Plan the migration.", hashed)
+
+	switch1 := &ConfigEntry{Model: "gpt-5-mini"}
+	if variant != switchAbsent {
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, ok := ctx.Settings.OmitDelta(Omit{Reasoning: OmitOtherModels})
+		if !ok || d == nil {
+			t.Fatalf("OmitDelta = %v, %v", d, ok)
+		}
+		switch1.Omit = d
+	}
+	must(switch1)
+	miniMessage := call(2, "gpt-5-mini", "gpt-5-mini-2026-08-07", "Now apply step one.", afterSwitch)
+
+	switch2 := &ConfigEntry{Model: "gpt-5"}
+	if variant != switchAbsent {
+		// A writer that states the rule at every switch writes it again;
+		// it changes nothing, and so does not make the entry a delta.
+		switch2.Omit = &Omit{Reasoning: OmitOtherModels}
+	}
+	must(switch2)
+	third := afterSwitch
+	if variant == switchBad {
+		third = func() string { return sent(true) }
+	}
+	call(3, "gpt-5", "gpt-5-2026-08-07", "Back to the first model: summarise.", third)
+
+	if variant != switchAbsent {
+		must(&ConfigEntry{Omit: &Omit{Items: []string{miniMessage}}})
+	}
+	call(4, "gpt-5", "gpt-5-2026-08-07", "Anything else?", afterSwitch)
+	return s
+}
+
+// TestOmitFixtures reads the 0.11 conformance fixtures for the omit
+// setting: with the rule written at each switch every response's hash
+// verifies, though the requests leave out another model's reasoning and
+// a host's listed message; the same session as 0.10 writes it verifies
+// the first response alone; and a hash over the request with the items
+// in fails as a divergence from the rule, not as a response with no
+// hash.
+func TestOmitFixtures(t *testing.T) {
+	for name, variant := range map[string]switchVariant{"omit": switchOmit, "omit-absent": switchAbsent, "bad-omit": switchBad} {
+		raw, err := os.ReadFile(filepath.Join("testdata", "sessions", name+".jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		if err := Write(&buf, switchFixture(t, variant)); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(buf.Bytes(), raw) {
+			t.Errorf("%s.jsonl is not what switchFixture builds; run go test -update", name)
+		}
+		s := loadFixture(t, name)
+		var results []string
+		for _, e := range s.Entries() {
+			r, ok := e.(*ResponseEntry)
+			if !ok {
+				continue
+			}
+			switch err := s.Verify(r.ID); {
+			case err == nil:
+				results = append(results, "ok")
+			case errors.Is(err, ErrNoHash):
+				results = append(results, "unhashed")
+			case errors.Is(err, ErrOmitDivergence) && errors.Is(err, ErrHashMismatch):
+				results = append(results, "divergence")
+			case errors.Is(err, ErrHashMismatch):
+				results = append(results, "mismatch")
+			default:
+				t.Fatalf("%s: %s: %v", name, r.ResponseID, err)
+			}
+		}
+		want := map[string]string{
+			"omit":        "ok ok ok ok",
+			"omit-absent": "ok unhashed unhashed unhashed",
+			"bad-omit":    "ok ok divergence ok",
+		}[name]
+		if got := strings.Join(results, " "); got != want {
+			t.Errorf("%s: responses %s, want %s", name, got, want)
+		}
+	}
+
+	// What the first fixture's requests leave out, and why.
+	s := loadFixture(t, "omit")
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	for _, o := range ctx.OmittedItems {
+		left = append(left, o.Reason+" "+o.Entry.Item.ItemType())
+	}
+	if got := strings.Join(left, ","); got != "other_models reasoning,items message" {
+		t.Errorf("the leaf's request leaves out %s", got)
+	}
+	if ctx.Settings.Omit.Reasoning != OmitOtherModels || len(ctx.Settings.Omit.Items) != 1 {
+		t.Errorf("omit in force: %+v", ctx.Settings.Omit)
+	}
+	// 4 users, 4 answers' worth less one listed message, 4 reasoning
+	// items less gpt-5-mini's.
+	if len(ctx.Items) != 4+3+3 || len(ctx.Items) != len(ctx.ItemEntries) {
+		t.Errorf("the request holds %d items", len(ctx.Items))
+	}
+	// A path that ends before the switch never meets the member: the
+	// first request is as written, and no later entry leaves anything
+	// out of it.
+	var firstResp string
+	for _, e := range s.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			firstResp = r.ID
+			break
+		}
+	}
+	before, err := s.ContextAt(firstResp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.OmittedItems) != 0 || !before.Settings.Omit.IsZero() {
+		t.Errorf("the path to the first response leaves out %d items under %+v", len(before.OmittedItems), before.Settings.Omit)
+	}
 }

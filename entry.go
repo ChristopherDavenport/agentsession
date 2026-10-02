@@ -338,6 +338,75 @@ type ConfigEntry struct {
 	// the key from the settings.
 	Extra   map[string]json.RawMessage `json:"extra,omitempty"`
 	Replace bool                       `json:"replace,omitempty"`
+	// Omit records the items a request leaves out of the context, in
+	// format 0.11: a rule that leaves out a reasoning item written under
+	// another model, and a list of entries whose items contribute
+	// nothing. It is in force as a setting is: nil leaves the object in
+	// force as it was, an empty, non-nil one, written as {}, clears it,
+	// and any other sets the reasoning rule it names and adds its items
+	// to those in force. See [Omit] and [Settings.OmitDelta]. An omit
+	// member that does not decode as the object, which a file from before
+	// the member was defined may hold, is kept as written in Unknown and
+	// Omit is nil.
+	Omit *Omit `json:"-" member:"omit"`
+}
+
+// Omit is the omit setting: what a request leaves out of the context
+// though it is on the path, as format 0.11 records it. Settings carry
+// the object in force, which a config entry's Omit extends: its
+// Reasoning replaces the rule in force when it names one, its Items
+// are added to the set in force, and an object naming neither clears
+// both.
+type Omit struct {
+	// Reasoning is a rule over the reasoning items on the path. It is
+	// closed: [OmitOtherModels] is the one value defined, and a value
+	// this package does not define has no effect.
+	Reasoning string `json:"reasoning,omitempty"`
+	// Items are entry IDs. An item entry on the path whose ID is listed
+	// contributes nothing, whatever it holds; an ID that names no item
+	// entry on the path names nothing. The set in force is the union of
+	// every list since the last replace or compaction's checkpoint.
+	Items []string `json:"items,omitempty"`
+}
+
+// OmitOtherModels is the one value of [Omit.Reasoning] the format
+// defines: a request leaves out each item entry holding a reasoning
+// item that carries a response and was written while a model other than
+// the request's was in force. It is also the reason a [Context] reports
+// for an item left out by that rule.
+const OmitOtherModels = "other_models"
+
+// OmitItems is the reason a [Context] reports for an item left out
+// because [Omit.Items] lists its entry.
+const OmitItems = "items"
+
+// IsZero reports whether the object names no rule and no entry, which
+// is the object a config entry writes to clear the one in force, and the
+// settings of a path that left nothing out.
+func (o Omit) IsZero() bool { return o.Reasoning == "" && len(o.Items) == 0 }
+
+// merged returns the object in force after a delta d: d's rule replaces
+// this one's when it names one, d's items are added to this one's in the
+// order they were first written, and a delta that names neither clears
+// both. The receiver and d are not modified.
+func (o Omit) merged(d Omit) Omit {
+	if d.IsZero() {
+		return Omit{}
+	}
+	out := Omit{Reasoning: o.Reasoning}
+	if d.Reasoning != "" {
+		out.Reasoning = d.Reasoning
+	}
+	seen := make(map[string]bool, len(o.Items)+len(d.Items))
+	for _, list := range [][]string{o.Items, d.Items} {
+		for _, id := range list {
+			if id != "" && !seen[id] {
+				seen[id] = true
+				out.Items = append(out.Items, id)
+			}
+		}
+	}
+	return out
 }
 
 // InstructionPart is one named part of the instructions. A harness
@@ -1812,7 +1881,15 @@ func (e *ResponseEntry) decodeMembers(data []byte, all map[string]json.RawMessag
 // MarshalJSON emits the entry as one JSON object.
 func (e *ConfigEntry) MarshalJSON() ([]byte, error) {
 	type plain ConfigEntry
-	return marshalEntry(TypeConfig, &e.EntryBase, (*plain)(e))
+	if e.Omit != nil {
+		if _, dup := e.Unknown["omit"]; dup {
+			return nil, errors.New("agentsession: config entry has omit both typed and unknown")
+		}
+	}
+	return marshalEntry(TypeConfig, &e.EntryBase, struct {
+		*plain
+		Omit *Omit `json:"omit,omitempty"`
+	}{(*plain)(e), e.Omit})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -1826,7 +1903,12 @@ func (e *ConfigEntry) UnmarshalJSON(data []byte) error {
 
 func (e *ConfigEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain ConfigEntry
-	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), configKeys)
+	e.Omit = nil
+	if err := unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), configKeys); err != nil {
+		return err
+	}
+	promote(&e.EntryBase, "omit", &e.Omit)
+	return nil
 }
 
 // MarshalJSON emits the entry as one JSON object.
