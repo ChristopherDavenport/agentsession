@@ -29,6 +29,11 @@ type Options struct {
 	// refused a session s holds. It is nil for a store that is not
 	// shared. The Read case uses it to show that Read takes no hold.
 	Second func(t *testing.T, s agentsession.Store) agentsession.Store
+	// ReadOnly returns a store on the same storage as s opened
+	// read-only, as another process's would be. It is nil for a store
+	// that has no read-only form; the Follow cases use Second then, and
+	// skip the second-store case when that is nil too.
+	ReadOnly func(t *testing.T, s agentsession.Store) agentsession.Store
 }
 
 // Run exercises a store through the whole interface.
@@ -47,6 +52,7 @@ func Run(t *testing.T, opts Options) {
 	t.Run("Fork", func(t *testing.T) { testFork(t, opts) })
 	t.Run("ForkPrefix", func(t *testing.T) { testForkPrefix(t, opts) })
 	t.Run("Read", func(t *testing.T) { testRead(t, opts) })
+	t.Run("Follow", func(t *testing.T) { testFollow(t, opts) })
 	if opts.Reopen != nil {
 		t.Run("Persistence", func(t *testing.T) { testPersistence(t, opts) })
 		t.Run("DurableLeaf", func(t *testing.T) { testDurableLeaf(t, opts) })
