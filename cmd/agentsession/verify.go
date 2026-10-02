@@ -109,6 +109,9 @@ func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Wr
 			if all {
 				fmt.Fprintf(stdout, "%s  ok\n", id)
 			}
+		case errors.Is(err, agentsession.ErrOmitDivergence):
+			failed++
+			fmt.Fprintf(stdout, "%s  MISMATCH recorded %s, the request with the items the omit setting leaves out\n", id, r.RequestHash)
 		case errors.Is(err, agentsession.ErrHashMismatch):
 			failed++
 			fmt.Fprintf(stdout, "%s  MISMATCH recorded %s\n", id, r.RequestHash)

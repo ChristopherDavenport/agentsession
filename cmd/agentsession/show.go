@@ -179,6 +179,9 @@ func printContext(w io.Writer, s *agentsession.Session, at string) error {
 		}
 		fmt.Fprintf(tw, "  omitted\t%s\n", strings.Join(names, ", "))
 	}
+	if !st.Omit.IsZero() {
+		fmt.Fprintf(tw, "  omit\t%s\n", strings.TrimPrefix(describeOmit(st.Omit), "omit "))
+	}
 	if len(st.Tools) > 0 {
 		names := make([]string, 0, len(st.Tools))
 		for _, t := range st.Tools {
@@ -192,6 +195,11 @@ func printContext(w io.Writer, s *agentsession.Session, at string) error {
 	tw.Flush()
 	for i, it := range ctx.Items {
 		fmt.Fprintf(w, "  %3d  %s\n", i+1, describeItem(it))
+	}
+	// What the request leaves out is in the record, so it is shown as
+	// omitted and not as absent.
+	for _, o := range ctx.OmittedItems {
+		fmt.Fprintf(w, "  left out (%s)  %s  %s\n", o.Reason, shortID(o.Entry.ID), describeItem(o.Entry.Item))
 	}
 	return nil
 }

@@ -180,6 +180,19 @@ func TestRun(t *testing.T) {
 			stdout: []string{"omitted memory/user/n-0003 (budget), +16 of ", "instructions [product= agentsmd= memory/user/n-0000= memory/user/n-0001= memory/user/n-0002= memory/user/n-0020="},
 		},
 		{
+			name: "show omitted items", args: []string{"show", filepath.Join(fixtures, "omit.jsonl")},
+			stdout: []string{"omit reasoning other_models", "omit 1 item(s)", "left out (other_models)", "left out (items)", "omit          reasoning other_models, 1 item(s)"},
+		},
+		{name: "verify omit", args: []string{"verify", filepath.Join(fixtures, "omit.jsonl")}, stdout: []string{"4 verified, 0 without hash, 0 failed"}, absent: []string{"MISMATCH"}},
+		{
+			name: "verify omit as 0.10 writes it", args: []string{"verify", filepath.Join(fixtures, "omit-absent.jsonl")},
+			stdout: []string{"1 verified, 3 without hash, 0 failed"},
+		},
+		{
+			name: "verify a hash over what omit leaves out", args: []string{"verify", filepath.Join(fixtures, "bad-omit.jsonl")}, code: 1,
+			stdout: []string{"MISMATCH recorded sha256:", "the request with the items the omit setting leaves out", "3 verified, 0 without hash, 1 failed"},
+		},
+		{
 			name: "verify a hand-back", args: []string{"verify", filepath.Join(fixtures, "handback.jsonl")},
 			stdout: []string{"5 verified, 0 without hash, 0 failed"}, absent: []string{"records to"},
 		},
