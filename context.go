@@ -97,6 +97,14 @@ func (h *partHistory) find(id, hash string) (InstructionPart, bool) {
 	return InstructionPart{}, false
 }
 
+// has reports whether the history holds p's text and source under its
+// ID, as a hash alone resolves it: the part that most recently left
+// force under p.ID with that text is p, source included.
+func (h *partHistory) has(p InstructionPart) bool {
+	q, ok := h.find(p.ID, HashText(p.Text))
+	return ok && q.Source == p.Source
+}
+
 // UnmarshalJSON decodes a checkpoint, taking instructions_omitted only
 // when the member is spelled exactly and holds a list of parts that
 // encodes back to what the line holds, extra members aside, as a
@@ -464,6 +472,18 @@ func unresolvedParts(parts []InstructionPart) bool {
 // prompt, however many parts it has. A part in force that parts leaves
 // out is removed by its absence. parts names each ID once.
 //
+// A part that is not in force, or is in force with other text, is named
+// by its hash alone when the path has given its ID that text and
+// source and the part has since left force, as format 0.11 lets a
+// writer: an agent handed the session back after another replaced its
+// parts costs the parts that changed, and not its whole prompt. Only a
+// part the path never had under its ID carries its text. A replace and
+// a compaction's checkpoint start the path's parts afresh, so a part
+// that left force before one carries its text again. A delta written
+// this way is read by a reader of 0.11, which resolves a hash against
+// the parts that have left force; the library writes 0.11 headers, so
+// a reader of 0.10 that cannot has refused the file.
+//
 // It returns nil when parts are exactly the ones in force, so a
 // harness that re-renders its layers every turn writes nothing when
 // nothing moved.
@@ -499,7 +519,13 @@ func (s Settings) InstructionsDelta(parts []InstructionPart) *ConfigEntry {
 		// the delta resolves it rather than keeping what is missing.
 		if !ok || s.InstructionsParts[j].Unresolved() || s.InstructionsParts[j].Text != p.Text || s.InstructionsParts[j].Source != p.Source {
 			flush()
-			out = append(out, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source})
+			if s.left.has(p) {
+				// The path has this text under this ID and it left force:
+				// its hash resolves it, and a hash is all it costs.
+				out = append(out, InstructionPart{ID: p.ID, Hash: HashText(p.Text)})
+			} else {
+				out = append(out, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source})
+			}
 			if ok {
 				cursor = j + 1
 			}
