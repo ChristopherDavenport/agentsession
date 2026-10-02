@@ -95,6 +95,28 @@ func TestScanAgreesWithRead(t *testing.T) {
 	}
 }
 
+// TestScanBaseRule: Scan refuses a file that breaks the base rule as
+// Read does, with ErrBaseRule, and takes the fork fixture, whose lines
+// keep it (#161).
+func TestScanBaseRule(t *testing.T) {
+	for _, name := range []string{"bad-base-root", "bad-base-parent", "bad-base-prefix"} {
+		data, err := os.ReadFile(filepath.Join("testdata", "sessions", name+".jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := scanAll(data); !errors.Is(err, ErrBaseRule) || !errors.Is(err, ErrNoEntry) {
+			t.Errorf("%s: Scan = %v, want ErrBaseRule, and ErrNoEntry under it", name, err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join("testdata", "sessions", "fork.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := scanAll(data); err != nil || len(ids) != 8 {
+		t.Errorf("fork: Scan = %d ids, %v", len(ids), err)
+	}
+}
+
 // scanFile is a session of two entries, r1 and r2 under it, which a
 // test line goes under.
 type scanFile struct {

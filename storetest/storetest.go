@@ -482,8 +482,17 @@ func testFork(t *testing.T, opts Options) {
 	}
 	above := agentsession.NewItemEntry(openresponses.UserText("above"))
 	above.Parent = ids[0]
-	if _, err := st.Append(ctx, "fork-1", above); !errors.Is(err, agentsession.ErrNoEntry) {
-		t.Errorf("append above the base = %v, want ErrNoEntry", err)
+	if _, err := st.Append(ctx, "fork-1", above); !errors.Is(err, agentsession.ErrBaseRule) || !errors.Is(err, agentsession.ErrNoEntry) {
+		t.Errorf("append above the base = %v, want ErrBaseRule, and ErrNoEntry under it", err)
+	}
+	// A session with a base has one root: ResetLeaf and an append is a
+	// second root, which the rule refuses, and the leaf is unchanged.
+	f.ResetLeaf()
+	if _, err := st.Append(ctx, "fork-1", agentsession.NewItemEntry(openresponses.UserText("a second root"))); !errors.Is(err, agentsession.ErrBaseRule) {
+		t.Errorf("append a second root to a fork = %v, want ErrBaseRule", err)
+	}
+	if err := f.Branch(own); err != nil {
+		t.Fatal(err)
 	}
 	// A header that names no parent session finds the holder; one on a
 	// fork's prefix is the origin's entry wherever it is found.

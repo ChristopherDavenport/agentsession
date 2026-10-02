@@ -136,12 +136,20 @@ func TestReadErrors(t *testing.T) {
 	tests := []struct {
 		name string
 		want error  // sentinel, when there is one
+		also error  // a second sentinel the error is under errors.Is
 		text string // substring of the message otherwise
 	}{
 		{name: "bad-parent", want: ErrNoEntry},
 		{name: "unsupported-format", want: ErrUnsupportedFormat},
 		{name: "corrupt-middle", text: "line 3"},
 		{name: "missing-id", text: "no id"},
+		// The base rule (#161): a file with a base has one root, its
+		// own entries hang from the base or from one another, and the
+		// lines before the base are the path to it. Each is ErrNoEntry
+		// too, which Append returned for the rule before the sentinel.
+		{name: "bad-base-root", want: ErrBaseRule, also: ErrNoEntry, text: "second root"},
+		{name: "bad-base-parent", want: ErrBaseRule, also: ErrNoEntry, text: "above the base"},
+		{name: "bad-base-prefix", want: ErrBaseRule, also: ErrNoEntry, text: "not from the line before it"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -156,6 +164,9 @@ func TestReadErrors(t *testing.T) {
 			}
 			if tt.want != nil && !errors.Is(err, tt.want) {
 				t.Errorf("err = %v, want %v", err, tt.want)
+			}
+			if tt.also != nil && !errors.Is(err, tt.also) {
+				t.Errorf("err = %v, want it under %v too", err, tt.also)
 			}
 			if tt.text != "" && !strings.Contains(err.Error(), tt.text) {
 				t.Errorf("err = %v, want substring %q", err, tt.text)

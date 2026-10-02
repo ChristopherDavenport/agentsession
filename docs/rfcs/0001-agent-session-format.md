@@ -242,7 +242,13 @@ file.
 
 A parent MUST appear earlier in the file than any child. Multiple roots
 are permitted in a file with no `base`; a file with one has one prefix
-and every own entry descends from the base. An entry MUST NOT be
+and every own entry descends from the base: the lines before the base
+are the path to it, one root and each the child of the line before, and
+every line after it names as `parent` the base or a line after it, never
+`null` and never a prefix entry above the base. A reader MUST refuse a
+file that breaks this, as it refuses a parent not in the file, since a
+writer appending to the file is held to the same rule and could not
+continue what it reads. An entry MUST NOT be
 modified after it is written; corrections are new entries.
 
 ### Entry hash
@@ -1579,7 +1585,9 @@ runs of the list in force by `keep` across deltas that move a part
 across a budget, beside a `replace` and a compaction's checkpoint that
 write it whole, the recomputed `reason` for every `run` end, and
 negative cases, each a file broken in one way, for a broken parent link,
-a truncated last line, an unknown type, a `dispatch` that follows a
+a truncated last line, an unknown type, a file with a `base` holding a
+second root, an own entry hung from the prefix above the base, or a line
+before the base that is not on the path to it, a `dispatch` that follows a
 `reject`, an `answer` or the call's output, a decision that follows a
 `reject`, a `reject` that follows a `dispatch` or an output, a `target`
 naming another call, a repeated `call_id`, an empty `call_id`, a `run`

@@ -2582,7 +2582,10 @@ func (s *Store) syncHead(h *handle, sessionID string) error {
 			return fmt.Errorf("%w: head %s is not in the log", ErrModified, leaf)
 		}
 	} else if h.session.Header().Base != "" {
-		return fmt.Errorf("%w: a session with a base has a head", agentsession.ErrNoEntry)
+		// The base rule, met here before the session's own check since
+		// the reset leaf is what is being recorded: under errors.Is it
+		// is ErrNoEntry too, as the session reports it.
+		return fmt.Errorf("%w: a session with a base has a head and no second root (%w)", agentsession.ErrBaseRule, agentsession.ErrNoEntry)
 	}
 	if err := s.appendRecords(h, h.dir, true, s.withSync(h, sessionID, logRecord{Op: opHead, Session: sessionID, Head: leaf, Seq: h.session.Len()})...); err != nil {
 		return err
