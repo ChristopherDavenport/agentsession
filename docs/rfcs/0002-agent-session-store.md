@@ -341,6 +341,47 @@ serialises appends to a log even when it accepts them concurrently. No
 session is short of an order, and no reader has to guess a head from
 one.
 
+### Following a log
+
+A reader may tail a session's log while its holder writes, and a
+reader in another process or another language will. What it may assume
+of the log is this.
+
+- **Complete records only.** A reader that tails a log MUST consume
+  only whole records: in a file store, up to the last newline; in a
+  store that writes a record before the objects it names are durable,
+  a record whose checksum holds and whose objects it can read. An
+  incomplete tail is a record being written, and the reader waits for
+  it. It is not damage, and it is not an error.
+- **Append-only, except named replacements.** A log only grows, with
+  these exceptions, each of which changes the log's identity or
+  shortens it: a holder that opens a session after a crash recovers it
+  by writing the log anew; a repair or a migration writes a new log;
+  a writer raising a file's header to a later format minor rewrites
+  the file and renames it over; and a holder cuts back a record it
+  accepted when the commit that was to make it durable failed. A reader
+  tells each by the log's identity, by its size falling below where the
+  reader had read, or by what the reader last consumed no longer
+  standing where it was; a log that is any of these is another log, and
+  the reader reads the session again rather than carry on from an
+  offset. A session deleted, or created again under the same ID, is
+  not a replacement of the log but another session, and a reader never
+  carries on from one into the other.
+- **The visible order, not the durable one.** What a tailing reader
+  sees is the log's visible order: a record is visible once the holder
+  has written it, which for a record whose commit is still running, or
+  one a lazy commit policy has not yet committed, is before it is
+  durable. A crash, or the cut after a failed commit, can take back a
+  record a reader saw, and the reader finds that as a replacement above.
+  A reader that must see only what is durable cannot learn it from the
+  log's bytes alone, since another process cannot see an fsync, and
+  reads from a store that says what it has committed, as the exchange
+  section's fetch does.
+
+The sequence in each record is the order a follower reports, in log
+order, on every branch; a head is the last the log records, as for any
+reader.
+
 ## Durability and recovery
 
 A session is a ref and its entries are objects, as a git branch is a

@@ -156,8 +156,9 @@ it at no extra I/O.
   - cas: the size and identity of `sessions/<id>/log`. Growth goes
     through `readSessionLog(from)`. A replaced or shorter log is a
     `Reset`. A missing directory is a deletion.
-  - sqlite: `PRAGMA data_version`, then `seq > ?`. A seq below the
-    cursor's, which only a rebuild makes, is a `Reset`.
+  - sqlite: the session's newest seq, then `seq > ?`. A seq below the
+    cursor's, which only a rebuild makes, is a `Reset`. The plan said
+    `PRAGMA data_version`; see Decided in implementation.
   - memory: in-process only; there is no other process.
 
   The interval is an option, `WithFollowInterval`, defaulting to 100 ms
@@ -167,7 +168,8 @@ it at no extra I/O.
 The cursor encodes what each store needs to resume and to detect a
 replacement:
 - jsonl: the byte offset, the inode and the header's hash;
-- cas: the log offset, the log's identity and the last `Seq`;
+- cas: the log offset, the log's identity and a checksum of the last
+  line consumed (not the last `Seq`; see Decided in implementation);
 - sqlite: the last seq and the session's creation stamp.
 
 ## RFC 0002
@@ -228,11 +230,88 @@ This adds no new wire shape, and no format minor.
 - **Should `Change.Session` stay?** It costs an in-memory session per
   follower. A consumer that renders a path needs one anyway, and it
   keeps `ContextAt` usable without a second read, so the plan keeps it.
+  Settled: it stayed. The follower extends it in place, so a change's
+  session is valid until the next step.
 - **Should a `Head` change carry the path it names?** A consumer can
   compute it from `Session`, so the plan leaves it out until a consumer
   shows otherwise.
 - **Should a cas follower read through packs?** cas reads objects after
   a sweep has packed them, and the follower uses the same path, so it
-  reads through packs either way. The open question is whether that
-  makes it too slow for a long session's snapshot. That needs measuring
-  in step 3.
+  reads through packs either way. Measured in step 3, on the snapshot
+  (`BenchmarkFollowSnapshot` in `cas`, 3 runs each, an i9): 1,000
+  entries take about 33 ms to `Read` and 33 ms to snapshot loose, 28 and
+  37 ms packed; 10,000 entries take about 287 and 285 ms loose, 305 and
+  290 ms packed. That is about 30 us an entry either way: the snapshot
+  costs what a `Read` costs, and a pack makes neither slower. A tail
+  costs one entry's objects per append. An idle poll is a stat of the
+  directory and the log, one read of the header and one short read of
+  the log's last line. Settled: reading through packs is fine; a long
+  session's snapshot is as slow as its `Read`, and that is where a
+  cheaper read would help both.
+
+## Decided in implementation
+
+Where building the plan decided what it left open or went another way:
+
+- **One loop for the file and database stores.** `internal/follow` holds
+  the iterator: a store gives a `Source` (`Load` the session up to a
+  cursor, `Tail` the complete records after one, and a wake channel and
+  interval), and the loop keeps the follower's session, yields changes,
+  waits, and turns `ErrStale` into a `Reset`. A tail record the session
+  will not take, which `Read` would judge, is a `Reset` too. The memory
+  store's loop is its own, since the root package cannot import
+  `internal/follow`. `internal/wake` is the broadcast and the backoff.
+- **Resume reads the session up to the cursor.** The follower needs a
+  session for `Change.Session`, so a resume loads the log up to the
+  cursor, checks it is the log the cursor names, and yields nothing
+  until the next change. A resume from a cursor at the end is quiet.
+- **`Head` means the head changed.** A `Head` follows the `Appended`
+  change of a leaf label that moved the leaf, and a head record the
+  store wrote on its own (cas) is yielded when it names a leaf the
+  follower does not already have. cas logs the head a writer moved with
+  `Session.Branch` before the label that records it, so it has the head
+  first and the label after; the follower reports the move once, and
+  `storetest` takes either order.
+- **No `PRAGMA data_version`.** It is per connection, so each follower
+  would keep a connection of the pool for good, and the pool is shared
+  with every read. The sqlite poll is a query on the pool: the header
+  row, the newest seq, then the new rows when there are any.
+- **cas cursor: a checksum of the last line, not the last `Seq`.** A
+  log cut back after a failed append and grown past the cursor again
+  has the same identity and a larger size; only what stands at the
+  cursor's offset says it is another log. A seq cannot say that, and
+  `Seq` counts a fork's prefix, which is no count of own entries. The
+  cursor holds the log's inode, the directory's identity and the
+  header's hash beside the offset.
+- **A same-process follower still polls, slowly.** The broadcast wakes
+  it at once, and the interval is its fallback: a store value can be
+  written by another process too, and the memory store's session can be
+  appended through the session `Open` returned, which rings nothing.
+  "Ignores it" means an append never waits for the interval.
+- **Raising a header's format resets only jsonl.** The jsonl follower
+  sees a rewritten and renamed file. cas rewrites the header file and
+  not the log, and sqlite the header row and not the entries, so those
+  followers go on, holding a header that still names the earlier minor.
+- **What tells a rewrite from another session.** jsonl and sqlite hash
+  the header without its `format`: the same hash under a new inode or
+  header bytes is the same session replaced (`Reset`), another hash is
+  another session (`ErrNoSession`). A session created again with the same
+  ID, the same creation time and the same members, in a file that took
+  over the old one's inode, cannot be told from the old one. cas has the
+  directory's identity too, so it can. A resume from a cursor into such
+  a session is a `Reset`, as the plan has it.
+- **Damage in a cas log is an error, not a wait.** A torn last line
+  waits; a whole line that fails its checksum is damage, as it is for
+  `Read`, and ends the follow with that error. A record whose objects
+  are missing waits, since a pack or a lazy append may be moving them.
+- **Wakeups in cas** ring from `appendRecords`, which every record goes
+  through, from the recovery that writes a log anew and from `Delete`.
+  `Repair` and `migrate` are found by the poll.
+- **`storetest`** gains `Options.ReadOnly`, a second store on the same
+  storage opened read-only; the cases use it, else `Second`, else skip
+  the second-store case. `internal/followtest` is the helper every
+  store's Follow tests share.
+- **CLI.** `show -f` follows a cas session by root and ID, and a file
+  only where a jsonl store keeps it, `<root>/<project>/<time>_<id>.jsonl`;
+  any other file is a usage error. sqlite is not a CLI source yet
+  (#92).

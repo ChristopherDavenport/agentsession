@@ -5,6 +5,39 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **`Follow`: receive a session's entries as the store accepts them.**
+  `Follower` is a new interface beside `Reader`: `Follow(ctx, id,
+  from)` yields a `Snapshot` of the session, then an `Appended` change
+  for each entry in the order the store accepted it, on every branch, a
+  `Head` change when the store records a head, and a `Reset` when the log
+  was replaced and the session is read again. It takes no hold and
+  writes nothing, recovery included, so a store opened read-only can
+  follow a session its writer holds. Each change carries the follower's
+  own session, extended in place, and a `Cursor` to resume from; a
+  cursor the log no longer holds is answered with a `Reset`. The
+  iterator ends without an error when its context is done, with
+  `ErrNoSession` when the session is deleted, and a session created again
+  under the same ID is never continued into. The memory, `jsonl`, `cas`
+  and `sqlite` stores implement it; `WithFollowInterval` sets how often
+  a follower looks at a session no writer in its own process rang for,
+  100 ms by default, backing off to a second while nothing changes. A
+  follower of a session the same store writes is woken by the append. The
+  `jsonl` store tails by byte offset and resets when the first append to
+  an older minor rewrites the file, on a shrink and on a new inode; `cas`
+  tails the log and resets when a recovery, `Repair`, a migration or the
+  cut after a failed append replaces or shortens it, and goes through
+  `Pack` and `Sweep`, which move objects and not logs; `sqlite` selects
+  the rows above its last seq and resets when the seq goes backwards.
+  The `storetest` suite gains the `Follow` cases and an `Options.ReadOnly`
+  for a second, read-only store on the same storage. `agentsession show
+  -f` prints a session and then each entry as it lands. RFC 0002 says in
+  *Following a log*, under *Ordering*, what a tailing reader may assume
+  of a log: whole records only, append-only but for the named
+  replacements, and the visible order rather than the durable one. The
+  plan is `docs/plans/follow.md`.
+
 ## v0.0.20 - 2026-10-02
 
 - **Dependencies:** `openresponses` v0.0.13, from v0.0.12, in the root
