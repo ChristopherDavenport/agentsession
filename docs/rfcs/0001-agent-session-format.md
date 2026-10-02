@@ -1152,10 +1152,16 @@ does, records the tree's identity in a namespaced member, beside the
 others in the entry (`"cline:tree"`) or inside `vcs`. The envelope
 section says a rewriter preserves either.
 
-A later `env` entry whose `workspace` differs from the one in force
-before it on the path is a **substitution**: from that entry on, the
-tools ran against another file system than the path recorded until
-then, as when a session recorded in a container is resumed on a laptop.
+Before the first `env` entry on a path the workspace is absent. An
+`env` entry after a `response` on the path whose `workspace` differs
+from the one in force before it, the absent one included, is a
+**substitution**: from that entry on, the tools ran against another
+file system than the path recorded until then, as when a session
+recorded in a container is resumed on a laptop, or one recorded with no
+`env` entry is resumed in a container. An `env` entry before any
+`response` on the path is not one, whatever it names, since nothing was
+recorded yet to hold fixed; nor is one after a `response` that names
+the workspace in force, a local run's absent one included.
 Two `workspace` members are compared member by member in their
 canonical form, as the entry hash writes them, every member this
 document does not define included, and an absent one equals only

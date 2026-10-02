@@ -20,8 +20,9 @@
 //
 // An env entry is an event on the session span carrying cwd and each
 // string member of its workspace as workspace.<member>, and
-// [AttrSubstitution] when its workspace is not the one in force before
-// it.
+// [AttrSubstitution] when it comes after a response on the path and its
+// workspace is not the one in force before it, the absent workspace
+// before the first env entry included.
 package otel
 
 import (
@@ -90,9 +91,14 @@ const (
 	AttrOutcomePass    = "agentsession.outcome.pass"
 	AttrLinkRel        = "agentsession.link.rel"
 	AttrLinkSession    = "agentsession.link.session"
-	// AttrSubstitution marks an env event whose workspace is not the
-	// one in force before it on the path, which RFC 0001 calls a
-	// substitution. A first env entry is not one.
+	// AttrSubstitution marks an env event, after a response on the
+	// path, whose workspace is not the one in force before it, which
+	// RFC 0001 calls a substitution. Before the first env entry the
+	// workspace is absent, so a first env entry after a response that
+	// names one is a substitution, as a session recorded without an env
+	// entry and resumed in a container is; an env entry before any
+	// response is not one, whatever it names, since nothing was
+	// recorded yet to hold fixed.
 	AttrSubstitution = "agentsession.substitution"
 
 	AttrOperation     = "gen_ai.operation.name"
@@ -301,10 +307,11 @@ type tracker struct {
 	byEntry    map[string]*callState
 	order      []*callState // in the order seen
 	branchLink *trace.Link
-	// workspace is the workspace in force, once envSeen says an env
-	// entry has put one in force.
+	// workspace is the workspace in force, nil until an env entry puts
+	// one in force, and responded reports a response on the path, after
+	// which a change of workspace is a substitution.
 	workspace *agentsession.Workspace
-	envSeen   bool
+	responded bool
 }
 
 type callState struct {
@@ -411,7 +418,9 @@ func (t *tracker) prime(path []agentsession.Entry) {
 				t.model = v.Model
 			}
 		case *agentsession.EnvEntry:
-			t.workspace, t.envSeen = v.Workspace, true
+			t.workspace = v.Workspace
+		case *agentsession.ResponseEntry:
+			t.responded = true
 		case *agentsession.CompactionEntry:
 			if v.Config.Model != "" {
 				t.model = v.Config.Model
@@ -518,6 +527,7 @@ func (t *tracker) entry(e agentsession.Entry) {
 			}
 		}
 	case *agentsession.ResponseEntry:
+		t.responded = true
 		t.response(v, ts)
 	case *agentsession.RunEntry:
 		if v.IsStart() {
@@ -551,10 +561,10 @@ func (t *tracker) entry(e agentsession.Entry) {
 			attrs = append(attrs, attribute.String("cwd", v.CWD))
 		}
 		attrs = append(attrs, workspaceAttrs(v.Workspace)...)
-		if t.envSeen && !agentsession.SameWorkspace(t.workspace, v.Workspace) {
+		if t.responded && !agentsession.SameWorkspace(t.workspace, v.Workspace) {
 			attrs = append(attrs, attribute.Bool(AttrSubstitution, true))
 		}
-		t.workspace, t.envSeen = v.Workspace, true
+		t.workspace = v.Workspace
 		t.session.AddEvent(EventEnv, trace.WithTimestamp(ts), trace.WithAttributes(attrs...))
 	case *agentsession.OutcomeEntry:
 		attrs := []attribute.KeyValue{attribute.String(AttrEntryID, v.ID), attribute.String(AttrOutcomeKind, v.Kind)}

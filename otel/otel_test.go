@@ -171,13 +171,17 @@ func substitutions(s sdktrace.ReadOnlySpan) (marked []bool, nodes []string) {
 
 // TestExportSubstitution: a second env entry whose workspace differs
 // from the first only by a member the format does not define is a
-// substitution, and its event says so; the first is not one, and an
-// env entry repeating the workspace in force is not either.
+// substitution, and its event says so; the first, before any response,
+// is not one, and an env entry repeating the workspace in force is not
+// either.
 func TestExportSubstitution(t *testing.T) {
 	sr, tracer := recorder()
 	s := agentsession.New(agentsession.Header{})
 	for _, node := range []string{"n-1", "n-2", "n-2"} {
 		if _, err := s.Append(nodeEnv(t, node)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(&agentsession.ResponseEntry{ResponseID: "resp_" + node, Status: openresponses.ResponseStatusCompleted}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -209,6 +213,9 @@ func TestStoreSubstitution(t *testing.T) {
 	id := sess.ID()
 	for _, node := range []string{"n-1", "n-2"} {
 		if _, err := st.Append(ctx, id, nodeEnv(t, node)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(ctx, id, &agentsession.ResponseEntry{ResponseID: "resp_" + node, Status: openresponses.ResponseStatusCompleted}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -713,5 +720,92 @@ func TestAnswerArgsNotRewritten(t *testing.T) {
 	}
 	if got := eventAttr(tool[0], EventDecision, AttrArgsRewritten); len(got) != 1 {
 		t.Errorf("the answer's event: args_rewritten = %v, want the decision's own fact", got)
+	}
+}
+
+// TestSubstitutionAfterResponse: before the first env entry the
+// workspace is absent, so a first env entry after a response that names
+// one is a substitution, as a session recorded without an env entry and
+// resumed under WithEnv in a container is, and agenteval's strict replay
+// refuses it; an env entry before any response is not one, whatever it
+// names, and a local env with no workspace after a response is not
+// either, since absent equals absent (#148).
+func TestSubstitutionAfterResponse(t *testing.T) {
+	resp := func(s *agentsession.Session) error {
+		_, err := s.Append(&agentsession.ResponseEntry{ResponseID: fmt.Sprintf("resp_%d", s.Len()), Status: openresponses.ResponseStatusCompleted})
+		return err
+	}
+	env := func(node string) func(*agentsession.Session) error {
+		return func(s *agentsession.Session) error {
+			_, err := s.Append(nodeEnv(t, node))
+			return err
+		}
+	}
+	local := func(s *agentsession.Session) error {
+		_, err := s.Append(&agentsession.EnvEntry{CWD: "/w"})
+		return err
+	}
+	tests := []struct {
+		name   string
+		steps  []func(*agentsession.Session) error
+		marked []bool
+	}{
+		{"no env, a response, then a container", []func(*agentsession.Session) error{resp, env("n-1")}, []bool{true}},
+		{"an env before the first response", []func(*agentsession.Session) error{env("n-1"), resp}, []bool{false}},
+		{"two envs before the first response", []func(*agentsession.Session) error{env("n-1"), env("n-2"), resp}, []bool{false, false}},
+		{"a local env with no workspace after a response", []func(*agentsession.Session) error{resp, local}, []bool{false}},
+		{"a container after a local run", []func(*agentsession.Session) error{local, resp, env("n-1")}, []bool{false, true}},
+		{"the same workspace after a response", []func(*agentsession.Session) error{env("n-1"), resp, env("n-1")}, []bool{false, false}},
+		{"another node after a response", []func(*agentsession.Session) error{env("n-1"), resp, env("n-2")}, []bool{false, true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sr, tracer := recorder()
+			s := agentsession.New(agentsession.Header{})
+			for _, step := range tt.steps {
+				if err := step(s); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+				t.Fatal(err)
+			}
+			session := spans(sr.Ended()).named(SpanSession)
+			if len(session) != 1 {
+				t.Fatalf("session spans = %d", len(session))
+			}
+			if marked, _ := substitutions(session[0]); !slices.Equal(marked, tt.marked) {
+				t.Errorf("env events marked %v, want %v", marked, tt.marked)
+			}
+		})
+	}
+
+	// The Store decorator primes a resumed session's response as it primes
+	// its workspace: a session recorded with a response and no env entry,
+	// resumed in a container, marks the env entry it then writes.
+	ctx := context.Background()
+	sr, tracer := recorder()
+	mem := agentsession.NewMemoryStore()
+	sess, err := mem.Create(ctx, agentsession.Header{ID: "resumed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resp(sess); err != nil {
+		t.Fatal(err)
+	}
+	st := Wrap(mem, tracer)
+	if _, err := st.Open(ctx, "resumed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, "resumed", nodeEnv(t, "n-1")); err != nil {
+		t.Fatal(err)
+	}
+	st.Close("resumed")
+	resumed := spans(sr.Ended()).named(SpanSession).withAttr(AttrResumed, "true")
+	if len(resumed) != 1 {
+		t.Fatalf("resumed session spans = %d", len(resumed))
+	}
+	if marked, _ := substitutions(resumed[0]); !slices.Equal(marked, []bool{true}) {
+		t.Errorf("resumed env events marked %v, want the first marked", marked)
 	}
 }
