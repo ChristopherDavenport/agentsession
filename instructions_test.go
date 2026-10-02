@@ -1166,3 +1166,52 @@ func TestInstructionsDeltaOutOfForce(t *testing.T) {
 		}
 	})
 }
+
+// TestInstructionsDeltaHashResolvesInForceFirst: a hash is resolved
+// against the part in force under its id before the parts that left
+// force, so a writer names a part out of force by hash only when no part
+// is in force under its id or the one in force is resolved and has other
+// text. A part in force with the text it means and another source, and
+// one in force the path could not resolve, carry their text.
+func TestInstructionsDeltaHashResolvesInForceFirst(t *testing.T) {
+	apply := func(settings Settings, parts ...InstructionPart) Settings {
+		return settings.Apply(&ConfigEntry{InstructionsParts: parts})
+	}
+	t.Run("the text in force with another source than the one that left", func(t *testing.T) {
+		// x(T,S2) leaves force, x(T,S1) is in force: a hash would resolve
+		// to the part in force and give x the source S1.
+		settings := apply(apply(Settings{}, InstructionPart{ID: "x", Text: "T", Source: "S2"}), InstructionPart{ID: "x", Text: "T", Source: "S1"})
+		want := []InstructionPart{{ID: "x", Text: "T", Source: "S2"}}
+		delta := settings.InstructionsDelta(want)
+		if delta == nil || len(delta.InstructionsParts) != 1 || delta.InstructionsParts[0].Text != "T" || delta.InstructionsParts[0].Source != "S2" {
+			t.Fatalf("delta %+v, want the part with its text and source", delta)
+		}
+		got := settings.Apply(delta)
+		if got.InstructionsParts[0].Source != "S2" || got.Instructions != "T" {
+			t.Errorf("parts after the delta: %+v", got.InstructionsParts)
+		}
+	})
+	t.Run("an in force part the path could not resolve", func(t *testing.T) {
+		settings := apply(Settings{}, InstructionPart{ID: "x", Text: "T"})
+		settings = apply(settings, InstructionPart{ID: "x", Text: "U"})
+		settings = apply(settings, InstructionPart{ID: "x", Hash: "sha256:bogus"})
+		if !unresolvedParts(settings.InstructionsParts) {
+			t.Fatal("the setup left a resolved part")
+		}
+		delta := settings.InstructionsDelta([]InstructionPart{{ID: "x", Text: "T"}})
+		if delta == nil || delta.InstructionsParts[0].Text != "T" {
+			t.Fatalf("delta %+v, want the text written out", delta)
+		}
+		got := settings.Apply(delta)
+		if unresolvedParts(got.InstructionsParts) || got.Instructions != "T" {
+			t.Errorf("after the delta: %+v, instructions %q", got.InstructionsParts, got.Instructions)
+		}
+	})
+	t.Run("a text the part in force had before still goes by hash", func(t *testing.T) {
+		settings := apply(apply(Settings{}, InstructionPart{ID: "x", Text: "T", Source: "S"}), InstructionPart{ID: "x", Text: "U", Source: "S"})
+		delta := settings.InstructionsDelta([]InstructionPart{{ID: "x", Text: "T", Source: "S"}})
+		if delta == nil || delta.InstructionsParts[0].Text != "" || delta.InstructionsParts[0].Hash != HashText("T") {
+			t.Errorf("delta %+v, want the hash alone", delta)
+		}
+	})
+}
