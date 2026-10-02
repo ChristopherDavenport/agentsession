@@ -28,8 +28,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/internal/wake"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -107,6 +109,9 @@ type Store struct {
 	policy      SyncPolicy
 	staleReport func(LockInfo)
 	readOnly    bool
+	followEvery time.Duration
+	// hub rings the followers of a session this store appends to.
+	hub wake.Hub
 
 	mu   sync.Mutex
 	open map[string]*handle
@@ -494,6 +499,9 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	if err != nil {
 		return "", err
 	}
+	// Followers look again however the append ends: a rewrite for the
+	// format may have landed before a write that failed.
+	defer s.hub.Notify(sessionID)
 	// The entry is prepared first, so that one the session refuses or
 	// already holds leaves the file as it was: a second append of an
 	// entry the session holds is a no-op, as RFC 0002 has it, and writing
@@ -788,6 +796,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 			return err
 		}
 	}
+	defer s.hub.Notify(id)
 	if err := os.Remove(path); err != nil {
 		releaseLock(path)
 		if errors.Is(err, os.ErrNotExist) {

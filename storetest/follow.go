@@ -10,147 +10,9 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/internal/followtest"
 	"github.com/ChristopherDavenport/openresponses"
 )
-
-// followTimeout bounds how long a case waits for a change that should
-// arrive, or for the end of a follow that should end. A change that
-// does arrive does so in a poll interval or two.
-const followTimeout = 10 * time.Second
-
-// tail ranges over a follow in a goroutine, so a case can wait for the
-// next change with a timeout.
-type tail struct {
-	t      *testing.T
-	cancel context.CancelFunc
-	ch     chan followed
-	done   chan struct{}
-	// ack lets the follow take its next step: it waits for one after
-	// each change, since a change's session is extended in place by the
-	// step after.
-	ack     chan struct{}
-	holding bool
-	// last is the cursor of the last change next returned.
-	last agentsession.Cursor
-}
-
-type followed struct {
-	c   agentsession.Change
-	err error
-}
-
-func startTail(t *testing.T, f agentsession.Follower, id string, from agentsession.Cursor) *tail {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	w := &tail{t: t, cancel: cancel, ch: make(chan followed), done: make(chan struct{}), ack: make(chan struct{})}
-	go func() {
-		defer close(w.done)
-		defer close(w.ch)
-		for c, err := range f.Follow(ctx, id, from) {
-			select {
-			case w.ch <- followed{c, err}:
-			case <-ctx.Done():
-				return
-			}
-			select {
-			case <-w.ack:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	t.Cleanup(w.stop)
-	return w
-}
-
-func (w *tail) stop() {
-	w.cancel()
-	<-w.done
-}
-
-// release lets the follow take its next step.
-func (w *tail) release() {
-	if w.holding {
-		w.holding = false
-		select {
-		case w.ack <- struct{}{}:
-		case <-w.done:
-		}
-	}
-}
-
-// next returns the next change, and fails the case when none comes.
-func (w *tail) next() agentsession.Change {
-	w.t.Helper()
-	c, err, ok := w.nextOrEnd()
-	if !ok {
-		w.t.Fatal("the follow ended; want another change")
-	}
-	if err != nil {
-		w.t.Fatalf("the follow failed: %v", err)
-	}
-	return c
-}
-
-// nextOrEnd returns the next change or error, and false when the
-// follow has ended.
-func (w *tail) nextOrEnd() (agentsession.Change, error, bool) {
-	w.t.Helper()
-	w.release()
-	select {
-	case f, ok := <-w.ch:
-		if ok {
-			w.holding = true
-		}
-		if ok && f.err == nil {
-			w.last = f.c.Cursor
-		}
-		return f.c, f.err, ok
-	case <-time.After(followTimeout):
-		w.t.Fatal("no change arrived")
-		return agentsession.Change{}, nil, false
-	}
-}
-
-// nextKind returns the next change and checks its kind.
-func (w *tail) nextKind(k agentsession.ChangeKind) agentsession.Change {
-	w.t.Helper()
-	c := w.next()
-	if c.Kind != k {
-		w.t.Fatalf("change %v, want %v", c.Kind, k)
-	}
-	return c
-}
-
-// quiet fails when a change arrives within a short while.
-func (w *tail) quiet() {
-	w.t.Helper()
-	w.release()
-	select {
-	case f, ok := <-w.ch:
-		if ok {
-			w.t.Fatalf("unexpected change %v (%v)", f.c.Kind, f.err)
-		}
-		w.t.Fatal("the follow ended")
-	case <-time.After(300 * time.Millisecond):
-	}
-}
-
-// end waits for the follow to end and returns its last error.
-func (w *tail) end() error {
-	w.t.Helper()
-	c, err, ok := w.nextOrEnd()
-	if !ok {
-		return nil
-	}
-	if err == nil {
-		w.t.Fatalf("change %v, want the follow to end", c.Kind)
-	}
-	if _, _, ok := w.nextOrEnd(); ok {
-		w.t.Fatal("the follow went on after an error")
-	}
-	return err
-}
 
 func user(text string) agentsession.Entry {
 	return agentsession.NewItemEntry(openresponses.UserText(text))
@@ -203,8 +65,8 @@ func seeded(t *testing.T, opts Options, n int) (agentsession.Store, *agentsessio
 func followAppends(t *testing.T, opts Options) {
 	ctx := context.Background()
 	st, s, ids := seeded(t, opts, 2)
-	w := startTail(t, st.(agentsession.Follower), s.ID(), "")
-	snap := w.nextKind(agentsession.Snapshot)
+	w := followtest.Start(t, st.(agentsession.Follower), s.ID(), "")
+	snap := w.NextKind(agentsession.Snapshot)
 	if got := entryIDs(snap.Session); !reflect.DeepEqual(got, ids) {
 		t.Fatalf("snapshot holds %v, want %v", got, ids)
 	}
@@ -217,7 +79,7 @@ func followAppends(t *testing.T, opts Options) {
 	if snap.Session.Leaf() != ids[1] {
 		t.Errorf("snapshot leaf %s, want %s", snap.Session.Leaf(), ids[1])
 	}
-	w.quiet()
+	w.Quiet()
 	prev := snap.Cursor
 	for _, text := range []string{"c", "d", "e"} {
 		id, err := st.Append(ctx, s.ID(), user(text))
@@ -225,7 +87,7 @@ func followAppends(t *testing.T, opts Options) {
 			t.Fatal(err)
 		}
 		ids = append(ids, id)
-		c := w.nextKind(agentsession.Appended)
+		c := w.NextKind(agentsession.Appended)
 		if c.ID != id || c.Entry == nil || c.Entry.Base().ID != id {
 			t.Errorf("appended %q, want %s", c.ID, id)
 		}
@@ -240,20 +102,20 @@ func followAppends(t *testing.T, opts Options) {
 			t.Errorf("leaf %s after the append, want %s", c.Session.Leaf(), id)
 		}
 	}
-	w.quiet()
+	w.Quiet()
 	// What the follower holds is its own: the writer's session did not
 	// take its entries, nor it the writer's moves.
 	if err := s.Branch(ids[0]); err != nil {
 		t.Fatal(err)
 	}
-	w.quiet()
+	w.Quiet()
 }
 
 func followBranch(t *testing.T, opts Options) {
 	ctx := context.Background()
 	st, s, ids := seeded(t, opts, 3)
-	w := startTail(t, st.(agentsession.Follower), s.ID(), "")
-	w.nextKind(agentsession.Snapshot)
+	w := followtest.Start(t, st.(agentsession.Follower), s.ID(), "")
+	w.NextKind(agentsession.Snapshot)
 
 	// A branch: an append under an entry that is not the leaf. It is
 	// seen in log order, with its own parent, and the leaf stays.
@@ -263,7 +125,7 @@ func followBranch(t *testing.T, opts Options) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := w.nextKind(agentsession.Appended)
+	c := w.NextKind(agentsession.Appended)
 	if c.ID != sid || c.Entry.Base().Parent != ids[0] {
 		t.Errorf("branch entry %s under %s, want %s under %s", c.ID, c.Entry.Base().Parent, sid, ids[0])
 	}
@@ -273,14 +135,14 @@ func followBranch(t *testing.T, opts Options) {
 	if p := c.Session.Path(sid); len(p) != 2 {
 		t.Errorf("path to the branch has %d entries, want 2", len(p))
 	}
-	w.quiet()
+	w.Quiet()
 
 	// A recorded head: the leaf label is an entry, then the head it
 	// records. A leaf moved and not recorded is not seen.
 	if err := s.Branch(ids[0]); err != nil {
 		t.Fatal(err)
 	}
-	w.quiet()
+	w.Quiet()
 	mark, err := s.MarkLeaf()
 	if err != nil {
 		t.Fatal(err)
@@ -289,18 +151,18 @@ func followBranch(t *testing.T, opts Options) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c = w.nextKind(agentsession.Appended)
+	c = w.NextKind(agentsession.Appended)
 	if c.ID != mid {
 		t.Errorf("appended %s, want the label %s", c.ID, mid)
 	}
-	h := w.nextKind(agentsession.Head)
+	h := w.NextKind(agentsession.Head)
 	if h.Leaf != ids[0] || h.Session.Leaf() != ids[0] {
 		t.Errorf("head %s (session leaf %s), want %s", h.Leaf, h.Session.Leaf(), ids[0])
 	}
 	if h.Cursor == "" {
 		t.Error("the head has no cursor")
 	}
-	w.quiet()
+	w.Quiet()
 }
 
 // second returns the store a second follower runs on: read-only when
@@ -329,8 +191,8 @@ func followSecond(t *testing.T, opts Options) {
 	if other == nil {
 		t.Skip("the store has no second handle on its storage")
 	}
-	w := startTail(t, other.(agentsession.Follower), s.ID(), "")
-	snap := w.nextKind(agentsession.Snapshot)
+	w := followtest.Start(t, other.(agentsession.Follower), s.ID(), "")
+	snap := w.NextKind(agentsession.Snapshot)
 	if got := entryIDs(snap.Session); !reflect.DeepEqual(got, ids) {
 		t.Fatalf("snapshot holds %v, want %v", got, ids)
 	}
@@ -339,7 +201,7 @@ func followSecond(t *testing.T, opts Options) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c := w.nextKind(agentsession.Appended)
+		c := w.NextKind(agentsession.Appended)
 		if c.ID != id {
 			t.Errorf("appended %s, want %s", c.ID, id)
 		}
@@ -348,7 +210,7 @@ func followSecond(t *testing.T, opts Options) {
 	if _, err := st.Append(ctx, s.ID(), user("e")); err != nil {
 		t.Errorf("the writer's append beside a follower: %v", err)
 	}
-	w.nextKind(agentsession.Appended)
+	w.NextKind(agentsession.Appended)
 	// A branch and a head cross too.
 	if err := s.Branch(ids[0]); err != nil {
 		t.Fatal(err)
@@ -360,8 +222,8 @@ func followSecond(t *testing.T, opts Options) {
 	if _, err := st.Append(ctx, s.ID(), mark); err != nil {
 		t.Fatal(err)
 	}
-	w.nextKind(agentsession.Appended)
-	if h := w.nextKind(agentsession.Head); h.Leaf != ids[0] {
+	w.NextKind(agentsession.Appended)
+	if h := w.NextKind(agentsession.Head); h.Leaf != ids[0] {
 		t.Errorf("head %s, want %s", h.Leaf, ids[0])
 	}
 }
@@ -370,11 +232,11 @@ func followResume(t *testing.T, opts Options) {
 	ctx := context.Background()
 	st, s, ids := seeded(t, opts, 2)
 	f := st.(agentsession.Follower)
-	w := startTail(t, f, s.ID(), "")
-	w.nextKind(agentsession.Snapshot)
+	w := followtest.Start(t, f, s.ID(), "")
+	w.NextKind(agentsession.Snapshot)
 	id3, _ := st.Append(ctx, s.ID(), user("c"))
-	mid := w.nextKind(agentsession.Appended)
-	w.stop()
+	mid := w.NextKind(agentsession.Appended)
+	w.Stop()
 	ids = append(ids, id3)
 
 	// Two more land while nobody follows.
@@ -385,9 +247,9 @@ func followResume(t *testing.T, opts Options) {
 		}
 		ids = append(ids, id)
 	}
-	r := startTail(t, f, s.ID(), mid.Cursor)
+	r := followtest.Start(t, f, s.ID(), mid.Cursor)
 	for i := 3; i < 5; i++ {
-		c := r.nextKind(agentsession.Appended)
+		c := r.NextKind(agentsession.Appended)
 		if c.ID != ids[i] {
 			t.Errorf("resumed change %d is %s, want %s", i, c.ID, ids[i])
 		}
@@ -395,19 +257,19 @@ func followResume(t *testing.T, opts Options) {
 			t.Errorf("session at change %d holds %v, want %v", i, got, ids[:i+1])
 		}
 	}
-	r.quiet()
+	r.Quiet()
 	id6, _ := st.Append(ctx, s.ID(), user("f"))
-	if c := r.nextKind(agentsession.Appended); c.ID != id6 {
+	if c := r.NextKind(agentsession.Appended); c.ID != id6 {
 		t.Errorf("appended %s, want %s", c.ID, id6)
 	}
 
 	// A cursor at the very end waits for what comes next.
-	end := r.last
-	r.stop()
-	e := startTail(t, f, s.ID(), end)
-	e.quiet()
+	end := r.Last()
+	r.Stop()
+	e := followtest.Start(t, f, s.ID(), end)
+	e.Quiet()
 	id7, _ := st.Append(ctx, s.ID(), user("g"))
-	if c := e.nextKind(agentsession.Appended); c.ID != id7 {
+	if c := e.NextKind(agentsession.Appended); c.ID != id7 {
 		t.Errorf("appended %s, want %s", c.ID, id7)
 	}
 }
@@ -417,17 +279,17 @@ func followStale(t *testing.T, opts Options) {
 	st, s, _ := seeded(t, opts, 3)
 	f := st.(agentsession.Follower)
 	// A cursor that is not the store's.
-	w := startTail(t, f, s.ID(), "not-a-cursor")
-	c := w.nextKind(agentsession.Reset)
+	w := followtest.Start(t, f, s.ID(), "not-a-cursor")
+	c := w.NextKind(agentsession.Reset)
 	if c.Session.Len() != 3 || c.Cursor == "" {
 		t.Errorf("reset holds %d entries at %q, want the 3 the store holds", c.Session.Len(), c.Cursor)
 	}
-	w.stop()
+	w.Stop()
 
 	// A cursor into a log the session has since replaced.
-	snap := startTail(t, f, s.ID(), "")
-	old := snap.nextKind(agentsession.Snapshot)
-	snap.stop()
+	snap := followtest.Start(t, f, s.ID(), "")
+	old := snap.NextKind(agentsession.Snapshot)
+	snap.Stop()
 	created := old.Session.Header().CreatedAt
 	if err := st.Delete(ctx, s.ID()); err != nil {
 		t.Fatal(err)
@@ -440,8 +302,8 @@ func followStale(t *testing.T, opts Options) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := startTail(t, f, s.ID(), old.Cursor)
-	c = r.nextKind(agentsession.Reset)
+	r := followtest.Start(t, f, s.ID(), old.Cursor)
+	c = r.NextKind(agentsession.Reset)
 	if got := entryIDs(c.Session); !reflect.DeepEqual(got, []string{nid}) {
 		t.Errorf("reset holds %v, want the new session's [%s]", got, nid)
 	}
@@ -450,12 +312,12 @@ func followStale(t *testing.T, opts Options) {
 func followDelete(t *testing.T, opts Options) {
 	ctx := context.Background()
 	st, s, _ := seeded(t, opts, 1)
-	w := startTail(t, st.(agentsession.Follower), s.ID(), "")
-	w.nextKind(agentsession.Snapshot)
+	w := followtest.Start(t, st.(agentsession.Follower), s.ID(), "")
+	w.NextKind(agentsession.Snapshot)
 	if err := st.Delete(ctx, s.ID()); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.end(); !errors.Is(err, agentsession.ErrNoSession) {
+	if err := w.End(); !errors.Is(err, agentsession.ErrNoSession) {
 		t.Errorf("follow of a deleted session ended with %v, want ErrNoSession", err)
 	}
 }
@@ -466,8 +328,8 @@ func followDelete(t *testing.T, opts Options) {
 func followRecreate(t *testing.T, opts Options) {
 	ctx := context.Background()
 	st, s, _ := seeded(t, opts, 2)
-	w := startTail(t, st.(agentsession.Follower), s.ID(), "")
-	snap := w.nextKind(agentsession.Snapshot)
+	w := followtest.Start(t, st.(agentsession.Follower), s.ID(), "")
+	snap := w.NextKind(agentsession.Snapshot)
 	created := snap.Session.Header().CreatedAt
 	if err := st.Delete(ctx, s.ID()); err != nil {
 		t.Fatal(err)
@@ -481,7 +343,7 @@ func followRecreate(t *testing.T, opts Options) {
 			t.Fatal(err)
 		}
 	}
-	if err := w.end(); !errors.Is(err, agentsession.ErrNoSession) {
+	if err := w.End(); !errors.Is(err, agentsession.ErrNoSession) {
 		t.Errorf("follow across a delete and create ended with %v, want ErrNoSession", err)
 	}
 }
@@ -504,7 +366,7 @@ func followCancel(t *testing.T, opts Options) {
 	}()
 	select {
 	case <-got:
-	case <-time.After(followTimeout):
+	case <-time.After(followtest.Timeout):
 		t.Fatal("no snapshot")
 	}
 	cancel()
@@ -513,7 +375,7 @@ func followCancel(t *testing.T, opts Options) {
 		if err != nil {
 			t.Errorf("a cancelled follow ended with %v, want no error", err)
 		}
-	case <-time.After(followTimeout):
+	case <-time.After(followtest.Timeout):
 		t.Fatal("the follow did not end when its context was cancelled")
 	}
 }
@@ -554,16 +416,16 @@ func followBreak(t *testing.T, opts Options) {
 	if _, err := st.Append(ctx, s.ID(), user("after")); err != nil {
 		t.Errorf("append after stopped follows: %v", err)
 	}
-	w := startTail(t, f, s.ID(), "")
-	if c := w.nextKind(agentsession.Snapshot); c.Session.Len() != 3 {
+	w := followtest.Start(t, f, s.ID(), "")
+	if c := w.NextKind(agentsession.Snapshot); c.Session.Len() != 3 {
 		t.Errorf("snapshot holds %d entries, want 3", c.Session.Len())
 	}
 }
 
 func followMissing(t *testing.T, opts Options) {
 	st := opts.New(t)
-	w := startTail(t, st.(agentsession.Follower), "no-such-session", "")
-	if err := w.end(); !errors.Is(err, agentsession.ErrNoSession) {
+	w := followtest.Start(t, st.(agentsession.Follower), "no-such-session", "")
+	if err := w.End(); !errors.Is(err, agentsession.ErrNoSession) {
 		t.Errorf("follow of a missing session: %v, want ErrNoSession", err)
 	}
 }
@@ -577,8 +439,8 @@ func followFork(t *testing.T, opts Options) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := startTail(t, st.(agentsession.Follower), f.ID(), "")
-	snap := w.nextKind(agentsession.Snapshot)
+	w := followtest.Start(t, st.(agentsession.Follower), f.ID(), "")
+	snap := w.NextKind(agentsession.Snapshot)
 	if snap.Session.Len() != 2 || snap.Session.Leaf() != ids[1] {
 		t.Fatalf("fork snapshot holds %d entries at %s, want the 2 on the path to %s", snap.Session.Len(), snap.Session.Leaf(), ids[1])
 	}
@@ -586,7 +448,7 @@ func followFork(t *testing.T, opts Options) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := w.nextKind(agentsession.Appended)
+	c := w.NextKind(agentsession.Appended)
 	if c.ID != own || c.Session.Len() != 3 || c.Entry.Base().Parent != ids[1] {
 		t.Errorf("fork append %s under %s (%d entries), want %s under %s", c.ID, c.Entry.Base().Parent, c.Session.Len(), own, ids[1])
 	}
@@ -602,8 +464,8 @@ func followBurst(t *testing.T, opts Options) {
 	if other == nil {
 		other = st
 	}
-	w := startTail(t, other.(agentsession.Follower), s.ID(), "")
-	w.nextKind(agentsession.Snapshot)
+	w := followtest.Start(t, other.(agentsession.Follower), s.ID(), "")
+	w.NextKind(agentsession.Snapshot)
 	const n = 60
 	var want []string
 	done := make(chan error, 1)
@@ -620,7 +482,7 @@ func followBurst(t *testing.T, opts Options) {
 	}()
 	var got []string
 	for len(got) < n {
-		c := w.nextKind(agentsession.Appended)
+		c := w.NextKind(agentsession.Appended)
 		got = append(got, c.ID)
 		if c.Session.Len() != len(ids)+len(got) {
 			t.Fatalf("session holds %d entries after change %d", c.Session.Len(), len(got))
@@ -632,5 +494,5 @@ func followBurst(t *testing.T, opts Options) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("follower saw %v, want %v", got, want)
 	}
-	w.quiet()
+	w.Quiet()
 }
