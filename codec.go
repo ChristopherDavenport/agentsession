@@ -35,7 +35,9 @@ func (t *TruncatedLine) Unwrap() error { return t.Err }
 // Read decodes a session from its JSONL form. A final line that does not
 // parse is tolerated and reported through [Session.Truncated]; any
 // other malformed line, a missing parent, a convergence reference that
-// names no entry yet in this file, or a repeated ID is an error.
+// names no entry yet in this file, a line that breaks the base rule
+// ([ErrBaseRule]) in a file whose header names one, or a repeated ID is
+// an error.
 // The leaf is the last entry in the file unless a [LeafLabel] is in
 // force, in which case it is the entry that label names.
 func Read(r io.Reader) (*Session, error) {
@@ -44,6 +46,7 @@ func Read(r io.Reader) (*Session, error) {
 		s    *Session
 		line int
 		m    *migration
+		rule *baseRule
 	)
 	for {
 		data, err := br.ReadBytes('\n')
@@ -88,6 +91,7 @@ func Read(r io.Reader) (*Session, error) {
 			s = New(h)
 			s.migrated = m != nil
 			s.declared = declared
+			rule = newBaseRule(h.Base)
 		} else {
 			e, c, err := decodeLine(data)
 			if err != nil {
@@ -107,7 +111,7 @@ func Read(r io.Reader) (*Session, error) {
 				s.truncated = &TruncatedLine{Line: line, Data: append([]byte(nil), data...), Err: err}
 				break
 			}
-			if err := s.link(e, m, data, c); err != nil {
+			if err := s.link(e, m, data, c, rule); err != nil {
 				return nil, fmt.Errorf("agentsession: line %d: %w", line, err)
 			}
 		}
@@ -144,8 +148,9 @@ type migration struct {
 // entry's fields encode. For a line of an earlier minor the entry is
 // rewritten — references to the hashes assigned earlier in the file, the
 // old id to legacy_id, ts to its one spelling — and hashed. A repeated
-// id is the same entry, kept once and reported.
-func (s *Session) link(e Entry, m *migration, data, c []byte) error {
+// id is the same entry, kept once and reported. rule, for a file with a
+// base, holds the line to the base rule, as Scan holds it.
+func (s *Session) link(e Entry, m *migration, data, c []byte, rule *baseRule) error {
 	b := e.Base()
 	if m != nil {
 		if err := m.rewrite(e, s); err != nil {
@@ -172,6 +177,9 @@ func (s *Session) link(e Entry, m *migration, data, c []byte) error {
 		if _, ok := s.byID[b.Parent]; !ok {
 			return fmt.Errorf("entry %s: %w: parent %s", b.ID, ErrNoEntry, b.Parent)
 		}
+	}
+	if err := rule.line(b.ID, b.Parent); err != nil {
+		return err
 	}
 	if err := s.checkParents(b); err != nil {
 		return err

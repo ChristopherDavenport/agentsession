@@ -187,6 +187,9 @@ RFC 2119.
   session appended itself. The prefix is another session's record,
   carried here so the file stands alone; the header's `records` promise
   and the rules that rest on it apply to the entries after the base.
+  What the origin wrote off the path to the base is not carried, a
+  `dispatch` for a prefix call among it; `dispatch` says how a reader
+  finds one through `parent_session`.
 - `ts` is informational and a reader MUST NOT order entries by it;
   clocks step backwards. This is a rule about the member an entry
   carries, which its writer asserts. A sequence a store assigns as it
@@ -214,9 +217,9 @@ RFC 2119.
 | `harness` | SHOULD | name and version of the writer |
 | `records` | SHOULD | the record entry types, core or namespaced, this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
-| `parent_session` | MAY | session ID this was forked or spawned from. Provenance, not validated: a fork made at an entry on another fork's prefix may name either session, and a `fork_of` link records the one it was made from |
+| `parent_session` | MAY | session ID this was forked or spawned from. Provenance, not validated for a fork: one made at an entry on another fork's prefix may name either session, and a `fork_of` link records the one it was made from, and it is the session a reader resolves a prefix call's `dispatch` through, as `dispatch` says. For a subsession it is the session holding the `subsession` link that names this one, and a verifier MAY check the two agree, as `link` says |
 | `base` | MAY | hash of the entry this session continues from, never a `leaf` label, since the base is a fork's first leaf; `parent_session` names a session holding it, as provenance. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
-| `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
+| `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it, which is the `call_id` of the parent's `subsession` link naming this session. A session a `subsession` link names carries it and `parent_session` both, since the check `link` describes compares each; a subsession's header without one reads as disagreeing with the link |
 | `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
 | `redacted` | MAY | `true` when bodies were changed after they were written, as export redaction does. The redactor MUST recompute every content hash and `id` over the redacted bodies and rewrite `parent`, every entry-naming member — `parents` into this file, `target`, `first_kept`, `from`, `queued_from` — and last the header's `base`, once the prefix is hashed, to the IDs assigned earlier in the file, as migration does, leaving a reference into another session's file as it was since it still names the unredacted original; the file then walks and verifies against itself; its IDs are then not the original's and its `request_hash` values are the original's and no longer match. A reader MUST NOT report such a file's hashes as verifying the original |
 
@@ -239,7 +242,13 @@ file.
 
 A parent MUST appear earlier in the file than any child. Multiple roots
 are permitted in a file with no `base`; a file with one has one prefix
-and every own entry descends from the base. An entry MUST NOT be
+and every own entry descends from the base: the lines before the base
+are the path to it, one root and each the child of the line before, and
+every line after it names as `parent` the base or a line after it, never
+`null` and never a prefix entry above the base. A reader MUST refuse a
+file that breaks this, as it refuses a parent not in the file, since a
+writer appending to the file is held to the same rule and could not
+continue what it reads. An entry MUST NOT be
 modified after it is written; corrections are new entries.
 
 ### Entry hash
@@ -909,7 +918,15 @@ on its path was never started, unless the session holds a `dispatch`
 naming it elsewhere, off the path: a writer that rebases to a point
 between a call and its `dispatch` leaves the call on the new path with
 no `dispatch`, and it may have run. Otherwise the file does not say
-whether it ran. A
+whether it ran. A call in a fork's prefix has its `dispatch` entries,
+if any, in the session the fork was made from: the prefix is the path
+to the base, and a `dispatch` the origin wrote off that path is not
+carried, so the fork's file does not say whether the call ran. A reader
+that wants them resolves the fork's `parent_session` and asks that
+session, and so up a chain of forks, bounded, and reads a `dispatch`
+found there as one on a branch a rebase left: the call may have run,
+under that dispatch's key and with the arguments it handed over, and its
+output, when the origin holds one, is on the origin's branch. A
 writer that names `dispatch` MUST write it, durably, before the tool
 runs, and no writer may write it for a call that was rejected or
 answered or that has its output: the output ends the call, and a harness
@@ -1021,8 +1038,14 @@ A call's fate was decided outside the tool.
 - `args`, when present, are the arguments the tool ran with when a
   decision rewrote them. The `function_call` item stays as the model
   produced it, so the request hash still verifies; the change is
-  recorded beside the call, never inside it. `args` on an `answer`
-  names nothing, since no tool ran with them.
+  recorded beside the call, never inside it. The `args` of the last
+  decision before a `dispatch` that carries them are what that hand-off
+  ran with, and a reader asking what a further hand-off would run with
+  reads the last such decision on the path. `args` on an `answer`
+  names nothing, since no tool ran with them: a reader asking what the
+  tool ran or runs with passes over an `answer`'s `args`, which are
+  read from the `answer` alone, so an output the harness wrote never
+  reads as a rewrite of the call.
 
 A `decision` is a lifecycle fact and carries no score. A judgement of
 how something went is an `outcome`.
@@ -1129,10 +1152,16 @@ does, records the tree's identity in a namespaced member, beside the
 others in the entry (`"cline:tree"`) or inside `vcs`. The envelope
 section says a rewriter preserves either.
 
-A later `env` entry whose `workspace` differs from the one in force
-before it on the path is a **substitution**: from that entry on, the
-tools ran against another file system than the path recorded until
-then, as when a session recorded in a container is resumed on a laptop.
+Before the first `env` entry on a path the workspace is absent. An
+`env` entry after a `response` on the path whose `workspace` differs
+from the one in force before it, the absent one included, is a
+**substitution**: from that entry on, the tools ran against another
+file system than the path recorded until then, as when a session
+recorded in a container is resumed on a laptop, or one recorded with no
+`env` entry is resumed in a container. An `env` entry before any
+`response` on the path is not one, whatever it names, since nothing was
+recorded yet to hold fixed; nor is one after a `response` that names
+the workspace in force, a local run's absent one included.
 Two `workspace` members are compared member by member in their
 canonical form, as the entry hash writes them, every member this
 document does not define included, and an absent one equals only
@@ -1183,6 +1212,20 @@ before the `dispatch` entry and before the child's header exists, so a
 link whose session cannot be found means the child never started
 rather than a child that was never linked.
 
+A `subsession` link and the child's header are two records of one
+spawn, written by the parent and by the child, and they agree: the
+named session's header, when it exists, has `parent_session` equal to
+the linking session's `id` and `spawned_by` equal to the link's
+`call_id`. This is the exception to `parent_session` being provenance
+alone. A verifier that can read the named session MAY check it, and a
+session it cannot find is not a failure, since the link says the child
+never started. A link on a fork's prefix was the origin's, checked
+there against the origin's `id`. The check is what finds a line moved
+to a fork after a `call_id` collision (RFC 0002) with a level of its
+subsessions left under the old IDs: two stores derive one ID for the
+subsession of one call, so such a link names the other store's
+subagent, and only that session's header says whose it is.
+
 A link names a session, not a point in one, and at the moment it is
 written there is no point to name. The other half of the round trip is
 `parents`: the entry carrying the child's `function_call_output`
@@ -1204,6 +1247,18 @@ one the harness writes about a call. With two calls of one batch in
 flight, a record's position on the path does not say which call it
 belongs to, and `call_id` does. A reader MAY use it to attribute the
 record and MUST NOT require it.
+
+A custom entry whose `data` is an object with a top-level `usage`
+member in the payload profile's usage shape (Open Responses `usage`)
+records a model call the path paid for that produced no `response`
+entry: a fold whose summary was refused, with the usage of its calls
+summed, or a call whose answer earned no entry in context. An optional
+top-level `model` names the model billed; without one, the model in
+force from the `config` entries applies. A reader computing what the
+path cost counts such an entry as one model call, however many calls
+its usage sums, and the ATIF projection's `final_metrics` do. The rest
+of `data` is the writer's. A writer that records a paid call under
+another member name records it for itself alone.
 
 ## Namespaced types
 
@@ -1446,11 +1501,17 @@ lossless.
 A document's steps are the context the algorithm produces, so a run
 that compacted is described by its last summary and what followed it.
 Its `final_metrics` are not: they total every model call on the path,
-the ones a fold replaced included, and `total_steps` counts the
-document's steps plus the model calls it does not show. When the two
-differ the root `notes` says so, which is what ATIF requires of a
-`total_steps` that is not the number of steps. Without that rule a
-cost column reads the tail's cost as the run's, and an agent that
+the ones a fold replaced and the ones a `custom` entry's `usage`
+records included, and `total_steps` counts those model calls, the
+path's `response`, `compaction` and `branch_summary` entries and its
+`custom` entries carrying `usage`, one each, which a reader can count
+in the path and check against the document. It is not the number of
+steps: a user turn is a step and no model call, and a fold's calls are
+model calls and no step. Whenever it differs from the number of steps
+the root `notes` says so, which is what ATIF requires of a
+`total_steps` that is not the number of steps, and when a fold left
+model calls out of the steps the note says how many. Without that rule
+a cost column reads the tail's cost as the run's, and an agent that
 folded eleven times outranks one that did not.
 
 One document per path is a projection of the whole session, so a
@@ -1467,7 +1528,14 @@ output contained the call; each inference span links to the previous
 turn's; the first span after a branch links to the branched-from entry.
 A tool span covers one hand-off, so a call with several `dispatch`
 entries has a span for each, and each after the first links to the one
-before it.
+before it. A hand-off's span ends at the call's output or, when the run
+the hand-off was made in ends first, at that run's end, carrying the
+state the path reads for the call there: in flight, with an error
+status, unless a `decision` after the `dispatch` holds or answers it;
+a hand-off still open when the record stops ends there the same way. A
+later `dispatch` for the call or its output opens a span of its own,
+linked to the hand-off's; a second hand-off within one run ends the
+first in flight at the moment of the second.
 
 ## Versioning
 
@@ -1568,7 +1636,9 @@ runs of the list in force by `keep` across deltas that move a part
 across a budget, beside a `replace` and a compaction's checkpoint that
 write it whole, the recomputed `reason` for every `run` end, and
 negative cases, each a file broken in one way, for a broken parent link,
-a truncated last line, an unknown type, a `dispatch` that follows a
+a truncated last line, an unknown type, a file with a `base` holding a
+second root, an own entry hung from the prefix above the base, or a line
+before the base that is not on the path to it, a `dispatch` that follows a
 `reject`, an `answer` or the call's output, a decision that follows a
 `reject`, a `reject` that follows a `dispatch` or an output, a `target`
 naming another call, a repeated `call_id`, an empty `call_id`, a `run`
@@ -1619,6 +1689,28 @@ A file raised from 0.9 may still hold entries an early 0.9 writer
 appended before the raise; a reader that finds one of the rules below
 broken in such a file, which it cannot tell from a 0.10 file, reads it
 as broken.
+
+### Clarified after writers of 0.10 were released
+
+0.10's rules do not change. These paragraphs were written into this
+document after writers of 0.10 were released, each saying what the
+format already meant where the text was silent or a reader was lax, so
+a reader of 0.10 applies them to every 0.10 file and no writer of 0.10
+wrote what they refuse: a `subsession` link and the header of the
+session it names agree, which a verifier that reads the target MAY
+check (`link`); a `custom` entry whose `data` carries a top-level
+`usage` records a paid model call, which a reader totalling the path's
+cost counts (`custom`, ATIF); the workspace before the first `env`
+entry is absent, so a first `env` entry after a `response` that names
+one is a substitution, as a reader holding the environment fixed
+already read it (`env`); a reader refuses a file with a `base` that
+breaks the base rule, which a writer appending to the file was always
+held to (envelope); a reader asking what a tool runs with passes over
+an `answer`'s `args`, which the text already said name nothing
+(`decision`); a prefix call's `dispatch` is resolved through
+`parent_session` (`dispatch`); and how a hand-off's span ends
+(OpenTelemetry). Each would have been a rule of 0.11 had it changed
+what a file may hold or how its context is built; none does.
 
 ## Changes since 0.8
 
@@ -1995,3 +2087,8 @@ which the `run` entry cannot name and which 0.3 adopts beside the
   share one directory across sessions is still open.
 - The venue: this repository, a standalone repository, or a proposal to
   openresponses.org as a companion document.
+- What 0.11 carries. `docs/plans/format-0.11.md` scopes the next
+  minor: the empty-resume `source` rule, instruction parts named by hash
+  out of force and an omitted list named by an earlier entry's, a
+  `config` member recording items that leave the context, and a link
+  relation for a judge.

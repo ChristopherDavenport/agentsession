@@ -5,6 +5,171 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Format 0.11 is planned and not written.** `docs/plans/format-0.11.md`
+  scopes the next minor and why this release does not bump it: the
+  `source` rule for a resume that took up nothing, instruction parts
+  named by hash out of force and an omitted list named by an earlier
+  entry's, a `config` member recording the items a request leaves out,
+  and a `judged_by` link relation. RFC 0001 says, under *Changes since
+  0.9*, which of this release's clarifications would have been rules of
+  0.11 had they changed what a file may hold, and that none does.
+  (#178, #56, #172, #173, #145)
+- **A prefix call's dispatches are read through its origin.** A fork
+  made at a call holds the call in its prefix and none of its
+  dispatches, which the origin wrote off the path to the base, so every
+  reader saw an unknown call with no dispatch while the store held one.
+  `OriginDispatches(ctx, reader, session, callEntry)` returns the
+  dispatches and the session holding them, walking the chain of forks
+  through `parent_session` with the `Reader` the caller passes, up to
+  `MaxOriginDepth`, and refuses a chain that does not end with
+  `ErrOriginChain`; an origin the reader lacks reads as the fork alone.
+  `agentsession show` on a cas fork lists the pending calls at the leaf
+  with the dispatch and key it finds. RFC 0001 says where a prefix
+  call's dispatches are and how a reader resolves them. (#185)
+- **Read and Scan hold a file to the base rule Append enforces.** A
+  file whose header names a base has one prefix, the path to the base,
+  and every own entry hangs from the base or from one another; both
+  readers took a file with a second root, an own entry hung from the
+  prefix above the base, or lines before the base that are not the path
+  to it, which Append could not then continue. One helper now holds
+  Read, Scan and Append to the rule, under `ErrBaseRule`, which is
+  `ErrNoEntry` too under `errors.Is`, so a caller testing for what
+  Append returned keeps working; `NewBaseRuleError(detail)` makes one for
+  a store that meets the rule first. Three negative fixtures cover it.
+  (#161)
+- **`Call.Args` passes over an answer's `args`**, which the format says
+  name nothing since no tool ran with them, so an output the harness
+  wrote no longer reads as a rewrite of what the tool runs with; the
+  otel tool span's `args_rewritten` does the same, and the RFC's
+  `decision` section says which decisions' `args` a reader reads.
+  `Append` keeps taking an answer with `args`, since files holding one
+  exist. RFC 0001's OpenTelemetry section now says what the exporter
+  does with a hand-off its run ends without an output: the span ends
+  with the run, in the state the path reads for the call, an error when
+  in flight, and a later hand-off or the output opens a span of its
+  own. (#103)
+- **otel marks a first `env` entry after a response as a substitution.**
+  A session recorded with no `env` entry and resumed under `WithEnv` in
+  a container showed none, while agenteval's strict replay already
+  refuses that path. RFC 0001 now says the workspace is absent before
+  the first `env` entry, that an `env` entry after a `response` whose
+  workspace differs from the one in force, the absent one included, is a
+  substitution, and that one before any `response` is not, whatever it
+  names; the exporter and the Store decorator read it so. (#148)
+- **`ListFilter` selects by `Harness`, `Extra` and `TopLevel`.**
+  `Harness` matches the header's harness name exactly, `Extra` matches
+  header members member by member in canonical form, and `TopLevel`
+  leaves out the subsessions a call spawned; all three decide on the
+  header alone, so every store applies them without a scan and the zero
+  filter still lists everything. `list` grows `-harness` and
+  `-top-level`. (#83)
+- **`agentsession list` on a cas store v0.0.15 or earlier wrote now
+  says to run `agentsession migrate`**, once, after the per-session
+  errors, as `show` and `verify` do; and `cas.ErrLegacyStore` now says
+  "stop every writer, take a copy, and run agentsession migrate <root>"
+  in place of "open the store for writing to migrate it", which is the
+  step v0.0.19 put behind the other two. A product that lists such a
+  store read-only passes the library's text on, so the text had to say
+  it too. (#190)
+- **`agentsession verify <cas-root>` prints every note a failing
+  session earns**, where it printed two of the five and dropped the
+  notes v0.0.19 added: the note on a run written `resume` that took up
+  nothing is printed beside that session's error, under its id, since
+  it names the run, and the notes that name no session once at the
+  end, in a fixed order. The notes that turn on the format a session
+  declared now get it from the store's header, through `List` for a
+  store and `Store.Read` for `verify <cas-root> <id>`: the projection a
+  session is read from is a file this release writes and declares this
+  release's format, so a 0.9 session an early writer of 0.9 wrote
+  earned no note on cas. `Store.Project` is unchanged. (#187)
+- **`Session.VerifyLinks` checks each subsession link against the
+  header of the session it names**, through a resolver the caller
+  gives: the target's `parent_session` is the linking session and its
+  `spawned_by` is the link's `call_id`, as RFC 0001's `link` section
+  now states; a target the resolver does not find is a child that never
+  started and passes, a link on a fork's prefix is the origin's and is
+  passed over, and a disagreement is `ErrLinkMismatch` in a `LinkError`
+  naming the link and the target. `agentsession verify` runs it for a
+  session a cas store holds, and for every session of a store, and
+  fails on a mismatch, printed as `link <entry> -> <session>  ERROR`:
+  it is what a fork remedy for a call ID collision that missed a level
+  of subsessions leaves, and `verify` reported nothing. A file names no
+  store to find the target in, so `verify <file>` does not check links.
+  (#186)
+- **export: `final_metrics` counts a custom entry whose data carries
+  `usage`** as a model call the path paid for, priced at the `model` the
+  data names or else the model in force, which RFC 0001's `custom`
+  section now states as the convention for a call that produced no
+  `response` entry. A failed fold's summary calls are recorded that way,
+  and a configuration whose folds all failed exported the same totals
+  as one that never compacted. The exporter names no other package's
+  namespace: any custom entry with a top-level `usage` object counts.
+  (#184)
+- **export: `total_steps` is the number of model calls on the path**,
+  its responses, folds, branch summaries and the custom entries whose
+  `usage` counts, one each. It was the document's steps plus the model
+  calls a fold left out of them, a number reproducible from neither
+  the document nor the path. The number changes for every document: a
+  run that never folded now reports its model calls where it reported
+  its steps, which is lower by its user and system steps, and a run
+  that folded reports its model calls where it reported its steps plus
+  the calls folded away. `notes` says what `total_steps` counts
+  whenever it is not the number of steps, and how many calls a fold
+  left out of the steps. (#145)
+- **`export.WriteDocument(path, doc)`** writes one document under a
+  name the caller chooses, `agent/trajectory.json` for a Harbor trial,
+  with its media spilled beside it and the document validated, as
+  `WriteATIF`, which now calls it, does for each of its documents; a
+  product that wrote the file with `encoding/json` alone kept every
+  image inline. (#145)
+- **cas: a writer stopped inside its commit no longer stops every
+  writer of every process on the store.** A sweep waiting for
+  `sweep.lock` held `sweep.lock.next` exclusive for as long as it
+  waited, and since v0.0.19 every writer takes that lock shared before
+  `sweep.lock`, so a writer that stayed alive and made no progress
+  while holding `sweep.lock` shared, stopped by SIGSTOP or Ctrl-Z, a
+  debugger or `docker pause`, kept the sweep waiting and every writer in
+  every process waiting behind it, with no bound but each one's
+  context; in v0.0.18 only the sweep waited. A waiting sweep now holds
+  `sweep.lock.next` for two seconds at a time, then lets the writers
+  through, who take `sweep.lock` shared beside the stopped holder, and
+  waits off the turnstile for a back-off interval that grows before it
+  tries again. A stopped holder of `sweep.lock` still keeps a sweep
+  waiting until it goes on or is killed, writers are held behind the
+  sweep for no longer than two seconds at a time, and a sweep of
+  v0.0.19 on the same store still holds them for as long as it waits.
+  A sweep beside steady writers passes the turnstile in one turn, so
+  the fix for #168 stands; the migration's wait for `sweep.lock` is
+  bounded the same way. (#188)
+- **cas: `Repair` salvages an entry from any damaged record that still
+  spells its hash, and accounts for every hash the damage touched.**
+  v0.0.19 salvaged only from a damaged line after the last readable
+  append that still spelled `"session":"<id>"` and `"op":"append"`, so
+  one damaged byte in either member, or damage to a branch leaf's
+  record that a readable append followed, dropped an acknowledged entry
+  whose objects were whole without listing it: a one-turn session was
+  `ErrUnrecoverable`, and `agentsession repair` printed the head "as the
+  log last named it" with nothing about the lost leaf. The log is the
+  session's own file and the objects are the evidence, so every hash a
+  damaged line spells, wherever the line is, is now salvaged when no
+  readable record appends the entry or records it lost, its objects
+  read and hash to their names, and its parent is the base or kept; it
+  is salvaged where its line is, so later records find it as their
+  parent or as an entry they converge. A hash not salvaged is listed in
+  `RepairReport.Dropped` with why: no object of it is held, or it is
+  what the damage made of a hash the line also spells, its objects do
+  not read, its parent is not kept, or a lost record names it. A
+  damaged `lost` record that still legibly names an entry is taken at
+  its word over the appends before it, a readable one too, since a
+  repair would otherwise bring back what recovery told the writer was
+  lost; an append after it, by which the writer appended the entry
+  again, stands, as after a readable `lost` record. An entry a
+  readable record's entry hangs from is reported in `Hidden`, as
+  before; `Salvaged` is what only a damaged line names. `agentsession
+  repair` says of each salvaged entry whether it is the head. (#189)
+
 ## v0.0.19 - 2026-10-01
 
 **On a cas store v0.0.15 or earlier wrote, stop every writer, take a

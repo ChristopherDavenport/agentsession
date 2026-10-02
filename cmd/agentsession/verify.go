@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"strings"
 
 	"github.com/ChristopherDavenport/agentsession"
 )
@@ -21,9 +23,12 @@ func verify(args []string, stdout, stderr io.Writer) error {
 	if src.isStore() {
 		return verifyStore(src.path, stdout)
 	}
-	s, err := readSource(src)
+	s, declared, st, err := readDeclared(src)
 	if err != nil {
 		return err
+	}
+	if st != nil {
+		defer st.Close()
 	}
 	// Reading checks each entry's id against its hash, except in a file
 	// of an earlier minor, whose ids the migration assigns. A header
@@ -40,10 +45,13 @@ func verify(args []string, stdout, stderr io.Writer) error {
 	} else {
 		fmt.Fprintf(stdout, "%d entries read, each id checked against its hash\n", s.Len())
 	}
-	problem, note := checkSession(s, "", stdout, true)
-	if note != "" {
-		fmt.Fprintln(stdout, note)
+	problem, notes := checkSession(s, declared, "", stdout, true)
+	// A link's target is found through the store the session is in; a
+	// file names no store, so its links go unchecked.
+	if st != nil && checkLinks(s, resolveIn(st, src.path), "", stdout) {
+		problem = true
 	}
+	printNotes(stdout, notes)
 	if t := s.Truncated(); t != nil {
 		problem = true
 		fmt.Fprintf(stdout, "truncated: line %d was cut short: %v\n", t.Line, t.Err)
@@ -103,9 +111,16 @@ const earlierNote = "note: this file declares a minor before 0.9, which did not 
 
 // checkSession checks each response's request hash and the records to
 // each leaf, printing each line under prefix: every response's result
-// when all is set, else only the failures. It reports whether anything
-// failed, and the note a failure earns, as noteFor gives it.
-func checkSession(s *agentsession.Session, prefix string, stdout io.Writer, all bool) (problem bool, note string) {
+// when all is set, else only the failures. declared is the format the
+// session's header declared where it is stored, which the notes turn
+// on; for a file it is the session's DeclaredFormat, and for a session
+// a cas store holds it is the stored header's, since the projection
+// the session is read from declares this release's format. It reports
+// whether anything failed, and the notes the failures earn, as noteFor
+// gives them, distinct and in noteOrder. The note on a run written
+// resume that took up nothing names the run, so it is printed under
+// prefix beside the failure it explains rather than returned.
+func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Writer, all bool) (problem bool, notes []string) {
 	var checked, unhashed, failed int
 	for _, e := range s.Entries() {
 		r, ok := e.(*agentsession.ResponseEntry)
@@ -141,13 +156,62 @@ func checkSession(s *agentsession.Session, prefix string, stdout io.Writer, all 
 			problem = true
 			fmt.Fprintf(stdout, "%srecords to %s  ERROR %v\n", prefix, shortID(leaf), err)
 			if r := emptyResume(s, leaf, err); r != nil {
-				note = fmt.Sprintf(emptyResumeNote, r.RunID())
-			} else if n := noteFor(s.DeclaredFormat(), err); n != "" {
-				note = n
+				fmt.Fprintf(stdout, "%s"+emptyResumeNote+"\n", prefix, r.RunID())
+			} else if n := noteFor(declared, err); n != "" {
+				// noteFor joins the note on an earlier minor with the
+				// writer's note; each is kept once.
+				for _, line := range strings.Split(n, "\n") {
+					if !slices.Contains(notes, line) {
+						notes = append(notes, line)
+					}
+				}
 			}
 		}
 	}
-	return problem, note
+	return problem, notes
+}
+
+// checkLinks checks each subsession link against the header of the
+// session it names, found through resolve, as VerifyLinks does, and
+// prints the first failure under prefix: the link, the session it
+// names, and what disagrees. It reports whether one failed. A link
+// whose target names another parent or another call breaks the format,
+// so it fails the command rather than warns; a target the store lacks
+// is a child that never started and is no failure.
+func checkLinks(s *agentsession.Session, resolve func(string) (*agentsession.Session, error), prefix string, stdout io.Writer) bool {
+	err := s.VerifyLinks(resolve)
+	if err == nil {
+		return false
+	}
+	var le *agentsession.LinkError
+	if errors.As(err, &le) {
+		fmt.Fprintf(stdout, "%slink %s -> %s  ERROR %v\n", prefix, shortID(le.Entry), le.Session, le.Err)
+	} else {
+		fmt.Fprintf(stdout, "%slinks  ERROR %v\n", prefix, err)
+	}
+	return true
+}
+
+// noteOrder is the order the notes a check collects are printed in,
+// whatever order the failures earned them: the note on the minor a
+// file declared before the notes on what its writer computed, as
+// noteFor joins them. A note not in it, which none is today, follows,
+// sorted, so the order is stable whatever is added.
+var noteOrder = []string{earlyNote, earlierNote, sourceNote, reasonNote}
+
+// printNotes prints each distinct note once, in noteOrder.
+func printNotes(stdout io.Writer, notes []string) {
+	rest := slices.Clone(notes)
+	for _, n := range noteOrder {
+		if i := slices.Index(rest, n); i >= 0 {
+			fmt.Fprintln(stdout, n)
+			rest = slices.Delete(rest, i, i+1)
+		}
+	}
+	slices.Sort(rest)
+	for _, n := range slices.Compact(rest) {
+		fmt.Fprintln(stdout, n)
+	}
 }
 
 // gained09 reports whether err breaks a rule draft 0.9 gained, after

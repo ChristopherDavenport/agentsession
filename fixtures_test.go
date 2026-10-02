@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -144,6 +145,27 @@ func TestRegenerateFixtures(t *testing.T) {
 	if err := os.WriteFile(filepath.Join("testdata", "sessions", "fork.jsonl"), fbuf.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The base rule's negative fixtures, each the fork's file with one
+	// line re-parented and re-hashed, so every id verifies and the base
+	// rule alone is what refuses them (#161). The fork's lines are the
+	// header, the six-line prefix ending at the base, and two own lines.
+	forkLines := strings.Split(strings.TrimSuffix(fbuf.String(), "\n"), "\n")
+	root, own := lineID(t, forkLines[1]), forkLines[7]
+	writeLines := func(name string, lines []string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join("testdata", "sessions", name+".jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// bad-base-root: an own entry that is a second root.
+	writeLines("bad-base-root", append(append([]string{}, forkLines...), reparent(t, own, "")))
+	// bad-base-parent: an own entry hung from the prefix above the base.
+	writeLines("bad-base-parent", append(append([]string{}, forkLines...), reparent(t, own, root)))
+	// bad-base-prefix: a line before the base that is not on the path to
+	// it, a child of the root beside the one the prefix continues with.
+	beside := append([]string{}, forkLines[:2]...)
+	beside = append(beside, reparent(t, own, root))
+	writeLines("bad-base-prefix", append(beside, forkLines[2:]...))
 
 	// normalised: the conformance vectors for writer-side normalisation,
 	// appended natively since a source file carrying them could not be
@@ -281,6 +303,50 @@ func TestRegenerateFixtures(t *testing.T) {
 	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
 	lines[2], lines[3] = lines[3], lines[2]
 	write("bad-parents", lines)
+}
+
+// lineID returns the id an entry line carries.
+func lineID(t *testing.T, line string) string {
+	t.Helper()
+	var env struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(line), &env); err != nil || env.ID == "" {
+		t.Fatalf("line has no id: %v", err)
+	}
+	return env.ID
+}
+
+// reparent rewrites an entry line's parent, null for "", and its id to
+// the hash the line then has, so a negative fixture breaks a link rule
+// and nothing else.
+func reparent(t *testing.T, line, parent string) string {
+	t.Helper()
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(line), &all); err != nil {
+		t.Fatal(err)
+	}
+	all["parent"] = json.RawMessage("null")
+	if parent != "" {
+		all["parent"] = json.RawMessage(`"` + parent + `"`)
+	}
+	delete(all, "id")
+	data, err := json.Marshal(all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _, err := EntryHashes(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all["id"] = json.RawMessage(`"` + id + `"`)
+	if data, err = json.Marshal(all); err != nil {
+		t.Fatal(err)
+	}
+	if data, err = jcs.Transform(data); err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 // partsFixture builds the session parts.jsonl holds: three turns over a

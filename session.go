@@ -560,22 +560,108 @@ func (s *Session) outcomeFor(e Entry) Outcome {
 var ErrBadID = errors.New("agentsession: entry id does not match its hash")
 
 // checkParentRule holds a parent to the format's rule: it exists, and in
-// a session with a base it is the base or an own entry, since the
-// prefix is another session's record and branching above the base is a
-// new session with a lower base.
+// a session with a base it is the base or an own entry, as the base rule
+// has it.
 func (s *Session) checkParentRule(parent string) error {
-	if parent == "" {
-		if s.header.Base != "" {
-			return fmt.Errorf("%w: a session with a base has no second root", ErrNoEntry)
+	if parent != "" {
+		if _, ok := s.byID[parent]; !ok {
+			return fmt.Errorf("%w: parent %s", ErrNoEntry, parent)
 		}
+	}
+	if s.header.Base != "" {
+		return checkOwnParent(s.header.Base, parent, func(id string) bool { return s.prefix[id] })
+	}
+	return nil
+}
+
+// ErrBaseRule is returned for an entry that breaks the rule a base
+// imposes on a session: the entries before the base are the path to it,
+// one root and each the child of the one before, and every entry after
+// it hangs from the base or from an entry after it, never from null,
+// since a session with a base has one root, and never from the prefix
+// above the base, since the prefix is another session's record and
+// branching above the base is a new session with a lower base. Read and
+// Scan hold a file's lines to it and Append the entry it is given, so a
+// file that reads is one Append can continue. An error reporting it is
+// also [ErrNoEntry] under errors.Is, which Append returned for it before
+// this sentinel existed.
+var ErrBaseRule = errors.New("agentsession: entry breaks the base rule")
+
+// baseRuleError reports an entry that breaks the base rule as
+// ErrBaseRule and as ErrNoEntry both.
+type baseRuleError struct{ detail string }
+
+func (e *baseRuleError) Error() string   { return ErrBaseRule.Error() + ": " + e.detail }
+func (e *baseRuleError) Unwrap() []error { return []error{ErrBaseRule, ErrNoEntry} }
+
+// NewBaseRuleError returns an error reporting that an entry breaks the base
+// rule, with detail saying how: [ErrBaseRule] and [ErrNoEntry] both
+// under errors.Is, as the session reports it. A store that meets the
+// rule before the session does, as one recording a reset leaf on a
+// session with a base, reports it the same way.
+func NewBaseRuleError(detail string) error {
+	return &baseRuleError{detail}
+}
+
+// checkOwnParent is the base rule for an entry after the base: one a
+// session with a base appends, or a line after the base in its file.
+// onPrefix says whether an entry is on the path to the base.
+func checkOwnParent(base, parent string, onPrefix func(string) bool) error {
+	if parent == "" {
+		return &baseRuleError{"a session with a base has no second root"}
+	}
+	if parent != base && onPrefix(parent) {
+		return &baseRuleError{"parent " + parent + " is on the prefix above the base"}
+	}
+	return nil
+}
+
+// baseRule holds the lines of a file with a base to the base rule in
+// file order, as Read and Scan meet them: the lines up to the base are
+// the path to it, so the first is a root and each later one the child
+// of the line before it, and the lines after it hang from the base or
+// from one another. Append holds the entry it is given to the same rule
+// through checkParentRule, so the three cannot differ on it. A nil
+// *baseRule, for a file with no base, checks nothing.
+type baseRule struct {
+	base string
+	// prev is the last prefix line met, "" before the first; met reports
+	// that the base has been; prefix holds the lines met up to it.
+	prev   string
+	met    bool
+	prefix map[string]bool
+}
+
+// newBaseRule returns the rule for a file whose header names base, or
+// nil for one that names none.
+func newBaseRule(base string) *baseRule {
+	if base == "" {
 		return nil
 	}
-	if _, ok := s.byID[parent]; !ok {
-		return fmt.Errorf("%w: parent %s", ErrNoEntry, parent)
+	return &baseRule{base: base, prefix: map[string]bool{}}
+}
+
+// line checks the next line of the file, the entry id under parent, and
+// takes it into the prefix when it comes before or at the base. A line
+// met a second time is the same entry and is not passed here.
+func (r *baseRule) line(id, parent string) error {
+	if r == nil {
+		return nil
 	}
-	if s.header.Base != "" && parent != s.header.Base && s.prefix[parent] {
-		return fmt.Errorf("%w: parent %s is on the prefix above the base", ErrNoEntry, parent)
+	if r.met {
+		return checkOwnParent(r.base, parent, func(p string) bool { return r.prefix[p] })
 	}
+	switch {
+	case r.prev == "" && parent != "":
+		return &baseRuleError{"entry " + id + " opens a file with a base and is not a root; the prefix opens with the root"}
+	case r.prev != "" && parent == "":
+		return &baseRuleError{"entry " + id + " before the base is a second root; the prefix is one path"}
+	case parent != r.prev:
+		return &baseRuleError{"entry " + id + " before the base hangs from " + parent + ", not from the line before it; the prefix is the path to the base"}
+	}
+	r.prefix[id] = true
+	r.prev = id
+	r.met = id == r.base
 	return nil
 }
 
@@ -993,7 +1079,9 @@ func (s *Session) add(e Entry) {
 // the entry target, anywhere in the session, in the order they were
 // added, each naming the call by its call ID. A call with none on its
 // path may have one elsewhere, which a rebase above it leaves, and may
-// then have run.
+// then have run. A call in a fork's prefix has its dispatches, if any,
+// in the session the fork was made from, which the fork does not hold;
+// [OriginDispatches] reads them through a store.
 func (s *Session) Dispatches(target string) []*DispatchEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

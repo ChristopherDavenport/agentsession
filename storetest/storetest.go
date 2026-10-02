@@ -5,6 +5,7 @@ package storetest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -482,8 +483,17 @@ func testFork(t *testing.T, opts Options) {
 	}
 	above := agentsession.NewItemEntry(openresponses.UserText("above"))
 	above.Parent = ids[0]
-	if _, err := st.Append(ctx, "fork-1", above); !errors.Is(err, agentsession.ErrNoEntry) {
-		t.Errorf("append above the base = %v, want ErrNoEntry", err)
+	if _, err := st.Append(ctx, "fork-1", above); !errors.Is(err, agentsession.ErrBaseRule) || !errors.Is(err, agentsession.ErrNoEntry) {
+		t.Errorf("append above the base = %v, want ErrBaseRule, and ErrNoEntry under it", err)
+	}
+	// A session with a base has one root: ResetLeaf and an append is a
+	// second root, which the rule refuses, and the leaf is unchanged.
+	f.ResetLeaf()
+	if _, err := st.Append(ctx, "fork-1", agentsession.NewItemEntry(openresponses.UserText("a second root"))); !errors.Is(err, agentsession.ErrBaseRule) {
+		t.Errorf("append a second root to a fork = %v, want ErrBaseRule", err)
+	}
+	if err := f.Branch(own); err != nil {
+		t.Fatal(err)
 	}
 	// A header that names no parent session finds the holder; one on a
 	// fork's prefix is the origin's entry wherever it is found.
@@ -738,8 +748,21 @@ func testList(t *testing.T, opts Options) {
 	base := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 	for i, cwd := range []string{"/a", "/b", "/a"} {
 		h := agentsession.Header{ID: []string{"one", "two", "three"}[i], CWD: cwd, CreatedAt: base.Add(time.Duration(i) * time.Hour)}
-		if i == 2 {
+		switch i {
+		case 0:
+			// A routine's session: its harness, the platform and user it
+			// wrote into the header, with the members spelled as a writer
+			// might.
+			h.Harness = &agentsession.Harness{Name: "nightly", Version: "2"}
+			h.Extra = map[string]json.RawMessage{"acme:platform": json.RawMessage(`"telegram"`), "acme:user": json.RawMessage(`{"name": "u1", "id": 7}`)}
+		case 1:
+			h.Harness = &agentsession.Harness{Name: "cli"}
+			h.Extra = map[string]json.RawMessage{"acme:platform": json.RawMessage(`"telegram"`)}
+		case 2:
+			// A subsession a call of one spawned, under the same harness.
 			h.ParentSession = "one"
+			h.SpawnedBy = "call_1"
+			h.Harness = &agentsession.Harness{Name: "nightly", Version: "2"}
 		}
 		if _, err := st.Create(ctx, h); err != nil {
 			t.Fatal(err)
@@ -781,6 +804,18 @@ func testList(t *testing.T, opts Options) {
 		{"with names", agentsession.ListFilter{WithNames: true}, []string{"three", "two", "one"}},
 		{"with names filtered", agentsession.ListFilter{WithNames: true, CWD: "/b"}, []string{"two"}},
 		{"none", agentsession.ListFilter{CWD: "/z"}, nil},
+		// The header-level filters (#83): the harness by name, the extra
+		// members by canonical value, and the sessions nothing spawned.
+		{"harness", agentsession.ListFilter{Harness: "nightly"}, []string{"three", "one"}},
+		{"harness no session has", agentsession.ListFilter{Harness: "cron"}, nil},
+		{"top level", agentsession.ListFilter{TopLevel: true}, []string{"two", "one"}},
+		{"harness, top level", agentsession.ListFilter{Harness: "nightly", TopLevel: true}, []string{"one"}},
+		{"extra", agentsession.ListFilter{Extra: map[string]json.RawMessage{"acme:platform": json.RawMessage(`"telegram"`)}}, []string{"two", "one"}},
+		{"extra spelled apart", agentsession.ListFilter{Extra: map[string]json.RawMessage{"acme:user": json.RawMessage(`{"id":7,"name":"u1"}`)}}, []string{"one"}},
+		{"extra two members", agentsession.ListFilter{Extra: map[string]json.RawMessage{"acme:platform": json.RawMessage(`"telegram"`), "acme:user": json.RawMessage(`{"id":7,"name":"u1"}`)}}, []string{"one"}},
+		{"extra differing", agentsession.ListFilter{Extra: map[string]json.RawMessage{"acme:platform": json.RawMessage(`"slack"`)}}, nil},
+		{"extra the header lacks", agentsession.ListFilter{Extra: map[string]json.RawMessage{"acme:zone": json.RawMessage(`1`)}}, nil},
+		{"extra with names", agentsession.ListFilter{WithNames: true, Extra: map[string]json.RawMessage{"acme:platform": json.RawMessage(`"telegram"`)}, CWD: "/b"}, []string{"two"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -226,8 +226,12 @@ one entry, which is what a consumer holding a score needs once the
 outcomes a judge appended have moved the leaf; `Trajectories` is that
 over each leaf. A document's steps are the context after compaction
 and its `final_metrics` are the whole path, so a run that folded
-reports what it spent, with `total_steps` and a line in `notes`
-saying what the steps leave out. `export.Options.ModelName` overrides
+reports what it spent; `total_steps` counts the path's model calls,
+and a line in `notes` says so where that is not the number of steps,
+and what the steps leave out. `export.WriteDocument` writes one
+document under a name of the caller's, `agent/trajectory.json` for a
+Harbor trial, with its media spilled beside it as `WriteATIF` does.
+`export.Options.ModelName` overrides
 the model name the document reports, for a consumer that derives a
 provider from it, without changing the name the request was sent
 with.
@@ -275,7 +279,13 @@ agentsession migrate ~/.agent/cas          # migrate a cas store v0.0.15 or earl
 `verify` exits 1 on a file with a header and no entries, since nothing
 was checked, and on a mismatch, a truncated final line, a run end that
 disagrees with its segment, a dispatch after a reject or an answer, or a call that
-ran without the dispatch the header promised. `export`
+ran without the dispatch the header promised. On a session a cas store
+holds it also exits 1 on a `subsession` link whose session's header
+names another parent or another call, which is what a line moved to a
+fork after a call ID collision leaves when a level of its subsessions
+was not re-derived; a file names no store to find the child in, so a
+file's links go unchecked, and a child the store lacks is one that
+never started. `export`
 writes one ATIF document per leaf and embeds a linked subsession when
 its file is beside the exported one or in the same store. `repair`
 takes the session's lock and writes: it rewrites a cas session whose

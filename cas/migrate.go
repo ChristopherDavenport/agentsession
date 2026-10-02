@@ -48,8 +48,12 @@ import (
 
 // ErrLegacyStore is returned for a store, or a session, in the layout of
 // a store from before logs were per session, where the operation cannot
-// migrate it: a read-only store, which writes nothing.
-var ErrLegacyStore = errors.New("cas: the session predates per-session logs and has not been migrated; open the store for writing to migrate it")
+// migrate it: a read-only store, which writes nothing. Its text says
+// what the migration asks, since a product that reads such a store
+// passes the text on: a writing open migrates the store, but one made
+// beside a writer of the earlier release migrates it under that
+// writer, so the open is the last step and not the first.
+var ErrLegacyStore = errors.New("cas: the session predates per-session logs and has not been migrated; stop every writer, take a copy, and run agentsession migrate <root>")
 
 // ErrMigrationBusy is returned by the writing open that would migrate a
 // store while a process of an earlier version still holds a session.

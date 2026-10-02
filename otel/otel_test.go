@@ -171,13 +171,17 @@ func substitutions(s sdktrace.ReadOnlySpan) (marked []bool, nodes []string) {
 
 // TestExportSubstitution: a second env entry whose workspace differs
 // from the first only by a member the format does not define is a
-// substitution, and its event says so; the first is not one, and an
-// env entry repeating the workspace in force is not either.
+// substitution, and its event says so; the first, before any response,
+// is not one, and an env entry repeating the workspace in force is not
+// either.
 func TestExportSubstitution(t *testing.T) {
 	sr, tracer := recorder()
 	s := agentsession.New(agentsession.Header{})
 	for _, node := range []string{"n-1", "n-2", "n-2"} {
 		if _, err := s.Append(nodeEnv(t, node)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(&agentsession.ResponseEntry{ResponseID: "resp_" + node, Status: openresponses.ResponseStatusCompleted}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -209,6 +213,9 @@ func TestStoreSubstitution(t *testing.T) {
 	id := sess.ID()
 	for _, node := range []string{"n-1", "n-2"} {
 		if _, err := st.Append(ctx, id, nodeEnv(t, node)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(ctx, id, &agentsession.ResponseEntry{ResponseID: "resp_" + node, Status: openresponses.ResponseStatusCompleted}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -606,5 +613,199 @@ func TestStateAfterTheRunEnd(t *testing.T) {
 				t.Error("the later span starts before its run")
 			}
 		})
+	}
+}
+
+// TestHandOffEndsWithRun: a hand-off the run left without an output
+// ends with the run, in the state the path reads for the call there,
+// in flight with an error status unless a decision after the dispatch
+// held or answered it; one still open when the record stops ends there
+// the same way, as RFC 0001's projection says (#103).
+func TestHandOffEndsWithRun(t *testing.T) {
+	build := func(t *testing.T, after ...func(target string) agentsession.Entry) *agentsession.Session {
+		t.Helper()
+		s := agentsession.New(agentsession.Header{ID: "cut", Records: agentsession.AllRecords})
+		if _, err := s.Append(agentsession.NewRunStart("r1", agentsession.SourceInput, "")); err != nil {
+			t.Fatal(err)
+		}
+		target, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "deploy", Arguments: "{}"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(agentsession.NewDispatch("c", target)); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range after {
+			if _, err := s.Append(f(target)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return s
+	}
+	end := func(string) agentsession.Entry {
+		return agentsession.NewRunEnd("r1", agentsession.ReasonAborted, "", []string{"c"})
+	}
+	decide := func(verdict string) func(string) agentsession.Entry {
+		return func(target string) agentsession.Entry {
+			return agentsession.NewDecision("c", target, verdict, agentsession.ByPolicy)
+		}
+	}
+	tests := []struct {
+		name   string
+		after  []func(string) agentsession.Entry
+		state  agentsession.CallState
+		status codes.Code
+	}{
+		{"in flight at the run end", []func(string) agentsession.Entry{end}, agentsession.CallInFlight, codes.Error},
+		{"held at the run end", []func(string) agentsession.Entry{decide(agentsession.VerdictHold), end}, agentsession.CallHeld, codes.Unset},
+		{"answered at the run end", []func(string) agentsession.Entry{decide(agentsession.VerdictAnswer), end}, agentsession.CallAnswered, codes.Unset},
+		{"in flight when the record stops", nil, agentsession.CallInFlight, codes.Error},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sr, tracer := recorder()
+			s := build(t, tt.after...)
+			if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+				t.Fatal(err)
+			}
+			all := spans(sr.Ended())
+			tool, runs := all.named(OpTool+" deploy"), all.named(SpanRun)
+			if len(tool) != 1 || len(runs) != 1 {
+				t.Fatalf("tool spans %d, run spans %d; want one each", len(tool), len(runs))
+			}
+			if got := attr(tool[0], AttrCallState); got != tt.state.String() {
+				t.Errorf("state = %s, want %s", got, tt.state)
+			}
+			if tool[0].Status().Code != tt.status {
+				t.Errorf("status = %v, want %v", tool[0].Status().Code, tt.status)
+			}
+			// The run's end entry, or the record's last entry when none
+			// was written, ends the run span and the hand-off's alike.
+			last := s.Entries()[s.Len()-1].Base().Timestamp
+			if !tool[0].EndTime().Equal(last) || !runs[0].EndTime().Equal(last) {
+				t.Errorf("hand-off ends %s, run ends %s, the record stops at %s", tool[0].EndTime(), runs[0].EndTime(), last)
+			}
+		})
+	}
+}
+
+// TestAnswerArgsNotRewritten: an answer carrying args does not mark the
+// tool span as having its arguments rewritten, since no tool ran with
+// them; the decision event still carries the decision's own fact (#103).
+func TestAnswerArgsNotRewritten(t *testing.T) {
+	sr, tracer := recorder()
+	s := agentsession.New(agentsession.Header{ID: "answer", Records: agentsession.AllRecords})
+	target, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "deploy", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(agentsession.NewDispatch("c", target)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(agentsession.NewDecision("c", target, agentsession.VerdictAnswer, agentsession.ByHuman).WithArgs([]byte(`{"x":1}`))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("c", "the harness's answer"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	tool := spans(sr.Ended()).named(OpTool + " deploy")
+	if len(tool) != 1 {
+		t.Fatalf("tool spans = %d", len(tool))
+	}
+	if attr(tool[0], AttrArgsRewritten) != "" || attr(tool[0], AttrCallState) != "answered" {
+		t.Errorf("an answered call's span: args_rewritten %q, state %s", attr(tool[0], AttrArgsRewritten), attr(tool[0], AttrCallState))
+	}
+	if got := eventAttr(tool[0], EventDecision, AttrArgsRewritten); len(got) != 1 {
+		t.Errorf("the answer's event: args_rewritten = %v, want the decision's own fact", got)
+	}
+}
+
+// TestSubstitutionAfterResponse: before the first env entry the
+// workspace is absent, so a first env entry after a response that names
+// one is a substitution, as a session recorded without an env entry and
+// resumed under WithEnv in a container is, and agenteval's strict replay
+// refuses it; an env entry before any response is not one, whatever it
+// names, and a local env with no workspace after a response is not
+// either, since absent equals absent (#148).
+func TestSubstitutionAfterResponse(t *testing.T) {
+	resp := func(s *agentsession.Session) error {
+		_, err := s.Append(&agentsession.ResponseEntry{ResponseID: fmt.Sprintf("resp_%d", s.Len()), Status: openresponses.ResponseStatusCompleted})
+		return err
+	}
+	env := func(node string) func(*agentsession.Session) error {
+		return func(s *agentsession.Session) error {
+			_, err := s.Append(nodeEnv(t, node))
+			return err
+		}
+	}
+	local := func(s *agentsession.Session) error {
+		_, err := s.Append(&agentsession.EnvEntry{CWD: "/w"})
+		return err
+	}
+	tests := []struct {
+		name   string
+		steps  []func(*agentsession.Session) error
+		marked []bool
+	}{
+		{"no env, a response, then a container", []func(*agentsession.Session) error{resp, env("n-1")}, []bool{true}},
+		{"an env before the first response", []func(*agentsession.Session) error{env("n-1"), resp}, []bool{false}},
+		{"two envs before the first response", []func(*agentsession.Session) error{env("n-1"), env("n-2"), resp}, []bool{false, false}},
+		{"a local env with no workspace after a response", []func(*agentsession.Session) error{resp, local}, []bool{false}},
+		{"a container after a local run", []func(*agentsession.Session) error{local, resp, env("n-1")}, []bool{false, true}},
+		{"the same workspace after a response", []func(*agentsession.Session) error{env("n-1"), resp, env("n-1")}, []bool{false, false}},
+		{"another node after a response", []func(*agentsession.Session) error{env("n-1"), resp, env("n-2")}, []bool{false, true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sr, tracer := recorder()
+			s := agentsession.New(agentsession.Header{})
+			for _, step := range tt.steps {
+				if err := step(s); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+				t.Fatal(err)
+			}
+			session := spans(sr.Ended()).named(SpanSession)
+			if len(session) != 1 {
+				t.Fatalf("session spans = %d", len(session))
+			}
+			if marked, _ := substitutions(session[0]); !slices.Equal(marked, tt.marked) {
+				t.Errorf("env events marked %v, want %v", marked, tt.marked)
+			}
+		})
+	}
+
+	// The Store decorator primes a resumed session's response as it primes
+	// its workspace: a session recorded with a response and no env entry,
+	// resumed in a container, marks the env entry it then writes.
+	ctx := context.Background()
+	sr, tracer := recorder()
+	mem := agentsession.NewMemoryStore()
+	sess, err := mem.Create(ctx, agentsession.Header{ID: "resumed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resp(sess); err != nil {
+		t.Fatal(err)
+	}
+	st := Wrap(mem, tracer)
+	if _, err := st.Open(ctx, "resumed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, "resumed", nodeEnv(t, "n-1")); err != nil {
+		t.Fatal(err)
+	}
+	st.Close("resumed")
+	resumed := spans(sr.Ended()).named(SpanSession).withAttr(AttrResumed, "true")
+	if len(resumed) != 1 {
+		t.Fatalf("resumed session spans = %d", len(resumed))
+	}
+	if marked, _ := substitutions(resumed[0]); !slices.Equal(marked, []bool{true}) {
+		t.Errorf("resumed env events marked %v, want the first marked", marked)
 	}
 }

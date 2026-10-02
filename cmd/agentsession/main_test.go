@@ -217,6 +217,9 @@ func TestRun(t *testing.T) {
 		{name: "list", args: []string{"list", filepath.Join(tmp, "root")}, stdout: []string{"CREATED", "01995b2a-0000-7000-8000-000000000003  Branching demo", "01995b2a-0000-7000-8000-000000000001", "/home/u/proj"}},
 		{name: "list limit", args: []string{"list", filepath.Join(tmp, "root"), "-limit", "1"}, stdout: []string{"01995b2a-0000-7000-8000-000000000003"}, absent: []string{"01995b2a-0000-7000-8000-000000000001"}},
 		{name: "list cwd", args: []string{"list", "-cwd", "/elsewhere", filepath.Join(tmp, "root")}, absent: []string{"01995b2a"}},
+		{name: "list harness", args: []string{"list", "-harness", "fixture", filepath.Join(tmp, "root")}, stdout: []string{"01995b2a-0000-7000-8000-000000000003", "01995b2a-0000-7000-8000-000000000001"}},
+		{name: "list another harness", args: []string{"list", "-harness", "nope", filepath.Join(tmp, "root")}, absent: []string{"01995b2a"}},
+		{name: "list top level", args: []string{"list", "-top-level", filepath.Join(tmp, "root")}, stdout: []string{"01995b2a-0000-7000-8000-000000000003", "01995b2a-0000-7000-8000-000000000001"}},
 		{name: "list missing root", args: []string{"list", filepath.Join(tmp, "nope")}, code: 1, stderr: []string{"no such file"}},
 		{name: "list file root", args: []string{"list", tampered}, code: 1, stderr: []string{"not a directory"}},
 	}
@@ -798,7 +801,18 @@ func TestCASMigrate(t *testing.T) {
 	if code := run([]string{"show", root, id}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "agentsession migrate") {
 		t.Errorf("show of an unmigrated session: exit %d: %s", code, stderr.String())
 	}
+	// list prints each session's error and then says once what to do
+	// about them; the library's own text says it too, since a product
+	// that lists a store passes that on (#190).
+	stderr.Reset()
+	if code := run([]string{"list", root}, &stdout, &stderr); code != 1 || strings.Count(stderr.String(), "agentsession migrate") != 3 || strings.Count(stderr.String(), legacyHint) != 1 {
+		t.Errorf("list of an unmigrated store: exit %d: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "open the store for writing") {
+		t.Errorf("list of an unmigrated store says to open it for writing: %s", stderr.String())
+	}
 	stdout.Reset()
+	stderr.Reset()
 	if code := run([]string{"verify", root}, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "agentsession migrate "+root) {
 		t.Errorf("verify of an unmigrated store: exit %d:\n%s", code, stdout.String())
 	}
@@ -850,50 +864,13 @@ func TestNoteDeclared(t *testing.T) {
 // message gets the ordinary note (#172).
 func TestVerifyEmptyResume(t *testing.T) {
 	tmp := t.TempDir()
-	// write records a held call and a run written resume, then has tail
-	// finish the session with an appender, an ender and the call.
-	type appender = func(agentsession.Entry) string
 	write := func(name string, tail func(must appender, end func(reason string), call string)) string {
-		t.Helper()
-		s := agentsession.New(agentsession.Header{})
-		must := func(e agentsession.Entry) string {
-			t.Helper()
-			id, err := s.Append(e)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return id
-		}
-		end := func(reason string) {
-			t.Helper()
-			e, err := s.EndRun(reason, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			must(e)
-		}
-		must(agentsession.NewRunStart("run-1", agentsession.SourceInput, ""))
-		must(agentsession.NewItemEntry(openresponses.UserText("charge it")))
-		call := must(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "a", Name: "charge", Arguments: "{}"}, ResponseID: "resp-1"})
-		must(&agentsession.ResponseEntry{ResponseID: "resp-1", Status: "completed"})
-		must(agentsession.NewDecision("a", call, agentsession.VerdictHold, agentsession.ByPolicy))
-		end(agentsession.ReasonInputRequired)
-		must(agentsession.NewRunStart("run-2", agentsession.SourceResume, ""))
-		tail(must, end, call)
 		path := filepath.Join(tmp, name+".jsonl")
-		var buf bytes.Buffer
-		if err := agentsession.Write(&buf, s); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writeResumed(t, path, tail)
 		return path
 	}
 	// A subscriber refuses the resume.
-	refused := write("refused", func(_ appender, end func(string), _ string) {
-		end(agentsession.ReasonError)
-	})
+	refused := write("refused", refusedResume)
 	// The process is killed after the resume's start; the restart closes
 	// the run error, and the next resume takes the call up.
 	cut := write("cut", func(must appender, end func(string), call string) {
@@ -932,6 +909,303 @@ func TestVerifyEmptyResume(t *testing.T) {
 	}
 }
 
+// An appender appends an entry to the session a test builds and
+// returns its id.
+type appender = func(agentsession.Entry) string
+
+// writeResumed writes a session to path that records a held call and a
+// run written resume, then has tail finish it with an appender, an
+// ender and the call's entry id. It returns the session's id.
+func writeResumed(t *testing.T, path string, tail func(must appender, end func(reason string), call string)) string {
+	t.Helper()
+	s := agentsession.New(agentsession.Header{})
+	must := func(e agentsession.Entry) string {
+		t.Helper()
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	end := func(reason string) {
+		t.Helper()
+		e, err := s.EndRun(reason, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		must(e)
+	}
+	must(agentsession.NewRunStart("run-1", agentsession.SourceInput, ""))
+	must(agentsession.NewItemEntry(openresponses.UserText("charge it")))
+	call := must(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "a", Name: "charge", Arguments: "{}"}, ResponseID: "resp-1"})
+	must(&agentsession.ResponseEntry{ResponseID: "resp-1", Status: "completed"})
+	must(agentsession.NewDecision("a", call, agentsession.VerdictHold, agentsession.ByPolicy))
+	end(agentsession.ReasonInputRequired)
+	must(agentsession.NewRunStart("run-2", agentsession.SourceResume, ""))
+	tail(must, end, call)
+	var buf bytes.Buffer
+	if err := agentsession.Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return s.ID()
+}
+
+// refusedResume ends the resume as a subscriber that refused it does,
+// before it took the call up.
+func refusedResume(_ appender, end func(string), _ string) {
+	end(agentsession.ReasonError)
+}
+
+// writeEarly09 writes a 0.9 file to path that repeats a call ID, which
+// draft 0.9 forbade only after its first writers shipped, and returns
+// the session's id.
+func writeEarly09(t *testing.T, path string) string {
+	t.Helper()
+	const id = "01995b2a-0000-7000-8000-00000000000a"
+	lines := []string{`{"type":"session","format":"agentsession/0.9","id":"` + id + `","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}`}
+	parent := "null"
+	for _, body := range []string{
+		`"type":"item","item":{"type":"function_call","id":"f1","call_id":"x","name":"t","arguments":"{}"}`,
+		`"type":"item","item":{"type":"function_call","id":"f2","call_id":"x","name":"t","arguments":"{}"}`,
+	} {
+		l := `{` + body + `,"parent":` + parent + `,"ts":"2026-09-17T16:00:01Z"}`
+		eid, _, err := agentsession.EntryHashes([]byte(l))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, `{"id":"`+eid+`",`+l[1:])
+		parent = `"` + eid + `"`
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// importFile imports a session file into a cas store and closes the
+// store. With declared set, the session's stored header is rewritten to
+// declare that format, as a store an earlier release wrote holds it:
+// Import writes the header this release's Read raises, and this release
+// raises a stored header only when it appends.
+func importFile(t *testing.T, root, path, declared string) {
+	t.Helper()
+	st, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := st.Import(context.Background(), f, true)
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if declared == "" {
+		return
+	}
+	hp := filepath.Join(root, "sessions", s.ID(), "header")
+	data, err := os.ReadFile(hp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var h agentsession.Header
+	if err := json.Unmarshal(data, &h); err != nil {
+		t.Fatal(err)
+	}
+	h.Format = declared
+	if data, err = json.Marshal(h); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hp, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCASVerifyNotes: verify of a cas root, and of one session a store
+// holds, print the notes verify of the session's file does: the note on
+// a resume that took up nothing beside the session's error, since it
+// names a run, and the note on a 0.9 file of an early writer once at
+// the end. The store's header, not the projection's, says what the
+// session declared: the projection is a file this release writes and
+// declares this release's format (#187).
+func TestCASVerifyNotes(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "cas")
+	refused := writeResumed(t, filepath.Join(tmp, "refused.jsonl"), refusedResume)
+	importFile(t, root, filepath.Join(tmp, "refused.jsonl"), "")
+	early := writeEarly09(t, filepath.Join(tmp, "early.jsonl"))
+	importFile(t, root, filepath.Join(tmp, "early.jsonl"), "agentsession/0.9")
+	// A second 0.9 session, so the note at the end is shown to be
+	// printed once for both.
+	other := filepath.Join(tmp, "other")
+	writeEarly09(t, filepath.Join(tmp, "other.jsonl"))
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Import refuses a session the store holds, so the second copy goes
+	// into a store of its own and the two are checked apart.
+	importFile(t, other, filepath.Join(tmp, "other.jsonl"), "agentsession/0.9")
+
+	emptyNote := fmt.Sprintf(emptyResumeNote, "run-2")
+	tests := []struct {
+		name   string
+		args   []string
+		stdout []string
+		count  map[string]int
+	}{
+		{
+			name: "the store", args: []string{"verify", root},
+			stdout: []string{
+				refused + ": records to ", "run source disagrees with its segment",
+				refused + ": " + emptyNote,
+				early + ": records to ", "call ID repeated",
+				"2 sessions' hashes and records checked, 2 failed",
+			},
+			count: map[string]int{earlyNote: 1, emptyNote: 1},
+		},
+		{name: "the resumed session", args: []string{"verify", root, refused}, stdout: []string{emptyNote}, count: map[string]int{earlyNote: 0}},
+		{name: "the early 0.9 session", args: []string{"verify", root, early}, stdout: []string{"call ID repeated", earlyNote}, count: map[string]int{earlyNote: 1}},
+		{name: "the other store", args: []string{"verify", other}, count: map[string]int{earlyNote: 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run(tt.args, &stdout, &stderr); code != 1 {
+				t.Errorf("exit %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+			}
+			for _, want := range tt.stdout {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("stdout lacks %q:\n%s", want, stdout.String())
+				}
+			}
+			for note, n := range tt.count {
+				if got := strings.Count(stdout.String(), note); got != n {
+					t.Errorf("stdout has %d of %q, want %d:\n%s", got, note, n, stdout.String())
+				}
+			}
+		})
+	}
+	// The projection of the early 0.9 session, as a file, declares this
+	// release's format and earns no note; the store knows better.
+	st, err := cas.Open(root, cas.WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, err := st.ProjectDir(context.Background(), filepath.Join(tmp, "projected"), early)
+	st.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"verify", projected}, &stdout, &stderr); code != 1 || strings.Contains(stdout.String(), earlyNote) {
+		t.Errorf("verify of the projection: exit %d:\n%s", code, stdout.String())
+	}
+}
+
+// TestCASVerifyLinks: verify of a cas root, and of one session a store
+// holds, checks each subsession link against the header of the session
+// it names, and fails on one whose header names another parent or
+// another call, which is what a fork remedy that missed a level of
+// subsessions leaves; a link to a session the store lacks is a child
+// that never started, and passes; a file names no store to find the
+// target in, so its links are not checked (#186).
+func TestCASVerifyLinks(t *testing.T) {
+	ctx := context.Background()
+	const parent = "01995b2a-0000-7000-8000-0000000000a1"
+	const call = "call_g"
+	child := agentsession.SubsessionID(parent, call)
+	// build makes a store holding the parent, which links the subsession
+	// the call spawned, and the child under the given header, or no
+	// child with none.
+	build := func(t *testing.T, root string, childHeader *agentsession.Header) {
+		t.Helper()
+		st, err := cas.Open(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		if _, err := st.Create(ctx, agentsession.Header{ID: parent}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(ctx, parent, agentsession.NewItemEntry(openresponses.UserText("delegate"))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(ctx, parent, &agentsession.LinkEntry{Rel: agentsession.RelSubsession, Session: child, CallID: call}); err != nil {
+			t.Fatal(err)
+		}
+		if childHeader == nil {
+			return
+		}
+		if _, err := st.Create(ctx, *childHeader); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(ctx, child, agentsession.NewItemEntry(openresponses.UserText("do it"))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tests := []struct {
+		name   string
+		child  *agentsession.Header
+		code   int
+		stdout []string // on verify of the store and of the parent alike
+	}{
+		{"the link and the header agree", &agentsession.Header{ID: child, ParentSession: parent, SpawnedBy: call}, 0, nil},
+		{"the child never started", nil, 0, nil},
+		{"the header names another parent", &agentsession.Header{ID: child, ParentSession: "01995b2a-0000-7000-8000-0000000000b2", SpawnedBy: call}, 1, []string{"link ", " -> " + child + "  ERROR ", "parent_session"}},
+		{"the header names another call", &agentsession.Header{ID: child, ParentSession: parent, SpawnedBy: "call_h"}, 1, []string{"link ", " -> " + child + "  ERROR ", "spawned_by"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			build(t, root, tt.child)
+			for _, args := range [][]string{{"verify", root}, {"verify", root, parent}} {
+				var stdout, stderr bytes.Buffer
+				if code := run(args, &stdout, &stderr); code != tt.code {
+					t.Errorf("%v: exit %d, want %d\nstdout:\n%s\nstderr:\n%s", args, code, tt.code, stdout.String(), stderr.String())
+				}
+				for _, want := range tt.stdout {
+					if !strings.Contains(stdout.String(), want) {
+						t.Errorf("%v: stdout lacks %q:\n%s", args, want, stdout.String())
+					}
+				}
+				if len(args) == 2 && tt.code == 1 {
+					for _, want := range []string{parent + ": link ", "1 failed"} {
+						if !strings.Contains(stdout.String(), want) {
+							t.Errorf("%v: stdout lacks %q:\n%s", args, want, stdout.String())
+						}
+					}
+				}
+			}
+			if tt.code == 0 {
+				return
+			}
+			// The parent's file alone: no store to find the child in,
+			// so the link is not checked.
+			st, err := cas.Open(root, cas.WithReadOnly())
+			if err != nil {
+				t.Fatal(err)
+			}
+			projected, err := st.ProjectDir(ctx, filepath.Join(root, "..", "projected"), parent)
+			st.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"verify", projected}, &stdout, &stderr); code != 0 || strings.Contains(stdout.String(), "link ") {
+				t.Errorf("verify of the file: exit %d:\n%s", code, stdout.String())
+			}
+		})
+	}
+}
+
 // TestNoteWriter: no release checks a run's source or end as it is
 // appended, so a mismatch earns a note naming the writer of the run in
 // a file of any minor, never the note on early 0.9 writers (#165).
@@ -950,5 +1224,149 @@ func TestNoteWriter(t *testing.T) {
 				t.Errorf("%v in %s: note %q, want %q", err, declared, got, want)
 			}
 		}
+	}
+}
+
+// TestShowOriginDispatch: show on a cas fork made at a call lists the
+// call pending with the dispatch its origin holds, read through the
+// store; the file the fork projects to reads alone and says the call is
+// unknown, with no dispatch to show (#185).
+func TestShowOriginDispatch(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "cas")
+	st, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin, err := st.Create(ctx, agentsession.Header{Records: agentsession.AllRecords})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := st.Append(ctx, origin.ID(), &agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fk", CallID: "call_k", Name: "deploy", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, origin.ID(), agentsession.NewDispatch("call_k", call).WithIdempotencyKey("k1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, origin.ID(), agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("call_k", "deployed"))); err != nil {
+		t.Fatal(err)
+	}
+	fork, err := st.Create(ctx, agentsession.Header{ParentSession: origin.ID(), Base: call, Records: agentsession.AllRecords})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, err := st.ProjectDir(ctx, filepath.Join(tmp, "projected"), fork.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		args   []string
+		stdout []string
+		absent []string
+	}{
+		{
+			name: "through the store", args: []string{"show", root, fork.ID()},
+			stdout: []string{"pending at", "call_k  deploy  unknown  dispatched in session " + origin.ID() + ", key \"k1\""},
+		},
+		{
+			name: "the projected file", args: []string{"show", projected},
+			stdout: []string{"pending at", "call_k  deploy  unknown"}, absent: []string{"dispatched"},
+		},
+		{
+			name: "the origin", args: []string{"show", root, origin.ID()},
+			absent: []string{"pending at"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run(tt.args, &stdout, &stderr); code != 0 {
+				t.Fatalf("exit %d: %s", code, stderr.String())
+			}
+			for _, want := range tt.stdout {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("stdout lacks %q:\n%s", want, stdout.String())
+				}
+			}
+			for _, absent := range tt.absent {
+				if strings.Contains(stdout.String(), absent) {
+					t.Errorf("stdout has %q:\n%s", absent, stdout.String())
+				}
+			}
+		})
+	}
+}
+
+// TestCASRepairSalvagedLeaf: a branch leaf whose record is damaged, a
+// readable append following it, is salvaged and said so, rather than
+// the head reported as the log last named it with nothing about the
+// leaf (#189).
+func TestCASRepairSalvagedLeaf(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "leafy"
+	if _, err := st.Create(ctx, agentsession.Header{ID: id}); err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, text := range []string{"one", "two", "three"} {
+		eid, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText(text)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, eid)
+	}
+	if err := st.SetHead(ctx, id, ids[2], ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	four, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("four, from two")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	// Three's record, damaged in its session member, so both hashes it
+	// spells stay legible.
+	path := filepath.Join(root, "sessions", id, "log")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(data), "\n")
+	for i, l := range lines {
+		if strings.Contains(l, `"op":"append"`) && strings.Contains(l, ids[2]) {
+			b := []byte(l)
+			b[strings.Index(l, `"session":"`)+len(`"session":"`)] ^= 1
+			lines[i] = string(b)
+		}
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"repair", root, id, "-dry-run"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	for _, w := range []string{
+		"kept     4 entries, 1 of them recovered from what the damage hid",
+		"salvaged " + shortID(ids[2]) + ": named only by a damaged record, and its objects whole; not the head",
+		"head     " + shortID(four) + ", as the log last named it",
+	} {
+		if !strings.Contains(stdout.String(), w) {
+			t.Errorf("stdout lacks %q:\n%s", w, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "dropped") {
+		t.Errorf("a leaf the damage spelled whole is dropped:\n%s", stdout.String())
 	}
 }

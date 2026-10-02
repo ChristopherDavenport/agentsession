@@ -145,11 +145,15 @@ func (c *Call) From() []EntryRef {
 }
 
 // Args returns the arguments the tool runs with: those of the last
-// decision that rewrote them, else the call's own.
+// decision that rewrote them, else the call's own. An answer's args are
+// passed over: no tool ran with them, the format says they name
+// nothing, and reading them here would show an output the harness wrote
+// as a rewrite of what the tool runs with. They are read from the
+// decision itself.
 func (c *Call) Args() string {
 	for i := len(c.Decisions) - 1; i >= 0; i-- {
-		if len(c.Decisions[i].Args) > 0 {
-			return string(c.Decisions[i].Args)
+		if d := c.Decisions[i]; len(d.Args) > 0 && d.Verdict != VerdictAnswer {
+			return string(d.Args)
 		}
 	}
 	return c.Call.Arguments
@@ -218,7 +222,11 @@ func (s CallState) String() string {
 // its origin may have promised nothing. So is one with no dispatch on
 // the path and one on another branch of the session, which a rebase
 // above the dispatch leaves. A call from [Calls] over a bare path is
-// taken to be the session's own, with nothing beside the path.
+// taken to be the session's own, with nothing beside the path. A prefix
+// call's dispatches, when its origin holds any, are what
+// [OriginDispatches] reads through a store; they do not change the
+// state, which is unknown either way, but say under which key and with
+// which arguments the call may have run.
 func (c *Call) State(h Header) CallState {
 	switch {
 	case c.Output != nil:
@@ -900,6 +908,78 @@ func (s *Session) VerifyRecords(leaf string) error {
 		}
 		if c.Output != nil && c.Dispatch == nil && !c.Rejected() && !c.Answered() && promised(c.Output.ID) {
 			return fmt.Errorf("%w: call %s has an output and no dispatch", ErrRecordMissing, c.ID())
+		}
+	}
+	return nil
+}
+
+// ErrLinkMismatch is returned by [Session.VerifyLinks] for a subsession
+// link whose target's header names another session as its parent, or
+// another call as the one that spawned it. The link and the header are
+// two records of one spawn, written by the parent and by the child, and
+// RFC 0001 has them agree. The disagreement is what a line moved to a
+// fork after a call ID collision leaves behind when its links were not
+// pointed at the subsessions re-derived under the fork's ID: two stores
+// derive one ID for the subsession of one call, so the link names the
+// other store's subagent, and only that session's header says so.
+var ErrLinkMismatch = errors.New("agentsession: subsession link disagrees with its target's header")
+
+// LinkError is the error [Session.VerifyLinks] returns for a link it
+// could not pass: the link entry, the session it names, and what went
+// wrong, which is [ErrLinkMismatch] naming the member that disagrees,
+// or the error the resolver returned for the target.
+type LinkError struct {
+	// Entry is the link entry's id.
+	Entry string
+	// Session is the session the link names.
+	Session string
+	// Err says what is wrong with the link.
+	Err error
+}
+
+// Error implements error.
+func (e *LinkError) Error() string {
+	return fmt.Sprintf("agentsession: link %s to session %s: %v", e.Entry, e.Session, e.Err)
+}
+
+// Unwrap returns the error the link failed on.
+func (e *LinkError) Unwrap() error { return e.Err }
+
+// VerifyLinks checks every subsession link the session wrote against
+// the header of the session it names, read through resolve: the
+// target's parent_session is this session's id and its spawned_by is
+// the link's call_id, as RFC 0001 says of a subsession. A target
+// resolve does not find, returned as (nil, nil), is a child that never
+// started, which a link written at dispatch records by design, and
+// passes; an error from resolve is reported for that link. A link on
+// a fork's prefix is the origin's, to be checked there against the
+// origin's id, since the child it names was spawned by the origin; it
+// is passed over, as are links of other relations, which name no
+// spawn. It returns the first problem found, a [*LinkError], and with
+// a nil resolve checks nothing.
+func (s *Session) VerifyLinks(resolve func(id string) (*Session, error)) error {
+	if resolve == nil {
+		return nil
+	}
+	self := s.ID()
+	for _, e := range s.Entries() {
+		l, ok := e.(*LinkEntry)
+		if !ok || l.Rel != RelSubsession || s.Prefix(l.ID) {
+			continue
+		}
+		target, err := resolve(l.Session)
+		if err != nil {
+			return &LinkError{Entry: l.ID, Session: l.Session, Err: err}
+		}
+		if target == nil {
+			continue
+		}
+		h := target.Header()
+		switch {
+		case h.ParentSession != self:
+			return &LinkError{Entry: l.ID, Session: l.Session, Err: fmt.Errorf("%w: its parent_session is %q, not the linking session %q", ErrLinkMismatch, h.ParentSession, self)}
+		case h.SpawnedBy != l.CallID:
+			return &LinkError{Entry: l.ID, Session: l.Session, Err: fmt.Errorf("%w: its spawned_by is %q, not the link's call_id %q", ErrLinkMismatch, h.SpawnedBy, l.CallID)}
 		}
 	}
 	return nil

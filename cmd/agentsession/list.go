@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -15,9 +16,11 @@ import (
 )
 
 func list(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("list", "<root> [-cwd path] [-parent id] [-limit n] [-current]", stderr)
+	fs := newFlags("list", "<root> [-cwd path] [-parent id] [-harness name] [-top-level] [-limit n] [-current]", stderr)
 	cwd := fs.String("cwd", "", "only sessions with this working directory")
 	parent := fs.String("parent", "", "only sessions forked or spawned from this session")
+	harness := fs.String("harness", "", "only sessions whose header names this harness")
+	topLevel := fs.Bool("top-level", false, "leave out the subsessions a call spawned")
 	limit := fs.Int("limit", 0, "at most this many sessions; 0 means all")
 	current := fs.Bool("current", false, "leave out sessions that were continued in a successor")
 	positional, err := parse(fs, args)
@@ -53,7 +56,7 @@ func list(args []string, stdout, stderr io.Writer) error {
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "CREATED\tID\tNAME\tSIZE\tCWD\tCONTINUED IN\tPATH")
 	var problems []error
-	f := agentsession.ListFilter{CWD: *cwd, ParentSession: *parent, Limit: *limit, WithNames: true, Current: *current}
+	f := agentsession.ListFilter{CWD: *cwd, ParentSession: *parent, Harness: *harness, TopLevel: *topLevel, Limit: *limit, WithNames: true, Current: *current}
 	for sum, err := range st.List(context.Background(), f) {
 		if err != nil {
 			problems = append(problems, err)
@@ -63,8 +66,18 @@ func list(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n", h.CreatedAt.UTC().Format(time.RFC3339), h.ID, orDash(sum.Name), sum.Size, orDash(h.CWD), orDash(sum.SupersededBy), sum.Path)
 	}
 	tw.Flush()
+	// Each session's problem is printed as it is; a store from before
+	// per-session logs fails every session the same way, and the hint
+	// says once what to do about all of them. list returns errFailed,
+	// which main does not add the hint to, since the problems are
+	// already reported.
+	legacy := false
 	for _, err := range problems {
 		fmt.Fprintf(stderr, "agentsession: %v\n", err)
+		legacy = legacy || errors.Is(err, cas.ErrLegacyStore)
+	}
+	if legacy {
+		fmt.Fprintln(stderr, legacyHint)
 	}
 	if len(problems) > 0 {
 		return errFailed

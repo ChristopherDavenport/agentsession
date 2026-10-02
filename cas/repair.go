@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -49,13 +51,15 @@ type RepairReport struct {
 	// of a kept entry, named by its envelope, whose records the damage
 	// hid.
 	Hidden []string
-	// Salvaged is the kept entries only a damaged append record after
-	// the last readable one names: its line still spells the entry's
-	// hash, the entry's objects read and hash to their names, and its
-	// parent is the base or kept.
+	// Salvaged is the kept entries only a damaged record names: its
+	// line still spells the entry's hash, no readable record appends the
+	// entry or records it lost, the entry's objects read and hash to
+	// their names, and its parent is the base or kept.
 	Salvaged []string
 	// Dropped is each entry a readable record appends that the repaired
-	// log does not hold, and why.
+	// log does not hold, and each hash a damaged line spells that was
+	// not salvaged, with why. A hash a damaged line spells may be what
+	// the damage made of another; it is dropped for having no object.
 	Dropped []DroppedEntry
 	// Head is the repaired session's head. Named is the head the damaged
 	// log last named, by its last readable head record or a damaged one
@@ -78,7 +82,8 @@ type RepairReport struct {
 	DamagedLog string
 }
 
-// DroppedEntry is an entry a repair dropped.
+// DroppedEntry is an entry a repair dropped, or a hash a damaged line
+// spells that it did not salvage, and why.
 type DroppedEntry struct {
 	Entry string
 	Err   error
@@ -93,13 +98,21 @@ type DroppedEntry struct {
 // from a dropped one is dropped too. A parent no readable record
 // appends is one the damage hid: the child's envelope names it by its
 // hash, so it is kept, with its own ancestors, when they all read and
-// reach the base. An entry only a damaged append record after the last
-// readable one names, which the hidden-parent rule cannot reach since no
-// child names it, is salvaged from the hash the damaged line still
-// spells, under the same tests, and reported. The head is the kept
-// entry the last readable head record, or a salvaged one, names, or
-// else the latest kept leaf; when a damaged line follows the last head
-// read, the report says the head the log last named is not known. The
+// reach the base. An entry only a damaged record names, which the
+// hidden-parent rule cannot reach since no readable child names it, a
+// branch's leaf or the session's last entry, is salvaged from the hash
+// the damaged line still spells, wherever the line is in the log, under
+// the same tests, and reported; a hash a damaged line spells that is not
+// salvaged is reported as dropped, with why. A lost record is recovery's
+// word to the writer that a crash took the append before it, so an
+// entry a damaged lost record still legibly names is not kept from an
+// append before that record, a readable one either, since a repair
+// would bring back what the writer was told was lost; an append after
+// it is the writer appending the entry again, and stands, as it does
+// after a readable lost record. The head is the kept entry the last readable head record,
+// or a salvaged one, names, or else the latest kept leaf; when a damaged
+// line follows the last head read, the report says the head the log
+// last named is not known. The
 // mark is the last readable mark record's, or a mirror's when none
 // reads. The new log is written durably and renamed into place; the
 // damaged one is kept in the session's directory as damaged-<time>,
@@ -279,24 +292,30 @@ func (s *Store) Repair(ctx context.Context, id string, opts RepairOptions) (Repa
 	return rep, nil
 }
 
-// logLine is one line of a log, by its offset.
+// logLine is one line of a damaged log that failed its checksum, by
+// its offset, with how many readable records come before it, so a
+// repair reads it where it is in the log.
 type logLine struct {
-	off   int64
-	bytes []byte
+	off    int64
+	bytes  []byte
+	before int
 }
 
 // logLines is what a repair reads of a damaged log's lines beyond its
-// records: the damaged lines after the last readable append, the
-// offset of the last line holding a readable head record, and of the
-// last damaged line, each -1 when there is none.
+// records: the damaged lines, in order, the offset of the last line
+// holding a readable head record, and of the last damaged line, each -1
+// when there is none.
 type logLines struct {
-	trailing    []logLine
+	damaged     []logLine
 	lastHead    int64
 	lastDamaged int64
 }
 
 // readLines reads a damaged log's lines as logLines says. A record's
 // newline damaged into another byte lost nothing, and is not counted.
+// The readable records are counted as parseSessionLog reads them, line
+// by line through decodeLine, so a damaged line's place among them is
+// its place in the records the repair plans from.
 func readLines(data []byte, damage []LogDamage) logLines {
 	ls := logLines{lastHead: -1, lastDamaged: -1}
 	damaged := map[int64]bool{}
@@ -306,39 +325,62 @@ func readLines(data []byte, damage []LogDamage) logLines {
 			ls.lastDamaged = max(ls.lastDamaged, d.Offset)
 		}
 	}
-	lastAppend := int64(-1)
-	var all []logLine
+	checked := 0
 	for off := 0; off < len(data); {
 		end := bytes.IndexByte(data[off:], '\n')
 		if end < 0 {
 			end = len(data) - off - 1
 		}
 		line := data[off : off+end+1]
-		all = append(all, logLine{int64(off), line})
+		if damaged[int64(off)] {
+			ls.damaged = append(ls.damaged, logLine{off: int64(off), bytes: line, before: checked})
+		}
 		recs, _ := decodeLine(line)
 		for _, r := range recs {
 			if !r.checked {
 				continue
 			}
-			if r.Op == opAppend {
-				lastAppend = int64(off)
-			}
+			checked++
 			if r.Op == opHead || (r.Op == opAppend && r.Head != "") {
 				ls.lastHead = int64(off)
 			}
 		}
 		off += len(line)
 	}
-	for _, l := range all {
-		if damaged[l.off] && l.off > lastAppend {
-			ls.trailing = append(ls.trailing, l)
-		}
-	}
 	return ls
 }
 
 // hashToken matches a well-formed hash wherever it is spelled.
 var hashToken = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
+
+// oneDigitOff returns the hash among tokens that differs from e in one
+// byte, as the hash one damaged byte makes of another does, or "".
+func oneDigitOff(e string, tokens [][]byte) string {
+	for _, t := range tokens {
+		h := string(t)
+		if len(h) != len(e) || h == e {
+			continue
+		}
+		diff := 0
+		for i := range h {
+			if h[i] != e[i] {
+				diff++
+			}
+		}
+		if diff == 1 {
+			return h
+		}
+	}
+	return ""
+}
+
+// errDamagedLost and errLostRecord say why a hash a damaged line spells
+// is not salvaged: a lost record, damaged but legible, or readable,
+// names it.
+var (
+	errDamagedLost = errors.New("a damaged lost record legibly names it: recovery recorded the append lost, and a repair does not bring back what the writer was told was lost")
+	errLostRecord  = errors.New("a lost record names it: recovery recorded the append lost")
+)
 
 // repairPlan is what a repair keeps of a log's readable records.
 type repairPlan struct {
@@ -354,19 +396,32 @@ type repairPlan struct {
 	path        []string // the path to the base, base first
 }
 
-// planRepair works out what a repair keeps of a log's readable records,
-// and of the damaged lines after the last readable append. A record
-// damaged in a way that leaves it decoding without its checksum is no
-// readable record.
+// planRepair works out what a repair keeps of a log's readable records
+// and its damaged lines, read in log order. A record damaged in a way
+// that leaves it decoding without its checksum is no readable record.
 //
 // A damaged append record still spells the hash of the entry it
 // appends, as its entry and as its head, and a single damaged byte
-// spoils at most one. Each hash such a line spells is salvaged when the
-// line still names this session and an append, no readable record
-// appended or recorded lost the entry, its objects read and hash to
-// their names, and its parent is the base or kept: nothing is taken on
-// the damaged record's word that the objects do not bear out. It is the
-// head only when the line names it as its head.
+// spoils at most one. The log is the session's own file and the objects
+// are the evidence, so each hash a damaged line spells, wherever the
+// line is, is salvaged when no readable record appends the entry or
+// records it lost, no damaged line legibly records it lost, its
+// objects read and hash to their names, and its parent is the base or
+// kept: nothing is taken on the damaged record's word that the objects
+// do not bear out. It is salvaged where its line is, so the records
+// after it find it kept, as their parent or as an entry they converge;
+// one a readable record's entry then hangs from is reported hidden, as
+// the child's envelope would have kept it had the line spelled nothing.
+// It is the head only when the line names it as its head. A hash not
+// salvaged is dropped, with why, so the report accounts for every hash
+// the damage touched; one the damage made of another, a digit off a
+// hash the line also spells, is dropped as no entry. A lost record is
+// recovery's word to the writer that a crash took the append before it,
+// and a damaged one that still legibly says so is taken at that word
+// over the appends before it, a readable one too, since a salvage would
+// bring back what the writer was told was lost; it says nothing of an
+// append after it, by which the writer appended the entry again, so the
+// damaged and the readable lost records are read alike, by position.
 func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord, lines logLines) (repairPlan, error) {
 	p := repairPlan{sizes: map[string]int64{}, headAt: -1}
 	var recs []logRecord
@@ -401,9 +456,58 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord, 
 		at, ok := lostAt[entry]
 		return ok && at > i
 	}
+	// What the damaged lines legibly record lost, each hash with the
+	// last such line naming it. A lost record stands against an append
+	// before it, which is the one recovery cut, and not against one after
+	// it, which is the writer appending the entry again once told; the
+	// readable and the damaged lost records are read alike, by position.
+	lostBy := map[string]logLine{}
+	for _, l := range lines.damaged {
+		if bytes.Contains(l.bytes, []byte(`"op":"lost"`)) {
+			for _, h := range hashToken.FindAll(l.bytes, -1) {
+				lostBy[string(h)] = l
+			}
+		}
+	}
+	// lostAfterRecord reports whether a damaged lost record after the
+	// readable record i legibly names entry, as gone reports a readable
+	// one; lostAfterLine reports whether a lost record of either kind
+	// comes after the damaged line l and names entry.
+	lostAfterRecord := func(entry string, i int) bool {
+		l, ok := lostBy[entry]
+		return ok && l.before > i
+	}
+	lostAfterLine := func(entry string, l logLine) (error, bool) {
+		if d, ok := lostBy[entry]; ok && d.off > l.off {
+			return errDamagedLost, true
+		}
+		if at, ok := lostAt[entry]; ok && at >= l.before {
+			return errLostRecord, true
+		}
+		return nil, false
+	}
+	// standing is each entry a readable append records that no lost
+	// record after that append takes back: such an append decides the
+	// entry, and a damaged line spelling its hash adds nothing. An
+	// append a lost record follows was cut, and a damaged line after the
+	// lost record may be the writer appending the entry again.
+	standing := map[string]bool{}
+	for i, r := range recs {
+		if r.Op == opAppend && r.Entry != "" && !gone(r.Entry, i) && !lostAfterRecord(r.Entry, i) {
+			standing[r.Entry] = true
+		}
+	}
 	kept := map[string]bool{}
-	seen := map[string]bool{}    // appended by a readable record
-	failed := map[string]error{} // hidden entries that cannot be kept
+	seen := map[string]bool{}      // appended by a readable record read so far
+	failed := map[string]error{}   // hidden entries that cannot be kept
+	listed := map[string]bool{}    // dropped as a hash a damaged line spells
+	parents := map[string]string{} // of each entry checked
+	dropSpelled := func(e string, err error) {
+		if !listed[e] {
+			listed[e] = true
+			p.dropped = append(p.dropped, DroppedEntry{Entry: e, Err: err})
+		}
+	}
 	// check reads an entry's objects, checked against their names, and
 	// returns its parent once its convergence references are all in the
 	// session.
@@ -433,6 +537,7 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord, 
 		if parent == nil {
 			return "", nil
 		}
+		parents[e] = *parent
 		return *parent, nil
 	}
 	keep := func(e string, i int, r logRecord) {
@@ -462,7 +567,7 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord, 
 				err = errors.New("its parent chain does not reach the session's base")
 				break
 			}
-			if seen[e] {
+			if _, lost := lostBy[e]; seen[e] || lost || listed[e] {
 				err = fmt.Errorf("its parent %s was dropped", e)
 				break
 			}
@@ -490,11 +595,73 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord, 
 		}
 		return nil
 	}
+	// salvage keeps what a damaged line still spells, under the tests
+	// above. A hash held by no object is said once the line's other
+	// hashes are known, since it may be what the damage made of one.
+	salvage := func(l logLine) {
+		// A damaged lost record names what was lost, not what to keep;
+		// what it names and nothing kept is listed once the log is read.
+		if bytes.Contains(l.bytes, []byte(`"op":"lost"`)) {
+			return
+		}
+		tokens := hashToken.FindAll(l.bytes, -1)
+		type unheld struct {
+			e   string
+			err error
+		}
+		var unhelds []unheld
+		for _, h := range tokens {
+			e := string(h)
+			if kept[e] || standing[e] || onPath[e] || e == hdr.Base || listed[e] {
+				continue
+			}
+			if err, lost := lostAfterLine(e, l); lost {
+				dropSpelled(e, err)
+				continue
+			}
+			if _, err := s.objs.read(spaceEntries, e); errors.Is(err, os.ErrNotExist) {
+				listed[e] = true
+				unhelds = append(unhelds, unheld{e, err})
+				continue
+			}
+			parent, err := check(e)
+			switch {
+			case err != nil:
+				err = fmt.Errorf("named only by a damaged record, and its objects do not read: %w", err)
+			case parent == "" && hdr.Base != "":
+				err = errors.New("named only by a damaged record, and its parent chain does not reach the session's base")
+			case !kept[parent] && parent != hdr.Base:
+				err = fmt.Errorf("named only by a damaged record, and its parent %s is not kept", parent)
+			}
+			if err != nil {
+				dropSpelled(e, err)
+				continue
+			}
+			keep(e, -1, logRecord{})
+			p.salvaged = append(p.salvaged, e)
+			// The head, unless a readable record after the line moved it.
+			if bytes.Contains(l.bytes, []byte(`"head":"`+e+`"`)) && l.off > lines.lastHead {
+				p.named, p.headAt = e, l.off
+			}
+		}
+		for _, u := range unhelds {
+			err := fmt.Errorf("named only by a damaged record, and no object of it is held: %w", u.err)
+			if twin := oneDigitOff(u.e, tokens); twin != "" && kept[twin] {
+				err = fmt.Errorf("no entry: the damage made it of %s, which is kept: %w", twin, u.err)
+			}
+			p.dropped = append(p.dropped, DroppedEntry{Entry: u.e, Err: err})
+		}
+	}
 	p.named = hdr.Base
+	next := 0 // the damaged lines read so far
 	for i, r := range recs {
+		for next < len(lines.damaged) && lines.damaged[next].before <= i {
+			salvage(lines.damaged[next])
+			next++
+		}
 		switch r.Op {
 		case opHead:
-			if !gone(r.Head, i) {
+			if !gone(r.Head, i) && !lostAfterRecord(r.Head, i) {
 				p.named = r.Head
 			}
 			continue
@@ -505,7 +672,10 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord, 
 		if r.Entry == "" || gone(r.Entry, i) {
 			continue
 		}
-		if r.Head != "" {
+		if lostAfterRecord(r.Entry, i) {
+			continue
+		}
+		if r.Head != "" && !lostAfterRecord(r.Head, i) {
 			p.named = r.Head
 		}
 		if seen[r.Entry] {
@@ -515,7 +685,10 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord, 
 		if kept[r.Entry] {
 			continue // kept already, as an ancestor an earlier entry named
 		}
-		drop := func(err error) { p.dropped = append(p.dropped, DroppedEntry{Entry: r.Entry, Err: err}) }
+		drop := func(err error) {
+			listed[r.Entry] = true
+			p.dropped = append(p.dropped, DroppedEntry{Entry: r.Entry, Err: err})
+		}
 		parent, err := check(r.Entry)
 		if err != nil {
 			drop(err)
@@ -529,40 +702,36 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord, 
 		}
 		keep(r.Entry, i, r)
 	}
-	// What a damaged line after the last readable append still spells.
-	session, _ := json.Marshal(id)
-	ofSession := append([]byte(`"session":`), session...)
-	lostBy := map[string]bool{} // named by a damaged lost record
-	for _, l := range lines.trailing {
-		if bytes.Contains(l.bytes, []byte(`"op":"lost"`)) {
-			for _, h := range hashToken.FindAll(l.bytes, -1) {
-				lostBy[string(h)] = true
-			}
+	for ; next < len(lines.damaged); next++ {
+		salvage(lines.damaged[next])
+	}
+	// What a damaged lost record legibly names and nothing kept, an
+	// append before it and nothing after, is accounted for as dropped.
+	for _, e := range slices.Sorted(maps.Keys(lostBy)) {
+		if !kept[e] && !onPath[e] && e != hdr.Base {
+			dropSpelled(e, errDamagedLost)
 		}
 	}
-	for _, l := range lines.trailing {
-		if !bytes.Contains(l.bytes, ofSession) || !bytes.Contains(l.bytes, []byte(`"op":"append"`)) {
-			continue
-		}
-		for _, h := range hashToken.FindAll(l.bytes, -1) {
-			e := string(h)
-			if kept[e] || seen[e] || onPath[e] || e == hdr.Base || lostBy[e] {
-				continue
-			}
-			if _, lost := lostAt[e]; lost {
-				continue
-			}
-			parent, err := check(e)
-			if err != nil || (!kept[parent] && parent != hdr.Base) {
-				continue
-			}
-			keep(e, -1, logRecord{})
-			p.salvaged = append(p.salvaged, e)
-			// The head, unless a readable record after the line moved it.
-			if bytes.Contains(l.bytes, []byte(`"head":"`+e+`"`)) && l.off > lines.lastHead {
-				p.named, p.headAt = e, l.off
+	// An entry salvaged from its line that a readable record's entry
+	// hangs from is one the damage hid, as the hidden rule would have
+	// kept it had the line spelled nothing: the child's envelope is the
+	// stronger evidence, and the report says so.
+	if len(p.salvaged) > 0 {
+		named := map[string]bool{}
+		for e, parent := range parents {
+			if seen[e] && kept[e] {
+				named[parent] = true
 			}
 		}
+		salvaged := p.salvaged[:0]
+		for _, e := range p.salvaged {
+			if named[e] {
+				p.hidden = append(p.hidden, e)
+			} else {
+				salvaged = append(salvaged, e)
+			}
+		}
+		p.salvaged = salvaged
 	}
 	if len(p.kept) == 0 {
 		return p, nil

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -112,8 +113,48 @@ func readSource(src source) (*agentsession.Session, error) {
 	return readFrom(st, src)
 }
 
+// readDeclared loads the session a source names, as readSource does,
+// and the format its header declares where it is stored, which is what
+// verify's notes turn on. For a file that is the session's
+// DeclaredFormat. For a session a cas store holds it is not: the
+// session is read from its projection, which is the file this release
+// would write and so declares this release's format, as any file names
+// its writer's; the header the store keeps declares the format the
+// session was written under, raised only when this release appends to
+// it. The store exposes that header through Store.Read, whose session
+// declares it, and through List; one session is read again here,
+// since the store offers no cheaper read of its header alone. For a
+// cas session the store is returned open, so the caller resolves the
+// session's links through it without opening the store for each, and
+// closes it; for a file it is nil.
+func readDeclared(src source) (*agentsession.Session, string, *cas.Store, error) {
+	if src.id == "" {
+		s, err := readSession(src.path)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		return s, s.DeclaredFormat(), nil, nil
+	}
+	st, err := cas.Open(src.path, cas.WithReadOnly())
+	if err != nil {
+		return nil, "", nil, err
+	}
+	s, err := readFrom(st, src)
+	if err != nil {
+		st.Close()
+		return nil, "", nil, err
+	}
+	stored, err := st.Read(context.Background(), src.id)
+	if err != nil {
+		st.Close()
+		return nil, "", nil, fmt.Errorf("%s: %w", src, err)
+	}
+	return s, stored.DeclaredFormat(), st, nil
+}
+
 // readFrom loads a session from a cas store already open, as readSource
-// does.
+// does. The session declares this release's format whatever its stored
+// header says; readDeclared is where the stored format comes from.
 func readFrom(st *cas.Store, src source) (*agentsession.Session, error) {
 	var buf bytes.Buffer
 	if err := st.Project(context.Background(), &buf, src.id); err != nil {
@@ -126,10 +167,26 @@ func readFrom(st *cas.Store, src source) (*agentsession.Session, error) {
 	return s, nil
 }
 
-// casResolver finds a linked subsession in the same cas store.
+// casResolver finds a linked subsession in the same cas store, opening
+// the store read-only for each.
 func casResolver(root string) func(id string) (*agentsession.Session, error) {
 	return func(id string) (*agentsession.Session, error) {
-		s, err := readSource(source{path: root, id: id})
+		st, err := cas.Open(root, cas.WithReadOnly())
+		if err != nil {
+			return nil, err
+		}
+		defer st.Close()
+		return resolveIn(st, root)(id)
+	}
+}
+
+// resolveIn finds a linked subsession in a cas store already open. A
+// session the store does not hold, or an id that names none, is nil: a
+// subsession link is written when its call is dispatched, so a child
+// the store lacks is one that never started.
+func resolveIn(st *cas.Store, root string) func(id string) (*agentsession.Session, error) {
+	return func(id string) (*agentsession.Session, error) {
+		s, err := readFrom(st, source{path: root, id: id})
 		if errors.Is(err, agentsession.ErrNoSession) || errors.Is(err, cas.ErrBadName) {
 			return nil, nil
 		}
@@ -139,8 +196,8 @@ func casResolver(root string) func(id string) (*agentsession.Session, error) {
 
 // verifyStore checks a whole cas store as git fsck does: logs,
 // objects, packs and every session's entries, and then each session as
-// verify of one session does, its request hashes and records, printing
-// only what fails.
+// verify of one session does, its request hashes, records and
+// subsession links, printing only what fails.
 func verifyStore(root string, stdout io.Writer) error {
 	ctx := context.Background()
 	st, err := cas.Open(root, cas.WithReadOnly())
@@ -172,38 +229,45 @@ func verifyStore(root string, stdout io.Writer) error {
 	}
 	// A session that fails to list or to open is one the store's walk
 	// has reported; it is named here as unchecked, and not counted
-	// again.
+	// again. The listing's header is the one the store keeps, so its
+	// format is the one the session declared; see readDeclared.
 	checked, failing, unchecked := 0, 0, 0
-	notes := map[string]bool{}
-	var ids []string
+	var notes []string
+	var listed []agentsession.Header
 	for sum, err := range st.List(ctx, agentsession.ListFilter{}) {
 		if err != nil {
 			fmt.Fprintf(stdout, "records not checked: %v\n", err)
 			unchecked++
 			continue
 		}
-		ids = append(ids, sum.Header.ID)
+		listed = append(listed, sum.Header)
 	}
-	for _, id := range ids {
-		s, err := readFrom(st, source{path: root, id: id})
+	resolve := resolveIn(st, root)
+	for _, h := range listed {
+		s, err := readFrom(st, source{path: root, id: h.ID})
 		if err != nil {
-			fmt.Fprintf(stdout, "%s: records not checked: %v\n", id, err)
+			fmt.Fprintf(stdout, "%s: records not checked: %v\n", h.ID, err)
 			unchecked++
 			continue
 		}
 		checked++
-		if problem, note := checkSession(s, id+": ", stdout, false); problem {
+		problem, ns := checkSession(s, h.Format, h.ID+": ", stdout, false)
+		if checkLinks(s, resolve, h.ID+": ", stdout) {
+			problem = true
+		}
+		if problem {
 			failing++
-			if note != "" {
-				notes[note] = true
+			for _, n := range ns {
+				if !slices.Contains(notes, n) {
+					notes = append(notes, n)
+				}
 			}
 		}
 	}
-	for _, n := range []string{earlyNote, earlierNote} {
-		if notes[n] {
-			fmt.Fprintln(stdout, n)
-		}
-	}
+	// The notes that name no session are printed once for every
+	// session that earned them; the one on a run that took up nothing
+	// names its run and was printed beside that session's failure.
+	printNotes(stdout, notes)
 	fmt.Fprintf(stdout, "%d sessions' hashes and records checked, %d failed, %d not checked\n", checked, failing, unchecked)
 	if cas.NeedsMigration(root) {
 		fmt.Fprintf(stdout, "the store holds a journal from before per-session logs; stop every writer, take a copy, and run agentsession migrate %s\n", root)
