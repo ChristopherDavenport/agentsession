@@ -7,6 +7,8 @@ versions may break the API.
 
 ## Unreleased
 
+- **Dependencies:** `openresponses` v0.0.13, from v0.0.12, in the root
+  and the `sqlite` and `otel` modules. Nothing here uses what it adds.
 - **Format 0.11.** `Format` is `agentsession/0.11` and `FormatMinor` is
   11: a writer raises every file it appends to, so a reader of 0.10
   refuses those files until it is upgraded, and readers of 0.11 ship
