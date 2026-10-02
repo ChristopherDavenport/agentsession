@@ -5,25 +5,27 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/ChristopherDavenport/agentsession"
 	"iter"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/atif"
 )
 
-// WriteATIF writes one JSON file per document under dir. A session's
-// main trajectory (see [Trajectory.Main]) is named "<session_id>.json",
-// which is what an unresolved subsession reference points at; every
-// other document is "<session_id>_<trajectory_id>.json", or
-// "<trajectory_id>.json" without a session ID. Media carried inline as
-// data URLs
-// is written beside the documents under images/ and audio/, named by
-// content hash, and the parts are rewritten to point at those files.
-// Documents are validated before they are written.
+// WriteATIF writes one JSON file per document under dir, each through
+// [WriteDocument]. A session's main trajectory (see [Trajectory.Main])
+// is named "<session_id>.json", which is what an unresolved subsession
+// reference points at; every other document is
+// "<session_id>_<trajectory_id>.json", or "<trajectory_id>.json"
+// without a session ID; [DocumentName] gives the name. Media carried
+// inline as data URLs is written beside the documents under images/
+// and audio/, named by content hash, and the parts are rewritten to
+// point at those files. Documents are validated before they are
+// written.
 func WriteATIF(dir string, docs iter.Seq[*atif.Trajectory]) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("export: create %s: %w", dir, err)
@@ -32,35 +34,58 @@ func WriteATIF(dir string, docs iter.Seq[*atif.Trajectory]) error {
 		if doc == nil {
 			continue
 		}
-		spilled := map[string]string{}
-		if err := spillMedia(dir, doc, spilled); err != nil {
+		if err := WriteDocument(filepath.Join(dir, DocumentName(doc)), doc); err != nil {
 			return err
 		}
-		if len(spilled) > 0 {
-			// The raw items in the extras carry the same data URLs; point
-			// them at the files too so the document stays small and the
-			// bundle stays lossless.
-			err := rewriteStrings(doc, func(s string) string {
-				if path, ok := spilled[s]; ok {
-					return path
-				}
-				return s
-			})
-			if err != nil {
-				return fmt.Errorf("export: %s: %w", DocumentName(doc), err)
+	}
+	return nil
+}
+
+// WriteDocument writes one document to path, under a name the caller
+// chooses: a Harbor trial reads agent/trajectory.json, which is no
+// name [DocumentName] gives. The directories to it are created. Media
+// carried inline as data URLs is written beside it under images/ and
+// audio/, named by content hash, and the parts are rewritten to point
+// at those files, the raw items in the extras included, so the
+// document stays small and the bundle stays lossless; a document
+// encoded with encoding/json alone keeps every image inline. The
+// document is validated before it is written, and the one in memory
+// is rewritten too.
+func WriteDocument(path string, doc *atif.Trajectory) error {
+	if doc == nil {
+		return errors.New("export: no document to write")
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("export: create %s: %w", dir, err)
+	}
+	spilled := map[string]string{}
+	if err := spillMedia(dir, doc, spilled); err != nil {
+		return err
+	}
+	if len(spilled) > 0 {
+		// The raw items in the extras carry the same data URLs; point
+		// them at the files too so the document stays small and the
+		// bundle stays lossless.
+		err := rewriteStrings(doc, func(s string) string {
+			if p, ok := spilled[s]; ok {
+				return p
 			}
-		}
-		if err := doc.Validate(); err != nil {
-			return fmt.Errorf("export: %s: %w", DocumentName(doc), err)
-		}
-		data, err := json.MarshalIndent(doc, "", "  ")
+			return s
+		})
 		if err != nil {
-			return fmt.Errorf("export: encode %s: %w", DocumentName(doc), err)
+			return fmt.Errorf("export: %s: %w", path, err)
 		}
-		path := filepath.Join(dir, DocumentName(doc))
-		if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
-			return fmt.Errorf("export: write %s: %w", path, err)
-		}
+	}
+	if err := doc.Validate(); err != nil {
+		return fmt.Errorf("export: %s: %w", path, err)
+	}
+	data, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return fmt.Errorf("export: encode %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("export: write %s: %w", path, err)
 	}
 	return nil
 }

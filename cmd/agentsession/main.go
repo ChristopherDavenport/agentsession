@@ -15,10 +15,13 @@
 // store and a session id, they open the store read-only and read the
 // session as the file its projection is. A path inside a cas store's
 // sessions/<id> directory, its one-line header file included, is read
-// as that session through the store. verify of a cas root with no id
-// checks the whole store as git fsck does, and then each session's
-// request hashes and records as verify of that session would, printing
-// only what fails. list opens a jsonl or cas
+// as that session through the store. verify of a session a cas store
+// holds also checks each subsession link against the header of the
+// session it names, which the store can find and a file alone cannot.
+// verify of a cas root with no id checks the whole store as git fsck
+// does, and then each session's request hashes, records and links as
+// verify of that session would, printing only what fails. list opens a
+// jsonl or cas
 // store root read-only and prints its sessions, newest first. All four
 // are safe to run beside a harness that is writing, which is when an
 // operator most wants them.
@@ -57,8 +60,8 @@ const usage = `usage: agentsession <command> [flags] <arguments>
 
 commands:
   show    <session> [-leaf id] [-v]  print the entries and the context at a leaf
-  verify  <session>                  check every entry hash and recorded request hash
-  verify  <cas-root>                 check a whole cas store: logs, objects, sessions, records
+  verify  <session>                  check every entry hash, request hash and record; in a cas store, every subsession link
+  verify  <cas-root>                 check a whole cas store: logs, objects, sessions, records, links
   export  <session> -out dir         write ATIF documents for every leaf
   list    <root>                     list the sessions of a jsonl or cas store
   repair  <cas-root> <id>            rewrite a damaged cas session log from what still reads

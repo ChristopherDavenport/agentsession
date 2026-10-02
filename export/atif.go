@@ -941,17 +941,31 @@ func (b *builder) finish() {
 	if b.doc.FinalMetrics == nil {
 		b.doc.FinalMetrics = &atif.FinalMetrics{}
 	}
-	hidden := b.pathTotals()
+	calls, hidden := b.pathTotals()
 	fm := b.doc.FinalMetrics
 	fm.TotalPromptTokens = atif.Ptr(b.prompt)
 	fm.TotalCompletionTokens = atif.Ptr(b.completion)
 	fm.TotalCachedTokens = atif.Ptr(b.cached)
-	fm.TotalSteps = atif.Ptr(len(b.doc.Steps) + hidden)
+	fm.TotalSteps = atif.Ptr(calls)
 	if b.hasCost {
 		fm.TotalCostUSD = atif.Ptr(b.cost)
 	}
+	// total_steps is the path's model calls, which a reader can count
+	// in the path and check against the document; it is not the number
+	// of steps, since a user turn is a step and no model call and a
+	// fold's calls are model calls and no step, and ATIF has the notes
+	// say so when the two differ. The steps are the context after
+	// compaction, so when a fold left model calls out of them the note
+	// says how many.
+	var notes []string
+	if calls != len(b.doc.Steps) {
+		notes = append(notes, fmt.Sprintf("total_steps counts the path's %d model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its %d steps.", calls, len(b.doc.Steps)))
+	}
 	if hidden > 0 {
-		note := fmt.Sprintf("The steps are the context after compaction and leave out %d model call(s) that were folded away; total_steps counts them and final_metrics totals the whole path.", hidden)
+		notes = append(notes, fmt.Sprintf("The steps are the context after compaction and leave out %d model call(s) that were folded away; final_metrics totals the whole path.", hidden))
+	}
+	if len(notes) > 0 {
+		note := strings.Join(notes, " ")
 		if b.doc.Notes != "" {
 			note = b.doc.Notes + "\n" + note
 		}
@@ -961,29 +975,33 @@ func (b *builder) finish() {
 
 // pathTotals replaces the totals accumulated from the steps with the
 // totals of the whole path, and returns the number of model calls the
-// path holds that the document does not show. A document's steps are
-// the context after compaction, so a run that folded is described by
-// its last summary and what followed; its cost is not, or a
-// leaderboard reads the tail's cost as the run's. It does nothing for
-// a Trajectory built without a Path, whose context is all there is.
-func (b *builder) pathTotals() int {
+// path holds and how many of them the document does not show. A
+// document's steps are the context after compaction, so a run that
+// folded is described by its last summary and what followed; its cost
+// is not, or a leaderboard reads the tail's cost as the run's. The
+// model calls are what modelCall says. For a Trajectory built without
+// a Path, whose context is all there is, the totals the steps
+// accumulated stand and the calls are counted in the context.
+func (b *builder) pathTotals() (calls, hidden int) {
 	if len(b.t.Path) == 0 {
-		return 0
+		for _, e := range b.t.Context.Entries {
+			if _, _, ok := modelCall(e, ""); ok {
+				calls++
+			}
+		}
+		return calls, 0
 	}
 	inContext := make(map[string]bool, len(b.t.Context.Entries))
 	for _, e := range b.t.Context.Entries {
 		inContext[e.Base().ID] = true
 	}
 	b.prompt, b.completion, b.cached, b.cost, b.hasCost = 0, 0, 0, 0, false
-	hidden, model := 0, ""
+	model := ""
 	for _, e := range b.t.Path {
-		var u *openresponses.Usage
-		priced := ""
+		// The model in force, for a call that does not name its own:
+		// the same replay the steps use, so the two agree.
 		switch v := e.(type) {
 		case *agentsession.ConfigEntry:
-			// The model in force, for a fold or a response that does
-			// not name its own: the same replay the steps use, so the
-			// two agree.
 			if v.Replace {
 				model = ""
 			}
@@ -991,19 +1009,14 @@ func (b *builder) pathTotals() int {
 				model = v.Model
 			}
 			continue
-		case *agentsession.ResponseEntry:
-			u, priced = v.Usage, model
-			if v.Model != "" {
-				priced = v.Model
-			}
 		case *agentsession.CompactionEntry:
 			model = v.Config.Model
-			u, priced = v.Usage, v.Config.Model
-		case *agentsession.BranchSummaryEntry:
-			u, priced = v.Usage, model
-		default:
+		}
+		u, priced, ok := modelCall(e, model)
+		if !ok {
 			continue
 		}
+		calls++
 		if !inContext[e.Base().ID] {
 			hidden++
 		}
@@ -1018,7 +1031,44 @@ func (b *builder) pathTotals() int {
 			b.hasCost = true
 		}
 	}
-	return hidden
+	return calls, hidden
+}
+
+// modelCall reports whether e records a model call, and if so its
+// usage, which may be nil, and the model it is priced at: a response, a
+// fold, a branch summary, or a custom entry whose data is an object
+// with a usage member in the payload's shape, which RFC 0001 reads as
+// a call the path paid for that produced no response, a failed fold's
+// summary calls for one; anything else such an entry carries is the
+// writer's and not read. A call that names no model is priced at
+// inForce, the model the config entries have in force.
+func modelCall(e agentsession.Entry, inForce string) (u *openresponses.Usage, priced string, ok bool) {
+	switch v := e.(type) {
+	case *agentsession.ResponseEntry:
+		u, priced = v.Usage, inForce
+		if v.Model != "" {
+			priced = v.Model
+		}
+	case *agentsession.CompactionEntry:
+		u, priced = v.Usage, v.Config.Model
+	case *agentsession.BranchSummaryEntry:
+		u, priced = v.Usage, inForce
+	case *agentsession.CustomEntry:
+		var paid struct {
+			Usage *openresponses.Usage `json:"usage"`
+			Model string               `json:"model"`
+		}
+		if json.Unmarshal(v.Data, &paid) != nil || paid.Usage == nil {
+			return nil, "", false
+		}
+		u, priced = paid.Usage, inForce
+		if paid.Model != "" {
+			priced = paid.Model
+		}
+	default:
+		return nil, "", false
+	}
+	return u, priced, true
 }
 
 // subsessions resolves link entries: a subsession is embedded and

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -65,8 +66,18 @@ func list(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n", h.CreatedAt.UTC().Format(time.RFC3339), h.ID, orDash(sum.Name), sum.Size, orDash(h.CWD), orDash(sum.SupersededBy), sum.Path)
 	}
 	tw.Flush()
+	// Each session's problem is printed as it is; a store from before
+	// per-session logs fails every session the same way, and the hint
+	// says once what to do about all of them. list returns errFailed,
+	// which main does not add the hint to, since the problems are
+	// already reported.
+	legacy := false
 	for _, err := range problems {
 		fmt.Fprintf(stderr, "agentsession: %v\n", err)
+		legacy = legacy || errors.Is(err, cas.ErrLegacyStore)
+	}
+	if legacy {
+		fmt.Fprintln(stderr, legacyHint)
 	}
 	if len(problems) > 0 {
 		return errFailed

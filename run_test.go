@@ -488,6 +488,106 @@ func TestVerifyRecords(t *testing.T) {
 	})
 }
 
+// TestVerifyLinks: a subsession link's target, when it can be read,
+// names the linking session as parent_session and the link's call as
+// spawned_by; a target that cannot be found is a child that never
+// started and passes; a resolver's error is reported for the link; and
+// a link on a fork's prefix is the origin's to check, so only the
+// fork's own links are resolved (#186).
+func TestVerifyLinks(t *testing.T) {
+	const call = "call_g"
+	parent := New(Header{ID: "P"})
+	child := SubsessionID("P", call)
+	link, err := parent.Append(&LinkEntry{Rel: RelSubsession, Session: child, CallID: call})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parent.Append(&LinkEntry{Rel: RelForkOf, Session: "elsewhere"}); err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("boom")
+	tests := []struct {
+		name   string
+		target Header // the child's header; a zero ID is a child not found
+		err    error  // what resolve returns
+		want   error
+		member string // the member the mismatch names
+	}{
+		{"agrees", Header{ID: child, ParentSession: "P", SpawnedBy: call}, nil, nil, ""},
+		{"another parent", Header{ID: child, ParentSession: "Q", SpawnedBy: call}, nil, ErrLinkMismatch, "parent_session"},
+		{"another call", Header{ID: child, ParentSession: "P", SpawnedBy: "call_h"}, nil, ErrLinkMismatch, "spawned_by"},
+		{"no parent", Header{ID: child, SpawnedBy: call}, nil, ErrLinkMismatch, "parent_session"},
+		{"never started", Header{}, nil, nil, ""},
+		{"unreadable", Header{}, boom, boom, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolve := func(id string) (*Session, error) {
+				if id != child {
+					t.Errorf("resolved %s; only the subsession link names a session to check", id)
+				}
+				if tt.err != nil {
+					return nil, tt.err
+				}
+				if tt.target.ID == "" {
+					return nil, nil
+				}
+				return New(tt.target), nil
+			}
+			err := parent.VerifyLinks(resolve)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("VerifyLinks = %v, want %v", err, tt.want)
+			}
+			if err == nil {
+				return
+			}
+			var le *LinkError
+			if !errors.As(err, &le) || le.Entry != link || le.Session != child {
+				t.Errorf("VerifyLinks = %#v, want a LinkError naming %s and %s", err, link, child)
+			}
+			if tt.member != "" && !strings.Contains(err.Error(), tt.member) {
+				t.Errorf("VerifyLinks = %v, want the member %s named", err, tt.member)
+			}
+		})
+	}
+	t.Run("nothing to resolve with", func(t *testing.T) {
+		if err := parent.VerifyLinks(nil); err != nil {
+			t.Errorf("VerifyLinks(nil) = %v", err)
+		}
+	})
+	t.Run("a fork's prefix", func(t *testing.T) {
+		fork, err := Fork(parent, parent.Leaf(), Header{ID: "F"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The prefix carries P's link, whose target names P, and F is
+		// not P: checked against F it would fail, so it is not checked.
+		resolve := func(id string) (*Session, error) {
+			if id == child {
+				t.Errorf("a link on the prefix was resolved")
+			}
+			return New(Header{ID: id, ParentSession: "P", SpawnedBy: call}), nil
+		}
+		if err := fork.VerifyLinks(resolve); err != nil {
+			t.Errorf("a fork with a link on its prefix: %v", err)
+		}
+		// The fork's own link is checked against the fork.
+		own := SubsessionID("F", "call_h")
+		if _, err := fork.Append(&LinkEntry{Rel: RelSubsession, Session: own, CallID: "call_h"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := fork.VerifyLinks(resolve); !errors.Is(err, ErrLinkMismatch) {
+			t.Errorf("the fork's own link to a child of P: %v, want ErrLinkMismatch", err)
+		}
+		resolve = func(id string) (*Session, error) {
+			return New(Header{ID: id, ParentSession: "F", SpawnedBy: "call_h"}), nil
+		}
+		if err := fork.VerifyLinks(resolve); err != nil {
+			t.Errorf("the fork's own link to its own child: %v", err)
+		}
+	})
+}
+
 // reappend appends the entries of another session's path to s, each
 // under the leaf and at ts when it is not zero, with the targets of
 // decisions and dispatches moved to the entries' new IDs.

@@ -54,6 +54,65 @@ versions may break the API.
   header alone, so every store applies them without a scan and the zero
   filter still lists everything. `list` grows `-harness` and
   `-top-level`. (#83)
+- **`agentsession list` on a cas store v0.0.15 or earlier wrote now
+  says to run `agentsession migrate`**, once, after the per-session
+  errors, as `show` and `verify` do; and `cas.ErrLegacyStore` now says
+  "stop every writer, take a copy, and run agentsession migrate <root>"
+  in place of "open the store for writing to migrate it", which is the
+  step v0.0.19 put behind the other two. A product that lists such a
+  store read-only passes the library's text on, so the text had to say
+  it too. (#190)
+- **`agentsession verify <cas-root>` prints every note a failing
+  session earns**, where it printed two of the five and dropped the
+  notes v0.0.19 added: the note on a run written `resume` that took up
+  nothing is printed beside that session's error, under its id, since
+  it names the run, and the notes that name no session once at the
+  end, in a fixed order. The notes that turn on the format a session
+  declared now get it from the store's header, through `List` for a
+  store and `Store.Read` for `verify <cas-root> <id>`: the projection a
+  session is read from is a file this release writes and declares this
+  release's format, so a 0.9 session an early writer of 0.9 wrote
+  earned no note on cas. `Store.Project` is unchanged. (#187)
+- **`Session.VerifyLinks` checks each subsession link against the
+  header of the session it names**, through a resolver the caller
+  gives: the target's `parent_session` is the linking session and its
+  `spawned_by` is the link's `call_id`, as RFC 0001's `link` section
+  now states; a target the resolver does not find is a child that never
+  started and passes, a link on a fork's prefix is the origin's and is
+  passed over, and a disagreement is `ErrLinkMismatch` in a `LinkError`
+  naming the link and the target. `agentsession verify` runs it for a
+  session a cas store holds, and for every session of a store, and
+  fails on a mismatch, printed as `link <entry> -> <session>  ERROR`:
+  it is what a fork remedy for a call ID collision that missed a level
+  of subsessions leaves, and `verify` reported nothing. A file names no
+  store to find the target in, so `verify <file>` does not check links.
+  (#186)
+- **export: `final_metrics` counts a custom entry whose data carries
+  `usage`** as a model call the path paid for, priced at the `model` the
+  data names or else the model in force, which RFC 0001's `custom`
+  section now states as the convention for a call that produced no
+  `response` entry. A failed fold's summary calls are recorded that way,
+  and a configuration whose folds all failed exported the same totals
+  as one that never compacted. The exporter names no other package's
+  namespace: any custom entry with a top-level `usage` object counts.
+  (#184)
+- **export: `total_steps` is the number of model calls on the path**,
+  its responses, folds, branch summaries and the custom entries whose
+  `usage` counts, one each. It was the document's steps plus the model
+  calls a fold left out of them, a number reproducible from neither
+  the document nor the path. The number changes for every document: a
+  run that never folded now reports its model calls where it reported
+  its steps, which is lower by its user and system steps, and a run
+  that folded reports its model calls where it reported its steps plus
+  the calls folded away. `notes` says what `total_steps` counts
+  whenever it is not the number of steps, and how many calls a fold
+  left out of the steps. (#145)
+- **`export.WriteDocument(path, doc)`** writes one document under a
+  name the caller chooses, `agent/trajectory.json` for a Harbor trial,
+  with its media spilled beside it and the document validated, as
+  `WriteATIF`, which now calls it, does for each of its documents; a
+  product that wrote the file with `encoding/json` alone kept every
+  image inline. (#145)
 
 ## v0.0.19 - 2026-10-01
 
