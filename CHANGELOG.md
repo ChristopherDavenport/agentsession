@@ -15,6 +15,17 @@ versions may break the API.
   step v0.0.19 put behind the other two. A product that lists such a
   store read-only passes the library's text on, so the text had to say
   it too. (#190)
+- **`agentsession verify <cas-root>` prints every note a failing
+  session earns**, where it printed two of the five and dropped the
+  notes v0.0.19 added: the note on a run written `resume` that took up
+  nothing is printed beside that session's error, under its id, since
+  it names the run, and the notes that name no session once at the
+  end, in a fixed order. The notes that turn on the format a session
+  declared now get it from the store's header, through `List` for a
+  store and `Store.Read` for `verify <cas-root> <id>`: the projection a
+  session is read from is a file this release writes and declares this
+  release's format, so a 0.9 session an early writer of 0.9 wrote
+  earned no note on cas. `Store.Project` is unchanged. (#187)
 
 ## v0.0.19 - 2026-10-01
 

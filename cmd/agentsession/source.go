@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -112,8 +113,44 @@ func readSource(src source) (*agentsession.Session, error) {
 	return readFrom(st, src)
 }
 
+// readDeclared loads the session a source names, as readSource does,
+// and the format its header declares where it is stored, which is what
+// verify's notes turn on. For a file that is the session's
+// DeclaredFormat. For a session a cas store holds it is not: the
+// session is read from its projection, which is the file this release
+// would write and so declares this release's format, as any file names
+// its writer's; the header the store keeps declares the format the
+// session was written under, raised only when this release appends to
+// it. The store exposes that header through Store.Read, whose session
+// declares it, and through List; one session is read again here,
+// since the store offers no cheaper read of its header alone.
+func readDeclared(src source) (*agentsession.Session, string, error) {
+	if src.id == "" {
+		s, err := readSession(src.path)
+		if err != nil {
+			return nil, "", err
+		}
+		return s, s.DeclaredFormat(), nil
+	}
+	st, err := cas.Open(src.path, cas.WithReadOnly())
+	if err != nil {
+		return nil, "", err
+	}
+	defer st.Close()
+	s, err := readFrom(st, src)
+	if err != nil {
+		return nil, "", err
+	}
+	stored, err := st.Read(context.Background(), src.id)
+	if err != nil {
+		return nil, "", fmt.Errorf("%s: %w", src, err)
+	}
+	return s, stored.DeclaredFormat(), nil
+}
+
 // readFrom loads a session from a cas store already open, as readSource
-// does.
+// does. The session declares this release's format whatever its stored
+// header says; readDeclared is where the stored format comes from.
 func readFrom(st *cas.Store, src source) (*agentsession.Session, error) {
 	var buf bytes.Buffer
 	if err := st.Project(context.Background(), &buf, src.id); err != nil {
@@ -173,37 +210,40 @@ func verifyStore(root string, stdout io.Writer) error {
 	// A session that fails to list or to open is one the store's walk
 	// has reported; it is named here as unchecked, and not counted
 	// again.
+	// The listing's header is the one the store keeps, so its format is
+	// the one the session declared; see readDeclared.
 	checked, failing, unchecked := 0, 0, 0
-	notes := map[string]bool{}
-	var ids []string
+	var notes []string
+	var listed []agentsession.Header
 	for sum, err := range st.List(ctx, agentsession.ListFilter{}) {
 		if err != nil {
 			fmt.Fprintf(stdout, "records not checked: %v\n", err)
 			unchecked++
 			continue
 		}
-		ids = append(ids, sum.Header.ID)
+		listed = append(listed, sum.Header)
 	}
-	for _, id := range ids {
-		s, err := readFrom(st, source{path: root, id: id})
+	for _, h := range listed {
+		s, err := readFrom(st, source{path: root, id: h.ID})
 		if err != nil {
-			fmt.Fprintf(stdout, "%s: records not checked: %v\n", id, err)
+			fmt.Fprintf(stdout, "%s: records not checked: %v\n", h.ID, err)
 			unchecked++
 			continue
 		}
 		checked++
-		if problem, note := checkSession(s, id+": ", stdout, false); problem {
+		if problem, ns := checkSession(s, h.Format, h.ID+": ", stdout, false); problem {
 			failing++
-			if note != "" {
-				notes[note] = true
+			for _, n := range ns {
+				if !slices.Contains(notes, n) {
+					notes = append(notes, n)
+				}
 			}
 		}
 	}
-	for _, n := range []string{earlyNote, earlierNote} {
-		if notes[n] {
-			fmt.Fprintln(stdout, n)
-		}
-	}
+	// The notes that name no session are printed once for every
+	// session that earned them; the one on a run that took up nothing
+	// names its run and was printed beside that session's failure.
+	printNotes(stdout, notes)
 	fmt.Fprintf(stdout, "%d sessions' hashes and records checked, %d failed, %d not checked\n", checked, failing, unchecked)
 	if cas.NeedsMigration(root) {
 		fmt.Fprintf(stdout, "the store holds a journal from before per-session logs; stop every writer, take a copy, and run agentsession migrate %s\n", root)
