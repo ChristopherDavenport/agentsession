@@ -43,12 +43,12 @@ func verify(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "%d entries read, each id checked against its hash\n", s.Len())
 	}
 	problem, notes := checkSession(s, declared, "", stdout, true)
-	printNotes(stdout, notes)
 	// A link's target is found through the store the session is in; a
 	// file names no store, so its links go unchecked.
 	if src.id != "" && checkLinks(s, casResolver(src.path), "", stdout) {
 		problem = true
 	}
+	printNotes(stdout, notes)
 	if t := s.Truncated(); t != nil {
 		problem = true
 		fmt.Fprintf(stdout, "truncated: line %d was cut short: %v\n", t.Line, t.Err)

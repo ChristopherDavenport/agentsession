@@ -225,9 +225,8 @@ func verifyStore(root string, stdout io.Writer) error {
 	}
 	// A session that fails to list or to open is one the store's walk
 	// has reported; it is named here as unchecked, and not counted
-	// again.
-	// The listing's header is the one the store keeps, so its format is
-	// the one the session declared; see readDeclared.
+	// again. The listing's header is the one the store keeps, so its
+	// format is the one the session declared; see readDeclared.
 	checked, failing, unchecked := 0, 0, 0
 	var notes []string
 	var listed []agentsession.Header
