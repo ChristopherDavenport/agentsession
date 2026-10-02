@@ -15,9 +15,11 @@ import (
 )
 
 func list(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("list", "<root> [-cwd path] [-parent id] [-limit n] [-current]", stderr)
+	fs := newFlags("list", "<root> [-cwd path] [-parent id] [-harness name] [-top-level] [-limit n] [-current]", stderr)
 	cwd := fs.String("cwd", "", "only sessions with this working directory")
 	parent := fs.String("parent", "", "only sessions forked or spawned from this session")
+	harness := fs.String("harness", "", "only sessions whose header names this harness")
+	topLevel := fs.Bool("top-level", false, "leave out the subsessions a call spawned")
 	limit := fs.Int("limit", 0, "at most this many sessions; 0 means all")
 	current := fs.Bool("current", false, "leave out sessions that were continued in a successor")
 	positional, err := parse(fs, args)
@@ -53,7 +55,7 @@ func list(args []string, stdout, stderr io.Writer) error {
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "CREATED\tID\tNAME\tSIZE\tCWD\tCONTINUED IN\tPATH")
 	var problems []error
-	f := agentsession.ListFilter{CWD: *cwd, ParentSession: *parent, Limit: *limit, WithNames: true, Current: *current}
+	f := agentsession.ListFilter{CWD: *cwd, ParentSession: *parent, Harness: *harness, TopLevel: *topLevel, Limit: *limit, WithNames: true, Current: *current}
 	for sum, err := range st.List(context.Background(), f) {
 		if err != nil {
 			problems = append(problems, err)

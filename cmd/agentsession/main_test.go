@@ -217,6 +217,9 @@ func TestRun(t *testing.T) {
 		{name: "list", args: []string{"list", filepath.Join(tmp, "root")}, stdout: []string{"CREATED", "01995b2a-0000-7000-8000-000000000003  Branching demo", "01995b2a-0000-7000-8000-000000000001", "/home/u/proj"}},
 		{name: "list limit", args: []string{"list", filepath.Join(tmp, "root"), "-limit", "1"}, stdout: []string{"01995b2a-0000-7000-8000-000000000003"}, absent: []string{"01995b2a-0000-7000-8000-000000000001"}},
 		{name: "list cwd", args: []string{"list", "-cwd", "/elsewhere", filepath.Join(tmp, "root")}, absent: []string{"01995b2a"}},
+		{name: "list harness", args: []string{"list", "-harness", "fixture", filepath.Join(tmp, "root")}, stdout: []string{"01995b2a-0000-7000-8000-000000000003", "01995b2a-0000-7000-8000-000000000001"}},
+		{name: "list another harness", args: []string{"list", "-harness", "nope", filepath.Join(tmp, "root")}, absent: []string{"01995b2a"}},
+		{name: "list top level", args: []string{"list", "-top-level", filepath.Join(tmp, "root")}, stdout: []string{"01995b2a-0000-7000-8000-000000000003", "01995b2a-0000-7000-8000-000000000001"}},
 		{name: "list missing root", args: []string{"list", filepath.Join(tmp, "nope")}, code: 1, stderr: []string{"no such file"}},
 		{name: "list file root", args: []string{"list", tampered}, code: 1, stderr: []string{"not a directory"}},
 	}
