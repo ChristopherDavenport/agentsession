@@ -49,6 +49,23 @@ versions may break the API.
   as one that never compacted. The exporter names no other package's
   namespace: any custom entry with a top-level `usage` object counts.
   (#184)
+- **export: `total_steps` is the number of model calls on the path**,
+  its responses, folds, branch summaries and the custom entries whose
+  `usage` counts, one each. It was the document's steps plus the model
+  calls a fold left out of them, a number reproducible from neither
+  the document nor the path. The number changes for every document: a
+  run that never folded now reports its model calls where it reported
+  its steps, which is lower by its user and system steps, and a run
+  that folded reports its model calls where it reported its steps plus
+  the calls folded away. `notes` says what `total_steps` counts
+  whenever it is not the number of steps, and how many calls a fold
+  left out of the steps. (#145)
+- **`export.WriteDocument(path, doc)`** writes one document under a
+  name the caller chooses, `agent/trajectory.json` for a Harbor trial,
+  with its media spilled beside it and the document validated, as
+  `WriteATIF`, which now calls it, does for each of its documents; a
+  product that wrote the file with `encoding/json` alone kept every
+  image inline. (#145)
 
 ## v0.0.19 - 2026-10-01
 

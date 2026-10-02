@@ -216,8 +216,13 @@ func TestBasicMapping(t *testing.T) {
 		t.Error("outcome not attached to its target step")
 	}
 	fm := doc.FinalMetrics
-	if *fm.TotalPromptTokens != 100 || *fm.TotalCompletionTokens != 20 || *fm.TotalCachedTokens != 40 || *fm.TotalSteps != 3 || fm.TotalCostUSD == nil {
+	// total_steps is the path's two model calls, not its three steps,
+	// and the notes say so.
+	if *fm.TotalPromptTokens != 100 || *fm.TotalCompletionTokens != 20 || *fm.TotalCachedTokens != 40 || *fm.TotalSteps != 2 || fm.TotalCostUSD == nil {
 		t.Errorf("final metrics = %+v", fm)
+	}
+	if !strings.Contains(doc.Notes, "total_steps counts the path's 2 model call(s)") || !strings.Contains(doc.Notes, "not its 3 steps") {
+		t.Errorf("notes = %q", doc.Notes)
 	}
 	if fm.Extra[ExtraOutcome] == nil {
 		t.Error("outcome missing from final metrics")
@@ -429,11 +434,13 @@ func TestSubsessions(t *testing.T) {
 	if err := doc.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if doc.Notes != "n" || len(doc.SubagentTrajectories) != 1 {
+	// The caller's notes come first; the exporter's line on total_steps,
+	// one model call to two steps here, follows them.
+	if !strings.HasPrefix(doc.Notes, "n\ntotal_steps counts") || len(doc.SubagentTrajectories) != 1 {
 		t.Fatalf("doc = %+v", doc)
 	}
 	sub := doc.SubagentTrajectories[0]
-	if sub.SessionID != "child" || !strings.HasPrefix(sub.TrajectoryID, "child/") || len(sub.Steps) != 2 || sub.Notes != "" {
+	if sub.SessionID != "child" || !strings.HasPrefix(sub.TrajectoryID, "child/") || len(sub.Steps) != 2 || !strings.HasPrefix(sub.Notes, "total_steps counts") {
 		t.Errorf("embedded = %+v", sub)
 	}
 	call := doc.Steps[1]
@@ -792,6 +799,58 @@ func one(doc *atif.Trajectory) func(func(*atif.Trajectory) bool) {
 	return func(yield func(*atif.Trajectory) bool) { yield(doc) }
 }
 
+// TestWriteDocument: a document is written under the name the caller
+// chooses, the one Harbor reads, with its media spilled beside it and
+// the directories to it made; an invalid document and no document are
+// refused (#145).
+func TestWriteDocument(t *testing.T) {
+	ts := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	s := agentsession.New(agentsession.Header{ID: "harbor", CreatedAt: ts})
+	png := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputText{Text: "see"}, &openresponses.InputImage{ImageURL: png})))
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ToATIF(tr, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent", "trajectory.json")
+	if err := WriteDocument(path, doc); err != nil {
+		t.Fatalf("WriteDocument: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "base64,") {
+		t.Error("data URL left in the document")
+	}
+	back, err := atif.Parse(data)
+	if err != nil {
+		t.Fatalf("written document: %v", err)
+	}
+	img := back.Steps[0].Message.Parts[1].Source.Path
+	if !strings.HasPrefix(img, "images/") || !strings.HasSuffix(img, ".png") {
+		t.Errorf("image path = %s", img)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "agent", img)); err != nil {
+		t.Errorf("the image is not beside the document: %v", err)
+	}
+	if doc.Steps[0].Message.Parts[1].Source.Path != img {
+		t.Error("in-memory document not rewritten")
+	}
+	if err := WriteDocument(filepath.Join(dir, "none.json"), nil); err == nil {
+		t.Error("WriteDocument wrote no document")
+	}
+	invalid := &atif.Trajectory{SchemaVersion: atif.SchemaVersion, Agent: atif.Agent{Name: "a"}}
+	if err := WriteDocument(filepath.Join(dir, "invalid.json"), invalid); err == nil {
+		t.Error("WriteDocument accepted an invalid document")
+	}
+}
+
 func TestTrajectoriesErrors(t *testing.T) {
 	// A compaction whose first_kept is off the path yields an error for
 	// that leaf but the iteration continues.
@@ -1109,8 +1168,9 @@ func TestTotalsCoverThePath(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// What the path spent, which is what the run cost.
-			prompt, completion, priced := 0, 0, 0
+			// What the path spent, which is what the run cost, and the
+			// model calls it made, which is what total_steps counts.
+			prompt, completion, priced, calls := 0, 0, 0, 0
 			for _, e := range tr.Path {
 				var u *openresponses.Usage
 				switch v := e.(type) {
@@ -1121,6 +1181,7 @@ func TestTotalsCoverThePath(t *testing.T) {
 				default:
 					continue
 				}
+				calls++
 				if u == nil {
 					continue
 				}
@@ -1138,21 +1199,14 @@ func TestTotalsCoverThePath(t *testing.T) {
 			if fm.TotalCostUSD == nil || *fm.TotalCostUSD != 0.5*float64(priced) {
 				t.Errorf("total_cost_usd = %v, want %g for %d priced calls", fm.TotalCostUSD, 0.5*float64(priced), priced)
 			}
-			switch {
-			case tt.folded:
-				if *fm.TotalSteps <= len(doc.Steps) {
-					t.Errorf("total_steps = %d for %d steps; the folded calls are not counted", *fm.TotalSteps, len(doc.Steps))
-				}
-				if !strings.Contains(doc.Notes, "after compaction") {
-					t.Errorf("notes do not say the steps are the context: %q", doc.Notes)
-				}
-			default:
-				if *fm.TotalSteps != len(doc.Steps) {
-					t.Errorf("total_steps = %d for %d steps", *fm.TotalSteps, len(doc.Steps))
-				}
-				if doc.Notes != "" {
-					t.Errorf("notes = %q for a run that folded nothing", doc.Notes)
-				}
+			if *fm.TotalSteps != calls {
+				t.Errorf("total_steps = %d, want the path's %d model calls", *fm.TotalSteps, calls)
+			}
+			if calls != len(doc.Steps) != strings.Contains(doc.Notes, "total_steps counts") {
+				t.Errorf("notes = %q for %d model calls and %d steps", doc.Notes, calls, len(doc.Steps))
+			}
+			if tt.folded != strings.Contains(doc.Notes, "after compaction") {
+				t.Errorf("notes = %q for a run whose steps leave model calls out: %v", doc.Notes, tt.folded)
 			}
 			if err := doc.Validate(); err != nil {
 				t.Errorf("invalid document: %v", err)
@@ -1224,6 +1278,17 @@ func TestTotalsCountCustomUsage(t *testing.T) {
 			slices.Sort(want)
 			if !slices.Equal(models, want) {
 				t.Errorf("priced %v, want %v", models, want)
+			}
+			// Each counted custom entry is a model call total_steps
+			// counts, and the notes say what it counts where that is not
+			// the number of steps; none was folded away, so they say
+			// nothing of that.
+			calls := len(tt.models)
+			if *fm.TotalSteps != calls {
+				t.Errorf("total_steps = %d, want %d", *fm.TotalSteps, calls)
+			}
+			if calls != len(doc.Steps) != strings.Contains(doc.Notes, fmt.Sprintf("total_steps counts the path's %d model call(s)", calls)) || strings.Contains(doc.Notes, "folded away") {
+				t.Errorf("notes = %q for %d model calls and %d steps, none folded away", doc.Notes, calls, len(doc.Steps))
 			}
 			if err := doc.Validate(); err != nil {
 				t.Errorf("invalid document: %v", err)

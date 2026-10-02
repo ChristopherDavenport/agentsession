@@ -297,11 +297,12 @@
       }
     }
   ],
+  "notes": "total_steps counts the path's 2 model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its 4 steps.",
   "final_metrics": {
     "total_prompt_tokens": 130,
     "total_completion_tokens": 28,
     "total_cached_tokens": 40,
-    "total_steps": 4
+    "total_steps": 2
   },
   "extra": {
     "abandoned_at": "sha256:ba4196c4d873763cc8ba62b394ad7ca57a8d8c95b5b981cd01a12b991d9934ee",

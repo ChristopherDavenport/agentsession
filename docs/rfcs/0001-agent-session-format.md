@@ -1473,11 +1473,16 @@ A document's steps are the context the algorithm produces, so a run
 that compacted is described by its last summary and what followed it.
 Its `final_metrics` are not: they total every model call on the path,
 the ones a fold replaced and the ones a `custom` entry's `usage`
-records included, and `total_steps` counts the
-document's steps plus the model calls it does not show. When the two
-differ the root `notes` says so, which is what ATIF requires of a
-`total_steps` that is not the number of steps. Without that rule a
-cost column reads the tail's cost as the run's, and an agent that
+records included, and `total_steps` counts those model calls, the
+path's `response`, `compaction` and `branch_summary` entries and its
+`custom` entries carrying `usage`, one each, which a reader can count
+in the path and check against the document. It is not the number of
+steps: a user turn is a step and no model call, and a fold's calls are
+model calls and no step. Whenever it differs from the number of steps
+the root `notes` says so, which is what ATIF requires of a
+`total_steps` that is not the number of steps, and when a fold left
+model calls out of the steps the note says how many. Without that rule
+a cost column reads the tail's cost as the run's, and an agent that
 folded eleven times outranks one that did not.
 
 One document per path is a projection of the whole session, so a

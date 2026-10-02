@@ -226,8 +226,12 @@ one entry, which is what a consumer holding a score needs once the
 outcomes a judge appended have moved the leaf; `Trajectories` is that
 over each leaf. A document's steps are the context after compaction
 and its `final_metrics` are the whole path, so a run that folded
-reports what it spent, with `total_steps` and a line in `notes`
-saying what the steps leave out. `export.Options.ModelName` overrides
+reports what it spent; `total_steps` counts the path's model calls,
+and a line in `notes` says so where that is not the number of steps,
+and what the steps leave out. `export.WriteDocument` writes one
+document under a name of the caller's, `agent/trajectory.json` for a
+Harbor trial, with its media spilled beside it as `WriteATIF` does.
+`export.Options.ModelName` overrides
 the model name the document reports, for a consumer that derives a
 provider from it, without changing the name the request was sent
 with.
