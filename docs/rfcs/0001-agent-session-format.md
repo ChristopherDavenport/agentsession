@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.10
+Status: draft 0.11
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -200,7 +200,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.10","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.11","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -534,7 +534,8 @@ A delta to request settings. The first entry on any root SHOULD be a
  "instructions_parts":[{"keep":2},{"id":"agentsmd","text":"…","source":"agentsmd"},
                        {"id":"memory","hash":"sha256:…"}],
  "instructions_omitted":[{"id":"service/AGENTS.md","reason":"budget","size":4096,"source":"agentsmd"},
-                         {"keep":3}],
+                         {"keep":3},{"keep":474,"of":"sha256:…"}],
+ "omit":{"reasoning":"other_models","items":["sha256:…"]},
  "tools_added":[…],"tools_removed":["name"],"extra":{…},"replace":false}
 ```
 
@@ -579,6 +580,23 @@ readers treat it as opaque.
   therefore explicit in every delta. A part with an `id` and neither
   `text` nor `hash` has empty text, which is how a writer that omits
   an empty string writes one.
+- The text the path has for an `id` is the text of the part by that
+  `id` in force, and of each part by that `id` that has left force: a
+  part a later delta removed, or gave other text. It stays named by its
+  `id` and `hash` until the next `replace` or compaction's checkpoint,
+  which starts the path's parts afresh. A `hash` that the part in force
+  does not have resolves to the text that most recently left force
+  under that `id` with it, and to that part's `source` when the element
+  carries none. A writer of 0.11 names an unchanged part by its `hash`
+  whenever the path has its text and `source` under its `id`, in force
+  or not, and writes the `text` only for a part the path does not have
+  so. A writer of 0.10 named only a part in force and wrote the text of
+  every other, so a file of 0.10 holds no `hash` for a part out of
+  force, and a reader of 0.10 that resolves a `hash` against the parts
+  in force alone, which fails every one a 0.11 writer writes, refuses
+  such a file by its header. A hand-back to an agent whose parts an
+  agent between them replaced then costs the parts that changed, and
+  not the whole prompt.
 - A part named by `hash` alone also keeps the `source` it had on the
   path, since the hash form has no way to say that a part has none
   now, so a writer leaves `source` off it. A `source` present on such a
@@ -673,8 +691,9 @@ of instruction parts does:
   writes that list whole. A writer MUST NOT write a `keep` that runs
   past the end of the list in force, or one that takes a part another
   element of the same list names, and MUST NOT write any other member
-  beside `keep`, which a reader ignores. A `keep` member on an element
-  that carries an `id` is a member this document does not define there.
+  beside `keep`, which a reader ignores, but `of`, which 0.11 defines
+  below. A `keep` member on an element that carries an `id` is a member
+  this document does not define there.
 - A `keep` that runs past the end of the list in force or takes a
   part the list names elsewhere, which a reader finds by reading the
   whole list first, and an element with neither an `id` nor a
@@ -684,6 +703,9 @@ of instruction parts does:
   takes it takes it as it is. Unlike a `keep` among the instruction
   parts, nothing checks one here: the list reaches no request, so no
   `request_hash` covers it.
+- A `keep` MAY carry `of`, the `id` of an earlier `config` entry, and
+  count over the list that entry put in force instead of the list in
+  force before this one; the paragraphs below define it.
 - `replace: true` discards the list in force with the rest of the
   settings, so a `keep` in the same entry resolves against nothing,
   and a writer MUST NOT write one there: a replace writes the list
@@ -691,6 +713,118 @@ of instruction parts does:
   whole too; an element in force that named no part is written as it
   stands, and a reader of a checkpoint takes each element as it is,
   resolving no `keep` in it.
+
+A hand-back repeats a list an earlier entry on the path already wrote:
+an agent given a session again after another ran writes the omitted
+list it wrote the first time, element for element. An element is about
+the size of a hash, so hashing elements would save nothing; what can be
+named is the list. A `keep` that carries `of` counts over the list an
+earlier entry put in force, and not over the list in force before this
+entry:
+
+- `of` is the `id` of a `config` entry on the path before this one that
+  carries `instructions_omitted`. The element stands for the next n
+  parts of the list that entry put in force, as this document resolves
+  it at that entry, each unchanged, `reason`, `size` and `source` alike.
+  `[{"keep":474,"of":"sha256:…"}]` is then the whole list an earlier entry
+  wrote, in under a hundred bytes where the list is 37 KB.
+- Each list a delta counts over has a cursor of its own, starting at
+  that list's first part. A `keep` moves the cursor of the list it
+  counts over, past the parts it takes, whether or not it resolves. An
+  element naming a part by `id` moves the cursor of each list that
+  names the `id`, to just after the first part so named, and leaves
+  that of a list that does not. The list in force before the entry is
+  the list a `keep` without `of` counts over, so the cursor rule above
+  is this rule with one list: an element carrying `of` moves the cursor
+  of its own list and no other, and the next element without it counts
+  from where the cursor over the list in force stands. A change to the
+  61st of 126 parts of an earlier list is
+  `[{"keep":60,"of":"…"},{"id":"m61",…},{"keep":65,"of":"…"}]`.
+- A writer MUST NOT write `of` on an element that carries an `id` or
+  that has no positive `keep`, a member this document does not define
+  there, and MUST NOT write a `keep` that carries `of` and runs past the
+  list it counts over or takes a part another element of the delta
+  names. The list the delta resolves to names each `id` once, so a
+  writer that counts over two lists takes no part from both.
+- A `keep` that carries `of` names no part a reader can rebuild when
+  `of` names an entry that is not on the path before this one, that is
+  not a `config` entry, that does not carry the member, or whose list a
+  `replace` or a compaction's checkpoint has discarded since, and when
+  the `keep` runs past that list or takes a part the delta names
+  elsewhere. A reader keeps such an element in the list in force where
+  it stands, `keep` and `of` as written, as it keeps any element it
+  cannot resolve. An element with an `id` takes `of` for a member this
+  document does not define there and the element is the part it names.
+- A `replace` or a compaction's checkpoint starts the lists afresh, as
+  it starts the parts: no `config` entry before one is named by an `of`
+  after it, and an entry that carries `replace: true` writes its list
+  whole, so carries no `of`, though a later entry may name its list. A
+  checkpoint writes the list whole, so nothing after it names an entry
+  before it.
+
+#### Items left out of the context
+
+Every `item` entry on a path is in the request, until a writer leaves
+one out; and until 0.11 nothing said it had. A reasoning item is bound to
+the model that produced it, and a provider refuses another model's
+signature, so a harness that changes model part-way through a session
+sends the rest of it without the reasoning that came before, a request
+the path does not rebuild. A response written after the switch could not
+carry a `request_hash` that verifies, nor could any after it, for as
+long as those items are on the path. `omit` records the rule, once.
+
+```json
+{"type":"config","id":"…","parent":"…","ts":"…",
+ "omit":{"reasoning":"other_models","items":["sha256:…"]}}
+```
+
+`omit` is an object, in force as a setting is: a delta without it
+leaves the object in force as it was, `replace: true` without it clears
+it with the rest of the settings, and a compaction's checkpoint carries
+it. A `config` entry MAY carry it and no setting. Its members:
+
+- `reasoning` is closed, and `other_models` is the one value this
+  document defines. A request leaves out each `item` entry on the path
+  that holds a `reasoning` item, carries a `response`, and was written
+  while a model other than the request's was in force. The model in
+  force at an entry is the `model` the settings hold there, the path from
+  its root to it replayed as the context algorithm replays it, a
+  compaction's checkpoint standing for the entries it folded; the model
+  in force for a request is the one the settings hold at the end of its
+  path. A `response` entry's own `model` is not read: it is the
+  provider's name for the model that answered, which may be a dated
+  snapshot of the alias the request named, and is not comparable with
+  the name the request carried. The rule is a function of the record,
+  so a writer writes it once, at the entry that changes the model, and
+  it covers every later request without listing an item. A switch back
+  is covered too, since the rule reads the model in force at each
+  request. A `reasoning` value this document does not define has no
+  effect, and a reader keeps the member as written.
+- `items` is the general case, for a host's own filter: a list of entry
+  ids, and an `item` entry on the path whose id it lists contributes
+  nothing, whatever it holds. An id that names no `item` entry on the
+  path names nothing; a `compaction`'s summary and pinned items and a
+  `branch_summary`'s summary are not `item` entries, and `omit` does not
+  reach them.
+- An `omit` in a delta sets the `reasoning` it names, leaves the one in
+  force when it names none, and adds its `items` to those in force: the
+  set in force is the union of every `items` on the path since the last
+  `replace` or compaction's checkpoint, so a later entry adds to it and
+  never has to repeat it. An object that names no `reasoning` and lists
+  no id, `{}` above all, clears both. A writer that wants to drop one
+  and keep the other writes `{}` in one entry and what it keeps in the
+  next.
+
+The `omit` in force at the end of a path decides every `item` entry on
+it, those before the entry that wrote it among them, so a request built
+over a path that ends before the entry never meets the member. What a
+request leaves out stays in the record: the entry is on the path and
+among the context's entries, and a projection can show it as omitted
+and not as absent. The `request_hash` is over the request built without
+it, so a response that hashes verifies. A response whose recorded hash
+is the request built with an item the `omit` in force leaves out is a
+divergence, a hash that does not match, and not a response that recorded
+none.
 
 ### `compaction`
 
@@ -738,15 +872,17 @@ Replaces earlier context with a summary.
 
   ```json
   {"model":"…","instructions":"…","instructions_parts":[…],
-   "instructions_omitted":[…],
+   "instructions_omitted":[…],"omit":{…},
    "reasoning":{…},"text":{…},"tools":[…],"extra":{…}}
   ```
 
   `instructions_parts`, when the checkpoint carries it, is the full
   list of parts in force, each with its text, not a delta, and
   `instructions` is their join. `instructions_omitted` is the list of
-  omitted parts in force, every part written out and no `keep`, and a
-  checkpoint without it has none in force. `tools` is the full list of tool
+  omitted parts in force, every part written out and no `keep` and no
+  `of`, and a checkpoint without it has none in force. `omit` is the
+  object in force, its `items` the union so far, and a checkpoint
+  without it has none in force. `tools` is the full list of tool
   definitions in force at the compaction, in the order the context
   algorithm would send them, not a delta; there are no `tools_added`, `tools_removed` or `replace`
   members. `extra` is the merged map of passthrough request members
@@ -793,7 +929,17 @@ Why a run started and how it ended. Two entries per run, paired by
   resume that holds such a call again, or rejects it, is one, and a
   message the run adds before or after it, such as the approval a person
   typed, does not change that. The shape is what the writer knows when
-  it writes `start`: it started the run to take up a call. `input`:
+  it writes `start`: it started the run to take up a call. A run written
+  `resume` whose segment holds no entry between its `start` and its
+  `end`, or none after its `start` when the run was cut, is accepted as
+  written: the writer started it to take up a call and the run ended
+  before it did, a refusal by a subscriber to the run's start and a
+  kill among the causes, and `resume` records what it meant to do, which
+  an empty segment cannot contradict. A `resume` over a segment that
+  adds a message or an output and takes up no call is not that, and a
+  reader reports it. A reader of 0.11 applies the rule to every file it
+  reads, those of 0.9 and 0.10 included, as 0.10 applied its relaxation
+  of the `answer` rule to 0.9 files. `input`:
   otherwise, including a run that answers nothing and adds nothing, such
   as a retry after an error, which `ref` names. `ref` on `start` names
   what triggered the input (a cron name, a channel message ID). How an
@@ -1203,7 +1349,8 @@ A reference to another session, for subagents and forks.
 
 ```json
 {"type":"link","id":"…","parent":"…","ts":"…",
- "rel":"subsession|fork_of|continued_in","session":"…","call_id":"…"}
+ "rel":"subsession|fork_of|continued_in|judged_by","session":"…","call_id":"…",
+ "target":"entry-id"}
 ```
 
 `call_id` ties a subsession to the function call that spawned it. A
@@ -1225,6 +1372,20 @@ to a fork after a `call_id` collision (RFC 0002) with a level of its
 subsessions left under the old IDs: two stores derive one ID for the
 subsession of one call, so such a link names the other store's
 subagent, and only that session's header says whose it is.
+
+`judged_by` is written into the session that was judged and names the
+session of the judge, with an optional `target` naming the entry the
+judgement is about, the entry the judge's `outcome` names. A judge is a
+session of its own, since the agent that scores another's work holds a
+conversation with a model, and its header says only which session it
+was derived from: `parent_session` holds a judge, a subagent and a fork
+alike, and cannot say which. The link can. A reader selecting the
+judges of a run reads the `judged_by` links on its path, and `target`
+tells the several judgements a session may hold apart. `target` is
+defined for this relation alone, and names an entry on a path in the
+judged session, which a store does not check, as it does not check an
+`outcome`'s. A `judged_by` link's `call_id` means nothing, and the
+checks below are the `subsession` link's alone.
 
 A link names a session, not a point in one, and at the moment it is
 written there is no point to name. The other half of the round trip is
@@ -1338,7 +1499,10 @@ list as follows.
    and the settings' instructions are the resolved parts joined with
    one blank line. The list of omitted parts in force replays beside
    them, as `instructions_omitted` defines, each `keep` in it resolved
-   against the list in force before its entry, and reaches no request.
+   against the list in force before its entry, or against the list an
+   earlier entry put in force when it carries `of`, and reaches no
+   request. The `omit` in force replays beside them, as the section on
+   items left out defines.
 3. Find the last `compaction` on the path, if any. If found:
    settings start from its `config` checkpoint and then replay any
    `config` after it; the item list starts with its `summary`, then its
@@ -1352,7 +1516,10 @@ list as follows.
    `dispatch`, `decision`, `queued`, `label`, `info`, `env`,
    `outcome`, `link`, `custom`) and every unknown extension
    contributes nothing. A `queued` entry holds an item and is not in
-   context: the input enters when it is appended as an `item`.
+   context: the input enters when it is appended as an `item`. An
+   `item` entry that the `omit` in force at the end of the path leaves
+   out contributes nothing either; it stays on the path, and a reader
+   reports that it was left out and why.
 5. The canonical request is settings plus the item list, encoded as the
    payload profile's request with `store: false` and no
    `previous_response_id`. Its hash is `request_hash`.
@@ -1498,6 +1665,12 @@ entries they were copied from are before `first_kept` and so are not
 in the document. Raw items travel in step `extra` so the projection is
 lossless.
 
+An `item` entry that `omit` leaves out of the request at the trajectory's
+leaf is in the step that holds it, since the model produced it or the
+person sent it, and the step's `extra` lists it under `omitted` with the
+reason, `other_models` or `items`, so a reader sees it as left out and
+not as absent.
+
 A document's steps are the context the algorithm produces, so a run
 that compacted is described by its last summary and what followed it.
 Its `final_metrics` are not: they total every model call on the path,
@@ -1576,13 +1749,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.10 reads a 0.5 to 0.9 file
-as it stands, since 0.6 to 0.9 add optional members and elements, 0.10
-relaxes one rule, and the hashes do not change, save for the few rules each minor's changes below say read
+it begins at 1.0. A reader of 0.11 reads a 0.5 to 0.10 file
+as it stands, since 0.6 to 0.11 add optional members and elements, 0.10
+and 0.11 relax one rule each, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.10 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.11 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -1634,7 +1807,13 @@ checkpoint and cleared by `[]`, a queued `trigger` with members of its
 own drained into an `item`'s `source`, a list of omitted parts naming
 runs of the list in force by `keep` across deltas that move a part
 across a budget, beside a `replace` and a compaction's checkpoint that
-write it whole, the recomputed `reason` for every `run` end, and
+write it whole, the recomputed `reason` for every `run` end, a `run` written `resume`
+whose segment holds nothing, beside one that adds a message and is
+reported, a hand-back naming every instructions part by `hash`, those
+out of force among them, and its omitted list by `of`, a two-model session
+whose `omit` is written at each switch, every response hashed and
+verifying, beside the same session written as 0.10 does, a `judged_by`
+link with its `target`, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second root, an own entry hung from the prefix above the base, or a line
@@ -1642,7 +1821,9 @@ before the base that is not on the path to it, a `dispatch` that follows a
 `reject`, an `answer` or the call's output, a decision that follows a
 `reject`, a `reject` that follows a `dispatch` or an output, a `target`
 naming another call, a repeated `call_id`, an empty `call_id`, a `run`
-start whose `source` is not the shape of its segment, and a header
+start whose `source` is not the shape of its segment, an `of` naming no
+`config` entry on the path, a response whose recorded hash is the request
+an `omit` in force leaves an item out of, and a header
 naming `dispatch` beside a call that has an output and no `dispatch`;
 and a fork naming `dispatch` whose prefix, from a session that promised
 nothing, holds such a call, and which verifies.
@@ -1664,6 +1845,52 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.10
+
+Five changes. Three are members a writer may write, one relaxes a rule
+and one is a relation, so a 0.10 file is a 0.11 file that holds none of
+the members and reads under the one relaxed rule. No hash changes.
+
+- A run written `resume` whose segment holds nothing is accepted as
+  written (`run`). A refusal by a subscriber to a run's start, or a kill
+  before the run took anything up, left a segment the 0.10 rule computed
+  as `input`, and every leaf below it failed to verify for ever. The rule
+  is relaxed for every file a reader of 0.11 reads, 0.9 and 0.10 ones
+  included, since the file such a run left was never corrupt: its writer
+  meant to take up a call and the run ended first. A `resume` over a
+  segment that adds a message or an output and takes up nothing is still
+  reported.
+- A writer of 0.11 names an unchanged instructions part by its `hash`
+  whether or not the part is in force, since the path has its text
+  (`config`, instructions as parts). A hand-back to an agent whose parts
+  another agent replaced repeated the text of every part the other agent
+  displaced, and that was the 99.7% of what a hand-back appended in the
+  study that measured it. The reader's rule is not new, only a writer's
+  use of it, and a reader of 0.10 that resolves a `hash` against the
+  parts in force alone refuses a file of 0.11 by its header.
+- A `keep` in an omitted list MAY carry `of`, naming an earlier `config`
+  entry whose list it counts over (`config`, instructions as parts). A
+  hand-back repeated the whole omitted list an earlier entry had written,
+  474 elements and 37 KB, and an element is the size of a hash, so only
+  naming the list could save it.
+- `omit` on a `config` entry records the items a request leaves out of the
+  context (`config`, items left out, and the context algorithm). A
+  reasoning item bound to another model, and any item a host filters,
+  were on the path and not in the request, and nothing said so: every
+  response after a model switch under reasoning went unhashed. `reasoning:
+  other_models` is a rule of the record that a writer writes once, and
+  `items` is the general case.
+- A `judged_by` relation on `link` names the session that judged this
+  one (`link`). A header's `parent_session` cannot tell a judge from a
+  subagent or a fork.
+
+A writer of 0.11 raises every file it appends to, as Versioning says, so
+every reader of 0.10 refuses those files until it is upgraded, and
+readers of 0.11 are upgraded before writers of 0.11 reach the files they
+read. A member 0.11 defines that an earlier file holds in another form,
+which it was free to while the name was undefined, is a member the
+reader does not know, and is kept as written.
 
 ## Changes since 0.9
 
@@ -2087,8 +2314,3 @@ which the `run` entry cannot name and which 0.3 adopts beside the
   share one directory across sessions is still open.
 - The venue: this repository, a standalone repository, or a proposal to
   openresponses.org as a companion document.
-- What 0.11 carries. `docs/plans/format-0.11.md` scopes the next
-  minor: the empty-resume `source` rule, instruction parts named by hash
-  out of force and an omitted list named by an earlier entry's, a
-  `config` member recording items that leave the context, and a link
-  relation for a judge.
