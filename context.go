@@ -168,6 +168,8 @@ func (s *Settings) UnmarshalJSON(data []byte) error {
 	}
 	var omit Omit
 	if raw, ok := all["omit"]; ok && holdsExactly(raw, &omit) && !omit.IsZero() {
+		// An empty id names no entry; the line keeps it as written.
+		omit.Items = slices.DeleteFunc(omit.Items, func(id string) bool { return id == "" })
 		s.Omit = omit
 	}
 	return nil
@@ -397,6 +399,15 @@ func applyInstructionParts(prev, delta []InstructionPart, left *partHistory) []I
 // no entry lists holds is kept as written, as is one that runs past that
 // entry's list or takes a part the delta names elsewhere.
 func applyOmitted(prev, delta []OmittedPart, lists *omittedHistory) []OmittedPart {
+	out, _ := resolveOmitted(prev, delta, lists)
+	return out
+}
+
+// resolveOmitted is applyOmitted, and reports whether a keep carrying
+// of was kept as written because it could not be resolved: the of names
+// no list lists holds, or the keep runs past that list or takes a part
+// the delta names elsewhere.
+func resolveOmitted(prev, delta []OmittedPart, lists *omittedHistory) (out []OmittedPart, unresolvedOf bool) {
 	// cursors holds a cursor per list the delta counts over, keyed by
 	// the entry an of names, and "" for the list in force. A list is
 	// found up front, so an element naming a part before the first
@@ -427,7 +438,7 @@ func applyOmitted(prev, delta []OmittedPart, lists *omittedHistory) []OmittedPar
 			}
 		}
 	}
-	out := make([]OmittedPart, 0, len(delta))
+	out = make([]OmittedPart, 0, len(delta))
 	for _, p := range delta {
 		switch {
 		case p.ID == "" && p.Keep > 0:
@@ -436,6 +447,7 @@ func applyOmitted(prev, delta []OmittedPart, lists *omittedHistory) []OmittedPar
 				// An of that names no list this path holds takes
 				// nothing, and moves no cursor.
 				out = append(out, OmittedPart{Keep: p.Keep, Of: p.Of})
+				unresolvedOf = true
 				continue
 			}
 			run := cur.list[min(cur.next, len(cur.list)):min(cur.next+p.Keep, len(cur.list))]
@@ -446,6 +458,7 @@ func applyOmitted(prev, delta []OmittedPart, lists *omittedHistory) []OmittedPar
 			cur.next += p.Keep
 			if !ok {
 				out = append(out, OmittedPart{Keep: p.Keep, Of: p.Of})
+				unresolvedOf = unresolvedOf || p.Of != ""
 				continue
 			}
 			// A part kept as it is stays unresolved if it was.
@@ -463,14 +476,60 @@ func applyOmitted(prev, delta []OmittedPart, lists *omittedHistory) []OmittedPar
 			out = append(out, p)
 		}
 	}
+	return out, unresolvedOf
+}
+
+// UnresolvedOf returns the config entries on a root-first path that
+// carry a keep with an of the path cannot resolve, in path order: the
+// of names no entry on the path whose list is still in force to name,
+// since a replace or a compaction's checkpoint, or the keep runs past
+// that list or takes a part the delta names elsewhere. The format keeps
+// such an element as written and it reaches no request, so nothing but
+// a tool that checks a file reports it; this is that check, replaying
+// the path as the context algorithm does.
+func UnresolvedOf(path []Entry) []*ConfigEntry {
+	var out []*ConfigEntry
+	var settings Settings
+	for _, e := range path {
+		switch v := e.(type) {
+		case *CompactionEntry:
+			// The checkpoint writes what was in force whole and starts the
+			// lists afresh.
+			settings = v.Config
+			settings.left, settings.lists = nil, nil
+		case *ConfigEntry:
+			if v.InstructionsOmitted != nil {
+				prev, lists := settings.InstructionsOmitted, settings.lists
+				if v.Replace {
+					prev, lists = nil, nil
+				}
+				if _, bad := resolveOmitted(prev, v.InstructionsOmitted, lists); bad {
+					out = append(out, v)
+				}
+			}
+			settings = settings.Apply(v)
+		}
+	}
 	return out
+}
+
+// UnresolvedOf returns the config entries on the path to leaf that carry
+// a keep with an of the path cannot resolve; see [UnresolvedOf].
+func (s *Session) UnresolvedOf(leaf string) ([]*ConfigEntry, error) {
+	path := s.Path(leaf)
+	if path == nil {
+		return nil, fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
+	}
+	return UnresolvedOf(path), nil
 }
 
 // maxOmittedLists is how many of the lists earlier entries put in
 // force [Settings.OmittedDelta] tries a delta against, newest first,
-// beside the list in force, not counting a list equal to it. A hand-back names the list of the last time
-// that agent ran, so it is among the few most recent; the bound keeps
-// the work of one call from growing with the length of the session.
+// beside the list in force. A list equal to the one in force, which the
+// keeps over it already cover, is not tried and is not counted. A
+// hand-back names the list of the last time that agent ran, so it is
+// among the few most recent; the bound keeps the work of one call from
+// growing with the length of the session.
 const maxOmittedLists = 16
 
 // OmittedDelta returns the instructions_omitted member that takes the
@@ -531,8 +590,8 @@ func (s Settings) OmittedDelta(omitted []OmittedPart) []OmittedPart {
 	}
 	tried := 0
 	for h := s.lists; h != nil && tried < maxOmittedLists; h = h.prev {
-		if slices.Equal(h.list, prev) {
-			continue // the keeps over the list in force already cover it
+		if h == s.lists && slices.Equal(h.list, prev) {
+			continue // the list in force, which the keeps over it already cover
 		}
 		tried++
 		if d, ok := omittedRuns(h.list, h.entry, omitted); ok {
@@ -678,11 +737,12 @@ func unresolvedParts(parts []InstructionPart) bool {
 // A part that is not in force, or is in force with other resolved text,
 // is named by its hash alone when the path has given its ID that text
 // and source and the part has since left force, as format 0.11 lets a
-// writer; a part in force with its text and another source, and one in
-// force the path could not resolve, carry their text, since a hash
-// resolves against the part in force first: an agent handed the session back after another replaced its
-// parts costs the parts that changed, and not its whole prompt. Only a
-// part the path never had under its ID carries its text. A replace and
+// writer: an agent handed the session back after another replaced its
+// parts costs the parts that changed, and not its whole prompt. A part
+// in force with its text and another source, and one in force the path
+// could not resolve, carry their text, since a hash resolves against
+// the part in force first, and so does a part the path never had under
+// its ID. A replace and
 // a compaction's checkpoint start the path's parts afresh, so a part
 // that left force before one carries its text again. A delta written
 // this way is read by a reader of 0.11, which resolves a hash against
@@ -1029,7 +1089,7 @@ func (c *Context) leaveOut(path []Entry) {
 // entry's own model is not read: it is the provider's name for the model
 // that answered, a snapshot of the alias the request named, and is not
 // comparable with the model a request carries. An item written with no
-// model in force is left out of the result: an empty name attributes
+// model in force has no entry in the map: an empty name attributes
 // nothing.
 func modelsOfOutput(path []Entry) map[string]string {
 	models := map[string]string{}

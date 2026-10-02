@@ -688,3 +688,24 @@ func TestContinueCarriesOmit(t *testing.T) {
 		t.Errorf("a response after a switch in the successor: %v", err)
 	}
 }
+
+// TestOmitCheckpointEmptyIDs: a checkpoint whose omit lists an empty id
+// among others reads as listing the others, and the line it came from
+// is written back as it was.
+func TestOmitCheckpointEmptyIDs(t *testing.T) {
+	cp := `{"type":"compaction","id":"k","parent":null,"ts":"2026-10-01T12:00:00Z","first_kept":"x","summary":{"type":"message","role":"user","content":[{"type":"input_text","text":"s"}]},"config":{"model":"m","omit":{"items":["","a"]}}}`
+	e, err := UnmarshalEntry([]byte(cp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e.(*CompactionEntry).Config.Omit.Items; len(got) != 1 || got[0] != "a" {
+		t.Errorf("items read as %q", got)
+	}
+	back, err := MarshalEntry(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameJSON(t, back, []byte(cp)) {
+		t.Errorf("rewritten as %s", back)
+	}
+}

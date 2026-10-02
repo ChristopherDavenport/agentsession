@@ -43,7 +43,8 @@ versions may break the API.
   a cursor of its own; an `of` naming no entry the path holds since the
   last replace or checkpoint is kept as written, and `bad-handback`
   holds it, and `verify` notes such an element without failing the
-  file. `OmittedDelta` writes the shortest of the whole list, the
+  file, through `UnresolvedOf`, which finds the config entries that
+  carry one. `OmittedDelta` writes the shortest of the whole list, the
   keeps over the list in force and the keeps over each of the sixteen
   lists before it, and `OmittedPart.Of` is the member. (#173)
 - **`omit` on a `config` entry records the items a request leaves
@@ -61,7 +62,9 @@ versions may break the API.
   `verify` say so. The rule reads the model in force at the reasoning
   item's entry and never a response entry's `model`, and an empty model
   name attributes nothing: an item written under none is never left
-  out, and a request under none leaves nothing out. `Continue` carries
+  out, and a request under none leaves nothing out. A reasoning value
+  the format does not define leaves the rule in force, and a writer
+  writes no empty id in `items`. `Continue` carries
   the omit into the successor, as a checkpoint does. The `omit`,
   `omit-absent`, `bad-omit` and `omit-folded` fixtures hold the session
   as 0.11 and 0.10 write it, a divergence, and an omit carried through

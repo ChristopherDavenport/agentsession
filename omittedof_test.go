@@ -1,6 +1,7 @@
 package agentsession
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -547,6 +548,102 @@ func TestHandbackFixture(t *testing.T) {
 		}
 		if first, back := sizeOf(configs[0]), sizeOf(configs[4]); back*2 > first {
 			t.Errorf("the hand-back is %d bytes beside the first config's %d", back, first)
+		}
+	}
+}
+
+// TestUnresolvedOf: the config entries that carry a keep with an of the
+// path cannot resolve are found, replaying the path as the context
+// algorithm does: an of that names no entry, one before a replace or a
+// compaction's checkpoint, and a keep that runs past its list are
+// reported, and a resolved one, or a keep without of, is not.
+func TestUnresolvedOf(t *testing.T) {
+	list := omitList("p", 3)
+	t.Run("resolved", func(t *testing.T) {
+		s, ids := omitSession(t, &ConfigEntry{Model: "m", InstructionsOmitted: list})
+		if _, err := s.Append(&ConfigEntry{InstructionsOmitted: []OmittedPart{{Keep: 3, Of: ids[0]}}}); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := s.UnresolvedOf(s.Leaf()); len(got) != 0 {
+			t.Errorf("a resolved of is reported: %d", len(got))
+		}
+	})
+	t.Run("a keep without of that runs past the list is not this check", func(t *testing.T) {
+		s, _ := omitSession(t, &ConfigEntry{Model: "m", InstructionsOmitted: list})
+		if _, err := s.Append(&ConfigEntry{InstructionsOmitted: []OmittedPart{{Keep: 9}}}); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := s.UnresolvedOf(s.Leaf()); len(got) != 0 {
+			t.Errorf("a keep without of is reported: %d", len(got))
+		}
+	})
+	t.Run("no such entry, and a keep past the list", func(t *testing.T) {
+		s, ids := omitSession(t, &ConfigEntry{Model: "m", InstructionsOmitted: list})
+		missing, err := s.Append(&ConfigEntry{InstructionsOmitted: []OmittedPart{{Keep: 1, Of: "sha256:nowhere"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		past, err := s.Append(&ConfigEntry{InstructionsOmitted: []OmittedPart{{Keep: 9, Of: ids[0]}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.UnresolvedOf(s.Leaf())
+		if err != nil || len(got) != 2 || got[0].ID != missing || got[1].ID != past {
+			t.Errorf("UnresolvedOf = %v, %v", got, err)
+		}
+	})
+	t.Run("after a replace", func(t *testing.T) {
+		s, ids := omitSession(t, &ConfigEntry{Model: "m", InstructionsOmitted: list}, &ConfigEntry{Replace: true, Model: "m", InstructionsOmitted: list})
+		bad, err := s.Append(&ConfigEntry{InstructionsOmitted: []OmittedPart{{Keep: 3, Of: ids[0]}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := s.UnresolvedOf(s.Leaf()); len(got) != 1 || got[0].ID != bad {
+			t.Errorf("UnresolvedOf = %v", got)
+		}
+	})
+	t.Run("after a fold", func(t *testing.T) {
+		s, ids := omitSession(t, &ConfigEntry{Model: "m", InstructionsOmitted: list}, nil, nil)
+		comp, err := s.CompactKeeping(1, openresponses.UserText("summary"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(comp); err != nil {
+			t.Fatal(err)
+		}
+		bad, err := s.Append(&ConfigEntry{InstructionsOmitted: []OmittedPart{{Keep: 1, Of: ids[0]}, {ID: "c", Reason: "r"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, _ := s.Context()
+		if len(ctx.Settings.InstructionsOmitted) != 2 || ctx.Settings.InstructionsOmitted[0].ID != "" {
+			t.Fatalf("the context resolved it: %s", omitIDs(ctx.Settings.InstructionsOmitted))
+		}
+		if got, _ := s.UnresolvedOf(s.Leaf()); len(got) != 1 || got[0].ID != bad {
+			t.Errorf("an of after a fold is not found: %v", got)
+		}
+	})
+	t.Run("a missing entry", func(t *testing.T) {
+		if _, err := New(Header{}).UnresolvedOf("nowhere"); !errors.Is(err, ErrNoEntry) {
+			t.Errorf("UnresolvedOf = %v, want ErrNoEntry", err)
+		}
+	})
+}
+
+// TestOmittedDeltaBoundsEqualLists: a run of lists equal to the one in
+// force is not walked in full, since each counts against the bound
+// except the list in force itself.
+func TestOmittedDeltaBoundsEqualLists(t *testing.T) {
+	a, b := omitList("a", 30), omitList("b", 30)
+	entries := []Entry{&ConfigEntry{Model: "m", InstructionsOmitted: a}}
+	for i := 0; i < maxOmittedLists+4; i++ {
+		entries = append(entries, &ConfigEntry{InstructionsOmitted: b})
+	}
+	s, ids := omitSession(t, entries...)
+	ctx, _ := s.Context()
+	for _, o := range ctx.Settings.OmittedDelta(a) {
+		if o.Of == ids[0] {
+			t.Errorf("a list behind %d copies of the one in force is named: %+v", maxOmittedLists+4, o)
 		}
 	}
 }

@@ -194,7 +194,7 @@ func TestRun(t *testing.T) {
 		},
 		{
 			name: "verify an of the path cannot resolve", args: []string{"verify", filepath.Join(fixtures, "bad-handback.jsonl")},
-			stdout: []string{"5 verified, 0 without hash, 0 failed", "names an omitted list by an of that no config entry on its path puts in force"},
+			stdout: []string{"5 verified, 0 without hash, 0 failed", "names an omitted list by an of its path cannot resolve"},
 		},
 		{
 			name: "verify an omit carried through a fold", args: []string{"verify", filepath.Join(fixtures, "omit-folded.jsonl")},

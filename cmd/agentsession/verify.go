@@ -128,7 +128,8 @@ func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Wr
 	problem = failed > 0
 	noted := map[string]bool{}
 	for _, leaf := range s.Leaves() {
-		for _, c := range unresolvedOf(s, leaf) {
+		unresolved, _ := s.UnresolvedOf(leaf)
+		for _, c := range unresolved {
 			if !noted[c.ID] {
 				noted[c.ID] = true
 				fmt.Fprintf(stdout, "%s"+unresolvedOfNote+"\n", prefix, shortID(c.ID))
@@ -262,31 +263,4 @@ func noteFor(declared string, err error) string {
 // unresolvedOfNote is printed on a line of its own for a config entry
 // whose omitted list names an earlier entry's list the path does not
 // hold.
-const unresolvedOfNote = "note: config %s names an omitted list by an of that no config entry on its path puts in force; the element is kept as written, which is not corruption: the list reaches no request"
-
-// unresolvedOf returns the config entries on the path to leaf that carry
-// a keep with an of the path cannot resolve, in path order: replaying
-// the path's settings leaves the element in the list as written.
-func unresolvedOf(s *agentsession.Session, leaf string) []*agentsession.ConfigEntry {
-	var out []*agentsession.ConfigEntry
-	var settings agentsession.Settings
-	for _, e := range s.Path(leaf) {
-		c, ok := e.(*agentsession.ConfigEntry)
-		if !ok {
-			continue
-		}
-		settings = settings.Apply(c)
-		for _, el := range c.InstructionsOmitted {
-			if el.ID != "" || el.Keep == 0 || el.Of == "" {
-				continue
-			}
-			if slices.ContainsFunc(settings.InstructionsOmitted, func(p agentsession.OmittedPart) bool {
-				return p.ID == "" && p.Keep == el.Keep && p.Of == el.Of
-			}) {
-				out = append(out, c)
-				break
-			}
-		}
-	}
-	return out
-}
+const unresolvedOfNote = "note: config %s names an omitted list by an of its path cannot resolve; the element is kept as written, which is not corruption: the list reaches no request"

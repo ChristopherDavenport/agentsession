@@ -592,16 +592,16 @@ readers treat it as opaque.
   against the parts that left force. A writer of 0.11 therefore names a
   part by its `hash` when no part is in force under its `id`, or the one
   in force has other text the path could resolve, and the path has the
-  text and `source` it means among the parts that left force; it writes
-  the `text` for any other part, a part in force with that text and
-  another `source` and one in force whose text the path could not
-  resolve among them. A writer of 0.10 named only a part in force and wrote the text of
-  every other, so a file of 0.10 holds no `hash` for a part out of
-  force, and a reader of 0.10 that resolves a `hash` against the parts
-  in force alone, which fails every one a 0.11 writer writes, refuses
-  such a file by its header. A hand-back to an agent whose parts an
-  agent between them replaced then costs the parts that changed, and
-  not the whole prompt.
+  text and `source` it means among the parts that left force. It writes
+  the `text` for any other part, among them a part in force with that
+  text and another `source`, and one in force whose text the path could
+  not resolve. A writer of 0.10 named only a part in force and wrote the
+  text of every other, so a file of 0.10 holds no `hash` for a part out
+  of force, and a reader of 0.10 that resolves a `hash` against the
+  parts in force alone, which fails every one a 0.11 writer writes,
+  refuses such a file by its header. A hand-back to an agent whose parts
+  another agent replaced then costs the parts that changed, and not the
+  whole prompt.
 - A part named by `hash` alone also keeps the `source` it had on the
   path, since the hash form has no way to say that a part has none
   now, so a writer leaves `source` off it. A `source` present on such a
@@ -761,8 +761,9 @@ entry:
   cannot resolve. A tool that checks a file SHOULD say so, since nothing
   else does: the list reaches no request. A reader holds the list each
   such entry put in force since the last `replace` or checkpoint, and
-  with long lists in a long session that is their sum. An element with an `id` takes `of` for a member this
-  document does not define there and the element is the part it names.
+  with long lists in a long session that is their sum. An element with
+  an `id` takes `of` for a member this document does not define there,
+  and the element is the part it names.
 - A `replace` or a compaction's checkpoint starts the lists afresh, as
   it starts the parts: no `config` entry before one is named by an `of`
   after it, and an entry that carries `replace: true` writes its list
@@ -815,15 +816,14 @@ it. A `config` entry MAY carry it and no setting. Its members:
   ids, and an `item` entry on the path whose id it lists contributes
   nothing, whatever it holds. A writer writes no empty id, and a reader
   takes a list with no non-empty id as listing none. An id that names no
-  `item` entry on the path names nothing; a `compaction`'s summary and pinned items and a
-  `branch_summary`'s summary are not `item` entries, and `omit` does not
-  reach them.
+  `item` entry on the path names nothing; a `compaction`'s summary and
+  pinned items and a `branch_summary`'s summary are not `item` entries,
+  and `omit` does not reach them.
 - An `omit` in a delta sets the `reasoning` it names when this document
   defines it, leaves the one in force when it names none, and adds its
-  `items` to those in force: the
-  set in force is the union of every `items` on the path since the last
-  `replace` or compaction's checkpoint, so a later entry adds to it and
-  never has to repeat it. An object that names no `reasoning` and lists
+  `items` to those in force: the set in force is the union of every
+  `items` on the path since the last `replace` or compaction's
+  checkpoint, so a later entry adds to it and never has to repeat it. An object that names no `reasoning` and lists
   no id, `{}` above all, clears both. A writer that wants to drop one
   and keep the other writes `{}` in one entry and what it keeps in the
   next.
