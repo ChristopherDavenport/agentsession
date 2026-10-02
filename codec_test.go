@@ -196,15 +196,15 @@ func TestReadErrors(t *testing.T) {
 // rewrite; the rewrite is canonical, so members are compared and not
 // bytes.
 func TestReadMinorVersion(t *testing.T) {
-	later := `{"type":"session","format":"agentsession/0.11","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}` + "\n"
+	later := `{"type":"session","format":"agentsession/0.12","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}` + "\n"
 	if _, err := Read(strings.NewReader(later)); !errors.Is(err, ErrUnsupportedFormat) {
 		t.Errorf("Read of a later 0.x minor = %v, want ErrUnsupportedFormat", err)
 	}
-	// 0.6 to 0.9 only add optional members and elements and 0.10 changes
-	// no rule, so a 0.5 to 0.9 file reads as it stands: nothing is
+	// 0.6 to 0.11 only add optional members and elements and relax a
+	// rule or two, so a 0.5 to 0.10 file reads as it stands: nothing is
 	// rehashed, the header takes the current format, and the session
 	// says which the file declared.
-	for _, minor := range []string{"0.5", "0.6", "0.7", "0.8", "0.9"} {
+	for _, minor := range []string{"0.5", "0.6", "0.7", "0.8", "0.9", "0.10"} {
 		earlier := `{"type":"session","format":"agentsession/` + minor + `","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}` + "\n"
 		if s, err := Read(strings.NewReader(earlier)); err != nil {
 			t.Errorf("Read of %s = %v", minor, err)
@@ -212,7 +212,7 @@ func TestReadMinorVersion(t *testing.T) {
 			t.Errorf("%s read as migrated %v, format %s, declared %s", minor, migrated, s.Header().Format, s.DeclaredFormat())
 		}
 	}
-	in := `{"type":"session","format":"agentsession/0.10","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24","future_field":{"a":1}}` + "\n"
+	in := `{"type":"session","format":"agentsession/0.11","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24","future_field":{"a":1}}` + "\n"
 	s, err := Read(strings.NewReader(in))
 	if err != nil {
 		t.Fatal(err)

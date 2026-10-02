@@ -13,7 +13,7 @@ import (
 )
 
 // Format is the session format version this package writes.
-const Format = "agentsession/0.10"
+const Format = "agentsession/0.11"
 
 // FormatMajor is the major version of the format this package reads.
 // Any minor version of it is accepted; files are migrated in memory.
@@ -226,8 +226,12 @@ func (h *Header) fill(now time.Time) {
 // ends input_required, not aborted. 0.9 lets instructions_omitted name
 // a run of the list in force by keep, which no 0.8 omitted part could
 // be. 0.10 also marks a file written under 0.9's rules as they stood
-// when they stopped changing.
-const FormatMinor = 10
+// when they stopped changing. 0.11 accepts a run written resume over a
+// segment that holds nothing, in a 0.9 or 0.10 file too, and adds the
+// of member of an omitted keep, the omit setting, the judged_by link
+// relation and the target member of a link; its writer names an
+// instructions part out of force by its hash.
+const FormatMinor = 11
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.
 // A file below it is rehashed on read.
