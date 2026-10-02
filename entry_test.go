@@ -110,6 +110,11 @@ func TestEntryEncoding(t *testing.T) {
 			want:  `{"type":"link","id":"k","parent":"a","ts":"2026-09-17T12:00:01.5Z","rel":"fork_of","session":"s2"}`,
 		},
 		{
+			name:  "judged_by link",
+			entry: &LinkEntry{EntryBase: base("k", "a"), Rel: RelJudgedBy, Session: "s9", Target: "r1"},
+			want:  `{"type":"link","id":"k","parent":"a","ts":"2026-09-17T12:00:01.5Z","rel":"judged_by","session":"s9","target":"r1"}`,
+		},
+		{
 			name:  "custom",
 			entry: &CustomEntry{EntryBase: base("u", "a"), NS: "acme", Data: json.RawMessage(`[1,"<two>"]`)},
 			want:  `{"type":"custom","id":"u","parent":"a","ts":"2026-09-17T12:00:01.5Z","ns":"acme","data":[1,"<two>"]}`,

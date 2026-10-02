@@ -243,3 +243,71 @@ func TestWorkspaceWithoutKind(t *testing.T) {
 		}
 	}
 }
+
+// TestJudgedByLink: a judged session names its judge by a judged_by
+// link, whose target names the entry judged; Judges reads them off a
+// path, a link of another relation is no judge, and a target belongs to
+// the judged_by relation alone (#145).
+func TestJudgedByLink(t *testing.T) {
+	l := NewJudgedByLink("judge-1", "r1")
+	if l.Rel != RelJudgedBy || l.Session != "judge-1" || l.Target != "r1" || l.CallID != "" {
+		t.Errorf("link = %+v", l)
+	}
+	s := New(Header{})
+	a := appendText(t, s, "work")
+	for _, e := range []Entry{
+		NewJudgedByLink("judge-1", a),
+		NewLinkEntry(RelForkOf, "elsewhere"),
+		NewJudgedByLink("judge-2", ""),
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	judges, err := s.Judges(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(judges) != 2 || judges[0].Session != "judge-1" || judges[0].Target != a || judges[1].Session != "judge-2" || judges[1].Target != "" {
+		t.Errorf("Judges = %+v", judges)
+	}
+	if len(Judges(s.Path(a))) != 0 {
+		t.Error("a path above the links holds a judge")
+	}
+	if _, err := s.Judges("nowhere"); !errors.Is(err, ErrNoEntry) {
+		t.Errorf("Judges of a missing entry = %v, want ErrNoEntry", err)
+	}
+	if _, err := s.Append(&LinkEntry{Rel: RelForkOf, Session: "x", Target: a}); err == nil {
+		t.Error("a target on a fork_of link was appended")
+	}
+}
+
+// TestLinkTargetOfAnotherRelation: a target member on a link that is not
+// judged_by, which a file from before the member was defined may hold,
+// is not the member this document defines, and is kept as written.
+func TestLinkTargetOfAnotherRelation(t *testing.T) {
+	line := `{"type":"link","id":"k","parent":null,"ts":"2026-09-17T12:00:01Z","rel":"fork_of","session":"s2","target":"x"}`
+	e, err := UnmarshalEntry([]byte(line))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := e.(*LinkEntry)
+	if l.Target != "" || string(l.Unknown["target"]) != `"x"` {
+		t.Errorf("target = %q, unknown %v", l.Target, l.Unknown)
+	}
+	back, err := MarshalEntry(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameJSON(t, back, []byte(line)) {
+		t.Errorf("rewritten as %s", back)
+	}
+	// The same member that is not a string is kept too, on judged_by.
+	e, err = UnmarshalEntry([]byte(strings.Replace(strings.Replace(line, "fork_of", "judged_by", 1), `"x"`, `7`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := e.(*LinkEntry); l.Target != "" || string(l.Unknown["target"]) != `7` {
+		t.Errorf("a numeric target: %q, unknown %v", l.Target, l.Unknown)
+	}
+}

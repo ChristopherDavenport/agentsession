@@ -256,6 +256,17 @@ func TestRegenerateFixtures(t *testing.T) {
 		}
 	}
 
+	// judged: the 0.11 conformance vector for a judge's link, appended
+	// natively: a session that answered a task and records the session
+	// that judged it, and the entry the judgement is about.
+	var jbuf bytes.Buffer
+	if err := Write(&jbuf, judgedFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("testdata", "sessions", "judged.jsonl"), jbuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	for module, names := range nestedFixtures {
 		dir := filepath.Join(module, "testdata", "sessions")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1226,5 +1237,69 @@ func TestEmptyResumeFixture(t *testing.T) {
 	}
 	if empty != 2 || len(runs) != 4 {
 		t.Errorf("%d empty resumes in %d runs, want 2 in 4", empty, len(runs))
+	}
+}
+
+// judgedFixture builds the session judged.jsonl holds: one answered
+// task, and two judged_by links written after it, the first naming the
+// entry the judgement is about and the second a judge that named none.
+func judgedFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-10-01T11:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000018", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must := func(e Entry) string {
+		t.Helper()
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatalf("append %T: %v", e, err)
+		}
+		return id
+	}
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewItemEntry(openresponses.UserText("What is 2+2?")))
+	answer := NewItemEntry(&openresponses.Message{ID: "msg_1", Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: "Four.", Annotations: []openresponses.Annotation{}}}})
+	answer.ResponseID = "resp_1"
+	last := must(answer)
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted})
+	must(NewJudgedByLink(SubsessionID("01995b2a-0000-7000-8000-000000000018", "judge-1"), last))
+	must(NewJudgedByLink(SubsessionID("01995b2a-0000-7000-8000-000000000018", "judge-2"), ""))
+	return s
+}
+
+// TestJudgedFixture reads the 0.11 conformance fixture: the judged_by
+// links are read back with the target they name, which is an entry on
+// the path, and the file is what the builder writes.
+func TestJudgedFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", "judged.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, judgedFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf.Bytes(), raw) {
+		t.Error("judged.jsonl is not what judgedFixture builds; run go test -update")
+	}
+	if !bytes.Contains(raw, []byte(`"rel":"judged_by"`)) || !bytes.Contains(raw, []byte(`"target":"sha256:`)) {
+		t.Error("the fixture lacks a judged_by link with its target")
+	}
+	s := loadFixture(t, "judged")
+	judges, err := s.Judges(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(judges) != 2 {
+		t.Fatalf("%d judges, want 2", len(judges))
+	}
+	if _, ok := s.Entry(judges[0].Target); !ok || len(s.Path(judges[0].Target)) == 0 {
+		t.Errorf("the first judge's target %q is not an entry of the session", judges[0].Target)
+	}
+	if judges[1].Target != "" || judges[0].Session == judges[1].Session {
+		t.Errorf("judges = %+v, %+v", judges[0], judges[1])
+	}
+	if err := s.VerifyRecords(s.Leaf()); err != nil {
+		t.Errorf("VerifyRecords: %v", err)
 	}
 }

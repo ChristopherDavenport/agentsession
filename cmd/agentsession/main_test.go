@@ -306,6 +306,7 @@ func TestDescribeEveryEntryType(t *testing.T) {
 		{entry: &agentsession.EnvEntry{CWD: "/p"}, want: "cwd /p"},
 		{entry: &agentsession.OutcomeEntry{Kind: agentsession.OutcomeEval, Target: "r1", Score: &score}, want: "eval on r1 score 0.5"},
 		{entry: agentsession.NewLinkEntry(agentsession.RelSubsession, "child"), want: "subsession child"},
+		{entry: agentsession.NewJudgedByLink("judge", "sha256:0123456789abcdef"), want: "judged_by judge judging "},
 		{
 			entry: &agentsession.CustomEntry{NS: "agentpolicy", Data: []byte(`{"verdict":"deny","rule":"bash(curl:*)"}`)},
 			want:  "agentpolicy (40 bytes)",

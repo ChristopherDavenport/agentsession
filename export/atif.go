@@ -1081,6 +1081,9 @@ func (b *builder) subsessions() {
 		if l.CallID != "" {
 			rec["call_id"] = l.CallID
 		}
+		if l.Target != "" {
+			rec["target"] = l.Target
+		}
 		copyUnknown(rec, l.Unknown)
 		if l.Rel != agentsession.RelSubsession {
 			others = append(others, rec)

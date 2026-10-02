@@ -953,6 +953,10 @@ func validateEntry(e Entry) error {
 		}
 	case *ConfigEntry:
 		return validateConfig(v)
+	case *LinkEntry:
+		if v.Target != "" && v.Rel != RelJudgedBy {
+			return fmt.Errorf("agentsession: a link target is defined for the %s relation alone, not %q", RelJudgedBy, v.Rel)
+		}
 	case *UnknownEntry:
 		if len(v.Raw) == 0 {
 			return errors.New("agentsession: unknown entry has no raw bytes")

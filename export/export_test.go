@@ -2007,3 +2007,40 @@ func TestDispatchesAndAnswer(t *testing.T) {
 		t.Errorf("call_notify = %+v", notify)
 	}
 }
+
+// TestJudgedByLinkExported: a judged_by link is not a subagent, so it is
+// recorded under the root's links with its target, as a fork_of link is.
+func TestJudgedByLinkExported(t *testing.T) {
+	ts := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	s := agentsession.New(agentsession.Header{ID: "judged", CreatedAt: ts})
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "gpt-5"})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("task")))
+	answer, err := s.Append(&agentsession.ItemEntry{Item: openresponses.AssistantText("done"), ResponseID: "resp_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp_1", Status: openresponses.ResponseStatusCompleted})
+	mustAppend(t, s, agentsession.NewJudgedByLink("judge", answer))
+	var tr Trajectory
+	for x, err := range Trajectories(s) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr = x
+	}
+	doc, err := ToATIF(tr, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := doc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	links, _ := doc.Extra["links"].([]any)
+	if len(links) != 1 {
+		t.Fatalf("links = %v", doc.Extra["links"])
+	}
+	rec := links[0].(map[string]any)
+	if rec["rel"] != agentsession.RelJudgedBy || rec["session"] != "judge" || rec["target"] != answer || len(doc.SubagentTrajectories) != 0 {
+		t.Errorf("link = %v", rec)
+	}
+}

@@ -39,6 +39,9 @@ const (
 	RelSubsession  = "subsession"
 	RelForkOf      = "fork_of"
 	RelContinuedIn = "continued_in"
+	// RelJudgedBy is written into a judged session and names the
+	// session of its judge; see [NewJudgedByLink] and [Judges].
+	RelJudgedBy = "judged_by"
 )
 
 // Kinds an [OutcomeEntry] may carry.
@@ -682,6 +685,13 @@ type LinkEntry struct {
 	Session   string `json:"session"`
 	// CallID ties a subsession to the function call that spawned it.
 	CallID string `json:"call_id,omitempty"`
+	// Target, on a [RelJudgedBy] link, names the entry of the judged
+	// session the judgement is about: the entry the judge's outcome
+	// names. It is a member of that relation alone: a target member on
+	// a link of another relation, or one that is not a non-empty
+	// string, which a file from before the member was defined may hold,
+	// is kept as written in Unknown and Target is empty.
+	Target string `json:"-" member:"target"`
 }
 
 // EntryType returns "link".
@@ -1981,7 +1991,15 @@ func (e *OutcomeEntry) decodeMembers(data []byte, all map[string]json.RawMessage
 // MarshalJSON emits the entry as one JSON object.
 func (e *LinkEntry) MarshalJSON() ([]byte, error) {
 	type plain LinkEntry
-	return marshalEntry(TypeLink, &e.EntryBase, (*plain)(e))
+	if e.Target != "" {
+		if _, dup := e.Unknown["target"]; dup {
+			return nil, errors.New("agentsession: link entry has target both typed and unknown")
+		}
+	}
+	return marshalEntry(TypeLink, &e.EntryBase, struct {
+		*plain
+		Target string `json:"target,omitempty"`
+	}{(*plain)(e), e.Target})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -1995,7 +2013,14 @@ func (e *LinkEntry) UnmarshalJSON(data []byte) error {
 
 func (e *LinkEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain LinkEntry
-	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), linkKeys)
+	e.Target = ""
+	if err := unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), linkKeys); err != nil {
+		return err
+	}
+	if e.Rel == RelJudgedBy {
+		promote(&e.EntryBase, "target", &e.Target)
+	}
+	return nil
 }
 
 // MarshalJSON emits the entry as one JSON object.
