@@ -218,7 +218,11 @@ func (s CallState) String() string {
 // its origin may have promised nothing. So is one with no dispatch on
 // the path and one on another branch of the session, which a rebase
 // above the dispatch leaves. A call from [Calls] over a bare path is
-// taken to be the session's own, with nothing beside the path.
+// taken to be the session's own, with nothing beside the path. A prefix
+// call's dispatches, when its origin holds any, are what
+// [OriginDispatches] reads through a store; they do not change the
+// state, which is unknown either way, but say under which key and with
+// which arguments the call may have run.
 func (c *Call) State(h Header) CallState {
 	switch {
 	case c.Output != nil:

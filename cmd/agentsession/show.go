@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/cas"
 )
 
 func show(args []string, stdout, stderr io.Writer) error {
@@ -25,7 +27,24 @@ func show(args []string, stdout, stderr io.Writer) error {
 	if err := requireSession(fs, src, "show"); err != nil {
 		return err
 	}
-	s, err := readSource(src)
+	// A session read through a cas store keeps the store open: a call
+	// in a fork's prefix has its dispatch in the session the fork was
+	// made from, which the store holds and a file does not.
+	var (
+		s      *agentsession.Session
+		reader agentsession.Reader
+	)
+	if src.id == "" {
+		s, err = readSession(src.path)
+	} else {
+		st, oerr := cas.Open(src.path, cas.WithReadOnly())
+		if oerr != nil {
+			return oerr
+		}
+		defer st.Close()
+		s, err = readFrom(st, src)
+		reader = st
+	}
 	if err != nil {
 		return err
 	}
@@ -42,6 +61,9 @@ func show(args []string, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintln(stdout)
 	if err := printContext(stdout, s, at); err != nil {
+		return err
+	}
+	if err := printPending(stdout, s, at, reader); err != nil {
 		return err
 	}
 	if t := s.Truncated(); t != nil {
@@ -169,6 +191,52 @@ func printContext(w io.Writer, s *agentsession.Session, at string) error {
 		fmt.Fprintf(w, "  %3d  %s\n", i+1, describeItem(it))
 	}
 	return nil
+}
+
+// printPending lists the calls pending at the entry at, with the state
+// the path reads for each, and where a call with no dispatch on its
+// path was handed to its tool, when it was: on another branch of the
+// session, which a rebase leaves, or, for a call in a fork's prefix, in
+// the session the fork was made from, read through r when the session
+// came from a store. A file is read alone, so a prefix call's dispatch
+// is not found from one. Nothing is printed when no call is pending.
+func printPending(w io.Writer, s *agentsession.Session, at string, r agentsession.Reader) error {
+	calls, err := s.PendingCalls(at)
+	if err != nil {
+		return err
+	}
+	if len(calls) == 0 {
+		return nil
+	}
+	h := s.Header()
+	fmt.Fprintf(w, "\npending at %s: %d call(s)\n", shortID(at), len(calls))
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	for _, c := range calls {
+		var note string
+		switch {
+		case len(c.Dispatches) > 0:
+			if key := c.IdempotencyKey(); key != "" {
+				note = "key " + describeText(key)
+			}
+		default:
+			origin, ds, err := agentsession.OriginDispatches(context.Background(), r, s, c.Entry.ID)
+			switch {
+			case err != nil:
+				note = "origin not read: " + err.Error()
+			case len(ds) > 0:
+				d := ds[len(ds)-1]
+				note = "dispatched off the path"
+				if origin != s {
+					note = "dispatched in session " + origin.ID()
+				}
+				if d.IdempotencyKey != "" {
+					note += ", key " + describeText(d.IdempotencyKey)
+				}
+			}
+		}
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", c.ID(), c.Call.Name, c.State(h), note)
+	}
+	return tw.Flush()
 }
 
 func orDash(s string) string {

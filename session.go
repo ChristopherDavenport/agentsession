@@ -993,7 +993,9 @@ func (s *Session) add(e Entry) {
 // the entry target, anywhere in the session, in the order they were
 // added, each naming the call by its call ID. A call with none on its
 // path may have one elsewhere, which a rebase above it leaves, and may
-// then have run.
+// then have run. A call in a fork's prefix has its dispatches, if any,
+// in the session the fork was made from, which the fork does not hold;
+// [OriginDispatches] reads them through a store.
 func (s *Session) Dispatches(target string) []*DispatchEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

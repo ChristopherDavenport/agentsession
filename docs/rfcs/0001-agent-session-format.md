@@ -187,6 +187,9 @@ RFC 2119.
   session appended itself. The prefix is another session's record,
   carried here so the file stands alone; the header's `records` promise
   and the rules that rest on it apply to the entries after the base.
+  What the origin wrote off the path to the base is not carried, a
+  `dispatch` for a prefix call among it; `dispatch` says how a reader
+  finds one through `parent_session`.
 - `ts` is informational and a reader MUST NOT order entries by it;
   clocks step backwards. This is a rule about the member an entry
   carries, which its writer asserts. A sequence a store assigns as it
@@ -214,7 +217,7 @@ RFC 2119.
 | `harness` | SHOULD | name and version of the writer |
 | `records` | SHOULD | the record entry types, core or namespaced, this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
-| `parent_session` | MAY | session ID this was forked or spawned from. Provenance, not validated: a fork made at an entry on another fork's prefix may name either session, and a `fork_of` link records the one it was made from |
+| `parent_session` | MAY | session ID this was forked or spawned from. Provenance, not validated: a fork made at an entry on another fork's prefix may name either session, and a `fork_of` link records the one it was made from. It is also the session a reader resolves a prefix call's `dispatch` through, as `dispatch` says |
 | `base` | MAY | hash of the entry this session continues from, never a `leaf` label, since the base is a fork's first leaf; `parent_session` names a session holding it, as provenance. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
@@ -909,7 +912,15 @@ on its path was never started, unless the session holds a `dispatch`
 naming it elsewhere, off the path: a writer that rebases to a point
 between a call and its `dispatch` leaves the call on the new path with
 no `dispatch`, and it may have run. Otherwise the file does not say
-whether it ran. A
+whether it ran. A call in a fork's prefix has its `dispatch` entries,
+if any, in the session the fork was made from: the prefix is the path
+to the base, and a `dispatch` the origin wrote off that path is not
+carried, so the fork's file does not say whether the call ran. A reader
+that wants them resolves the fork's `parent_session` and asks that
+session, and so up a chain of forks, bounded, and reads a `dispatch`
+found there as one on a branch a rebase left: the call may have run,
+under that dispatch's key and with the arguments it handed over, and its
+output, when the origin holds one, is on the origin's branch. A
 writer that names `dispatch` MUST write it, durably, before the tool
 runs, and no writer may write it for a call that was rejected or
 answered or that has its output: the output ends the call, and a harness

@@ -952,3 +952,79 @@ func TestNoteWriter(t *testing.T) {
 		}
 	}
 }
+
+// TestShowOriginDispatch: show on a cas fork made at a call lists the
+// call pending with the dispatch its origin holds, read through the
+// store; the file the fork projects to reads alone and says the call is
+// unknown, with no dispatch to show (#185).
+func TestShowOriginDispatch(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "cas")
+	st, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin, err := st.Create(ctx, agentsession.Header{Records: agentsession.AllRecords})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := st.Append(ctx, origin.ID(), &agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fk", CallID: "call_k", Name: "deploy", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, origin.ID(), agentsession.NewDispatch("call_k", call).WithIdempotencyKey("k1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, origin.ID(), agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("call_k", "deployed"))); err != nil {
+		t.Fatal(err)
+	}
+	fork, err := st.Create(ctx, agentsession.Header{ParentSession: origin.ID(), Base: call, Records: agentsession.AllRecords})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, err := st.ProjectDir(ctx, filepath.Join(tmp, "projected"), fork.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		args   []string
+		stdout []string
+		absent []string
+	}{
+		{
+			name: "through the store", args: []string{"show", root, fork.ID()},
+			stdout: []string{"pending at", "call_k  deploy  unknown  dispatched in session " + origin.ID() + ", key \"k1\""},
+		},
+		{
+			name: "the projected file", args: []string{"show", projected},
+			stdout: []string{"pending at", "call_k  deploy  unknown"}, absent: []string{"dispatched"},
+		},
+		{
+			name: "the origin", args: []string{"show", root, origin.ID()},
+			absent: []string{"pending at"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run(tt.args, &stdout, &stderr); code != 0 {
+				t.Fatalf("exit %d: %s", code, stderr.String())
+			}
+			for _, want := range tt.stdout {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("stdout lacks %q:\n%s", want, stdout.String())
+				}
+			}
+			for _, absent := range tt.absent {
+				if strings.Contains(stdout.String(), absent) {
+					t.Errorf("stdout has %q:\n%s", absent, stdout.String())
+				}
+			}
+		})
+	}
+}
