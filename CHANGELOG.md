@@ -5,6 +5,17 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **`agentsession list` on a cas store v0.0.15 or earlier wrote now
+  says to run `agentsession migrate`**, once, after the per-session
+  errors, as `show` and `verify` do; and `cas.ErrLegacyStore` now says
+  "stop every writer, take a copy, and run agentsession migrate <root>"
+  in place of "open the store for writing to migrate it", which is the
+  step v0.0.19 put behind the other two. A product that lists such a
+  store read-only passes the library's text on, so the text had to say
+  it too. (#190)
+
 ## v0.0.19 - 2026-10-01
 
 **On a cas store v0.0.15 or earlier wrote, stop every writer, take a

@@ -798,7 +798,18 @@ func TestCASMigrate(t *testing.T) {
 	if code := run([]string{"show", root, id}, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "agentsession migrate") {
 		t.Errorf("show of an unmigrated session: exit %d: %s", code, stderr.String())
 	}
+	// list prints each session's error and then says once what to do
+	// about them; the library's own text says it too, since a product
+	// that lists a store passes that on (#190).
+	stderr.Reset()
+	if code := run([]string{"list", root}, &stdout, &stderr); code != 1 || strings.Count(stderr.String(), "agentsession migrate") != 3 || strings.Count(stderr.String(), legacyHint) != 1 {
+		t.Errorf("list of an unmigrated store: exit %d: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "open the store for writing") {
+		t.Errorf("list of an unmigrated store says to open it for writing: %s", stderr.String())
+	}
 	stdout.Reset()
+	stderr.Reset()
 	if code := run([]string{"verify", root}, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "agentsession migrate "+root) {
 		t.Errorf("verify of an unmigrated store: exit %d:\n%s", code, stdout.String())
 	}
