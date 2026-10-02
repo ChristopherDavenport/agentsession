@@ -7,6 +7,15 @@ versions may break the API.
 
 ## Unreleased
 
+- **Format 0.11 is planned and not written.** `docs/plans/format-0.11.md`
+  scopes the next minor and why this release does not bump it: the
+  `source` rule for a resume that took up nothing, instruction parts
+  named by hash out of force and an omitted list named by an earlier
+  entry's, a `config` member recording the items a request leaves out,
+  and a `judged_by` link relation. RFC 0001 says, under *Changes since
+  0.9*, which of this release's clarifications would have been rules of
+  0.11 had they changed what a file may hold, and that none does.
+  (#178, #56, #172, #173, #145)
 - **A prefix call's dispatches are read through its origin.** A fork
   made at a call holds the call in its prefix and none of its
   dispatches, which the origin wrote off the path to the base, so every

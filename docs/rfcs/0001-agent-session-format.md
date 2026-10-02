@@ -1690,6 +1690,28 @@ appended before the raise; a reader that finds one of the rules below
 broken in such a file, which it cannot tell from a 0.10 file, reads it
 as broken.
 
+### Clarified after writers of 0.10 were released
+
+0.10's rules do not change. These paragraphs were written into this
+document after writers of 0.10 were released, each saying what the
+format already meant where the text was silent or a reader was lax, so
+a reader of 0.10 applies them to every 0.10 file and no writer of 0.10
+wrote what they refuse: a `subsession` link and the header of the
+session it names agree, which a verifier that reads the target MAY
+check (`link`); a `custom` entry whose `data` carries a top-level
+`usage` records a paid model call, which a reader totalling the path's
+cost counts (`custom`, ATIF); the workspace before the first `env`
+entry is absent, so a first `env` entry after a `response` that names
+one is a substitution, as a reader holding the environment fixed
+already read it (`env`); a reader refuses a file with a `base` that
+breaks the base rule, which a writer appending to the file was always
+held to (envelope); a reader asking what a tool runs with passes over
+an `answer`'s `args`, which the text already said name nothing
+(`decision`); a prefix call's `dispatch` is resolved through
+`parent_session` (`dispatch`); and how a hand-off's span ends
+(OpenTelemetry). Each would have been a rule of 0.11 had it changed
+what a file may hold or how its context is built; none does.
+
 ## Changes since 0.8
 
 One element and a paragraph in the `config` section, a writer's rule in
@@ -2065,3 +2087,8 @@ which the `run` entry cannot name and which 0.3 adopts beside the
   share one directory across sessions is still open.
 - The venue: this repository, a standalone repository, or a proposal to
   openresponses.org as a companion document.
+- What 0.11 carries. `docs/plans/format-0.11.md` scopes the next
+  minor: the empty-resume `source` rule, instruction parts named by hash
+  out of force and an omitted list named by an earlier entry's, a
+  `config` member recording items that leave the context, and a link
+  relation for a judge.
