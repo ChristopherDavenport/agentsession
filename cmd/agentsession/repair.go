@@ -45,7 +45,11 @@ func repair(args []string, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "kept     %d entries, %d of them recovered from what the damage hid\n", len(rep.Kept), len(rep.Hidden)+len(rep.Salvaged))
 	for _, e := range rep.Salvaged {
-		fmt.Fprintf(stdout, "salvaged %s: named only by a damaged record, and its objects whole\n", shortID(e))
+		place := "not the head"
+		if e == rep.Head {
+			place = "the head"
+		}
+		fmt.Fprintf(stdout, "salvaged %s: named only by a damaged record, and its objects whole; %s\n", shortID(e), place)
 	}
 	switch {
 	case rep.Unread:

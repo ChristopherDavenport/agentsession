@@ -113,6 +113,49 @@ versions may break the API.
   `WriteATIF`, which now calls it, does for each of its documents; a
   product that wrote the file with `encoding/json` alone kept every
   image inline. (#145)
+- **cas: a writer stopped inside its commit no longer stops every
+  writer of every process on the store.** A sweep waiting for
+  `sweep.lock` held `sweep.lock.next` exclusive for as long as it
+  waited, and since v0.0.19 every writer takes that lock shared before
+  `sweep.lock`, so a writer that stayed alive and made no progress
+  while holding `sweep.lock` shared, stopped by SIGSTOP or Ctrl-Z, a
+  debugger or `docker pause`, kept the sweep waiting and every writer in
+  every process waiting behind it, with no bound but each one's
+  context; in v0.0.18 only the sweep waited. A waiting sweep now holds
+  `sweep.lock.next` for two seconds at a time, then lets the writers
+  through, who take `sweep.lock` shared beside the stopped holder, and
+  waits off the turnstile for a back-off interval that grows before it
+  tries again. A stopped holder of `sweep.lock` still keeps a sweep
+  waiting until it goes on or is killed, writers are held behind the
+  sweep for no longer than two seconds at a time, and a sweep of
+  v0.0.19 on the same store still holds them for as long as it waits.
+  A sweep beside steady writers passes the turnstile in one turn, so
+  the fix for #168 stands; the migration's wait for `sweep.lock` is
+  bounded the same way. (#188)
+- **cas: `Repair` salvages an entry from any damaged record that still
+  spells its hash, and accounts for every hash the damage touched.**
+  v0.0.19 salvaged only from a damaged line after the last readable
+  append that still spelled `"session":"<id>"` and `"op":"append"`, so
+  one damaged byte in either member, or damage to a branch leaf's
+  record that a readable append followed, dropped an acknowledged entry
+  whose objects were whole without listing it: a one-turn session was
+  `ErrUnrecoverable`, and `agentsession repair` printed the head "as the
+  log last named it" with nothing about the lost leaf. The log is the
+  session's own file and the objects are the evidence, so every hash a
+  damaged line spells, wherever the line is, is now salvaged when no
+  readable record appends the entry or records it lost, its objects
+  read and hash to their names, and its parent is the base or kept; it
+  is salvaged where its line is, so later records find it as their
+  parent or as an entry they converge. A hash not salvaged is listed in
+  `RepairReport.Dropped` with why: no object of it is held, or it is
+  what the damage made of a hash the line also spells, its objects do
+  not read, its parent is not kept, or a lost record names it. A
+  damaged `lost` record that still legibly names an entry is taken at
+  its word, over a readable append too, since a repair would otherwise
+  bring back what recovery told the writer was lost. An entry a
+  readable record's entry hangs from is reported in `Hidden`, as
+  before; `Salvaged` is what only a damaged line names. `agentsession
+  repair` says of each salvaged entry whether it is the head. (#189)
 
 ## v0.0.19 - 2026-10-01
 

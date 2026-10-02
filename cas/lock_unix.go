@@ -64,12 +64,15 @@ func (l *dirLock) release() error {
 //
 // The turnstile has a second side. Every holder first takes path's next
 // lock shared, and lets it go once it has the lock, so it holds it only
-// while it tries; lockExclusive holds next exclusive while it waits. A
-// holder arriving once a sweep waits therefore queues behind it, and
-// writers whose holds overlap, as durable appends' fsyncs do, cannot
-// keep the lock from ever being free for the sweep. No caller may hold
-// the lock while it takes it again, nor wait, holding it, on one that
-// takes it: behind a waiting sweep, that is a deadlock.
+// while it tries; lockExclusive holds next exclusive while it waits,
+// for at most turnstileBound at a time. A holder arriving once a sweep
+// waits therefore queues behind it, and writers whose holds overlap, as
+// durable appends' fsyncs do, cannot keep the lock from ever being free
+// for the sweep; and a holder of the lock that has stopped, keeping the
+// sweep waiting, keeps those behind the sweep no longer than the bound
+// before they take the lock shared beside it. No caller may hold the
+// lock while it takes it again, nor wait, holding it, on one that takes
+// it: behind a waiting sweep, that is a deadlock.
 func lockShared(ctx context.Context, path string) (*dirLock, error) {
 	next, err := lockPoll(ctx, path+".next", syscall.LOCK_SH, 2*time.Millisecond)
 	if err != nil {
@@ -107,28 +110,89 @@ func lockTry(path string, how int) (*dirLock, bool, error) {
 	return nil, false, fmt.Errorf("cas: lock: %w", err)
 }
 
+// turnstileBound is the longest a caller of lockExclusive holds path's
+// next lock, keeping every holder arriving at the lock behind it, while
+// it waits for the lock itself. A holder of the lock that stays alive
+// and makes no progress, a process stopped by SIGSTOP or a debugger or
+// a paused container, keeps it for as long as it is stopped; with no
+// bound a sweep waiting on it held next through all of that, and every
+// writer of every process waited behind the sweep (#188). The bound is
+// set against what a live holder's hold lasts, so a sweep beside steady
+// writers still passes the turnstile in one turn: a durable append holds
+// the lock through its two object writes and their directories' fsyncs,
+// its record's fsync and a commit pack's three, some eight fsyncs, which
+// a disk taking 100 ms for each, a loaded network filesystem or an SD
+// card, serves in under a second; two seconds leaves that a margin. A
+// hold that outlasts it, an import packing a large session, costs the
+// sweep a turn and the writers nothing. Tests shorten it.
+var turnstileBound = 2 * time.Second
+
 // lockExclusive takes an exclusive lock at path, waiting for its
 // holders to let it go until ctx ends. It first waits for each holder
 // waiting in lockShared to take the lock shared, so a caller that takes
 // it again and again lets those waiting in between. It holds path's
 // next lock exclusive from before that wait until it has the lock, so
-// no holder arriving meanwhile takes the lock ahead of it.
+// no holder arriving meanwhile takes the lock ahead of it, but for no
+// longer than turnstileBound at a time: a holder of the lock may be
+// stopped, and the holders queued on next must not wait on it too. When
+// the bound passes it lets next go, so they take the lock shared beside
+// the stopped holder, and waits off the turnstile, polling the lock
+// alone as v0.0.18 did, for a back-off interval that doubles up to
+// sixteen times the bound; then it takes next again and tries the
+// turnstile once more. Each try costs the holders behind it at most the
+// bound, and the back-off spaces the tries out. Nothing here asks
+// whether a holder is stopped: the kernel drops a dead holder's lock,
+// and a live one is waited for, within the bound, for as long as the
+// caller's ctx allows.
 func lockExclusive(ctx context.Context, path string) (*dirLock, error) {
-	next, err := lockPoll(ctx, path+".next", syscall.LOCK_EX, 2*time.Millisecond)
-	if err != nil {
-		return nil, err
+	backoff := turnstileBound
+	for {
+		next, err := lockPoll(ctx, path+".next", syscall.LOCK_EX, 2*time.Millisecond)
+		if err != nil {
+			return nil, err
+		}
+		turn, cancel := context.WithTimeout(ctx, turnstileBound)
+		lk, err := func() (*dirLock, error) {
+			// The want lock stays, though next covers this release's
+			// writers: writers of v0.0.17 and v0.0.18 sharing the store
+			// know only it. Its wait is under the bound too, since one of
+			// them may be stopped while it waits.
+			want, err := lockPoll(turn, path+".want", syscall.LOCK_EX, 2*time.Millisecond)
+			if err != nil {
+				return nil, err
+			}
+			want.release()
+			// Holders arriving now wait on this caller, so it polls at a
+			// short interval rather than lockWait's longest.
+			return lockPoll(turn, path, syscall.LOCK_EX, 2*time.Millisecond)
+		}()
+		cancel()
+		next.release()
+		if err == nil {
+			return lk, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		// The bound passed with the lock still held: off the turnstile,
+		// the lock is polled alone, taken if its holders let go.
+		off, cancel := context.WithTimeout(ctx, backoff)
+		lk, err = lockWait(off, path, syscall.LOCK_EX)
+		cancel()
+		if err == nil {
+			return lk, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		backoff = min(2*backoff, 16*turnstileBound)
 	}
-	defer next.release()
-	// The want lock stays, though next covers this release's writers:
-	// writers of v0.0.17 and v0.0.18 sharing the store know only it.
-	want, err := lockPoll(ctx, path+".want", syscall.LOCK_EX, 2*time.Millisecond)
-	if err != nil {
-		return nil, err
-	}
-	want.release()
-	// Holders arriving now wait on this caller, so it polls at a short
-	// interval rather than lockWait's longest.
-	return lockPoll(ctx, path, syscall.LOCK_EX, 2*time.Millisecond)
 }
 
 // lockWait tries the lock without blocking and retries until ctx ends,

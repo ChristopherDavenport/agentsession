@@ -1302,3 +1302,71 @@ func TestShowOriginDispatch(t *testing.T) {
 		})
 	}
 }
+
+// TestCASRepairSalvagedLeaf: a branch leaf whose record is damaged, a
+// readable append following it, is salvaged and said so, rather than
+// the head reported as the log last named it with nothing about the
+// leaf (#189).
+func TestCASRepairSalvagedLeaf(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "leafy"
+	if _, err := st.Create(ctx, agentsession.Header{ID: id}); err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, text := range []string{"one", "two", "three"} {
+		eid, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText(text)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, eid)
+	}
+	if err := st.SetHead(ctx, id, ids[2], ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	four, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("four, from two")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	// Three's record, damaged in its session member, so both hashes it
+	// spells stay legible.
+	path := filepath.Join(root, "sessions", id, "log")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(data), "\n")
+	for i, l := range lines {
+		if strings.Contains(l, `"op":"append"`) && strings.Contains(l, ids[2]) {
+			b := []byte(l)
+			b[strings.Index(l, `"session":"`)+len(`"session":"`)] ^= 1
+			lines[i] = string(b)
+		}
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"repair", root, id, "-dry-run"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	for _, w := range []string{
+		"kept     4 entries, 1 of them recovered from what the damage hid",
+		"salvaged " + shortID(ids[2]) + ": named only by a damaged record, and its objects whole; not the head",
+		"head     " + shortID(four) + ", as the log last named it",
+	} {
+		if !strings.Contains(stdout.String(), w) {
+			t.Errorf("stdout lacks %q:\n%s", w, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "dropped") {
+		t.Errorf("a leaf the damage spelled whole is dropped:\n%s", stdout.String())
+	}
+}

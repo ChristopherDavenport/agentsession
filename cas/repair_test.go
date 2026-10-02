@@ -78,8 +78,8 @@ func TestRepair(t *testing.T) {
 	if len(rep.Damage) != 1 || rep.Damage[0].Line != line {
 		t.Errorf("damage: %v, want line %d", rep.Damage, line)
 	}
-	if !slices.Equal(rep.Kept, ids) || !slices.Equal(rep.Hidden, ids[2:3]) || len(rep.Dropped) != 0 {
-		t.Errorf("kept %v hidden %v dropped %v", rep.Kept, rep.Hidden, rep.Dropped)
+	if !slices.Equal(rep.Kept, ids) || !slices.Equal(rep.Hidden, ids[2:3]) || len(rep.Salvaged) != 0 || len(rep.Dropped) != 0 {
+		t.Errorf("kept %v hidden %v salvaged %v dropped %v", rep.Kept, rep.Hidden, rep.Salvaged, rep.Dropped)
 	}
 	if rep.Head != ids[4] || rep.Named != ids[4] || rep.Mark != MarkRecord {
 		t.Errorf("head %s named %s mark %s", rep.Head, rep.Named, rep.Mark)
@@ -136,7 +136,7 @@ func TestRepairDropsWhatHangsFromALostEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(rep.Kept, []string{a, y}) || !slices.Equal(droppedIDs(rep), []string{z}) {
+	if !slices.Equal(rep.Kept, []string{a, y}) || !slices.Equal(droppedIDs(rep), []string{x, z}) {
 		t.Errorf("kept %v dropped %v", rep.Kept, droppedIDs(rep))
 	}
 	if rep.Head != y || rep.Named != z {
@@ -164,8 +164,11 @@ func TestRepairMissingObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(rep.Kept, ids[:2]) || !slices.Equal(droppedIDs(rep), ids[2:4]) || !errors.Is(rep.Dropped[0].Err, os.ErrNotExist) {
+	if !slices.Equal(rep.Kept, ids[:2]) || !slices.Equal(droppedIDs(rep), ids[2:]) || !errors.Is(rep.Dropped[0].Err, os.ErrNotExist) {
 		t.Errorf("kept %v dropped %v", rep.Kept, rep.Dropped)
+	}
+	if r := dropReason(rep, ids[4]); !strings.Contains(r, "parent "+ids[3]) {
+		t.Errorf("the damaged last record's entry: %s", r)
 	}
 	if rep.Head != ids[1] {
 		t.Errorf("head %s", rep.Head)
@@ -173,7 +176,8 @@ func TestRepairMissingObject(t *testing.T) {
 }
 
 // TestRepairConvergence: an entry converging one that is not kept is
-// dropped, rather than failing the repair.
+// dropped, rather than failing the repair; one converging an entry
+// salvaged from the damaged line before it is kept.
 func TestRepairConvergence(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -189,12 +193,22 @@ func TestRepairConvergence(t *testing.T) {
 	damageAppend(t, root, "c", 1)
 
 	st2, _ := Open(root)
-	defer st2.Close()
-	rep, err := st2.Repair(ctx, "c", RepairOptions{})
+	rep, err := st2.Repair(ctx, "c", RepairOptions{DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(rep.Kept, []string{a}) || !slices.Equal(droppedIDs(rep), []string{m}) {
+	if !slices.Equal(rep.Kept, []string{a, b, m}) || !slices.Equal(rep.Salvaged, []string{b}) || len(rep.Hidden) != 0 || len(rep.Dropped) != 0 {
+		t.Errorf("kept %v salvaged %v dropped %v", rep.Kept, rep.Salvaged, rep.Dropped)
+	}
+	st2.Close()
+	removeObject(t, st, b, false)
+	st3, _ := Open(root)
+	defer st3.Close()
+	rep, err = st3.Repair(ctx, "c", RepairOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rep.Kept, []string{a}) || !slices.Equal(droppedIDs(rep), []string{b, m}) {
 		t.Errorf("kept %v dropped %v", rep.Kept, rep.Dropped)
 	}
 }
@@ -413,8 +427,11 @@ func TestRepairSalvagesLastAppend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(rep.Kept, ids) || !slices.Equal(rep.Salvaged, ids[27:]) || len(rep.Dropped) != 0 {
+	if !slices.Equal(rep.Kept, ids) || !slices.Equal(rep.Salvaged, ids[27:]) || len(rep.Dropped) != 1 {
 		t.Fatalf("kept %d, salvaged %v, dropped %v", len(rep.Kept), rep.Salvaged, rep.Dropped)
+	}
+	if d := rep.Dropped[0]; slices.Contains(ids, d.Entry) || !strings.Contains(d.Err.Error(), "made it of "+ids[27]) {
+		t.Errorf("the hash the damage made: %s: %v", d.Entry, d.Err)
 	}
 	if rep.Head != ids[27] || rep.Named != ids[27] || rep.Unread {
 		t.Errorf("head %s named %s unread %v, want %s", rep.Head, rep.Named, rep.Unread, ids[27])
@@ -454,8 +471,8 @@ func TestRepairLastAppendHeadDamaged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(rep.Kept, ids) || !slices.Equal(rep.Salvaged, ids[4:]) {
-		t.Fatalf("kept %v, salvaged %v", rep.Kept, rep.Salvaged)
+	if !slices.Equal(rep.Kept, ids) || !slices.Equal(rep.Salvaged, ids[4:]) || len(rep.Dropped) != 1 || !strings.Contains(rep.Dropped[0].Err.Error(), "made it of "+ids[4]) {
+		t.Fatalf("kept %v, salvaged %v, dropped %v", rep.Kept, rep.Salvaged, rep.Dropped)
 	}
 	if !rep.Unread || rep.Named != "" || rep.Head != ids[3] {
 		t.Errorf("head %s named %q unread %v, want %s, unknown", rep.Head, rep.Named, rep.Unread, ids[3])
@@ -482,8 +499,8 @@ func TestRepairSalvageKeepsLaterHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(rep.Salvaged, ids[3:]) || rep.Head != ids[1] || rep.Named != ids[1] || rep.Unread {
-		t.Errorf("salvaged %v head %s named %s unread %v, want the head at %s", rep.Salvaged, rep.Head, rep.Named, rep.Unread, ids[1])
+	if !slices.Equal(rep.Salvaged, ids[3:]) || rep.Head != ids[1] || rep.Named != ids[1] || rep.Unread || len(rep.Dropped) != 1 {
+		t.Errorf("salvaged %v head %s named %s unread %v dropped %v, want the head at %s", rep.Salvaged, rep.Head, rep.Named, rep.Unread, rep.Dropped, ids[1])
 	}
 }
 
@@ -507,15 +524,18 @@ func TestRepairSalvagesOnlyWhatReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(rep.Kept, ids[:2]) || len(rep.Salvaged) != 0 || !rep.Unread {
-		t.Errorf("kept %v, salvaged %v, unread %v", rep.Kept, rep.Salvaged, rep.Unread)
+	if !slices.Equal(rep.Kept, ids[:2]) || len(rep.Salvaged) != 0 || !rep.Unread || len(rep.Dropped) != 2 {
+		t.Errorf("kept %v, salvaged %v, unread %v, dropped %v", rep.Kept, rep.Salvaged, rep.Unread, rep.Dropped)
+	}
+	if r := dropReason(rep, ids[2]); !strings.Contains(r, "do not read") {
+		t.Errorf("the entry whose content is gone: %s", r)
 	}
 	rep, err = st2.Repair(ctx, "b", RepairOptions{DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(rep.Kept, one) || !slices.Equal(rep.Salvaged, one) || rep.Head != one[0] {
-		t.Errorf("kept %v, salvaged %v, head %s", rep.Kept, rep.Salvaged, rep.Head)
+	if !slices.Equal(rep.Kept, one) || !slices.Equal(rep.Salvaged, one) || rep.Head != one[0] || len(rep.Dropped) != 1 {
+		t.Errorf("kept %v, salvaged %v, head %s, dropped %v", rep.Kept, rep.Salvaged, rep.Head, rep.Dropped)
 	}
 }
 
@@ -548,4 +568,242 @@ func TestSweepKeepsWhatDamagedLinesSpell(t *testing.T) {
 	if _, err := st2.objs.read(spaceEntries, ids[2]); err != nil {
 		t.Errorf("the envelope only a damaged line names, after the sweep: %v", err)
 	}
+}
+
+// damageMember flips a bit in the first byte of member's value in the
+// first line of session id's log that spells spell, so the record fails
+// its checksum while every hash the line spells stays legible, and
+// returns the line's number.
+func damageMember(t *testing.T, root, id, spell, member string) int {
+	t.Helper()
+	path := filepath.Join(root, "sessions", id, logName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(data), "\n")
+	for i, l := range lines {
+		if !strings.Contains(l, spell) {
+			continue
+		}
+		k := strings.Index(l, `"`+member+`":"`)
+		if k < 0 {
+			t.Fatalf("line %d of %s has no %s", i+1, id, member)
+		}
+		b := []byte(l)
+		b[k+len(member)+4] ^= 1
+		lines[i] = string(b)
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "")), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return i + 1
+	}
+	t.Fatalf("no line of %s spells %s", id, spell)
+	return 0
+}
+
+// dropReason returns why a repair dropped entry, or "" when it did not.
+func dropReason(rep RepairReport, entry string) string {
+	for _, d := range rep.Dropped {
+		if d.Entry == entry {
+			return d.Err.Error()
+		}
+	}
+	return ""
+}
+
+// TestRepairSalvagesAnyDamagedRecord: an entry whose append record is
+// damaged outside its hashes, in its session or op member, or whose
+// record a readable append follows, is salvaged from the hashes the line
+// still spells, kept, reported, and kept by a sweep after, with and
+// without the damaged log beside the new one (#189). Before, only a
+// damaged line after the last readable append that still spelled the
+// session and an append was read.
+func TestRepairSalvagesAnyDamagedRecord(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name   string
+		member string
+		// setup fills session id and returns its entries and which one's
+		// record to damage; kept and head say what the repair keeps, in
+		// log order, and which is the head.
+		setup func(t *testing.T, st *Store, id string) (ids []string, target int)
+		kept  func(ids []string) []string
+		head  func(ids []string) string
+	}{
+		{"the one append of a session, damaged in session", "session",
+			func(t *testing.T, st *Store, id string) ([]string, int) { return fill(t, st, id, 1), 0 },
+			func(ids []string) []string { return ids },
+			func(ids []string) string { return ids[0] }},
+		{"the last of three, damaged in op", "op",
+			func(t *testing.T, st *Store, id string) ([]string, int) { return fill(t, st, id, 3), 2 },
+			func(ids []string) []string { return ids },
+			func(ids []string) string { return ids[2] }},
+		{"a branch leaf whose record a readable append follows", "session",
+			func(t *testing.T, st *Store, id string) ([]string, int) {
+				ids := fill(t, st, id, 3)
+				if err := st.SetHead(ctx, id, ids[2], ids[1]); err != nil {
+					t.Fatal(err)
+				}
+				return append(ids, mustAppend(t, st, id, item("four, from two"))), 2
+			},
+			func(ids []string) []string { return ids },
+			func(ids []string) string { return ids[3] }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			st, err := Open(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids, target := c.setup(t, st, "a")
+			st.Close()
+			line := damageMember(t, root, "a", ids[target], c.member)
+
+			st2, err := Open(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st2.Close()
+			rep, err := st2.Repair(ctx, "a", RepairOptions{})
+			if err != nil {
+				t.Fatalf("repair: %v", err)
+			}
+			if len(rep.Damage) != 1 || rep.Damage[0].Line != line {
+				t.Errorf("damage %v, want line %d", rep.Damage, line)
+			}
+			if !slices.Equal(rep.Kept, c.kept(ids)) || !slices.Equal(rep.Salvaged, ids[target:target+1]) || len(rep.Dropped) != 0 {
+				t.Errorf("kept %v salvaged %v dropped %v, want kept %v salvaged %v", rep.Kept, rep.Salvaged, rep.Dropped, c.kept(ids), ids[target:target+1])
+			}
+			if head := c.head(ids); rep.Head != head || rep.Named != head || rep.Unread {
+				t.Errorf("head %s named %s unread %v, want %s", rep.Head, rep.Named, rep.Unread, head)
+			}
+			// A sweep keeps the salvaged entry's objects while the damaged
+			// log is kept, and once it is removed, since the repaired log
+			// names it.
+			for _, keepDamaged := range []bool{true, false} {
+				if !keepDamaged {
+					if err := os.Remove(rep.DamagedLog); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, err := st2.Sweep(ctx, 0); err != nil {
+					t.Fatalf("sweep (damaged log kept %v): %v", keepDamaged, err)
+				}
+				for _, id := range ids {
+					if _, err := st2.loadLine(id); err != nil {
+						t.Errorf("entry %s after a sweep (damaged log kept %v): %v", id, keepDamaged, err)
+					}
+				}
+			}
+			s, err := st2.Open(ctx, "a")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Len() != len(ids) || s.Leaf() != c.head(ids) {
+				t.Errorf("repaired: len %d leaf %s, want %d and %s", s.Len(), s.Leaf(), len(ids), c.head(ids))
+			}
+			if !slices.Contains(s.Leaves(), ids[target]) {
+				t.Errorf("leaves %v lack the salvaged entry %s", s.Leaves(), ids[target])
+			}
+		})
+	}
+}
+
+// TestRepairListsWhatItDoesNotSalvage: every hash a damaged line spells
+// that the repair does not salvage is in Dropped with why: one the
+// damage made of another, held by no object; one whose objects are
+// gone; one whose parent is not kept; and one a damaged lost record
+// still legibly names, which recovery told the writer was lost and a
+// salvage would bring back (#189).
+func TestRepairListsWhatItDoesNotSalvage(t *testing.T) {
+	ctx := context.Background()
+	t.Run("a hash the damage made of another", func(t *testing.T) {
+		root := t.TempDir()
+		st, _ := Open(root)
+		ids := fill(t, st, "a", 2)
+		st.Close()
+		damageField(t, root, "a", "entry")
+		st2, _ := Open(root)
+		defer st2.Close()
+		rep, err := st2.Repair(ctx, "a", RepairOptions{DryRun: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(rep.Kept, ids) || !slices.Equal(rep.Salvaged, ids[1:]) || len(rep.Dropped) != 1 {
+			t.Fatalf("kept %v salvaged %v dropped %v", rep.Kept, rep.Salvaged, rep.Dropped)
+		}
+		if d := rep.Dropped[0]; slices.Contains(ids, d.Entry) || !strings.Contains(d.Err.Error(), "made it of "+ids[1]) || !errors.Is(d.Err, os.ErrNotExist) {
+			t.Errorf("dropped %s: %v", d.Entry, d.Err)
+		}
+	})
+	t.Run("objects gone, and a child whose parent is not kept", func(t *testing.T) {
+		root := t.TempDir()
+		st, _ := Open(root)
+		ids := fill(t, st, "a", 4)
+		st.Close()
+		damageMember(t, root, "a", ids[2], "session")
+		damageMember(t, root, "a", ids[3], "session")
+		removeObject(t, st, ids[2], false)
+		st2, _ := Open(root)
+		defer st2.Close()
+		rep, err := st2.Repair(ctx, "a", RepairOptions{DryRun: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(rep.Kept, ids[:2]) || len(rep.Salvaged) != 0 || !slices.Equal(droppedIDs(rep), ids[2:]) {
+			t.Fatalf("kept %v salvaged %v dropped %v", rep.Kept, rep.Salvaged, rep.Dropped)
+		}
+		if r := dropReason(rep, ids[2]); !strings.Contains(r, "damaged record") || !errors.Is(rep.Dropped[0].Err, os.ErrNotExist) {
+			t.Errorf("%s dropped: %s", ids[2], r)
+		}
+		if r := dropReason(rep, ids[3]); !strings.Contains(r, "parent "+ids[2]) || !strings.Contains(r, "not kept") {
+			t.Errorf("%s dropped: %s", ids[3], r)
+		}
+		if rep.Head != ids[1] || !rep.Unread {
+			t.Errorf("head %s unread %v, want %s and unread", rep.Head, rep.Unread, ids[1])
+		}
+	})
+	t.Run("a damaged lost record", func(t *testing.T) {
+		root := t.TempDir()
+		st, _ := Open(root, WithSync(SyncNever))
+		st.Create(ctx, agentsession.Header{ID: "l"})
+		one := mustAppend(t, st, "l", item("one"))
+		two := mustAppend(t, st, "l", item("two"))
+		branch := agentsession.NewItemEntry(openresponses.UserText("three, from one"))
+		branch.Parent = one
+		three := mustAppend(t, st, "l", branch)
+		die(st)
+		// two's envelope is gone, so recovery records two lost and three,
+		// accepted after it, with it, though three's objects are whole and
+		// its parent, one, is kept: only the lost record stands against it.
+		removeObject(t, st, two, false)
+		st2, _ := Open(root)
+		if _, err := st2.Open(ctx, "l"); err != nil {
+			t.Fatal(err)
+		}
+		four := mustAppend(t, st2, "l", item("four"))
+		st2.Close()
+		if _, err := st2.loadLine(three); err != nil {
+			t.Fatalf("three's objects: %v", err)
+		}
+		damageMember(t, root, "l", `"op":"lost","session":"l","entry":"`+three, "session")
+
+		st3, _ := Open(root)
+		defer st3.Close()
+		rep, err := st3.Repair(ctx, "l", RepairOptions{DryRun: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(rep.Kept, []string{one, four}) || len(rep.Salvaged) != 0 || !slices.Equal(droppedIDs(rep), []string{three}) {
+			t.Fatalf("kept %v salvaged %v dropped %v", rep.Kept, rep.Salvaged, rep.Dropped)
+		}
+		if r := dropReason(rep, three); !strings.Contains(r, "lost") {
+			t.Errorf("three dropped: %s", r)
+		}
+		if rep.Head != four || rep.Named != four {
+			t.Errorf("head %s named %s, want %s", rep.Head, rep.Named, four)
+		}
+	})
 }
