@@ -2044,3 +2044,69 @@ func TestJudgedByLinkExported(t *testing.T) {
 		t.Errorf("link = %v", rec)
 	}
 }
+
+// TestOmittedItemsExported: an item entry the omit setting leaves out
+// of the request is still a step of the document, since the model
+// produced it, and the step says so under omitted with the reason; the
+// raw items rebuild the request, with the omitted ones out, and still
+// do after the document is written and read back.
+func TestOmittedItemsExported(t *testing.T) {
+	s := loadFixture(t, "omit")
+	var tr Trajectory
+	for x, err := range Trajectories(s) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr = x
+	}
+	if len(tr.Context.OmittedItems) != 2 {
+		t.Fatalf("the fixture's request leaves out %d items, want 2", len(tr.Context.OmittedItems))
+	}
+	doc, err := ToATIF(tr, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := doc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	reasons := map[string]string{}
+	for _, st := range doc.Steps {
+		list, _ := st.Extra[ExtraOmitted].([]map[string]any)
+		for _, o := range list {
+			reasons[o["entry_id"].(string)] = o["reason"].(string)
+		}
+	}
+	for _, o := range tr.Context.OmittedItems {
+		if got := reasons[o.Entry.ID]; got != o.Reason {
+			t.Errorf("entry %s is omitted as %q in the document, want %q", o.Entry.ID, got, o.Reason)
+		}
+	}
+	if len(reasons) != 2 {
+		t.Errorf("the document lists %d omitted entries, want 2: %v", len(reasons), reasons)
+	}
+	want, _ := json.Marshal(tr.Context.Items)
+	items, err := Items(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := json.Marshal(items); !bytes.Equal(got, want) {
+		t.Errorf("Items rebuilt\n%s\nwant\n%s", got, want)
+	}
+	// Written and read back, the extras are generic JSON and the list
+	// is the same.
+	data, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back atif.Trajectory
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	items, err = Items(&back)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := json.Marshal(items); !bytes.Equal(got, want) {
+		t.Errorf("Items after a round trip rebuilt\n%s\nwant\n%s", got, want)
+	}
+}
