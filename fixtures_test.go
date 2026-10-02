@@ -1109,18 +1109,38 @@ func emptyResumeFixture(t *testing.T, message bool) *Session {
 		}
 		must(e)
 	}
+	// hash is the request the context at the leaf rebuilds, which the
+	// next response's request_hash must be.
+	hash := func() string {
+		t.Helper()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := ctx.Request()
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := RequestHash(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
 	say := func(responseID, text string) {
 		t.Helper()
+		sent := hash()
 		answer := NewItemEntry(&openresponses.Message{ID: "msg_" + responseID, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: text, Annotations: []openresponses.Annotation{}}}})
 		answer.ResponseID = responseID
 		must(answer)
-		must(&ResponseEntry{ResponseID: responseID, Model: "gpt-5", Status: openresponses.ResponseStatusCompleted})
+		must(&ResponseEntry{ResponseID: responseID, Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
 	}
 	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
 	must(NewRunStart("run-1", SourceInput, ""))
 	must(NewItemEntry(openresponses.UserText("Charge the card.")))
+	sent := hash()
 	call := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_charge", Name: "charge", Arguments: "{}"}, ResponseID: "resp_1"})
-	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted})
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
 	must(NewDecision("call_charge", call, VerdictHold, ByPolicy))
 	end(ReasonInputRequired, "")
 	must(NewRunStart("run-2", SourceResume, ""))
@@ -1179,6 +1199,13 @@ func TestEmptyResumeFixture(t *testing.T) {
 			for _, leaf := range s.Leaves() {
 				if err := s.VerifyRecords(leaf); !errors.Is(err, tt.want) {
 					t.Errorf("%s as %s: VerifyRecords = %v, want %v", name, minor, err, tt.want)
+				}
+			}
+			for _, e := range s.Entries() {
+				if r, ok := e.(*ResponseEntry); ok {
+					if err := s.Verify(r.ID); err != nil {
+						t.Errorf("%s as %s: %s: %v", name, minor, r.ResponseID, err)
+					}
 				}
 			}
 		}
