@@ -24,10 +24,13 @@ import (
 var ErrStale = errors.New("follow: the log was replaced")
 
 // Item is one record a Source found beyond a cursor: an entry the
-// store accepted, or a head record naming Leaf when Entry is nil.
+// store accepted, a head record naming Leaf when Entry is nil, or, when
+// Skip is set, a record that changes nothing a follower sees, which
+// only moves the cursor past it.
 type Item struct {
 	Entry  agentsession.Entry
 	Leaf   string
+	Skip   bool
 	Cursor agentsession.Cursor
 }
 
@@ -142,8 +145,14 @@ func Run(ctx context.Context, src Source, from agentsession.Cursor) iter.Seq2[ag
 
 // apply extends sess with an item and returns the changes it makes: an
 // Appended, and a Head after it when the entry moved the leaf, or a
-// Head alone for a head record.
+// Head alone for a head record. A head that names the leaf the session
+// already has is no change: cas logs the head a writer moved before the
+// leaf label that records it, and the follower reports the move once.
 func apply(sess *agentsession.Session, it Item) ([]agentsession.Change, error) {
+	if it.Skip {
+		return nil, nil
+	}
+	before := sess.Leaf()
 	if it.Entry == nil {
 		if it.Leaf != "" {
 			if err := sess.Branch(it.Leaf); err != nil {
@@ -151,6 +160,9 @@ func apply(sess *agentsession.Session, it Item) ([]agentsession.Change, error) {
 			}
 		} else {
 			sess.ResetLeaf()
+		}
+		if it.Leaf == before {
+			return nil, nil
 		}
 		return []agentsession.Change{{Kind: agentsession.Head, Session: sess, Leaf: it.Leaf, Cursor: it.Cursor}}, nil
 	}
@@ -162,7 +174,7 @@ func apply(sess *agentsession.Session, it Item) ([]agentsession.Change, error) {
 		return nil, nil
 	}
 	out := []agentsession.Change{{Kind: agentsession.Appended, Session: sess, ID: r.ID, Entry: it.Entry, Cursor: it.Cursor}}
-	if r.Outcome == agentsession.LeafMoved {
+	if r.Outcome == agentsession.LeafMoved && sess.Leaf() != before {
 		out = append(out, agentsession.Change{Kind: agentsession.Head, Session: sess, Leaf: sess.Leaf(), Cursor: it.Cursor})
 	}
 	return out, nil

@@ -151,13 +151,9 @@ func followBranch(t *testing.T, opts Options) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c = w.NextKind(agentsession.Appended)
-	if c.ID != mid {
-		t.Errorf("appended %s, want the label %s", c.ID, mid)
-	}
-	h := w.NextKind(agentsession.Head)
-	if h.Leaf != ids[0] || h.Session.Leaf() != ids[0] {
-		t.Errorf("head %s (session leaf %s), want %s", h.Leaf, h.Session.Leaf(), ids[0])
+	h := labelAndHead(t, w, mid, ids[0])
+	if h.Session.Leaf() != ids[0] {
+		t.Errorf("session leaf %s after the head, want %s", h.Session.Leaf(), ids[0])
 	}
 	if h.Cursor == "" {
 		t.Error("the head has no cursor")
@@ -219,13 +215,11 @@ func followSecond(t *testing.T, opts Options) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Append(ctx, s.ID(), mark); err != nil {
+	mid, err := st.Append(ctx, s.ID(), mark)
+	if err != nil {
 		t.Fatal(err)
 	}
-	w.NextKind(agentsession.Appended)
-	if h := w.NextKind(agentsession.Head); h.Leaf != ids[0] {
-		t.Errorf("head %s, want %s", h.Leaf, ids[0])
-	}
+	labelAndHead(t, w, mid, ids[0])
 }
 
 func followResume(t *testing.T, opts Options) {
@@ -495,4 +489,36 @@ func followBurst(t *testing.T, opts Options) {
 		t.Errorf("follower saw %v, want %v", got, want)
 	}
 	w.Quiet()
+}
+
+// labelAndHead takes the two changes a recorded head makes, in the
+// order the store has them: the leaf label's append, and the head it
+// records, once. A store whose log records the head a writer moved
+// before the label has the head first. It returns the head change.
+func labelAndHead(t *testing.T, w *followtest.Tail, label, leaf string) agentsession.Change {
+	t.Helper()
+	var head agentsession.Change
+	var appended, heads int
+	for range 2 {
+		c := w.Next()
+		switch c.Kind {
+		case agentsession.Appended:
+			appended++
+			if c.ID != label {
+				t.Errorf("appended %s, want the label %s", c.ID, label)
+			}
+		case agentsession.Head:
+			heads++
+			head = c
+			if c.Leaf != leaf {
+				t.Errorf("head %s, want %s", c.Leaf, leaf)
+			}
+		default:
+			t.Fatalf("change %v, want the label's append and its head", c.Kind)
+		}
+	}
+	if appended != 1 || heads != 1 {
+		t.Fatalf("%d appends and %d heads, want one each", appended, heads)
+	}
+	return head
 }

@@ -222,6 +222,7 @@ func (src *source) Tail(ctx context.Context, cur agentsession.Cursor) ([]follow.
 		off += int64(len(line))
 		line = bytes.TrimRight(line, "\r\n")
 		if len(line) == 0 {
+			items = append(items, follow.Item{Skip: true, Cursor: pos{off, ino, p.raw, p.ident}.cursor()})
 			continue
 		}
 		e, err := agentsession.UnmarshalEntry(line)

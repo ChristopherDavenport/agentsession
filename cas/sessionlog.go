@@ -85,6 +85,28 @@ func readSessionLog(dir string, from int64) (sessionLog, error) {
 	return parseSessionLog(f, from, info.Size())
 }
 
+// readSessionLogTo reads the log in dir through its first limit bytes,
+// or all of it when limit is negative.
+func readSessionLogTo(dir string, limit int64) (sessionLog, error) {
+	if limit < 0 {
+		return readSessionLog(dir, 0)
+	}
+	var l sessionLog
+	f, err := os.Open(filepath.Join(dir, logName))
+	if errors.Is(err, os.ErrNotExist) {
+		return l, nil
+	}
+	if err != nil {
+		return l, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return l, err
+	}
+	return parseSessionLog(io.NewSectionReader(f, 0, min(limit, info.Size())), 0, min(limit, info.Size()))
+}
+
 // parseSessionLog reads a log of size bytes from r, from the byte
 // offset from, as readSessionLog does.
 func parseSessionLog(r interface {
@@ -203,6 +225,9 @@ func (s *Store) appendRecords(h *handle, dir string, durable bool, recs ...logRe
 	if err != nil {
 		return err
 	}
+	// Followers of the session look again however this ends: the
+	// record is there once written, and a failed one is cut back.
+	defer s.hub.Notify(recs[0].Session)
 	if durable && h != nil {
 		// A session's commit flushes what its own appends wrote or found
 		// lazily. A caller with no handle flushed what it wrote itself,
@@ -233,6 +258,9 @@ func (s *Store) appendRecords(h *handle, dir string, durable bool, recs ...logRe
 	}
 	before := info.Size()
 	_, err = f.Write(data)
+	if err == nil {
+		s.hub.Notify(recs[0].Session) // visible now, before any fsync
+	}
 	if err == nil && durable {
 		err = s.objs.fsync(filepath.Join(dir, logName), f, syncLog)
 	}
