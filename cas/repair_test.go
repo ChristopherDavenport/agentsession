@@ -848,3 +848,61 @@ func TestRepairKeepsAnAppendAfterADamagedLostRecord(t *testing.T) {
 		t.Errorf("head %s named %s, want %s", rep.Head, rep.Named, two)
 	}
 }
+
+// TestRepairSalvagesAReappendAfterALostRecord: the mirror case, the
+// lost record readable and the line appending the entry again damaged.
+// The lost record stands against the append before it alone, so the
+// entry is salvaged from the damaged line after it, not dropped
+// unlisted as an entry the lost record names (#189).
+func TestRepairSalvagesAReappendAfterALostRecord(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "l"})
+	one := mustAppend(t, st, "l", item("one"))
+	e := item("two")
+	two := mustAppend(t, st, "l", e)
+	die(st)
+	removeObject(t, st, two, false)
+	st2, _ := Open(root)
+	if _, err := st2.Open(ctx, "l"); err != nil {
+		t.Fatal(err)
+	}
+	if again := mustAppend(t, st2, "l", e); again != two {
+		t.Fatalf("appended again as %s, want %s", again, two)
+	}
+	st2.Close()
+	// The last line is the append again; the first is the append cut.
+	data, err := os.ReadFile(filepath.Join(root, "sessions", "l", logName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(data), "\n")
+	last := len(lines) - 1
+	if lines[last] == "" {
+		last--
+	}
+	if !strings.Contains(lines[last], `"op":"append"`) || !strings.Contains(lines[last], two) {
+		t.Fatalf("the last line is not the append again: %s", lines[last])
+	}
+	k := strings.Index(lines[last], `"session":"`)
+	b := []byte(lines[last])
+	b[k+len(`"session":"`)] ^= 1
+	lines[last] = string(b)
+	if err := os.WriteFile(filepath.Join(root, "sessions", "l", logName), []byte(strings.Join(lines, "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st3, _ := Open(root)
+	defer st3.Close()
+	rep, err := st3.Repair(ctx, "l", RepairOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rep.Kept, []string{one, two}) || !slices.Equal(rep.Salvaged, []string{two}) || len(rep.Dropped) != 0 {
+		t.Fatalf("kept %v salvaged %v dropped %v", rep.Kept, rep.Salvaged, rep.Dropped)
+	}
+	if rep.Head != two || rep.Named != two {
+		t.Errorf("head %s named %s, want %s", rep.Head, rep.Named, two)
+	}
+}

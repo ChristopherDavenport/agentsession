@@ -36,7 +36,9 @@ versions may break the API.
   to it, which Append could not then continue. One helper now holds
   Read, Scan and Append to the rule, under `ErrBaseRule`, which is
   `ErrNoEntry` too under `errors.Is`, so a caller testing for what
-  Append returned keeps working. Three negative fixtures cover it. (#161)
+  Append returned keeps working; `BaseRuleError(detail)` makes one for
+  a store that meets the rule first. Three negative fixtures cover it.
+  (#161)
 - **`Call.Args` passes over an answer's `args`**, which the format says
   name nothing since no tool ran with them, so an output the harness
   wrote no longer reads as a rewrite of what the tool runs with; the

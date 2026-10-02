@@ -594,6 +594,15 @@ type baseRuleError struct{ detail string }
 func (e *baseRuleError) Error() string   { return ErrBaseRule.Error() + ": " + e.detail }
 func (e *baseRuleError) Unwrap() []error { return []error{ErrBaseRule, ErrNoEntry} }
 
+// BaseRuleError returns an error reporting that an entry breaks the base
+// rule, with detail saying how: [ErrBaseRule] and [ErrNoEntry] both
+// under errors.Is, as the session reports it. A store that meets the
+// rule before the session does, as one recording a reset leaf on a
+// session with a base, reports it the same way.
+func BaseRuleError(detail string) error {
+	return &baseRuleError{detail}
+}
+
 // checkOwnParent is the base rule for an entry after the base: one a
 // session with a base appends, or a line after the base in its file.
 // onPrefix says whether an entry is on the path to the base.

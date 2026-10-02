@@ -442,7 +442,6 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord, 
 	}
 	synced := -1
 	lostAt := map[string]int{}
-	appended := map[string]bool{} // by a readable record, which decides it
 	for i, r := range recs {
 		switch r.Op {
 		case opSync:
@@ -451,8 +450,6 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord, 
 			lostAt[r.Entry] = i
 		case opMark:
 			p.mark = r.Mark
-		case opAppend:
-			appended[r.Entry] = true
 		}
 	}
 	gone := func(entry string, i int) bool {
@@ -488,6 +485,17 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord, 
 			return errLostRecord, true
 		}
 		return nil, false
+	}
+	// standing is each entry a readable append records that no lost
+	// record after that append takes back: such an append decides the
+	// entry, and a damaged line spelling its hash adds nothing. An
+	// append a lost record follows was cut, and a damaged line after the
+	// lost record may be the writer appending the entry again.
+	standing := map[string]bool{}
+	for i, r := range recs {
+		if r.Op == opAppend && r.Entry != "" && !gone(r.Entry, i) && !lostAfterRecord(r.Entry, i) {
+			standing[r.Entry] = true
+		}
 	}
 	kept := map[string]bool{}
 	seen := map[string]bool{}      // appended by a readable record read so far
@@ -604,7 +612,7 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord, 
 		var unhelds []unheld
 		for _, h := range tokens {
 			e := string(h)
-			if kept[e] || appended[e] || onPath[e] || e == hdr.Base || listed[e] {
+			if kept[e] || standing[e] || onPath[e] || e == hdr.Base || listed[e] {
 				continue
 			}
 			if err, lost := lostAfterLine(e, l); lost {
@@ -677,7 +685,10 @@ func (s *Store) planRepair(id string, hdr agentsession.Header, all []logRecord, 
 		if kept[r.Entry] {
 			continue // kept already, as an ancestor an earlier entry named
 		}
-		drop := func(err error) { p.dropped = append(p.dropped, DroppedEntry{Entry: r.Entry, Err: err}) }
+		drop := func(err error) {
+			listed[r.Entry] = true
+			p.dropped = append(p.dropped, DroppedEntry{Entry: r.Entry, Err: err})
+		}
 		parent, err := check(r.Entry)
 		if err != nil {
 			drop(err)

@@ -23,9 +23,12 @@ func verify(args []string, stdout, stderr io.Writer) error {
 	if src.isStore() {
 		return verifyStore(src.path, stdout)
 	}
-	s, declared, err := readDeclared(src)
+	s, declared, st, err := readDeclared(src)
 	if err != nil {
 		return err
+	}
+	if st != nil {
+		defer st.Close()
 	}
 	// Reading checks each entry's id against its hash, except in a file
 	// of an earlier minor, whose ids the migration assigns. A header
@@ -45,7 +48,7 @@ func verify(args []string, stdout, stderr io.Writer) error {
 	problem, notes := checkSession(s, declared, "", stdout, true)
 	// A link's target is found through the store the session is in; a
 	// file names no store, so its links go unchecked.
-	if src.id != "" && checkLinks(s, casResolver(src.path), "", stdout) {
+	if st != nil && checkLinks(s, resolveIn(st, src.path), "", stdout) {
 		problem = true
 	}
 	printNotes(stdout, notes)

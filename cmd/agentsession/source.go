@@ -123,29 +123,33 @@ func readSource(src source) (*agentsession.Session, error) {
 // session was written under, raised only when this release appends to
 // it. The store exposes that header through Store.Read, whose session
 // declares it, and through List; one session is read again here,
-// since the store offers no cheaper read of its header alone.
-func readDeclared(src source) (*agentsession.Session, string, error) {
+// since the store offers no cheaper read of its header alone. For a
+// cas session the store is returned open, so the caller resolves the
+// session's links through it without opening the store for each, and
+// closes it; for a file it is nil.
+func readDeclared(src source) (*agentsession.Session, string, *cas.Store, error) {
 	if src.id == "" {
 		s, err := readSession(src.path)
 		if err != nil {
-			return nil, "", err
+			return nil, "", nil, err
 		}
-		return s, s.DeclaredFormat(), nil
+		return s, s.DeclaredFormat(), nil, nil
 	}
 	st, err := cas.Open(src.path, cas.WithReadOnly())
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
-	defer st.Close()
 	s, err := readFrom(st, src)
 	if err != nil {
-		return nil, "", err
+		st.Close()
+		return nil, "", nil, err
 	}
 	stored, err := st.Read(context.Background(), src.id)
 	if err != nil {
-		return nil, "", fmt.Errorf("%s: %w", src, err)
+		st.Close()
+		return nil, "", nil, fmt.Errorf("%s: %w", src, err)
 	}
-	return s, stored.DeclaredFormat(), nil
+	return s, stored.DeclaredFormat(), st, nil
 }
 
 // readFrom loads a session from a cas store already open, as readSource
