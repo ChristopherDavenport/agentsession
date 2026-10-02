@@ -605,6 +605,11 @@ func omittedRuns(list []OmittedPart, of string, omitted []OmittedPart) ([]Omitte
 // one entry and writes what it keeps in the next. A reasoning rule in
 // force that want does not name is dropped in that case too, since a
 // delta that names none leaves it.
+//
+// A config entry with Replace set discards the omit in force with the
+// rest of the settings, so the member it carries is want itself, not
+// this delta: a replace that wrote nothing, because the rule was in
+// force, would clear it.
 func (s Settings) OmitDelta(want Omit) (*Omit, bool) {
 	have := s.Omit
 	listed := make(map[string]bool, len(have.Items))
