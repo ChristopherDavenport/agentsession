@@ -241,6 +241,21 @@ func TestRegenerateFixtures(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// empty-resume and bad-resume: the 0.11 conformance vectors for a
+	// resume that took up nothing, appended natively. The first holds a
+	// refused resume and one cut and closed on restart, each followed by
+	// the resume that took the call up; the second a resume that adds a
+	// message and takes nothing up, which stays reported.
+	for name, message := range map[string]bool{"empty-resume": false, "bad-resume": true} {
+		var buf bytes.Buffer
+		if err := Write(&buf, emptyResumeFixture(t, message)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join("testdata", "sessions", name+".jsonl"), buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	for module, names := range nestedFixtures {
 		dir := filepath.Join(module, "testdata", "sessions")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1058,5 +1073,131 @@ func TestFrozen08Fixture(t *testing.T) {
 		if !slices.Equal(octx.InstructionsOmitted(), cctx.InstructionsOmitted()) {
 			t.Errorf("entry %d: omitted %v, the 0.9 fixture reads %v", i, octx.InstructionsOmitted(), cctx.InstructionsOmitted())
 		}
+	}
+}
+
+// emptyResumeFixture builds the session empty-resume.jsonl holds, or
+// with message set bad-resume.jsonl. A charge call is held at the end of
+// the first run. The second run is written resume, and a subscriber
+// refuses it before it takes the call up; the third is written resume
+// too and is cut after its start, and the restart closes it error; the
+// fourth takes the call up. With message set the second run instead
+// adds a user message, is answered, and takes nothing up: the shape of
+// an input written resume, which VerifyRecords reports.
+func emptyResumeFixture(t *testing.T, message bool) *Session {
+	t.Helper()
+	id := "01995b2a-0000-7000-8000-000000000016"
+	if message {
+		id = "01995b2a-0000-7000-8000-000000000017"
+	}
+	at, _ := time.Parse(time.RFC3339, "2026-10-01T09:00:00Z")
+	s := New(Header{ID: id, CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: AllRecords})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must := func(e Entry) string {
+		t.Helper()
+		got, err := s.Append(e)
+		if err != nil {
+			t.Fatalf("append %T: %v", e, err)
+		}
+		return got
+	}
+	end := func(reason, ref string) {
+		t.Helper()
+		e, err := s.EndRun(reason, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		must(e)
+	}
+	say := func(responseID, text string) {
+		t.Helper()
+		answer := NewItemEntry(&openresponses.Message{ID: "msg_" + responseID, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: text, Annotations: []openresponses.Annotation{}}}})
+		answer.ResponseID = responseID
+		must(answer)
+		must(&ResponseEntry{ResponseID: responseID, Model: "gpt-5", Status: openresponses.ResponseStatusCompleted})
+	}
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewRunStart("run-1", SourceInput, ""))
+	must(NewItemEntry(openresponses.UserText("Charge the card.")))
+	call := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_charge", Name: "charge", Arguments: "{}"}, ResponseID: "resp_1"})
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted})
+	must(NewDecision("call_charge", call, VerdictHold, ByPolicy))
+	end(ReasonInputRequired, "")
+	must(NewRunStart("run-2", SourceResume, ""))
+	if message {
+		must(NewItemEntry(openresponses.UserText("Also, which card is it?")))
+		say("resp_2", "The one ending 4242.")
+		end(ReasonDone, "")
+		return s
+	}
+	end(ReasonError, "a run_start subscriber refused the run")
+	must(NewRunStart("run-3", SourceResume, ""))
+	end(ReasonError, "the harness stopped before the run took anything up")
+	must(NewRunStart("run-4", SourceResume, ""))
+	must(NewDecision("call_charge", call, VerdictProceed, ByPolicy))
+	must(NewDispatch("call_charge", call))
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_charge", "charged")))
+	say("resp_2", "Charged.")
+	end(ReasonDone, "")
+	return s
+}
+
+// TestEmptyResumeFixture reads the 0.11 conformance fixtures: a file
+// holding a refused resume and a cut one, each written resume over a
+// segment that holds nothing, verifies, in a file of 0.9 and 0.10 too;
+// one holding a resume that adds a message and takes nothing up is still
+// reported (#172).
+func TestEmptyResumeFixture(t *testing.T) {
+	for name, tt := range map[string]struct {
+		message bool
+		want    error
+	}{
+		"empty-resume": {false, nil},
+		"bad-resume":   {true, ErrSourceMismatch},
+	} {
+		raw, err := os.ReadFile(filepath.Join("testdata", "sessions", name+".jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		if err := Write(&buf, emptyResumeFixture(t, tt.message)); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(buf.Bytes(), raw) {
+			t.Errorf("%s.jsonl is not what emptyResumeFixture builds; run go test -update", name)
+		}
+		// The relaxation is the reader's, so the file reads the same
+		// whatever minor its header declares.
+		for _, minor := range []string{Format, "agentsession/0.10", "agentsession/0.9"} {
+			s, err := Read(bytes.NewReader(bytes.Replace(raw, []byte(`"format":"`+Format+`"`), []byte(`"format":"`+minor+`"`), 1)))
+			if err != nil {
+				t.Fatalf("%s as %s: %v", name, minor, err)
+			}
+			if s.DeclaredFormat() != minor {
+				t.Errorf("%s declares %s, want %s", name, s.DeclaredFormat(), minor)
+			}
+			for _, leaf := range s.Leaves() {
+				if err := s.VerifyRecords(leaf); !errors.Is(err, tt.want) {
+					t.Errorf("%s as %s: VerifyRecords = %v, want %v", name, minor, err, tt.want)
+				}
+			}
+		}
+	}
+	s := loadFixture(t, "empty-resume")
+	var empty int
+	runs, err := s.Runs(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range runs {
+		if r.Start.Source == SourceResume && r.Empty() {
+			empty++
+		}
+		if err := r.Verify(); err != nil {
+			t.Errorf("run %s: %v", r.RunID(), err)
+		}
+	}
+	if empty != 2 || len(runs) != 4 {
+		t.Errorf("%d empty resumes in %d runs, want 2 in 4", empty, len(runs))
 	}
 }
