@@ -151,8 +151,10 @@ versions may break the API.
   what the damage made of a hash the line also spells, its objects do
   not read, its parent is not kept, or a lost record names it. A
   damaged `lost` record that still legibly names an entry is taken at
-  its word, over a readable append too, since a repair would otherwise
-  bring back what recovery told the writer was lost. An entry a
+  its word over the appends before it, a readable one too, since a
+  repair would otherwise bring back what recovery told the writer was
+  lost; an append after it, by which the writer appended the entry
+  again, stands, as after a readable `lost` record. An entry a
   readable record's entry hangs from is reported in `Hidden`, as
   before; `Salvaged` is what only a damaged line names. `agentsession
   repair` says of each salvaged entry whether it is the head. (#189)

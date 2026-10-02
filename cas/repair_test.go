@@ -807,3 +807,44 @@ func TestRepairListsWhatItDoesNotSalvage(t *testing.T) {
 		}
 	})
 }
+
+// TestRepairKeepsAnAppendAfterADamagedLostRecord: a lost record stands
+// against the append before it, which recovery cut, and not against one
+// after it, by which the writer appended the entry again once told; a
+// damaged lost record is read by its position as a readable one is, so
+// the entry appended again is kept, and is the head (#189).
+func TestRepairKeepsAnAppendAfterADamagedLostRecord(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "l"})
+	one := mustAppend(t, st, "l", item("one"))
+	e := item("two")
+	two := mustAppend(t, st, "l", e)
+	die(st)
+	// two's envelope is gone, so recovery records two lost; the writer,
+	// told so, appends the same entry again.
+	removeObject(t, st, two, false)
+	st2, _ := Open(root)
+	if _, err := st2.Open(ctx, "l"); err != nil {
+		t.Fatal(err)
+	}
+	if again := mustAppend(t, st2, "l", e); again != two {
+		t.Fatalf("appended again as %s, want %s", again, two)
+	}
+	st2.Close()
+	damageMember(t, root, "l", `"op":"lost","session":"l","entry":"`+two, "session")
+
+	st3, _ := Open(root)
+	defer st3.Close()
+	rep, err := st3.Repair(ctx, "l", RepairOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rep.Kept, []string{one, two}) || len(rep.Salvaged) != 0 || len(rep.Dropped) != 0 {
+		t.Fatalf("kept %v salvaged %v dropped %v", rep.Kept, rep.Salvaged, rep.Dropped)
+	}
+	if rep.Head != two || rep.Named != two {
+		t.Errorf("head %s named %s, want %s", rep.Head, rep.Named, two)
+	}
+}
