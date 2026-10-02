@@ -709,3 +709,58 @@ func TestOmitCheckpointEmptyIDs(t *testing.T) {
 		t.Errorf("rewritten as %s", back)
 	}
 }
+
+// TestContinueAfterAMixedCheckpoint: a checkpoint whose omit lists an
+// empty id among others reads as the others, so Continue writes a config
+// a writer accepts and the successor carries what the checkpoint named.
+func TestContinueAfterAMixedCheckpoint(t *testing.T) {
+	ctx := t.Context()
+	s := New(Header{})
+	for _, e := range []Entry{
+		&ConfigEntry{Model: "a", Instructions: ptr("Be brief.")},
+		NewItemEntry(openresponses.UserText("one")),
+		NewItemEntry(openresponses.UserText("two")),
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	comp, err := s.CompactKeeping(1, openresponses.UserText("summary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	comp.Config.Omit = Omit{Reasoning: OmitOtherModels, Items: []string{"", "a"}}
+	if _, err := s.Append(comp); err != nil {
+		t.Fatal(err)
+	}
+	var buf strings.Builder
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	read, err := Read(strings.NewReader(buf.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewMemoryStore()
+	old, err := store.Create(ctx, read.Header())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range read.Entries() {
+		e.Base().ID = ""
+		if _, err := store.Append(ctx, old.ID(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next, err := Continue(ctx, store, old.ID(), nil)
+	if err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+	cx, err := next.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cx.Settings.Omit.Reasoning != OmitOtherModels || len(cx.Settings.Omit.Items) != 1 || cx.Settings.Omit.Items[0] != "a" {
+		t.Errorf("the successor's omit is %+v", cx.Settings.Omit)
+	}
+}

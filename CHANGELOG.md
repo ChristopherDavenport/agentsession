@@ -42,7 +42,7 @@ versions may break the API.
   hand-back where the list was 37 KB. Each list a delta counts over has
   a cursor of its own; an `of` naming no entry the path holds since the
   last replace or checkpoint is kept as written, and `bad-handback`
-  holds it, and `verify` notes such an element without failing the
+  and `bad-handback-folded` hold it, and `verify` notes such an element without failing the
   file, through `UnresolvedOf`, which finds the config entries that
   carry one. `OmittedDelta` writes the shortest of the whole list, the
   keeps over the list in force and the keeps over each of the sixteen

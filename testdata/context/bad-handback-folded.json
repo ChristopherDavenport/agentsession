@@ -1,0 +1,71 @@
+{
+  "sha256:b60548d358de6046365d5013aca7896ab46474e4c5561e9a042259a79a3be440": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Be brief.",
+      "instructions_omitted": [
+        {
+          "keep": 4,
+          "of": "sha256:f3d5cc08c63ca5061fac8d6183e6160567d9a418533fea0de6c2d27626e90654"
+        }
+      ]
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Summary of one and two."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "two"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "three"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Three.",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "sha256:14d250d40830b2c9521d9673594747985224fd7e7cce73a2dbaf9080ab891db2",
+      "sha256:b51f8b17ab3a80f1ac852172952a7bce56f058424ab8fd2dfa180e9bc9c33bf3",
+      "sha256:b3a9b62dcb4757ef6a946a978bdad1f1fc1e3063cb59d6f06db2cd9ce63a0a5b",
+      "sha256:5d083b4d8bc0e8f6227add972cd4f8a9b7e20fc640a35f0daf5b47ff012e0f5a",
+      "sha256:a4623dbfa75135d30932d6427bda093b2ba65d3c9b98bc7d1dbcf07b13211f06",
+      "sha256:b60548d358de6046365d5013aca7896ab46474e4c5561e9a042259a79a3be440"
+    ],
+    "item_entries": [
+      "sha256:14d250d40830b2c9521d9673594747985224fd7e7cce73a2dbaf9080ab891db2",
+      "sha256:b51f8b17ab3a80f1ac852172952a7bce56f058424ab8fd2dfa180e9bc9c33bf3",
+      "sha256:5d083b4d8bc0e8f6227add972cd4f8a9b7e20fc640a35f0daf5b47ff012e0f5a",
+      "sha256:a4623dbfa75135d30932d6427bda093b2ba65d3c9b98bc7d1dbcf07b13211f06"
+    ]
+  }
+}

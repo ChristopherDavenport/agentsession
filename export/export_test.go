@@ -115,7 +115,7 @@ func encode(t *testing.T, v any) []byte {
 // for byte.
 func TestATIFGolden(t *testing.T) {
 	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge",
-		"empty-resume", "bad-resume", "handback", "bad-handback", "omit", "omit-absent", "bad-omit", "omit-folded", "judged"} {
+		"empty-resume", "bad-resume", "handback", "bad-handback", "omit", "omit-absent", "bad-omit", "omit-folded", "bad-handback-folded", "judged"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			n := 0

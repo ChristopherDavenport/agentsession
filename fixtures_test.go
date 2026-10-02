@@ -287,6 +287,16 @@ func TestRegenerateFixtures(t *testing.T) {
 		}
 	}
 
+	// bad-handback-folded: an of after a compaction that names a config
+	// entry before the checkpoint, which the checkpoint started afresh.
+	var foldedBuf bytes.Buffer
+	if err := Write(&foldedBuf, foldedHandbackFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("testdata", "sessions", "bad-handback-folded.jsonl"), foldedBuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	// judged: the 0.11 conformance vector for a judge's link, appended
 	// natively: a session that answered a task and records the session
 	// that judged it, and the entry the judgement is about.
@@ -1716,5 +1726,89 @@ func TestOmitFixtures(t *testing.T) {
 	}
 	if len(before.OmittedItems) != 0 || !before.Settings.Omit.IsZero() {
 		t.Errorf("the path to the first response leaves out %d items under %+v", len(before.OmittedItems), before.Settings.Omit)
+	}
+}
+
+// foldedHandbackFixture builds the session bad-handback-folded.jsonl
+// holds: an agent writes an omitted list, the context is folded, and a
+// later entry names the list by an of that names the entry before the
+// checkpoint. The checkpoint writes the list whole and starts the lists
+// afresh, so nothing after it names an entry before it: the element is
+// kept as written, and the request still verifies.
+func foldedHandbackFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-10-01T13:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-00000000001f", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must := func(e Entry) string {
+		t.Helper()
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatalf("append %T: %v", e, err)
+		}
+		return id
+	}
+	first := must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief."), InstructionsOmitted: omitList("p", 4)})
+	must(NewItemEntry(openresponses.UserText("one")))
+	must(NewItemEntry(openresponses.UserText("two")))
+	comp, err := s.CompactKeeping(1, openresponses.UserText("Summary of one and two."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(comp)
+	must(&ConfigEntry{InstructionsOmitted: []OmittedPart{{Keep: 4, Of: first}}})
+	must(NewItemEntry(openresponses.UserText("three")))
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := ctx.Request()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := RequestHash(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := NewItemEntry(openresponses.AssistantText("Three."))
+	answer.ResponseID = "resp_1"
+	must(answer)
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: hash})
+	return s
+}
+
+// TestFoldedHandbackFixture: an of after a fold that names an entry
+// before the checkpoint is kept as written, found by UnresolvedOf, and
+// does not stop the request verifying.
+func TestFoldedHandbackFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", "bad-handback-folded.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, foldedHandbackFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf.Bytes(), raw) {
+		t.Error("bad-handback-folded.jsonl is not what foldedHandbackFixture builds; run go test -update")
+	}
+	s := loadFixture(t, "bad-handback-folded")
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ctx.Settings.InstructionsOmitted; len(got) != 1 || got[0].ID != "" || got[0].Keep != 4 || got[0].Of == "" {
+		t.Errorf("list in force %+v, want the keep kept as written", got)
+	}
+	bad, err := s.UnresolvedOf(s.Leaf())
+	if err != nil || len(bad) != 1 {
+		t.Fatalf("UnresolvedOf = %v, %v", bad, err)
+	}
+	for _, e := range s.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			if err := s.Verify(r.ID); err != nil {
+				t.Errorf("%s: %v", r.ResponseID, err)
+			}
+		}
 	}
 }

@@ -1828,7 +1828,8 @@ whose `omit` is written at each switch, every response hashed and
 verifying, beside the same session written as 0.10 does, and one whose
 `omit` a compaction's checkpoint carries into a switch of model, a `judged_by`
 link with its `target`, an `of` naming no `config` entry on the path,
-kept as written and noted by a tool that checks a file, and
+or one before a compaction's checkpoint, kept as written and noted by a
+tool that checks a file, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second root, an own entry hung from the prefix above the base, or a line
