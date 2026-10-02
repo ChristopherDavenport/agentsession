@@ -1161,6 +1161,77 @@ func TestTotalsCoverThePath(t *testing.T) {
 	}
 }
 
+// TestTotalsCountCustomUsage: a custom entry whose data carries usage
+// records a model call the path paid for that produced no response,
+// which is how a failed fold's summary calls are recorded, and the
+// totals count it, priced at the model it names or else the model in
+// force; a custom entry without usage, or whose data is no object,
+// changes nothing (#184).
+func TestTotalsCountCustomUsage(t *testing.T) {
+	usage := func(in, out int) *openresponses.Usage {
+		return &openresponses.Usage{InputTokens: in, OutputTokens: out, InputTokensDetails: openresponses.InputTokensDetails{CachedTokens: in / 2}}
+	}
+	tests := []struct {
+		name                       string
+		data                       []string // the data of the custom entries between the two responses
+		prompt, completion, cached int
+		models                     []string // the models the price source is asked for, in path order
+	}{
+		{"naming a model", []string{`{"attempts":2,"model":"m2","usage":{"input_tokens":100,"output_tokens":50,"input_tokens_details":{"cached_tokens":50}}}`}, 130, 53, 65, []string{"m1", "m2", "m1"}},
+		{"naming no model", []string{`{"usage":{"input_tokens":100,"output_tokens":50}}`}, 130, 53, 15, []string{"m1", "m1", "m1"}},
+		{"two of them", []string{`{"usage":{"input_tokens":100,"output_tokens":50}}`, `{"usage":{"input_tokens":1,"output_tokens":1},"model":"m3"}`}, 131, 54, 15, []string{"m1", "m1", "m3", "m1"}},
+		{"no usage", []string{`{"attempts":2,"model":"m2"}`}, 30, 3, 15, []string{"m1", "m1"}},
+		{"no object", []string{`"paid"`, `[1]`, `null`, `7`}, 30, 3, 15, []string{"m1", "m1"}},
+		{"usage of another shape", []string{`{"usage":"lots"}`, `{"usage":[1]}`}, 30, 3, 15, []string{"m1", "m1"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := agentsession.New(agentsession.Header{})
+			mustAppend(t, s, &agentsession.ConfigEntry{Model: "m1"})
+			mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("hi")))
+			mustAppend(t, s, &agentsession.ItemEntry{Item: openresponses.AssistantText("one"), ResponseID: "resp-1"})
+			mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp-1", Model: "m1", Status: "completed", Usage: usage(10, 1)})
+			for _, d := range tt.data {
+				mustAppend(t, s, &agentsession.CustomEntry{NS: "x:paid", Data: json.RawMessage(d)})
+			}
+			mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("more")))
+			mustAppend(t, s, &agentsession.ItemEntry{Item: openresponses.AssistantText("two"), ResponseID: "resp-2"})
+			mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp-2", Model: "m1", Status: "completed", Usage: usage(20, 2)})
+			tr, err := At(s, s.Leaf())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var models []string
+			doc, err := ToATIF(tr, Options{Cost: func(model string, u openresponses.Usage) (float64, bool) {
+				models = append(models, model)
+				return float64(u.InputTokens), true
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fm := doc.FinalMetrics
+			if *fm.TotalPromptTokens != tt.prompt || *fm.TotalCompletionTokens != tt.completion || *fm.TotalCachedTokens != tt.cached {
+				t.Errorf("totals = %d+%d (%d cached), want %d+%d (%d cached)", *fm.TotalPromptTokens, *fm.TotalCompletionTokens, *fm.TotalCachedTokens, tt.prompt, tt.completion, tt.cached)
+			}
+			if fm.TotalCostUSD == nil || *fm.TotalCostUSD != float64(tt.prompt) {
+				t.Errorf("total_cost_usd = %v, want %d", fm.TotalCostUSD, tt.prompt)
+			}
+			// The steps priced the responses first, and a price is asked
+			// once per entry, so the order the source is asked in is not
+			// the path's.
+			slices.Sort(models)
+			want := slices.Clone(tt.models)
+			slices.Sort(want)
+			if !slices.Equal(models, want) {
+				t.Errorf("priced %v, want %v", models, want)
+			}
+			if err := doc.Validate(); err != nil {
+				t.Errorf("invalid document: %v", err)
+			}
+		})
+	}
+}
+
 // TestOptionsModelName: the document reports the name Harbor needs
 // while the session keeps the name the provider answered to.
 func TestOptionsModelName(t *testing.T) {

@@ -1219,6 +1219,18 @@ flight, a record's position on the path does not say which call it
 belongs to, and `call_id` does. A reader MAY use it to attribute the
 record and MUST NOT require it.
 
+A custom entry whose `data` is an object with a top-level `usage`
+member in the payload profile's usage shape (Open Responses `usage`)
+records a model call the path paid for that produced no `response`
+entry: a fold whose summary was refused, with the usage of its calls
+summed, or a call whose answer earned no entry in context. An optional
+top-level `model` names the model billed; without one, the model in
+force from the `config` entries applies. A reader computing what the
+path cost counts such an entry as one model call, however many calls
+its usage sums, and the ATIF projection's `final_metrics` do. The rest
+of `data` is the writer's. A writer that records a paid call under
+another member name records it for itself alone.
+
 ## Namespaced types
 
 Any type of the form `ns:name` is an extension. Readers MUST preserve
@@ -1460,7 +1472,8 @@ lossless.
 A document's steps are the context the algorithm produces, so a run
 that compacted is described by its last summary and what followed it.
 Its `final_metrics` are not: they total every model call on the path,
-the ones a fold replaced included, and `total_steps` counts the
+the ones a fold replaced and the ones a `custom` entry's `usage`
+records included, and `total_steps` counts the
 document's steps plus the model calls it does not show. When the two
 differ the root `notes` says so, which is what ATIF requires of a
 `total_steps` that is not the number of steps. Without that rule a

@@ -40,6 +40,15 @@ versions may break the API.
   of subsessions leaves, and `verify` reported nothing. A file names no
   store to find the target in, so `verify <file>` does not check links.
   (#186)
+- **export: `final_metrics` counts a custom entry whose data carries
+  `usage`** as a model call the path paid for, priced at the `model` the
+  data names or else the model in force, which RFC 0001's `custom`
+  section now states as the convention for a call that produced no
+  `response` entry. A failed fold's summary calls are recorded that way,
+  and a configuration whose folds all failed exported the same totals
+  as one that never compacted. The exporter names no other package's
+  namespace: any custom entry with a top-level `usage` object counts.
+  (#184)
 
 ## v0.0.19 - 2026-10-01
 

@@ -964,8 +964,12 @@ func (b *builder) finish() {
 // path holds that the document does not show. A document's steps are
 // the context after compaction, so a run that folded is described by
 // its last summary and what followed; its cost is not, or a
-// leaderboard reads the tail's cost as the run's. It does nothing for
-// a Trajectory built without a Path, whose context is all there is.
+// leaderboard reads the tail's cost as the run's. The model calls are
+// the responses, the folds, the branch summaries and the custom
+// entries whose data carries usage, which RFC 0001 reads as a call the
+// path paid for that produced no response, a failed fold's summary
+// calls for one. It does nothing for a Trajectory built without a
+// Path, whose context is all there is.
 func (b *builder) pathTotals() int {
 	if len(b.t.Path) == 0 {
 		return 0
@@ -1001,6 +1005,22 @@ func (b *builder) pathTotals() int {
 			u, priced = v.Usage, v.Config.Model
 		case *agentsession.BranchSummaryEntry:
 			u, priced = v.Usage, model
+		case *agentsession.CustomEntry:
+			// Only an object with a usage member in the payload's shape
+			// is a paid call; anything else the entry carries is the
+			// writer's and not read. The model it names is the one
+			// billed; without one the model in force was.
+			var paid struct {
+				Usage *openresponses.Usage `json:"usage"`
+				Model string               `json:"model"`
+			}
+			if json.Unmarshal(v.Data, &paid) != nil || paid.Usage == nil {
+				continue
+			}
+			u, priced = paid.Usage, model
+			if paid.Model != "" {
+				priced = paid.Model
+			}
 		default:
 			continue
 		}
