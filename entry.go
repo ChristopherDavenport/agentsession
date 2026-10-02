@@ -39,6 +39,9 @@ const (
 	RelSubsession  = "subsession"
 	RelForkOf      = "fork_of"
 	RelContinuedIn = "continued_in"
+	// RelJudgedBy is written into a judged session and names the
+	// session of its judge; see [NewJudgedByLink] and [Judges].
+	RelJudgedBy = "judged_by"
 )
 
 // Kinds an [OutcomeEntry] may carry.
@@ -325,7 +328,8 @@ type ConfigEntry struct {
 	// list in force as it was, and an empty, non-nil list, written as
 	// [], clears it. A writer sets it only when the list changed, and
 	// through [Settings.OmittedDelta], which names each run of parts
-	// that stay omitted by a keep.
+	// that stay omitted by a keep, and, in a session of format 0.11, a
+	// run of the list an earlier entry wrote by a keep carrying of.
 	InstructionsOmitted []OmittedPart       `json:"instructions_omitted,omitzero"`
 	ToolsAdded          openresponses.Tools `json:"tools_added,omitempty"`
 	ToolsRemoved        []string            `json:"tools_removed,omitempty"`
@@ -334,6 +338,89 @@ type ConfigEntry struct {
 	// the key from the settings.
 	Extra   map[string]json.RawMessage `json:"extra,omitempty"`
 	Replace bool                       `json:"replace,omitempty"`
+	// Omit records the items a request leaves out of the context, in
+	// format 0.11: a rule that leaves out a reasoning item written under
+	// another model, and a list of entries whose items contribute
+	// nothing. It is in force as a setting is: nil leaves the object in
+	// force as it was, an empty, non-nil one, written as {}, clears it,
+	// and any other sets the reasoning rule it names and adds its items
+	// to those in force. See [Omit] and [Settings.OmitDelta]. An omit
+	// member that does not decode as the object, which a file from before
+	// the member was defined may hold, is kept as written in Unknown and
+	// Omit is nil.
+	Omit *Omit `json:"-" member:"omit"`
+}
+
+// Omit is the omit setting: what a request leaves out of the context
+// though it is on the path, as format 0.11 records it. Settings carry
+// the object in force, which a config entry's Omit extends: its
+// Reasoning replaces the rule in force when it names one, its Items
+// are added to the set in force, and an object naming neither clears
+// both.
+type Omit struct {
+	// Reasoning is a rule over the reasoning items on the path. It is
+	// closed: [OmitOtherModels] is the one value defined, and a value
+	// this package does not define has no effect, leaving the rule in
+	// force as it was.
+	Reasoning string `json:"reasoning,omitempty"`
+	// Items are entry IDs. An item entry on the path whose ID is listed
+	// contributes nothing, whatever it holds; an ID that names no item
+	// entry on the path names nothing, and a writer writes no empty one.
+	// The set in force is the union of every list since the last replace
+	// or compaction's checkpoint.
+	Items []string `json:"items,omitempty"`
+}
+
+// OmitOtherModels is the one value of [Omit.Reasoning] the format
+// defines: a request leaves out each item entry holding a reasoning
+// item that carries a response and was written while a model other than
+// the request's was in force. It is also the reason a [Context] reports
+// for an item left out by that rule.
+const OmitOtherModels = "other_models"
+
+// OmitItems is the reason a [Context] reports for an item left out
+// because [Omit.Items] lists its entry.
+const OmitItems = "items"
+
+// IsZero reports whether the object names no rule and no entry, which
+// is the object a config entry writes to clear the one in force, and the
+// settings of a path that left nothing out. An empty id names no entry,
+// so a list of them names none.
+func (o Omit) IsZero() bool {
+	if o.Reasoning != "" {
+		return false
+	}
+	for _, id := range o.Items {
+		if id != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// merged returns the object in force after a delta d: d's rule replaces
+// this one's when it is one the format defines, a rule it does not
+// define leaves this one's in force, d's items are added to this one's
+// in the order they were first written, and a delta that names neither a
+// rule nor an entry clears both. The receiver and d are not modified.
+func (o Omit) merged(d Omit) Omit {
+	if d.IsZero() {
+		return Omit{}
+	}
+	out := Omit{Reasoning: o.Reasoning}
+	if d.Reasoning == OmitOtherModels {
+		out.Reasoning = d.Reasoning
+	}
+	seen := make(map[string]bool, len(o.Items)+len(d.Items))
+	for _, list := range [][]string{o.Items, d.Items} {
+		for _, id := range list {
+			if id != "" && !seen[id] {
+				seen[id] = true
+				out.Items = append(out.Items, id)
+			}
+		}
+	}
+	return out
 }
 
 // InstructionPart is one named part of the instructions. A harness
@@ -417,6 +504,15 @@ type OmittedPart struct {
 	// hold, is kept as written and Keep is zero; on an element that
 	// names an ID it means nothing.
 	Keep int `json:"keep,omitempty"`
+	// Of, on a keep, names a config entry earlier on the path: the keep
+	// counts over the list that entry put in force instead of the list
+	// in force before this entry, as format 0.11 lets a writer name the
+	// list an earlier entry wrote. It is the id of that entry. It means
+	// nothing beside an ID or without a Keep, and an of member that is
+	// not a non-empty string, which a file from before the member was
+	// defined may hold, is kept as written and Of is empty. See
+	// [Settings.OmittedDelta].
+	Of string `json:"of,omitempty"`
 }
 
 // Unresolved reports whether the element names no part: a keep the
@@ -425,21 +521,27 @@ type OmittedPart struct {
 func (p OmittedPart) Unresolved() bool { return p.ID == "" }
 
 // UnmarshalJSON decodes the part, taking keep only when it is a
-// positive integer written as digits, so an earlier file's keep in any
-// other form stays a member this package does not define.
+// positive integer written as digits and of only when it is a
+// non-empty string, so an earlier file's member in any other form stays
+// a member this package does not define.
 func (p *OmittedPart) UnmarshalJSON(data []byte) error {
 	type plain OmittedPart
 	var v struct {
 		plain
 		Keep json.RawMessage `json:"keep"`
+		Of   json.RawMessage `json:"of"`
 	}
 	if err := json.Unmarshal(data, &v); err != nil {
 		return err
 	}
 	*p = OmittedPart(v.plain)
-	p.Keep = 0
+	p.Keep, p.Of = 0, ""
 	if n, err := strconv.ParseInt(string(v.Keep), 10, 32); err == nil && n > 0 {
 		p.Keep = int(n)
+	}
+	var of string
+	if json.Unmarshal(v.Of, &of) == nil {
+		p.Of = of
 	}
 	return nil
 }
@@ -682,6 +784,13 @@ type LinkEntry struct {
 	Session   string `json:"session"`
 	// CallID ties a subsession to the function call that spawned it.
 	CallID string `json:"call_id,omitempty"`
+	// Target, on a [RelJudgedBy] link, names the entry of the judged
+	// session the judgement is about: the entry the judge's outcome
+	// names. It is a member of that relation alone: a target member on
+	// a link of another relation, or one that is not a non-empty
+	// string, which a file from before the member was defined may hold,
+	// is kept as written in Unknown and Target is empty.
+	Target string `json:"-" member:"target"`
 }
 
 // EntryType returns "link".
@@ -1786,7 +1895,15 @@ func (e *ResponseEntry) decodeMembers(data []byte, all map[string]json.RawMessag
 // MarshalJSON emits the entry as one JSON object.
 func (e *ConfigEntry) MarshalJSON() ([]byte, error) {
 	type plain ConfigEntry
-	return marshalEntry(TypeConfig, &e.EntryBase, (*plain)(e))
+	if e.Omit != nil {
+		if _, dup := e.Unknown["omit"]; dup {
+			return nil, errors.New("agentsession: config entry has omit both typed and unknown")
+		}
+	}
+	return marshalEntry(TypeConfig, &e.EntryBase, struct {
+		*plain
+		Omit *Omit `json:"omit,omitempty"`
+	}{(*plain)(e), e.Omit})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -1800,7 +1917,12 @@ func (e *ConfigEntry) UnmarshalJSON(data []byte) error {
 
 func (e *ConfigEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain ConfigEntry
-	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), configKeys)
+	e.Omit = nil
+	if err := unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), configKeys); err != nil {
+		return err
+	}
+	promote(&e.EntryBase, "omit", &e.Omit)
+	return nil
 }
 
 // MarshalJSON emits the entry as one JSON object.
@@ -1981,7 +2103,15 @@ func (e *OutcomeEntry) decodeMembers(data []byte, all map[string]json.RawMessage
 // MarshalJSON emits the entry as one JSON object.
 func (e *LinkEntry) MarshalJSON() ([]byte, error) {
 	type plain LinkEntry
-	return marshalEntry(TypeLink, &e.EntryBase, (*plain)(e))
+	if e.Target != "" {
+		if _, dup := e.Unknown["target"]; dup {
+			return nil, errors.New("agentsession: link entry has target both typed and unknown")
+		}
+	}
+	return marshalEntry(TypeLink, &e.EntryBase, struct {
+		*plain
+		Target string `json:"target,omitempty"`
+	}{(*plain)(e), e.Target})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -1995,7 +2125,14 @@ func (e *LinkEntry) UnmarshalJSON(data []byte) error {
 
 func (e *LinkEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain LinkEntry
-	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), linkKeys)
+	e.Target = ""
+	if err := unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), linkKeys); err != nil {
+		return err
+	}
+	if e.Rel == RelJudgedBy {
+		promote(&e.EntryBase, "target", &e.Target)
+	}
+	return nil
 }
 
 // MarshalJSON emits the entry as one JSON object.

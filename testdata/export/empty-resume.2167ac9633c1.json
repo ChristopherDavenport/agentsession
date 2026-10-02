@@ -1,0 +1,220 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000016",
+  "trajectory_id": "sha256:2167ac9633c1b25672daad93e07dce37a964c7fea801d93e1f9684fb3ac23129",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-10-01T09:00:03Z",
+      "source": "user",
+      "message": "Charge the card.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:7840feb76752310d7ece87ee27e2ee33e15e1d452f26d2622889aad560eee4fe"
+        },
+        "config_entries": [
+          "sha256:1b77d0ed2913bfb731c511d8483c9e2be73f2df0ba99fd37cccdf828ffbcd254"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Charge the card."
+              }
+            ]
+          }
+        },
+        "run": [
+          {
+            "end_entry_id": "sha256:4c2e6f5d30c0adbf5e304c1277f2199ebdc8a8aaf3ef685205375e8701a70c11",
+            "pending": [
+              "call_charge"
+            ],
+            "reason": "input_required",
+            "run_id": "run-1",
+            "source": "input",
+            "start_entry_id": "sha256:98fbf2e1822524a64f4f1445c9577c8d3bcd1a3542cc595fc9d971e068ca1488"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-10-01T09:00:05Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_charge",
+          "function_name": "charge",
+          "arguments": {}
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_charge",
+            "content": "charged",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_charge",
+                  "output": "charged"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:2f1d74a489363f20cd47be7d930d7341e6f9966da6b3acb31c0f7a32ce4d2e07"
+        },
+        "calls": {
+          "call_charge": {
+            "decisions": [
+              {
+                "by": "policy",
+                "entry_id": "sha256:3594c836045ec86f885101adc9941693e589811d93a9f0613d78baa77bc92ba9",
+                "verdict": "hold"
+              },
+              {
+                "by": "policy",
+                "entry_id": "sha256:9459f4f9feb515e4efcc60853e0789a3e8deab9674abe12c93d3e78071bac84b",
+                "verdict": "proceed"
+              }
+            ],
+            "dispatch": {
+              "entry_id": "sha256:1033052b6afd01fc778e20369b649ae6983e46acd59f4156a8a0b6449e3402cb"
+            }
+          }
+        },
+        "item_entry_ids": [
+          "sha256:1e3e3154337272b6dc6cdbb239d0f12ff054c74a802d6c5546aebf176779e99b"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_1",
+              "call_id": "call_charge",
+              "name": "charge",
+              "arguments": "{}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:2f1d74a489363f20cd47be7d930d7341e6f9966da6b3acb31c0f7a32ce4d2e07",
+            "model": "gpt-5",
+            "request_hash": "sha256:a6e4faeea56eb178c874aa7c760ec92a021a57a1f1509bc50b99aca6ff0e8df4",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-10-01T09:00:05Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-10-01T09:00:17Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Charged.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:c1ca2e9314d2f5d57d2e791cd24bb99d30d9568d5f0d490b1f5cb3e671a010c7"
+        },
+        "item_entry_ids": [
+          "sha256:7d602114c4f5d190735da82083be07084455cd3b885b8c2d93cb883960876d26"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_2",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Charged.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:c1ca2e9314d2f5d57d2e791cd24bb99d30d9568d5f0d490b1f5cb3e671a010c7",
+            "model": "gpt-5",
+            "request_hash": "sha256:064c2ac437fe23e657d101f4026218c37806a5959463000db44a0a872103727e",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-10-01T09:00:17Z"
+          }
+        },
+        "run": [
+          {
+            "cause": "a run_start subscriber refused the run",
+            "end_entry_id": "sha256:8e84b3538705ac89747259871f088dc03968f28d3cfdb6d064cd6f099dbae850",
+            "pending": [],
+            "reason": "error",
+            "run_id": "run-2",
+            "source": "resume",
+            "start_entry_id": "sha256:ac0ec26a5cc058d3558317df541ab680084d3e5289fcedcf96089c5a88b68ec4"
+          },
+          {
+            "cause": "the harness stopped before the run took anything up",
+            "end_entry_id": "sha256:92d1d158602bdd563b5624528d5795081153cba0f4e93554f213880aefff64e2",
+            "pending": [],
+            "reason": "error",
+            "run_id": "run-3",
+            "source": "resume",
+            "start_entry_id": "sha256:35185bac8ca43e4781e7ae0f530389ec9ac6c30a3baaabe1886200fa39831fc3"
+          },
+          {
+            "end_entry_id": "sha256:2167ac9633c1b25672daad93e07dce37a964c7fea801d93e1f9684fb3ac23129",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-4",
+            "source": "resume",
+            "start_entry_id": "sha256:8afb4461eca1d727b6759c8cc3721192b8fd254ee21b4c1d24f2acdcac4ff142"
+          }
+        ]
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 2 model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its 3 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 2
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.11",
+      "leaf": "sha256:2167ac9633c1b25672daad93e07dce37a964c7fea801d93e1f9684fb3ac23129",
+      "main": true,
+      "records": [
+        "run",
+        "dispatch",
+        "decision"
+      ]
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

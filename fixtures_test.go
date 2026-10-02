@@ -241,6 +241,73 @@ func TestRegenerateFixtures(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// empty-resume and bad-resume: the 0.11 conformance vectors for a
+	// resume that took up nothing, appended natively. The first holds a
+	// refused resume and one cut and closed on restart, each followed by
+	// the resume that took the call up; the second a resume that adds a
+	// message and takes nothing up, which stays reported.
+	for name, message := range map[string]bool{"empty-resume": false, "bad-resume": true} {
+		var buf bytes.Buffer
+		if err := Write(&buf, emptyResumeFixture(t, message)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join("testdata", "sessions", name+".jsonl"), buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// handback and bad-handback: the 0.11 conformance vectors for an
+	// agent handed a session again, appended natively. The first names
+	// the parts that left force by hash and the omitted list by of; the
+	// second writes an of that names no entry on the path.
+	for name, bad := range map[string]bool{"handback": false, "bad-handback": true} {
+		var buf bytes.Buffer
+		if err := Write(&buf, handbackFixture(t, bad)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join("testdata", "sessions", name+".jsonl"), buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// omit, omit-absent and bad-omit: the 0.11 conformance vectors for
+	// the omit setting, appended natively. A session that switches
+	// model and back under reasoning: the first writes omit and hashes
+	// every response; the second is the same session as 0.10 writes
+	// it, with no omit and no hash after the first switch; the third
+	// records a hash over the request the omit in force says was not
+	// sent.
+	for name, variant := range map[string]switchVariant{"omit": switchOmit, "omit-absent": switchAbsent, "bad-omit": switchBad, "omit-folded": switchFolded} {
+		var buf bytes.Buffer
+		if err := Write(&buf, switchFixture(t, variant)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join("testdata", "sessions", name+".jsonl"), buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// bad-handback-folded: an of after a compaction that names a config
+	// entry before the checkpoint, which the checkpoint started afresh.
+	var foldedBuf bytes.Buffer
+	if err := Write(&foldedBuf, foldedHandbackFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("testdata", "sessions", "bad-handback-folded.jsonl"), foldedBuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// judged: the 0.11 conformance vector for a judge's link, appended
+	// natively: a session that answered a task and records the session
+	// that judged it, and the entry the judgement is about.
+	var jbuf bytes.Buffer
+	if err := Write(&jbuf, judgedFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("testdata", "sessions", "judged.jsonl"), jbuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	for module, names := range nestedFixtures {
 		dir := filepath.Join(module, "testdata", "sessions")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1057,6 +1124,691 @@ func TestFrozen08Fixture(t *testing.T) {
 		}
 		if !slices.Equal(octx.InstructionsOmitted(), cctx.InstructionsOmitted()) {
 			t.Errorf("entry %d: omitted %v, the 0.9 fixture reads %v", i, octx.InstructionsOmitted(), cctx.InstructionsOmitted())
+		}
+	}
+}
+
+// emptyResumeFixture builds the session empty-resume.jsonl holds, or
+// with message set bad-resume.jsonl. A charge call is held at the end of
+// the first run. The second run is written resume, and a subscriber
+// refuses it before it takes the call up; the third is written resume
+// too and is cut after its start, and the restart closes it error; the
+// fourth takes the call up. With message set the second run instead
+// adds a user message, is answered, and takes nothing up: the shape of
+// an input written resume, which VerifyRecords reports.
+func emptyResumeFixture(t *testing.T, message bool) *Session {
+	t.Helper()
+	id := "01995b2a-0000-7000-8000-000000000016"
+	if message {
+		id = "01995b2a-0000-7000-8000-000000000017"
+	}
+	at, _ := time.Parse(time.RFC3339, "2026-10-01T09:00:00Z")
+	s := New(Header{ID: id, CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: AllRecords})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must := func(e Entry) string {
+		t.Helper()
+		got, err := s.Append(e)
+		if err != nil {
+			t.Fatalf("append %T: %v", e, err)
+		}
+		return got
+	}
+	end := func(reason, ref string) {
+		t.Helper()
+		e, err := s.EndRun(reason, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		must(e)
+	}
+	// hash is the request the context at the leaf rebuilds, which the
+	// next response's request_hash must be.
+	hash := func() string {
+		t.Helper()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := ctx.Request()
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := RequestHash(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	say := func(responseID, text string) {
+		t.Helper()
+		sent := hash()
+		answer := NewItemEntry(&openresponses.Message{ID: "msg_" + responseID, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: text, Annotations: []openresponses.Annotation{}}}})
+		answer.ResponseID = responseID
+		must(answer)
+		must(&ResponseEntry{ResponseID: responseID, Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+	}
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewRunStart("run-1", SourceInput, ""))
+	must(NewItemEntry(openresponses.UserText("Charge the card.")))
+	sent := hash()
+	call := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_charge", Name: "charge", Arguments: "{}"}, ResponseID: "resp_1"})
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+	must(NewDecision("call_charge", call, VerdictHold, ByPolicy))
+	end(ReasonInputRequired, "")
+	must(NewRunStart("run-2", SourceResume, ""))
+	if message {
+		must(NewItemEntry(openresponses.UserText("Also, which card is it?")))
+		say("resp_2", "The one ending 4242.")
+		end(ReasonDone, "")
+		return s
+	}
+	end(ReasonError, "a run_start subscriber refused the run")
+	must(NewRunStart("run-3", SourceResume, ""))
+	end(ReasonError, "the harness stopped before the run took anything up")
+	must(NewRunStart("run-4", SourceResume, ""))
+	must(NewDecision("call_charge", call, VerdictProceed, ByPolicy))
+	must(NewDispatch("call_charge", call))
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_charge", "charged")))
+	say("resp_2", "Charged.")
+	end(ReasonDone, "")
+	return s
+}
+
+// TestEmptyResumeFixture reads the 0.11 conformance fixtures: a file
+// holding a refused resume and a cut one, each written resume over a
+// segment that holds nothing, verifies, in a file of 0.9 and 0.10 too;
+// one holding a resume that adds a message and takes nothing up is still
+// reported (#172).
+func TestEmptyResumeFixture(t *testing.T) {
+	for name, tt := range map[string]struct {
+		message bool
+		want    error
+	}{
+		"empty-resume": {false, nil},
+		"bad-resume":   {true, ErrSourceMismatch},
+	} {
+		raw, err := os.ReadFile(filepath.Join("testdata", "sessions", name+".jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		if err := Write(&buf, emptyResumeFixture(t, tt.message)); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(buf.Bytes(), raw) {
+			t.Errorf("%s.jsonl is not what emptyResumeFixture builds; run go test -update", name)
+		}
+		// The relaxation is the reader's, so the file reads the same
+		// whatever minor its header declares.
+		for _, minor := range []string{Format, "agentsession/0.10", "agentsession/0.9"} {
+			s, err := Read(bytes.NewReader(bytes.Replace(raw, []byte(`"format":"`+Format+`"`), []byte(`"format":"`+minor+`"`), 1)))
+			if err != nil {
+				t.Fatalf("%s as %s: %v", name, minor, err)
+			}
+			if s.DeclaredFormat() != minor {
+				t.Errorf("%s declares %s, want %s", name, s.DeclaredFormat(), minor)
+			}
+			for _, leaf := range s.Leaves() {
+				if err := s.VerifyRecords(leaf); !errors.Is(err, tt.want) {
+					t.Errorf("%s as %s: VerifyRecords = %v, want %v", name, minor, err, tt.want)
+				}
+			}
+			for _, e := range s.Entries() {
+				if r, ok := e.(*ResponseEntry); ok {
+					if err := s.Verify(r.ID); err != nil {
+						t.Errorf("%s as %s: %s: %v", name, minor, r.ResponseID, err)
+					}
+				}
+			}
+		}
+	}
+	s := loadFixture(t, "empty-resume")
+	var empty int
+	runs, err := s.Runs(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range runs {
+		if r.Start.Source == SourceResume && r.Empty() {
+			empty++
+		}
+		if err := r.Verify(); err != nil {
+			t.Errorf("run %s: %v", r.RunID(), err)
+		}
+	}
+	if empty != 2 || len(runs) != 4 {
+		t.Errorf("%d empty resumes in %d runs, want 2 in 4", empty, len(runs))
+	}
+}
+
+// judgedFixture builds the session judged.jsonl holds: one answered
+// task, and two judged_by links written after it, the first naming the
+// entry the judgement is about and the second a judge that named none.
+func judgedFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-10-01T11:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000018", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must := func(e Entry) string {
+		t.Helper()
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatalf("append %T: %v", e, err)
+		}
+		return id
+	}
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewItemEntry(openresponses.UserText("What is 2+2?")))
+	answer := NewItemEntry(&openresponses.Message{ID: "msg_1", Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: "Four.", Annotations: []openresponses.Annotation{}}}})
+	answer.ResponseID = "resp_1"
+	last := must(answer)
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted})
+	must(NewJudgedByLink(SubsessionID("01995b2a-0000-7000-8000-000000000018", "judge-1"), last))
+	must(NewJudgedByLink(SubsessionID("01995b2a-0000-7000-8000-000000000018", "judge-2"), ""))
+	return s
+}
+
+// TestJudgedFixture reads the 0.11 conformance fixture: the judged_by
+// links are read back with the target they name, which is an entry on
+// the path, and the file is what the builder writes.
+func TestJudgedFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", "judged.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, judgedFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf.Bytes(), raw) {
+		t.Error("judged.jsonl is not what judgedFixture builds; run go test -update")
+	}
+	if !bytes.Contains(raw, []byte(`"rel":"judged_by"`)) || !bytes.Contains(raw, []byte(`"target":"sha256:`)) {
+		t.Error("the fixture lacks a judged_by link with its target")
+	}
+	s := loadFixture(t, "judged")
+	judges, err := s.Judges(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(judges) != 2 {
+		t.Fatalf("%d judges, want 2", len(judges))
+	}
+	if _, ok := s.Entry(judges[0].Target); !ok || len(s.Path(judges[0].Target)) == 0 {
+		t.Errorf("the first judge's target %q is not an entry of the session", judges[0].Target)
+	}
+	if judges[1].Target != "" || judges[0].Session == judges[1].Session {
+		t.Errorf("judges = %+v, %+v", judges[0], judges[1])
+	}
+	if err := s.VerifyRecords(s.Leaf()); err != nil {
+		t.Errorf("VerifyRecords: %v", err)
+	}
+}
+
+// handbackFixture builds the session handback.jsonl holds: a triage
+// agent A with a memory of twenty facts, sixteen of them omitted by
+// budget, handed to a billing agent B and back, five turns in all.
+//
+//  1. A runs, writing its parts and its omitted list whole.
+//  2. B replaces A's parts and omitted list with its own, in a delta.
+//  3. A is handed the session back, and has saved a fact: its parts
+//     are named by hash, the one new fact by text, and its omitted
+//     list is the new fact's element and a keep of sixteen over the
+//     list entry 1 wrote.
+//  4. B again.
+//  5. A again, unchanged: its omitted list is one keep over the list
+//     entry 3 resolved to, and its parts are named by hash.
+//
+// Every response carries the hash of the request its context rebuilds.
+// With bad set, entry 5 names an entry that is not on the path.
+func handbackFixture(t *testing.T, bad bool) *Session {
+	t.Helper()
+	id := "01995b2a-0000-7000-8000-000000000019"
+	if bad {
+		id = "01995b2a-0000-7000-8000-00000000001a"
+	}
+	at, _ := time.Parse(time.RFC3339, "2026-10-01T12:00:00Z")
+	s := New(Header{ID: id, CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must := func(e Entry) string {
+		t.Helper()
+		got, err := s.Append(e)
+		if err != nil {
+			t.Fatalf("append %T: %v", e, err)
+		}
+		return got
+	}
+	factParts := func(shown []int) []InstructionPart {
+		var parts []InstructionPart
+		for _, n := range shown {
+			p, _ := memoryFact(n)
+			parts = append(parts, p)
+		}
+		return parts
+	}
+	factsOmitted := func(ns ...int) []OmittedPart {
+		var list []OmittedPart
+		for _, n := range ns {
+			_, o := memoryFact(n)
+			list = append(list, o)
+		}
+		return list
+	}
+	seq := func(from, to int) []int {
+		var out []int
+		for n := from; n <= to; n++ {
+			out = append(out, n)
+		}
+		return out
+	}
+	agentA := func(shown []int) []InstructionPart {
+		return append([]InstructionPart{{ID: "product", Source: "product", Text: "You are the triage agent."}, {ID: "agentsmd", Source: "agentsmd", Text: "Route billing questions to billing."}}, factParts(shown)...)
+	}
+	agentB := []InstructionPart{
+		{ID: "product", Source: "product", Text: "You are the billing agent."},
+		{ID: "skills", Source: "agentskill", Text: "refund: issue a refund\ninvoice: find an invoice"},
+	}
+	omittedB := []OmittedPart{
+		{ID: "skills/dispute", Reason: "budget", Size: 120, Source: "agentskill"},
+		{ID: "skills/audit", Reason: "budget", Size: 90, Source: "agentskill"},
+	}
+	turn := func(n int, model string, parts []InstructionPart, omitted []OmittedPart, user string) {
+		t.Helper()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg *ConfigEntry
+		if n == 1 {
+			if cfg, err = ConfigFromRequestParts(openresponses.Request{Model: model, Instructions: JoinInstructions(parts)}, parts...); err != nil {
+				t.Fatal(err)
+			}
+			cfg.InstructionsOmitted = omitted
+		} else {
+			cfg = ctx.Settings.InstructionsDelta(parts)
+			if cfg == nil {
+				cfg = &ConfigEntry{}
+			}
+			if model != ctx.Settings.Model {
+				cfg.Model = model
+			}
+			if d := ctx.Settings.OmittedDelta(omitted); d != nil {
+				cfg.InstructionsOmitted = d
+			}
+		}
+		if n == 5 && bad {
+			cfg.InstructionsOmitted = []OmittedPart{{Keep: len(omitted), Of: "sha256:" + strings.Repeat("0", 64)}}
+		}
+		must(cfg)
+		must(NewItemEntry(openresponses.UserText(user)))
+		if ctx, err = s.Context(); err != nil {
+			t.Fatal(err)
+		}
+		req, err := ctx.Request()
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash, err := RequestHash(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		respID := fmt.Sprintf("resp_%d", n)
+		answer := NewItemEntry(&openresponses.Message{ID: "msg_" + respID, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: "Noted.", Annotations: []openresponses.Annotation{}}}})
+		answer.ResponseID = respID
+		must(answer)
+		must(&ResponseEntry{ResponseID: respID, Model: model, Status: openresponses.ResponseStatusCompleted, RequestHash: hash})
+	}
+	turn(1, "gpt-5", agentA(seq(0, 3)), factsOmitted(seq(4, 19)...), "I was charged twice.")
+	turn(2, "gpt-5-mini", agentB, omittedB, "Please refund the second charge.")
+	// A saved fact 20 while B ran: it sorts into the shown facts and
+	// pushes fact 3 out, to the head of the omitted list.
+	turn(3, "gpt-5", agentA([]int{0, 1, 2, 20}), factsOmitted(append([]int{3}, seq(4, 19)...)...), "Thanks. What about my other card?")
+	turn(4, "gpt-5-mini", agentB, omittedB, "Which invoice was it?")
+	turn(5, "gpt-5", agentA([]int{0, 1, 2, 20}), factsOmitted(append([]int{3}, seq(4, 19)...)...), "Back to triage.")
+	return s
+}
+
+// A switchVariant is the way switchFixture writes its session.
+type switchVariant int
+
+const (
+	// switchOmit writes omit and hashes every response.
+	switchOmit switchVariant = iota
+	// switchAbsent writes as 0.10 does: no omit, and a response whose
+	// request left items out carries no hash.
+	switchAbsent
+	// switchBad writes omit, and hashes the third response over the
+	// request with the other model's reasoning in it.
+	switchBad
+	// switchFolded writes omit, folds the context, and switches model
+	// again: the checkpoint carries the omit, and the reasoning the fold
+	// kept is left out of the request to the other model.
+	switchFolded
+)
+
+// switchFixture builds the session omit.jsonl holds, or with another
+// variant omit-absent.jsonl or bad-omit.jsonl. One conversation, four
+// requests, reasoning in each response:
+//
+//  1. gpt-5 answers, and reasons. Its response entry names the model
+//     under a dated snapshot name, as a provider does.
+//  2. The session switches to gpt-5-mini, and the config entry that
+//     changes the model writes omit reasoning other_models: the request
+//     leaves out gpt-5's reasoning, which gpt-5-mini would refuse.
+//  3. The session switches back and the config writes the rule again,
+//     which changes nothing: gpt-5's reasoning is in the request, and
+//     gpt-5-mini's is out.
+//  4. A host drops gpt-5-mini's message by listing its entry in omit
+//     items, beside the rule still in force.
+func switchFixture(t *testing.T, variant switchVariant) *Session {
+	t.Helper()
+	id := map[switchVariant]string{
+		switchOmit:   "01995b2a-0000-7000-8000-00000000001b",
+		switchAbsent: "01995b2a-0000-7000-8000-00000000001c",
+		switchBad:    "01995b2a-0000-7000-8000-00000000001d",
+		switchFolded: "01995b2a-0000-7000-8000-00000000001e",
+	}[variant]
+	at, _ := time.Parse(time.RFC3339, "2026-10-01T14:00:00Z")
+	s := New(Header{ID: id, CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must := func(e Entry) string {
+		t.Helper()
+		got, err := s.Append(e)
+		if err != nil {
+			t.Fatalf("append %T: %v", e, err)
+		}
+		return got
+	}
+	// sent is the hash of the request the next call is sent: what the
+	// context at the leaf rebuilds, or, with bare set, what it would
+	// rebuild had nothing been left out.
+	sent := func(bare bool) string {
+		t.Helper()
+		ctx, err := buildContext(s.Path(s.Leaf()), !bare)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := ctx.Request()
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := RequestHash(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	// call appends the user message, then the output of the call and
+	// its response, which carries the hash unless the writer cannot
+	// stand behind one. It returns the message's entry.
+	call := func(n int, model, snapshot, user string, hash func() string) (message string) {
+		t.Helper()
+		must(NewItemEntry(openresponses.UserText(user)))
+		h := hash()
+		respID := fmt.Sprintf("resp_%d", n)
+		reasoning := NewItemEntry(&openresponses.ReasoningItem{ID: fmt.Sprintf("rs_%d", n), Summary: openresponses.Contents{&openresponses.SummaryText{Text: "thinking about " + user}}, EncryptedContent: fmt.Sprintf("enc-%s-%d", model, n)})
+		reasoning.ResponseID = respID
+		must(reasoning)
+		answer := NewItemEntry(&openresponses.Message{ID: "msg_" + respID, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: "Answer " + respID + ".", Annotations: []openresponses.Annotation{}}}})
+		answer.ResponseID = respID
+		message = must(answer)
+		must(&ResponseEntry{ResponseID: respID, Model: snapshot, Status: openresponses.ResponseStatusCompleted, RequestHash: h})
+		return message
+	}
+	hashed := func() string { return sent(false) }
+	// afterSwitch is the hash a writer of 0.10 could record for a request
+	// that left items out of what the path shows: none.
+	afterSwitch := func() string {
+		if variant == switchAbsent {
+			return ""
+		}
+		return sent(false)
+	}
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	call(1, "gpt-5", "gpt-5-2026-08-07", "Plan the migration.", hashed)
+
+	switch1 := &ConfigEntry{Model: "gpt-5-mini"}
+	if variant != switchAbsent {
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, ok := ctx.Settings.OmitDelta(Omit{Reasoning: OmitOtherModels})
+		if !ok || d == nil {
+			t.Fatalf("OmitDelta = %v, %v", d, ok)
+		}
+		switch1.Omit = d
+	}
+	must(switch1)
+	miniMessage := call(2, "gpt-5-mini", "gpt-5-mini-2026-08-07", "Now apply step one.", afterSwitch)
+
+	switch2 := &ConfigEntry{Model: "gpt-5"}
+	if variant != switchAbsent {
+		// A writer that states the rule at every switch writes it again;
+		// it changes nothing, and so does not make the entry a delta.
+		switch2.Omit = &Omit{Reasoning: OmitOtherModels}
+	}
+	must(switch2)
+	third := afterSwitch
+	if variant == switchBad {
+		third = func() string { return sent(true) }
+	}
+	call(3, "gpt-5", "gpt-5-2026-08-07", "Back to the first model: summarise.", third)
+
+	if variant != switchAbsent {
+		must(&ConfigEntry{Omit: &Omit{Items: []string{miniMessage}}})
+	}
+	call(4, "gpt-5", "gpt-5-2026-08-07", "Anything else?", afterSwitch)
+	if variant == switchFolded {
+		// The request holds ten items, two of gpt-5's reasoning among
+		// them in the last six, which the fold keeps. The checkpoint
+		// carries the rule and the listed entry.
+		comp, err := s.CompactKeeping(6, openresponses.UserText("Summary of the migration so far."))
+		if err != nil {
+			t.Fatal(err)
+		}
+		must(comp)
+		must(&ConfigEntry{Model: "gpt-5-mini"})
+		call(5, "gpt-5-mini", "gpt-5-mini-2026-08-07", "Finish the migration.", hashed)
+	}
+	return s
+}
+
+// TestOmitFixtures reads the 0.11 conformance fixtures for the omit
+// setting: with the rule written at each switch every response's hash
+// verifies, though the requests leave out another model's reasoning and
+// a host's listed message; the same session as 0.10 writes it verifies
+// the first response alone; and a hash over the request with the items
+// in fails as a divergence from the rule, not as a response with no
+// hash.
+func TestOmitFixtures(t *testing.T) {
+	for name, variant := range map[string]switchVariant{"omit": switchOmit, "omit-absent": switchAbsent, "bad-omit": switchBad, "omit-folded": switchFolded} {
+		raw, err := os.ReadFile(filepath.Join("testdata", "sessions", name+".jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		if err := Write(&buf, switchFixture(t, variant)); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(buf.Bytes(), raw) {
+			t.Errorf("%s.jsonl is not what switchFixture builds; run go test -update", name)
+		}
+		s := loadFixture(t, name)
+		var results []string
+		for _, e := range s.Entries() {
+			r, ok := e.(*ResponseEntry)
+			if !ok {
+				continue
+			}
+			switch err := s.Verify(r.ID); {
+			case err == nil:
+				results = append(results, "ok")
+			case errors.Is(err, ErrNoHash):
+				results = append(results, "unhashed")
+			case errors.Is(err, ErrOmitDivergence) && errors.Is(err, ErrHashMismatch):
+				results = append(results, "divergence")
+			case errors.Is(err, ErrHashMismatch):
+				results = append(results, "mismatch")
+			default:
+				t.Fatalf("%s: %s: %v", name, r.ResponseID, err)
+			}
+		}
+		want := map[string]string{
+			"omit":        "ok ok ok ok",
+			"omit-absent": "ok unhashed unhashed unhashed",
+			"bad-omit":    "ok ok divergence ok",
+			"omit-folded": "ok ok ok ok ok",
+		}[name]
+		if got := strings.Join(results, " "); got != want {
+			t.Errorf("%s: responses %s, want %s", name, got, want)
+		}
+	}
+
+	// What the first fixture's requests leave out, and why.
+	s := loadFixture(t, "omit")
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	for _, o := range ctx.OmittedItems {
+		left = append(left, o.Reason+" "+o.Entry.Item.ItemType())
+	}
+	if got := strings.Join(left, ","); got != "other_models reasoning,items message" {
+		t.Errorf("the leaf's request leaves out %s", got)
+	}
+	if ctx.Settings.Omit.Reasoning != OmitOtherModels || len(ctx.Settings.Omit.Items) != 1 {
+		t.Errorf("omit in force: %+v", ctx.Settings.Omit)
+	}
+	// 4 users, 4 answers' worth less one listed message, 4 reasoning
+	// items less gpt-5-mini's.
+	if len(ctx.Items) != 4+3+3 || len(ctx.Items) != len(ctx.ItemEntries) {
+		t.Errorf("the request holds %d items", len(ctx.Items))
+	}
+	// After a fold the checkpoint carries the omit, and the request to
+	// the other model still leaves out gpt-5's reasoning the fold kept.
+	folded := loadFixture(t, "omit-folded")
+	var comp *CompactionEntry
+	for _, e := range folded.Entries() {
+		if c, ok := e.(*CompactionEntry); ok {
+			comp = c
+		}
+	}
+	if comp == nil || comp.Config.Omit.Reasoning != OmitOtherModels || len(comp.Config.Omit.Items) != 1 {
+		t.Fatalf("the checkpoint carries %+v", comp)
+	}
+	fctx, err := folded.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fleft []string
+	for _, o := range fctx.OmittedItems {
+		fleft = append(fleft, o.Reason+" "+o.Entry.Item.ItemType())
+	}
+	if got := strings.Join(fleft, ","); got != "other_models reasoning,other_models reasoning" {
+		t.Errorf("after the fold the request leaves out %s", got)
+	}
+
+	// A path that ends before the switch never meets the member: the
+	// first request is as written, and no later entry leaves anything
+	// out of it.
+	var firstResp string
+	for _, e := range s.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			firstResp = r.ID
+			break
+		}
+	}
+	before, err := s.ContextAt(firstResp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.OmittedItems) != 0 || !before.Settings.Omit.IsZero() {
+		t.Errorf("the path to the first response leaves out %d items under %+v", len(before.OmittedItems), before.Settings.Omit)
+	}
+}
+
+// foldedHandbackFixture builds the session bad-handback-folded.jsonl
+// holds: an agent writes an omitted list, the context is folded, and a
+// later entry names the list by an of that names the entry before the
+// checkpoint. The checkpoint writes the list whole and starts the lists
+// afresh, so nothing after it names an entry before it: the element is
+// kept as written, and the request still verifies.
+func foldedHandbackFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-10-01T13:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-00000000001f", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must := func(e Entry) string {
+		t.Helper()
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatalf("append %T: %v", e, err)
+		}
+		return id
+	}
+	first := must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief."), InstructionsOmitted: omitList("p", 4)})
+	must(NewItemEntry(openresponses.UserText("one")))
+	must(NewItemEntry(openresponses.UserText("two")))
+	comp, err := s.CompactKeeping(1, openresponses.UserText("Summary of one and two."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(comp)
+	must(&ConfigEntry{InstructionsOmitted: []OmittedPart{{Keep: 4, Of: first}}})
+	must(NewItemEntry(openresponses.UserText("three")))
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := ctx.Request()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := RequestHash(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := NewItemEntry(openresponses.AssistantText("Three."))
+	answer.ResponseID = "resp_1"
+	must(answer)
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: hash})
+	return s
+}
+
+// TestFoldedHandbackFixture: an of after a fold that names an entry
+// before the checkpoint is kept as written, found by UnresolvedOf, and
+// does not stop the request verifying.
+func TestFoldedHandbackFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", "bad-handback-folded.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, foldedHandbackFixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf.Bytes(), raw) {
+		t.Error("bad-handback-folded.jsonl is not what foldedHandbackFixture builds; run go test -update")
+	}
+	s := loadFixture(t, "bad-handback-folded")
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ctx.Settings.InstructionsOmitted; len(got) != 1 || got[0].ID != "" || got[0].Keep != 4 || got[0].Of == "" {
+		t.Errorf("list in force %+v, want the keep kept as written", got)
+	}
+	bad, err := s.UnresolvedOf(s.Leaf())
+	if err != nil || len(bad) != 1 {
+		t.Fatalf("UnresolvedOf = %v, %v", bad, err)
+	}
+	for _, e := range s.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			if err := s.Verify(r.ID); err != nil {
+				t.Errorf("%s: %v", r.ResponseID, err)
+			}
 		}
 	}
 }

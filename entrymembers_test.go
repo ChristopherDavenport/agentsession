@@ -277,6 +277,8 @@ func fillValue(t *testing.T, v reflect.Value, name string) {
 // entry that will not marshal cannot be round-tripped.
 func fillString(name string) string {
 	switch name {
+	case "Rel":
+		return RelJudgedBy // the relation a link's target is defined for
 	case "Phase":
 		return RunStart // overridden per variant
 	case "Verdict":

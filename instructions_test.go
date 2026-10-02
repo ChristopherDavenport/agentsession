@@ -285,7 +285,7 @@ func TestInstructionsDeltaShapes(t *testing.T) {
 			t.Errorf("%d parts survive a string that replaced them", len(got.InstructionsParts))
 		}
 	})
-	t.Run("the delta from a string is the whole composition", func(t *testing.T) {
+	t.Run("the delta from a string names the parts it replaced by hash", func(t *testing.T) {
 		one := "Be brief."
 		plain := settings.Apply(&ConfigEntry{Instructions: &one})
 		delta := plain.InstructionsDelta(composed())
@@ -293,8 +293,32 @@ func TestInstructionsDeltaShapes(t *testing.T) {
 			t.Fatal("no delta")
 		}
 		for _, p := range delta.InstructionsParts {
+			if p.Text != "" || p.Hash == "" {
+				t.Errorf("part %s carries text %q: the path had it before the string replaced it", p.ID, p.Text)
+			}
+		}
+		if got := plain.Apply(delta); got.Instructions != JoinInstructions(composed()) {
+			t.Errorf("instructions after the delta = %q", got.Instructions)
+		}
+	})
+	t.Run("the delta from a string with no history is the whole composition", func(t *testing.T) {
+		// Settings a replace started afresh, or a checkpoint carried,
+		// remember no part that left force, so nothing can be named.
+		one := "Be brief."
+		fresh := Settings{Instructions: one}
+		delta := fresh.InstructionsDelta(composed())
+		if delta == nil {
+			t.Fatal("no delta")
+		}
+		for _, p := range delta.InstructionsParts {
 			if p.Text == "" {
 				t.Errorf("part %s is named as unchanged against a string", p.ID)
+			}
+		}
+		replaced := settings.Apply(&ConfigEntry{Replace: true, Instructions: &one})
+		for _, p := range replaced.InstructionsDelta(composed()).InstructionsParts {
+			if p.Text == "" {
+				t.Errorf("part %s names a hash after a replace discarded it", p.ID)
 			}
 		}
 	})
@@ -965,4 +989,229 @@ func TestInstructionsHashLeftForce(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestInstructionsDeltaOutOfForce: a writer of 0.11 names a part the
+// path has the text of by its hash when the part is not in force, as a
+// hand-back to an agent whose parts another agent replaced does, and
+// writes the text only of a part the path never had under its ID, with
+// its source; a compaction's checkpoint and a replace start the path's
+// parts afresh (#173).
+func TestInstructionsDeltaOutOfForce(t *testing.T) {
+	agentA := []InstructionPart{
+		{ID: "product", Source: "product", Text: "You are the triage agent."},
+		{ID: "agentsmd", Source: "agentsmd", Text: strings.Repeat("a", 400)},
+		{ID: "memory", Source: "agentmemory", Text: strings.Repeat("m", 800)},
+	}
+	agentB := []InstructionPart{
+		{ID: "product", Source: "product", Text: "You are the billing agent."},
+		{ID: "skills", Source: "agentskill", Text: strings.Repeat("s", 600)},
+	}
+	// turn appends the delta that takes the session to parts and one
+	// user message, and returns the config it wrote, nil for none.
+	turn := func(t *testing.T, s *Session, parts []InstructionPart) *ConfigEntry {
+		t.Helper()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := ctx.Settings.InstructionsDelta(parts)
+		if cfg != nil {
+			if _, err := s.Append(cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		appendText(t, s, "next")
+		after, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if unresolvedParts(after.Settings.InstructionsParts) || after.Settings.Instructions != JoinInstructions(parts) {
+			t.Fatalf("the delta does not rebuild the instructions: %+v", after.Settings.InstructionsParts)
+		}
+		for i, p := range after.Settings.InstructionsParts {
+			if p.ID != parts[i].ID || p.Source != parts[i].Source || p.Text != parts[i].Text {
+				t.Errorf("part %d is %+v, want %+v", i, p, parts[i])
+			}
+		}
+		return cfg
+	}
+	textOf := func(cfg *ConfigEntry) (named, texts int) {
+		for _, p := range cfg.InstructionsParts {
+			if p.Keep == 0 {
+				named++
+			}
+			if p.Text != "" {
+				texts++
+			}
+		}
+		return
+	}
+	t.Run("a hand-back names every part by hash", func(t *testing.T) {
+		s := New(Header{})
+		first := turn(t, s, agentA)
+		if _, texts := textOf(first); texts != len(agentA) {
+			t.Fatalf("the first config carries %d texts, want %d", texts, len(agentA))
+		}
+		turn(t, s, agentB)
+		back := turn(t, s, agentA)
+		if back == nil {
+			t.Fatal("no delta for a hand-back")
+		}
+		for _, p := range back.InstructionsParts {
+			if p.Text != "" || p.Hash == "" || p.Source != "" {
+				t.Errorf("part %+v is not named by its hash alone", p)
+			}
+		}
+		sized := *back
+		line, err := MarshalEntry(withEnvelope(&sized))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(line) > 600 {
+			t.Errorf("the hand-back is %d bytes, which is not the hashes alone", len(line))
+		}
+		// And it survives a write and a read, where a reader resolves
+		// the hashes against the path alone.
+		var buf bytes.Buffer
+		if err := Write(&buf, s); err != nil {
+			t.Fatal(err)
+		}
+		read, err := Read(&buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, err := read.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if unresolvedParts(ctx.Settings.InstructionsParts) || ctx.Settings.Instructions != JoinInstructions(agentA) {
+			t.Errorf("the file reads as %+v", ctx.Settings.InstructionsParts)
+		}
+	})
+	t.Run("a part never had carries its text", func(t *testing.T) {
+		s := New(Header{})
+		turn(t, s, agentA)
+		turn(t, s, agentB)
+		next := append(append([]InstructionPart(nil), agentA...), InstructionPart{ID: "scratch", Source: "product", Text: "new"})
+		back := turn(t, s, next)
+		for _, p := range back.InstructionsParts {
+			if (p.ID == "scratch") != (p.Text != "") {
+				t.Errorf("part %+v: only the part the path never had carries text", p)
+			}
+		}
+	})
+	t.Run("a source the path did not give the text is written with it", func(t *testing.T) {
+		s := New(Header{})
+		turn(t, s, agentA)
+		turn(t, s, agentB)
+		moved := append([]InstructionPart(nil), agentA...)
+		moved[1].Source = "elsewhere"
+		back := turn(t, s, moved)
+		for _, p := range back.InstructionsParts {
+			if (p.ID == "agentsmd") != (p.Text != "") {
+				t.Errorf("part %+v: the part whose source moved carries its text, the others do not", p)
+			}
+		}
+	})
+	t.Run("a text a part in force had before", func(t *testing.T) {
+		s := New(Header{})
+		turn(t, s, agentA)
+		changed := edit(agentA, "memory", "a different memory")
+		turn(t, s, changed)
+		back := turn(t, s, agentA)
+		var memory InstructionPart
+		for _, p := range back.InstructionsParts {
+			if p.ID == "memory" {
+				memory = p
+			}
+		}
+		if memory.Text != "" || memory.Hash != HashText(agentA[2].Text) {
+			t.Errorf("the memory part is %+v, want its hash alone", memory)
+		}
+	})
+	t.Run("a compaction starts the parts afresh", func(t *testing.T) {
+		s := New(Header{})
+		turn(t, s, agentA)
+		turn(t, s, agentB)
+		comp, err := s.CompactKeeping(1, openresponses.UserText("summary"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(comp); err != nil {
+			t.Fatal(err)
+		}
+		back := turn(t, s, agentA)
+		for _, p := range back.InstructionsParts {
+			if p.ID != "" && p.Text == "" {
+				t.Errorf("part %+v names a hash the checkpoint cannot resolve", p)
+			}
+		}
+	})
+	t.Run("a replace starts the parts afresh", func(t *testing.T) {
+		s := New(Header{})
+		turn(t, s, agentA)
+		cfg, err := ConfigFromRequestParts(openresponses.Request{Model: "m", Instructions: JoinInstructions(agentB)}, agentB...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(cfg); err != nil {
+			t.Fatal(err)
+		}
+		back := turn(t, s, agentA)
+		for _, p := range back.InstructionsParts {
+			if p.ID != "" && p.Text == "" {
+				t.Errorf("part %+v names a hash a replace discarded", p)
+			}
+		}
+	})
+}
+
+// TestInstructionsDeltaHashResolvesInForceFirst: a hash is resolved
+// against the part in force under its id before the parts that left
+// force, so a writer names a part out of force by hash only when no part
+// is in force under its id or the one in force is resolved and has other
+// text. A part in force with the text it means and another source, and
+// one in force the path could not resolve, carry their text.
+func TestInstructionsDeltaHashResolvesInForceFirst(t *testing.T) {
+	apply := func(settings Settings, parts ...InstructionPart) Settings {
+		return settings.Apply(&ConfigEntry{InstructionsParts: parts})
+	}
+	t.Run("the text in force with another source than the one that left", func(t *testing.T) {
+		// x(T,S2) leaves force, x(T,S1) is in force: a hash would resolve
+		// to the part in force and give x the source S1.
+		settings := apply(apply(Settings{}, InstructionPart{ID: "x", Text: "T", Source: "S2"}), InstructionPart{ID: "x", Text: "T", Source: "S1"})
+		want := []InstructionPart{{ID: "x", Text: "T", Source: "S2"}}
+		delta := settings.InstructionsDelta(want)
+		if delta == nil || len(delta.InstructionsParts) != 1 || delta.InstructionsParts[0].Text != "T" || delta.InstructionsParts[0].Source != "S2" {
+			t.Fatalf("delta %+v, want the part with its text and source", delta)
+		}
+		got := settings.Apply(delta)
+		if got.InstructionsParts[0].Source != "S2" || got.Instructions != "T" {
+			t.Errorf("parts after the delta: %+v", got.InstructionsParts)
+		}
+	})
+	t.Run("an in force part the path could not resolve", func(t *testing.T) {
+		settings := apply(Settings{}, InstructionPart{ID: "x", Text: "T"})
+		settings = apply(settings, InstructionPart{ID: "x", Text: "U"})
+		settings = apply(settings, InstructionPart{ID: "x", Hash: "sha256:bogus"})
+		if !unresolvedParts(settings.InstructionsParts) {
+			t.Fatal("the setup left a resolved part")
+		}
+		delta := settings.InstructionsDelta([]InstructionPart{{ID: "x", Text: "T"}})
+		if delta == nil || delta.InstructionsParts[0].Text != "T" {
+			t.Fatalf("delta %+v, want the text written out", delta)
+		}
+		got := settings.Apply(delta)
+		if unresolvedParts(got.InstructionsParts) || got.Instructions != "T" {
+			t.Errorf("after the delta: %+v, instructions %q", got.InstructionsParts, got.Instructions)
+		}
+	})
+	t.Run("a text the part in force had before still goes by hash", func(t *testing.T) {
+		settings := apply(apply(Settings{}, InstructionPart{ID: "x", Text: "T", Source: "S"}), InstructionPart{ID: "x", Text: "U", Source: "S"})
+		delta := settings.InstructionsDelta([]InstructionPart{{ID: "x", Text: "T", Source: "S"}})
+		if delta == nil || delta.InstructionsParts[0].Text != "" || delta.InstructionsParts[0].Hash != HashText("T") {
+			t.Errorf("delta %+v, want the hash alone", delta)
+		}
+	})
 }

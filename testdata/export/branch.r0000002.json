@@ -185,7 +185,7 @@
     "abandoned_at": "sha256:d5fb4724d28690ce84fa6970b57ec286c645d3493939c71e0b2e07509573a0d2",
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.10",
+      "format": "agentsession/0.11",
       "labels": {
         "sha256:d5fb4724d28690ce84fa6970b57ec286c645d3493939c71e0b2e07509573a0d2": "fork"
       },

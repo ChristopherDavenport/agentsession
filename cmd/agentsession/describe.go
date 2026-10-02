@@ -63,6 +63,10 @@ func describeEntry(e agentsession.Entry, full bool) string {
 			ids := make([]string, 0, n)
 			for _, o := range v.InstructionsOmitted {
 				if o.ID == "" && o.Keep > 0 {
+					if o.Of != "" {
+						ids = append(ids, fmt.Sprintf("+%d of %s", o.Keep, shortID(o.Of)))
+						continue
+					}
 					ids = append(ids, fmt.Sprintf("+%d", o.Keep))
 					continue
 				}
@@ -71,6 +75,9 @@ func describeEntry(e agentsession.Entry, full bool) string {
 			parts = append(parts, fmt.Sprintf("omitted %s", strings.Join(ids, ", ")))
 		} else if v.InstructionsOmitted != nil {
 			parts = append(parts, "omitted cleared")
+		}
+		if v.Omit != nil {
+			parts = append(parts, describeOmit(*v.Omit))
 		}
 		if v.Reasoning != nil {
 			parts = append(parts, "reasoning")
@@ -164,6 +171,9 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		s := v.Rel + " " + v.Session
 		if v.CallID != "" {
 			s += " via " + v.CallID
+		}
+		if v.Target != "" {
+			s += " judging " + shortID(v.Target)
 		}
 		return s
 	case *agentsession.RunEntry:
@@ -345,4 +355,19 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// describeOmit is how a config entry's omit member reads in a listing.
+func describeOmit(o agentsession.Omit) string {
+	if o.IsZero() {
+		return "omit cleared"
+	}
+	var bits []string
+	if o.Reasoning != "" {
+		bits = append(bits, "reasoning "+o.Reasoning)
+	}
+	if n := len(o.Items); n > 0 {
+		bits = append(bits, fmt.Sprintf("%d item(s)", n))
+	}
+	return "omit " + strings.Join(bits, ", ")
 }

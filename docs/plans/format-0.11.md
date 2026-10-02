@@ -152,9 +152,12 @@ other settings:
 ```
 
 - `reasoning` is closed. `other_models`: a `reasoning` item that is an
-  output of a `response` whose model, the entry's `model` or else the
-  model in force at it, is not the model in force for this request
-  contributes nothing in step 4 of the context algorithm. The rule is a
+  output of a `response` and was written while a model other than the
+  model in force for this request was in force, which is the model in
+  force at the item's own entry and never the `response` entry's
+  `model`, contributes nothing in step 4 of the context algorithm. An
+  empty model name attributes nothing: an item written under none is
+  never left out, and a request under none leaves nothing out. The rule is a
   function of the record, so a writer writes it once, at the entry that
   changes the model, and it covers every later request without listing
   items; a switch back is covered too, since the rule reads the model
@@ -217,13 +220,27 @@ together, since the header cannot say which, and the link can. agenteval
   first, then agentturn/session writing (2), (3) and (4), agenteval
   writing (5), the exports and the studies' probes.
 
-## Open for the maintainer
+## Decided by the maintainer
 
-- Whether `omit.reasoning` alone, or `items` beside it, goes into 0.11.
-  The three round 8 products need the rule; `items` is for the filter
-  #56 was filed about, which no product writes today.
-- Whether item 1 relaxes 0.9 and 0.10 files too (as drafted) or only
-  0.11 ones. Relaxing them clears the sessions the round 7 and 8 studies
-  left unverifiable; keeping them strict keeps the note.
-- The spelling `of` (item 3) against `from`; `from` is taken by
-  `branch_summary`.
+- `omit` carries `reasoning: other_models` and the cumulative `items`
+  list.
+- Item 1 relaxes 0.9 and 0.10 files too, as drafted.
+- The omitted-list cursor is spelled `of`.
+
+The RFC text refines the draft in four places, each to make the rule
+total or to match what a recorder can do:
+
+- `omit.reasoning` compares the model in force at the reasoning item's
+  own entry with the model in force for the request, attributes nothing
+  to an empty model name, and never reads a
+  `response` entry's `model`. A provider spells that member as its own
+  snapshot of the alias requested, which a request's model never equals,
+  and agentturn attributes reasoning by the settings' model already.
+- An `omit` delta merges: it sets the `reasoning` it names, adds its
+  `items` to those in force, and `{}` clears both.
+- `of` is counted over a list of its own, with a cursor of its own per
+  list, which an element naming a part by `id` moves in each list that
+  names it, so a hand-back whose parts changed in the middle keeps both
+  halves by `of`.
+- A `replace` starts the lists `of` can name afresh, as it starts the
+  parts; the draft said only a compaction's checkpoint did.

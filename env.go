@@ -258,6 +258,44 @@ func NewSubsessionLink(session, callID string) *LinkEntry {
 	return &LinkEntry{Rel: RelSubsession, Session: session, CallID: callID}
 }
 
+// NewJudgedByLink builds the link entry a judged session records for
+// the session of its judge: judge is the judge's session ID, and target,
+// when it is not empty, the entry of the judged session the judgement is
+// about, the one the judge's outcome names. The judge is a session of
+// its own whose header names the judged one as its parent_session, which
+// a subagent's and a fork's header does too, so the link is what says
+// which it is. [Judges] reads these links back.
+func NewJudgedByLink(judge, target string) *LinkEntry {
+	return &LinkEntry{Rel: RelJudgedBy, Session: judge, Target: target}
+}
+
+// Judges returns the judged_by links on a root-first path, in path
+// order: the sessions that judged what the path holds, each with the
+// entry it judged in its Target when the writer named one. A link is a
+// record entry and contributes nothing to a context, so a reader
+// selecting the judges of a run reads them here and filters by Target
+// for the judgements of one entry; the header of a judge's session
+// cannot say it is one, since a subagent and a fork carry the same
+// parent_session.
+func Judges(path []Entry) []*LinkEntry {
+	var out []*LinkEntry
+	for _, e := range path {
+		if l, ok := e.(*LinkEntry); ok && l.Rel == RelJudgedBy {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// Judges returns the judged_by links on the path to leaf; see [Judges].
+func (s *Session) Judges(leaf string) ([]*LinkEntry, error) {
+	path := s.Path(leaf)
+	if path == nil {
+		return nil, fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
+	}
+	return Judges(path), nil
+}
+
 // NewLabelEntry builds a label on target; an empty label clears.
 func NewLabelEntry(target, label string) *LabelEntry {
 	e := &LabelEntry{Target: target}

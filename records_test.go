@@ -65,8 +65,9 @@ func TestSourceShape(t *testing.T) {
 }
 
 // TestEmptyResume: a resume refused before it takes up its call, or
-// cut, holds nothing but its start and end; 0.10's rule still reports
-// it, and Run.Empty tells it from a resume that adds a message (#172).
+// cut, holds nothing but its start and end, and format 0.11 accepts it
+// as written; a resume that adds a message and takes nothing up is still
+// reported, and Run.Empty tells the two apart (#172).
 func TestEmptyResume(t *testing.T) {
 	held := "start user calls:a resp hold:a end:input_required "
 	for _, tt := range []struct {
@@ -91,8 +92,12 @@ func TestEmptyResume(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrSourceMismatch) {
-				t.Errorf("VerifyRecords = %v, want ErrSourceMismatch", err)
+			want := ErrSourceMismatch
+			if tt.empty {
+				want = nil
+			}
+			if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, want) {
+				t.Errorf("VerifyRecords = %v, want %v", err, want)
 			}
 			runs, err := s.Runs(s.Leaf())
 			if err != nil {
@@ -103,6 +108,39 @@ func TestEmptyResume(t *testing.T) {
 			}
 			if runs[0].Empty() {
 				t.Error("the first run, which made a call, is empty")
+			}
+		})
+	}
+}
+
+// TestEmptyResumeInput: the relaxation is for a resume over nothing
+// alone. An input over an empty segment is the shape computed, and a
+// run written input whose segment takes a call up is still reported.
+func TestEmptyResumeInput(t *testing.T) {
+	held := "start user calls:a resp hold:a end:input_required "
+	for _, tt := range []struct {
+		name, script string
+		want         error
+	}{
+		{"an empty input", held + "start end:error", nil},
+		{"an input that takes a call up", held + "start:input proceed:a dispatch:a out:a resp end:done", ErrSourceMismatch},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := New(Header{Records: AllRecords})
+			for _, e := range seg(t, tt.script) {
+				b := e.Base()
+				b.ID, b.Parent = "", ""
+				if r, ok := e.(*RunEntry); ok && r.IsEnd() {
+					if end, err := s.EndRun(r.Reason, ""); err == nil {
+						e = end
+					}
+				}
+				if _, err := s.Append(e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, tt.want) {
+				t.Errorf("VerifyRecords = %v, want %v", err, tt.want)
 			}
 		})
 	}

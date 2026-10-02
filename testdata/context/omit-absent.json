@@ -1,0 +1,181 @@
+{
+  "sha256:5bbae4ba3cefc186f1c24fe7c8082522b7dba945e800146b7196e340828dfae2": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Be brief."
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Plan the migration."
+          }
+        ]
+      },
+      {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [
+          {
+            "type": "summary_text",
+            "text": "thinking about Plan the migration."
+          }
+        ],
+        "encrypted_content": "enc-gpt-5-1"
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Answer resp_1.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Now apply step one."
+          }
+        ]
+      },
+      {
+        "type": "reasoning",
+        "id": "rs_2",
+        "summary": [
+          {
+            "type": "summary_text",
+            "text": "thinking about Now apply step one."
+          }
+        ],
+        "encrypted_content": "enc-gpt-5-mini-2"
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_2",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Answer resp_2.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Back to the first model: summarise."
+          }
+        ]
+      },
+      {
+        "type": "reasoning",
+        "id": "rs_3",
+        "summary": [
+          {
+            "type": "summary_text",
+            "text": "thinking about Back to the first model: summarise."
+          }
+        ],
+        "encrypted_content": "enc-gpt-5-3"
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_3",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Answer resp_3.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Anything else?"
+          }
+        ]
+      },
+      {
+        "type": "reasoning",
+        "id": "rs_4",
+        "summary": [
+          {
+            "type": "summary_text",
+            "text": "thinking about Anything else?"
+          }
+        ],
+        "encrypted_content": "enc-gpt-5-4"
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_4",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Answer resp_4.",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "sha256:99f03d666ffc03b6bb860fbee52697b33617afc9ca541a8bd5de6cd8ca0e9c7f",
+      "sha256:93a3c979897b69c7eb1b79a94a98144a76d6e8976b825204d5668982fa505dae",
+      "sha256:881af447ff4a91c60eb2c17d489184b7d4de0d61522c57f3b10c560148cf9c39",
+      "sha256:d38ce3f40cca68ff5c419d7975b74c0dc56a1d628fb44585d18e46e180bcacfa",
+      "sha256:11a36edac6da3c62777db7df85bf77ef1b3e6a80b87e56c405a504add4e42cfb",
+      "sha256:6a7bb312c7fa462815d3db5082f232936ffe2498e85776a303e7352ced2911dc",
+      "sha256:0274218469eb47f7cbf677a54d183a9aee797c2ae0c7d2d979b855f583970641",
+      "sha256:c68c8fa405b043db01dfa86644f283b843979b3424148b71b3c255c281f3dc1e",
+      "sha256:cd423770d83e64d676b7d9b75cc814dc40177985d51f65718939a3ef985ca8a5",
+      "sha256:e8def216807c12b38dc9173e6bf32c7c24b003abed0d321c2db3a7511941ad5d",
+      "sha256:f00139ba2d29921ca0ba474649abdc164c8a10f26c4f2b977be8ebcb513c1a29",
+      "sha256:adeacd2fe09e224390da85d604826b405d7c35252ad87cc56265d76e2a807f91",
+      "sha256:56ee443f993e7dc55eea376147262d18d7aef78b5649f539868ac62abb87b3c9",
+      "sha256:8ba469c974e87b47563b8064ec6bc56fdaebc516ca9ff24610e4722e849db70c",
+      "sha256:d9c65b3b924557ebeefcce78d111c819c56645d7fa015b93aa7c9d9baca36a66",
+      "sha256:122aca6042c5502298ec22021425f5436f48041c02ee0294f740593a1d92fe70",
+      "sha256:60e9d63040aaec58d8fa217aea3f4abe4a9fc96bd31d29abbfef06cafc128544",
+      "sha256:7bae3268ff800722acbbac2bfa2de9b390fb45a9f1da73b6eef248a504624787",
+      "sha256:5bbae4ba3cefc186f1c24fe7c8082522b7dba945e800146b7196e340828dfae2"
+    ],
+    "item_entries": [
+      "sha256:93a3c979897b69c7eb1b79a94a98144a76d6e8976b825204d5668982fa505dae",
+      "sha256:881af447ff4a91c60eb2c17d489184b7d4de0d61522c57f3b10c560148cf9c39",
+      "sha256:d38ce3f40cca68ff5c419d7975b74c0dc56a1d628fb44585d18e46e180bcacfa",
+      "sha256:0274218469eb47f7cbf677a54d183a9aee797c2ae0c7d2d979b855f583970641",
+      "sha256:c68c8fa405b043db01dfa86644f283b843979b3424148b71b3c255c281f3dc1e",
+      "sha256:cd423770d83e64d676b7d9b75cc814dc40177985d51f65718939a3ef985ca8a5",
+      "sha256:adeacd2fe09e224390da85d604826b405d7c35252ad87cc56265d76e2a807f91",
+      "sha256:56ee443f993e7dc55eea376147262d18d7aef78b5649f539868ac62abb87b3c9",
+      "sha256:8ba469c974e87b47563b8064ec6bc56fdaebc516ca9ff24610e4722e849db70c",
+      "sha256:122aca6042c5502298ec22021425f5436f48041c02ee0294f740593a1d92fe70",
+      "sha256:60e9d63040aaec58d8fa217aea3f4abe4a9fc96bd31d29abbfef06cafc128544",
+      "sha256:7bae3268ff800722acbbac2bfa2de9b390fb45a9f1da73b6eef248a504624787"
+    ]
+  }
+}

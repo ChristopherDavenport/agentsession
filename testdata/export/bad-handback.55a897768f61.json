@@ -1,0 +1,365 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-00000000001a",
+  "trajectory_id": "sha256:55a897768f61858af9190c30976f6e03bca16d94be2c0338b148cabce808ca94",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-10-01T12:00:02Z",
+      "source": "user",
+      "message": "I was charged twice.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:e92bd7ff7943b658f197a54d4e9ca188f0fe5c0762eade6a672950fa18b10dff"
+        },
+        "config_entries": [
+          "sha256:4eaae15edc8860528074067cf9ae2deb9fe3a150ae4a28624024ec32ae39677a"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "I was charged twice."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-10-01T12:00:04Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Noted.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:6133bcaa22bf465ded9e9070e6822f05f0e46212104cdc8bc6e8d44339620a0f"
+        },
+        "item_entry_ids": [
+          "sha256:27055c6be87b8034c1c2a2b2cd91a68ade004e49ddf922431059648fe16c3acb"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Noted.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:6133bcaa22bf465ded9e9070e6822f05f0e46212104cdc8bc6e8d44339620a0f",
+            "model": "gpt-5",
+            "request_hash": "sha256:b4c6c1b88afc61214eb818768fb74d2589e6234937227c983f43ba73ab29ead7",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-10-01T12:00:04Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-10-01T12:00:06Z",
+      "source": "user",
+      "message": "Please refund the second charge.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:4788c6fa90a7e317caa7fee40cefe4d242ddc450c75ece33ce12d5a6b38200b8"
+        },
+        "config_entries": [
+          "sha256:f43f976acd7743e74a02790b12f54eb3eea7c94946285616813e0d4237f7b17f"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Please refund the second charge."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-10-01T12:00:08Z",
+      "source": "agent",
+      "model_name": "gpt-5-mini",
+      "message": "Noted.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:48d3ffa3965e382a54e84605118dabc1cd6b9cb6f7ab91a28cff22d1b9e00d65"
+        },
+        "item_entry_ids": [
+          "sha256:e1952985bc46236a6e9bffc3eee4391cb8992339175a48ddcedeb7ae7db3b590"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_2",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Noted.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:48d3ffa3965e382a54e84605118dabc1cd6b9cb6f7ab91a28cff22d1b9e00d65",
+            "model": "gpt-5-mini",
+            "request_hash": "sha256:ef70c41fd05eadc14c02a3478142f3b31bcfc68a89f9c32aa37b8c0c27618d3f",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-10-01T12:00:08Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 5,
+      "timestamp": "2026-10-01T12:00:10Z",
+      "source": "user",
+      "message": "Thanks. What about my other card?",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:86ba6f938855965ac3ffb51990514cbea244057ec1b01032a00169ce9bc2bc42"
+        },
+        "config_entries": [
+          "sha256:aa2da97b983045aa24222aeee007ef853c00bc45e41b6b75bb168cf6034350bb"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Thanks. What about my other card?"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 6,
+      "timestamp": "2026-10-01T12:00:12Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Noted.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:f4287a6f3f7653e1c5293281f5ed5b3f6279841747d9ace955bde1079752f46d"
+        },
+        "item_entry_ids": [
+          "sha256:4efc1e0ccb5670301b83dcb01abf95e59538ec72e2c020523cec6cd73416cfa7"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_3",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Noted.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:f4287a6f3f7653e1c5293281f5ed5b3f6279841747d9ace955bde1079752f46d",
+            "model": "gpt-5",
+            "request_hash": "sha256:42f8074ada7ed7fd17e284d8340bf0cd6d00b117d7bc65ae969f1932b5ac4953",
+            "response_id": "resp_3",
+            "status": "completed",
+            "ts": "2026-10-01T12:00:12Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 7,
+      "timestamp": "2026-10-01T12:00:14Z",
+      "source": "user",
+      "message": "Which invoice was it?",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:0a1e0b5f95013aae9dfab2baa3fde6c3b82c020dc949175dc583fa138c0cb197"
+        },
+        "config_entries": [
+          "sha256:fdf81f8e00b460053e4e3db547262083251d76b131706fa20c997fdc418e5eb3"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Which invoice was it?"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 8,
+      "timestamp": "2026-10-01T12:00:16Z",
+      "source": "agent",
+      "model_name": "gpt-5-mini",
+      "message": "Noted.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:86f27dd599f672af832b4a9fca02234fd4fa81dea0436acbf166fb9c45184692"
+        },
+        "item_entry_ids": [
+          "sha256:9d5d88571dacfef2b8faf071e7c9ee343c38662c6acf79a687c1db165568dcc5"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_4",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Noted.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:86f27dd599f672af832b4a9fca02234fd4fa81dea0436acbf166fb9c45184692",
+            "model": "gpt-5-mini",
+            "request_hash": "sha256:19bce45aa0f04db115632e4dd7868a5b21c89b77073672e41007f47dbd38f987",
+            "response_id": "resp_4",
+            "status": "completed",
+            "ts": "2026-10-01T12:00:16Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 9,
+      "timestamp": "2026-10-01T12:00:18Z",
+      "source": "user",
+      "message": "Back to triage.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:20cbb47ca52e67bcb8a99c148ebc6414eec3f37f9a9ae1af4f9a13ff3562ac4a"
+        },
+        "config_entries": [
+          "sha256:bb53025d82e38164c9c7b6dc1c4a65ee9298a0c8b8de7be78cf10e66634fda0e"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Back to triage."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 10,
+      "timestamp": "2026-10-01T12:00:20Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Noted.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:55a897768f61858af9190c30976f6e03bca16d94be2c0338b148cabce808ca94"
+        },
+        "item_entry_ids": [
+          "sha256:d75604e525669f8169cc0a78466c633dafb876b14c4d1b0766e709d8d90f212d"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_5",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Noted.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:55a897768f61858af9190c30976f6e03bca16d94be2c0338b148cabce808ca94",
+            "model": "gpt-5",
+            "request_hash": "sha256:1f14c35cc25d40e632d547f88fcd5355ee2d21490d357ad4164d2570aef78192",
+            "response_id": "resp_5",
+            "status": "completed",
+            "ts": "2026-10-01T12:00:20Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 5 model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its 10 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 5
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.11",
+      "leaf": "sha256:55a897768f61858af9190c30976f6e03bca16d94be2c0338b148cabce808ca94",
+      "main": true
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

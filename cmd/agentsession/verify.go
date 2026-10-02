@@ -75,36 +75,6 @@ const (
 	reasonNote = "note: no release checks a run's end as it is written; the writer of this run computed its reason or pending list otherwise than ComputeReason and Run.Pending"
 )
 
-// emptyResumeNote follows a source mismatch that is a run written
-// resume that took up nothing; see emptyResume.
-const emptyResumeNote = "note: run %s was written resume and took up nothing: its writer meant to take up a call, and the run ended or was cut before it did; this is not corruption, and format 0.11 is expected to accept it"
-
-// emptyResume returns the run err reports, when err is VerifyRecords'
-// source mismatch on the path to leaf and the run is written resume
-// with an empty segment, or nil. It finds the run as VerifyRecords
-// does: the first whose end verifies and whose source does not.
-func emptyResume(s *agentsession.Session, leaf string, err error) *agentsession.Run {
-	if !errors.Is(err, agentsession.ErrSourceMismatch) {
-		return nil
-	}
-	runs, rerr := s.Runs(leaf)
-	if rerr != nil {
-		return nil
-	}
-	for _, r := range runs {
-		if r.Verify() != nil {
-			return nil
-		}
-		if src := r.Start.Source; (src == agentsession.SourceInput || src == agentsession.SourceResume) && src != agentsession.ComputeSource(r) {
-			if src == agentsession.SourceResume && r.Empty() {
-				return r
-			}
-			return nil
-		}
-	}
-	return nil
-}
-
 // earlierNote follows such an error in a file of a minor before 0.9,
 // which did not forbid what failed; see noteFor.
 const earlierNote = "note: this file declares a minor before 0.9, which did not forbid what failed; it is checked here by 0.9's rules"
@@ -117,9 +87,11 @@ const earlierNote = "note: this file declares a minor before 0.9, which did not 
 // a cas store holds it is the stored header's, since the projection
 // the session is read from declares this release's format. It reports
 // whether anything failed, and the notes the failures earn, as noteFor
-// gives them, distinct and in noteOrder. The note on a run written
-// resume that took up nothing names the run, so it is printed under
-// prefix beside the failure it explains rather than returned.
+// gives them, distinct and in noteOrder. A config entry that names an
+// omitted list by an of the path cannot resolve fails nothing, since
+// the format keeps such an element as written and the list reaches no
+// request, but it names the entry, so its note is printed under prefix
+// rather than returned.
 func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Writer, all bool) (problem bool, notes []string) {
 	var checked, unhashed, failed int
 	for _, e := range s.Entries() {
@@ -139,6 +111,9 @@ func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Wr
 			if all {
 				fmt.Fprintf(stdout, "%s  ok\n", id)
 			}
+		case errors.Is(err, agentsession.ErrOmitDivergence):
+			failed++
+			fmt.Fprintf(stdout, "%s  MISMATCH recorded %s, the request with the items the omit setting leaves out\n", id, r.RequestHash)
 		case errors.Is(err, agentsession.ErrHashMismatch):
 			failed++
 			fmt.Fprintf(stdout, "%s  MISMATCH recorded %s\n", id, r.RequestHash)
@@ -151,13 +126,21 @@ func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Wr
 		fmt.Fprintf(stdout, "%d verified, %d without hash, %d failed\n", checked, unhashed, failed)
 	}
 	problem = failed > 0
+	noted := map[string]bool{}
+	for _, leaf := range s.Leaves() {
+		unresolved, _ := s.UnresolvedOf(leaf)
+		for _, c := range unresolved {
+			if !noted[c.ID] {
+				noted[c.ID] = true
+				fmt.Fprintf(stdout, "%s"+unresolvedOfNote+"\n", prefix, shortID(c.ID))
+			}
+		}
+	}
 	for _, leaf := range s.Leaves() {
 		if err := s.VerifyRecords(leaf); err != nil {
 			problem = true
 			fmt.Fprintf(stdout, "%srecords to %s  ERROR %v\n", prefix, shortID(leaf), err)
-			if r := emptyResume(s, leaf, err); r != nil {
-				fmt.Fprintf(stdout, "%s"+emptyResumeNote+"\n", prefix, r.RunID())
-			} else if n := noteFor(declared, err); n != "" {
+			if n := noteFor(declared, err); n != "" {
 				// noteFor joins the note on an earlier minor with the
 				// writer's note; each is kept once.
 				for _, line := range strings.Split(n, "\n") {
@@ -276,3 +259,8 @@ func noteFor(declared string, err error) string {
 	}
 	return note
 }
+
+// unresolvedOfNote is printed on a line of its own for a config entry
+// whose omitted list names an earlier entry's list the path does not
+// hold.
+const unresolvedOfNote = "note: config %s names an omitted list by an of its path cannot resolve; the element is kept as written, which is not corruption: the list reaches no request"

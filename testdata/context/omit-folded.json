@@ -1,0 +1,143 @@
+{
+  "sha256:056ebc75fa1090a41fdbd7a6684c267817e29c15015d961a29d46a5782418bac": {
+    "settings": {
+      "model": "gpt-5-mini",
+      "instructions": "Be brief.",
+      "omit": {
+        "reasoning": "other_models",
+        "items": [
+          "sha256:c5b17c66c1c979b9a90290d6b3c0ef05411cf666c6ee121338445600c676ff4f"
+        ]
+      }
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Summary of the migration so far."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Back to the first model: summarise."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_3",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Answer resp_3.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Anything else?"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_4",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Answer resp_4.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Finish the migration."
+          }
+        ]
+      },
+      {
+        "type": "reasoning",
+        "id": "rs_5",
+        "summary": [
+          {
+            "type": "summary_text",
+            "text": "thinking about Finish the migration."
+          }
+        ],
+        "encrypted_content": "enc-gpt-5-mini-5"
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_5",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Answer resp_5.",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "sha256:3b19846ddb1ca83ef3af8bebe4becc6b5f6a3b39a9a51c91a68f8eb1b10bc619",
+      "sha256:0ed1e3ad46c5f08133212301e8bdcacba4c1113c1b8cd4b51b9573ea14768e9d",
+      "sha256:979a1d8510b45e15541ec437fca762282508d4bb82317eaa719b31ddd8476d22",
+      "sha256:f5840bad3004d05b433c2a361e3678dea27974d0b36451b6d68c2ad7c4789e9c",
+      "sha256:4d2709e194df6b0a9072b4d8c9afc7697f6f5ec9a1377cdb8c598389c121d501",
+      "sha256:221f568952bffc3d179a3e3d7fa1bd0c0eb30cc7f5a5bc20361de7744a2e6bdc",
+      "sha256:1a9316001e143ef9916160821689fbc7543bec209667d482ab175360bbcf265f",
+      "sha256:446377d0e0b46b7175be1290693e63731f2cc09c4b184d212ef9e2da795bb86b",
+      "sha256:ce2f909961bce5ef70bde7c79954f24e9d0bc0dc7ed0fe01bd455e333aeb70ac",
+      "sha256:aaffa5e6bdb35b0cd90deb3ed2be8da1419db3fa80675b1daffedad0ea70b7a3",
+      "sha256:35e4e4379af433b746698243d2bdfe161411e83180a8ff4a4c00160aa90dffc9",
+      "sha256:d6d4842a83af26e4a82a6d813c974e15e746d9c22d9ed9ed605059d74b787a32",
+      "sha256:b676f0a02e34b8ead9a9c0b17d473661faa9e840b66dc04c54dcf4d8e4212c8e",
+      "sha256:c5c4dae56da100e43c5caa0d37db9a9bf39861ab98c7d1e0b8e12fc5f50aca48",
+      "sha256:056ebc75fa1090a41fdbd7a6684c267817e29c15015d961a29d46a5782418bac"
+    ],
+    "item_entries": [
+      "sha256:3b19846ddb1ca83ef3af8bebe4becc6b5f6a3b39a9a51c91a68f8eb1b10bc619",
+      "sha256:0ed1e3ad46c5f08133212301e8bdcacba4c1113c1b8cd4b51b9573ea14768e9d",
+      "sha256:f5840bad3004d05b433c2a361e3678dea27974d0b36451b6d68c2ad7c4789e9c",
+      "sha256:1a9316001e143ef9916160821689fbc7543bec209667d482ab175360bbcf265f",
+      "sha256:ce2f909961bce5ef70bde7c79954f24e9d0bc0dc7ed0fe01bd455e333aeb70ac",
+      "sha256:d6d4842a83af26e4a82a6d813c974e15e746d9c22d9ed9ed605059d74b787a32",
+      "sha256:b676f0a02e34b8ead9a9c0b17d473661faa9e840b66dc04c54dcf4d8e4212c8e",
+      "sha256:c5c4dae56da100e43c5caa0d37db9a9bf39861ab98c7d1e0b8e12fc5f50aca48"
+    ],
+    "omitted": [
+      {
+        "entry": "sha256:979a1d8510b45e15541ec437fca762282508d4bb82317eaa719b31ddd8476d22",
+        "reason": "other_models"
+      },
+      {
+        "entry": "sha256:446377d0e0b46b7175be1290693e63731f2cc09c4b184d212ef9e2da795bb86b",
+        "reason": "other_models"
+      }
+    ]
+  }
+}

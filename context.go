@@ -37,8 +37,14 @@ type Settings struct {
 	// it so the list survives the fold. A checkpoint member that does
 	// not decode as a list of parts, which a file from before 0.8 may
 	// hold, is kept as written and InstructionsOmitted is nil.
-	InstructionsOmitted []OmittedPart       `json:"instructions_omitted,omitempty"`
-	Tools               openresponses.Tools `json:"tools,omitempty"`
+	InstructionsOmitted []OmittedPart `json:"instructions_omitted,omitempty"`
+	// Omit is what a request leaves out of the context, in force as the
+	// path's config entries set it: see [Omit]. The checkpoint of a
+	// compaction carries it. A checkpoint member that does not decode as
+	// the object, which a file from before 0.11 may hold, is kept as
+	// written and Omit is zero.
+	Omit  Omit                `json:"omit,omitzero"`
+	Tools openresponses.Tools `json:"tools,omitempty"`
 	// Extra carries request members beyond the named ones, keyed by
 	// their wire name.
 	Extra map[string]json.RawMessage `json:"extra,omitempty"`
@@ -47,6 +53,34 @@ type Settings struct {
 	// began, a compaction's checkpoint or a replace, which a later
 	// delta may still name by hash; see applyInstructionParts.
 	left *partHistory
+
+	// lists holds the omitted list each config entry put in force since
+	// the replay began, a compaction's checkpoint or a replace, which a
+	// later keep may name by of; see applyOmitted.
+	lists *omittedHistory
+}
+
+// omittedHistory is the omitted list each config entry that carried the
+// member put in force, as the list resolved at that entry, one node per
+// entry, newest first. A node is never changed once built, so settings
+// copied by value share it. It holds every such list since the last
+// replace or checkpoint, since an of may name any of them, so a replay
+// of a long session whose lists are long holds their sum.
+type omittedHistory struct {
+	entry string
+	list  []OmittedPart
+	prev  *omittedHistory
+}
+
+// find returns the list the config entry put in force, and whether the
+// history has one.
+func (h *omittedHistory) find(entry string) ([]OmittedPart, bool) {
+	for ; h != nil; h = h.prev {
+		if h.entry == entry {
+			return h.list, true
+		}
+	}
+	return nil, false
 }
 
 // partHistory is the parts that left force, one node per config entry
@@ -97,6 +131,14 @@ func (h *partHistory) find(id, hash string) (InstructionPart, bool) {
 	return InstructionPart{}, false
 }
 
+// has reports whether the history holds p's text and source under its
+// ID, as a hash alone resolves it: the part that most recently left
+// force under p.ID with that text is p, source included.
+func (h *partHistory) has(p InstructionPart) bool {
+	q, ok := h.find(p.ID, HashText(p.Text))
+	return ok && q.Source == p.Source
+}
+
 // UnmarshalJSON decodes a checkpoint, taking instructions_omitted only
 // when the member is spelled exactly and holds a list of parts that
 // encodes back to what the line holds, extra members aside, as a
@@ -107,9 +149,10 @@ func (s *Settings) UnmarshalJSON(data []byte) error {
 	type plain Settings
 	var aux struct {
 		plain
-		// Shadows the typed field, which is decoded below from the
+		// Shadow the typed fields, which are decoded below from the
 		// exactly spelled member alone.
 		Omitted json.RawMessage `json:"instructions_omitted"`
+		Omit    json.RawMessage `json:"omit"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
@@ -122,6 +165,12 @@ func (s *Settings) UnmarshalJSON(data []byte) error {
 	var omitted []OmittedPart
 	if raw, ok := all["instructions_omitted"]; ok && holdsExactly(raw, &omitted) && len(omitted) > 0 {
 		s.InstructionsOmitted = omitted
+	}
+	var omit Omit
+	if raw, ok := all["omit"]; ok && holdsExactly(raw, &omit) && !omit.IsZero() {
+		// An empty id names no entry; the line keeps it as written.
+		omit.Items = slices.DeleteFunc(omit.Items, func(id string) bool { return id == "" })
+		s.Omit = omit
 	}
 	return nil
 }
@@ -150,6 +199,7 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 		out.Extra = cloneRaw(s.Extra)
 		out.InstructionsParts = cloneParts(s.InstructionsParts)
 		out.InstructionsOmitted = cloneOmitted(s.InstructionsOmitted)
+		out.Omit.Items = slices.Clone(s.Omit.Items)
 	}
 	if c.InstructionsOmitted != nil {
 		// The entry carries the member, so it replaces the list in
@@ -159,7 +209,15 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 		if c.Replace {
 			prev = nil
 		}
-		out.InstructionsOmitted = cloneOmitted(applyOmitted(prev, c.InstructionsOmitted))
+		out.InstructionsOmitted = cloneOmitted(applyOmitted(prev, c.InstructionsOmitted, out.lists))
+		if c.ID != "" {
+			// The entry's list can be named by a later keep. A replace
+			// started the lists afresh, so out.lists is empty then.
+			out.lists = &omittedHistory{entry: c.ID, list: cloneOmitted(out.InstructionsOmitted), prev: out.lists}
+		}
+	}
+	if c.Omit != nil {
+		out.Omit = out.Omit.merged(*c.Omit)
 	}
 	if c.Model != "" {
 		out.Model = c.Model
@@ -331,32 +389,76 @@ func applyInstructionParts(prev, delta []InstructionPart, left *partHistory) []I
 // written, and so is an element with neither an id nor a keep, so a
 // reader can see that a part is missing. An element that names a part
 // carries all of it.
-func applyOmitted(prev, delta []OmittedPart) []OmittedPart {
-	at := make(map[string]int, len(prev))
-	for i, p := range prev {
-		if _, dup := at[p.ID]; p.ID != "" && !dup {
-			at[p.ID] = i
-		}
+//
+// A keep that carries of counts over the list the config entry it names
+// put in force, found in lists, which holds the entries on the path
+// since the last replace or checkpoint, instead of over the list in
+// force. Each list a delta counts over has a cursor of its own: a keep
+// moves the cursor of its own list alone, and an element naming a part
+// moves the cursor of every list that names it. A keep whose of names
+// no entry lists holds is kept as written, as is one that runs past that
+// entry's list or takes a part the delta names elsewhere.
+func applyOmitted(prev, delta []OmittedPart, lists *omittedHistory) []OmittedPart {
+	out, _ := resolveOmitted(prev, delta, lists)
+	return out
+}
+
+// resolveOmitted is applyOmitted, and reports whether a keep carrying
+// of was kept as written because it could not be resolved: the of names
+// no list lists holds, or the keep runs past that list or takes a part
+// the delta names elsewhere.
+func resolveOmitted(prev, delta []OmittedPart, lists *omittedHistory) (out []OmittedPart, unresolvedOf bool) {
+	// cursors holds a cursor per list the delta counts over, keyed by
+	// the entry an of names, and "" for the list in force. A list is
+	// found up front, so an element naming a part before the first
+	// keep over it has already moved its cursor.
+	type cursor struct {
+		list []OmittedPart
+		at   map[string]int
+		next int
 	}
+	newCursor := func(list []OmittedPart) *cursor {
+		c := &cursor{list: list, at: make(map[string]int, len(list))}
+		for i, p := range list {
+			if _, dup := c.at[p.ID]; p.ID != "" && !dup {
+				c.at[p.ID] = i
+			}
+		}
+		return c
+	}
+	cursors := map[string]*cursor{"": newCursor(prev)}
 	named := make(map[string]bool, len(delta))
 	for _, p := range delta {
 		if p.ID != "" {
 			named[p.ID] = true
 		}
+		if p.ID == "" && p.Keep > 0 && p.Of != "" && cursors[p.Of] == nil {
+			if list, ok := lists.find(p.Of); ok {
+				cursors[p.Of] = newCursor(list)
+			}
+		}
 	}
-	out := make([]OmittedPart, 0, len(delta))
-	cursor := 0
+	out = make([]OmittedPart, 0, len(delta))
 	for _, p := range delta {
 		switch {
 		case p.ID == "" && p.Keep > 0:
-			run := prev[min(cursor, len(prev)):min(cursor+p.Keep, len(prev))]
+			cur := cursors[p.Of]
+			if cur == nil {
+				// An of that names no list this path holds takes
+				// nothing, and moves no cursor.
+				out = append(out, OmittedPart{Keep: p.Keep, Of: p.Of})
+				unresolvedOf = true
+				continue
+			}
+			run := cur.list[min(cur.next, len(cur.list)):min(cur.next+p.Keep, len(cur.list))]
 			ok := len(run) == p.Keep
 			for _, q := range run {
 				ok = ok && !named[q.ID]
 			}
-			cursor += p.Keep
+			cur.next += p.Keep
 			if !ok {
-				out = append(out, OmittedPart{Keep: p.Keep})
+				out = append(out, OmittedPart{Keep: p.Keep, Of: p.Of})
+				unresolvedOf = unresolvedOf || p.Of != ""
 				continue
 			}
 			// A part kept as it is stays unresolved if it was.
@@ -365,31 +467,103 @@ func applyOmitted(prev, delta []OmittedPart) []OmittedPart {
 			// Neither a part nor a keep: kept as written.
 			out = append(out, p)
 		default:
-			if i, ok := at[p.ID]; ok {
-				cursor = i + 1
+			for _, cur := range cursors {
+				if i, ok := cur.at[p.ID]; ok {
+					cur.next = i + 1
+				}
 			}
-			p.Keep = 0 // a keep beside an id means nothing
+			p.Keep, p.Of = 0, "" // a keep or an of beside an id means nothing
 			out = append(out, p)
+		}
+	}
+	return out, unresolvedOf
+}
+
+// UnresolvedOf returns the config entries on a root-first path that
+// carry a keep with an of the path cannot resolve, in path order: the
+// of names no entry on the path whose list is still in force to name,
+// since a replace or a compaction's checkpoint, or the keep runs past
+// that list or takes a part the delta names elsewhere. The format keeps
+// such an element as written and it reaches no request, so nothing but
+// a tool that checks a file reports it; this is that check, replaying
+// the path as the context algorithm does.
+func UnresolvedOf(path []Entry) []*ConfigEntry {
+	var out []*ConfigEntry
+	var settings Settings
+	for _, e := range path {
+		switch v := e.(type) {
+		case *CompactionEntry:
+			// The checkpoint writes what was in force whole and starts the
+			// lists afresh.
+			settings = v.Config
+			settings.left, settings.lists = nil, nil
+		case *ConfigEntry:
+			if v.InstructionsOmitted != nil {
+				prev, lists := settings.InstructionsOmitted, settings.lists
+				if v.Replace {
+					prev, lists = nil, nil
+				}
+				if _, bad := resolveOmitted(prev, v.InstructionsOmitted, lists); bad {
+					out = append(out, v)
+				}
+			}
+			settings = settings.Apply(v)
 		}
 	}
 	return out
 }
+
+// UnresolvedOf returns the config entries on the path to leaf that carry
+// a keep with an of the path cannot resolve; see [UnresolvedOf].
+func (s *Session) UnresolvedOf(leaf string) ([]*ConfigEntry, error) {
+	path := s.Path(leaf)
+	if path == nil {
+		return nil, fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
+	}
+	return UnresolvedOf(path), nil
+}
+
+// maxOmittedLists is how many of the lists earlier entries put in
+// force [Settings.OmittedDelta] tries a delta against, newest first,
+// beside the list in force. A list equal to the one in force, which the
+// keeps over it already cover, is not tried and is not counted. A
+// hand-back names the list of the last time that agent ran, so it is
+// among the few most recent; the bound keeps the work of one call from
+// growing with the length of the session.
+const maxOmittedLists = 16
 
 // OmittedDelta returns the instructions_omitted member that takes the
 // omitted parts in force in these settings to omitted, for
 // [ConfigEntry.InstructionsOmitted]: nil when omitted is the list in
 // force, so a writer that renders its omissions every turn writes
 // nothing when nothing moved; an empty, non-nil list, written as [],
-// when omitted is empty and a list is in force; and otherwise omitted
-// with every run of parts in force, unchanged and in the order they
-// are in force, named by a keep, so a part moving across a budget
-// costs that part and not the whole list. A part that changed, is new
-// or is out of that order is written whole. omitted names each ID
-// once; when it does not, or the list in force names an ID twice,
-// omitted is returned whole.
+// when omitted is empty and a list is in force; and otherwise the
+// shortest of three, as encoded: omitted whole; omitted with every run
+// of parts in force, unchanged and in the order they are in force,
+// named by a keep, so a part moving across a budget costs that part and
+// not the whole list; and omitted with every run of parts that an
+// earlier entry on the path put in force, unchanged and in that list's
+// order, named by a keep carrying of, so a hand-back to an agent whose
+// list another agent replaced costs one element and not the list. Each
+// of the sixteen lists put in force most recently before the one in
+// force is tried, newest first, and one is used only when it is shorter
+// than the best so far, so a list in force that the keeps already
+// cover is never named by of. A part that changed, is new or is out of
+// the order of the list a delta counts over is written whole. omitted
+// names each ID once; when it does not, omitted is returned whole, and
+// a list a delta would count over that names an ID twice is not counted
+// over.
 //
-// A delta with Replace set discards the list in force, so its keeps
-// would resolve against nothing: such a delta carries omitted itself.
+// The lists an of can name are those the settings recorded as they were
+// replayed, so settings from [Session.Context] or [BuildContext] have
+// them, back to the last replace or compaction; settings built by hand
+// have none, and the result is the first two. An of is the ID of the
+// config entry, so a recorder writes the delta for the entry it is about
+// to append and nothing else.
+//
+// A delta with Replace set discards the lists in force and earlier
+// ones, so its keeps would resolve against nothing: such a delta
+// carries omitted itself.
 func (s Settings) OmittedDelta(omitted []OmittedPart) []OmittedPart {
 	prev := s.InstructionsOmitted
 	if slices.Equal(prev, omitted) {
@@ -398,39 +572,75 @@ func (s Settings) OmittedDelta(omitted []OmittedPart) []OmittedPart {
 	if len(omitted) == 0 {
 		return []OmittedPart{}
 	}
-	at := make(map[string]int, len(prev))
-	whole := false
-	for i, p := range prev {
+	seen := make(map[string]bool, len(omitted))
+	for _, p := range omitted {
+		if p.ID == "" || p.Keep != 0 || p.Of != "" || seen[p.ID] {
+			return append([]OmittedPart{}, omitted...)
+		}
+		seen[p.ID] = true
+	}
+	whole := append([]OmittedPart{}, omitted...)
+	best, ok := omittedRuns(prev, "", omitted)
+	if !ok {
+		best = whole
+	}
+	size := encodedSize(best)
+	if n := encodedSize(whole); n < size {
+		best, size = whole, n
+	}
+	tried := 0
+	for h := s.lists; h != nil && tried < maxOmittedLists; h = h.prev {
+		if h == s.lists && slices.Equal(h.list, prev) {
+			continue // the list in force, which the keeps over it already cover
+		}
+		tried++
+		if d, ok := omittedRuns(h.list, h.entry, omitted); ok {
+			if n := encodedSize(d); n < size {
+				best, size = d, n
+			}
+		}
+	}
+	return best
+}
+
+// encodedSize is the length of the JSON a list encodes to, which an
+// element that fails to encode, none here, counts as nothing.
+func encodedSize(list []OmittedPart) int {
+	b, _ := json.Marshal(list)
+	return len(b)
+}
+
+// omittedRuns returns omitted with each run of parts that list holds,
+// unchanged and in list's order, named by a keep, carrying of when it
+// is not empty. It reports false when list cannot be counted over: it
+// names no part, or names an ID twice. An element of list that names no
+// part is not counted. omitted names each ID once and holds no keep.
+func omittedRuns(list []OmittedPart, of string, omitted []OmittedPart) ([]OmittedPart, bool) {
+	at := make(map[string]int, len(list))
+	for i, p := range list {
 		if p.ID == "" {
 			continue // an element naming nothing is never kept by a delta
 		}
 		if _, dup := at[p.ID]; dup {
-			whole = true
+			return nil, false
 		}
 		at[p.ID] = i
 	}
-	seen := make(map[string]bool, len(omitted))
-	for _, p := range omitted {
-		if p.ID == "" || p.Keep != 0 || seen[p.ID] {
-			whole = true
-		}
-		seen[p.ID] = true
-	}
-	if whole {
-		return append([]OmittedPart{}, omitted...)
+	if len(at) == 0 {
+		return nil, false
 	}
 	out := make([]OmittedPart, 0, len(omitted))
 	cursor, run := 0, 0
 	flush := func() {
 		if run > 0 {
-			out = append(out, OmittedPart{Keep: run})
+			out = append(out, OmittedPart{Keep: run, Of: of})
 			cursor += run
 			run = 0
 		}
 	}
 	for _, p := range omitted {
 		j, ok := at[p.ID]
-		if ok && prev[j] == p && j == cursor+run {
+		if ok && list[j] == p && j == cursor+run {
 			run++
 			continue
 		}
@@ -441,7 +651,67 @@ func (s Settings) OmittedDelta(omitted []OmittedPart) []OmittedPart {
 		}
 	}
 	flush()
-	return out
+	return out, true
+}
+
+// OmitDelta returns the omit member that takes the omit in force in
+// these settings to want, for [ConfigEntry.Omit], and whether one does.
+// It is nil, and true, when want is what is in force, so a recorder
+// that states its rule at every model switch writes it once; the rule
+// and the entries not yet in force when want only adds to what is, a
+// rule other than the one in force included, which a delta replaces; and
+// an empty, non-nil object, which clears, when want is empty and
+// something is in force. A want that drops the rule or an entry in
+// force and keeps something is no single member: a delta only adds, and
+// clears both with {}, so it returns nil and false, and the writer
+// clears in one entry and writes what it keeps in the next. So does a
+// want whose rule is not one the format defines, which no delta sets.
+//
+// A config entry with Replace set discards the omit in force with the
+// rest of the settings, so the member it carries is want itself, not
+// this delta: a replace that wrote nothing, because the rule was in
+// force, would clear it.
+func (s Settings) OmitDelta(want Omit) (*Omit, bool) {
+	have := s.Omit
+	listed := make(map[string]bool, len(have.Items))
+	for _, id := range have.Items {
+		listed[id] = true
+	}
+	wanted := make(map[string]bool, len(want.Items))
+	for _, id := range want.Items {
+		if id != "" {
+			wanted[id] = true
+		}
+	}
+	same := have.Reasoning == want.Reasoning && len(listed) == len(wanted)
+	for id := range wanted {
+		same = same && listed[id]
+	}
+	if same {
+		return nil, true
+	}
+	if want.IsZero() {
+		return &Omit{}, true
+	}
+	if want.Reasoning != "" && want.Reasoning != OmitOtherModels || have.Reasoning != "" && want.Reasoning == "" {
+		return nil, false
+	}
+	for id := range listed {
+		if !wanted[id] {
+			return nil, false
+		}
+	}
+	var d Omit
+	if want.Reasoning != have.Reasoning {
+		d.Reasoning = want.Reasoning
+	}
+	for _, id := range want.Items {
+		if id != "" && !listed[id] {
+			listed[id] = true
+			d.Items = append(d.Items, id)
+		}
+	}
+	return &d, true
 }
 
 // unresolvedParts reports whether any part is one the path could not
@@ -463,6 +733,21 @@ func unresolvedParts(parts []InstructionPart) bool {
 // order, so a change to one layer costs that layer and not the whole
 // prompt, however many parts it has. A part in force that parts leaves
 // out is removed by its absence. parts names each ID once.
+//
+// A part that is not in force, or is in force with other resolved text,
+// is named by its hash alone when the path has given its ID that text
+// and source and the part has since left force, as format 0.11 lets a
+// writer: an agent handed the session back after another replaced its
+// parts costs the parts that changed, and not its whole prompt. A part
+// in force with its text and another source, and one in force the path
+// could not resolve, carry their text, since a hash resolves against
+// the part in force first, and so does a part the path never had under
+// its ID. A replace and
+// a compaction's checkpoint start the path's parts afresh, so a part
+// that left force before one carries its text again. A delta written
+// this way is read by a reader of 0.11, which resolves a hash against
+// the parts that have left force; the library writes 0.11 headers, so
+// a reader of 0.10 that cannot has refused the file.
 //
 // It returns nil when parts are exactly the ones in force, so a
 // harness that re-renders its layers every turn writes nothing when
@@ -499,7 +784,17 @@ func (s Settings) InstructionsDelta(parts []InstructionPart) *ConfigEntry {
 		// the delta resolves it rather than keeping what is missing.
 		if !ok || s.InstructionsParts[j].Unresolved() || s.InstructionsParts[j].Text != p.Text || s.InstructionsParts[j].Source != p.Source {
 			flush()
-			out = append(out, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source})
+			// A hash resolves against the part in force first, and only
+			// when that has other text, or there is none, against what
+			// left force. So a part in force with this text and another
+			// source, or one the path could not resolve, is written out.
+			if (!ok || !s.InstructionsParts[j].Unresolved() && s.InstructionsParts[j].Text != p.Text) && s.left.has(p) {
+				// The path has this text under this ID and it left force:
+				// its hash resolves it, and a hash is all it costs.
+				out = append(out, InstructionPart{ID: p.ID, Hash: HashText(p.Text)})
+			} else {
+				out = append(out, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source})
+			}
 			if ok {
 				cursor = j + 1
 			}
@@ -632,6 +927,26 @@ type Context struct {
 	// contributed: Items[0] is its summary and the next len(Pinned)
 	// items are its pins.
 	ItemEntries []Entry
+	// OmittedItems are the item entries on the path that the request
+	// leaves out, each with the reason, in path order: the entries the
+	// context algorithm selected whose items [Settings.Omit] excludes.
+	// They are in Entries, so a renderer can show them as omitted and
+	// not as absent, and in neither Items nor ItemEntries, so Request
+	// is what the model was sent. It is empty for a path with no omit
+	// in force.
+	OmittedItems []OmittedItem
+}
+
+// OmittedItem is an item entry a request leaves out of the context, and
+// why.
+type OmittedItem struct {
+	// Entry is the item entry whose item contributes nothing.
+	Entry *ItemEntry
+	// Reason is [OmitOtherModels] when the entry holds a reasoning item
+	// written under another model than the request's, and [OmitItems]
+	// when the omit in force lists it. An entry both rules reach is
+	// reported as listed.
+	Reason string
 }
 
 // Request returns the canonical request for the context. It equals the
@@ -656,8 +971,18 @@ func (c Context) InstructionsOmitted() []OmittedPart {
 
 // BuildContext runs the context algorithm over a root-first path. Only
 // the last compaction on the path is applied. FirstKept must name an
-// entry on the path before the compaction.
+// entry on the path before the compaction. An item entry that the omit
+// in force at the end of the path excludes contributes nothing and is
+// reported in [Context.OmittedItems].
 func BuildContext(path []Entry) (Context, error) {
+	return buildContext(path, true)
+}
+
+// buildContext is BuildContext with the omit setting applied when
+// omit is set, and left out otherwise: the request that would have
+// been built had nothing been left out, which Verify compares with a
+// recorded hash to say why one does not match.
+func buildContext(path []Entry, omit bool) (Context, error) {
 	var ctx Context
 	var settings Settings
 	start := 0
@@ -682,6 +1007,11 @@ func BuildContext(path []Entry) (Context, error) {
 		settings = comp.Config
 		settings.InstructionsParts = cloneParts(comp.Config.InstructionsParts)
 		settings.InstructionsOmitted = cloneOmitted(comp.Config.InstructionsOmitted)
+		// The checkpoint writes what was in force whole: no entry before
+		// it is named by a later keep, and no part that left force
+		// before it by a later hash.
+		settings.left, settings.lists = nil, nil
+		settings.Omit.Items = slices.Clone(comp.Config.Omit.Items)
 		ctx.Entries = append(ctx.Entries, comp)
 		ctx.Items = append(ctx.Items, comp.Summary)
 		ctx.ItemEntries = append(ctx.ItemEntries, comp)
@@ -711,7 +1041,79 @@ func BuildContext(path []Entry) (Context, error) {
 		}
 	}
 	ctx.Settings = settings
+	if omit && !settings.Omit.IsZero() {
+		ctx.leaveOut(path)
+	}
 	return ctx, nil
+}
+
+// leaveOut removes from the items the entries the omit in force
+// excludes, and records them in OmittedItems. The entries stay in
+// Entries.
+func (c *Context) leaveOut(path []Entry) {
+	om := c.Settings.Omit
+	listed := make(map[string]bool, len(om.Items))
+	for _, id := range om.Items {
+		listed[id] = true
+	}
+	var models map[string]string
+	if om.Reasoning == OmitOtherModels {
+		models = modelsOfOutput(path)
+	}
+	items := make(openresponses.Items, 0, len(c.Items))
+	entries := make([]Entry, 0, len(c.ItemEntries))
+	for i, e := range c.ItemEntries {
+		if ie, ok := e.(*ItemEntry); ok {
+			reason := ""
+			if listed[ie.ID] {
+				reason = OmitItems
+			} else if m, ok := models[ie.ID]; ok && c.Settings.Model != "" && m != c.Settings.Model {
+				reason = OmitOtherModels
+			}
+			if reason != "" {
+				c.OmittedItems = append(c.OmittedItems, OmittedItem{Entry: ie, Reason: reason})
+				continue
+			}
+		}
+		items = append(items, c.Items[i])
+		entries = append(entries, e)
+	}
+	c.Items, c.ItemEntries = items, entries
+}
+
+// modelsOfOutput returns, for each item entry on the path that holds a
+// reasoning item and names the response that produced it, the model in
+// force at the entry: the model the settings hold there, the path from
+// its root replayed as the context algorithm replays it, with a
+// compaction's checkpoint standing for what it folded. A response
+// entry's own model is not read: it is the provider's name for the model
+// that answered, a snapshot of the alias the request named, and is not
+// comparable with the model a request carries. An item written with no
+// model in force has no entry in the map: an empty name attributes
+// nothing.
+func modelsOfOutput(path []Entry) map[string]string {
+	models := map[string]string{}
+	model := ""
+	for _, e := range path {
+		switch v := e.(type) {
+		case *ConfigEntry:
+			if v.Replace {
+				model = ""
+			}
+			if v.Model != "" {
+				model = v.Model
+			}
+		case *CompactionEntry:
+			model = v.Config.Model
+		case *ItemEntry:
+			// An empty model name attributes nothing: an item produced
+			// under no named model is sent to every model.
+			if _, ok := v.Item.(*openresponses.ReasoningItem); ok && v.ResponseID != "" && model != "" {
+				models[v.ID] = model
+			}
+		}
+	}
+	return models
 }
 
 // contextItem returns the item an entry contributes to the context, or
@@ -801,6 +1203,12 @@ func OutputEntries(path []Entry, resp *ResponseEntry) []*ItemEntry {
 // contributes nothing to context, leaves the rebuilt request and its
 // hash alone.
 func (s *Session) RequestContext(id string) (Context, error) {
+	return s.requestContext(id, true)
+}
+
+// requestContext is RequestContext with the omit setting applied when
+// omit is set; see buildContext.
+func (s *Session) requestContext(id string, omit bool) (Context, error) {
 	e, ok := s.Entry(id)
 	if !ok {
 		return Context{}, fmt.Errorf("agentsession: %w: %s", ErrNoEntry, id)
@@ -813,7 +1221,7 @@ func (s *Session) RequestContext(id string) (Context, error) {
 	path = path[:len(path)-1] // drop the response entry itself
 	output := OutputEntries(path, resp)
 	if len(output) == 0 {
-		return BuildContext(path)
+		return buildContext(path, omit)
 	}
 	drop := make(map[*ItemEntry]struct{}, len(output))
 	for _, item := range output {
@@ -828,12 +1236,20 @@ func (s *Session) RequestContext(id string) (Context, error) {
 		}
 		request = append(request, e)
 	}
-	return BuildContext(request)
+	return buildContext(request, omit)
 }
 
 // ErrHashMismatch is returned by [Session.Verify] when the rebuilt
 // request does not hash to the recorded value.
 var ErrHashMismatch = errors.New("agentsession: request hash mismatch")
+
+// ErrOmitDivergence is wrapped, beside [ErrHashMismatch], by the error
+// that [Session.Verify] returns when the response's recorded hash is the
+// request built with the items the omit in force leaves out: the writer
+// sent, or hashed, what the record says a request leaves out. It is a
+// divergence between the record and its own rule, and not a response
+// that recorded no hash.
+var ErrOmitDivergence = errors.New("agentsession: the recorded hash is the request without the omit setting applied")
 
 // ErrNoHash is returned by [Session.Verify] for a response entry that
 // recorded no request hash. The response is not verified and not
@@ -866,6 +1282,18 @@ func (s *Session) Verify(id string) error {
 		return err
 	}
 	if got != resp.RequestHash {
+		if len(ctx.OmittedItems) > 0 {
+			// The record leaves items out of this request. A hash that
+			// is the request with them in says the writer disagreed with
+			// the rule it wrote down.
+			if bare, err := s.requestContext(id, false); err == nil {
+				if req, err := bare.Request(); err == nil {
+					if h, err := RequestHash(req); err == nil && h == resp.RequestHash {
+						return fmt.Errorf("%w: response %s recorded %s, the request with %d item(s) the omit setting leaves out: %w", ErrHashMismatch, id, resp.RequestHash, len(ctx.OmittedItems), ErrOmitDivergence)
+					}
+				}
+			}
+		}
 		return fmt.Errorf("%w: response %s recorded %s, rebuilt %s", ErrHashMismatch, id, resp.RequestHash, got)
 	}
 	return nil

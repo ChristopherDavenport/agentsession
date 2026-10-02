@@ -102,7 +102,10 @@ type ListFilter struct {
 	// CWD matches the header's working directory exactly.
 	CWD string
 	// ParentSession matches sessions forked or spawned from the given
-	// one.
+	// one. A header cannot say which: a judge, a subagent and a fork
+	// all carry the session they came from, so they are listed
+	// together. The link entries of the parent say which each is, as
+	// [Judges] reads for judges.
 	ParentSession string
 	// Harness matches the name of the header's harness exactly; a
 	// header naming no harness matches nothing when it is set. A

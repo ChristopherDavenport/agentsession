@@ -176,6 +176,39 @@ func TestRun(t *testing.T) {
 			},
 		},
 		{
+			name: "show a hand-back", args: []string{"show", filepath.Join(fixtures, "handback.jsonl")},
+			stdout: []string{"omitted memory/user/n-0003 (budget), +16 of ", "instructions [product= agentsmd= memory/user/n-0000= memory/user/n-0001= memory/user/n-0002= memory/user/n-0020="},
+		},
+		{
+			name: "show omitted items", args: []string{"show", filepath.Join(fixtures, "omit.jsonl")},
+			stdout: []string{"omit reasoning other_models", "omit 1 item(s)", "left out (other_models)", "left out (items)", "omit          reasoning other_models, 1 item(s)"},
+		},
+		{name: "verify omit", args: []string{"verify", filepath.Join(fixtures, "omit.jsonl")}, stdout: []string{"4 verified, 0 without hash, 0 failed"}, absent: []string{"MISMATCH"}},
+		{
+			name: "verify omit as 0.10 writes it", args: []string{"verify", filepath.Join(fixtures, "omit-absent.jsonl")},
+			stdout: []string{"1 verified, 3 without hash, 0 failed"},
+		},
+		{
+			name: "verify a hash over what omit leaves out", args: []string{"verify", filepath.Join(fixtures, "bad-omit.jsonl")}, code: 1,
+			stdout: []string{"MISMATCH recorded sha256:", "the request with the items the omit setting leaves out", "3 verified, 0 without hash, 1 failed"},
+		},
+		{
+			name: "verify an of the path cannot resolve", args: []string{"verify", filepath.Join(fixtures, "bad-handback.jsonl")},
+			stdout: []string{"5 verified, 0 without hash, 0 failed", "names an omitted list by an of its path cannot resolve"},
+		},
+		{
+			name: "verify an of after a fold", args: []string{"verify", filepath.Join(fixtures, "bad-handback-folded.jsonl")},
+			stdout: []string{"1 verified, 0 without hash, 0 failed", "names an omitted list by an of its path cannot resolve"},
+		},
+		{
+			name: "verify an omit carried through a fold", args: []string{"verify", filepath.Join(fixtures, "omit-folded.jsonl")},
+			stdout: []string{"5 verified, 0 without hash, 0 failed"}, absent: []string{"MISMATCH", "note:"},
+		},
+		{
+			name: "verify a hand-back", args: []string{"verify", filepath.Join(fixtures, "handback.jsonl")},
+			stdout: []string{"5 verified, 0 without hash, 0 failed"}, absent: []string{"records to", "names an omitted list"},
+		},
+		{
 			name: "verify instructions parts", args: []string{"verify", filepath.Join(fixtures, "instructions.jsonl")},
 			stdout: []string{"2 verified, 0 without hash, 0 failed"},
 		},
@@ -292,6 +325,7 @@ func TestDescribeEveryEntryType(t *testing.T) {
 		{entry: &agentsession.ConfigEntry{Model: "gpt-5"}, want: "model gpt-5"},
 		{entry: &agentsession.ConfigEntry{InstructionsOmitted: []agentsession.OmittedPart{}}, want: "omitted cleared"},
 		{entry: &agentsession.ConfigEntry{InstructionsOmitted: []agentsession.OmittedPart{{ID: "m/1", Reason: "budget"}, {Keep: 474}}}, want: "omitted m/1 (budget), +474"},
+		{entry: &agentsession.ConfigEntry{InstructionsOmitted: []agentsession.OmittedPart{{ID: "m/1", Reason: "budget"}, {Keep: 474, Of: "sha256:0123456789abcdef"}}}, want: "omitted m/1 (budget), +474 of "},
 		{entry: &agentsession.CompactionEntry{FirstKept: "i1", Summary: openresponses.UserText("so far")}, want: "first kept i1"},
 		{entry: &agentsession.BranchSummaryEntry{From: "i1", Summary: openresponses.UserText("before")}, want: "from i1"},
 		{entry: agentsession.NewRunStart("run-1", agentsession.SourceInput, "cron:x"), want: "start run-1 input"},
@@ -306,6 +340,7 @@ func TestDescribeEveryEntryType(t *testing.T) {
 		{entry: &agentsession.EnvEntry{CWD: "/p"}, want: "cwd /p"},
 		{entry: &agentsession.OutcomeEntry{Kind: agentsession.OutcomeEval, Target: "r1", Score: &score}, want: "eval on r1 score 0.5"},
 		{entry: agentsession.NewLinkEntry(agentsession.RelSubsession, "child"), want: "subsession child"},
+		{entry: agentsession.NewJudgedByLink("judge", "sha256:0123456789abcdef"), want: "judged_by judge judging "},
 		{
 			entry: &agentsession.CustomEntry{NS: "agentpolicy", Data: []byte(`{"verdict":"deny","rule":"bash(curl:*)"}`)},
 			want:  "agentpolicy (40 bytes)",
@@ -859,9 +894,10 @@ func TestNoteDeclared(t *testing.T) {
 }
 
 // TestVerifyEmptyResume: a resume refused before it takes up its
-// call, or cut and closed on restart, fails VerifyRecords as 0.10 has
-// it, and verify notes that it took up nothing; a resume that adds a
-// message gets the ordinary note (#172).
+// call, or cut and closed on restart, verifies, as format 0.11 accepts
+// a run written resume over a segment that holds nothing; a resume that
+// adds a message and takes nothing up still fails, with the ordinary
+// note (#172).
 func TestVerifyEmptyResume(t *testing.T) {
 	tmp := t.TempDir()
 	write := func(name string, tail func(must appender, end func(reason string), call string)) string {
@@ -888,24 +924,21 @@ func TestVerifyEmptyResume(t *testing.T) {
 		must(&agentsession.ResponseEntry{ResponseID: "resp-2", Status: "completed"})
 		end(agentsession.ReasonDone)
 	})
-	for _, tt := range []struct {
-		path, note string
-	}{
-		{refused, fmt.Sprintf(emptyResumeNote, "run-2")},
-		{cut, fmt.Sprintf(emptyResumeNote, "run-2")},
-		{message, sourceNote},
-	} {
+	for _, path := range []string{refused, cut} {
 		var stdout, stderr bytes.Buffer
-		if code := run([]string{"verify", tt.path}, &stdout, &stderr); code != 1 {
-			t.Errorf("%s: exit %d, want 1\n%s", tt.path, code, stdout.String())
+		if code := run([]string{"verify", path}, &stdout, &stderr); code != 0 {
+			t.Errorf("%s: exit %d, want 0\n%s", path, code, stdout.String())
 		}
-		out := stdout.String()
-		if !strings.Contains(out, "run source disagrees with its segment") || !strings.Contains(out, tt.note) {
-			t.Errorf("%s: stdout lacks the mismatch or %q:\n%s", tt.path, tt.note, out)
+		if strings.Contains(stdout.String(), "disagrees") {
+			t.Errorf("%s: stdout reports a mismatch:\n%s", path, stdout.String())
 		}
-		if tt.note == sourceNote && strings.Contains(out, "took up nothing") {
-			t.Errorf("%s: a resume that adds a message is noted as empty:\n%s", tt.path, out)
-		}
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"verify", message}, &stdout, &stderr); code != 1 {
+		t.Errorf("%s: exit %d, want 1\n%s", message, code, stdout.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, "run source disagrees with its segment") || !strings.Contains(out, sourceNote) {
+		t.Errorf("%s: stdout lacks the mismatch or %q:\n%s", message, sourceNote, out)
 	}
 }
 
@@ -1031,15 +1064,15 @@ func importFile(t *testing.T, root, path, declared string) {
 
 // TestCASVerifyNotes: verify of a cas root, and of one session a store
 // holds, print the notes verify of the session's file does: the note on
-// a resume that took up nothing beside the session's error, since it
-// names a run, and the note on a 0.9 file of an early writer once at
-// the end. The store's header, not the projection's, says what the
-// session declared: the projection is a file this release writes and
-// declares this release's format (#187).
+// a 0.9 file of an early writer once at the end. A resume that took up
+// nothing fails nothing, so a session holding one verifies beside it.
+// The store's header, not the projection's, says what the session
+// declared: the projection is a file this release writes and declares
+// this release's format (#187).
 func TestCASVerifyNotes(t *testing.T) {
 	tmp := t.TempDir()
 	root := filepath.Join(tmp, "cas")
-	refused := writeResumed(t, filepath.Join(tmp, "refused.jsonl"), refusedResume)
+	writeResumed(t, filepath.Join(tmp, "refused.jsonl"), refusedResume)
 	importFile(t, root, filepath.Join(tmp, "refused.jsonl"), "")
 	early := writeEarly09(t, filepath.Join(tmp, "early.jsonl"))
 	importFile(t, root, filepath.Join(tmp, "early.jsonl"), "agentsession/0.9")
@@ -1054,7 +1087,6 @@ func TestCASVerifyNotes(t *testing.T) {
 	// into a store of its own and the two are checked apart.
 	importFile(t, other, filepath.Join(tmp, "other.jsonl"), "agentsession/0.9")
 
-	emptyNote := fmt.Sprintf(emptyResumeNote, "run-2")
 	tests := []struct {
 		name   string
 		args   []string
@@ -1064,14 +1096,11 @@ func TestCASVerifyNotes(t *testing.T) {
 		{
 			name: "the store", args: []string{"verify", root},
 			stdout: []string{
-				refused + ": records to ", "run source disagrees with its segment",
-				refused + ": " + emptyNote,
 				early + ": records to ", "call ID repeated",
-				"2 sessions' hashes and records checked, 2 failed",
+				"2 sessions' hashes and records checked, 1 failed",
 			},
-			count: map[string]int{earlyNote: 1, emptyNote: 1},
+			count: map[string]int{earlyNote: 1, "disagrees": 0},
 		},
-		{name: "the resumed session", args: []string{"verify", root, refused}, stdout: []string{emptyNote}, count: map[string]int{earlyNote: 0}},
 		{name: "the early 0.9 session", args: []string{"verify", root, early}, stdout: []string{"call ID repeated", earlyNote}, count: map[string]int{earlyNote: 1}},
 		{name: "the other store", args: []string{"verify", other}, count: map[string]int{earlyNote: 1}},
 	}

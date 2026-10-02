@@ -74,6 +74,14 @@ const (
 	// of each. A queued input that was appended is a step of its own
 	// carrying the same trigger under "source".
 	ExtraQueued = "queued"
+	// ExtraOmitted carries, as a list of objects with an entry_id and a
+	// reason, the item entries the request at the trajectory's leaf
+	// leaves out, in the extra of the step, or of the observation result,
+	// that holds each: the model produced the item or the person sent it,
+	// so it is a step of the document, and the member says the request
+	// does not carry it. The reason is "other_models" or "items", as
+	// [agentsession.OmittedItem] has it. [Items] leaves these items out.
+	ExtraOmitted = "omitted"
 )
 
 // ToATIF converts one trajectory into an ATIF document. Every step
@@ -82,7 +90,10 @@ const (
 // docs/plans/session-layer.md.
 func ToATIF(t Trajectory, opts Options) (*atif.Trajectory, error) {
 	b := &builder{t: t, opts: opts, stepByEntry: map[string]int{}, callStep: map[string]int{},
-		callFrom: map[string][]agentsession.EntryRef{}}
+		callFrom: map[string][]agentsession.EntryRef{}, omitted: map[string]string{}}
+	for _, o := range t.Context.OmittedItems {
+		b.omitted[o.Entry.ID] = o.Reason
+	}
 	b.doc = &atif.Trajectory{
 		SchemaVersion: atif.SchemaVersion,
 		SessionID:     t.Header.ID,
@@ -150,6 +161,10 @@ type builder struct {
 	// came from. It is what lets a subsession reference name a point in
 	// the child rather than the projection choosing one.
 	callFrom map[string][]agentsession.EntryRef
+	// omitted is the reason the omit setting in force at the leaf leaves
+	// each item entry out of the request, by entry ID. The entry is
+	// still in the step that holds it, which says so under extra.
+	omitted map[string]string
 }
 
 // price is one answer from Options.Cost.
@@ -492,6 +507,9 @@ func (b *builder) itemExtra(e *agentsession.ItemEntry) map[string]any {
 	if e.QueuedFrom != "" {
 		extra["queued_from"] = e.QueuedFrom
 	}
+	if reason, ok := b.omitted[e.ID]; ok {
+		extra[ExtraOmitted] = []map[string]any{{"entry_id": e.ID, "reason": reason}}
+	}
 	return copyUnknown(extra, e.Unknown)
 }
 
@@ -623,6 +641,15 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 	}
 	if len(ids) > 0 {
 		step.Extra["item_entry_ids"] = ids
+	}
+	var left []map[string]any
+	for _, e := range g.entries {
+		if reason, ok := b.omitted[e.ID]; ok {
+			left = append(left, map[string]any{"entry_id": e.ID, "reason": reason})
+		}
+	}
+	if len(left) > 0 {
+		step.Extra[ExtraOmitted] = left
 	}
 	for _, e := range g.entries {
 		copyUnknown(step.Extra, e.Unknown)
@@ -1081,6 +1108,9 @@ func (b *builder) subsessions() {
 		if l.CallID != "" {
 			rec["call_id"] = l.CallID
 		}
+		if l.Target != "" {
+			rec["target"] = l.Target
+		}
 		copyUnknown(rec, l.Unknown)
 		if l.Rel != agentsession.RelSubsession {
 			others = append(others, rec)
@@ -1524,14 +1554,61 @@ func sortStrings(s []string) {
 	}
 }
 
+// omittedEntries returns the entry IDs an extra lists under
+// [ExtraOmitted], as the exporter writes them or as they read back from
+// JSON.
+func omittedEntries(extra map[string]any) map[string]bool {
+	var out map[string]bool
+	add := func(id any) {
+		if s, ok := id.(string); ok && s != "" {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[s] = true
+		}
+	}
+	switch l := extra[ExtraOmitted].(type) {
+	case []map[string]any:
+		for _, m := range l {
+			add(m["entry_id"])
+		}
+	case []any:
+		for _, v := range l {
+			if m, ok := v.(map[string]any); ok {
+				add(m["entry_id"])
+			}
+		}
+	}
+	return out
+}
+
+// entryIDs returns a step's item_entry_ids as the exporter writes them
+// or as they read back from JSON.
+func entryIDs(v any) []string {
+	switch l := v.(type) {
+	case []string:
+		return l
+	case []any:
+		out := make([]string, 0, len(l))
+		for _, id := range l {
+			s, _ := id.(string)
+			out = append(out, s)
+		}
+		return out
+	}
+	return nil
+}
+
 // ErrNoRawItems is returned by [Items] for a document that was not
 // written by this package.
 var ErrNoRawItems = errors.New("export: document carries no raw items")
 
 // Items rebuilds the item list of the path a document was exported
 // from, reading the raw items every step carries under
-// extra.openresponses. Steps without them are skipped; a document with
-// none at all yields ErrNoRawItems.
+// extra.openresponses, and leaving out those a step lists under
+// [ExtraOmitted]: the list is the request's input, as the context
+// algorithm builds it. Steps without raw items are skipped; a document
+// with none at all yields ErrNoRawItems.
 func Items(doc *atif.Trajectory) (openresponses.Items, error) {
 	var items openresponses.Items
 	found := false
@@ -1540,9 +1617,13 @@ func Items(doc *atif.Trajectory) (openresponses.Items, error) {
 		if !ok {
 			continue
 		}
+		left := omittedEntries(s.Extra)
 		var raws []any
 		if item, ok := or["item"]; ok {
-			raws = append(raws, item)
+			found = true // the document carries raw items, though this one is left out
+			if len(left) == 0 {
+				raws = append(raws, item)
+			}
 		}
 		// A fold's pinned items follow its summary, which is the order
 		// the context algorithm places them in.
@@ -1557,13 +1638,23 @@ func Items(doc *atif.Trajectory) (openresponses.Items, error) {
 			}
 		}
 		if list, ok := or["items"]; ok {
+			var group []any
 			switch l := list.(type) {
 			case []any:
-				raws = append(raws, l...)
+				group = l
 			case []json.RawMessage:
 				for _, r := range l {
-					raws = append(raws, r)
+					group = append(group, r)
 				}
+			}
+			// The group's entries are named in the order its items are.
+			ids := entryIDs(s.Extra["item_entry_ids"])
+			for i, raw := range group {
+				if i < len(ids) && left[ids[i]] {
+					found = true
+					continue
+				}
+				raws = append(raws, raw)
 			}
 		}
 		for _, raw := range raws {
@@ -1591,6 +1682,9 @@ func Items(doc *atif.Trajectory) (openresponses.Items, error) {
 					continue
 				}
 				found = true
+				if len(omittedEntries(r.Extra)) > 0 {
+					continue
+				}
 				data, err := json.Marshal(raw)
 				if err != nil {
 					return nil, fmt.Errorf("export: step %d: %w", s.StepID, err)

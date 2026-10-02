@@ -1,0 +1,155 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-00000000001f",
+  "trajectory_id": "sha256:b60548d358de6046365d5013aca7896ab46474e4c5561e9a042259a79a3be440",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-10-01T13:00:04Z",
+      "source": "system",
+      "message": "Summary of one and two.",
+      "observation": {
+        "results": [
+          {
+            "content": "Summary of one and two."
+          }
+        ]
+      },
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:14d250d40830b2c9521d9673594747985224fd7e7cce73a2dbaf9080ab891db2"
+        },
+        "context_management": {
+          "boundary": "replace",
+          "type": "compaction"
+        },
+        "first_kept": "sha256:b51f8b17ab3a80f1ac852172952a7bce56f058424ab8fd2dfa180e9bc9c33bf3",
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Summary of one and two."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-10-01T13:00:03Z",
+      "source": "user",
+      "message": "two",
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:b51f8b17ab3a80f1ac852172952a7bce56f058424ab8fd2dfa180e9bc9c33bf3"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "two"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-10-01T13:00:06Z",
+      "source": "user",
+      "message": "three",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:5d083b4d8bc0e8f6227add972cd4f8a9b7e20fc640a35f0daf5b47ff012e0f5a"
+        },
+        "config_entries": [
+          "sha256:b3a9b62dcb4757ef6a946a978bdad1f1fc1e3063cb59d6f06db2cd9ce63a0a5b"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "three"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-10-01T13:00:08Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Three.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:b60548d358de6046365d5013aca7896ab46474e4c5561e9a042259a79a3be440"
+        },
+        "item_entry_ids": [
+          "sha256:a4623dbfa75135d30932d6427bda093b2ba65d3c9b98bc7d1dbcf07b13211f06"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Three.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:b60548d358de6046365d5013aca7896ab46474e4c5561e9a042259a79a3be440",
+            "model": "gpt-5",
+            "request_hash": "sha256:4c0d8067b69e4912842ce7b2799b6f16611c453bcd93f9e624acde3100196e71",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-10-01T13:00:08Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 2 model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its 4 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 2
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.11",
+      "leaf": "sha256:b60548d358de6046365d5013aca7896ab46474e4c5561e9a042259a79a3be440",
+      "main": true
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

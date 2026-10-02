@@ -41,6 +41,11 @@ func legacyOf(s *agentsession.Session, id string) string {
 	if e, ok := s.Entry(id); ok && e.Base().LegacyID != "" {
 		return e.Base().LegacyID
 	}
+	// A native fixture has hashes for ids, which are not fit for a file
+	// name as they are: the first twelve hex digits name the leaf.
+	if hex := strings.TrimPrefix(id, "sha256:"); hex != id && len(hex) >= 12 {
+		return hex[:12]
+	}
 	return id
 }
 
@@ -109,7 +114,8 @@ func encode(t *testing.T, v any) []byte {
 // and the raw items it carries must rebuild the path's item list byte
 // for byte.
 func TestATIFGolden(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge",
+		"empty-resume", "bad-resume", "handback", "bad-handback", "omit", "omit-absent", "bad-omit", "omit-folded", "bad-handback-folded", "judged"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			n := 0
@@ -2005,5 +2011,108 @@ func TestDispatchesAndAnswer(t *testing.T) {
 	}
 	if notify.Dispatch == nil || notify.Dispatches != nil || len(notify.Decisions) != 1 || notify.Decisions[0]["verdict"] != agentsession.VerdictAnswer || notify.Decisions[0]["by"] != agentsession.ByPolicy {
 		t.Errorf("call_notify = %+v", notify)
+	}
+}
+
+// TestJudgedByLinkExported: a judged_by link is not a subagent, so it is
+// recorded under the root's links with its target, as a fork_of link is.
+func TestJudgedByLinkExported(t *testing.T) {
+	ts := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	s := agentsession.New(agentsession.Header{ID: "judged", CreatedAt: ts})
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "gpt-5"})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("task")))
+	answer, err := s.Append(&agentsession.ItemEntry{Item: openresponses.AssistantText("done"), ResponseID: "resp_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp_1", Status: openresponses.ResponseStatusCompleted})
+	mustAppend(t, s, agentsession.NewJudgedByLink("judge", answer))
+	var tr Trajectory
+	for x, err := range Trajectories(s) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr = x
+	}
+	doc, err := ToATIF(tr, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := doc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	links, _ := doc.Extra["links"].([]any)
+	if len(links) != 1 {
+		t.Fatalf("links = %v", doc.Extra["links"])
+	}
+	rec := links[0].(map[string]any)
+	if rec["rel"] != agentsession.RelJudgedBy || rec["session"] != "judge" || rec["target"] != answer || len(doc.SubagentTrajectories) != 0 {
+		t.Errorf("link = %v", rec)
+	}
+}
+
+// TestOmittedItemsExported: an item entry the omit setting leaves out
+// of the request is still a step of the document, since the model
+// produced it, and the step says so under omitted with the reason; the
+// raw items rebuild the request, with the omitted ones out, and still
+// do after the document is written and read back.
+func TestOmittedItemsExported(t *testing.T) {
+	s := loadFixture(t, "omit")
+	var tr Trajectory
+	for x, err := range Trajectories(s) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr = x
+	}
+	if len(tr.Context.OmittedItems) != 2 {
+		t.Fatalf("the fixture's request leaves out %d items, want 2", len(tr.Context.OmittedItems))
+	}
+	doc, err := ToATIF(tr, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := doc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	reasons := map[string]string{}
+	for _, st := range doc.Steps {
+		list, _ := st.Extra[ExtraOmitted].([]map[string]any)
+		for _, o := range list {
+			reasons[o["entry_id"].(string)] = o["reason"].(string)
+		}
+	}
+	for _, o := range tr.Context.OmittedItems {
+		if got := reasons[o.Entry.ID]; got != o.Reason {
+			t.Errorf("entry %s is omitted as %q in the document, want %q", o.Entry.ID, got, o.Reason)
+		}
+	}
+	if len(reasons) != 2 {
+		t.Errorf("the document lists %d omitted entries, want 2: %v", len(reasons), reasons)
+	}
+	want, _ := json.Marshal(tr.Context.Items)
+	items, err := Items(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := json.Marshal(items); !bytes.Equal(got, want) {
+		t.Errorf("Items rebuilt\n%s\nwant\n%s", got, want)
+	}
+	// Written and read back, the extras are generic JSON and the list
+	// is the same.
+	data, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back atif.Trajectory
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	items, err = Items(&back)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := json.Marshal(items); !bytes.Equal(got, want) {
+		t.Errorf("Items after a round trip rebuilt\n%s\nwant\n%s", got, want)
 	}
 }

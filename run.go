@@ -482,6 +482,14 @@ func (c *Call) takenUpIn(in map[string]bool) bool {
 // it, and [SourceInput] otherwise, a run that takes up nothing
 // included. A run built by hand with no Path has nothing before its
 // segment, so it is an input.
+//
+// It is the shape the segment shows, which is not always what the
+// writer meant: a run started to take up a call and ended before it did
+// has an empty segment, which computes as an input. Format 0.11
+// accepts such a run written [SourceResume] as it is written, and
+// [Session.VerifyRecords] does not report it; a writer still computes
+// the source it writes at start from what it knows then, and need not
+// change.
 func ComputeSource(r *Run) string {
 	path := r.Path
 	if path == nil {
@@ -527,10 +535,12 @@ func ComputeSource(r *Run) string {
 // Empty reports whether the run's segment holds no entry but its start
 // and its end, or, for a run that was cut, none after its start: a run
 // refused, or killed, before it did anything. Such a run written
-// [SourceResume] is the shape of [SourceInput], and
-// [Session.VerifyRecords] reports it with [ErrSourceMismatch], though
-// all it shows is that its writer meant to take up a call and took up
-// nothing.
+// [SourceResume] is the shape of [SourceInput], and format 0.11
+// accepts it as written, since all it shows is that its writer meant to
+// take up a call and took up nothing: [Session.VerifyRecords] does not
+// report it with [ErrSourceMismatch]. Empty tells it from a resume that
+// adds a message or an output and takes up nothing, which is still
+// reported.
 func (r *Run) Empty() bool {
 	for _, e := range r.Segment {
 		if e != Entry(r.Start) && (r.End == nil || e != Entry(r.End)) {
@@ -805,7 +815,8 @@ var ErrCallIDEmpty = errors.New("agentsession: function call has no call ID")
 
 // ErrSourceMismatch is returned by [Session.VerifyRecords] for a run
 // start whose source is not the shape of its segment; see
-// [ComputeSource].
+// [ComputeSource]. A run written resume over a segment that holds
+// nothing is not one, as [Run.Empty] says.
 var ErrSourceMismatch = errors.New("agentsession: run source disagrees with its segment")
 
 // ErrRejectDispatched is returned when a reject is appended for a call
@@ -844,10 +855,11 @@ var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 // on the same call, no answer, reject or dispatch follows an output and
 // no reject a dispatch, and, when the header names dispatch in records,
 // no answer ends a call with no dispatch and every call that ran has a
-// dispatch. The rules that rest on records apply to what the session
-// wrote, the entries after its base: a fork's prefix is another
-// session's record, kept to that session's promise. It returns the
-// first problem found.
+// dispatch. A run written resume over a segment that holds nothing
+// agrees with it, as format 0.11 has it, in a file of any minor. The
+// rules that rest on records apply to what the session wrote, the
+// entries after its base: a fork's prefix is another session's record,
+// kept to that session's promise. It returns the first problem found.
 func (s *Session) VerifyRecords(leaf string) error {
 	path := s.Path(leaf)
 	if path == nil {
@@ -868,7 +880,7 @@ func (s *Session) VerifyRecords(leaf string) error {
 		if err := r.Verify(); err != nil {
 			return err
 		}
-		if src := r.Start.Source; (src == SourceInput || src == SourceResume) && src != ComputeSource(r) {
+		if src := r.Start.Source; (src == SourceInput || src == SourceResume) && src != ComputeSource(r) && !(src == SourceResume && r.Empty()) {
 			return fmt.Errorf("%w: run %s starts as %s and its segment is the shape of %s", ErrSourceMismatch, r.RunID(), src, ComputeSource(r))
 		}
 	}

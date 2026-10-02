@@ -7,15 +7,76 @@ versions may break the API.
 
 ## Unreleased
 
-- **Format 0.11 is planned and not written.** `docs/plans/format-0.11.md`
-  scopes the next minor and why this release does not bump it: the
-  `source` rule for a resume that took up nothing, instruction parts
-  named by hash out of force and an omitted list named by an earlier
-  entry's, a `config` member recording the items a request leaves out,
-  and a `judged_by` link relation. RFC 0001 says, under *Changes since
-  0.9*, which of this release's clarifications would have been rules of
-  0.11 had they changed what a file may hold, and that none does.
-  (#178, #56, #172, #173, #145)
+- **Dependencies:** `openresponses` v0.0.13, from v0.0.12, in the root
+  and the `sqlite` and `otel` modules. Nothing here uses what it adds.
+- **Format 0.11.** `Format` is `agentsession/0.11` and `FormatMinor` is
+  11: a writer raises every file it appends to, so a reader of 0.10
+  refuses those files until it is upgraded, and readers of 0.11 ship
+  before writers do. RFC 0001 is draft 0.11 and says each change first,
+  under *Changes since 0.10*, with its conformance fixtures; the plan is
+  `docs/plans/format-0.11.md`. A reader of 0.11 reads a 0.5 to 0.10 file
+  as it stands. No entry hash moves. (#178)
+- **A run written `resume` over a segment that holds nothing verifies.**
+  A resume refused by a subscriber to the run's start, or killed before
+  it took anything up, left a segment that computes `input`, and
+  `VerifyRecords` failed it and every leaf below it for ever;
+  v0.0.19 answered with `Run.Empty` and a note. 0.11 accepts it as
+  written, in a file of any minor, 0.9 and 0.10 included; a resume that
+  adds a message or an output and takes nothing up is still reported.
+  `agentsession verify` drops the note, and the `empty-resume` and
+  `bad-resume` fixtures hold the two cases. (#172)
+- **`InstructionsDelta` names a part out of force by hash.** A part the
+  path gave its id that text and source, in force or since left, is
+  named by its `hash` alone, and only a part the path never had carries
+  its text; a replace and a compaction's checkpoint start the history
+  afresh. A part in force with its text and another source, and one the
+  path could not resolve, still carry their text, since a hash resolves
+  against the part in force first. A hand-back to an agent whose parts
+  another agent replaced no
+  longer repeats them: the letta-memory probe's parts went from 40,620
+  bytes to about 14,070. The `handback` fixture, a, b, a, holds it.
+  (#173)
+- **A keep in `instructions_omitted` may carry `of`**, the id of an
+  earlier `config` entry, and count over the list that entry put in
+  force, as resolved there. `{"keep":474,"of":"sha256:…"}` is the whole
+  hand-back where the list was 37 KB. Each list a delta counts over has
+  a cursor of its own; an `of` naming no entry the path holds since the
+  last replace or checkpoint is kept as written, and `bad-handback`
+  and `bad-handback-folded` hold it, and `verify` notes such an element without failing the
+  file, through `UnresolvedOf`, which finds the config entries that
+  carry one. `OmittedDelta` writes the shortest of the whole list, the
+  keeps over the list in force and the keeps over each of the sixteen
+  lists before it, and `OmittedPart.Of` is the member. (#173)
+- **`omit` on a `config` entry records the items a request leaves
+  out.** `Omit{Reasoning: OmitOtherModels}` leaves out each reasoning
+  item of a response written while another model was in force, so a
+  model switch under reasoning no longer leaves every later response
+  unhashed; `Items` lists entries whose items contribute nothing. A delta
+  sets the rule it names, adds its items to those in force and `{}`
+  clears both; a checkpoint carries it. `Context.OmittedItems` says
+  which entries a request leaves out and why, `Verify` reports a hash
+  over the request with them in as `ErrOmitDivergence` under
+  `ErrHashMismatch`, `Settings.OmitDelta` gives a recorder the member
+  that takes the omit in force to the one it wants, the ATIF export lists
+  such an item under `omitted` and `Items` leaves it out, and `show` and
+  `verify` say so. The rule reads the model in force at the reasoning
+  item's entry and never a response entry's `model`, and an empty model
+  name attributes nothing: an item written under none is never left
+  out, and a request under none leaves nothing out. A reasoning value
+  the format does not define leaves the rule in force, and a writer
+  writes no empty id in `items`. `Continue` carries
+  the omit into the successor, as a checkpoint does. The `omit`,
+  `omit-absent`, `bad-omit` and `omit-folded` fixtures hold the session
+  as 0.11 and 0.10 write it, a divergence, and an omit carried through
+  a fold. (#56)
+- **A `judged_by` link relation names a session's judge.** The judged
+  session records the judge's session, with an optional `target` naming
+  the entry judged, the entry the judge's `outcome` names; a header's
+  `parent_session` cannot tell a judge from a subagent or a fork.
+  `NewJudgedByLink`, `Judges` and `LinkEntry.Target` are the API, the
+  ATIF export lists one under the root's `links` with its target, and
+  `ListFilter.ParentSession` is unchanged and says why. The `judged`
+  fixture holds it. (#145)
 - **A prefix call's dispatches are read through its origin.** A fork
   made at a call holds the call in its prefix and none of its
   dispatches, which the origin wrote off the path to the base, so every
