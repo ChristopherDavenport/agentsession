@@ -1012,11 +1012,12 @@ func validateConfig(c *ConfigEntry) error {
 }
 
 // validateOmitted checks a config delta's omitted parts: each is named
-// or is a keep and nothing else, a list with a keep names each id once,
-// and a replace, which discards the list a keep counts over, has none.
-// Whether a keep stays within the list in force depends on the path,
-// and nothing reaches the request to check it, so it is left to the
-// writer; [Settings.OmittedDelta] computes one that does.
+// or is a keep, which may carry of and nothing else, a list with a keep
+// names each id once, and a replace, which discards the lists a keep
+// counts over, has none. Whether a keep stays within the list it counts
+// over, and whether an of names an entry on the path, depends on the
+// path, and nothing reaches the request to check it, so it is left to
+// the writer; [Settings.OmittedDelta] computes one that does.
 func validateOmitted(c *ConfigEntry) error {
 	keeps := false
 	for _, o := range c.InstructionsOmitted {
@@ -1029,6 +1030,9 @@ func validateOmitted(c *ConfigEntry) error {
 			}
 			keeps = true
 			continue
+		}
+		if o.Of != "" {
+			return errors.New("agentsession: an omitted instructions part carries of, which belongs to a keep")
 		}
 		if o.ID == "" {
 			return errors.New("agentsession: an omitted instructions part has no id")
@@ -1355,6 +1359,6 @@ func checkpoint(settings Settings) Settings {
 	if unresolvedParts(settings.InstructionsParts) {
 		settings.InstructionsParts = nil
 	}
-	settings.left = nil
+	settings.left, settings.lists = nil, nil
 	return settings
 }

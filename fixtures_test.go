@@ -256,6 +256,20 @@ func TestRegenerateFixtures(t *testing.T) {
 		}
 	}
 
+	// handback and bad-handback: the 0.11 conformance vectors for an
+	// agent handed a session again, appended natively. The first names
+	// the parts that left force by hash and the omitted list by of; the
+	// second writes an of that names no entry on the path.
+	for name, bad := range map[string]bool{"handback": false, "bad-handback": true} {
+		var buf bytes.Buffer
+		if err := Write(&buf, handbackFixture(t, bad)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join("testdata", "sessions", name+".jsonl"), buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	// judged: the 0.11 conformance vector for a judge's link, appended
 	// natively: a session that answered a task and records the session
 	// that judged it, and the entry the judgement is about.
@@ -1302,4 +1316,127 @@ func TestJudgedFixture(t *testing.T) {
 	if err := s.VerifyRecords(s.Leaf()); err != nil {
 		t.Errorf("VerifyRecords: %v", err)
 	}
+}
+
+// handbackFixture builds the session handback.jsonl holds: a triage
+// agent A with a memory of twenty facts, sixteen of them omitted by
+// budget, handed to a billing agent B and back, five turns in all.
+//
+//  1. A runs, writing its parts and its omitted list whole.
+//  2. B replaces A's parts and omitted list with its own, in a delta.
+//  3. A is handed the session back, and has saved a fact: its parts
+//     are named by hash, the one new fact by text, and its omitted
+//     list is the new fact's element and a keep of sixteen over the
+//     list entry 1 wrote.
+//  4. B again.
+//  5. A again, unchanged: its omitted list is one keep over the list
+//     entry 3 resolved to, and its parts are named by hash.
+//
+// Every response carries the hash of the request its context rebuilds.
+// With bad set, entry 5 names an entry that is not on the path.
+func handbackFixture(t *testing.T, bad bool) *Session {
+	t.Helper()
+	id := "01995b2a-0000-7000-8000-000000000019"
+	if bad {
+		id = "01995b2a-0000-7000-8000-00000000001a"
+	}
+	at, _ := time.Parse(time.RFC3339, "2026-10-01T12:00:00Z")
+	s := New(Header{ID: id, CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must := func(e Entry) string {
+		t.Helper()
+		got, err := s.Append(e)
+		if err != nil {
+			t.Fatalf("append %T: %v", e, err)
+		}
+		return got
+	}
+	factParts := func(shown []int) []InstructionPart {
+		var parts []InstructionPart
+		for _, n := range shown {
+			p, _ := memoryFact(n)
+			parts = append(parts, p)
+		}
+		return parts
+	}
+	factsOmitted := func(ns ...int) []OmittedPart {
+		var list []OmittedPart
+		for _, n := range ns {
+			_, o := memoryFact(n)
+			list = append(list, o)
+		}
+		return list
+	}
+	seq := func(from, to int) []int {
+		var out []int
+		for n := from; n <= to; n++ {
+			out = append(out, n)
+		}
+		return out
+	}
+	agentA := func(shown []int) []InstructionPart {
+		return append([]InstructionPart{{ID: "product", Source: "product", Text: "You are the triage agent."}, {ID: "agentsmd", Source: "agentsmd", Text: "Route billing questions to billing."}}, factParts(shown)...)
+	}
+	agentB := []InstructionPart{
+		{ID: "product", Source: "product", Text: "You are the billing agent."},
+		{ID: "skills", Source: "agentskill", Text: "refund: issue a refund\ninvoice: find an invoice"},
+	}
+	omittedB := []OmittedPart{
+		{ID: "skills/dispute", Reason: "budget", Size: 120, Source: "agentskill"},
+		{ID: "skills/audit", Reason: "budget", Size: 90, Source: "agentskill"},
+	}
+	turn := func(n int, model string, parts []InstructionPart, omitted []OmittedPart, user string) {
+		t.Helper()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg *ConfigEntry
+		if n == 1 {
+			if cfg, err = ConfigFromRequestParts(openresponses.Request{Model: model, Instructions: JoinInstructions(parts)}, parts...); err != nil {
+				t.Fatal(err)
+			}
+			cfg.InstructionsOmitted = omitted
+		} else {
+			cfg = ctx.Settings.InstructionsDelta(parts)
+			if cfg == nil {
+				cfg = &ConfigEntry{}
+			}
+			if model != ctx.Settings.Model {
+				cfg.Model = model
+			}
+			if d := ctx.Settings.OmittedDelta(omitted); d != nil {
+				cfg.InstructionsOmitted = d
+			}
+		}
+		if n == 5 && bad {
+			cfg.InstructionsOmitted = []OmittedPart{{Keep: len(omitted), Of: "sha256:" + strings.Repeat("0", 64)}}
+		}
+		must(cfg)
+		must(NewItemEntry(openresponses.UserText(user)))
+		if ctx, err = s.Context(); err != nil {
+			t.Fatal(err)
+		}
+		req, err := ctx.Request()
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash, err := RequestHash(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		respID := fmt.Sprintf("resp_%d", n)
+		answer := NewItemEntry(&openresponses.Message{ID: "msg_" + respID, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: "Noted.", Annotations: []openresponses.Annotation{}}}})
+		answer.ResponseID = respID
+		must(answer)
+		must(&ResponseEntry{ResponseID: respID, Model: model, Status: openresponses.ResponseStatusCompleted, RequestHash: hash})
+	}
+	turn(1, "gpt-5", agentA(seq(0, 3)), factsOmitted(seq(4, 19)...), "I was charged twice.")
+	turn(2, "gpt-5-mini", agentB, omittedB, "Please refund the second charge.")
+	// A saved fact 20 while B ran: it sorts into the shown facts and
+	// pushes fact 3 out, to the head of the omitted list.
+	turn(3, "gpt-5", agentA([]int{0, 1, 2, 20}), factsOmitted(append([]int{3}, seq(4, 19)...)...), "Thanks. What about my other card?")
+	turn(4, "gpt-5-mini", agentB, omittedB, "Which invoice was it?")
+	turn(5, "gpt-5", agentA([]int{0, 1, 2, 20}), factsOmitted(append([]int{3}, seq(4, 19)...)...), "Back to triage.")
+	return s
 }

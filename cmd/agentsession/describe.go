@@ -63,6 +63,10 @@ func describeEntry(e agentsession.Entry, full bool) string {
 			ids := make([]string, 0, n)
 			for _, o := range v.InstructionsOmitted {
 				if o.ID == "" && o.Keep > 0 {
+					if o.Of != "" {
+						ids = append(ids, fmt.Sprintf("+%d of %s", o.Keep, shortID(o.Of)))
+						continue
+					}
 					ids = append(ids, fmt.Sprintf("+%d", o.Keep))
 					continue
 				}

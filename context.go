@@ -47,6 +47,32 @@ type Settings struct {
 	// began, a compaction's checkpoint or a replace, which a later
 	// delta may still name by hash; see applyInstructionParts.
 	left *partHistory
+
+	// lists holds the omitted list each config entry put in force since
+	// the replay began, a compaction's checkpoint or a replace, which a
+	// later keep may name by of; see applyOmitted.
+	lists *omittedHistory
+}
+
+// omittedHistory is the omitted list each config entry that carried the
+// member put in force, as the list resolved at that entry, one node per
+// entry, newest first. A node is never changed once built, so settings
+// copied by value share it.
+type omittedHistory struct {
+	entry string
+	list  []OmittedPart
+	prev  *omittedHistory
+}
+
+// find returns the list the config entry put in force, and whether the
+// history has one.
+func (h *omittedHistory) find(entry string) ([]OmittedPart, bool) {
+	for ; h != nil; h = h.prev {
+		if h.entry == entry {
+			return h.list, true
+		}
+	}
+	return nil, false
 }
 
 // partHistory is the parts that left force, one node per config entry
@@ -167,7 +193,12 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 		if c.Replace {
 			prev = nil
 		}
-		out.InstructionsOmitted = cloneOmitted(applyOmitted(prev, c.InstructionsOmitted))
+		out.InstructionsOmitted = cloneOmitted(applyOmitted(prev, c.InstructionsOmitted, out.lists))
+		if c.ID != "" {
+			// The entry's list can be named by a later keep. A replace
+			// started the lists afresh, so out.lists is empty then.
+			out.lists = &omittedHistory{entry: c.ID, list: out.InstructionsOmitted, prev: out.lists}
+		}
 	}
 	if c.Model != "" {
 		out.Model = c.Model
@@ -339,32 +370,65 @@ func applyInstructionParts(prev, delta []InstructionPart, left *partHistory) []I
 // written, and so is an element with neither an id nor a keep, so a
 // reader can see that a part is missing. An element that names a part
 // carries all of it.
-func applyOmitted(prev, delta []OmittedPart) []OmittedPart {
-	at := make(map[string]int, len(prev))
-	for i, p := range prev {
-		if _, dup := at[p.ID]; p.ID != "" && !dup {
-			at[p.ID] = i
-		}
+//
+// A keep that carries of counts over the list the config entry it names
+// put in force, found in lists, which holds the entries on the path
+// since the last replace or checkpoint, instead of over the list in
+// force. Each list a delta counts over has a cursor of its own: a keep
+// moves the cursor of its own list alone, and an element naming a part
+// moves the cursor of every list that names it. A keep whose of names
+// no entry lists holds is kept as written, as is one that runs past that
+// entry's list or takes a part the delta names elsewhere.
+func applyOmitted(prev, delta []OmittedPart, lists *omittedHistory) []OmittedPart {
+	// cursors holds a cursor per list the delta counts over, keyed by
+	// the entry an of names, and "" for the list in force. A list is
+	// found up front, so an element naming a part before the first
+	// keep over it has already moved its cursor.
+	type cursor struct {
+		list []OmittedPart
+		at   map[string]int
+		next int
 	}
+	newCursor := func(list []OmittedPart) *cursor {
+		c := &cursor{list: list, at: make(map[string]int, len(list))}
+		for i, p := range list {
+			if _, dup := c.at[p.ID]; p.ID != "" && !dup {
+				c.at[p.ID] = i
+			}
+		}
+		return c
+	}
+	cursors := map[string]*cursor{"": newCursor(prev)}
 	named := make(map[string]bool, len(delta))
 	for _, p := range delta {
 		if p.ID != "" {
 			named[p.ID] = true
 		}
+		if p.ID == "" && p.Keep > 0 && p.Of != "" && cursors[p.Of] == nil {
+			if list, ok := lists.find(p.Of); ok {
+				cursors[p.Of] = newCursor(list)
+			}
+		}
 	}
 	out := make([]OmittedPart, 0, len(delta))
-	cursor := 0
 	for _, p := range delta {
 		switch {
 		case p.ID == "" && p.Keep > 0:
-			run := prev[min(cursor, len(prev)):min(cursor+p.Keep, len(prev))]
+			cur := cursors[p.Of]
+			if cur == nil {
+				// An of that names no list this path holds takes
+				// nothing, and moves no cursor.
+				out = append(out, OmittedPart{Keep: p.Keep, Of: p.Of})
+				continue
+			}
+			run := cur.list[min(cur.next, len(cur.list)):min(cur.next+p.Keep, len(cur.list))]
 			ok := len(run) == p.Keep
 			for _, q := range run {
 				ok = ok && !named[q.ID]
 			}
-			cursor += p.Keep
+			cur.next += p.Keep
 			if !ok {
-				out = append(out, OmittedPart{Keep: p.Keep})
+				out = append(out, OmittedPart{Keep: p.Keep, Of: p.Of})
 				continue
 			}
 			// A part kept as it is stays unresolved if it was.
@@ -373,31 +437,57 @@ func applyOmitted(prev, delta []OmittedPart) []OmittedPart {
 			// Neither a part nor a keep: kept as written.
 			out = append(out, p)
 		default:
-			if i, ok := at[p.ID]; ok {
-				cursor = i + 1
+			for _, cur := range cursors {
+				if i, ok := cur.at[p.ID]; ok {
+					cur.next = i + 1
+				}
 			}
-			p.Keep = 0 // a keep beside an id means nothing
+			p.Keep, p.Of = 0, "" // a keep or an of beside an id means nothing
 			out = append(out, p)
 		}
 	}
 	return out
 }
 
+// maxOmittedLists is how many of the lists earlier entries put in
+// force [Settings.OmittedDelta] tries a delta against, newest first,
+// beside the list in force. A hand-back names the list of the last time
+// that agent ran, so it is among the few most recent; the bound keeps
+// the work of one call from growing with the length of the session.
+const maxOmittedLists = 16
+
 // OmittedDelta returns the instructions_omitted member that takes the
 // omitted parts in force in these settings to omitted, for
 // [ConfigEntry.InstructionsOmitted]: nil when omitted is the list in
 // force, so a writer that renders its omissions every turn writes
 // nothing when nothing moved; an empty, non-nil list, written as [],
-// when omitted is empty and a list is in force; and otherwise omitted
-// with every run of parts in force, unchanged and in the order they
-// are in force, named by a keep, so a part moving across a budget
-// costs that part and not the whole list. A part that changed, is new
-// or is out of that order is written whole. omitted names each ID
-// once; when it does not, or the list in force names an ID twice,
-// omitted is returned whole.
+// when omitted is empty and a list is in force; and otherwise the
+// shortest of three, as encoded: omitted whole; omitted with every run
+// of parts in force, unchanged and in the order they are in force,
+// named by a keep, so a part moving across a budget costs that part and
+// not the whole list; and omitted with every run of parts that an
+// earlier entry on the path put in force, unchanged and in that list's
+// order, named by a keep carrying of, so a hand-back to an agent whose
+// list another agent replaced costs one element and not the list. Each
+// of the sixteen lists put in force most recently before the one in
+// force is tried, newest first, and one is used only when it is shorter
+// than the best so far, so a list in force that the keeps already
+// cover is never named by of. A part that changed, is new or is out of
+// the order of the list a delta counts over is written whole. omitted
+// names each ID once; when it does not, omitted is returned whole, and
+// a list a delta would count over that names an ID twice is not counted
+// over.
 //
-// A delta with Replace set discards the list in force, so its keeps
-// would resolve against nothing: such a delta carries omitted itself.
+// The lists an of can name are those the settings recorded as they were
+// replayed, so settings from [Session.Context] or [BuildContext] have
+// them, back to the last replace or compaction; settings built by hand
+// have none, and the result is the first two. An of is the ID of the
+// config entry, so a recorder writes the delta for the entry it is about
+// to append and nothing else.
+//
+// A delta with Replace set discards the lists in force and earlier
+// ones, so its keeps would resolve against nothing: such a delta
+// carries omitted itself.
 func (s Settings) OmittedDelta(omitted []OmittedPart) []OmittedPart {
 	prev := s.InstructionsOmitted
 	if slices.Equal(prev, omitted) {
@@ -406,39 +496,75 @@ func (s Settings) OmittedDelta(omitted []OmittedPart) []OmittedPart {
 	if len(omitted) == 0 {
 		return []OmittedPart{}
 	}
-	at := make(map[string]int, len(prev))
-	whole := false
-	for i, p := range prev {
+	seen := make(map[string]bool, len(omitted))
+	for _, p := range omitted {
+		if p.ID == "" || p.Keep != 0 || p.Of != "" || seen[p.ID] {
+			return append([]OmittedPart{}, omitted...)
+		}
+		seen[p.ID] = true
+	}
+	whole := append([]OmittedPart{}, omitted...)
+	best, ok := omittedRuns(prev, "", omitted)
+	if !ok {
+		best = whole
+	}
+	size := encodedSize(best)
+	if n := encodedSize(whole); n < size {
+		best, size = whole, n
+	}
+	tried := 0
+	for h := s.lists; h != nil && tried < maxOmittedLists; h = h.prev {
+		tried++
+		if slices.Equal(h.list, prev) {
+			continue // the keeps over the list in force already cover it
+		}
+		if d, ok := omittedRuns(h.list, h.entry, omitted); ok {
+			if n := encodedSize(d); n < size {
+				best, size = d, n
+			}
+		}
+	}
+	return best
+}
+
+// encodedSize is the length of the JSON a list encodes to, which an
+// element that fails to encode, none here, counts as nothing.
+func encodedSize(list []OmittedPart) int {
+	b, _ := json.Marshal(list)
+	return len(b)
+}
+
+// omittedRuns returns omitted with each run of parts that list holds,
+// unchanged and in list's order, named by a keep, carrying of when it
+// is not empty. It reports false when list cannot be counted over: it
+// names no part, or names an ID twice. An element of list that names no
+// part is not counted. omitted names each ID once and holds no keep.
+func omittedRuns(list []OmittedPart, of string, omitted []OmittedPart) ([]OmittedPart, bool) {
+	at := make(map[string]int, len(list))
+	for i, p := range list {
 		if p.ID == "" {
 			continue // an element naming nothing is never kept by a delta
 		}
 		if _, dup := at[p.ID]; dup {
-			whole = true
+			return nil, false
 		}
 		at[p.ID] = i
 	}
-	seen := make(map[string]bool, len(omitted))
-	for _, p := range omitted {
-		if p.ID == "" || p.Keep != 0 || seen[p.ID] {
-			whole = true
-		}
-		seen[p.ID] = true
-	}
-	if whole {
-		return append([]OmittedPart{}, omitted...)
+	if len(at) == 0 {
+		return nil, false
 	}
 	out := make([]OmittedPart, 0, len(omitted))
 	cursor, run := 0, 0
 	flush := func() {
 		if run > 0 {
-			out = append(out, OmittedPart{Keep: run})
+			out = append(out, OmittedPart{Keep: run, Of: of})
 			cursor += run
 			run = 0
 		}
 	}
 	for _, p := range omitted {
 		j, ok := at[p.ID]
-		if ok && prev[j] == p && j == cursor+run {
+		if ok && list[j] == p && j == cursor+run {
 			run++
 			continue
 		}
@@ -449,7 +575,7 @@ func (s Settings) OmittedDelta(omitted []OmittedPart) []OmittedPart {
 		}
 	}
 	flush()
-	return out
+	return out, true
 }
 
 // unresolvedParts reports whether any part is one the path could not
@@ -708,6 +834,10 @@ func BuildContext(path []Entry) (Context, error) {
 		settings = comp.Config
 		settings.InstructionsParts = cloneParts(comp.Config.InstructionsParts)
 		settings.InstructionsOmitted = cloneOmitted(comp.Config.InstructionsOmitted)
+		// The checkpoint writes what was in force whole: no entry before
+		// it is named by a later keep, and no part that left force
+		// before it by a later hash.
+		settings.left, settings.lists = nil, nil
 		ctx.Entries = append(ctx.Entries, comp)
 		ctx.Items = append(ctx.Items, comp.Summary)
 		ctx.ItemEntries = append(ctx.ItemEntries, comp)

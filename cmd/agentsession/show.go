@@ -168,6 +168,9 @@ func printContext(w io.Writer, s *agentsession.Session, at string) error {
 				name := "- unresolved"
 				if o.Keep > 0 {
 					name = fmt.Sprintf("keep %d unresolved", o.Keep)
+					if o.Of != "" {
+						name = fmt.Sprintf("keep %d of %s unresolved", o.Keep, shortID(o.Of))
+					}
 				}
 				names = append(names, name)
 				continue

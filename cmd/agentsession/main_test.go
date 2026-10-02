@@ -176,6 +176,14 @@ func TestRun(t *testing.T) {
 			},
 		},
 		{
+			name: "show a hand-back", args: []string{"show", filepath.Join(fixtures, "handback.jsonl")},
+			stdout: []string{"omitted memory/user/n-0003 (budget), +16 of ", "instructions [product= agentsmd= memory/user/n-0000= memory/user/n-0001= memory/user/n-0002= memory/user/n-0020="},
+		},
+		{
+			name: "verify a hand-back", args: []string{"verify", filepath.Join(fixtures, "handback.jsonl")},
+			stdout: []string{"5 verified, 0 without hash, 0 failed"}, absent: []string{"records to"},
+		},
+		{
 			name: "verify instructions parts", args: []string{"verify", filepath.Join(fixtures, "instructions.jsonl")},
 			stdout: []string{"2 verified, 0 without hash, 0 failed"},
 		},
@@ -292,6 +300,7 @@ func TestDescribeEveryEntryType(t *testing.T) {
 		{entry: &agentsession.ConfigEntry{Model: "gpt-5"}, want: "model gpt-5"},
 		{entry: &agentsession.ConfigEntry{InstructionsOmitted: []agentsession.OmittedPart{}}, want: "omitted cleared"},
 		{entry: &agentsession.ConfigEntry{InstructionsOmitted: []agentsession.OmittedPart{{ID: "m/1", Reason: "budget"}, {Keep: 474}}}, want: "omitted m/1 (budget), +474"},
+		{entry: &agentsession.ConfigEntry{InstructionsOmitted: []agentsession.OmittedPart{{ID: "m/1", Reason: "budget"}, {Keep: 474, Of: "sha256:0123456789abcdef"}}}, want: "omitted m/1 (budget), +474 of "},
 		{entry: &agentsession.CompactionEntry{FirstKept: "i1", Summary: openresponses.UserText("so far")}, want: "first kept i1"},
 		{entry: &agentsession.BranchSummaryEntry{From: "i1", Summary: openresponses.UserText("before")}, want: "from i1"},
 		{entry: agentsession.NewRunStart("run-1", agentsession.SourceInput, "cron:x"), want: "start run-1 input"},

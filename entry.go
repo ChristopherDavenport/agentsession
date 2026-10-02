@@ -328,7 +328,8 @@ type ConfigEntry struct {
 	// list in force as it was, and an empty, non-nil list, written as
 	// [], clears it. A writer sets it only when the list changed, and
 	// through [Settings.OmittedDelta], which names each run of parts
-	// that stay omitted by a keep.
+	// that stay omitted by a keep, and, in a session of format 0.11, a
+	// run of the list an earlier entry wrote by a keep carrying of.
 	InstructionsOmitted []OmittedPart       `json:"instructions_omitted,omitzero"`
 	ToolsAdded          openresponses.Tools `json:"tools_added,omitempty"`
 	ToolsRemoved        []string            `json:"tools_removed,omitempty"`
@@ -420,6 +421,15 @@ type OmittedPart struct {
 	// hold, is kept as written and Keep is zero; on an element that
 	// names an ID it means nothing.
 	Keep int `json:"keep,omitempty"`
+	// Of, on a keep, names a config entry earlier on the path: the keep
+	// counts over the list that entry put in force instead of the list
+	// in force before this entry, as format 0.11 lets a writer name the
+	// list an earlier entry wrote. It is the id of that entry. It means
+	// nothing beside an ID or without a Keep, and an of member that is
+	// not a non-empty string, which a file from before the member was
+	// defined may hold, is kept as written and Of is empty. See
+	// [Settings.OmittedDelta].
+	Of string `json:"of,omitempty"`
 }
 
 // Unresolved reports whether the element names no part: a keep the
@@ -428,21 +438,27 @@ type OmittedPart struct {
 func (p OmittedPart) Unresolved() bool { return p.ID == "" }
 
 // UnmarshalJSON decodes the part, taking keep only when it is a
-// positive integer written as digits, so an earlier file's keep in any
-// other form stays a member this package does not define.
+// positive integer written as digits and of only when it is a
+// non-empty string, so an earlier file's member in any other form stays
+// a member this package does not define.
 func (p *OmittedPart) UnmarshalJSON(data []byte) error {
 	type plain OmittedPart
 	var v struct {
 		plain
 		Keep json.RawMessage `json:"keep"`
+		Of   json.RawMessage `json:"of"`
 	}
 	if err := json.Unmarshal(data, &v); err != nil {
 		return err
 	}
 	*p = OmittedPart(v.plain)
-	p.Keep = 0
+	p.Keep, p.Of = 0, ""
 	if n, err := strconv.ParseInt(string(v.Keep), 10, 32); err == nil && n > 0 {
 		p.Keep = int(n)
+	}
+	var of string
+	if json.Unmarshal(v.Of, &of) == nil {
+		p.Of = of
 	}
 	return nil
 }
