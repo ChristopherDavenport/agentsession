@@ -3,12 +3,15 @@ package agentsession
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 )
 
 // ErrNoSession is returned when a session ID is not in the store.
@@ -91,13 +94,30 @@ type Reader interface {
 	Read(ctx context.Context, id string) (*Session, error)
 }
 
-// ListFilter narrows a List. Zero fields do not filter.
+// ListFilter narrows a List. Zero fields do not filter, so the zero
+// filter lists every session. The header fields cost no scan: every
+// store reads the header to list a session, and Matches decides on it
+// alone; WithNames and Current read the session's entries.
 type ListFilter struct {
 	// CWD matches the header's working directory exactly.
 	CWD string
 	// ParentSession matches sessions forked or spawned from the given
 	// one.
 	ParentSession string
+	// Harness matches the name of the header's harness exactly; a
+	// header naming no harness matches nothing when it is set. A
+	// scheduled routine finds its own sessions by it without an index
+	// of its own beside the store.
+	Harness string
+	// Extra matches the header's extra members: each member named here
+	// must be in the header with the same value, compared in canonical
+	// form so key order and spacing do not matter; members the header
+	// has beyond these do not count. A harness that writes its user or
+	// platform into the header selects by them here.
+	Extra map[string]json.RawMessage
+	// TopLevel keeps only sessions with no spawned_by: those a person or
+	// a schedule started, and not the subsessions a call spawned.
+	TopLevel bool
 	// After and Before bound created_at, exclusive.
 	After, Before time.Time
 	// Limit caps the number of results; zero means no cap.
@@ -125,13 +145,27 @@ func (f ListFilter) Keep(sum Summary) bool {
 	return true
 }
 
-// Matches reports whether a header passes the filter.
+// Matches reports whether a header passes the filter: the fields of the
+// filter that read the header alone, which is every one but WithNames
+// and Current.
 func (f ListFilter) Matches(h Header) bool {
 	if f.CWD != "" && h.CWD != f.CWD {
 		return false
 	}
 	if f.ParentSession != "" && h.ParentSession != f.ParentSession {
 		return false
+	}
+	if f.Harness != "" && (h.Harness == nil || h.Harness.Name != f.Harness) {
+		return false
+	}
+	if f.TopLevel && h.SpawnedBy != "" {
+		return false
+	}
+	for k, want := range f.Extra {
+		got, ok := h.Extra[k]
+		if !ok || !sameCanonical(want, got) {
+			return false
+		}
 	}
 	if !f.After.IsZero() && !h.CreatedAt.After(f.After) {
 		return false
@@ -140,6 +174,21 @@ func (f ListFilter) Matches(h Header) bool {
 		return false
 	}
 	return true
+}
+
+// sameCanonical reports whether two JSON values are the same in canonical
+// form, the form the format hashes, so two spellings of one value match.
+// A value that is not JSON matches nothing.
+func sameCanonical(a, b json.RawMessage) bool {
+	ca, err := jcs.Transform(a)
+	if err != nil {
+		return false
+	}
+	cb, err := jcs.Transform(b)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(ca, cb)
 }
 
 // Summary describes a stored session without loading it.

@@ -187,6 +187,9 @@ RFC 2119.
   session appended itself. The prefix is another session's record,
   carried here so the file stands alone; the header's `records` promise
   and the rules that rest on it apply to the entries after the base.
+  What the origin wrote off the path to the base is not carried, a
+  `dispatch` for a prefix call among it; `dispatch` says how a reader
+  finds one through `parent_session`.
 - `ts` is informational and a reader MUST NOT order entries by it;
   clocks step backwards. This is a rule about the member an entry
   carries, which its writer asserts. A sequence a store assigns as it
@@ -214,7 +217,7 @@ RFC 2119.
 | `harness` | SHOULD | name and version of the writer |
 | `records` | SHOULD | the record entry types, core or namespaced, this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
-| `parent_session` | MAY | session ID this was forked or spawned from. Provenance, not validated: a fork made at an entry on another fork's prefix may name either session, and a `fork_of` link records the one it was made from |
+| `parent_session` | MAY | session ID this was forked or spawned from. Provenance, not validated: a fork made at an entry on another fork's prefix may name either session, and a `fork_of` link records the one it was made from. It is also the session a reader resolves a prefix call's `dispatch` through, as `dispatch` says |
 | `base` | MAY | hash of the entry this session continues from, never a `leaf` label, since the base is a fork's first leaf; `parent_session` names a session holding it, as provenance. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
 | `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
@@ -239,7 +242,13 @@ file.
 
 A parent MUST appear earlier in the file than any child. Multiple roots
 are permitted in a file with no `base`; a file with one has one prefix
-and every own entry descends from the base. An entry MUST NOT be
+and every own entry descends from the base: the lines before the base
+are the path to it, one root and each the child of the line before, and
+every line after it names as `parent` the base or a line after it, never
+`null` and never a prefix entry above the base. A reader MUST refuse a
+file that breaks this, as it refuses a parent not in the file, since a
+writer appending to the file is held to the same rule and could not
+continue what it reads. An entry MUST NOT be
 modified after it is written; corrections are new entries.
 
 ### Entry hash
@@ -909,7 +918,15 @@ on its path was never started, unless the session holds a `dispatch`
 naming it elsewhere, off the path: a writer that rebases to a point
 between a call and its `dispatch` leaves the call on the new path with
 no `dispatch`, and it may have run. Otherwise the file does not say
-whether it ran. A
+whether it ran. A call in a fork's prefix has its `dispatch` entries,
+if any, in the session the fork was made from: the prefix is the path
+to the base, and a `dispatch` the origin wrote off that path is not
+carried, so the fork's file does not say whether the call ran. A reader
+that wants them resolves the fork's `parent_session` and asks that
+session, and so up a chain of forks, bounded, and reads a `dispatch`
+found there as one on a branch a rebase left: the call may have run,
+under that dispatch's key and with the arguments it handed over, and its
+output, when the origin holds one, is on the origin's branch. A
 writer that names `dispatch` MUST write it, durably, before the tool
 runs, and no writer may write it for a call that was rejected or
 answered or that has its output: the output ends the call, and a harness
@@ -1021,8 +1038,14 @@ A call's fate was decided outside the tool.
 - `args`, when present, are the arguments the tool ran with when a
   decision rewrote them. The `function_call` item stays as the model
   produced it, so the request hash still verifies; the change is
-  recorded beside the call, never inside it. `args` on an `answer`
-  names nothing, since no tool ran with them.
+  recorded beside the call, never inside it. The `args` of the last
+  decision before a `dispatch` that carries them are what that hand-off
+  ran with, and a reader asking what a further hand-off would run with
+  reads the last such decision on the path. `args` on an `answer`
+  names nothing, since no tool ran with them: a reader asking what the
+  tool ran or runs with passes over an `answer`'s `args`, which are
+  read from the `answer` alone, so an output the harness wrote never
+  reads as a rewrite of the call.
 
 A `decision` is a lifecycle fact and carries no score. A judgement of
 how something went is an `outcome`.
@@ -1129,10 +1152,16 @@ does, records the tree's identity in a namespaced member, beside the
 others in the entry (`"cline:tree"`) or inside `vcs`. The envelope
 section says a rewriter preserves either.
 
-A later `env` entry whose `workspace` differs from the one in force
-before it on the path is a **substitution**: from that entry on, the
-tools ran against another file system than the path recorded until
-then, as when a session recorded in a container is resumed on a laptop.
+Before the first `env` entry on a path the workspace is absent. An
+`env` entry after a `response` on the path whose `workspace` differs
+from the one in force before it, the absent one included, is a
+**substitution**: from that entry on, the tools ran against another
+file system than the path recorded until then, as when a session
+recorded in a container is resumed on a laptop, or one recorded with no
+`env` entry is resumed in a container. An `env` entry before any
+`response` on the path is not one, whatever it names, since nothing was
+recorded yet to hold fixed; nor is one after a `response` that names
+the workspace in force, a local run's absent one included.
 Two `workspace` members are compared member by member in their
 canonical form, as the entry hash writes them, every member this
 document does not define included, and an absent one equals only
@@ -1467,7 +1496,14 @@ output contained the call; each inference span links to the previous
 turn's; the first span after a branch links to the branched-from entry.
 A tool span covers one hand-off, so a call with several `dispatch`
 entries has a span for each, and each after the first links to the one
-before it.
+before it. A hand-off's span ends at the call's output or, when the run
+the hand-off was made in ends first, at that run's end, carrying the
+state the path reads for the call there: in flight, with an error
+status, unless a `decision` after the `dispatch` holds or answers it;
+a hand-off still open when the record stops ends there the same way. A
+later `dispatch` for the call or its output opens a span of its own,
+linked to the hand-off's; a second hand-off within one run ends the
+first in flight at the moment of the second.
 
 ## Versioning
 
@@ -1568,7 +1604,9 @@ runs of the list in force by `keep` across deltas that move a part
 across a budget, beside a `replace` and a compaction's checkpoint that
 write it whole, the recomputed `reason` for every `run` end, and
 negative cases, each a file broken in one way, for a broken parent link,
-a truncated last line, an unknown type, a `dispatch` that follows a
+a truncated last line, an unknown type, a file with a `base` holding a
+second root, an own entry hung from the prefix above the base, or a line
+before the base that is not on the path to it, a `dispatch` that follows a
 `reject`, an `answer` or the call's output, a decision that follows a
 `reject`, a `reject` that follows a `dispatch` or an output, a `target`
 naming another call, a repeated `call_id`, an empty `call_id`, a `run`

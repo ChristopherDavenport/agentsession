@@ -39,8 +39,9 @@ var ErrScanMigrated = errors.New("agentsession: a file before 0.5 has no hashed 
 // entry: every line passes the I-JSON test, every entry's id is the hash
 // of its line's canonical bytes, its ts has the one spelling the format
 // admits, its parent is null or an entry earlier in the file, its
-// parents keep the convergence rules, and the legacy_id and normalised
-// any entry may carry have their types. The header is read and checked
+// parents keep the convergence rules, in a file whose header names a
+// base it keeps the base rule ([ErrBaseRule]), and the legacy_id and
+// normalised any entry may carry have their types. The header is read and checked
 // first and returned as the file declares it. A line met a second time
 // is yielded with Repeat set. A last line cut short, as a crash
 // mid-append leaves, ends the sequence with a [*TruncatedLine] error;
@@ -102,6 +103,7 @@ func Scan(r io.Reader) (Header, iter.Seq2[RawEntry, error], error) {
 		}
 		used = true
 		seen := map[string]bool{}
+		rule := newBaseRule(h.Base)
 		for !atEOF {
 			var data []byte
 			if data, atEOF, err = next(); err != nil {
@@ -111,7 +113,7 @@ func Scan(r io.Reader) (Header, iter.Seq2[RawEntry, error], error) {
 			if data == nil {
 				break
 			}
-			e, err := scanLine(data, h.ID, seen)
+			e, err := scanLine(data, h.ID, seen, rule)
 			if err != nil {
 				// Only a last line that is not JSON is cut short, and a
 				// line is the last only when nothing at all follows it.
@@ -146,8 +148,9 @@ func nothingLeft(br *bufio.Reader) bool {
 }
 
 // scanLine verifies one entry line against the entries seen before it
-// and adds it to them.
-func scanLine(data []byte, session string, seen map[string]bool) (RawEntry, error) {
+// and adds it to them; rule holds it to the base rule in a file with
+// one.
+func scanLine(data []byte, session string, seen map[string]bool, rule *baseRule) (RawEntry, error) {
 	if err := ijson.Check(data); err != nil {
 		return RawEntry{}, err
 	}
@@ -166,6 +169,9 @@ func scanLine(data []byte, session string, seen map[string]bool) (RawEntry, erro
 	}
 	if e.Parent != "" && !seen[e.Parent] {
 		return RawEntry{}, fmt.Errorf("entry %s: %w: parent %s", e.ID, ErrNoEntry, e.Parent)
+	}
+	if err := rule.line(e.ID, e.Parent); err != nil {
+		return RawEntry{}, err
 	}
 	if p := v.parents; p != nil && string(p) != "null" {
 		var refs []EntryRef

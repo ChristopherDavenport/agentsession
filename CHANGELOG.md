@@ -5,6 +5,56 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **A prefix call's dispatches are read through its origin.** A fork
+  made at a call holds the call in its prefix and none of its
+  dispatches, which the origin wrote off the path to the base, so every
+  reader saw an unknown call with no dispatch while the store held one.
+  `OriginDispatches(ctx, reader, session, callEntry)` returns the
+  dispatches and the session holding them, walking the chain of forks
+  through `parent_session` with the `Reader` the caller passes, up to
+  `MaxOriginDepth`, and refuses a chain that does not end with
+  `ErrOriginChain`; an origin the reader lacks reads as the fork alone.
+  `agentsession show` on a cas fork lists the pending calls at the leaf
+  with the dispatch and key it finds. RFC 0001 says where a prefix
+  call's dispatches are and how a reader resolves them. (#185)
+- **Read and Scan hold a file to the base rule Append enforces.** A
+  file whose header names a base has one prefix, the path to the base,
+  and every own entry hangs from the base or from one another; both
+  readers took a file with a second root, an own entry hung from the
+  prefix above the base, or lines before the base that are not the path
+  to it, which Append could not then continue. One helper now holds
+  Read, Scan and Append to the rule, under `ErrBaseRule`, which is
+  `ErrNoEntry` too under `errors.Is`, so a caller testing for what
+  Append returned keeps working. Three negative fixtures cover it. (#161)
+- **`Call.Args` passes over an answer's `args`**, which the format says
+  name nothing since no tool ran with them, so an output the harness
+  wrote no longer reads as a rewrite of what the tool runs with; the
+  otel tool span's `args_rewritten` does the same, and the RFC's
+  `decision` section says which decisions' `args` a reader reads.
+  `Append` keeps taking an answer with `args`, since files holding one
+  exist. RFC 0001's OpenTelemetry section now says what the exporter
+  does with a hand-off its run ends without an output: the span ends
+  with the run, in the state the path reads for the call, an error when
+  in flight, and a later hand-off or the output opens a span of its
+  own. (#103)
+- **otel marks a first `env` entry after a response as a substitution.**
+  A session recorded with no `env` entry and resumed under `WithEnv` in
+  a container showed none, while agenteval's strict replay already
+  refuses that path. RFC 0001 now says the workspace is absent before
+  the first `env` entry, that an `env` entry after a `response` whose
+  workspace differs from the one in force, the absent one included, is a
+  substitution, and that one before any `response` is not, whatever it
+  names; the exporter and the Store decorator read it so. (#148)
+- **`ListFilter` selects by `Harness`, `Extra` and `TopLevel`.**
+  `Harness` matches the header's harness name exactly, `Extra` matches
+  header members member by member in canonical form, and `TopLevel`
+  leaves out the subsessions a call spawned; all three decide on the
+  header alone, so every store applies them without a scan and the zero
+  filter still lists everything. `list` grows `-harness` and
+  `-top-level`. (#83)
+
 ## v0.0.19 - 2026-10-01
 
 **On a cas store v0.0.15 or earlier wrote, stop every writer, take a
