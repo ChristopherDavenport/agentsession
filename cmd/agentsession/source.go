@@ -163,10 +163,26 @@ func readFrom(st *cas.Store, src source) (*agentsession.Session, error) {
 	return s, nil
 }
 
-// casResolver finds a linked subsession in the same cas store.
+// casResolver finds a linked subsession in the same cas store, opening
+// the store read-only for each.
 func casResolver(root string) func(id string) (*agentsession.Session, error) {
 	return func(id string) (*agentsession.Session, error) {
-		s, err := readSource(source{path: root, id: id})
+		st, err := cas.Open(root, cas.WithReadOnly())
+		if err != nil {
+			return nil, err
+		}
+		defer st.Close()
+		return resolveIn(st, root)(id)
+	}
+}
+
+// resolveIn finds a linked subsession in a cas store already open. A
+// session the store does not hold, or an id that names none, is nil: a
+// subsession link is written when its call is dispatched, so a child
+// the store lacks is one that never started.
+func resolveIn(st *cas.Store, root string) func(id string) (*agentsession.Session, error) {
+	return func(id string) (*agentsession.Session, error) {
+		s, err := readFrom(st, source{path: root, id: id})
 		if errors.Is(err, agentsession.ErrNoSession) || errors.Is(err, cas.ErrBadName) {
 			return nil, nil
 		}
@@ -176,8 +192,8 @@ func casResolver(root string) func(id string) (*agentsession.Session, error) {
 
 // verifyStore checks a whole cas store as git fsck does: logs,
 // objects, packs and every session's entries, and then each session as
-// verify of one session does, its request hashes and records, printing
-// only what fails.
+// verify of one session does, its request hashes, records and
+// subsession links, printing only what fails.
 func verifyStore(root string, stdout io.Writer) error {
 	ctx := context.Background()
 	st, err := cas.Open(root, cas.WithReadOnly())
@@ -223,6 +239,7 @@ func verifyStore(root string, stdout io.Writer) error {
 		}
 		listed = append(listed, sum.Header)
 	}
+	resolve := resolveIn(st, root)
 	for _, h := range listed {
 		s, err := readFrom(st, source{path: root, id: h.ID})
 		if err != nil {
@@ -231,7 +248,11 @@ func verifyStore(root string, stdout io.Writer) error {
 			continue
 		}
 		checked++
-		if problem, ns := checkSession(s, h.Format, h.ID+": ", stdout, false); problem {
+		problem, ns := checkSession(s, h.Format, h.ID+": ", stdout, false)
+		if checkLinks(s, resolve, h.ID+": ", stdout) {
+			problem = true
+		}
+		if problem {
 			failing++
 			for _, n := range ns {
 				if !slices.Contains(notes, n) {

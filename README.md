@@ -275,7 +275,13 @@ agentsession migrate ~/.agent/cas          # migrate a cas store v0.0.15 or earl
 `verify` exits 1 on a file with a header and no entries, since nothing
 was checked, and on a mismatch, a truncated final line, a run end that
 disagrees with its segment, a dispatch after a reject or an answer, or a call that
-ran without the dispatch the header promised. `export`
+ran without the dispatch the header promised. On a session a cas store
+holds it also exits 1 on a `subsession` link whose session's header
+names another parent or another call, which is what a line moved to a
+fork after a call ID collision leaves when a level of its subsessions
+was not re-derived; a file names no store to find the child in, so a
+file's links go unchecked, and a child the store lacks is one that
+never started. `export`
 writes one ATIF document per leaf and embeds a linked subsession when
 its file is beside the exported one or in the same store. `repair`
 takes the session's lock and writes: it rewrites a cas session whose

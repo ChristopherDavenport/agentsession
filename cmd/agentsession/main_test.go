@@ -1107,6 +1107,102 @@ func TestCASVerifyNotes(t *testing.T) {
 	}
 }
 
+// TestCASVerifyLinks: verify of a cas root, and of one session a store
+// holds, checks each subsession link against the header of the session
+// it names, and fails on one whose header names another parent or
+// another call, which is what a fork remedy that missed a level of
+// subsessions leaves; a link to a session the store lacks is a child
+// that never started, and passes; a file names no store to find the
+// target in, so its links are not checked (#186).
+func TestCASVerifyLinks(t *testing.T) {
+	ctx := context.Background()
+	const parent = "01995b2a-0000-7000-8000-0000000000a1"
+	const call = "call_g"
+	child := agentsession.SubsessionID(parent, call)
+	// build makes a store holding the parent, which links the subsession
+	// the call spawned, and the child under the given header, or no
+	// child with none.
+	build := func(t *testing.T, root string, childHeader *agentsession.Header) {
+		t.Helper()
+		st, err := cas.Open(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		if _, err := st.Create(ctx, agentsession.Header{ID: parent}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(ctx, parent, agentsession.NewItemEntry(openresponses.UserText("delegate"))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(ctx, parent, &agentsession.LinkEntry{Rel: agentsession.RelSubsession, Session: child, CallID: call}); err != nil {
+			t.Fatal(err)
+		}
+		if childHeader == nil {
+			return
+		}
+		if _, err := st.Create(ctx, *childHeader); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(ctx, child, agentsession.NewItemEntry(openresponses.UserText("do it"))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tests := []struct {
+		name   string
+		child  *agentsession.Header
+		code   int
+		stdout []string // on verify of the store and of the parent alike
+	}{
+		{"the link and the header agree", &agentsession.Header{ID: child, ParentSession: parent, SpawnedBy: call}, 0, nil},
+		{"the child never started", nil, 0, nil},
+		{"the header names another parent", &agentsession.Header{ID: child, ParentSession: "01995b2a-0000-7000-8000-0000000000b2", SpawnedBy: call}, 1, []string{"link ", " -> " + child + "  ERROR ", "parent_session"}},
+		{"the header names another call", &agentsession.Header{ID: child, ParentSession: parent, SpawnedBy: "call_h"}, 1, []string{"link ", " -> " + child + "  ERROR ", "spawned_by"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			build(t, root, tt.child)
+			for _, args := range [][]string{{"verify", root}, {"verify", root, parent}} {
+				var stdout, stderr bytes.Buffer
+				if code := run(args, &stdout, &stderr); code != tt.code {
+					t.Errorf("%v: exit %d, want %d\nstdout:\n%s\nstderr:\n%s", args, code, tt.code, stdout.String(), stderr.String())
+				}
+				for _, want := range tt.stdout {
+					if !strings.Contains(stdout.String(), want) {
+						t.Errorf("%v: stdout lacks %q:\n%s", args, want, stdout.String())
+					}
+				}
+				if len(args) == 2 && tt.code == 1 {
+					for _, want := range []string{parent + ": link ", "1 failed"} {
+						if !strings.Contains(stdout.String(), want) {
+							t.Errorf("%v: stdout lacks %q:\n%s", args, want, stdout.String())
+						}
+					}
+				}
+			}
+			if tt.code == 0 {
+				return
+			}
+			// The parent's file alone: no store to find the child in,
+			// so the link is not checked.
+			st, err := cas.Open(root, cas.WithReadOnly())
+			if err != nil {
+				t.Fatal(err)
+			}
+			projected, err := st.ProjectDir(ctx, filepath.Join(root, "..", "projected"), parent)
+			st.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"verify", projected}, &stdout, &stderr); code != 0 || strings.Contains(stdout.String(), "link ") {
+				t.Errorf("verify of the file: exit %d:\n%s", code, stdout.String())
+			}
+		})
+	}
+}
+
 // TestNoteWriter: no release checks a run's source or end as it is
 // appended, so a mismatch earns a note naming the writer of the run in
 // a file of any minor, never the note on early 0.9 writers (#165).

@@ -658,7 +658,9 @@ apply here, where holding the session already is the usual case.
   link on. Under the old IDs the subsessions would stay those of the
   session the line left, and the one for the repeated `call_id` would
   have the ID of the subsession the other store spawned for its own
-  call. Two stores may hold one session with different log orders
+  call. A link left naming an old ID names a session whose header
+  gives another `parent_session`, which a verifier that reads link
+  targets reports, as RFC 0001's `link` section says. Two stores may hold one session with different log orders
   and both are correct: the order says which branch was written last
   in that store, and the head is the fact that travels. Sequence
   numbers are never synchronised.

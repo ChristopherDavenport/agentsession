@@ -26,6 +26,20 @@ versions may break the API.
   session is read from is a file this release writes and declares this
   release's format, so a 0.9 session an early writer of 0.9 wrote
   earned no note on cas. `Store.Project` is unchanged. (#187)
+- **`Session.VerifyLinks` checks each subsession link against the
+  header of the session it names**, through a resolver the caller
+  gives: the target's `parent_session` is the linking session and its
+  `spawned_by` is the link's `call_id`, as RFC 0001's `link` section
+  now states; a target the resolver does not find is a child that never
+  started and passes, a link on a fork's prefix is the origin's and is
+  passed over, and a disagreement is `ErrLinkMismatch` in a `LinkError`
+  naming the link and the target. `agentsession verify` runs it for a
+  session a cas store holds, and for every session of a store, and
+  fails on a mismatch, printed as `link <entry> -> <session>  ERROR`:
+  it is what a fork remedy for a call ID collision that missed a level
+  of subsessions leaves, and `verify` reported nothing. A file names no
+  store to find the target in, so `verify <file>` does not check links.
+  (#186)
 
 ## v0.0.19 - 2026-10-01
 

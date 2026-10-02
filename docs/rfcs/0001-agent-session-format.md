@@ -214,9 +214,9 @@ RFC 2119.
 | `harness` | SHOULD | name and version of the writer |
 | `records` | SHOULD | the record entry types, core or namespaced, this writer writes whenever their event occurs, so a reader may take their absence as the event not having happened. Absent or empty means no such promise |
 | `cwd` | MAY | working directory at creation; an `env` entry's `cwd` takes precedence from that entry on |
-| `parent_session` | MAY | session ID this was forked or spawned from. Provenance, not validated: a fork made at an entry on another fork's prefix may name either session, and a `fork_of` link records the one it was made from |
+| `parent_session` | MAY | session ID this was forked or spawned from. Provenance, not validated for a fork: one made at an entry on another fork's prefix may name either session, and a `fork_of` link records the one it was made from. For a subsession it is the session holding the `subsession` link that names this one, and a verifier MAY check the two agree, as `link` says |
 | `base` | MAY | hash of the entry this session continues from, never a `leaf` label, since the base is a fork's first leaf; `parent_session` names a session holding it, as provenance. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
-| `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it |
+| `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it, which is the `call_id` of the parent's `subsession` link naming this session |
 | `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
 | `redacted` | MAY | `true` when bodies were changed after they were written, as export redaction does. The redactor MUST recompute every content hash and `id` over the redacted bodies and rewrite `parent`, every entry-naming member — `parents` into this file, `target`, `first_kept`, `from`, `queued_from` — and last the header's `base`, once the prefix is hashed, to the IDs assigned earlier in the file, as migration does, leaving a reference into another session's file as it was since it still names the unredacted original; the file then walks and verifies against itself; its IDs are then not the original's and its `request_hash` values are the original's and no longer match. A reader MUST NOT report such a file's hashes as verifying the original |
 
@@ -1182,6 +1182,20 @@ A reference to another session, for subagents and forks.
 before the `dispatch` entry and before the child's header exists, so a
 link whose session cannot be found means the child never started
 rather than a child that was never linked.
+
+A `subsession` link and the child's header are two records of one
+spawn, written by the parent and by the child, and they agree: the
+named session's header, when it exists, has `parent_session` equal to
+the linking session's `id` and `spawned_by` equal to the link's
+`call_id`. This is the exception to `parent_session` being provenance
+alone. A verifier that can read the named session MAY check it, and a
+session it cannot find is not a failure, since the link says the child
+never started. A link on a fork's prefix was the origin's, checked
+there against the origin's `id`. The check is what finds a line moved
+to a fork after a `call_id` collision (RFC 0002) with a level of its
+subsessions left under the old IDs: two stores derive one ID for the
+subsession of one call, so such a link names the other store's
+subagent, and only that session's header says whose it is.
 
 A link names a session, not a point in one, and at the moment it is
 written there is no point to name. The other half of the round trip is

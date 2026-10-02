@@ -44,6 +44,11 @@ func verify(args []string, stdout, stderr io.Writer) error {
 	}
 	problem, notes := checkSession(s, declared, "", stdout, true)
 	printNotes(stdout, notes)
+	// A link's target is found through the store the session is in; a
+	// file names no store, so its links go unchecked.
+	if src.id != "" && checkLinks(s, casResolver(src.path), "", stdout) {
+		problem = true
+	}
 	if t := s.Truncated(); t != nil {
 		problem = true
 		fmt.Fprintf(stdout, "truncated: line %d was cut short: %v\n", t.Line, t.Err)
@@ -161,6 +166,27 @@ func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Wr
 		}
 	}
 	return problem, notes
+}
+
+// checkLinks checks each subsession link against the header of the
+// session it names, found through resolve, as VerifyLinks does, and
+// prints the first failure under prefix: the link, the session it
+// names, and what disagrees. It reports whether one failed. A link
+// whose target names another parent or another call breaks the format,
+// so it fails the command rather than warns; a target the store lacks
+// is a child that never started and is no failure.
+func checkLinks(s *agentsession.Session, resolve func(string) (*agentsession.Session, error), prefix string, stdout io.Writer) bool {
+	err := s.VerifyLinks(resolve)
+	if err == nil {
+		return false
+	}
+	var le *agentsession.LinkError
+	if errors.As(err, &le) {
+		fmt.Fprintf(stdout, "%slink %s -> %s  ERROR %v\n", prefix, shortID(le.Entry), le.Session, le.Err)
+	} else {
+		fmt.Fprintf(stdout, "%slinks  ERROR %v\n", prefix, err)
+	}
+	return true
 }
 
 // noteOrder is the order the notes a check collects are printed in,
