@@ -299,3 +299,30 @@ func BenchmarkFollowSnapshot(b *testing.B) {
 		}
 	}
 }
+
+// TestFollowYieldsWholeRecordsBeforeDamage: a damaged line ends the
+// follow with an error, after the appends whose whole records came
+// before it, which a Read shows too.
+func TestFollowYieldsWholeRecordsBeforeDamage(t *testing.T) {
+	root := t.TempDir()
+	st, _ := Open(root)
+	fill(t, st, "a", 3)
+	st.Close()
+	w := followtest.Start(t, followRO(t, root), "a", "")
+	from := w.NextKind(agentsession.Snapshot).Cursor
+	w.Stop()
+
+	wr, _ := Open(root)
+	fourth := mustAppend(t, wr, "a", item("fourth"))
+	mustAppend(t, wr, "a", item("fifth"))
+	wr.Close()
+	damageAppend(t, root, "a", 4)
+
+	w = followtest.Start(t, followRO(t, root), "a", from)
+	if c := w.NextKind(agentsession.Appended); c.ID != fourth {
+		t.Errorf("appended %s before the damage, want the fourth, %s", c.ID, fourth)
+	}
+	if err := w.End(); err == nil {
+		t.Error("the follow ended without an error at the damaged line")
+	}
+}

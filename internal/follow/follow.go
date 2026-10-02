@@ -101,18 +101,16 @@ func Run(ctx context.Context, src Source, from agentsession.Cursor) iter.Seq2[ag
 				return
 			}
 			ch := wakeCh()
-			items, err := src.Tail(ctx, cur)
-			switch {
-			case err == nil:
-			case errors.Is(err, ErrStale):
+			items, tailErr := src.Tail(ctx, cur)
+			if errors.Is(tailErr, ErrStale) {
 				if !reload(agentsession.Reset) {
 					return
 				}
 				continue
-			default:
-				fail(err)
-				return
 			}
+			// Any other error is damage. It ends the follow, after the
+			// whole records the source read before it, which a Read
+			// would show too.
 			for _, it := range items {
 				if ctx.Err() != nil {
 					return
@@ -132,6 +130,10 @@ func Run(ctx context.Context, src Source, from agentsession.Cursor) iter.Seq2[ag
 						return
 					}
 				}
+			}
+			if tailErr != nil {
+				fail(tailErr)
+				return
 			}
 			if len(items) > 0 {
 				poll.Reset()

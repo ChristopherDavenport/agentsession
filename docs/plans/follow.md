@@ -315,8 +315,15 @@ Where building the plan decided what it left open or went another way:
   a session is a `Reset`, as the plan has it.
 - **Damage in a cas log is an error, not a wait.** A torn last line
   waits; a whole line that fails its checksum is damage, as it is for
-  `Read`, and ends the follow with that error. A record whose objects
-  are missing waits, since a pack or a lazy append may be moving them.
+  `Read`, and ends the follow with that error, after the appends whose
+  whole records came before it. A record whose objects are missing
+  waits, since a pack or a lazy append may be moving them.
+- **A known jsonl gap.** The jsonl follower reads nothing while the
+  file's size and inode stand still. A corrupt last line that `Read`
+  takes as truncated, cut by the next writer's open and replaced by an
+  entry of exactly its length, would not be seen. That needs a corrupt
+  tail first; a checksum of the last line in the cursor, as cas keeps,
+  would close it.
 - **Wakeups in cas** ring from `appendRecords`, which every record goes
   through, from the recovery that writes a log anew and from `Delete`.
   `Repair` and `migrate` are found by the poll.
