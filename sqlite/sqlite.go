@@ -25,6 +25,7 @@ import (
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/internal/procs"
+	"github.com/ChristopherDavenport/agentsession/internal/wake"
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
 )
 
@@ -153,6 +154,11 @@ type Store struct {
 
 	mu   sync.Mutex
 	open map[string]*agentsession.Session
+
+	followEvery time.Duration
+	// hub rings the followers of a session this store writes; see
+	// Follow.
+	hub wake.Hub
 }
 
 // Open opens or creates the database at path and applies the schema.
@@ -567,47 +573,57 @@ func raiseFormat(ctx context.Context, tx *sql.Tx, id string) error {
 // append, a raised header or a delete another connection commits
 // meanwhile is wholly in it or wholly not.
 func (s *Store) load(ctx context.Context, id string) (*agentsession.Session, string, error) {
+	sess, header, _, err := s.loadTo(ctx, id, -1)
+	return sess, header, err
+}
+
+// loadTo is load over the entries whose seq is at most limit, or all of
+// them when limit is negative, and reports the last seq it read: the
+// session as it stood when its newest row had that seq, which a
+// follower resumes from.
+func (s *Store) loadTo(ctx context.Context, id string, limit int64) (*agentsession.Session, string, int64, error) {
 	tx, err := s.r.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, "", fmt.Errorf("sqlite: begin: %w", err)
+		return nil, "", 0, fmt.Errorf("sqlite: begin: %w", err)
 	}
 	defer tx.Rollback()
+	var last int64
 	var header string
 	err = tx.QueryRowContext(ctx, `SELECT header FROM sessions WHERE id = ?`, id).Scan(&header)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, "", fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
+		return nil, "", 0, fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
 	}
 	if err != nil {
-		return nil, "", fmt.Errorf("sqlite: load session: %w", err)
+		return nil, "", 0, fmt.Errorf("sqlite: load session: %w", err)
 	}
 	// Rebuild the JSONL form and let the library validate the tree.
 	var buf bytes.Buffer
 	buf.WriteString(header)
 	buf.WriteByte('\n')
-	rows, err := tx.QueryContext(ctx, `SELECT line FROM entries WHERE session_id = ? ORDER BY seq`, id)
+	rows, err := tx.QueryContext(ctx, `SELECT seq, line FROM entries WHERE session_id = ? AND (? < 0 OR seq <= ?) ORDER BY seq`, id, limit, limit)
 	if err != nil {
-		return nil, "", fmt.Errorf("sqlite: load entries: %w", err)
+		return nil, "", 0, fmt.Errorf("sqlite: load entries: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var line string
-		if err := rows.Scan(&line); err != nil {
-			return nil, "", fmt.Errorf("sqlite: load entries: %w", err)
+		if err := rows.Scan(&last, &line); err != nil {
+			return nil, "", 0, fmt.Errorf("sqlite: load entries: %w", err)
 		}
 		buf.WriteString(line)
 		buf.WriteByte('\n')
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("sqlite: load entries: %w", err)
+		return nil, "", 0, fmt.Errorf("sqlite: load entries: %w", err)
 	}
 	sess, err := agentsession.Read(&buf)
 	if err != nil {
-		return nil, "", fmt.Errorf("sqlite: session %s: %w", id, err)
+		return nil, "", 0, fmt.Errorf("sqlite: session %s: %w", id, err)
 	}
 	if sess.ID() != id {
-		return nil, "", fmt.Errorf("sqlite: row %s holds session %s", id, sess.ID())
+		return nil, "", 0, fmt.Errorf("sqlite: row %s holds session %s", id, sess.ID())
 	}
-	return sess, header, nil
+	return sess, header, last, nil
 }
 
 // Read implements [agentsession.Reader]: it reads the session's rows as
@@ -697,6 +713,7 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	if err != nil {
 		return "", err
 	}
+	defer s.hub.Notify(sessionID)
 	r, err := sess.Commit(e)
 	if err != nil {
 		return "", err
@@ -860,6 +877,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("sqlite: delete session: %w", err)
 	}
+	defer s.hub.Notify(id)
 	delete(s.open, id)
 	delete(s.stale, id)
 	n, err := res.RowsAffected()
