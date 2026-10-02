@@ -483,7 +483,10 @@ func (t *tracker) noteDecision(c *callState, d *agentsession.DecisionEntry) {
 	case agentsession.VerdictAnswer:
 		c.answered = true
 	}
-	if len(d.Args) > 0 {
+	// An answer's args are the answer's and no tool ran with them, as
+	// Call.Args reads them; the tool span says rewritten only of a
+	// decision that rewrote what the tool ran with.
+	if len(d.Args) > 0 && d.Verdict != agentsession.VerdictAnswer {
 		c.rewritten = true
 	}
 }

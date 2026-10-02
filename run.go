@@ -145,11 +145,15 @@ func (c *Call) From() []EntryRef {
 }
 
 // Args returns the arguments the tool runs with: those of the last
-// decision that rewrote them, else the call's own.
+// decision that rewrote them, else the call's own. An answer's args are
+// passed over: no tool ran with them, the format says they name
+// nothing, and reading them here would show an output the harness wrote
+// as a rewrite of what the tool runs with. They are read from the
+// decision itself.
 func (c *Call) Args() string {
 	for i := len(c.Decisions) - 1; i >= 0; i-- {
-		if len(c.Decisions[i].Args) > 0 {
-			return string(c.Decisions[i].Args)
+		if d := c.Decisions[i]; len(d.Args) > 0 && d.Verdict != VerdictAnswer {
+			return string(d.Args)
 		}
 	}
 	return c.Call.Arguments

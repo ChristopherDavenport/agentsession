@@ -340,6 +340,25 @@ func TestCallArgs(t *testing.T) {
 	if got := calls[0].Args(); got != `{"x":2}` {
 		t.Errorf("Args after rewrite = %s", got)
 	}
+	// An answer's args are the answer's, not a rewrite of what the tool
+	// runs with: Args passes over them, and the dispatched arguments
+	// stand (#103).
+	if _, err := s.Append(NewDispatch("a", calls[0].Entry.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewDecision("a", calls[0].Entry.ID, VerdictAnswer, ByHuman).WithArgs([]byte(`{"x":"rm -rf /"}`))); err != nil {
+		t.Fatal(err)
+	}
+	calls = Calls(s.Path(s.Leaf()))
+	if got := calls[0].Args(); got != `{"x":2}` {
+		t.Errorf("Args after an answer with args = %s, want the proceed's", got)
+	}
+	if got := calls[0].DispatchedArgs(); got != `{"x":2}` {
+		t.Errorf("DispatchedArgs after an answer with args = %s", got)
+	}
+	if got := calls[0].Decisions[len(calls[0].Decisions)-1].Args; string(got) != `{"x":"rm -rf /"}` {
+		t.Errorf("the answer's own args = %s", got)
+	}
 }
 
 func TestRunsAcrossBranch(t *testing.T) {

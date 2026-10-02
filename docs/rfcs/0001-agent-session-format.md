@@ -1038,8 +1038,14 @@ A call's fate was decided outside the tool.
 - `args`, when present, are the arguments the tool ran with when a
   decision rewrote them. The `function_call` item stays as the model
   produced it, so the request hash still verifies; the change is
-  recorded beside the call, never inside it. `args` on an `answer`
-  names nothing, since no tool ran with them.
+  recorded beside the call, never inside it. The `args` of the last
+  decision before a `dispatch` that carries them are what that hand-off
+  ran with, and a reader asking what a further hand-off would run with
+  reads the last such decision on the path. `args` on an `answer`
+  names nothing, since no tool ran with them: a reader asking what the
+  tool ran or runs with passes over an `answer`'s `args`, which are
+  read from the `answer` alone, so an output the harness wrote never
+  reads as a rewrite of the call.
 
 A `decision` is a lifecycle fact and carries no score. A judgement of
 how something went is an `outcome`.
@@ -1484,7 +1490,14 @@ output contained the call; each inference span links to the previous
 turn's; the first span after a branch links to the branched-from entry.
 A tool span covers one hand-off, so a call with several `dispatch`
 entries has a span for each, and each after the first links to the one
-before it.
+before it. A hand-off's span ends at the call's output or, when the run
+the hand-off was made in ends first, at that run's end, carrying the
+state the path reads for the call there: in flight, with an error
+status, unless a `decision` after the `dispatch` holds or answers it;
+a hand-off still open when the record stops ends there the same way. A
+later `dispatch` for the call or its output opens a span of its own,
+linked to the hand-off's; a second hand-off within one run ends the
+first in flight at the moment of the second.
 
 ## Versioning
 

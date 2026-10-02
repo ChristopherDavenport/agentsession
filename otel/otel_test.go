@@ -608,3 +608,110 @@ func TestStateAfterTheRunEnd(t *testing.T) {
 		})
 	}
 }
+
+// TestHandOffEndsWithRun: a hand-off the run left without an output
+// ends with the run, in the state the path reads for the call there,
+// in flight with an error status unless a decision after the dispatch
+// held or answered it; one still open when the record stops ends there
+// the same way, as RFC 0001's projection says (#103).
+func TestHandOffEndsWithRun(t *testing.T) {
+	build := func(t *testing.T, after ...func(target string) agentsession.Entry) *agentsession.Session {
+		t.Helper()
+		s := agentsession.New(agentsession.Header{ID: "cut", Records: agentsession.AllRecords})
+		if _, err := s.Append(agentsession.NewRunStart("r1", agentsession.SourceInput, "")); err != nil {
+			t.Fatal(err)
+		}
+		target, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "deploy", Arguments: "{}"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(agentsession.NewDispatch("c", target)); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range after {
+			if _, err := s.Append(f(target)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return s
+	}
+	end := func(string) agentsession.Entry {
+		return agentsession.NewRunEnd("r1", agentsession.ReasonAborted, "", []string{"c"})
+	}
+	decide := func(verdict string) func(string) agentsession.Entry {
+		return func(target string) agentsession.Entry {
+			return agentsession.NewDecision("c", target, verdict, agentsession.ByPolicy)
+		}
+	}
+	tests := []struct {
+		name   string
+		after  []func(string) agentsession.Entry
+		state  agentsession.CallState
+		status codes.Code
+	}{
+		{"in flight at the run end", []func(string) agentsession.Entry{end}, agentsession.CallInFlight, codes.Error},
+		{"held at the run end", []func(string) agentsession.Entry{decide(agentsession.VerdictHold), end}, agentsession.CallHeld, codes.Unset},
+		{"answered at the run end", []func(string) agentsession.Entry{decide(agentsession.VerdictAnswer), end}, agentsession.CallAnswered, codes.Unset},
+		{"in flight when the record stops", nil, agentsession.CallInFlight, codes.Error},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sr, tracer := recorder()
+			s := build(t, tt.after...)
+			if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+				t.Fatal(err)
+			}
+			all := spans(sr.Ended())
+			tool, runs := all.named(OpTool+" deploy"), all.named(SpanRun)
+			if len(tool) != 1 || len(runs) != 1 {
+				t.Fatalf("tool spans %d, run spans %d; want one each", len(tool), len(runs))
+			}
+			if got := attr(tool[0], AttrCallState); got != tt.state.String() {
+				t.Errorf("state = %s, want %s", got, tt.state)
+			}
+			if tool[0].Status().Code != tt.status {
+				t.Errorf("status = %v, want %v", tool[0].Status().Code, tt.status)
+			}
+			// The run's end entry, or the record's last entry when none
+			// was written, ends the run span and the hand-off's alike.
+			last := s.Entries()[s.Len()-1].Base().Timestamp
+			if !tool[0].EndTime().Equal(last) || !runs[0].EndTime().Equal(last) {
+				t.Errorf("hand-off ends %s, run ends %s, the record stops at %s", tool[0].EndTime(), runs[0].EndTime(), last)
+			}
+		})
+	}
+}
+
+// TestAnswerArgsNotRewritten: an answer carrying args does not mark the
+// tool span as having its arguments rewritten, since no tool ran with
+// them; the decision event still carries the decision's own fact (#103).
+func TestAnswerArgsNotRewritten(t *testing.T) {
+	sr, tracer := recorder()
+	s := agentsession.New(agentsession.Header{ID: "answer", Records: agentsession.AllRecords})
+	target, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "deploy", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(agentsession.NewDispatch("c", target)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(agentsession.NewDecision("c", target, agentsession.VerdictAnswer, agentsession.ByHuman).WithArgs([]byte(`{"x":1}`))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("c", "the harness's answer"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	tool := spans(sr.Ended()).named(OpTool + " deploy")
+	if len(tool) != 1 {
+		t.Fatalf("tool spans = %d", len(tool))
+	}
+	if attr(tool[0], AttrArgsRewritten) != "" || attr(tool[0], AttrCallState) != "answered" {
+		t.Errorf("an answered call's span: args_rewritten %q, state %s", attr(tool[0], AttrArgsRewritten), attr(tool[0], AttrCallState))
+	}
+	if got := eventAttr(tool[0], EventDecision, AttrArgsRewritten); len(got) != 1 {
+		t.Errorf("the answer's event: args_rewritten = %v, want the decision's own fact", got)
+	}
+}
