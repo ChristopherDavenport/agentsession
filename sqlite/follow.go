@@ -188,6 +188,10 @@ func (src *source) Tail(ctx context.Context, cur agentsession.Cursor) ([]follow.
 
 func (src *source) Watch() (func() <-chan struct{}, func()) { return src.store.hub.Watch(src.id) }
 
+// FileLeaf marks the source as one whose sessions agentsession.Read
+// builds, so the follower places the leaf as Read does.
+func (src *source) FileLeaf() {}
+
 func (src *source) Interval() (time.Duration, time.Duration) {
 	lo := src.store.followEvery
 	if lo <= 0 {

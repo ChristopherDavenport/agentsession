@@ -120,6 +120,27 @@ func (w *Tail) NextKind(k agentsession.ChangeKind) agentsession.Change {
 	return c
 }
 
+// Poll returns the next change when one arrives within a short while,
+// and false when none does. It fails the case on an error or an end.
+func (w *Tail) Poll() (agentsession.Change, bool) {
+	w.t.Helper()
+	w.release()
+	select {
+	case f, ok := <-w.ch:
+		if !ok {
+			w.t.Fatal("the follow ended")
+		}
+		w.holding = true
+		if f.err != nil {
+			w.t.Fatalf("the follow failed: %v", f.err)
+		}
+		w.last = f.c.Cursor
+		return f.c, true
+	case <-time.After(300 * time.Millisecond):
+		return agentsession.Change{}, false
+	}
+}
+
 // Quiet fails when a change arrives within a short while.
 func (w *Tail) Quiet() {
 	w.t.Helper()

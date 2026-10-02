@@ -58,6 +58,7 @@ func Run(ctx context.Context, src Source, from agentsession.Cursor) iter.Seq2[ag
 	return func(yield func(agentsession.Change, error) bool) {
 		wakeCh, done := src.Watch()
 		defer done()
+		_, fileLeaf := src.(FileLeaf)
 		fail := func(err error) {
 			if ctx.Err() == nil {
 				yield(agentsession.Change{}, err)
@@ -116,7 +117,7 @@ func Run(ctx context.Context, src Source, from agentsession.Cursor) iter.Seq2[ag
 				if ctx.Err() != nil {
 					return
 				}
-				c, err := apply(sess, it)
+				c, err := apply(sess, it, fileLeaf)
 				if err != nil {
 					// What the log holds does not extend the session
 					// this follower has: read it again.
@@ -148,7 +149,7 @@ func Run(ctx context.Context, src Source, from agentsession.Cursor) iter.Seq2[ag
 // Head alone for a head record. A head that names the leaf the session
 // already has is no change: cas logs the head a writer moved before the
 // leaf label that records it, and the follower reports the move once.
-func apply(sess *agentsession.Session, it Item) ([]agentsession.Change, error) {
+func apply(sess *agentsession.Session, it Item, fileLeaf bool) ([]agentsession.Change, error) {
 	if it.Skip {
 		return nil, nil
 	}
@@ -166,7 +167,11 @@ func apply(sess *agentsession.Session, it Item) ([]agentsession.Change, error) {
 		}
 		return []agentsession.Change{{Kind: agentsession.Head, Session: sess, Leaf: it.Leaf, Cursor: it.Cursor}}, nil
 	}
-	r, err := sess.Commit(it.Entry)
+	commit := sess.Commit
+	if fileLeaf {
+		commit = sess.Extend
+	}
+	r, err := commit(it.Entry)
 	if err != nil {
 		return nil, fmt.Errorf("follow: %w", err)
 	}
@@ -174,8 +179,25 @@ func apply(sess *agentsession.Session, it Item) ([]agentsession.Change, error) {
 		return nil, nil
 	}
 	out := []agentsession.Change{{Kind: agentsession.Appended, Session: sess, ID: r.ID, Entry: it.Entry, Cursor: it.Cursor}}
-	if r.Outcome == agentsession.LeafMoved && sess.Leaf() != before {
+	moved := r.Outcome == agentsession.LeafMoved
+	if fileLeaf {
+		// Under Read's rule an append that becomes the leaf says so by
+		// being appended; a move elsewhere is a leaf label's.
+		moved = sess.Leaf() != r.ID
+	}
+	if moved && sess.Leaf() != before {
 		out = append(out, agentsession.Change{Kind: agentsession.Head, Session: sess, Leaf: sess.Leaf(), Cursor: it.Cursor})
 	}
 	return out, nil
+}
+
+// FileLeaf is implemented by a Source whose store reads a session with
+// [agentsession.Read], which places the leaf by the file's order and its
+// leaf labels. The follower then adds each entry with
+// [agentsession.Session.Extend], so its leaf is the one a Read would
+// give, and not the live rule's, which a writer's Session.Branch leaves
+// behind. A store that records its head, as cas does, gives the leaf in
+// its Items instead.
+type FileLeaf interface {
+	FileLeaf()
 }

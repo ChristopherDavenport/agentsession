@@ -147,8 +147,9 @@ func (m *MemoryStore) Follow(ctx context.Context, id string, from Cursor) iter.S
 					e, err = UnmarshalEntry(b)
 				}
 				var r Result
+				before := sess.Leaf()
 				if err == nil {
-					r, err = sess.Commit(e)
+					r, err = sess.Extend(e)
 				}
 				if err != nil {
 					yield(Change{}, fmt.Errorf("agentsession: follow %s: %w", id, err))
@@ -159,8 +160,11 @@ func (m *MemoryStore) Follow(ctx context.Context, id string, from Cursor) iter.S
 					return
 				}
 				poll.Reset()
-				if r.Outcome == LeafMoved {
-					c = Change{Kind: Head, Session: sess, Leaf: sess.Leaf(), Cursor: c.Cursor}
+				// Under Read's rule, which the memory store's Read
+				// applies, an append that becomes the leaf says so by
+				// being appended; a move elsewhere is a leaf label's.
+				if l := sess.Leaf(); l != r.ID && l != before {
+					c = Change{Kind: Head, Session: sess, Leaf: l, Cursor: c.Cursor}
 					if !yield(c, nil) {
 						return
 					}

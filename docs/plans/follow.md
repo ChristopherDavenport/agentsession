@@ -265,6 +265,19 @@ Where building the plan decided what it left open or went another way:
   session for `Change.Session`, so a resume loads the log up to the
   cursor, checks it is the log the cursor names, and yields nothing
   until the next change. A resume from a cursor at the end is quiet.
+- **The follower's leaf is `Read`'s.** The memory, jsonl and sqlite
+  stores build a session with `agentsession.Read`, whose leaf is the
+  newest entry unless a leaf label is in force, and then the newest
+  entry under the mark appended after it. A follower that added
+  entries with `Session.Commit` applied the live rule, under which an
+  entry off the leaf moves nothing, and so after a writer's
+  `Session.Branch`, which writes nothing, kept the old tip while `Read`
+  gave the new one (found in review). Those followers add entries with
+  `Session.Extend`, which keeps resolveLeaf's state as it goes rather
+  than a pass per entry. cas reads its leaf from the head records it
+  logs, a writer's `Branch` included, and its follower follows them.
+  Under `Read`'s rule an append that becomes the leaf is reported by
+  its `Appended`; a `Head` is a move elsewhere, a leaf label's.
 - **`Head` means the head changed.** A `Head` follows the `Appended`
   change of a leaf label that moved the leaf, and a head record the
   store wrote on its own (cas) is yielded when it names a leaf the

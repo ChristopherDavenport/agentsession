@@ -279,3 +279,68 @@ func TestLeafResolvesPendingWork(t *testing.T) {
 		t.Errorf("open run = %v, want run-1", run)
 	}
 }
+
+// TestExtendPlacesTheLeafAsRead builds a session the way a writer does,
+// branching, marking, appending off and under the mark, clearing it and
+// marking again, and after every entry checks that a session kept up to
+// date with Extend has the leaf Read gives for the same lines, starting
+// from both a fresh read and one taken partway through.
+func TestExtendPlacesTheLeafAsRead(t *testing.T) {
+	w := New(Header{ID: "extend"})
+	add := func(e Entry) string {
+		t.Helper()
+		id, err := w.Append(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	user := func(x string) Entry { return NewItemEntry(openresponses.UserText(x)) }
+	under := func(parent, x string) Entry {
+		e := user(x)
+		e.Base().Parent = parent
+		return e
+	}
+	a := add(user("a"))
+	b := add(user("b"))
+	add(user("c"))
+	add(under(a, "branch from a")) // no mark: the newest entry is the leaf
+	add(NewLabelEntry(b, LeafLabel))
+	add(under(a, "off the mark")) // the mark stands
+	d := add(under(b, "under the mark"))
+	add(under(d, "deeper"))
+	add(NewLabelEntry(b, "")) // the clear: the newest entry again
+	e := add(under(a, "after the clear"))
+	add(NewLabelEntry(e, LeafLabel))
+	add(NewLabelEntry(a, "not a leaf label"))
+	add(under(e, "under the second mark"))
+
+	var buf bytes.Buffer
+	if err := Write(&buf, w); err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimRight(buf.Bytes(), "\n"), []byte{'\n'})
+	readAt := func(n int) *Session {
+		t.Helper()
+		s, err := Read(bytes.NewReader(bytes.Join(lines[:n+1], []byte{'\n'})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	for _, from := range []int{0, 5} {
+		f := readAt(from)
+		for n := from + 1; n < len(lines); n++ {
+			e, err := UnmarshalEntry(lines[n])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.Extend(e); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := f.Leaf(), readAt(n).Leaf(); got != want {
+				t.Errorf("from line %d, after line %d: Extend leaf %s, Read leaf %s", from, n, got, want)
+			}
+		}
+	}
+}

@@ -53,6 +53,20 @@ type Session struct {
 	// declared is the format the file's header named when Read met it,
 	// before the header was brought up to this package's.
 	declared string
+	// read is the state Extend keeps of Read's leaf rule, so each entry
+	// it adds places the leaf without a pass over the whole session.
+	read *readLeaf
+}
+
+// readLeaf is resolveLeaf's state as of the first n entries: the durable
+// leaf mark in force and the line it sits on, the entries under the mark,
+// and the newest of those after the mark's line.
+type readLeaf struct {
+	n      int
+	marked string
+	at     int
+	under  map[string]bool
+	tip    string
 }
 
 // New creates an empty session. Header fields left empty are filled:
@@ -328,6 +342,94 @@ func (s *Session) Commit(e Entry) (Result, error) {
 	s.add(e)
 	s.moveLeafFor(e)
 	return r, nil
+}
+
+// Extend adds e, an entry a store already holds, to a session read
+// from that store, and places the leaf as [Read] would had e been in
+// what it read: the newest entry under the durable leaf mark that was
+// appended after it, the mark itself when none was, and the newest
+// entry when no mark is in force. [Session.Commit] applies the live
+// rule instead, under which an entry whose parent is not the leaf is a
+// branch and moves nothing; a session read from a file has no live
+// leaf to follow, so the two differ after a writer's
+// [Session.Branch]. A follower of a store whose sessions [Read] builds
+// keeps its session up to date with Extend.
+func (s *Session) Extend(e Entry) (Result, error) {
+	if err := validateEntry(e); err != nil {
+		return Result{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, err := s.prepare(e)
+	if err != nil || r.Outcome == Held {
+		return r, err
+	}
+	if s.read == nil || s.read.n != len(s.entries) {
+		s.read = s.readLeafState()
+	}
+	s.add(e)
+	s.read.extend(s, len(s.entries)-1)
+	if s.read.marked == "" {
+		s.leaf = s.notOnLabel(e.Base().ID)
+	} else {
+		s.leaf = s.notOnLabel(s.read.tip)
+	}
+	return r, nil
+}
+
+// readLeafState computes resolveLeaf's state over the session's entries.
+func (s *Session) readLeafState() *readLeaf {
+	st := &readLeaf{at: -1}
+	st.marked, st.at = s.durableLeafAt()
+	st.mark(s, st.marked, st.at)
+	st.n = len(s.entries)
+	return st
+}
+
+// mark puts the mark on target at line at: the entries under it are its
+// descendants anywhere in the session, and its tip is the newest of them
+// after line at, the mark itself when there is none.
+func (st *readLeaf) mark(s *Session, target string, at int) {
+	st.marked, st.at, st.tip, st.under = target, at, target, nil
+	if target == "" {
+		return
+	}
+	st.under = map[string]bool{target: true}
+	for i, e := range s.entries {
+		b := e.Base()
+		if st.under[b.Parent] {
+			st.under[b.ID] = true
+			if i > at {
+				st.tip = b.ID
+			}
+		}
+	}
+}
+
+// extend takes the entry at line i, the session's newest, into the state
+// as resolveLeaf's passes would.
+func (st *readLeaf) extend(s *Session, i int) {
+	e := s.entries[i]
+	b := e.Base()
+	if l, ok := e.(*LabelEntry); ok {
+		switch {
+		case l.Label != nil && *l.Label == LeafLabel:
+			if s.mayRestOn(l.Target) {
+				st.mark(s, l.Target, i)
+				st.n = i + 1
+				return
+			}
+		case l.Label == nil && l.Target == st.marked && st.marked != "":
+			st.mark(s, "", -1)
+			st.n = i + 1
+			return
+		}
+	}
+	if st.marked != "" && st.under[b.Parent] {
+		st.under[b.ID] = true
+		st.tip = b.ID
+	}
+	st.n = i + 1
 }
 
 // prepare is prepareEntry with the envelope put back on refusal: the

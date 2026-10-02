@@ -39,6 +39,88 @@ func testFollow(t *testing.T, opts Options) {
 	t.Run("Missing", func(t *testing.T) { followMissing(t, opts) })
 	t.Run("Fork", func(t *testing.T) { followFork(t, opts) })
 	t.Run("Burst", func(t *testing.T) { followBurst(t, opts) })
+	t.Run("LeafAsRead", func(t *testing.T) { followLeafAsRead(t, opts) })
+}
+
+// sameLeafAsRead fails when the follower's leaf after c is not the leaf
+// a Read of the session gives, which is the leaf the follower promises.
+func sameLeafAsRead(t *testing.T, st agentsession.Store, id string, c agentsession.Change, when string) {
+	t.Helper()
+	r, ok := st.(agentsession.Reader)
+	if !ok {
+		return
+	}
+	got, err := r.Read(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Session.Leaf() != got.Leaf() {
+		t.Errorf("follower leaf %s %s, Read gives %s", c.Session.Leaf(), when, got.Leaf())
+	}
+}
+
+// followLeafAsRead follows a writer that moves its leaf with
+// Session.Branch, which records nothing, and appends under it, then
+// marks a leaf and appends off the marked branch. After every change
+// the follower's leaf is the one Read gives: the newest entry while no
+// mark is in force, and the mark's newest descendant once one is.
+func followLeafAsRead(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st, s, ids := seeded(t, opts, 3)
+	w := followtest.Start(t, st.(agentsession.Follower), s.ID(), "")
+	w.NextKind(agentsession.Snapshot)
+	step := func(what string, e agentsession.Entry) string {
+		t.Helper()
+		id, err := st.Append(ctx, s.ID(), e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for {
+			c := w.Next()
+			if c.Kind == agentsession.Head {
+				// A head the store logged before the entry, as cas
+				// logs a writer's Branch; Read already has the entry,
+				// so the leaves are compared after it.
+				continue
+			}
+			if c.Kind != agentsession.Appended || c.ID != id {
+				t.Fatalf("%s: change %v %s, want the append %s", what, c.Kind, c.ID, id)
+			}
+			// A store that records a head after the entry yields it
+			// next; compare once the follower is quiet.
+			if next, ok := w.Poll(); ok {
+				if next.Kind != agentsession.Head {
+					t.Fatalf("%s: change %v after the append, want a head or nothing", what, next.Kind)
+				}
+				c = next
+			}
+			sameLeafAsRead(t, st, s.ID(), c, what)
+			return id
+		}
+	}
+	if err := s.Branch(ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	a := step("after a writer's Branch and an append", user("a"))
+	step("after a second append on the branch", user("b"))
+	other := user("other")
+	other.Base().Parent = ids[2]
+	step("after an append back on the first branch", other)
+	if err := s.Branch(a); err != nil {
+		t.Fatal(err)
+	}
+	mark, err := s.MarkLeaf()
+	if err != nil {
+		t.Fatal(err)
+	}
+	step("after a leaf label", mark)
+	off := user("off")
+	off.Base().Parent = ids[1]
+	step("after an append off the marked branch", off)
+	under := user("under")
+	under.Base().Parent = a
+	step("after an append under the mark", under)
+	w.Quiet()
 }
 
 // seeded makes a session of n entries and returns the store, the
@@ -118,7 +200,8 @@ func followBranch(t *testing.T, opts Options) {
 	w.NextKind(agentsession.Snapshot)
 
 	// A branch: an append under an entry that is not the leaf. It is
-	// seen in log order, with its own parent, and the leaf stays.
+	// seen in log order, with its own parent, and the follower's leaf is
+	// the one Read gives.
 	side := user("side")
 	side.Base().Parent = ids[0]
 	sid, err := st.Append(ctx, s.ID(), side)
@@ -129,9 +212,7 @@ func followBranch(t *testing.T, opts Options) {
 	if c.ID != sid || c.Entry.Base().Parent != ids[0] {
 		t.Errorf("branch entry %s under %s, want %s under %s", c.ID, c.Entry.Base().Parent, sid, ids[0])
 	}
-	if c.Session.Leaf() != ids[2] {
-		t.Errorf("leaf %s after a branch, want %s", c.Session.Leaf(), ids[2])
-	}
+	sameLeafAsRead(t, st, s.ID(), c, "after a branch")
 	if p := c.Session.Path(sid); len(p) != 2 {
 		t.Errorf("path to the branch has %d entries, want 2", len(p))
 	}

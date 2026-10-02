@@ -37,6 +37,16 @@ versions may break the API.
   of a log: whole records only, append-only but for the named
   replacements, and the visible order rather than the durable one. The
   plan is `docs/plans/follow.md`.
+- **`Session.Extend` adds an entry a store already holds and places the
+  leaf as `Read` would.** With no leaf label in force the leaf is the
+  newest entry; under one, the newest entry descending from the mark
+  that was appended after it. `Commit` applies the live rule instead,
+  under which an entry whose parent is not the leaf is a branch and
+  moves nothing, so a session kept up to date with `Commit` keeps the
+  old tip after a writer's `Session.Branch`, which writes nothing, and
+  disagrees with a `Read` of the same lines. Followers of the memory,
+  `jsonl` and `sqlite` stores use `Extend`; `cas`, whose `Read` takes the
+  leaf from the head records it logs, follows those.
 
 ## v0.0.20 - 2026-10-02
 
