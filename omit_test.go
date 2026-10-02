@@ -135,9 +135,12 @@ func TestOmitReasoningOtherModels(t *testing.T) {
 		{"a message of another model stays",
 			[]string{"cfg:a", "user:u1", "msg:m1", "resp:resp-m1:a", "cfg:b+rule"},
 			"u1,m1", ""},
-		{"a replace that sets no model leaves no model in force",
-			[]string{"cfg:a", "user:u1", "rs:r1", "cfg:b+rule", "user:u2", "rs:r2"},
-			"u1,u2", "r1/other_models,r2/other_models"},
+		{"an item written under no model is never left out",
+			[]string{"cfg:+rule", "user:u1", "rs:r1", "msg:m1", "resp:resp-r1", "cfg:b", "user:u2"},
+			"u1,r1,m1,u2", ""},
+		{"a request under no model leaves nothing out",
+			[]string{"cfg:a+rule", "user:u1", "rs:r1", "msg:m1", "resp:resp-r1:a", "user:u2", "rs:r2"},
+			"u1,r1,m1,u2,r2", ""},
 		{"a value the format does not define has no effect",
 			[]string{"cfg:a", "user:u1", "rs:r1", "cfg:b"},
 			"u1,r1", ""},
@@ -149,8 +152,8 @@ func TestOmitReasoningOtherModels(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if tt.name == "a replace that sets no model leaves no model in force" {
-				// r2 was written with b in force; the replace drops b.
+			if tt.name == "a request under no model leaves nothing out" {
+				// A replace that sets no model leaves none in force.
 				if _, err := s.Append(&ConfigEntry{Replace: true, Omit: &Omit{Reasoning: OmitOtherModels}}); err != nil {
 					t.Fatal(err)
 				}
@@ -175,6 +178,25 @@ func TestOmitReasoningOtherModels(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestOmitUnknownRule: a reasoning value the format does not define
+// leaves the rule in force as it was, and does not clear it.
+func TestOmitUnknownRule(t *testing.T) {
+	s, ids := omitScript(t, "cfg:a", "user:u1", "rs:r1", "msg:m1", "resp:resp-r1:a", "cfg:b+rule", "user:u2")
+	if _, err := s.Append(&ConfigEntry{Omit: &Omit{Reasoning: "all_models"}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Settings.Omit.Reasoning != OmitOtherModels {
+		t.Errorf("an unknown rule changed the rule in force to %q", ctx.Settings.Omit.Reasoning)
+	}
+	if got := leftOut(ctx, ids); got != "r1/other_models" {
+		t.Errorf("left out %s", got)
 	}
 }
 
@@ -268,6 +290,9 @@ func TestOmitMerge(t *testing.T) {
 		{"nil leaves what is in force", []*Omit{{Reasoning: OmitOtherModels, Items: []string{"a"}}, nil}, OmitOtherModels, "a"},
 		{"what is cleared is written afresh", []*Omit{{Items: []string{"a"}}, {}, {Items: []string{"b"}}}, "", "b"},
 		{"an empty id names nothing", []*Omit{{Items: []string{"", "a"}}}, "", "a"},
+		{"a list of empty ids names none and clears", []*Omit{{Reasoning: OmitOtherModels, Items: []string{"a"}}, {Items: []string{""}}}, "", ""},
+		{"a rule the format does not define leaves the one in force", []*Omit{{Reasoning: OmitOtherModels}, {Reasoning: "later"}}, OmitOtherModels, ""},
+		{"a rule the format does not define alone sets nothing", []*Omit{{Reasoning: "later"}}, "", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var settings Settings
@@ -522,7 +547,8 @@ func TestOmitDelta(t *testing.T) {
 		{"nothing wanted clears", Omit{Reasoning: OmitOtherModels, Items: []string{"a"}}, Omit{}, "{}", true},
 		{"dropping the rule while keeping items is two entries", Omit{Reasoning: OmitOtherModels, Items: []string{"a"}}, Omit{Items: []string{"a"}}, "", false},
 		{"dropping an item while keeping the rule is two entries", Omit{Reasoning: OmitOtherModels, Items: []string{"a", "b"}}, Omit{Reasoning: OmitOtherModels, Items: []string{"a"}}, "", false},
-		{"another rule than the one in force", Omit{Reasoning: "x"}, rule, "", false},
+		{"a rule swapped for another in one delta", Omit{Reasoning: "x"}, rule, "reasoning=other_models", true},
+		{"a rule the format does not define is no delta", Omit{}, Omit{Reasoning: "x"}, "", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			settings := Settings{Omit: tt.have}
@@ -567,4 +593,98 @@ func sortedCopy(s []string) []string {
 	out := slices.Clone(s)
 	slices.Sort(out)
 	return out
+}
+
+// TestOmitValidation: a writer writes no empty id in an items list.
+func TestOmitValidation(t *testing.T) {
+	s := New(Header{})
+	if _, err := s.Append(&ConfigEntry{Omit: &Omit{Items: []string{"a", ""}}}); err == nil {
+		t.Error("an empty id was appended")
+	}
+	if _, err := s.Append(&ConfigEntry{Omit: &Omit{Reasoning: OmitOtherModels, Items: []string{"a"}}}); err != nil {
+		t.Error(err)
+	}
+	if _, err := s.Append(&ConfigEntry{Omit: &Omit{}}); err != nil {
+		t.Errorf("a clearing omit: %v", err)
+	}
+}
+
+// TestContinueCarriesOmit: a session rolled over into a successor keeps
+// the omit in force, as a compaction's checkpoint does, so a model
+// switch in the successor is covered by the rule written before the
+// rollover, and a response after it verifies.
+func TestContinueCarriesOmit(t *testing.T) {
+	ctx := t.Context()
+	store := NewMemoryStore()
+	old, err := store.Create(ctx, Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []Entry{
+		&ConfigEntry{Model: "a", Instructions: ptr("Be brief.")},
+		NewItemEntry(openresponses.UserText("hi")),
+		&ConfigEntry{Model: "b", Omit: &Omit{Reasoning: OmitOtherModels, Items: []string{"sha256:gone"}}},
+	} {
+		if _, err := store.Append(ctx, old.ID(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next, err := Continue(ctx, store, old.ID(), openresponses.UserText("summary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cx, err := next.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cx.Settings.Omit.Reasoning != OmitOtherModels || len(cx.Settings.Omit.Items) != 1 {
+		t.Fatalf("the successor's omit is %+v", cx.Settings.Omit)
+	}
+	// Under b a response reasons; then the session switches to a, and
+	// the request leaves b's reasoning out and hashes without it.
+	appendEntry := func(e Entry) string {
+		t.Helper()
+		id, err := store.Append(ctx, next.ID(), e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	appendEntry(NewItemEntry(openresponses.UserText("go on")))
+	rs := NewItemEntry(&openresponses.ReasoningItem{ID: "rs_1", Summary: openresponses.Contents{}, EncryptedContent: "enc"})
+	rs.ResponseID = "resp_1"
+	appendEntry(rs)
+	appendEntry(&ResponseEntry{ResponseID: "resp_1", Status: openresponses.ResponseStatusCompleted})
+	appendEntry(&ConfigEntry{Model: "a"})
+	appendEntry(NewItemEntry(openresponses.UserText("and again")))
+	next, err = store.Open(ctx, next.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cx, err = next.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cx.OmittedItems) != 1 || cx.OmittedItems[0].Reason != OmitOtherModels {
+		t.Fatalf("the request leaves out %+v", cx.OmittedItems)
+	}
+	req, err := cx.Request()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := RequestHash(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := NewItemEntry(openresponses.AssistantText("ok"))
+	out.ResponseID = "resp_2"
+	appendEntry(out)
+	id := appendEntry(&ResponseEntry{ResponseID: "resp_2", Status: openresponses.ResponseStatusCompleted, RequestHash: h})
+	next, err = store.Open(ctx, next.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := next.Verify(id); err != nil {
+		t.Errorf("a response after a switch in the successor: %v", err)
+	}
 }

@@ -41,6 +41,11 @@ func legacyOf(s *agentsession.Session, id string) string {
 	if e, ok := s.Entry(id); ok && e.Base().LegacyID != "" {
 		return e.Base().LegacyID
 	}
+	// A native fixture has hashes for ids, which are not fit for a file
+	// name as they are: the first twelve hex digits name the leaf.
+	if hex := strings.TrimPrefix(id, "sha256:"); hex != id && len(hex) >= 12 {
+		return hex[:12]
+	}
 	return id
 }
 
@@ -109,7 +114,8 @@ func encode(t *testing.T, v any) []byte {
 // and the raw items it carries must rebuild the path's item list byte
 // for byte.
 func TestATIFGolden(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge",
+		"empty-resume", "bad-resume", "handback", "bad-handback", "omit", "omit-absent", "bad-omit", "omit-folded", "judged"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			n := 0

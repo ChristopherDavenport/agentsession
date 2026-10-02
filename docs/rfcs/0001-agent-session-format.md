@@ -587,10 +587,15 @@ readers treat it as opaque.
   which starts the path's parts afresh. A `hash` that the part in force
   does not have resolves to the text that most recently left force
   under that `id` with it, and to that part's `source` when the element
-  carries none. A writer of 0.11 names an unchanged part by its `hash`
-  whenever the path has its text and `source` under its `id`, in force
-  or not, and writes the `text` only for a part the path does not have
-  so. A writer of 0.10 named only a part in force and wrote the text of
+  carries none. A hash is resolved against the part in force under its
+  `id` first, and only when there is none, or its text has another hash,
+  against the parts that left force. A writer of 0.11 therefore names a
+  part by its `hash` when no part is in force under its `id`, or the one
+  in force has other text the path could resolve, and the path has the
+  text and `source` it means among the parts that left force; it writes
+  the `text` for any other part, a part in force with that text and
+  another `source` and one in force whose text the path could not
+  resolve among them. A writer of 0.10 named only a part in force and wrote the text of
   every other, so a file of 0.10 holds no `hash` for a part out of
   force, and a reader of 0.10 that resolves a `hash` against the parts
   in force alone, which fails every one a 0.11 writer writes, refuses
@@ -753,7 +758,10 @@ entry:
   the `keep` runs past that list or takes a part the delta names
   elsewhere. A reader keeps such an element in the list in force where
   it stands, `keep` and `of` as written, as it keeps any element it
-  cannot resolve. An element with an `id` takes `of` for a member this
+  cannot resolve. A tool that checks a file SHOULD say so, since nothing
+  else does: the list reaches no request. A reader holds the list each
+  such entry put in force since the last `replace` or checkpoint, and
+  with long lists in a long session that is their sum. An element with an `id` takes `of` for a member this
   document does not define there and the element is the part it names.
 - A `replace` or a compaction's checkpoint starts the lists afresh, as
   it starts the parts: no `config` entry before one is named by an `of`
@@ -798,16 +806,21 @@ it. A `config` entry MAY carry it and no setting. Its members:
   so a writer writes it once, at the entry that changes the model, and
   it covers every later request without listing an item. A switch back
   is covered too, since the rule reads the model in force at each
-  request. A `reasoning` value this document does not define has no
-  effect, and a reader keeps the member as written.
+  request. An empty model name attributes nothing: a reasoning item
+  written while no model was in force is never left out, and a request
+  under no model leaves nothing out. A `reasoning` value this document
+  does not define has no effect, leaving the rule in force as it was,
+  and a reader keeps the member as written.
 - `items` is the general case, for a host's own filter: a list of entry
   ids, and an `item` entry on the path whose id it lists contributes
-  nothing, whatever it holds. An id that names no `item` entry on the
-  path names nothing; a `compaction`'s summary and pinned items and a
+  nothing, whatever it holds. A writer writes no empty id, and a reader
+  takes a list with no non-empty id as listing none. An id that names no
+  `item` entry on the path names nothing; a `compaction`'s summary and pinned items and a
   `branch_summary`'s summary are not `item` entries, and `omit` does not
   reach them.
-- An `omit` in a delta sets the `reasoning` it names, leaves the one in
-  force when it names none, and adds its `items` to those in force: the
+- An `omit` in a delta sets the `reasoning` it names when this document
+  defines it, leaves the one in force when it names none, and adds its
+  `items` to those in force: the
   set in force is the union of every `items` on the path since the last
   `replace` or compaction's checkpoint, so a later entry adds to it and
   never has to repeat it. An object that names no `reasoning` and lists
@@ -1812,8 +1825,10 @@ whose segment holds nothing, beside one that adds a message and is
 reported, a hand-back naming every instructions part by `hash`, those
 out of force among them, and its omitted list by `of`, a two-model session
 whose `omit` is written at each switch, every response hashed and
-verifying, beside the same session written as 0.10 does, a `judged_by`
-link with its `target`, and
+verifying, beside the same session written as 0.10 does, and one whose
+`omit` a compaction's checkpoint carries into a switch of model, a `judged_by`
+link with its `target`, an `of` naming no `config` entry on the path,
+kept as written and noted by a tool that checks a file, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second root, an own entry hung from the prefix above the base, or a line
@@ -1821,9 +1836,9 @@ before the base that is not on the path to it, a `dispatch` that follows a
 `reject`, an `answer` or the call's output, a decision that follows a
 `reject`, a `reject` that follows a `dispatch` or an output, a `target`
 naming another call, a repeated `call_id`, an empty `call_id`, a `run`
-start whose `source` is not the shape of its segment, an `of` naming no
-`config` entry on the path, a response whose recorded hash is the request
-an `omit` in force leaves an item out of, and a header
+start whose `source` is not the shape of its segment, a response whose
+recorded hash is the request an `omit` in force leaves an item out of,
+and a header
 naming `dispatch` beside a call that has an output and no `dispatch`;
 and a fork naming `dispatch` whose prefix, from a session that promised
 nothing, holds such a call, and which verifies.
@@ -1848,9 +1863,10 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.10
 
-Five changes. Three are members a writer may write, one relaxes a rule
-and one is a relation, so a 0.10 file is a 0.11 file that holds none of
-the members and reads under the one relaxed rule. No hash changes.
+Five changes: one relaxes a rule, one is a writer's use of a rule a
+reader already had, and three add a member or a relation. A 0.10 file
+is a 0.11 file that holds none of the members and reads under the one
+relaxed rule. No hash changes.
 
 - A run written `resume` whose segment holds nothing is accepted as
   written (`run`). A refusal by a subscriber to a run's start, or a kill

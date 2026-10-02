@@ -152,9 +152,12 @@ other settings:
 ```
 
 - `reasoning` is closed. `other_models`: a `reasoning` item that is an
-  output of a `response` whose model, the entry's `model` or else the
-  model in force at it, is not the model in force for this request
-  contributes nothing in step 4 of the context algorithm. The rule is a
+  output of a `response` and was written while a model other than the
+  model in force for this request was in force, which is the model in
+  force at the item's own entry and never the `response` entry's
+  `model`, contributes nothing in step 4 of the context algorithm. An
+  empty model name attributes nothing: an item written under none is
+  never left out, and a request under none leaves nothing out. The rule is a
   function of the record, so a writer writes it once, at the entry that
   changes the model, and it covers every later request without listing
   items; a switch back is covered too, since the rule reads the model
@@ -228,7 +231,8 @@ The RFC text refines the draft in four places, each to make the rule
 total or to match what a recorder can do:
 
 - `omit.reasoning` compares the model in force at the reasoning item's
-  own entry with the model in force for the request, and never reads a
+  own entry with the model in force for the request, attributes nothing
+  to an empty model name, and never reads a
   `response` entry's `model`. A provider spells that member as its own
   snapshot of the alias requested, which a request's model never equals,
   and agentturn attributes reasoning by the settings' model already.

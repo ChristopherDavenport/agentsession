@@ -360,12 +360,14 @@ type ConfigEntry struct {
 type Omit struct {
 	// Reasoning is a rule over the reasoning items on the path. It is
 	// closed: [OmitOtherModels] is the one value defined, and a value
-	// this package does not define has no effect.
+	// this package does not define has no effect, leaving the rule in
+	// force as it was.
 	Reasoning string `json:"reasoning,omitempty"`
 	// Items are entry IDs. An item entry on the path whose ID is listed
 	// contributes nothing, whatever it holds; an ID that names no item
-	// entry on the path names nothing. The set in force is the union of
-	// every list since the last replace or compaction's checkpoint.
+	// entry on the path names nothing, and a writer writes no empty one.
+	// The set in force is the union of every list since the last replace
+	// or compaction's checkpoint.
 	Items []string `json:"items,omitempty"`
 }
 
@@ -382,19 +384,31 @@ const OmitItems = "items"
 
 // IsZero reports whether the object names no rule and no entry, which
 // is the object a config entry writes to clear the one in force, and the
-// settings of a path that left nothing out.
-func (o Omit) IsZero() bool { return o.Reasoning == "" && len(o.Items) == 0 }
+// settings of a path that left nothing out. An empty id names no entry,
+// so a list of them names none.
+func (o Omit) IsZero() bool {
+	if o.Reasoning != "" {
+		return false
+	}
+	for _, id := range o.Items {
+		if id != "" {
+			return false
+		}
+	}
+	return true
+}
 
 // merged returns the object in force after a delta d: d's rule replaces
-// this one's when it names one, d's items are added to this one's in the
-// order they were first written, and a delta that names neither clears
-// both. The receiver and d are not modified.
+// this one's when it is one the format defines, a rule it does not
+// define leaves this one's in force, d's items are added to this one's
+// in the order they were first written, and a delta that names neither a
+// rule nor an entry clears both. The receiver and d are not modified.
 func (o Omit) merged(d Omit) Omit {
 	if d.IsZero() {
 		return Omit{}
 	}
 	out := Omit{Reasoning: o.Reasoning}
-	if d.Reasoning != "" {
+	if d.Reasoning == OmitOtherModels {
 		out.Reasoning = d.Reasoning
 	}
 	seen := make(map[string]bool, len(o.Items)+len(d.Items))

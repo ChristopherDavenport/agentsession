@@ -87,9 +87,11 @@ const earlierNote = "note: this file declares a minor before 0.9, which did not 
 // a cas store holds it is the stored header's, since the projection
 // the session is read from declares this release's format. It reports
 // whether anything failed, and the notes the failures earn, as noteFor
-// gives them, distinct and in noteOrder. The note on a run written
-// resume that took up nothing names the run, so it is printed under
-// prefix beside the failure it explains rather than returned.
+// gives them, distinct and in noteOrder. A config entry that names an
+// omitted list by an of the path cannot resolve fails nothing, since
+// the format keeps such an element as written and the list reaches no
+// request, but it names the entry, so its note is printed under prefix
+// rather than returned.
 func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Writer, all bool) (problem bool, notes []string) {
 	var checked, unhashed, failed int
 	for _, e := range s.Entries() {
@@ -124,6 +126,15 @@ func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Wr
 		fmt.Fprintf(stdout, "%d verified, %d without hash, %d failed\n", checked, unhashed, failed)
 	}
 	problem = failed > 0
+	noted := map[string]bool{}
+	for _, leaf := range s.Leaves() {
+		for _, c := range unresolvedOf(s, leaf) {
+			if !noted[c.ID] {
+				noted[c.ID] = true
+				fmt.Fprintf(stdout, "%s"+unresolvedOfNote+"\n", prefix, shortID(c.ID))
+			}
+		}
+	}
 	for _, leaf := range s.Leaves() {
 		if err := s.VerifyRecords(leaf); err != nil {
 			problem = true
@@ -246,4 +257,36 @@ func noteFor(declared string, err error) string {
 		return earlierNote
 	}
 	return note
+}
+
+// unresolvedOfNote is printed on a line of its own for a config entry
+// whose omitted list names an earlier entry's list the path does not
+// hold.
+const unresolvedOfNote = "note: config %s names an omitted list by an of that no config entry on its path puts in force; the element is kept as written, which is not corruption: the list reaches no request"
+
+// unresolvedOf returns the config entries on the path to leaf that carry
+// a keep with an of the path cannot resolve, in path order: replaying
+// the path's settings leaves the element in the list as written.
+func unresolvedOf(s *agentsession.Session, leaf string) []*agentsession.ConfigEntry {
+	var out []*agentsession.ConfigEntry
+	var settings agentsession.Settings
+	for _, e := range s.Path(leaf) {
+		c, ok := e.(*agentsession.ConfigEntry)
+		if !ok {
+			continue
+		}
+		settings = settings.Apply(c)
+		for _, el := range c.InstructionsOmitted {
+			if el.ID != "" || el.Keep == 0 || el.Of == "" {
+				continue
+			}
+			if slices.ContainsFunc(settings.InstructionsOmitted, func(p agentsession.OmittedPart) bool {
+				return p.ID == "" && p.Keep == el.Keep && p.Of == el.Of
+			}) {
+				out = append(out, c)
+				break
+			}
+		}
+	}
+	return out
 }

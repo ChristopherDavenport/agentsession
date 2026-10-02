@@ -63,7 +63,9 @@ type Settings struct {
 // omittedHistory is the omitted list each config entry that carried the
 // member put in force, as the list resolved at that entry, one node per
 // entry, newest first. A node is never changed once built, so settings
-// copied by value share it.
+// copied by value share it. It holds every such list since the last
+// replace or checkpoint, since an of may name any of them, so a replay
+// of a long session whose lists are long holds their sum.
 type omittedHistory struct {
 	entry string
 	list  []OmittedPart
@@ -209,7 +211,7 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 		if c.ID != "" {
 			// The entry's list can be named by a later keep. A replace
 			// started the lists afresh, so out.lists is empty then.
-			out.lists = &omittedHistory{entry: c.ID, list: out.InstructionsOmitted, prev: out.lists}
+			out.lists = &omittedHistory{entry: c.ID, list: cloneOmitted(out.InstructionsOmitted), prev: out.lists}
 		}
 	}
 	if c.Omit != nil {
@@ -466,7 +468,7 @@ func applyOmitted(prev, delta []OmittedPart, lists *omittedHistory) []OmittedPar
 
 // maxOmittedLists is how many of the lists earlier entries put in
 // force [Settings.OmittedDelta] tries a delta against, newest first,
-// beside the list in force. A hand-back names the list of the last time
+// beside the list in force, not counting a list equal to it. A hand-back names the list of the last time
 // that agent ran, so it is among the few most recent; the bound keeps
 // the work of one call from growing with the length of the session.
 const maxOmittedLists = 16
@@ -529,10 +531,10 @@ func (s Settings) OmittedDelta(omitted []OmittedPart) []OmittedPart {
 	}
 	tried := 0
 	for h := s.lists; h != nil && tried < maxOmittedLists; h = h.prev {
-		tried++
 		if slices.Equal(h.list, prev) {
 			continue // the keeps over the list in force already cover it
 		}
+		tried++
 		if d, ok := omittedRuns(h.list, h.entry, omitted); ok {
 			if n := encodedSize(d); n < size {
 				best, size = d, n
@@ -597,14 +599,14 @@ func omittedRuns(list []OmittedPart, of string, omitted []OmittedPart) ([]Omitte
 // these settings to want, for [ConfigEntry.Omit], and whether one does.
 // It is nil, and true, when want is what is in force, so a recorder
 // that states its rule at every model switch writes it once; the rule
-// and the entries not yet in force when want only adds to what is; and
+// and the entries not yet in force when want only adds to what is, a
+// rule other than the one in force included, which a delta replaces; and
 // an empty, non-nil object, which clears, when want is empty and
-// something is in force. A want that drops a rule or an entry in force
-// and keeps another is no single member: a delta only adds, and clears
-// both with {}, so it returns nil and false, and the writer clears in
-// one entry and writes what it keeps in the next. A reasoning rule in
-// force that want does not name is dropped in that case too, since a
-// delta that names none leaves it.
+// something is in force. A want that drops the rule or an entry in
+// force and keeps something is no single member: a delta only adds, and
+// clears both with {}, so it returns nil and false, and the writer
+// clears in one entry and writes what it keeps in the next. So does a
+// want whose rule is not one the format defines, which no delta sets.
 //
 // A config entry with Replace set discards the omit in force with the
 // rest of the settings, so the member it carries is want itself, not
@@ -632,7 +634,7 @@ func (s Settings) OmitDelta(want Omit) (*Omit, bool) {
 	if want.IsZero() {
 		return &Omit{}, true
 	}
-	if have.Reasoning != "" && have.Reasoning != want.Reasoning {
+	if want.Reasoning != "" && want.Reasoning != OmitOtherModels || have.Reasoning != "" && want.Reasoning == "" {
 		return nil, false
 	}
 	for id := range listed {
@@ -673,10 +675,12 @@ func unresolvedParts(parts []InstructionPart) bool {
 // prompt, however many parts it has. A part in force that parts leaves
 // out is removed by its absence. parts names each ID once.
 //
-// A part that is not in force, or is in force with other text, is named
-// by its hash alone when the path has given its ID that text and
-// source and the part has since left force, as format 0.11 lets a
-// writer: an agent handed the session back after another replaced its
+// A part that is not in force, or is in force with other resolved text,
+// is named by its hash alone when the path has given its ID that text
+// and source and the part has since left force, as format 0.11 lets a
+// writer; a part in force with its text and another source, and one in
+// force the path could not resolve, carry their text, since a hash
+// resolves against the part in force first: an agent handed the session back after another replaced its
 // parts costs the parts that changed, and not its whole prompt. Only a
 // part the path never had under its ID carries its text. A replace and
 // a compaction's checkpoint start the path's parts afresh, so a part
@@ -720,7 +724,11 @@ func (s Settings) InstructionsDelta(parts []InstructionPart) *ConfigEntry {
 		// the delta resolves it rather than keeping what is missing.
 		if !ok || s.InstructionsParts[j].Unresolved() || s.InstructionsParts[j].Text != p.Text || s.InstructionsParts[j].Source != p.Source {
 			flush()
-			if s.left.has(p) {
+			// A hash resolves against the part in force first, and only
+			// when that has other text, or there is none, against what
+			// left force. So a part in force with this text and another
+			// source, or one the path could not resolve, is written out.
+			if (!ok || !s.InstructionsParts[j].Unresolved() && s.InstructionsParts[j].Text != p.Text) && s.left.has(p) {
 				// The path has this text under this ID and it left force:
 				// its hash resolves it, and a hash is all it costs.
 				out = append(out, InstructionPart{ID: p.ID, Hash: HashText(p.Text)})
@@ -999,7 +1007,7 @@ func (c *Context) leaveOut(path []Entry) {
 			reason := ""
 			if listed[ie.ID] {
 				reason = OmitItems
-			} else if m, ok := models[ie.ID]; ok && m != c.Settings.Model {
+			} else if m, ok := models[ie.ID]; ok && c.Settings.Model != "" && m != c.Settings.Model {
 				reason = OmitOtherModels
 			}
 			if reason != "" {
@@ -1020,7 +1028,9 @@ func (c *Context) leaveOut(path []Entry) {
 // compaction's checkpoint standing for what it folded. A response
 // entry's own model is not read: it is the provider's name for the model
 // that answered, a snapshot of the alias the request named, and is not
-// comparable with the model a request carries.
+// comparable with the model a request carries. An item written with no
+// model in force is left out of the result: an empty name attributes
+// nothing.
 func modelsOfOutput(path []Entry) map[string]string {
 	models := map[string]string{}
 	model := ""
@@ -1036,7 +1046,9 @@ func modelsOfOutput(path []Entry) map[string]string {
 		case *CompactionEntry:
 			model = v.Config.Model
 		case *ItemEntry:
-			if _, ok := v.Item.(*openresponses.ReasoningItem); ok && v.ResponseID != "" {
+			// An empty model name attributes nothing: an item produced
+			// under no named model is sent to every model.
+			if _, ok := v.Item.(*openresponses.ReasoningItem); ok && v.ResponseID != "" && model != "" {
 				models[v.ID] = model
 			}
 		}
@@ -1171,8 +1183,8 @@ func (s *Session) requestContext(id string, omit bool) (Context, error) {
 // request does not hash to the recorded value.
 var ErrHashMismatch = errors.New("agentsession: request hash mismatch")
 
-// ErrOmitDivergence is wrapped by the [ErrHashMismatch] that
-// [Session.Verify] returns when the response's recorded hash is the
+// ErrOmitDivergence is wrapped, beside [ErrHashMismatch], by the error
+// that [Session.Verify] returns when the response's recorded hash is the
 // request built with the items the omit in force leaves out: the writer
 // sent, or hashed, what the record says a request leaves out. It is a
 // divergence between the record and its own rule, and not a response

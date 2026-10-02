@@ -1,0 +1,45 @@
+{
+  "sha256:a6e982db0df1962051a580fd220da3a19791967e8acb60fa49b6a35ff9508ebc": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Be brief."
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "What is 2+2?"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Four.",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "sha256:5fd0441ab3bc17cf7c60965e7d836b83788490748730842bf17902a017b9b872",
+      "sha256:a7c172ad245502c0b219fa2367b6f9c7dff3ae63dbdd62c95365616e7120ec4c",
+      "sha256:dd5dfd5ea97c60a3f952e4b6f4694bbf65e42c4a5f5a774c20e6dd3cf0663a44",
+      "sha256:c7e2b57a492157c782d62ac0e2839b1553e4f5f0de612ffd2f41dd790eca71fb",
+      "sha256:3f6b46424216964f2998a45471f49e81db83498642723e5ba1ab2833afecbbdd",
+      "sha256:a6e982db0df1962051a580fd220da3a19791967e8acb60fa49b6a35ff9508ebc"
+    ],
+    "item_entries": [
+      "sha256:a7c172ad245502c0b219fa2367b6f9c7dff3ae63dbdd62c95365616e7120ec4c",
+      "sha256:dd5dfd5ea97c60a3f952e4b6f4694bbf65e42c4a5f5a774c20e6dd3cf0663a44"
+    ]
+  }
+}

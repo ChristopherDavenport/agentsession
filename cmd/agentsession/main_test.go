@@ -193,8 +193,16 @@ func TestRun(t *testing.T) {
 			stdout: []string{"MISMATCH recorded sha256:", "the request with the items the omit setting leaves out", "3 verified, 0 without hash, 1 failed"},
 		},
 		{
+			name: "verify an of the path cannot resolve", args: []string{"verify", filepath.Join(fixtures, "bad-handback.jsonl")},
+			stdout: []string{"5 verified, 0 without hash, 0 failed", "names an omitted list by an of that no config entry on its path puts in force"},
+		},
+		{
+			name: "verify an omit carried through a fold", args: []string{"verify", filepath.Join(fixtures, "omit-folded.jsonl")},
+			stdout: []string{"5 verified, 0 without hash, 0 failed"}, absent: []string{"MISMATCH", "note:"},
+		},
+		{
 			name: "verify a hand-back", args: []string{"verify", filepath.Join(fixtures, "handback.jsonl")},
-			stdout: []string{"5 verified, 0 without hash, 0 failed"}, absent: []string{"records to"},
+			stdout: []string{"5 verified, 0 without hash, 0 failed"}, absent: []string{"records to", "names an omitted list"},
 		},
 		{
 			name: "verify instructions parts", args: []string{"verify", filepath.Join(fixtures, "instructions.jsonl")},

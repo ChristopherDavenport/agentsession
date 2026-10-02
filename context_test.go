@@ -20,13 +20,21 @@ type contextGolden struct {
 	Items       openresponses.Items `json:"items"`
 	Entries     []string            `json:"entries"`
 	ItemEntries []string            `json:"item_entries"`
+	// Omitted are the item entries the request leaves out, with why.
+	Omitted []omittedGolden `json:"omitted,omitempty"`
+}
+
+type omittedGolden struct {
+	Entry  string `json:"entry"`
+	Reason string `json:"reason"`
 }
 
 // TestContextGolden runs the context algorithm at every leaf of every
 // positive fixture and compares against testdata/context. Reviewing
 // those files is reviewing the algorithm.
 func TestContextGolden(t *testing.T) {
-	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge"} {
+	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge",
+		"empty-resume", "bad-resume", "handback", "bad-handback", "omit", "omit-absent", "bad-omit", "omit-folded", "judged"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			got := map[string]contextGolden{}
@@ -44,6 +52,9 @@ func TestContextGolden(t *testing.T) {
 				}
 				for _, e := range ctx.ItemEntries {
 					g.ItemEntries = append(g.ItemEntries, e.Base().ID)
+				}
+				for _, o := range ctx.OmittedItems {
+					g.Omitted = append(g.Omitted, omittedGolden{Entry: o.Entry.ID, Reason: o.Reason})
 				}
 				got[leaf] = g
 			}

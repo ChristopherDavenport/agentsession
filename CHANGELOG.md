@@ -29,7 +29,10 @@ versions may break the API.
   path gave its id that text and source, in force or since left, is
   named by its `hash` alone, and only a part the path never had carries
   its text; a replace and a compaction's checkpoint start the history
-  afresh. A hand-back to an agent whose parts another agent replaced no
+  afresh. A part in force with its text and another source, and one the
+  path could not resolve, still carry their text, since a hash resolves
+  against the part in force first. A hand-back to an agent whose parts
+  another agent replaced no
   longer repeats them: the letta-memory probe's parts went from 40,620
   bytes to about 14,070. The `handback` fixture, a, b, a, holds it.
   (#173)
@@ -39,7 +42,8 @@ versions may break the API.
   hand-back where the list was 37 KB. Each list a delta counts over has
   a cursor of its own; an `of` naming no entry the path holds since the
   last replace or checkpoint is kept as written, and `bad-handback`
-  holds it. `OmittedDelta` writes the shortest of the whole list, the
+  holds it, and `verify` notes such an element without failing the
+  file. `OmittedDelta` writes the shortest of the whole list, the
   keeps over the list in force and the keeps over each of the sixteen
   lists before it, and `OmittedPart.Of` is the member. (#173)
 - **`omit` on a `config` entry records the items a request leaves
@@ -55,9 +59,13 @@ versions may break the API.
   that takes the omit in force to the one it wants, the ATIF export lists
   such an item under `omitted` and `Items` leaves it out, and `show` and
   `verify` say so. The rule reads the model in force at the reasoning
-  item's entry and never a response entry's `model`. The `omit`,
-  `omit-absent` and `bad-omit` fixtures hold the session as 0.11 and
-  0.10 write it and a divergence. (#56)
+  item's entry and never a response entry's `model`, and an empty model
+  name attributes nothing: an item written under none is never left
+  out, and a request under none leaves nothing out. `Continue` carries
+  the omit into the successor, as a checkpoint does. The `omit`,
+  `omit-absent`, `bad-omit` and `omit-folded` fixtures hold the session
+  as 0.11 and 0.10 write it, a divergence, and an omit carried through
+  a fold. (#56)
 - **A `judged_by` link relation names a session's judge.** The judged
   session records the judge's session, with an optional `target` naming
   the entry judged, the entry the judge's `outcome` names; a header's

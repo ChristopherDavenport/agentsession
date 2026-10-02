@@ -409,6 +409,32 @@ func TestOmittedDeltaOf(t *testing.T) {
 			}
 		}
 	})
+	t.Run("sixteen earlier lists are tried beside the list in force", func(t *testing.T) {
+		// The list wanted is the oldest of maxOmittedLists earlier lists,
+		// and the list in force is not counted among them.
+		build := func(pad int) (*Session, []string) {
+			entries := []Entry{&ConfigEntry{Model: "m", InstructionsOmitted: a}}
+			for i := 0; i < maxOmittedLists-1+pad; i++ {
+				entries = append(entries, &ConfigEntry{InstructionsOmitted: omitList(fmt.Sprintf("x%d_", i), 3)})
+			}
+			entries = append(entries, &ConfigEntry{InstructionsOmitted: b})
+			return omitSession(t, entries...)
+		}
+		s, ids := build(0)
+		ctx, _ := s.Context()
+		d := ctx.Settings.OmittedDelta(a)
+		if len(d) != 1 || d[0].Of != ids[0] {
+			t.Errorf("the oldest of %d earlier lists is not named: %s", maxOmittedLists, omitIDs(d))
+		}
+		// One list further back is out of reach.
+		s, ids = build(1)
+		ctx, _ = s.Context()
+		for _, o := range ctx.Settings.OmittedDelta(a) {
+			if o.Of == ids[0] {
+				t.Errorf("the list %d back is named: %+v", maxOmittedLists+1, o)
+			}
+		}
+	})
 	t.Run("only the most recent lists are tried", func(t *testing.T) {
 		entries := []Entry{&ConfigEntry{Model: "m", InstructionsOmitted: a}}
 		for i := 0; i < maxOmittedLists+2; i++ {

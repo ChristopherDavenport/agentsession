@@ -851,15 +851,15 @@ var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 // the format's rules: every function call has a call ID and none
 // repeats in the session, every decision and dispatch names its call
 // by target, every run start's source and every run end agree with
-// the segment, a resume over a segment that holds nothing excepted, in
-// a file of any minor, as format 0.11 has it, no dispatch or decision follows a reject or an answer
+// the segment, no dispatch or decision follows a reject or an answer
 // on the same call, no answer, reject or dispatch follows an output and
 // no reject a dispatch, and, when the header names dispatch in records,
 // no answer ends a call with no dispatch and every call that ran has a
-// dispatch. The rules that rest on records apply to what the session
-// wrote, the entries after its base: a fork's prefix is another
-// session's record, kept to that session's promise. It returns the
-// first problem found.
+// dispatch. A run written resume over a segment that holds nothing
+// agrees with it, as format 0.11 has it, in a file of any minor. The
+// rules that rest on records apply to what the session wrote, the
+// entries after its base: a fork's prefix is another session's record,
+// kept to that session's promise. It returns the first problem found.
 func (s *Session) VerifyRecords(leaf string) error {
 	path := s.Path(leaf)
 	if path == nil {

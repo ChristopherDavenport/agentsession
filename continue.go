@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/ChristopherDavenport/openresponses"
 )
@@ -41,6 +42,14 @@ func Continue(ctx context.Context, store Store, id string, summary openresponses
 	// The parts left out stay in force across the rollover, as they do
 	// across a compaction.
 	cfg.InstructionsOmitted = cloneOmitted(cx.Settings.InstructionsOmitted)
+	// And so does what the request leaves out, as a checkpoint carries
+	// it: the rule keeps covering a later switch of model, and the
+	// entries listed name nothing in the successor, so they leave
+	// nothing out there.
+	if o := cx.Settings.Omit; !o.IsZero() {
+		o.Items = slices.Clone(o.Items)
+		cfg.Omit = &o
+	}
 	h := old.Header()
 	next, err := store.Create(ctx, Header{
 		Harness:       h.Harness,

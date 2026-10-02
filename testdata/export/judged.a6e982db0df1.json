@@ -1,0 +1,109 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000018",
+  "trajectory_id": "sha256:a6e982db0df1962051a580fd220da3a19791967e8acb60fa49b6a35ff9508ebc",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-10-01T11:00:02Z",
+      "source": "user",
+      "message": "What is 2+2?",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:a7c172ad245502c0b219fa2367b6f9c7dff3ae63dbdd62c95365616e7120ec4c"
+        },
+        "config_entries": [
+          "sha256:5fd0441ab3bc17cf7c60965e7d836b83788490748730842bf17902a017b9b872"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "What is 2+2?"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-10-01T11:00:04Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Four.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:c7e2b57a492157c782d62ac0e2839b1553e4f5f0de612ffd2f41dd790eca71fb"
+        },
+        "item_entry_ids": [
+          "sha256:dd5dfd5ea97c60a3f952e4b6f4694bbf65e42c4a5f5a774c20e6dd3cf0663a44"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Four.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:c7e2b57a492157c782d62ac0e2839b1553e4f5f0de612ffd2f41dd790eca71fb",
+            "model": "gpt-5",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-10-01T11:00:04Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 1 model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its 2 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 1
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.11",
+      "leaf": "sha256:a6e982db0df1962051a580fd220da3a19791967e8acb60fa49b6a35ff9508ebc",
+      "main": true
+    },
+    "links": [
+      {
+        "entry_id": "sha256:3f6b46424216964f2998a45471f49e81db83498642723e5ba1ab2833afecbbdd",
+        "rel": "judged_by",
+        "session": "c7cbb816-c8a3-5df5-b921-4871310db182",
+        "target": "sha256:dd5dfd5ea97c60a3f952e4b6f4694bbf65e42c4a5f5a774c20e6dd3cf0663a44"
+      },
+      {
+        "entry_id": "sha256:a6e982db0df1962051a580fd220da3a19791967e8acb60fa49b6a35ff9508ebc",
+        "rel": "judged_by",
+        "session": "0458961f-dfdc-5b18-ba2e-432a5ecf31f5"
+      }
+    ],
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

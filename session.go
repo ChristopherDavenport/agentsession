@@ -975,6 +975,13 @@ func validateEntry(e Entry) error {
 // this is what a writer is held to. Whether a keep stays within the
 // parts in force depends on the path, and is left to the request hash.
 func validateConfig(c *ConfigEntry) error {
+	if c.Omit != nil {
+		for _, id := range c.Omit.Items {
+			if id == "" {
+				return errors.New("agentsession: an omit items list names an empty id")
+			}
+		}
+	}
 	seen := make(map[string]bool, len(c.InstructionsParts))
 	full := true
 	for _, p := range c.InstructionsParts {

@@ -1,0 +1,295 @@
+{
+  "sha256:4fa0efc1956679c1dca8fe4730fbd7a5001c1078a3bf7e4ed5318a3387f241db": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "You are the triage agent.\n\nRoute billing questions to billing.\n\nfact 0000: the user said something worth keeping\n\nfact 0001: the user said something worth keeping\n\nfact 0002: the user said something worth keeping\n\nfact 0020: the user said something worth keeping",
+      "instructions_parts": [
+        {
+          "id": "product",
+          "text": "You are the triage agent.",
+          "source": "product"
+        },
+        {
+          "id": "agentsmd",
+          "text": "Route billing questions to billing.",
+          "source": "agentsmd"
+        },
+        {
+          "id": "memory/user/n-0000",
+          "text": "fact 0000: the user said something worth keeping",
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0001",
+          "text": "fact 0001: the user said something worth keeping",
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0002",
+          "text": "fact 0002: the user said something worth keeping",
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0020",
+          "text": "fact 0020: the user said something worth keeping",
+          "source": "agentmemory"
+        }
+      ],
+      "instructions_omitted": [
+        {
+          "id": "memory/user/n-0003",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0004",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0005",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0006",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0007",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0008",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0009",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0010",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0011",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0012",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0013",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0014",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0015",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0016",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0017",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0018",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        },
+        {
+          "id": "memory/user/n-0019",
+          "reason": "budget",
+          "size": 48,
+          "source": "agentmemory"
+        }
+      ]
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "I was charged twice."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Noted.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Please refund the second charge."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_2",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Noted.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Thanks. What about my other card?"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_3",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Noted.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Which invoice was it?"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_4",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Noted.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Back to triage."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_5",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Noted.",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "sha256:4eaae15edc8860528074067cf9ae2deb9fe3a150ae4a28624024ec32ae39677a",
+      "sha256:e92bd7ff7943b658f197a54d4e9ca188f0fe5c0762eade6a672950fa18b10dff",
+      "sha256:27055c6be87b8034c1c2a2b2cd91a68ade004e49ddf922431059648fe16c3acb",
+      "sha256:6133bcaa22bf465ded9e9070e6822f05f0e46212104cdc8bc6e8d44339620a0f",
+      "sha256:f43f976acd7743e74a02790b12f54eb3eea7c94946285616813e0d4237f7b17f",
+      "sha256:4788c6fa90a7e317caa7fee40cefe4d242ddc450c75ece33ce12d5a6b38200b8",
+      "sha256:e1952985bc46236a6e9bffc3eee4391cb8992339175a48ddcedeb7ae7db3b590",
+      "sha256:48d3ffa3965e382a54e84605118dabc1cd6b9cb6f7ab91a28cff22d1b9e00d65",
+      "sha256:aa2da97b983045aa24222aeee007ef853c00bc45e41b6b75bb168cf6034350bb",
+      "sha256:86ba6f938855965ac3ffb51990514cbea244057ec1b01032a00169ce9bc2bc42",
+      "sha256:4efc1e0ccb5670301b83dcb01abf95e59538ec72e2c020523cec6cd73416cfa7",
+      "sha256:f4287a6f3f7653e1c5293281f5ed5b3f6279841747d9ace955bde1079752f46d",
+      "sha256:fdf81f8e00b460053e4e3db547262083251d76b131706fa20c997fdc418e5eb3",
+      "sha256:0a1e0b5f95013aae9dfab2baa3fde6c3b82c020dc949175dc583fa138c0cb197",
+      "sha256:9d5d88571dacfef2b8faf071e7c9ee343c38662c6acf79a687c1db165568dcc5",
+      "sha256:86f27dd599f672af832b4a9fca02234fd4fa81dea0436acbf166fb9c45184692",
+      "sha256:77b89aa3cc7431e37367c55af08dbda936d1d2314099efe600ec61c6b5684e43",
+      "sha256:fd8bd0468cfdb114eb9747501cf88adfc85c3bd67d7f1e251638740a4d3fa66d",
+      "sha256:c95095e3be15a9dc1c28242ddd47b11bef2db5603d33b13aa328cdfb17edabc1",
+      "sha256:4fa0efc1956679c1dca8fe4730fbd7a5001c1078a3bf7e4ed5318a3387f241db"
+    ],
+    "item_entries": [
+      "sha256:e92bd7ff7943b658f197a54d4e9ca188f0fe5c0762eade6a672950fa18b10dff",
+      "sha256:27055c6be87b8034c1c2a2b2cd91a68ade004e49ddf922431059648fe16c3acb",
+      "sha256:4788c6fa90a7e317caa7fee40cefe4d242ddc450c75ece33ce12d5a6b38200b8",
+      "sha256:e1952985bc46236a6e9bffc3eee4391cb8992339175a48ddcedeb7ae7db3b590",
+      "sha256:86ba6f938855965ac3ffb51990514cbea244057ec1b01032a00169ce9bc2bc42",
+      "sha256:4efc1e0ccb5670301b83dcb01abf95e59538ec72e2c020523cec6cd73416cfa7",
+      "sha256:0a1e0b5f95013aae9dfab2baa3fde6c3b82c020dc949175dc583fa138c0cb197",
+      "sha256:9d5d88571dacfef2b8faf071e7c9ee343c38662c6acf79a687c1db165568dcc5",
+      "sha256:fd8bd0468cfdb114eb9747501cf88adfc85c3bd67d7f1e251638740a4d3fa66d",
+      "sha256:c95095e3be15a9dc1c28242ddd47b11bef2db5603d33b13aa328cdfb17edabc1"
+    ]
+  }
+}

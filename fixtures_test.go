@@ -277,7 +277,7 @@ func TestRegenerateFixtures(t *testing.T) {
 	// it, with no omit and no hash after the first switch; the third
 	// records a hash over the request the omit in force says was not
 	// sent.
-	for name, variant := range map[string]switchVariant{"omit": switchOmit, "omit-absent": switchAbsent, "bad-omit": switchBad} {
+	for name, variant := range map[string]switchVariant{"omit": switchOmit, "omit-absent": switchAbsent, "bad-omit": switchBad, "omit-folded": switchFolded} {
 		var buf bytes.Buffer
 		if err := Write(&buf, switchFixture(t, variant)); err != nil {
 			t.Fatal(err)
@@ -1470,6 +1470,10 @@ const (
 	// switchBad writes omit, and hashes the third response over the
 	// request with the other model's reasoning in it.
 	switchBad
+	// switchFolded writes omit, folds the context, and switches model
+	// again: the checkpoint carries the omit, and the reasoning the fold
+	// kept is left out of the request to the other model.
+	switchFolded
 )
 
 // switchFixture builds the session omit.jsonl holds, or with another
@@ -1492,6 +1496,7 @@ func switchFixture(t *testing.T, variant switchVariant) *Session {
 		switchOmit:   "01995b2a-0000-7000-8000-00000000001b",
 		switchAbsent: "01995b2a-0000-7000-8000-00000000001c",
 		switchBad:    "01995b2a-0000-7000-8000-00000000001d",
+		switchFolded: "01995b2a-0000-7000-8000-00000000001e",
 	}[variant]
 	at, _ := time.Parse(time.RFC3339, "2026-10-01T14:00:00Z")
 	s := New(Header{ID: id, CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
@@ -1584,6 +1589,18 @@ func switchFixture(t *testing.T, variant switchVariant) *Session {
 		must(&ConfigEntry{Omit: &Omit{Items: []string{miniMessage}}})
 	}
 	call(4, "gpt-5", "gpt-5-2026-08-07", "Anything else?", afterSwitch)
+	if variant == switchFolded {
+		// The request holds ten items, two of gpt-5's reasoning among
+		// them in the last six, which the fold keeps. The checkpoint
+		// carries the rule and the listed entry.
+		comp, err := s.CompactKeeping(6, openresponses.UserText("Summary of the migration so far."))
+		if err != nil {
+			t.Fatal(err)
+		}
+		must(comp)
+		must(&ConfigEntry{Model: "gpt-5-mini"})
+		call(5, "gpt-5-mini", "gpt-5-mini-2026-08-07", "Finish the migration.", hashed)
+	}
 	return s
 }
 
@@ -1595,7 +1612,7 @@ func switchFixture(t *testing.T, variant switchVariant) *Session {
 // in fails as a divergence from the rule, not as a response with no
 // hash.
 func TestOmitFixtures(t *testing.T) {
-	for name, variant := range map[string]switchVariant{"omit": switchOmit, "omit-absent": switchAbsent, "bad-omit": switchBad} {
+	for name, variant := range map[string]switchVariant{"omit": switchOmit, "omit-absent": switchAbsent, "bad-omit": switchBad, "omit-folded": switchFolded} {
 		raw, err := os.ReadFile(filepath.Join("testdata", "sessions", name+".jsonl"))
 		if err != nil {
 			t.Fatal(err)
@@ -1631,6 +1648,7 @@ func TestOmitFixtures(t *testing.T) {
 			"omit":        "ok ok ok ok",
 			"omit-absent": "ok unhashed unhashed unhashed",
 			"bad-omit":    "ok ok divergence ok",
+			"omit-folded": "ok ok ok ok ok",
 		}[name]
 		if got := strings.Join(results, " "); got != want {
 			t.Errorf("%s: responses %s, want %s", name, got, want)
@@ -1658,6 +1676,30 @@ func TestOmitFixtures(t *testing.T) {
 	if len(ctx.Items) != 4+3+3 || len(ctx.Items) != len(ctx.ItemEntries) {
 		t.Errorf("the request holds %d items", len(ctx.Items))
 	}
+	// After a fold the checkpoint carries the omit, and the request to
+	// the other model still leaves out gpt-5's reasoning the fold kept.
+	folded := loadFixture(t, "omit-folded")
+	var comp *CompactionEntry
+	for _, e := range folded.Entries() {
+		if c, ok := e.(*CompactionEntry); ok {
+			comp = c
+		}
+	}
+	if comp == nil || comp.Config.Omit.Reasoning != OmitOtherModels || len(comp.Config.Omit.Items) != 1 {
+		t.Fatalf("the checkpoint carries %+v", comp)
+	}
+	fctx, err := folded.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fleft []string
+	for _, o := range fctx.OmittedItems {
+		fleft = append(fleft, o.Reason+" "+o.Entry.Item.ItemType())
+	}
+	if got := strings.Join(fleft, ","); got != "other_models reasoning,other_models reasoning" {
+		t.Errorf("after the fold the request leaves out %s", got)
+	}
+
 	// A path that ends before the switch never meets the member: the
 	// first request is as written, and no later entry leaves anything
 	// out of it.

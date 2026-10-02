@@ -1,0 +1,200 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000017",
+  "trajectory_id": "sha256:823e70f28640a61b4154cc6fb0d38e1462afb481072864061bb430068aef1d5e",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-10-01T09:00:03Z",
+      "source": "user",
+      "message": "Charge the card.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:7840feb76752310d7ece87ee27e2ee33e15e1d452f26d2622889aad560eee4fe"
+        },
+        "config_entries": [
+          "sha256:1b77d0ed2913bfb731c511d8483c9e2be73f2df0ba99fd37cccdf828ffbcd254"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Charge the card."
+              }
+            ]
+          }
+        },
+        "run": [
+          {
+            "end_entry_id": "sha256:4c2e6f5d30c0adbf5e304c1277f2199ebdc8a8aaf3ef685205375e8701a70c11",
+            "pending": [
+              "call_charge"
+            ],
+            "reason": "input_required",
+            "run_id": "run-1",
+            "source": "input",
+            "start_entry_id": "sha256:98fbf2e1822524a64f4f1445c9577c8d3bcd1a3542cc595fc9d971e068ca1488"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-10-01T09:00:05Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_charge",
+          "function_name": "charge",
+          "arguments": {}
+        }
+      ],
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:2f1d74a489363f20cd47be7d930d7341e6f9966da6b3acb31c0f7a32ce4d2e07"
+        },
+        "calls": {
+          "call_charge": {
+            "decisions": [
+              {
+                "by": "policy",
+                "entry_id": "sha256:3594c836045ec86f885101adc9941693e589811d93a9f0613d78baa77bc92ba9",
+                "verdict": "hold"
+              }
+            ]
+          }
+        },
+        "item_entry_ids": [
+          "sha256:1e3e3154337272b6dc6cdbb239d0f12ff054c74a802d6c5546aebf176779e99b"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_1",
+              "call_id": "call_charge",
+              "name": "charge",
+              "arguments": "{}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:2f1d74a489363f20cd47be7d930d7341e6f9966da6b3acb31c0f7a32ce4d2e07",
+            "model": "gpt-5",
+            "request_hash": "sha256:a6e4faeea56eb178c874aa7c760ec92a021a57a1f1509bc50b99aca6ff0e8df4",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-10-01T09:00:05Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-10-01T09:00:09Z",
+      "source": "user",
+      "message": "Also, which card is it?",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:3d642afcf6640eb90d27a1ea8335674801213cdb47b4f6d43da3e7586f159832"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Also, which card is it?"
+              }
+            ]
+          }
+        },
+        "run": [
+          {
+            "end_entry_id": "sha256:823e70f28640a61b4154cc6fb0d38e1462afb481072864061bb430068aef1d5e",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-2",
+            "source": "resume",
+            "start_entry_id": "sha256:ac0ec26a5cc058d3558317df541ab680084d3e5289fcedcf96089c5a88b68ec4"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-10-01T09:00:11Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "The one ending 4242.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:5c072af1d1b3bef2cd189c11a46a0d5f6baee85337923060fc86992003e4cf0b"
+        },
+        "item_entry_ids": [
+          "sha256:d3d883c4dda44001dcfb6459b82c4e5e3331f3c628ad69a7c50e7e7e0d2bb67b"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_2",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "The one ending 4242.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:5c072af1d1b3bef2cd189c11a46a0d5f6baee85337923060fc86992003e4cf0b",
+            "model": "gpt-5",
+            "request_hash": "sha256:c956beb464f1ffeea481a208215386ed385bedd6315fe533e08de8a05ee1e745",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-10-01T09:00:11Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 2 model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its 4 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 2
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.11",
+      "leaf": "sha256:823e70f28640a61b4154cc6fb0d38e1462afb481072864061bb430068aef1d5e",
+      "main": true,
+      "records": [
+        "run",
+        "dispatch",
+        "decision"
+      ]
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}
