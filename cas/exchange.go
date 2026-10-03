@@ -40,6 +40,36 @@ type Exchange struct {
 	// Handover is set when a push made the receiver the record and the
 	// sender a mirror.
 	Handover bool
+	// Refs says what became of each ref the exchange carried, in the
+	// order they were named.
+	Refs []RefResult
+}
+
+// RefPush names a ref an exchange carries. Name is the ref at the
+// sender, which a push reads, or at the source, which a fetch reads: it
+// must point at the session exchanged, and its target, a pinned entry
+// included, is what the receiver's ref is moved to. Expected is the
+// target the sender believes the receiver's ref of that name holds, the
+// zero RefTarget for none, and the receiver moves its ref by
+// compare-and-swap from it, as a head moves from PushOptions.Expected.
+type RefPush struct {
+	Name     string
+	Expected agentsession.RefTarget
+}
+
+// RefResult is what became of one ref an exchange carried. A ref the
+// receiver refused leaves the closure admitted and every other ref
+// undisturbed, and Why says why.
+type RefResult struct {
+	Name string
+	// Target is what the exchange asked the receiver's ref to hold.
+	Target agentsession.RefTarget
+	// Moved is set when the receiver's ref now holds Target.
+	Moved bool
+	// Current is the target the receiver's ref held when it refused the
+	// move, as a compare-and-swap reports it.
+	Current agentsession.RefTarget
+	Why     string
 }
 
 // PushOptions are a push's compare-and-swap and its overrides.
@@ -57,6 +87,9 @@ type PushOptions struct {
 	// mirror, each in its own commit and in that order, so a failure
 	// between the two leaves two records and never none.
 	Handover bool
+	// Refs are the refs the push carries, each applied at the receiver
+	// by compare-and-swap once the entries and the head are done.
+	Refs []RefPush
 }
 
 // bundle is what an exchange carries: the closure of one session.
@@ -154,6 +187,12 @@ func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions
 			return Exchange{}, fmt.Errorf("cas: handover: %w", err)
 		}
 	}
+	// The refs are read before anything is sent, so a name that does
+	// not point at this session is refused with nothing landed.
+	targets, err := s.exchangedRefs(ctx, id, opts.Refs)
+	if err != nil {
+		return Exchange{}, err
+	}
 	b, err := s.bundleOf(ctx, id)
 	if err != nil {
 		return Exchange{}, err
@@ -162,8 +201,14 @@ func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions
 		return Exchange{}, fmt.Errorf("%w: this store holds %s as a mirror", ErrNotRecord, id)
 	}
 	x, err := to.receive(ctx, b, receiveOptions{push: true, expected: opts.Expected, force: opts.Force, handover: opts.Handover})
-	if err != nil || !opts.Handover {
+	if err != nil {
 		return x, err
+	}
+	if x.Refs, err = to.applyRefs(ctx, opts.Refs, targets, "push"); err != nil {
+		return x, err
+	}
+	if !opts.Handover {
+		return x, nil
 	}
 	// The receiver is the record now; clear the mark here.
 	h, err := s.hold(id)
@@ -227,18 +272,78 @@ func callIDOf(e agentsession.Entry) string {
 // head descends from its own, or it has none; a record's head moves
 // only by its own writers, and a fetch from a stale mirror moves
 // nothing. A session this store lacked is created as a mirror.
-func (s *Store) Fetch(ctx context.Context, from *Store, id string) (Exchange, error) {
+//
+// refs are the refs the fetcher names, as RefPush says, read at the
+// source and moved here by compare-and-swap once the entries and the
+// head are done; a ref this store refuses leaves the rest as they are.
+func (s *Store) Fetch(ctx context.Context, from *Store, id string, refs ...RefPush) (Exchange, error) {
 	if err := ctx.Err(); err != nil {
 		return Exchange{}, err
 	}
 	if s.sameStore(from) {
 		return Exchange{}, ErrSameStore
 	}
+	targets, err := from.exchangedRefs(ctx, id, refs)
+	if err != nil {
+		return Exchange{}, err
+	}
 	b, err := from.bundleOf(ctx, id)
 	if err != nil {
 		return Exchange{}, err
 	}
-	return s.receive(ctx, b, receiveOptions{})
+	x, err := s.receive(ctx, b, receiveOptions{})
+	if err != nil {
+		return x, err
+	}
+	if x.Refs, err = s.applyRefs(ctx, refs, targets, "fetch"); err != nil {
+		return x, err
+	}
+	return x, nil
+}
+
+// exchangedRefs reads the targets of the refs an exchange carries from
+// the store that sends them, each of which must point at session id.
+func (s *Store) exchangedRefs(ctx context.Context, id string, refs []RefPush) ([]agentsession.RefTarget, error) {
+	out := make([]agentsession.RefTarget, len(refs))
+	for i, r := range refs {
+		t, err := s.ResolveRef(ctx, r.Name)
+		if err != nil {
+			return nil, fmt.Errorf("cas: exchange: ref %s: %w", r.Name, err)
+		}
+		if t.Session != id {
+			return nil, fmt.Errorf("cas: exchange: ref %s points at %s, not at %s", r.Name, t.Session, id)
+		}
+		out[i] = t
+	}
+	return out, nil
+}
+
+// applyRefs moves the receiver's refs to the targets an exchange
+// carried, each by compare-and-swap from the value the sender expected.
+// A refusal for the ref's name, its expected value, or its pinned entry
+// is reported in the result and leaves the entries admitted and the
+// other refs to be moved; anything else, a failing disk or a read-only
+// store, is an error.
+func (s *Store) applyRefs(ctx context.Context, refs []RefPush, targets []agentsession.RefTarget, how string) ([]RefResult, error) {
+	var out []RefResult
+	for i, r := range refs {
+		res := RefResult{Name: r.Name, Target: targets[i]}
+		err := s.UpdateRef(ctx, r.Name, r.Expected, targets[i], "exchange: "+how)
+		var moved *agentsession.RefMovedError
+		switch {
+		case err == nil:
+			res.Moved = true
+		case errors.As(err, &moved):
+			res.Current = moved.Current
+			res.Why = fmt.Sprintf("the receiver's ref holds %s, not the expected %s", orNone(moved.Current.String()), orNone(r.Expected.String()))
+		case errors.Is(err, agentsession.ErrRefName), errors.Is(err, agentsession.ErrNoEntry):
+			res.Why = err.Error()
+		default:
+			return out, fmt.Errorf("cas: exchange committed, and ref %s could not be moved: %w", r.Name, err)
+		}
+		out = append(out, res)
+	}
+	return out, nil
 }
 
 // ErrSameStore is an exchange between a store and itself, whether one
