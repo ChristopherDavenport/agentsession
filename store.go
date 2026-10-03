@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
+	"github.com/ChristopherDavenport/agentsession/internal/wake"
 )
 
 // ErrNoSession is returned when a session ID is not in the store.
@@ -219,11 +220,15 @@ type Summary struct {
 type MemoryStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
+	// gens names each session's creation, so a follower can tell a
+	// session created again under a deleted ID from the one it follows.
+	gens map[string]uint64
+	hub  wake.Hub
 }
 
 // NewMemoryStore returns an empty store.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{sessions: map[string]*Session{}}
+	return &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{}}
 }
 
 // Create implements Store. A header whose Base is set makes a fork of
@@ -246,6 +251,7 @@ func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
 		return nil, fmt.Errorf("%w: %s", ErrSessionExists, s.ID())
 	}
 	m.sessions[s.ID()] = s
+	m.gens[s.ID()] = memoryGen.Add(1)
 	return s, nil
 }
 
@@ -313,7 +319,9 @@ func (m *MemoryStore) Append(ctx context.Context, sessionID string, e Entry) (st
 	if err != nil {
 		return "", err
 	}
-	return s.Append(e)
+	got, err := s.Append(e)
+	m.hub.Notify(sessionID)
+	return got, err
 }
 
 // List implements Store.
@@ -350,10 +358,13 @@ func (m *MemoryStore) Delete(_ context.Context, id string) error {
 		return fmt.Errorf("%w: %s", ErrNoSession, id)
 	}
 	delete(m.sessions, id)
+	delete(m.gens, id)
+	m.hub.Notify(id)
 	return nil
 }
 
 var (
-	_ Store  = (*MemoryStore)(nil)
-	_ Reader = (*MemoryStore)(nil)
+	_ Store    = (*MemoryStore)(nil)
+	_ Reader   = (*MemoryStore)(nil)
+	_ Follower = (*MemoryStore)(nil)
 )

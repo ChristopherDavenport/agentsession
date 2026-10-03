@@ -169,6 +169,7 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/internal/ijson"
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
+	"github.com/ChristopherDavenport/agentsession/internal/wake"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -276,6 +277,20 @@ func WithReadOnly() Option {
 	return func(s *Store) { s.readOnly = true }
 }
 
+// WithFollowInterval sets how often a follower looks at a session's
+// log that no writer in this process rang for: the shortest wait, which
+// it keeps while the log keeps growing and doubles while it does not,
+// up to a second or the interval itself when that is longer. The
+// default is 100 ms. A follower of a session this store appends to is
+// woken by the append and does not wait for the interval.
+func WithFollowInterval(d time.Duration) Option {
+	return func(s *Store) {
+		if d > 0 {
+			s.followEvery = d
+		}
+	}
+}
+
 // Store is a content-addressed store rooted at a directory. It is safe
 // for concurrent use: calls on one session take turns, and calls on
 // different sessions run at once, commits and opens included.
@@ -292,6 +307,10 @@ type Store struct {
 	// processes do; the order is a handle's lock, then idx, then mu.
 	mu   sync.Mutex
 	open map[string]*handle
+	// hub rings the followers of a session this store writes; see
+	// Follow.
+	hub         wake.Hub
+	followEvery time.Duration
 	// idx guards owners, prefix, indexed, building and deltas, and is
 	// held only to read or change them. An index is built by reading
 	// every session with no lock held, one build at a time under
@@ -1218,6 +1237,13 @@ func (s *Store) committedView(id, dir string) (view, error) {
 }
 
 func (s *Store) reconcileAs(id, dir string, committedOnly bool) (view, error) {
+	return s.reconcileTo(id, dir, committedOnly, -1)
+}
+
+// reconcileTo is reconcileAs over the log's first limit bytes, or all
+// of it when limit is negative: the session as it stood when the log
+// was that long, which a follower resumes from.
+func (s *Store) reconcileTo(id, dir string, committedOnly bool, limit int64) (view, error) {
 	var v view
 	hdr, err := readHeader(dir)
 	if err != nil {
@@ -1227,7 +1253,7 @@ func (s *Store) reconcileAs(id, dir string, committedOnly bool) (view, error) {
 		return v, err
 	}
 	v.exists = true
-	l, err := readSessionLog(dir, 0)
+	l, err := readSessionLogTo(dir, limit)
 	if err != nil {
 		return v, err
 	}
@@ -1484,6 +1510,7 @@ func (s *Store) writeRecovered(id, dir string, v view) error {
 	if err != nil {
 		return err
 	}
+	defer s.hub.Notify(id)
 	return s.objs.writeAtomic(path, append(data, more...))
 }
 
@@ -2911,6 +2938,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	}
 	s.disown(id)
 	_ = os.RemoveAll(gone)
+	s.hub.Notify(id)
 	return nil
 }
 

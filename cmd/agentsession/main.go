@@ -3,12 +3,17 @@
 // repairs a cas session whose log is damaged, and migrates a cas store
 // from before per-session logs.
 //
-//	agentsession show <file> | <cas-root> <id> [-leaf id] [-v]
+//	agentsession show <file> | <cas-root> <id> [-leaf id] [-v] [-f]
 //	agentsession verify <file> | <cas-root> [id]
 //	agentsession export <file> | <cas-root> <id> -out dir [-redact-home] [-redact-env] [-secret VALUE]...
 //	agentsession list <root> [-cwd path] [-parent id] [-limit n]
 //	agentsession repair <cas-root> <id> [-dry-run]
 //	agentsession migrate <cas-root>
+//
+// show -f prints the session and then each entry as the store accepts
+// it, until interrupted: a session a harness is writing, watched from
+// beside it, in a cas store or in a jsonl store's layout, with nothing
+// held and nothing written.
 //
 // Every command but repair and migrate opens what it reads read-only. show, verify
 // and export read a file directly and never take its lock; given a cas
@@ -60,6 +65,7 @@ const usage = `usage: agentsession <command> [flags] <arguments>
 
 commands:
   show    <session> [-leaf id] [-v]  print the entries and the context at a leaf
+  show    <session> -f               then print each entry as it is written, until interrupted
   verify  <session>                  check every entry hash, request hash and record; in a cas store, every subsession link
   verify  <cas-root>                 check a whole cas store: logs, objects, sessions, records, links
   export  <session> -out dir         write ATIF documents for every leaf

@@ -13,9 +13,10 @@ import (
 )
 
 func show(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("show", "<file> | <cas-root> <id> [-leaf id] [-v]", stderr)
+	fs := newFlags("show", "<file> | <cas-root> <id> [-leaf id] [-v] [-f]", stderr)
 	leaf := fs.String("leaf", "", "entry whose context to print; the current leaf by default")
 	full := fs.Bool("v", false, "print the data of custom and extension entries instead of its size")
+	follow := fs.Bool("f", false, "after the session, print each entry as it lands, until interrupted")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -26,6 +27,13 @@ func show(args []string, stdout, stderr io.Writer) error {
 	}
 	if err := requireSession(fs, src, "show"); err != nil {
 		return err
+	}
+	if *follow {
+		if *leaf != "" {
+			fs.Usage()
+			return fmt.Errorf("%w: -f follows the session's own leaf; it cannot be given -leaf", errUsage)
+		}
+		return followShow(src, *full, stdout, stderr)
 	}
 	// A session read through a cas store keeps the store open: a call
 	// in a fork's prefix has its dispatch in the session the fork was
@@ -48,13 +56,23 @@ func show(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	printHeader(stdout, s)
-	printEntries(stdout, s, *full)
 	at := *leaf
+	if at != "" {
+		if at, err = resolveEntry(s, at); err != nil {
+			return err
+		}
+	}
+	return printSession(stdout, s, at, *full, reader)
+}
+
+// printSession prints a session as show does: the header, the entries,
+// the context at at, which is the session's leaf when empty, and the
+// calls pending there.
+func printSession(stdout io.Writer, s *agentsession.Session, at string, full bool, reader agentsession.Reader) error {
+	printHeader(stdout, s)
+	printEntries(stdout, s, full)
 	if at == "" {
 		at = s.Leaf()
-	} else if at, err = resolveEntry(s, at); err != nil {
-		return err
 	}
 	if at == "" {
 		return nil
