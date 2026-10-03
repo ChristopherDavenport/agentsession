@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.21 - 2026-10-02
 
 - **Fixed: the memory store keeps a copy of each entry appended through
   it.** It held the caller's entry, so a caller writing to it afterwards,
