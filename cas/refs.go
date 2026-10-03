@@ -333,7 +333,8 @@ func (s *Store) incarnation(id string) (string, bool) {
 	return ident, err == nil
 }
 
-// refNames lists the names of the refs the store holds.
+// refNames lists the names of the refs the store holds: every ref file.
+// The files refs are written through carry a "%" and are no names.
 func (s *Store) refNames() ([]string, error) {
 	ents, err := os.ReadDir(filepath.Join(s.root, refsDir))
 	if errors.Is(err, os.ErrNotExist) {
@@ -344,11 +345,9 @@ func (s *Store) refNames() ([]string, error) {
 	}
 	var out []string
 	for _, e := range ents {
-		n := refName(e.Name())
-		if e.IsDir() || strings.HasPrefix(e.Name(), ".tmp-") || agentsession.ValidRefName(n) != nil {
-			continue
+		if n := refName(e.Name()); !e.IsDir() && agentsession.ValidRefName(n) == nil {
+			out = append(out, n)
 		}
-		out = append(out, n)
 	}
 	sort.Strings(out)
 	return out, nil
@@ -609,10 +608,41 @@ func (s *Store) placeRef(name string, t refVal) error {
 		}
 		return s.objs.fsyncDir(filepath.Dir(path))
 	}
-	if err := s.objs.writeAtomic(path, encodeRefTarget(t)); err != nil {
+	if err := s.writeRefFile(path, encodeRefTarget(t)); err != nil {
 		return fmt.Errorf("cas: ref %s: %w", name, err)
 	}
 	return nil
+}
+
+// refTmp prefixes the temporary files a ref is written through. A ref
+// name cannot hold a "%", which is how a name's "/" is written, so no
+// temporary file is taken for a ref and no ref for a temporary file.
+const refTmp = "%tmp-"
+
+// writeRefFile replaces the file at path with data through a temporary
+// file in its directory, fsynced before the rename and the directory
+// after.
+func (s *Store) writeRefFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, refTmp+"*")
+	if err != nil {
+		return err
+	}
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = s.objs.fsync(tmp.Name(), tmp, syncFile)
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return s.objs.fsyncDir(dir)
 }
 
 var _ agentsession.RefStore = (*Store)(nil)

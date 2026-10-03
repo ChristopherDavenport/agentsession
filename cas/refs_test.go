@@ -555,3 +555,67 @@ func TestRefLogRecordsIdentity(t *testing.T) {
 		t.Errorf("file %q", got)
 	}
 }
+
+func listedRefs(t *testing.T, st *Store, prefix string) []string {
+	t.Helper()
+	var out []string
+	for r, err := range st.ListRefs(context.Background(), prefix) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, r.Name)
+	}
+	return out
+}
+
+// pinnedSession makes a session of three entries and returns it, the
+// pinned entry and the entry after it.
+func pinnedSession(t *testing.T, st *Store, id string) (pin, after string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := st.Create(ctx, agentsession.Header{ID: id}); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, st, id, agentsession.NewItemEntry(openresponses.UserText("root "+id)))
+	pin = mustAppend(t, st, id, agentsession.NewItemEntry(openresponses.UserText("pinned "+id)))
+	after = mustAppend(t, st, id, agentsession.NewItemEntry(openresponses.UserText("after "+id)))
+	return pin, after
+}
+
+// TestRefNamedLikeATempFile: ".tmp-x" is a name a ref may have, so the
+// files refs are written through must not be taken for it, nor it for
+// one of them: it lists, it conflicts with a ref under it, and its pin
+// survives a sweep.
+func TestRefNamedLikeATempFile(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	pin, after := pinnedSession(t, st, "s")
+	if err := st.UpdateRef(ctx, ".tmp-x", agentsession.RefTarget{}, agentsession.RefTarget{Session: "s", Entry: pin}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedRefs(t, st, ""); len(got) != 1 || got[0] != ".tmp-x" {
+		t.Errorf("ListRefs = %v, want [.tmp-x]", got)
+	}
+	for _, n := range []string{".tmp-x/y", ".TMP-x", ".TMP-x/y"} {
+		if err := st.UpdateRef(ctx, n, agentsession.RefTarget{}, refTarget("s"), ""); !errors.Is(err, agentsession.ErrRefName) {
+			t.Errorf("UpdateRef(%q): %v, want ErrRefName", n, err)
+		}
+	}
+	if err := st.Delete(ctx, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Sweep(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.present(pin); err != nil || !ok {
+		t.Errorf("the pin of .tmp-x was swept (%v)", err)
+	}
+	if ok, _ := st.present(after); ok {
+		t.Error("the entry past the pin survived")
+	}
+}
+
