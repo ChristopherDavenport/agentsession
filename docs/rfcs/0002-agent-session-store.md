@@ -378,6 +378,10 @@ projection to a file carries none.
   process on the same store. The rules about names hold across
   different refs: a store MUST NOT let two concurrent creations
   admit a ref and a ref under it.
+  The compare-and-swap is by target value, as git's `update-ref` is by
+  object name, so a ref moved away and back (A to B to A) is
+  indistinguishable to a caller holding the old expected value: its
+  update succeeds. A caller that needs more reads the ref log.
 - **A ref names a session the store holds when it is set.** A store
   MUST refuse a next target whose session it does not hold with
   `no such session`, and one whose entry the session does not hold
@@ -398,9 +402,13 @@ projection to a file carries none.
   ref names: the ref is dangling, as when none is held. Subsession IDs
   are derived (RFC 0001), so a deleted ID can recur. The identity is the
   store's: no target carries it, a compare-and-swap compares the session
-  and entry alone, and the ref log records it with each target. Setting
-  a ref to the target it holds, while the session under that ID is
-  another, adopts that session and is an update like any other.
+  and entry alone, and the ref log records it with each target. A store
+  MUST refuse an update whose next target is the target a dangling ref
+  holds, whether its session is missing or another is now under its ID,
+  with `no such session`: a ref is re-adopted by deleting it and
+  setting it again, two updates, each logged, and moving a dangling ref
+  to a different target is allowed. Setting a live ref to the target it
+  holds changes nothing.
 - **Listing is by prefix, in name order.** A store MUST list refs whose
   name begins with a given string, in the byte order of the name, and
   the prefix need not end at a segment boundary. A listing that cannot

@@ -435,9 +435,13 @@ func (m *MemoryStore) UpdateRef(_ context.Context, name string, expected, next R
 			return err
 		}
 	}
-	// Setting a ref to the target it holds changes nothing, unless the
-	// session under that ID is another since: then it adopts it.
-	if cur == next && m.refs.idents[name] == ident {
+	// Setting a ref to the target it holds changes nothing, and is
+	// refused while the session under that ID is another since: a ref
+	// is re-adopted by deleting it and setting it again.
+	if cur == next {
+		if !next.IsZero() && m.refs.idents[name] != "" && m.refs.idents[name] != ident {
+			return fmt.Errorf("%w: ref %s holds %s, which was created again after the ref was set; delete the ref and set it again to adopt the session now there", ErrNoSession, name, next.Session)
+		}
 		return nil
 	}
 	if cur.IsZero() {

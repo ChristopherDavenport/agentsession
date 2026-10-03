@@ -830,17 +830,53 @@ func refsRecreated(t *testing.T, opts Options) {
 	if s.ID() == "reused" {
 		t.Error("SessionFor returned the session created again under the ID")
 	}
-	// Setting the ref to its own target adopts the session now there.
-	if err := rs.UpdateRef(ctx, "r", tgt(s.ID()), tgt("reused"), "adopt"); err != nil {
-		t.Fatalf("adopting: %v", err)
+	// Moving a dangling ref to another target is allowed, as SessionFor
+	// did; and moving it to a session that is now at the target's own ID
+	// is a move to a different incarnation, the one the ref then names.
+	if err := rs.UpdateRef(ctx, "r", tgt(s.ID()), tgt("reused"), "move"); err != nil {
+		t.Fatalf("moving to the session now at the old ID: %v", err)
 	}
 	if got, err := rs.ResolveRef(ctx, "r"); err != nil || got != tgt("reused") {
-		t.Errorf("after adopting: %v, %v", got, err)
+		t.Errorf("after the move: %v, %v", got, err)
 	}
 	if err := rs.UpdateRef(ctx, "r", tgt("reused"), tgt("reused"), "again"); err != nil {
 		t.Fatal(err)
 	}
-	if got := refLog(t, rs, "r"); got[0].Reason != "adopt" {
+	if got := refLog(t, rs, "r"); got[0].Reason != "move" {
 		t.Errorf("setting a ref to what it holds was logged: %+v", got[0])
+	}
+
+	// A dangling ref is not re-adopted by setting it to its own target:
+	// that is refused, naming the session. Adopting the session now
+	// there is two updates, a delete and a create, each logged.
+	if _, err := st.Create(ctx, agentsession.Header{ID: "again", CWD: "/first"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.UpdateRef(ctx, "r2", agentsession.RefTarget{}, tgt("again"), "set"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Delete(ctx, "again"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "again", CWD: "/second"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.UpdateRef(ctx, "r2", tgt("again"), tgt("again"), "adopt"); !errors.Is(err, agentsession.ErrNoSession) {
+		t.Fatalf("setting a dangling ref to its own target: %v, want ErrNoSession", err)
+	}
+	if got := refLog(t, rs, "r2"); len(got) != 1 {
+		t.Errorf("a refused update was logged: %+v", got)
+	}
+	if err := rs.UpdateRef(ctx, "r2", tgt("again"), agentsession.RefTarget{}, "drop"); err != nil {
+		t.Fatalf("deleting the dangling ref: %v", err)
+	}
+	if err := rs.UpdateRef(ctx, "r2", agentsession.RefTarget{}, tgt("again"), "adopt"); err != nil {
+		t.Fatalf("setting it again: %v", err)
+	}
+	if got, err := rs.ResolveRef(ctx, "r2"); err != nil || got != tgt("again") {
+		t.Errorf("after the two steps: %v, %v", got, err)
+	}
+	if got := refLog(t, rs, "r2"); len(got) != 3 || got[0].Reason != "adopt" || got[1].Reason != "drop" {
+		t.Errorf("log of the two steps: %+v", got)
 	}
 }

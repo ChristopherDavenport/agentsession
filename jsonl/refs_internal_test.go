@@ -282,6 +282,9 @@ func TestRefRecordedAdoptionIsSeen(t *testing.T) {
 	if got, err := st.ResolveRef(ctx, "r"); err != nil || got != rt("reused") {
 		t.Fatalf("ResolveRef = %v, %v; want it resolving", got, err)
 	}
+	if err := st.UpdateRef(ctx, "r", rt("reused"), rt("reused"), "same"); err != nil {
+		t.Fatalf("setting the ref to the target it holds: %v", err)
+	}
 	if err := st.UpdateRef(ctx, "r", rt("reused"), rt(other), "move"); err != nil {
 		t.Fatal(err)
 	}

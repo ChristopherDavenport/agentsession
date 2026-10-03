@@ -101,9 +101,13 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 			}
 		}
 	}
-	// Setting a ref to the target it holds changes nothing, unless the
-	// session under that ID is another since: then it adopts it.
-	if cur == next && curIdent == nextIdent {
+	// Setting a ref to the target it holds changes nothing, and is
+	// refused while the session under that ID is another since: a ref
+	// is re-adopted by deleting it and setting it again.
+	if cur == next {
+		if !next.IsZero() && curIdent != "" && curIdent != nextIdent {
+			return fmt.Errorf("%w: ref %s holds %s, which was created again after the ref was set; delete the ref and set it again to adopt the session now there", agentsession.ErrNoSession, name, next.Session)
+		}
 		return nil
 	}
 	now := stamp(time.Now())

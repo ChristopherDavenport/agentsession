@@ -30,7 +30,13 @@ versions may break the API.
   stale expected value fails with `ErrRefMoved`, whose `RefMovedError`
   carries the target the ref holds. A next target must be a session the
   store holds and an entry of it. A ref outlives its session: resolving
-  it reports `ErrNoSession` with the target still returned. Names are
+  it reports `ErrNoSession` with the target still returned, and so it
+  does when another session was created under the ID since, which each
+  store tells by the hash of the session's header (`HeaderIdent`) it
+  recorded when the ref was set. Setting a dangling ref to its own
+  target is refused; adopting the session now there is a delete and a
+  create. A compare-and-swap is by value, so a ref moved away and back
+  is not told apart by a caller holding the old expected value. Names are
   checked by `ValidRefName` and, against the refs a store holds, by
   `RefConflict`: no ref under a ref, and none differing only in case
   from another; no segment ends in a dot or is a Windows device name. Every update is logged, with its time and a reason, and

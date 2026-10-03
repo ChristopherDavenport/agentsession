@@ -219,8 +219,17 @@ Where building the plan decided what it left open or went another way:
   Targets stay `Session` and `Entry`, and a compare-and-swap compares
   those alone; the identity is in each store's ref (a cas ref file's
   third field, a sqlite `refs.ident` column, jsonl's `ident`, memory's
-  map) and in the ref log. Setting a ref to the target it holds adopts a
-  session created again, and is logged.
+  map) and in the ref log. Setting a ref to the target it holds is a
+  no-op while it resolves and is refused with `ErrNoSession` while it
+  dangles, with the session missing or another under its ID; a ref is
+  re-adopted by deleting it and setting it again, two logged updates,
+  and moving a dangling ref to a different target is allowed, which is
+  `SessionFor`'s path. The compare-and-swap is by value, so a ref moved
+  away and back is not told apart by a caller holding the old expected
+  value; the ref log is where to look. cas compares the identity as
+  well as the target when it decides whether the file lags the log's
+  last record (a side with no identity matches any), so a recorded
+  change of incarnation is seen and finished like any other.
 - **An update that changes nothing is not logged.** It still fails if
   the held target is not the expected one.
 - **The ref log is written ahead.** The plan said rename, then record,

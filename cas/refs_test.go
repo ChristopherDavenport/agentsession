@@ -757,6 +757,12 @@ func TestRefRecordedAdoptionIsSeen(t *testing.T) {
 	if _, err := ro.ResolveRef(ctx, "r"); err != nil {
 		t.Errorf("read-only ResolveRef: %v", err)
 	}
+	// The ref holds the new incarnation, so setting it to its own target
+	// is the no-op it is for any ref, and not the refusal a dangling ref
+	// gets; it also needs the file to say so, which the update finishes.
+	if err := st.UpdateRef(ctx, "r", target, target, "same"); err != nil {
+		t.Fatalf("setting the ref to the target it holds: %v", err)
+	}
 	if err := st.UpdateRef(ctx, "r", target, refTarget(other), "move"); err != nil {
 		t.Fatal(err)
 	}
