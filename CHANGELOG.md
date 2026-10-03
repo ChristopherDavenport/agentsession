@@ -61,6 +61,10 @@ versions may break the API.
   takes a session in a cas store takes `ref:<name>`. RFC 0002 gets a
   *Refs* section after *Head* and a paragraph in *Exchange between
   stores*; RFC 0001 does not change. The plan is `docs/plans/refs.md`.
+  **Breaking, before v1.0.0:** `cas.Store.Fetch` gained a variadic
+  parameter, `Fetch(ctx, from, id, refs ...RefPush)`. A call compiles as
+  before, but the function's type changed, so a method value or an
+  interface that names the old signature no longer matches.
   (#129)
 - **`Follow`: receive a session's entries as the store accepts them.**
   `Follower` is a new interface beside `Reader`: `Follow(ctx, id,
