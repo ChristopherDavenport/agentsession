@@ -61,6 +61,23 @@ CREATE TABLE IF NOT EXISTS holders (
 	since      TEXT    NOT NULL,
 	heartbeat  TEXT    NOT NULL
 ) STRICT;
+CREATE TABLE IF NOT EXISTS refs (
+	name       TEXT PRIMARY KEY,
+	session    TEXT NOT NULL,
+	entry      TEXT NOT NULL DEFAULT '',
+	updated_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS ref_log (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	name        TEXT NOT NULL,
+	old_session TEXT NOT NULL DEFAULT '',
+	old_entry   TEXT NOT NULL DEFAULT '',
+	new_session TEXT NOT NULL DEFAULT '',
+	new_entry   TEXT NOT NULL DEFAULT '',
+	at          TEXT NOT NULL,
+	reason      TEXT NOT NULL DEFAULT ''
+) STRICT;
+CREATE INDEX IF NOT EXISTS ref_log_name ON ref_log(name, id);
 `
 
 // ErrSessionLocked is returned by Create, Open and Append when another
@@ -206,6 +223,8 @@ var ownColumns = []struct {
 	{"sessions", []string{"id", "created_at", "updated_at", "cwd", "parent_session", "header"}},
 	{"entries", []string{"session_id", "seq", "id", "parent", "type", "line"}},
 	{"holders", []string{"session_id", "pid", "host", "token", "since", "heartbeat"}},
+	{"refs", []string{"name", "session", "entry", "updated_at"}},
+	{"ref_log", []string{"id", "name", "old_session", "old_entry", "new_session", "new_entry", "at", "reason"}},
 }
 
 // applySchema checks the tables already in the database, creates the
@@ -1020,6 +1039,7 @@ func isConstraint(err error) bool {
 }
 
 var (
-	_ agentsession.Store  = (*Store)(nil)
-	_ agentsession.Reader = (*Store)(nil)
+	_ agentsession.Store    = (*Store)(nil)
+	_ agentsession.Reader   = (*Store)(nil)
+	_ agentsession.RefStore = (*Store)(nil)
 )
