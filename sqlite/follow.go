@@ -2,9 +2,7 @@ package sqlite
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"iter"
@@ -88,13 +86,7 @@ func identOf(header string) (string, error) {
 	if err := h.UnmarshalJSON([]byte(header)); err != nil {
 		return "", err
 	}
-	h.Format = ""
-	b, err := h.MarshalJSON()
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:8]), nil
+	return agentsession.HeaderIdent(h)
 }
 
 func (src *source) gone() error {

@@ -113,7 +113,8 @@ and then moves the ref from the old session to the successor.
 
 ## Per store
 
-- **cas:**
+- **cas** (the layout changed in implementation; see Decided in
+  implementation):
   - `refs/<name>` is a file holding the target, written to `tmp/` and
     renamed into place.
   - A compare-and-swap is taken under `locks/refs/<name>` (flock, as a
@@ -192,3 +193,100 @@ and then moves the ref from the old session to the successor.
 - **Name length and case.** File-based stores on case-insensitive file
   systems fold `A` and `a`. The plan refuses names that differ only in
   case, so every store behaves alike.
+
+## Decided in implementation
+
+Where building the plan decided what it left open or went another way:
+
+- **Names.** At most 200 bytes. The case rule covers every prefix at a
+  segment boundary, not only the whole name: `A/x` is refused beside
+  `a/y`, since a directory on a case-folding file system would hold
+  both. `ValidRefName` and `ValidRefPrefix` check a name alone, and
+  `RefConflict` checks it against the refs a store holds; a segment may
+  not end in a dot or be a Windows device name (`CON`, `NUL`, `COM1`,
+  `lpt9.x`), so no store holds a name another system cannot; every store
+  calls them, so the rule is one piece of code. A bad name is
+  `ErrRefName` from reads and writes alike.
+- **A dangling ref resolves with its target, and names an incarnation.**
+  `ResolveRef` returns the target and an error wrapping `ErrNoSession`,
+  so a caller can see which session was lost and move the ref by
+  compare-and-swap from it. The plan's guarantee that a ref never
+  reaches a session created later under a deleted ID stands: subsession
+  IDs are derived, so reuse is real. Each store records, when a ref is
+  set, `agentsession.HeaderIdent` of the target session (the hash of its
+  header without `format`, the one Follow's cursors use), and resolution
+  compares it with the session now under the ID; a mismatch is dangling.
+  Targets stay `Session` and `Entry`, and a compare-and-swap compares
+  those alone; the identity is in each store's ref (a cas ref file's
+  third field, a sqlite `refs.ident` column, jsonl's `ident`, memory's
+  map) and in the ref log. Setting a ref to the target it holds is a
+  no-op while it resolves and is refused with `ErrNoSession` while it
+  dangles, with the session missing or another under its ID; a ref is
+  re-adopted by deleting it and setting it again, two logged updates,
+  and moving a dangling ref to a different target is allowed, which is
+  `SessionFor`'s path. The compare-and-swap is by value, so a ref moved
+  away and back is not told apart by a caller holding the old expected
+  value; the ref log is where to look. cas compares the identity as
+  well as the target when it decides whether the file lags the log's
+  last record (a side with no identity matches any), so a recorded
+  change of incarnation is seen and finished like any other.
+- **An update that changes nothing is not logged.** It still fails if
+  the held target is not the expected one.
+- **The ref log is written ahead.** The plan said rename, then record,
+  and also that a record without its rename is completed. Only a log
+  written first honors the RFC's "a store MUST NOT accept an update it
+  cannot log", so cas appends and fsyncs the record, then renames, and
+  cuts the record back if the rename fails. The recovery rules: a last
+  record that moves the file's target is finished by the next update, and
+  a read already sees it, since the record is the commit; a file the last
+  record does not account for is logged, as a "recovered" record. A read
+  never writes, so a read-only store sees the recorded target. `jsonl`
+  does the same with a sequence number in `refs.json`; it mends the
+  record-without-file direction only. `sqlite` has one transaction.
+- **cas layout is flat.** `refs/<name>`, `logs/refs/<name>` and
+  `reflocks/<name>` with `/` written `%`, a character no name has, and
+  `refs.lock` for creations. A tree would let a deleted ref's log, or an
+  empty directory, collide with a later ref under or over that name, and
+  `locks/refs/` would collide with a session named `refs`. A creation
+  takes `refs.lock` and then the ref's lock, since only it looks at every
+  name; other updates take the ref's lock alone. Locks wait, where a
+  session's hold is refused, since an update holds one for a few file
+  writes.
+- **Pinned entries.** The entry must be one the session holds: its base,
+  one of its own, or one on its prefix (`ErrNoEntry`). A pin is part of
+  the value compared. `Sweep` keeps the pinned entry and the path above
+  it, as it keeps a base, so a pin outlives its session; a pinning update
+  takes the sweep's shared lock.
+- **`ResolveCurrent` is the open question's answer.** `ResolveRef` stays
+  literal. `ResolveCurrent(ctx, store, name)` returns the session at the
+  end of the `continued_in` chain and whether it walked, reading through
+  `Reader` where the store has one, and fails on a cycle.
+  `ContinueRef` returns the successor together with `ErrRefMoved` when the
+  ref moved while the continuation ran.
+- **`SessionFor`** replaces a dangling ref by compare-and-swap from the
+  dangling target, deletes the session it created on every path that
+  does not return it (including a loser refused `ErrSessionLocked`
+  because the winner is held by another store), and returns that error
+  to the loser: a second daemon is told the session is in use.
+- **Exchange.** `PushOptions.Refs` and `Fetch(ctx, from, id, refs...)`
+  take `RefPush{Name, Expected}`. The name must exist at the sender and
+  point at the exchanged session, or the call fails before anything is
+  sent. The target pushed is the sender's, pin included. A refusal for
+  the expected value, the name or the pinned entry is reported in
+  `Exchange.Refs` and undoes nothing; other errors fail the call.
+  Refs are applied after the head and before a handover clears the
+  sender's mark, and not at all after a failed handover. A mirror
+  receiver still moves a ref, which is its own state.
+- **CLI.** `refs` and `ref` open cas and jsonl roots read-only; sqlite is
+  a module of its own, as for `list`. `ref:<name>` is read wherever a
+  command takes `<cas-root> <id>`, which is `show`, `verify`, `export`
+  and `show -f`; `repair` does not. A pin is shown on stderr and is not
+  made the default `-leaf`.
+- **Tests that needed a hook.** A missing per-ref lock, and a missing
+  creation lock, were not caught by racing goroutines or processes: the
+  windows are too small. `refStep` in cas and jsonl lets a test hold one
+  update in the middle while another arrives. The race tests stay, since
+  they are the scenario, and `SessionForLoser` makes the loser's path
+  certain, which a plain race on the memory store did not.
+- **Not done here:** dexclaw (step 6, another repository), a multi-process
+  test for jsonl, refs over `Follow`, and pruning of ref logs.

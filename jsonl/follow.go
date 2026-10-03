@@ -106,14 +106,12 @@ func headerIdent(line []byte) (raw, ident string, err error) {
 	if err := h.UnmarshalJSON(line); err != nil {
 		return "", "", err
 	}
-	h.Format = ""
-	b, err := h.MarshalJSON()
+	ident, err = agentsession.HeaderIdent(h)
 	if err != nil {
 		return "", "", err
 	}
 	r := sha256.Sum256(line)
-	i := sha256.Sum256(b)
-	return hex.EncodeToString(r[:8]), hex.EncodeToString(i[:8]), nil
+	return hex.EncodeToString(r[:8]), ident, nil
 }
 
 func (src *source) gone() error {

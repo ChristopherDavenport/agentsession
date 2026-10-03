@@ -3,9 +3,6 @@ package cas
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -122,13 +119,9 @@ func (src *source) identity() (pos, os.FileInfo, error) {
 	if err != nil {
 		return p, nil, err
 	}
-	hdr.Format = ""
-	b, err := json.Marshal(hdr)
-	if err != nil {
+	if p.ident, err = agentsession.HeaderIdent(hdr); err != nil {
 		return p, nil, err
 	}
-	sum := sha256.Sum256(b)
-	p.ident = hex.EncodeToString(sum[:8])
 	fi, err := os.Stat(filepath.Join(src.dir, logName))
 	if errors.Is(err, os.ErrNotExist) {
 		p.log = "-"

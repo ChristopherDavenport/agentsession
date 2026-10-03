@@ -1,11 +1,14 @@
 package agentsession_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/storetest"
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 func TestMemoryStore(t *testing.T) {
@@ -63,5 +66,40 @@ func TestListFilterMatches(t *testing.T) {
 				t.Errorf("Keep = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestMemoryStoreKeepsItsOwnEntry: an entry appended through the store
+// is filled as Append fills it, and the store holds a copy, so writing
+// to the caller's entry afterwards changes nothing the store reads back,
+// and a follower reading it races with no caller.
+func TestMemoryStoreKeepsItsOwnEntry(t *testing.T) {
+	ctx := context.Background()
+	st := agentsession.NewMemoryStore()
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := agentsession.NewItemEntry(openresponses.UserText("held"))
+	id, err := st.Append(ctx, s.ID(), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.ID != id || e.Timestamp.IsZero() {
+		t.Fatalf("the caller's entry is not filled: id %q (want %q), ts %v", e.ID, id, e.Timestamp)
+	}
+	e.Item = openresponses.UserText("changed afterwards")
+	e.ID = "sha256:caller"
+	got, err := st.Read(ctx, s.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, ok := got.Entry(id)
+	if !ok {
+		t.Fatalf("the store does not hold %s", id)
+	}
+	b, _ := agentsession.MarshalEntry(held)
+	if bytes.Contains(b, []byte("changed afterwards")) {
+		t.Errorf("the store's entry changed with the caller's: %s", b)
 	}
 }

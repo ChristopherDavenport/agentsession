@@ -226,3 +226,11 @@ func lockPoll(ctx context.Context, path string, how int, longest time.Duration) 
 		wait = min(2*wait, longest)
 	}
 }
+
+// lockBlocking takes an exclusive lock at path, waiting for its holder
+// until ctx ends. A ref's lock is held for one update, a few file
+// writes and an fsync, so a caller waits for it where a session's
+// holder is refused.
+func lockBlocking(ctx context.Context, path string) (*dirLock, error) {
+	return lockPoll(ctx, path, syscall.LOCK_EX, 5*time.Millisecond)
+}
