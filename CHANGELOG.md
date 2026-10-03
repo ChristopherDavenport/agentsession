@@ -7,6 +7,17 @@ versions may break the API.
 
 ## Unreleased
 
+- **Fixed: the `jsonl` store's takeover of a stale lock was not atomic,
+  so two processes could hold one session.** A lock left by a process
+  that no longer runs is taken over by reading its holder, removing the
+  file and creating a new one; with two takers, one that had read the
+  stale lock could remove the fresh one the other had just created, and
+  both then held the session and appended to it. The takers of a
+  directory's locks now take turns through an flock on
+  `.agentsession-guard` in it, held for that decision alone and dropped
+  by the kernel with its process, so what a taker removes is the lock it
+  read. The refs file's lock is taken the same way. On a platform
+  without flock the takeover is as it was.
 - **Refs: names that point to sessions, moved by compare-and-swap.** A
   harness names its conversations by a channel, a ticket or a user, and
   the store had nowhere to keep the name, so each harness kept a map

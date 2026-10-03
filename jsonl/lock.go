@@ -37,6 +37,13 @@ func lockPath(sessionPath string) string { return sessionPath + ".lock" }
 // produces ErrSessionLocked.
 func acquireLock(sessionPath string, report func(LockInfo)) error {
 	path := lockPath(sessionPath)
+	return guarded(path, func() error { return takeLock(path, report) })
+}
+
+// takeLock is acquireLock's decision, made with the directory's takers
+// held in turn: a stale lock is read, removed and replaced by one taker
+// at a time, so what it removes is the lock it read.
+func takeLock(path string, report func(LockInfo)) error {
 	for attempt := 0; attempt < 2; attempt++ {
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
