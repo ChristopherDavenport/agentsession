@@ -321,9 +321,28 @@ func (m *MemoryStore) Append(ctx context.Context, sessionID string, e Entry) (st
 	if err != nil {
 		return "", err
 	}
-	got, err := s.Append(e)
+	// The store keeps an entry of its own. Prepare fills the caller's
+	// entry, its parent, time and ID, as Append does; the session then
+	// takes a copy, so a caller that writes to its entry afterwards, as
+	// a recorder setting the ID it was given does, shares nothing with
+	// what the store holds or what a follower is reading.
+	if _, err := s.Prepare(e); err != nil {
+		return "", err
+	}
+	b, err := MarshalEntry(e)
+	if err != nil {
+		return "", err
+	}
+	own, err := UnmarshalEntry(b)
+	if err != nil {
+		return "", err
+	}
+	r, err := s.Commit(own)
 	m.hub.Notify(sessionID)
-	return got, err
+	if err != nil {
+		return "", err
+	}
+	return r.ID, nil
 }
 
 // List implements Store.

@@ -7,6 +7,12 @@ versions may break the API.
 
 ## Unreleased
 
+- **Fixed: the memory store keeps a copy of each entry appended through
+  it.** It held the caller's entry, so a caller writing to it afterwards,
+  as agentturn's recorder sets the ID it was given, changed what the
+  store held, raced with a `Follow` reading it, and could leave an entry
+  whose ID no longer matched its hash. The caller's entry is still
+  filled, its parent, time and ID, as before.
 - **Fixed: the `jsonl` store's takeover of a stale lock was not atomic,
   so two processes could hold one session.** A lock left by a process
   that no longer runs is taken over by reading its holder, removing the
