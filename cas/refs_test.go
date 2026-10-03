@@ -698,3 +698,70 @@ func TestRefRecordedDeletionIsNone(t *testing.T) {
 		t.Error("a deleted ref still pins its entry through a sweep")
 	}
 }
+
+// TestRefRecordedAdoptionIsSeen: the session under a ref's ID was
+// deleted and created again, and the log records the ref's move to the
+// new incarnation, the same target with another identity, that a crash
+// kept from the rename. The record is the commit: the ref resolves to
+// the session now there, and the next update finishes the rename
+// without logging the move a second time.
+func TestRefRecordedAdoptionIsSeen(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Create(ctx, agentsession.Header{ID: "reused", CWD: "/first"}); err != nil {
+		t.Fatal(err)
+	}
+	other := newRefSession(t, st)
+	target := refTarget("reused")
+	if err := st.UpdateRef(ctx, "r", agentsession.RefTarget{}, target, "set"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Delete(ctx, "reused"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "reused", CWD: "/second"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ResolveRef(ctx, "r"); !errors.Is(err, agentsession.ErrNoSession) {
+		t.Fatalf("setup: ref to a session created again: %v", err)
+	}
+	old, _, err := st.effectiveRef("r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, ok := st.incarnation("reused")
+	if !ok || fresh == old.Ident {
+		t.Fatalf("setup: incarnation %q, ref's %q", fresh, old.Ident)
+	}
+	rec := newRefRecord("r", target, target, time.Now(), "adopt")
+	rec.OldIdent, rec.NewIdent = old.Ident, fresh
+	line, err := rec.encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRaw(t, st, "r", line)
+
+	if got, err := st.ResolveRef(ctx, "r"); err != nil || got != target {
+		t.Fatalf("ResolveRef after the recorded adoption = %v, %v; want %s resolving", got, err, target)
+	}
+	// A read-only store sees the same, and writes nothing.
+	ro, err := Open(st.root, WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	if _, err := ro.ResolveRef(ctx, "r"); err != nil {
+		t.Errorf("read-only ResolveRef: %v", err)
+	}
+	if err := st.UpdateRef(ctx, "r", target, refTarget(other), "move"); err != nil {
+		t.Fatal(err)
+	}
+	log := logOf(t, st, "r")
+	if len(log) != 3 || log[1].Reason != "adopt" {
+		t.Errorf("log %+v, want set, adopt, move once each", log)
+	}
+}

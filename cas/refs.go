@@ -94,6 +94,16 @@ type refVal struct {
 
 func (r refRecord) nextVal() refVal { return refVal{r.next(), r.NewIdent} }
 
+// oldVal is the state a record moved a ref from.
+func (r refRecord) oldVal() refVal { return refVal{r.old(), r.OldIdent} }
+
+// same reports whether two refs hold one target of one incarnation. A
+// side with no identity, a ref or a record written without one, matches
+// any.
+func (v refVal) same(o refVal) bool {
+	return v.RefTarget == o.RefTarget && (v.Ident == "" || o.Ident == "" || v.Ident == o.Ident)
+}
+
 func newRefRecord(name string, old, next agentsession.RefTarget, at time.Time, reason string) refRecord {
 	return refRecord{
 		Op: refOp, Name: name,
@@ -286,8 +296,8 @@ func (s *Store) effectiveRef(name string) (refVal, refTail, error) {
 	if err != nil {
 		return file, tail, err
 	}
-	if tail.last != nil && tail.last.old() == file.RefTarget && tail.last.next() != file.RefTarget {
-		return tail.last.nextVal(), tail, nil
+	if last := tail.last; last != nil && last.oldVal().same(file) && !last.nextVal().same(file) {
+		return last.nextVal(), tail, nil
 	}
 	return file, tail, nil
 }
@@ -565,9 +575,9 @@ func (s *Store) mendRef(name string) (refVal, error) {
 		return file, err
 	}
 	switch last := tail.last; {
-	case last == nil && file.IsZero(), last != nil && last.next() == file.RefTarget:
+	case last == nil && file.IsZero(), last != nil && last.nextVal().same(file):
 		return file, nil
-	case last != nil && last.old() == file.RefTarget:
+	case last != nil && last.oldVal().same(file):
 		// Recorded, not made.
 		return last.nextVal(), s.placeRef(name, last.nextVal())
 	}

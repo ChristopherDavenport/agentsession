@@ -252,3 +252,40 @@ func TestRefLogRecordsIdentity(t *testing.T) {
 		t.Errorf("log lacks the identity: %s", data)
 	}
 }
+
+// TestRefRecordedAdoptionIsSeen: the record of a ref's move to a session
+// created again under its ID, with the file one record behind, resolves
+// to the new incarnation, and the next update finishes the file.
+func TestRefRecordedAdoptionIsSeen(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "reused", CWD: "/first"}); err != nil {
+		t.Fatal(err)
+	}
+	other := newRefSession(t, st)
+	if err := st.UpdateRef(ctx, "r", agentsession.RefTarget{}, rt("reused"), "set"); err != nil {
+		t.Fatal(err)
+	}
+	st.Release("reused")
+	if err := st.Delete(ctx, "reused"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "reused", CWD: "/second"}); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := st.readRefsDoc()
+	fresh, _ := st.incarnation("reused")
+	appendRaw(t, st, recLine(t, refRecord{Seq: doc.Seq + 1, Name: "r", Old: doc.Refs["r"], New: refTarget{Session: "reused", Ident: fresh}, At: time.Now().UTC().Format(time.RFC3339Nano), Reason: "adopt"}))
+	if got, err := st.ResolveRef(ctx, "r"); err != nil || got != rt("reused") {
+		t.Fatalf("ResolveRef = %v, %v; want it resolving", got, err)
+	}
+	if err := st.UpdateRef(ctx, "r", rt("reused"), rt(other), "move"); err != nil {
+		t.Fatal(err)
+	}
+	if log := logOf(t, st, "r"); len(log) != 3 || log[1].Reason != "adopt" {
+		t.Errorf("log %+v, want set, adopt, move once each", log)
+	}
+}
