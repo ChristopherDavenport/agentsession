@@ -384,10 +384,18 @@ projection to a file carries none.
   session is gone is dangling: resolving it reports that the session
   is missing, and still reports the target, so that a caller can see
   which session it was and move or delete the ref by compare-and-swap.
-  A ref names a session by ID and does not pin an incarnation of it, so
-  a session created again under that ID is the one the ref names.
-  Session IDs are generated, so that takes a deliberate creation under
-  the old ID.
+  A ref names one incarnation of a session, not only an ID. A store MUST
+  record, when it sets a ref, an identity of the target session: the
+  hash of its header without `format`, which is all a writer's rewrite
+  of a session changes. Resolving the ref MUST compare it with the
+  session now held under that ID, and a session whose identity differs,
+  one created again under the ID of a deleted session, is no session the
+  ref names: the ref is dangling, as when none is held. Subsession IDs
+  are derived (RFC 0001), so a deleted ID can recur. The identity is the
+  store's: no target carries it, a compare-and-swap compares the session
+  and entry alone, and the ref log records it with each target. Setting
+  a ref to the target it holds, while the session under that ID is
+  another, adopts that session and is an update like any other.
 - **Listing is by prefix, in name order.** A store MUST list refs whose
   name begins with a given string, in the byte order of the name, and
   the prefix need not end at a segment boundary. A listing that cannot

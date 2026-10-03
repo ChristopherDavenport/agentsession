@@ -216,3 +216,28 @@ func TestRefsProcessRace(t *testing.T) {
 		check.Close()
 	}
 }
+
+// TestRefLogRecordsIdentity: ref_log carries the identity of the session
+// each target named, which the store compares and callers never see.
+func TestRefLogRecordsIdentity(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	st, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	s, _ := st.Create(ctx, agentsession.Header{})
+	if err := st.UpdateRef(ctx, "r", agentsession.RefTarget{}, agentsession.RefTarget{Session: s.ID()}, ""); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var ident string
+	if err := db.QueryRow(`SELECT new_ident FROM ref_log WHERE name = 'r'`).Scan(&ident); err != nil || ident == "" {
+		t.Errorf("ref_log new_ident = %q, %v", ident, err)
+	}
+}

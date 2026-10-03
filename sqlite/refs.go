@@ -32,10 +32,10 @@ func (s *Store) ResolveRef(ctx context.Context, name string) (agentsession.RefTa
 	if err := agentsession.ValidRefName(name); err != nil {
 		return agentsession.RefTarget{}, err
 	}
-	var sess, entry string
-	var exists int
-	err := s.r.QueryRowContext(ctx, `SELECT refs.session, refs.entry, EXISTS(SELECT 1 FROM sessions WHERE id = refs.session)
-		FROM refs WHERE refs.name = ?`, name).Scan(&sess, &entry, &exists)
+	var sess, entry, ident string
+	var header sql.NullString
+	err := s.r.QueryRowContext(ctx, `SELECT refs.session, refs.entry, refs.ident, sessions.header
+		FROM refs LEFT JOIN sessions ON sessions.id = refs.session WHERE refs.name = ?`, name).Scan(&sess, &entry, &ident, &header)
 	if errors.Is(err, sql.ErrNoRows) {
 		return agentsession.RefTarget{}, fmt.Errorf("%w: %s", agentsession.ErrNoRef, name)
 	}
@@ -43,8 +43,11 @@ func (s *Store) ResolveRef(ctx context.Context, name string) (agentsession.RefTa
 		return agentsession.RefTarget{}, fmt.Errorf("sqlite: resolve ref: %w", err)
 	}
 	t := target(sess, entry)
-	if exists == 0 {
+	if !header.Valid {
 		return t, fmt.Errorf("%w: %s, which ref %s names", agentsession.ErrNoSession, sess, name)
+	}
+	if now, err := identOf(header.String); err != nil || (ident != "" && now != ident) {
+		return t, fmt.Errorf("%w: %s was created again after ref %s was set", agentsession.ErrNoSession, sess, name)
 	}
 	return t, nil
 }
@@ -63,8 +66,8 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 	}
 	defer tx.Rollback()
 	var cur agentsession.RefTarget
-	var curSession, curEntry string
-	switch err := tx.QueryRowContext(ctx, `SELECT session, entry FROM refs WHERE name = ?`, name).Scan(&curSession, &curEntry); {
+	var curSession, curEntry, curIdent string
+	switch err := tx.QueryRowContext(ctx, `SELECT session, entry, ident FROM refs WHERE name = ?`, name).Scan(&curSession, &curEntry, &curIdent); {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
 		return fmt.Errorf("sqlite: update ref: %w", err)
@@ -74,13 +77,18 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 	if cur != expected {
 		return &agentsession.RefMovedError{Name: name, Current: cur}
 	}
+	var nextIdent string
 	if !next.IsZero() {
 		var one int
-		err := tx.QueryRowContext(ctx, `SELECT 1 FROM sessions WHERE id = ?`, next.Session).Scan(&one)
+		var header string
+		err := tx.QueryRowContext(ctx, `SELECT header FROM sessions WHERE id = ?`, next.Session).Scan(&header)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("%w: %s", agentsession.ErrNoSession, next.Session)
 		}
 		if err != nil {
+			return fmt.Errorf("sqlite: update ref: %w", err)
+		}
+		if nextIdent, err = identOf(header); err != nil {
 			return fmt.Errorf("sqlite: update ref: %w", err)
 		}
 		if next.Entry != "" {
@@ -93,7 +101,9 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 			}
 		}
 	}
-	if cur == next {
+	// Setting a ref to the target it holds changes nothing, unless the
+	// session under that ID is another since: then it adopts it.
+	if cur == next && curIdent == nextIdent {
 		return nil
 	}
 	now := stamp(time.Now())
@@ -119,8 +129,8 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 		if err := agentsession.RefConflict(name, names); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO refs (name, session, entry, updated_at) VALUES (?, ?, ?, ?)`,
-			name, next.Session, next.Entry, now); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO refs (name, session, entry, ident, updated_at) VALUES (?, ?, ?, ?, ?)`,
+			name, next.Session, next.Entry, nextIdent, now); err != nil {
 			return fmt.Errorf("sqlite: update ref: %w", err)
 		}
 	case next.IsZero():
@@ -132,8 +142,8 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 			return err
 		}
 	default:
-		res, err := tx.ExecContext(ctx, `UPDATE refs SET session = ?, entry = ?, updated_at = ? WHERE name = ? AND session = ? AND entry = ?`,
-			next.Session, next.Entry, now, name, cur.Session, cur.Entry)
+		res, err := tx.ExecContext(ctx, `UPDATE refs SET session = ?, entry = ?, ident = ?, updated_at = ? WHERE name = ? AND session = ? AND entry = ?`,
+			next.Session, next.Entry, nextIdent, now, name, cur.Session, cur.Entry)
 		if err != nil {
 			return fmt.Errorf("sqlite: update ref: %w", err)
 		}
@@ -141,8 +151,8 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO ref_log (name, old_session, old_entry, new_session, new_entry, at, reason) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		name, cur.Session, cur.Entry, next.Session, next.Entry, now, reason); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO ref_log (name, old_session, old_entry, new_session, new_entry, old_ident, new_ident, at, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		name, cur.Session, cur.Entry, next.Session, next.Entry, curIdent, nextIdent, now, reason); err != nil {
 		return fmt.Errorf("sqlite: update ref: log: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

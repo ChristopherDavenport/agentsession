@@ -65,7 +65,10 @@ func refFileHolds(t *testing.T, st *Store, name string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return strings.TrimSpace(string(data))
+	if f := strings.Fields(string(data)); len(f) > 0 {
+		return f[0]
+	}
+	return ""
 }
 
 // TestRefCrashRecordWithoutRename is a crash after the log record and
@@ -135,7 +138,7 @@ func TestRefCrashRenameWithoutRecord(t *testing.T) {
 	if err := st.UpdateRef(ctx, "r", agentsession.RefTarget{}, refTarget(a), "one"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.placeRef("r", refTarget(b)); err != nil {
+	if err := st.placeRef("r", refVal{RefTarget: refTarget(b)}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := st.ResolveRef(ctx, "r"); err != nil || got != refTarget(b) {
@@ -152,7 +155,7 @@ func TestRefCrashRenameWithoutRecord(t *testing.T) {
 		t.Errorf("recovery record %+v, want a to b, recovered", rec)
 	}
 	// A ref created and never logged is logged too.
-	if err := st.placeRef("fresh", refTarget(a)); err != nil {
+	if err := st.placeRef("fresh", refVal{RefTarget: refTarget(a)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.UpdateRef(ctx, "fresh", refTarget(a), refTarget(c), ""); err != nil {
@@ -527,5 +530,28 @@ func TestRefCreationsTakeTurns(t *testing.T) {
 	}
 	if err := <-second; !errors.Is(err, agentsession.ErrRefName) {
 		t.Errorf("the creation under a ref: %v, want ErrRefName", err)
+	}
+}
+
+// TestRefLogRecordsIdentity: the ref log carries the identity of the
+// session each target named, which the store compares and callers never
+// see.
+func TestRefLogRecordsIdentity(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	a := newRefSession(t, st)
+	if err := st.UpdateRef(ctx, "r", agentsession.RefTarget{}, refTarget(a), ""); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(st.refLogPath("r"))
+	if !strings.Contains(string(data), `"new_ident":"`) {
+		t.Errorf("log lacks the identity: %s", data)
+	}
+	if got := refFileHolds(t, st, "r"); got != a {
+		t.Errorf("file %q", got)
 	}
 }

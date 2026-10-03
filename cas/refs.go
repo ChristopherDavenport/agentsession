@@ -68,8 +68,13 @@ type refRecord struct {
 	OldEntry   string `json:"old_entry,omitempty"`
 	NewSession string `json:"new_session,omitempty"`
 	NewEntry   string `json:"new_entry,omitempty"`
-	At         string `json:"at"`
-	Reason     string `json:"reason,omitempty"`
+	// OldIdent and NewIdent are the targets' sessions' HeaderIdent when
+	// each was set, which the store compares at resolution and no
+	// caller sees.
+	OldIdent string `json:"old_ident,omitempty"`
+	NewIdent string `json:"new_ident,omitempty"`
+	At       string `json:"at"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 func (r refRecord) old() agentsession.RefTarget {
@@ -79,6 +84,15 @@ func (r refRecord) old() agentsession.RefTarget {
 func (r refRecord) next() agentsession.RefTarget {
 	return agentsession.RefTarget{Session: r.NewSession, Entry: r.NewEntry}
 }
+
+// refVal is a ref's target with the identity of its session's
+// incarnation, which only the store keeps and compares.
+type refVal struct {
+	agentsession.RefTarget
+	Ident string
+}
+
+func (r refRecord) nextVal() refVal { return refVal{r.next(), r.NewIdent} }
 
 func newRefRecord(name string, old, next agentsession.RefTarget, at time.Time, reason string) refRecord {
 	return refRecord{
@@ -141,32 +155,48 @@ func (r refRecord) update() agentsession.RefUpdate {
 	return agentsession.RefUpdate{Name: r.Name, Old: r.old(), New: r.next(), Time: at, Reason: r.Reason}
 }
 
-func encodeRefTarget(t agentsession.RefTarget) []byte {
-	if t.Entry == "" {
-		return []byte(t.Session + "\n")
-	}
-	return []byte(t.Session + " " + t.Entry + "\n")
+// encodeRefTarget renders a ref file: the session, the pinned entry or
+// "-", and the incarnation's identity or "-", separated by spaces.
+func encodeRefTarget(v refVal) []byte {
+	return []byte(v.Session + " " + orDashRef(v.Entry) + " " + orDashRef(v.Ident) + "\n")
 }
 
-func decodeRefTarget(data []byte) (agentsession.RefTarget, error) {
-	f := strings.Fields(string(data))
-	switch {
-	case len(f) == 1 && validSessionID(f[0]):
-		return agentsession.RefTarget{Session: f[0]}, nil
-	case len(f) == 2 && validSessionID(f[0]) && agentsession.ValidHash(f[1]):
-		return agentsession.RefTarget{Session: f[0], Entry: f[1]}, nil
+func orDashRef(s string) string {
+	if s == "" {
+		return "-"
 	}
-	return agentsession.RefTarget{}, fmt.Errorf("%w: ref file holds %q", ErrCorrupt, strings.TrimSpace(string(data)))
+	return s
+}
+
+func decodeRefTarget(data []byte) (refVal, error) {
+	f := strings.Fields(string(data))
+	bad := func() (refVal, error) {
+		return refVal{}, fmt.Errorf("%w: ref file holds %q", ErrCorrupt, strings.TrimSpace(string(data)))
+	}
+	if len(f) < 1 || len(f) > 3 || !validSessionID(f[0]) {
+		return bad()
+	}
+	v := refVal{RefTarget: agentsession.RefTarget{Session: f[0]}}
+	if len(f) > 1 && f[1] != "-" {
+		if !agentsession.ValidHash(f[1]) {
+			return bad()
+		}
+		v.Entry = f[1]
+	}
+	if len(f) > 2 && f[2] != "-" {
+		v.Ident = f[2]
+	}
+	return v, nil
 }
 
 // readRefFile reads a ref's file: the zero target when there is none.
-func (s *Store) readRefFile(name string) (agentsession.RefTarget, error) {
+func (s *Store) readRefFile(name string) (refVal, error) {
 	data, err := os.ReadFile(filepath.Join(s.root, refsDir, refFile(name)))
 	if errors.Is(err, os.ErrNotExist) {
-		return agentsession.RefTarget{}, nil
+		return refVal{}, nil
 	}
 	if err != nil {
-		return agentsession.RefTarget{}, fmt.Errorf("cas: ref %s: %w", name, err)
+		return refVal{}, fmt.Errorf("cas: ref %s: %w", name, err)
 	}
 	t, err := decodeRefTarget(data)
 	if err != nil {
@@ -247,7 +277,7 @@ func (s *Store) readRefTail(name string) (refTail, error) {
 // read first. When the log's last record moves the target the file
 // holds, the record is the update's commit and the file lags it, so
 // the record's target is the ref's.
-func (s *Store) effectiveRef(name string) (agentsession.RefTarget, refTail, error) {
+func (s *Store) effectiveRef(name string) (refVal, refTail, error) {
 	file, err := s.readRefFile(name)
 	if err != nil {
 		return file, refTail{}, err
@@ -256,8 +286,8 @@ func (s *Store) effectiveRef(name string) (agentsession.RefTarget, refTail, erro
 	if err != nil {
 		return file, tail, err
 	}
-	if tail.last != nil && tail.last.old() == file && tail.last.next() != file {
-		return tail.last.next(), tail, nil
+	if tail.last != nil && tail.last.old() == file.RefTarget && tail.last.next() != file.RefTarget {
+		return tail.last.nextVal(), tail, nil
 	}
 	return file, tail, nil
 }
@@ -270,26 +300,37 @@ func (s *Store) ResolveRef(ctx context.Context, name string) (agentsession.RefTa
 	if err := ctx.Err(); err != nil {
 		return agentsession.RefTarget{}, err
 	}
-	t, _, err := s.effectiveRef(name)
+	v, _, err := s.effectiveRef(name)
 	if err != nil {
 		return agentsession.RefTarget{}, err
 	}
+	t := v.RefTarget
 	if t.IsZero() {
 		return t, fmt.Errorf("%w: %s", agentsession.ErrNoRef, name)
 	}
-	if !s.sessionExists(t.Session) {
+	ident, ok := s.incarnation(t.Session)
+	if !ok {
 		return t, fmt.Errorf("%w: %s, which ref %s names", agentsession.ErrNoSession, t.Session, name)
+	}
+	if v.Ident != "" && ident != v.Ident {
+		return t, fmt.Errorf("%w: %s was created again after ref %s was set", agentsession.ErrNoSession, t.Session, name)
 	}
 	return t, nil
 }
 
-func (s *Store) sessionExists(id string) bool {
+// incarnation is the identity of the session now under id, and false
+// when none is.
+func (s *Store) incarnation(id string) (string, bool) {
 	dir, err := s.sessionDir(id)
 	if err != nil {
-		return false
+		return "", false
 	}
-	_, err = os.Stat(filepath.Join(dir, "header"))
-	return err == nil
+	h, err := readHeader(dir)
+	if err != nil {
+		return "", false
+	}
+	ident, err := agentsession.HeaderIdent(h)
+	return ident, err == nil
 }
 
 // refNames lists the names of the refs the store holds.
@@ -333,15 +374,15 @@ func (s *Store) ListRefs(ctx context.Context, prefix string) iter.Seq2[agentsess
 				yield(agentsession.Ref{}, err)
 				return
 			}
-			t, _, err := s.effectiveRef(n)
+			v, _, err := s.effectiveRef(n)
 			if err != nil {
 				yield(agentsession.Ref{}, err)
 				return
 			}
-			if t.IsZero() {
+			if v.IsZero() {
 				continue // deleted since the directory was read
 			}
-			if !yield(agentsession.Ref{Name: n, Target: t}, nil) {
+			if !yield(agentsession.Ref{Name: n, Target: v.RefTarget}, nil) {
 				return
 			}
 		}
@@ -437,11 +478,13 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 		return err
 	}
 	refStep(name, "read")
-	if cur != expected {
-		return &agentsession.RefMovedError{Name: name, Current: cur}
+	if cur.RefTarget != expected {
+		return &agentsession.RefMovedError{Name: name, Current: cur.RefTarget}
 	}
+	var nextIdent string
 	if !next.IsZero() {
-		if !s.sessionExists(next.Session) {
+		var ok bool
+		if nextIdent, ok = s.incarnation(next.Session); !ok {
 			return fmt.Errorf("%w: %s", agentsession.ErrNoSession, next.Session)
 		}
 		if next.Entry != "" {
@@ -454,7 +497,9 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 			}
 		}
 	}
-	if cur == next {
+	// Setting a ref to the target it holds changes nothing, unless the
+	// session under that ID is another since: then it adopts it.
+	if cur.RefTarget == next && cur.Ident == nextIdent {
 		return nil
 	}
 	if cur.IsZero() {
@@ -467,7 +512,8 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 		}
 	}
 	refStep(name, "checked")
-	rec := newRefRecord(name, cur, next, time.Now(), reason)
+	rec := newRefRecord(name, cur.RefTarget, next, time.Now(), reason)
+	rec.OldIdent, rec.NewIdent = cur.Ident, nextIdent
 	tail, err := s.readRefTail(name)
 	if err != nil {
 		return err
@@ -475,7 +521,7 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 	if err := s.appendRefRecord(name, tail, rec); err != nil {
 		return err
 	}
-	if err := s.placeRef(name, next); err != nil {
+	if err := s.placeRef(name, refVal{next, nextIdent}); err != nil {
 		// The record is cut back, so an update that failed is not one
 		// the log says was made; where that fails too, the next update
 		// finishes what the record says.
@@ -493,7 +539,7 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 // recorded and not made, and is made. A file the last record does not
 // account for is an update that was made and not recorded, and is
 // recorded.
-func (s *Store) mendRef(name string) (agentsession.RefTarget, error) {
+func (s *Store) mendRef(name string) (refVal, error) {
 	file, err := s.readRefFile(name)
 	if err != nil {
 		return file, err
@@ -503,17 +549,18 @@ func (s *Store) mendRef(name string) (agentsession.RefTarget, error) {
 		return file, err
 	}
 	switch last := tail.last; {
-	case last == nil && file.IsZero(), last != nil && last.next() == file:
+	case last == nil && file.IsZero(), last != nil && last.next() == file.RefTarget:
 		return file, nil
-	case last != nil && last.old() == file:
+	case last != nil && last.old() == file.RefTarget:
 		// Recorded, not made.
-		return last.next(), s.placeRef(name, last.next())
+		return last.nextVal(), s.placeRef(name, last.nextVal())
 	}
-	var from agentsession.RefTarget
+	var from refVal
 	if tail.last != nil {
-		from = tail.last.next()
+		from = tail.last.nextVal()
 	}
-	rec := newRefRecord(name, from, file, time.Now(), "recovered: the ref changed with no record of it")
+	rec := newRefRecord(name, from.RefTarget, file.RefTarget, time.Now(), "recovered: the ref changed with no record of it")
+	rec.OldIdent, rec.NewIdent = from.Ident, file.Ident
 	return file, s.appendRefRecord(name, tail, rec)
 }
 
@@ -554,7 +601,7 @@ func (s *Store) appendRefRecord(name string, tail refTail, rec refRecord) error 
 
 // placeRef makes the ref file hold t, durably: replaced by rename, or
 // removed for none.
-func (s *Store) placeRef(name string, t agentsession.RefTarget) error {
+func (s *Store) placeRef(name string, t refVal) error {
 	path := filepath.Join(s.root, refsDir, refFile(name))
 	if t.IsZero() {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {

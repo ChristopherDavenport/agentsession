@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -232,5 +233,22 @@ func TestRefUpdatesTakeTurns(t *testing.T) {
 	var moved *agentsession.RefMovedError
 	if err := <-second; !errors.As(err, &moved) || moved.Current != rt(a) {
 		t.Errorf("the second update: %v, want ErrRefMoved holding %s", err, a)
+	}
+}
+
+// TestRefLogRecordsIdentity: refs.log carries the identity of the
+// session each target named.
+func TestRefLogRecordsIdentity(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newRefSession(t, st)
+	if err := st.UpdateRef(context.Background(), "r", agentsession.RefTarget{}, rt(a), ""); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(st.refLogPath())
+	if !strings.Contains(string(data), `"ident":"`) {
+		t.Errorf("log lacks the identity: %s", data)
 	}
 }

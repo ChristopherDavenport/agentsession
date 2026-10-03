@@ -29,6 +29,7 @@ func testRefs(t *testing.T, opts Options) {
 	t.Run("NameRace", func(t *testing.T) { refsNameRace(t, opts) })
 	t.Run("Target", func(t *testing.T) { refsTarget(t, opts) })
 	t.Run("Dangling", func(t *testing.T) { refsDangling(t, opts) })
+	t.Run("Recreated", func(t *testing.T) { refsRecreated(t, opts) })
 	t.Run("List", func(t *testing.T) { refsList(t, opts) })
 	t.Run("Log", func(t *testing.T) { refsLog(t, opts) })
 	t.Run("SecondStore", func(t *testing.T) { refsSecond(t, opts) })
@@ -784,5 +785,61 @@ func refsSessionForLoser(t *testing.T, opts Options) {
 	}
 	if n := countSessions(t, st); n != 1 {
 		t.Errorf("%d sessions after the loser, want 1: its own was not deleted", n)
+	}
+}
+
+// refsRecreated: a session deleted and created again under its ID, with
+// another header, is not the session the ref was set to. The ref is
+// dangling as when the session was gone, and moves by compare-and-swap
+// from its target as before; the identity the store compares is never
+// in the target.
+func refsRecreated(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	rs := refStore(t, st)
+	h := agentsession.Header{ID: "reused", CWD: "/first"}
+	if _, err := st.Create(ctx, h); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.UpdateRef(ctx, "r", agentsession.RefTarget{}, tgt("reused"), "set"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Delete(ctx, "reused"); err != nil {
+		t.Fatal(err)
+	}
+	h.CWD = "/second"
+	if _, err := st.Create(ctx, h); err != nil {
+		t.Fatal(err)
+	}
+	got, err := rs.ResolveRef(ctx, "r")
+	if !errors.Is(err, agentsession.ErrNoSession) {
+		t.Fatalf("ref to a session created again: %v, want ErrNoSession", err)
+	}
+	if got != tgt("reused") {
+		t.Errorf("target %v, want the ID the ref was set to", got)
+	}
+	if listed := listRefs(t, rs, ""); len(listed) != 1 || listed[0].Target != tgt("reused") {
+		t.Errorf("ListRefs: %v", listed)
+	}
+	// SessionFor does not return the stranger; it replaces the ref.
+	s, err := agentsession.SessionFor(ctx, st, "r", agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ID() == "reused" {
+		t.Error("SessionFor returned the session created again under the ID")
+	}
+	// Setting the ref to its own target adopts the session now there.
+	if err := rs.UpdateRef(ctx, "r", tgt(s.ID()), tgt("reused"), "adopt"); err != nil {
+		t.Fatalf("adopting: %v", err)
+	}
+	if got, err := rs.ResolveRef(ctx, "r"); err != nil || got != tgt("reused") {
+		t.Errorf("after adopting: %v, %v", got, err)
+	}
+	if err := rs.UpdateRef(ctx, "r", tgt("reused"), tgt("reused"), "again"); err != nil {
+		t.Fatal(err)
+	}
+	if got := refLog(t, rs, "r"); got[0].Reason != "adopt" {
+		t.Errorf("setting a ref to what it holds was logged: %+v", got[0])
 	}
 }

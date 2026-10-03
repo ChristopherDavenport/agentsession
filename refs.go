@@ -2,6 +2,8 @@ package agentsession
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"iter"
@@ -111,6 +113,23 @@ type RefStore interface {
 	// RefLog lists the ref's updates, newest first, and nothing for a
 	// name never updated. It outlives the ref's deletion.
 	RefLog(ctx context.Context, name string) iter.Seq2[RefUpdate, error]
+}
+
+// HeaderIdent names a session's incarnation: the hash of its header
+// without `format`, which is all a writer's rewrite of a session
+// changes, as a follower tells one session from another created again
+// under its ID. A store records it with each ref it sets and compares it
+// at resolution, so a ref to a deleted session never reaches a session
+// created later under that ID. It is the store's, and no RefTarget
+// carries it.
+func HeaderIdent(h Header) (string, error) {
+	h.Format = ""
+	b, err := h.MarshalJSON()
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8]), nil
 }
 
 // MaxRefName is the longest ref name, in bytes.
@@ -342,7 +361,9 @@ func ResolveCurrent(ctx context.Context, st Store, name string) (id string, move
 // refState is a store's refs and their logs, for MemoryStore.
 type refState struct {
 	refs map[string]RefTarget
-	logs map[string][]RefUpdate
+	// idents is each ref's target session's HeaderIdent when it was set.
+	idents map[string]string
+	logs   map[string][]RefUpdate
 }
 
 // ResolveRef implements [RefStore].
@@ -356,8 +377,10 @@ func (m *MemoryStore) ResolveRef(_ context.Context, name string) (RefTarget, err
 	if !ok {
 		return RefTarget{}, fmt.Errorf("%w: %s", ErrNoRef, name)
 	}
-	if _, ok := m.sessions[t.Session]; !ok {
+	if sess, ok := m.sessions[t.Session]; !ok {
 		return t, fmt.Errorf("%w: %s, which ref %s names", ErrNoSession, t.Session, name)
+	} else if id, err := HeaderIdent(sess.Header()); err != nil || id != m.refs.idents[name] {
+		return t, fmt.Errorf("%w: %s was created again after ref %s was set", ErrNoSession, t.Session, name)
 	}
 	return t, nil
 }
@@ -384,7 +407,16 @@ func (m *MemoryStore) UpdateRef(_ context.Context, name string, expected, next R
 			}
 		}
 	}
-	if cur == next {
+	var ident string
+	if !next.IsZero() {
+		var err error
+		if ident, err = HeaderIdent(m.sessions[next.Session].Header()); err != nil {
+			return err
+		}
+	}
+	// Setting a ref to the target it holds changes nothing, unless the
+	// session under that ID is another since: then it adopts it.
+	if cur == next && m.refs.idents[name] == ident {
 		return nil
 	}
 	if cur.IsZero() {
@@ -398,8 +430,10 @@ func (m *MemoryStore) UpdateRef(_ context.Context, name string, expected, next R
 	}
 	if next.IsZero() {
 		delete(m.refs.refs, name)
+		delete(m.refs.idents, name)
 	} else {
 		m.refs.refs[name] = next
+		m.refs.idents[name] = ident
 	}
 	m.refs.logs[name] = append(m.refs.logs[name], RefUpdate{
 		Name: name, Old: cur, New: next, Time: time.Now().UTC(), Reason: reason,

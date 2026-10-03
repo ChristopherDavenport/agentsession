@@ -41,13 +41,33 @@ const (
 type refTarget struct {
 	Session string `json:"session"`
 	Entry   string `json:"entry,omitempty"`
+	// Ident is the session's HeaderIdent when the ref was set, which the
+	// store compares at resolution and no caller sees.
+	Ident string `json:"ident,omitempty"`
 }
 
 func (t refTarget) get() agentsession.RefTarget {
 	return agentsession.RefTarget{Session: t.Session, Entry: t.Entry}
 }
 
-func asRef(t agentsession.RefTarget) refTarget { return refTarget{Session: t.Session, Entry: t.Entry} }
+func asRef(t agentsession.RefTarget, ident string) refTarget {
+	return refTarget{Session: t.Session, Entry: t.Entry, Ident: ident}
+}
+
+// incarnation is the identity of the session now under id, and false
+// when none is.
+func (s *Store) incarnation(id string) (string, bool) {
+	path, err := s.find(id)
+	if err != nil {
+		return "", false
+	}
+	sum, err := summarize(path, false)
+	if err != nil {
+		return "", false
+	}
+	ident, err := agentsession.HeaderIdent(sum.Header)
+	return ident, err == nil
+}
 
 type refsDoc struct {
 	Seq  int64                `json:"seq"`
@@ -190,8 +210,12 @@ func (s *Store) ResolveRef(ctx context.Context, name string) (agentsession.RefTa
 	if !ok {
 		return agentsession.RefTarget{}, fmt.Errorf("%w: %s", agentsession.ErrNoRef, name)
 	}
-	if _, err := s.find(t.Session); err != nil {
+	ident, found := s.incarnation(t.Session)
+	if !found {
 		return t.get(), fmt.Errorf("%w: %s, which ref %s names", agentsession.ErrNoSession, t.Session, name)
+	}
+	if t.Ident != "" && ident != t.Ident {
+		return t.get(), fmt.Errorf("%w: %s was created again after ref %s was set", agentsession.ErrNoSession, t.Session, name)
 	}
 	return t.get(), nil
 }
@@ -312,12 +336,15 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 			}
 		}
 		refStep("read")
-		cur := doc.Refs[name].get()
+		curVal := doc.Refs[name]
+		cur := curVal.get()
 		if cur != expected {
 			return &agentsession.RefMovedError{Name: name, Current: cur}
 		}
+		var nextIdent string
 		if !next.IsZero() {
-			if _, err := s.find(next.Session); err != nil {
+			var found bool
+			if nextIdent, found = s.incarnation(next.Session); !found {
 				return fmt.Errorf("%w: %s", agentsession.ErrNoSession, next.Session)
 			}
 			if next.Entry != "" {
@@ -330,7 +357,9 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 				}
 			}
 		}
-		if cur == next {
+		// Setting a ref to the target it holds changes nothing, unless
+		// the session under that ID is another since: then it adopts it.
+		if cur == next && curVal.Ident == nextIdent {
 			return nil
 		}
 		if cur.IsZero() {
@@ -344,7 +373,7 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 		}
 		refStep("checked")
 		rec := refRecord{
-			Seq: doc.Seq + 1, Name: name, Old: asRef(cur), New: asRef(next),
+			Seq: doc.Seq + 1, Name: name, Old: asRef(cur, curVal.Ident), New: asRef(next, nextIdent),
 			At: time.Now().UTC().Format(time.RFC3339Nano), Reason: reason,
 		}
 		if err := s.appendRefRecord(tail, rec); err != nil {

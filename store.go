@@ -230,7 +230,7 @@ type MemoryStore struct {
 // NewMemoryStore returns an empty store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{},
-		refs: refState{refs: map[string]RefTarget{}, logs: map[string][]RefUpdate{}}}
+		refs: refState{refs: map[string]RefTarget{}, idents: map[string]string{}, logs: map[string][]RefUpdate{}}}
 }
 
 // Create implements Store. A header whose Base is set makes a fork of

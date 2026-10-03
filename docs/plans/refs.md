@@ -205,13 +205,20 @@ Where building the plan decided what it left open or went another way:
   `RefConflict` checks it against the refs a store holds; every store
   calls them, so the rule is one piece of code. A bad name is
   `ErrRefName` from reads and writes alike.
-- **A dangling ref resolves with its target.** `ResolveRef` returns the
-  target and an error wrapping `ErrNoSession`, so a caller can see which
-  session was lost and move the ref by compare-and-swap from it. The
-  plan's "never to another session created later under that ID" is
-  dropped: a ref names an ID, not an incarnation, and no store carries a
-  generation for sessions. IDs are generated, so reuse takes a deliberate
-  `Create` of the old ID. RFC 0002 says so.
+- **A dangling ref resolves with its target, and names an incarnation.**
+  `ResolveRef` returns the target and an error wrapping `ErrNoSession`,
+  so a caller can see which session was lost and move the ref by
+  compare-and-swap from it. The plan's guarantee that a ref never
+  reaches a session created later under a deleted ID stands: subsession
+  IDs are derived, so reuse is real. Each store records, when a ref is
+  set, `agentsession.HeaderIdent` of the target session (the hash of its
+  header without `format`, the one Follow's cursors use), and resolution
+  compares it with the session now under the ID; a mismatch is dangling.
+  Targets stay `Session` and `Entry`, and a compare-and-swap compares
+  those alone; the identity is in each store's ref (a cas ref file's
+  third field, a sqlite `refs.ident` column, jsonl's `ident`, memory's
+  map) and in the ref log. Setting a ref to the target it holds adopts a
+  session created again, and is logged.
 - **An update that changes nothing is not logged.** It still fails if
   the held target is not the expected one.
 - **The ref log is written ahead.** The plan said rename, then record,
