@@ -7,6 +7,50 @@ versions may break the API.
 
 ## Unreleased
 
+- **Refs: names that point to sessions, moved by compare-and-swap.** A
+  harness names its conversations by a channel, a ticket or a user, and
+  the store had nowhere to keep the name, so each harness kept a map
+  beside it and two harnesses on one root raced on it. `RefStore` is the
+  new interface: `ResolveRef`, `UpdateRef(name, expected, next, reason)`,
+  `ListRefs(prefix)` and `RefLog(name)`. A ref is a slash-separated name
+  and a `RefTarget`, a session ID and optionally an entry of it that the
+  ref pins. `UpdateRef` is the only write, a compare-and-swap with none
+  as an expected value (create if absent) and as a next one (delete); a
+  stale expected value fails with `ErrRefMoved`, whose `RefMovedError`
+  carries the target the ref holds. A next target must be a session the
+  store holds and an entry of it. A ref outlives its session: resolving
+  it reports `ErrNoSession` with the target still returned. Names are
+  checked by `ValidRefName` and, against the refs a store holds, by
+  `RefConflict`: no ref under a ref, and none differing only in case
+  from another. Every update is logged, with its time and a reason, and
+  the log outlives the ref. The memory, `cas`, `sqlite` and `jsonl`
+  stores implement it, and the `storetest` suite gains the `Refs` cases,
+  among them the races. `SessionFor(ctx, store, name, header)` is #129's
+  answer: it returns the session a ref points to and creates one by
+  compare-and-swap when there is none, so two callers racing both create
+  and the loser opens the winner's session and deletes its own.
+  `ContinueRef` continues the session a ref names and moves the ref to
+  the successor; `ResolveCurrent` follows `continued_in` from a ref's
+  target and says it did, leaving `ResolveRef` literal. In `cas` a ref
+  is `refs/<name>` and its log `logs/refs/<name>`, in the checksummed
+  record form of a session's log, names written with `%` for `/`; an
+  update holds a lock for the ref, writes its record ahead and renames
+  the file, and a crash between the two is finished by the next update,
+  a read seeing the recorded target at once; `Sweep` keeps the entry a
+  ref pins. In `sqlite` the tables are `refs` and `ref_log`, an update
+  one immediate transaction, and an existing database gains them at its
+  first open. In `jsonl` they are `refs.json` and `refs.log` under
+  `refs.json.lock`. A `cas` exchange carries refs: `PushOptions.Refs`
+  and the new `refs` argument of `Fetch` name refs that point at the
+  session exchanged, and the receiver moves each by compare-and-swap
+  after the closure and the head, refusing one whose expected value is
+  stale with the holder reported in `Exchange.Refs` and keeping the
+  closure. `agentsession refs <root> [prefix]` lists them, `agentsession
+  ref <root> <name> [-log]` prints one and its log, and a command that
+  takes a session in a cas store takes `ref:<name>`. RFC 0002 gets a
+  *Refs* section after *Head* and a paragraph in *Exchange between
+  stores*; RFC 0001 does not change. The plan is `docs/plans/refs.md`.
+  (#129)
 - **`Follow`: receive a session's entries as the store accepts them.**
   `Follower` is a new interface beside `Reader`: `Follow(ctx, id,
   from)` yields a `Snapshot` of the session, then an `Appended` change
