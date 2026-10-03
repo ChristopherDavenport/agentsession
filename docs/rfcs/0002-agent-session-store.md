@@ -86,7 +86,7 @@ is the order, and the head is a ref, never inferred.
 - A query language or index beyond what the projections need.
 - A network protocol between stores. What a store owes when it sends or
   receives a session is the exchange section's; how the bytes move is
-  not this document's.
+  not this document's, and RFC 0003 defines one.
 - Defining the entry's contents. RFC 0001 does; this document stores
   them.
 - A spool for model output in flight; see durability and recovery.
