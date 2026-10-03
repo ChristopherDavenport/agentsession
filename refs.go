@@ -216,23 +216,23 @@ func refsOf(st Store) (RefStore, error) {
 // The session comes from Open, so a store that guards sessions against
 // a second writing process reports [ErrSessionLocked] to a caller
 // whose winner is held by another process.
-func SessionFor(ctx context.Context, st Store, name string, h Header) (*Session, error) {
+func SessionFor(ctx context.Context, st Store, name string, h Header) (s *Session, err error) {
 	rs, err := refsOf(st)
 	if err != nil {
 		return nil, err
 	}
+	// own is the session this call created, which nothing else has
+	// seen. Whatever the call returns but own, it deletes.
 	var own *Session
-	discard := func() error {
-		if own == nil {
-			return nil
+	defer func() {
+		if own == nil || (s != nil && s == own) {
+			return
 		}
 		id := own.ID()
-		own = nil
-		if err := st.Delete(ctx, id); err != nil && !errors.Is(err, ErrNoSession) {
-			return fmt.Errorf("agentsession: SessionFor %s: discarding %s: %w", name, id, err)
+		if derr := st.Delete(ctx, id); derr != nil && !errors.Is(derr, ErrNoSession) {
+			s, err = nil, errors.Join(err, fmt.Errorf("agentsession: SessionFor %s: discarding %s: %w", name, id, derr))
 		}
-		return nil
-	}
+	}()
 	for {
 		var expected RefTarget
 		cur, err := rs.ResolveRef(ctx, name)
@@ -246,12 +246,8 @@ func SessionFor(ctx context.Context, st Store, name string, h Header) (*Session,
 			if oerr != nil {
 				return nil, oerr
 			}
-			if err := discard(); err != nil {
-				return nil, err
-			}
 			return s, nil
 		case errors.Is(err, ErrNoRef):
-			expected = RefTarget{}
 		case errors.Is(err, ErrNoSession):
 			expected = cur
 		default:
@@ -267,9 +263,6 @@ func SessionFor(ctx context.Context, st Store, name string, h Header) (*Session,
 			return own, nil
 		}
 		if !errors.Is(err, ErrRefMoved) {
-			if derr := discard(); derr != nil {
-				err = errors.Join(err, derr)
-			}
 			return nil, err
 		}
 		// Moved: resolve again and take what is there.

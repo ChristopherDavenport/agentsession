@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 )
 
 // dirLock on a platform without flock is a file created exclusively; a
@@ -52,4 +53,20 @@ func lockShared(ctx context.Context, path string) (*dirLock, error) {
 // reason.
 func lockExclusive(ctx context.Context, path string) (*dirLock, error) {
 	return &dirLock{}, ctx.Err()
+}
+
+// lockBlocking takes the lock at path, retrying while another holder
+// has it, until ctx ends.
+func lockBlocking(ctx context.Context, path string) (*dirLock, error) {
+	for {
+		lk, err := lockFile(path)
+		if !errors.Is(err, ErrSessionLocked) {
+			return lk, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }

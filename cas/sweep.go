@@ -171,7 +171,34 @@ func (s *Store) keepAll() (keepSet, logMarks, error) {
 	if err := s.keepLogs(k, marks); err != nil {
 		return k, nil, err
 	}
+	if err := s.keepRefs(k); err != nil {
+		return k, nil, err
+	}
 	return k, marks, nil
+}
+
+// keepRefs adds the entry each ref pins, and the path above it, as a
+// session's base is kept: RFC 0002's retention keeps what a ref pins
+// though no session holds it any longer. A ref that pins no entry
+// keeps nothing of its own.
+func (s *Store) keepRefs(k keepSet) error {
+	names, err := s.refNames()
+	if err != nil {
+		return err
+	}
+	for _, n := range names {
+		t, _, err := s.effectiveRef(n)
+		if err != nil {
+			return fmt.Errorf("cas: sweep: %w", err)
+		}
+		if t.Entry == "" {
+			continue
+		}
+		if err := s.keepPath(k, t.Entry); err != nil {
+			return fmt.Errorf("cas: sweep: ref %s: %w", n, err)
+		}
+	}
+	return nil
 }
 
 // keepLogs adds what each session's log names beyond the mark it has in
@@ -705,6 +732,10 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 	}
 	since := keepSet{entries: map[string]bool{}, contents: map[string]bool{}}
 	if err := s.keepLogs(since, marks); err != nil {
+		lk.release()
+		return 0, err
+	}
+	if err := s.keepRefs(since); err != nil {
 		lk.release()
 		return 0, err
 	}
