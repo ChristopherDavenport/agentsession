@@ -115,6 +115,9 @@ type Store struct {
 
 	mu   sync.Mutex
 	open map[string]*handle
+	// refMu keeps this process's updates of the refs files in turn, so
+	// they do not poll the lock file against each other.
+	refMu sync.Mutex
 }
 
 type handle struct {
