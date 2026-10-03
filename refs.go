@@ -142,7 +142,8 @@ func refNameChar(c byte) bool {
 
 // ValidRefName reports whether name is a ref name by RFC 0002's rules,
 // which are about the name alone: segments of [A-Za-z0-9._-] joined by
-// "/", none empty, "." or "..", at most [MaxRefName] bytes. A store
+// "/", none empty, "." or "..", ending in a dot or naming a Windows
+// device, at most [MaxRefName] bytes. A store
 // checks what depends on the refs it holds with [RefConflict].
 func ValidRefName(name string) error {
 	if name == "" {
@@ -163,8 +164,28 @@ func ValidRefName(name string) error {
 				return fmt.Errorf("%w: %q has the character %q", ErrRefName, name, seg[i])
 			}
 		}
+		if seg[len(seg)-1] == '.' {
+			return fmt.Errorf("%w: %q has a segment ending in a dot, which Windows drops", ErrRefName, name)
+		}
+		if windowsReserved(seg) {
+			return fmt.Errorf("%w: %q has the segment %q, a device name on Windows", ErrRefName, name, seg)
+		}
 	}
 	return nil
+}
+
+// windowsReserved reports whether a segment names a Windows device,
+// whatever its case and with or without an extension: CON, PRN, AUX,
+// NUL, COM1 to COM9 and LPT1 to LPT9, so a store on a file system that
+// reserves them refuses what every other store does.
+func windowsReserved(seg string) bool {
+	stem, _, _ := strings.Cut(seg, ".")
+	stem = strings.ToUpper(stem)
+	switch stem {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	}
+	return len(stem) == 4 && (strings.HasPrefix(stem, "COM") || strings.HasPrefix(stem, "LPT")) && stem[3] >= '1' && stem[3] <= '9'
 }
 
 // ValidRefPrefix reports whether prefix can begin a ref name: the empty

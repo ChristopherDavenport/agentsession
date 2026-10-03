@@ -193,7 +193,7 @@ func refsNames(t *testing.T, opts Options) {
 	st := opts.New(t)
 	rs := refStore(t, st)
 	s := newSession(t, st)
-	good := []string{"a", "a.b", "a_b-c", "conversations/slack/C123", "x/1", "a..b", "..a", ".hidden", "v1.2/x"}
+	good := []string{"a", "a.b", "a_b-c", "conversations/slack/C123", "x/1", "a..b", "..a", ".hidden", "v1.2/x", "console", "COM10", "com0", "con-x", ".con", "x/lpt", "aux_1"}
 	for _, n := range good {
 		if err := rs.UpdateRef(ctx, n, agentsession.RefTarget{}, tgt(s), ""); err != nil {
 			// A case or prefix clash among the good names themselves is
@@ -205,7 +205,8 @@ func refsNames(t *testing.T, opts Options) {
 	for i := range long {
 		long[i] = 'x'
 	}
-	bad := []string{"", "/", "/a", "a/", "a//b", ".", "..", "a/./b", "a/../b", "a b", "a:b", "a\\b", "é", "a\x00b", string(long)}
+	bad := []string{"", "/", "/a", "a/", "a//b", ".", "..", "a/./b", "a/../b", "a b", "a:b", "a\\b", "é", "a\x00b", string(long),
+		"CON", "con", "Prn", "aux", "NUL", "nul.txt", "a/PRN", "COM1", "com9.log", "LPT1", "lpt9.x", "a.", "a./b", "x/CON.d/y"}
 	for _, n := range bad {
 		err := rs.UpdateRef(ctx, n, agentsession.RefTarget{}, tgt(s), "")
 		if !errors.Is(err, agentsession.ErrRefName) {

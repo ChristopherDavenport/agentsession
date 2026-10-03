@@ -202,7 +202,9 @@ Where building the plan decided what it left open or went another way:
   segment boundary, not only the whole name: `A/x` is refused beside
   `a/y`, since a directory on a case-folding file system would hold
   both. `ValidRefName` and `ValidRefPrefix` check a name alone, and
-  `RefConflict` checks it against the refs a store holds; every store
+  `RefConflict` checks it against the refs a store holds; a segment may
+  not end in a dot or be a Windows device name (`CON`, `NUL`, `COM1`,
+  `lpt9.x`), so no store holds a name another system cannot; every store
   calls them, so the rule is one piece of code. A bad name is
   `ErrRefName` from reads and writes alike.
 - **A dangling ref resolves with its target, and names an incarnation.**

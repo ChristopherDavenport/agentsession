@@ -33,7 +33,7 @@ versions may break the API.
   it reports `ErrNoSession` with the target still returned. Names are
   checked by `ValidRefName` and, against the refs a store holds, by
   `RefConflict`: no ref under a ref, and none differing only in case
-  from another. Every update is logged, with its time and a reason, and
+  from another; no segment ends in a dot or is a Windows device name. Every update is logged, with its time and a reason, and
   the log outlives the ref. The memory, `cas`, `sqlite` and `jsonl`
   stores implement it, and the `storetest` suite gains the `Refs` cases,
   among them the races. `SessionFor(ctx, store, name, header)` is #129's

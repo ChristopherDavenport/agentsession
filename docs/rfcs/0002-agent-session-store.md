@@ -345,7 +345,12 @@ projection to a file carries none.
 
 - **A ref is a name and a target.** A name is one or more segments
   joined by `/`. A segment is one or more characters of `A-Z`, `a-z`,
-  `0-9`, `.`, `_` and `-`, and is neither `.` nor `..`. A name is at most
+  `0-9`, `.`, `_` and `-`, and is neither `.` nor `..`, does not end in
+  `.`, and is not a Windows device name: `CON`, `PRN`, `AUX`, `NUL`,
+  `COM1` to `COM9` or `LPT1` to `LPT9`, in any case and with or without
+  an extension (`nul.txt`). The last two rules are for the file systems
+  that drop a trailing dot or reserve those names, so that every store
+  refuses what the rest do on every system. A name is at most
   200 bytes. No name is a prefix of another at a segment boundary:
   `a/b` and `a/b/c` MUST NOT both exist, as git refuses a ref under a
   ref, so a store may keep its refs as a tree. Two names MUST NOT
