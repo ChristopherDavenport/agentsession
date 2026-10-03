@@ -17,7 +17,9 @@ versions may break the API.
   `.agentsession-guard` in it, held for that decision alone and dropped
   by the kernel with its process, so what a taker removes is the lock it
   read. The refs file's lock is taken the same way. On a platform
-  without flock the takeover is as it was.
+  without flock, and on a file system that reports none (ENOTSUP,
+  ENOLCK), the takeover is as it was, with its race, and the store
+  stays usable.
 - **Refs: names that point to sessions, moved by compare-and-swap.** A
   harness names its conversations by a channel, a ticket or a user, and
   the store had nowhere to keep the name, so each harness kept a map
