@@ -56,7 +56,11 @@ func sessionSource(fs *flag.FlagSet, positional []string, stderr io.Writer) (sou
 			fs.Usage()
 			return source{}, fmt.Errorf("%w: %s is not a cas store; a session id follows only a store's root", errUsage, positional[0])
 		}
-		return source{path: positional[0], id: positional[1]}, nil
+		src := source{path: positional[0], id: positional[1]}
+		if strings.HasPrefix(src.id, refPrefix) {
+			return resolveRefSource(src, stderr)
+		}
+		return src, nil
 	}
 	fs.Usage()
 	return source{}, fmt.Errorf("%w: expected a session file, or a cas store and a session id, got %d arguments", errUsage, len(positional))
