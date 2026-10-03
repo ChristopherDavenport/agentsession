@@ -224,11 +224,13 @@ type MemoryStore struct {
 	// session created again under a deleted ID from the one it follows.
 	gens map[string]uint64
 	hub  wake.Hub
+	refs refState
 }
 
 // NewMemoryStore returns an empty store.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{}}
+	return &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{},
+		refs: refState{refs: map[string]RefTarget{}, logs: map[string][]RefUpdate{}}}
 }
 
 // Create implements Store. A header whose Base is set makes a fork of
