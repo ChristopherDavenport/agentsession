@@ -619,3 +619,82 @@ func TestRefNamedLikeATempFile(t *testing.T) {
 	}
 }
 
+// TestRefRecordedCreationIsARef: a creation the log records and a crash
+// kept from the rename is a ref, as ResolveRef says: it lists, a ref
+// under it is refused, and a sweep keeps its pin.
+func TestRefRecordedCreationIsARef(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	pin, _ := pinnedSession(t, st, "s")
+	target := agentsession.RefTarget{Session: "s", Entry: pin}
+	rec, err := newRefRecord("base", agentsession.RefTarget{}, target, time.Now(), "crashed").encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRaw(t, st, "base", rec)
+	if _, err := os.Stat(filepath.Join(st.root, refsDir, "base")); err == nil {
+		t.Fatal("setup: the ref file exists")
+	}
+	if got, err := st.ResolveRef(ctx, "base"); err != nil || got != target {
+		t.Fatalf("ResolveRef = %v, %v", got, err)
+	}
+	if got := listedRefs(t, st, ""); len(got) != 1 || got[0] != "base" {
+		t.Errorf("ListRefs = %v, want [base]", got)
+	}
+	if err := st.UpdateRef(ctx, "base/x", agentsession.RefTarget{}, refTarget("s"), ""); !errors.Is(err, agentsession.ErrRefName) {
+		t.Errorf("a ref under the recorded creation: %v, want ErrRefName", err)
+	}
+	if err := st.Delete(ctx, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Sweep(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.present(pin); err != nil || !ok {
+		t.Errorf("the pin of the recorded creation was swept (%v)", err)
+	}
+}
+
+// TestRefRecordedDeletionIsNone: the other direction. A deletion the log
+// records and a crash kept from removing the file leaves a file, and no
+// ref: it does not list, and a ref under its name is allowed.
+func TestRefRecordedDeletionIsNone(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	pin, _ := pinnedSession(t, st, "s")
+	target := agentsession.RefTarget{Session: "s", Entry: pin}
+	if err := st.UpdateRef(ctx, "r", agentsession.RefTarget{}, target, ""); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := newRefRecord("r", target, agentsession.RefTarget{}, time.Now(), "crashed").encode()
+	appendRaw(t, st, "r", rec)
+	if got := refFileHolds(t, st, "r"); got != "s" {
+		t.Fatalf("setup: the ref file holds %q", got)
+	}
+	if _, err := st.ResolveRef(ctx, "r"); !errors.Is(err, agentsession.ErrNoRef) {
+		t.Errorf("ResolveRef: %v, want ErrNoRef", err)
+	}
+	if got := listedRefs(t, st, ""); len(got) != 0 {
+		t.Errorf("ListRefs = %v, want none", got)
+	}
+	if err := st.UpdateRef(ctx, "r/x", agentsession.RefTarget{}, refTarget("s"), ""); err != nil {
+		t.Errorf("a ref under a ref whose deletion is recorded: %v", err)
+	}
+	if err := st.Delete(ctx, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Sweep(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := st.present(pin); ok {
+		t.Error("a deleted ref still pins its entry through a sweep")
+	}
+}

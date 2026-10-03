@@ -333,19 +333,36 @@ func (s *Store) incarnation(id string) (string, bool) {
 	return ident, err == nil
 }
 
-// refNames lists the names of the refs the store holds: every ref file.
-// The files refs are written through carry a "%" and are no names.
+// refNames lists the names of the refs the store holds: every name with
+// a ref file or a log, kept when the ref is not none as the file and the
+// log's last record say together. A creation recorded and not yet made
+// is a ref, so it is listed, conflicts and keeps its pin through a
+// sweep; a deletion recorded and not yet made is not, though its file
+// is still there. A name is any a ref may have: files this store makes
+// for its own use carry a "%" and are no names.
 func (s *Store) refNames() ([]string, error) {
-	ents, err := os.ReadDir(filepath.Join(s.root, refsDir))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("cas: refs: %w", err)
+	seen := map[string]bool{}
+	for _, dir := range []string{refsDir, refLogsDir} {
+		ents, err := os.ReadDir(filepath.Join(s.root, dir))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("cas: refs: %w", err)
+		}
+		for _, e := range ents {
+			if n := refName(e.Name()); !e.IsDir() && agentsession.ValidRefName(n) == nil {
+				seen[n] = true
+			}
+		}
 	}
 	var out []string
-	for _, e := range ents {
-		if n := refName(e.Name()); !e.IsDir() && agentsession.ValidRefName(n) == nil {
+	for n := range seen {
+		v, _, err := s.effectiveRef(n)
+		if err != nil {
+			return nil, err
+		}
+		if !v.IsZero() {
 			out = append(out, n)
 		}
 	}
