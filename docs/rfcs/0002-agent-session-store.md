@@ -114,6 +114,10 @@ in RFC 2119.
   the appender names another.
 - **Log**: the entries a session appended, in the order the store
   accepted them. These are the session's **own** entries.
+- **Named ref**: a store-level name that points to a session, optionally
+  pinned to one of its entries, moved by compare-and-swap; the refs
+  section defines it. A bare "ref" in that section is a named ref. That
+  a session and its head are refs is the analogy it extends.
 - **Commit**: making a session's appends durable; see durability and
   recovery.
 - **Working state**: a session's appends the store has accepted but not
@@ -324,6 +328,109 @@ The head is a session's resume point, and it is a ref.
   wherever it is, and a store honours it so a writer built against files
   behaves the same against a store. A store MUST refuse a `label` entry
   carrying `synthetic`, which marks a projection's own marker.
+
+## Refs
+
+A session's head names an entry. A store's ref names a session. A
+harness names its conversations by something of its own, a channel, a
+ticket or a user, and that name has to live in the store: kept beside
+it, it is a map that two harnesses on one store race on. A ref is that
+name, held by the store and moved by compare-and-swap, as the head is.
+
+Two kinds of name are not refs. A session's display name, the `info`
+entry's `name`, is record content: immutable, hashed, and carried by
+the session. A ref is mutable store state: which session is current
+for something outside the stack. It is part of no session, and a
+projection to a file carries none.
+
+- **A ref is a name and a target.** A name is one or more segments
+  joined by `/`. A segment is one or more characters of `A-Z`, `a-z`,
+  `0-9`, `.`, `_` and `-`, and is neither `.` nor `..`. A name is at most
+  200 bytes. No name is a prefix of another at a segment boundary:
+  `a/b` and `a/b/c` MUST NOT both exist, as git refuses a ref under a
+  ref, so a store may keep its refs as a tree. Two names MUST NOT
+  differ only in ASCII case, nor may any prefix of one at a segment
+  boundary differ only in case from the same-length prefix of the
+  other (`A/x` and `a/y` are refused), so that a store on a
+  case-folding file system behaves as every other. A store MUST refuse
+  a name that breaks these rules with an error that says so, whether
+  the call reads or writes.
+- **A target is a session ID, and optionally an entry.** The entry,
+  when present, is the one the ref pins, as a tag pins a commit: a fork
+  base, an evaluation baseline. It MUST be an entry the session holds,
+  its base, one of its own entries, or one on its prefix. A ref that
+  pins no entry is the zero-entry form, and a reader tells the two
+  forms apart by the entry being empty.
+- **A store MUST offer compare-and-swap on a ref**: set it from an
+  expected target to a next one, or fail and report the target it
+  holds. "No ref" is a valid expected value, which is create-if-absent,
+  and of two callers who create a ref at once, one MUST succeed and
+  the other MUST fail reporting the winner's target. "No ref" is a
+  valid next value, which deletes the ref. There is no other write to
+  a ref. A store MUST decide the comparison and the write as one step
+  with respect to every other update of the ref, whether made through
+  the same store value, another in the same process, or another
+  process on the same store. The rules about names hold across
+  different refs: a store MUST NOT let two concurrent creations
+  admit a ref and a ref under it.
+- **A ref names a session the store holds when it is set.** A store
+  MUST refuse a next target whose session it does not hold with
+  `no such session`, and one whose entry the session does not hold
+  with `no such entry`. An update whose expected and next targets are
+  equal changes nothing, and a store MUST NOT log it; it still fails if
+  the held target is not the expected one.
+- **A ref outlives its session's deletion.** Deleting a session does
+  not delete its refs, and a store need not know of them. A ref whose
+  session is gone is dangling: resolving it reports that the session
+  is missing, and still reports the target, so that a caller can see
+  which session it was and move or delete the ref by compare-and-swap.
+  A ref names a session by ID and does not pin an incarnation of it, so
+  a session created again under that ID is the one the ref names.
+  Session IDs are generated, so that takes a deliberate creation under
+  the old ID.
+- **Listing is by prefix, in name order.** A store MUST list refs whose
+  name begins with a given string, in the byte order of the name, and
+  the prefix need not end at a segment boundary. A listing that cannot
+  be completed, such as one that finds a ref it cannot read, reports
+  the error rather than a short list.
+- **The ref log records every accepted update**, in the order the
+  store accepted them: the name, the old and the new target (either may
+  be none), the time, and an optional reason. It is what says where a
+  conversation has lived, as git's reflog does. It is per ref and
+  is read newest first. A store MUST NOT accept an update it cannot
+  log, and a reader that takes the store's lock for the ref MUST find
+  the ref and its log agreeing: a crash between the two steps is mended
+  by the store before the next update or read of that ref, whichever
+  came first, in whichever order the steps ran. A store keeps a ref's
+  log at least as long as the ref exists, and keeps the log of a deleted
+  ref until its pruning policy removes it, as it does the trash. A ref
+  created again under the name of a deleted one continues that name's
+  log.
+- **Refs and holds are separate.** A ref says which session is current;
+  a hold or lease says who may write it. Setting a ref takes no hold on
+  the session, and holding a session gives no claim on a ref. A store
+  open read-only MUST refuse to move a ref, as it refuses any write, and
+  MAY resolve and list.
+- **Refs and continuation.** A session retired by a `continued_in` link
+  is replaced by its successor, and a ref does not follow that link by
+  itself: a store MUST NOT move a ref except by an update. The writer
+  that continues a named session moves its ref by compare-and-swap from
+  the old session to the new, and a crash between the two steps leaves
+  the ref on the retired session. A caller that wants the current
+  session of a name, and not the one the ref says, follows
+  `continued_in` links from the target to the end of the chain, and
+  SHOULD report that it did so, which tells it the ref is behind. The
+  chain walk is the caller's, not the store's, and a reader MUST stop
+  at a cycle.
+- **Retention keeps what a ref pins.** A store that reclaims objects no
+  session holds MUST treat the entry a ref pins, and the path above it,
+  as it treats a session's base: reachable. A ref that pins nothing
+  keeps no object of its own, since the session it names keeps its own
+  while it is held.
+- **Exchange moves refs** as the exchange section says.
+
+These are store rules. RFC 0001 does not change, and a projection
+carries no refs.
 
 ## Ordering
 
@@ -742,6 +849,23 @@ apply here, where holding the session already is the usual case.
   handover by clearing. A
   mirror whose record has deleted the session without handing it over
   may declare itself the record, since nothing else can advance it.
+
+- **A push can carry refs.** The sender names the refs it pushes with
+  the session, each as a name and the target it expects the receiver
+  to hold, and the receiver moves each by compare-and-swap once the
+  closure is admitted and the head step is done, to the pushed session
+  and entry, with the same two steps and the same failure as the head:
+  the entries land whether or not a ref moves, and a ref whose expected
+  target is not the held one is refused, reported by name with the
+  target the receiver holds, and left where it was. A refused ref does
+  not undo the closure and does not stop the other refs. A ref whose
+  name breaks the rules above is refused the same way. Refs never merge,
+  and a fetch carries the refs the fetcher names in the reverse way:
+  two stores that disagree on a ref disagree until one of them moves
+  it. A ref is not mirrored by being a mirror: the record mark governs
+  a session's writes and not a ref's, and a receiver that is a mirror
+  of the session still moves a ref to it, since a ref is the receiver's
+  own state.
 
 Fetch is the reverse, and any store may fetch from any store that holds
 the session, a mirror included, since a mirror holds what the record
