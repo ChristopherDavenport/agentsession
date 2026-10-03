@@ -1,6 +1,6 @@
 module github.com/ChristopherDavenport/agentsession/otel
 
-go 1.25.0
+go 1.26.0
 
 // Every module in the repository is released at one version, from one
 // commit, and requires its first-party siblings at exactly that version.
@@ -24,7 +24,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/metric v1.46.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 )
 
 replace github.com/ChristopherDavenport/agentsession => ../
