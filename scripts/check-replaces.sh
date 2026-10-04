@@ -58,7 +58,7 @@ for m in "$@"; do
     if ! printf '%s\n' "$reps" | awk -v d="$path" '$1 == d { found = 1 } END { exit !found }'; then
       echo "$gomod requires $path without replacing it;" >&2
       echo "  the next release would resolve it from the proxy, where the version" >&2
-      echo "  being released does not exist yet (see CLAUDE.md)" >&2
+      echo "  being released does not exist yet (see AGENTS.md)" >&2
       status=1
     fi
   done <<EOF
