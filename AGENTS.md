@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 Guidance for working in this repository. The release section is the part
 where a mistake is permanent; read it before touching a tag.
