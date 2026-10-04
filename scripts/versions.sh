@@ -73,5 +73,5 @@ $(requires "$gomod")
 EOF
 done
 
-[ "$status" -eq 0 ] || echo "versions: every first-party require must name the version being released (see CLAUDE.md)" >&2
+[ "$status" -eq 0 ] || echo "versions: every first-party require must name the version being released (see AGENTS.md)" >&2
 exit $status

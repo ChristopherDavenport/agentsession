@@ -80,7 +80,7 @@ bytes.
 
 ## Releases
 
-`CLAUDE.md` holds the full procedure and the reasoning, including what to
+`AGENTS.md` holds the full procedure and the reasoning, including what to
 do when a tag goes out wrong. The essentials:
 
 Every published module is released at one version, from one commit, and

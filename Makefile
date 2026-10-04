@@ -9,7 +9,7 @@ MODULE := $(shell GOWORK=off $(GO) list -m)
 # Nested modules with their own go.mod, so their dependencies stay out of
 # the root module. Each requires the root, and any sibling it uses, at
 # exactly the version the whole repository is released at, and carries a
-# replace pointing at the tree — see replaces below, and CLAUDE.md for
+# replace pointing at the tree — see replaces below, and AGENTS.md for
 # why the two go together. ./... from the root covers only the root
 # module, so every target loops over them.
 SUBMODULES = sqlite otel
