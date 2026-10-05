@@ -15,7 +15,7 @@ by). The round 8 studies measured the cost: a hand-back's config entry is
 78 KB, 99.7% of what a hand-back appends (letta-memory/2), and since
 agentturn v0.0.15 every cross-model handoff, Plan-to-Act switch or model
 switch under reasoning leaves the rest of the session's responses
-unhashed (agents-sdk-handoffs/3, cline, dex). The pressure is real.
+unhashed (agents-sdk-handoffs/3, cline, dax). The pressure is real.
 
 A minor still waits, for three reasons.
 
