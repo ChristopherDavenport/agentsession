@@ -1,5 +1,5 @@
-github.com/ChristopherDavenport/openresponses v0.0.13 h1:eXyvrTKN6JgmLjzQ5dUsiM8re2oN9fVjDg6SSwzo4vs=
-github.com/ChristopherDavenport/openresponses v0.0.13/go.mod h1:oZT6GCySXw3+vL5LzrJrRI5qagBumqvwDZdp6Kr++a8=
+github.com/ChristopherDavenport/openresponses v0.0.15 h1:QdqIanhSw47FAMz4h6+dLL+RuTBPq3LBjcFb4Xb3AZM=
+github.com/ChristopherDavenport/openresponses v0.0.15/go.mod h1:oZT6GCySXw3+vL5LzrJrRI5qagBumqvwDZdp6Kr++a8=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 h1:LMLX+LgTNWpfvCBdFebv6EsYotImrt/Ppc5cXIriCSo=
