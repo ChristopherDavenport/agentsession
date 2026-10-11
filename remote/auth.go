@@ -10,12 +10,25 @@ import (
 )
 
 // Scope is what a principal may do through a [Handler]. RFC 0003 names
-// read, write (lease), refs, exchange and admin; this slice serves reads
-// alone.
+// read, write (lease), refs, exchange and admin; this server serves the
+// first three and admin's lease break.
 type Scope string
 
-// ScopeRead reads and follows sessions and refs.
-const ScopeRead Scope = "read"
+const (
+	// ScopeRead reads and follows sessions and refs.
+	ScopeRead Scope = "read"
+	// ScopeWrite creates sessions, takes leases on them and, under a
+	// lease, appends, moves the head, commits and deletes.
+	ScopeWrite Scope = "write"
+	// ScopeRefs updates refs. A ref is the store's state, not a
+	// session's, so an update needs this and no lease.
+	ScopeRefs Scope = "refs"
+	// ScopeAdmin breaks a lease another holder has.
+	ScopeAdmin Scope = "admin"
+)
+
+// AllScopes are every scope this server checks.
+var AllScopes = []Scope{ScopeRead, ScopeWrite, ScopeRefs, ScopeAdmin}
 
 // Principal is who a request is from, as an [Authenticator] resolved
 // it, and what they may do.

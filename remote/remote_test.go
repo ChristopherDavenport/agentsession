@@ -197,8 +197,8 @@ func TestCapabilitiesDifferByStore(t *testing.T) {
 	}
 	for _, caps := range []remote.Capabilities{a, b} {
 		f := caps.Features
-		if f.Objects || f.Shallow || f.Exchange || f.Marks || f.Commit || f.CommittedView || f.RefFollow || f.Leases {
-			t.Errorf("features %+v: this slice serves none of them", f)
+		if f.Objects || f.Shallow || f.Exchange || f.Marks || f.Commit || f.CommittedView || f.RefFollow || !f.Leases {
+			t.Errorf("features %+v: over a memory store, leases alone of them", f)
 		}
 		if caps.Reads != agentsession.Format || caps.Limits.FollowBuffer <= 0 {
 			t.Errorf("capabilities %+v", caps)
@@ -214,7 +214,8 @@ func TestCapabilitiesDifferByStore(t *testing.T) {
 	}
 }
 
-// What this slice does not serve is 501 `unsupported`, writes included.
+// What this server does not serve, or its store lacks, is 501
+// `unsupported`.
 func TestUnservedIsUnsupported(t *testing.T) {
 	st, s, _ := seeded(t, 1)
 	url := server(t, st, remote.WithInsecureNoAuth())
@@ -222,14 +223,14 @@ func TestUnservedIsUnsupported(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, r := range []struct{ method, path string }{
-		{http.MethodPost, "/v1/sessions"},
-		{http.MethodDelete, "/v1/sessions/" + s.ID()},
+		{http.MethodPost, "/v1/sessions/" + s.ID() + "/record"},
+		{http.MethodPost, "/v1/sessions/" + s.ID() + "/commit"},
+		{http.MethodPost, "/v1/sessions/" + s.ID() + "/entries?commit=true"},
 		{http.MethodGet, "/v1/sessions/" + s.ID() + "/log"},
 		{http.MethodGet, "/v1/sessions/" + s.ID() + "/path?contents=since-fold"},
 		{http.MethodGet, "/v1/sessions/" + s.ID() + "/follow?durable=true"},
 		{http.MethodGet, "/v1/objects/entries/sha256:00"},
 		{http.MethodPost, "/v1/objects/missing"},
-		{http.MethodPut, "/v1/refs/main"},
 		{http.MethodGet, "/v1/refs/main?view=follow"},
 	} {
 		req, _ := http.NewRequest(r.method, url+r.path, nil)
@@ -242,9 +243,6 @@ func TestUnservedIsUnsupported(t *testing.T) {
 		if p.Code != remote.CodeUnsupported {
 			t.Errorf("%s %s: %s, want unsupported", r.method, r.path, p.Code)
 		}
-	}
-	if err := dial(t, url).UpdateRef(context.Background(), "main", agentsession.RefTarget{}, agentsession.RefTarget{}, ""); !errors.Is(err, agentsession.ErrReadOnly) {
-		t.Errorf("UpdateRef: %v, want ErrReadOnly", err)
 	}
 }
 
