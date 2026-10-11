@@ -7,6 +7,47 @@ versions may break the API.
 
 ## Unreleased
 
+- **Added: the rest of `remote`'s reads (closes #213).** The log read
+  (`GET …/log?after=&durable=`), over a store that keeps a log of
+  records (`cas`; capability `log`): each append or head move with its
+  seq, the head after it, its outcome, whether it is committed and a
+  cursor a follow resumes from, a stale cursor answered with the whole
+  log and `reset`. `durable=true` on the log and the follow (capability
+  `committed_view`): only committed records, the server committing a
+  session it holds the writer of first; a commit answers its cursor.
+  `contents=since-fold` on a path (capability `shallow`, every store).
+  A ref's follow (`?view=follow`, capability `ref_follow`, `WithRefPoll`).
+  A bound on a follow's snapshot (`WithSnapshotLimit`, 64 MiB by
+  default, published as `snapshot_bytes`): past it a `cas` server sends
+  the remaining records without their lines, and another refuses with
+  the new `too_large` (`ErrTooLarge`). The client adds `Log`, `Path`
+  (every envelope and content verified; `Lacks` names a shallow path's
+  missing contents), `FollowCommitted`, `FollowRef`, `remote.Fetch` (a
+  session read from the server's committed log and objects into a local
+  `cas` store) and `remote.TakeBack` (fetch, hand the server's record
+  over at that head, declare the local store the record), and reads a
+  snapshot's line-less records as objects.
+- Added: `cas.Store.ReadLog` (a session's log records after a cursor,
+  each with the follower's own cursor and whether it was committed; a
+  durable read commits a session the store holds and stops at the
+  committed view), `cas.Store.LogCursor`, and `cas.ReceiveOptions.Fetch`
+  (admit a closure as Fetch does).
+- Fixed: `cas`'s follower held back the records of a log line until all
+  of its appends' objects were there; before, the records ahead of the
+  missing one were yielded with the line's cursor, so a follower that
+  resumed there skipped the rest of the line.
+- RFC 0003, the remaining reads: the log read is a capability (`log`);
+  a head move's `seq` is the entries before it; records a follower does
+  not see move the cursor without a line; a log cursor and a follow
+  event's ID are one; a stale cursor is answered with the whole log and
+  `reset`; the end frame carries the cursor and head; `durable` on a
+  plain follow and the `committed` event are a capability of their own
+  (`durable_marks`), which the reference server does not offer; past
+  `snapshot_bytes` a server with objects sends records without lines and
+  one without refuses with `too_large` (413); a ref absent when its
+  follow starts is `no_ref`, and one set to none is a null target with
+  no state; a garbled sentence on an empty path is mended; and the
+  reference implementation's fourth slice, and what it leaves.
 - **Added: `remote` writes, under leases (part of #213).** The handler
   serves create (`POST /v1/sessions`, leased from its first instant
   with `lease_ttl_ms`), leases (acquire, renew, release, and an admin's

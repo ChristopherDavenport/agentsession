@@ -40,6 +40,15 @@ type Features struct {
 	Refs          bool `json:"refs"`
 	RefFollow     bool `json:"ref_follow"`
 	Leases        bool `json:"leases"`
+	// Log is the log read, record by record with a cursor after each,
+	// which a store that keeps a log of records serves (of the
+	// reference stores, cas).
+	Log bool `json:"log"`
+	// DurableMarks is durable on each event of a follow that is not
+	// durable=true, and the committed event. This server does not send
+	// them: its follow is a store's follower, which does not say; a
+	// client that needs committed records follows with durable=true.
+	DurableMarks bool `json:"durable_marks"`
 }
 
 // Limits are the server's bounds a client can plan around.
@@ -55,6 +64,11 @@ type Limits struct {
 	// sweep of the store must give unreferenced objects. Zero where the
 	// server takes no objects.
 	UploadGraceMS int64 `json:"upload_grace_ms,omitempty"`
+	// SnapshotBytes is the most entry-line bytes a follow's snapshot or
+	// reset carries inline: past it a server that serves objects sends
+	// records without their lines, and one that serves none refuses the
+	// snapshot with `too_large`.
+	SnapshotBytes int64 `json:"snapshot_bytes,omitempty"`
 }
 
 // The error codes of RFC 0003's Errors table this slice uses, and
@@ -97,6 +111,10 @@ const (
 	CodeHeaderDiffers = "header_differs"
 	CodeNotRecord     = "not_record"
 	CodeBadRefTarget  = "bad_ref_target"
+
+	// The remaining reads': a snapshot past the server's bound from a
+	// server that serves no objects.
+	CodeTooLarge = "too_large"
 )
 
 // Errors a [Client] call returns, matched with errors.Is, beside the
@@ -145,6 +163,9 @@ var (
 	// ErrBadRefTarget is a pushed ref whose next is not the pushed
 	// session.
 	ErrBadRefTarget = errors.New("remote: a pushed ref names another session")
+	// ErrTooLarge is a snapshot past the server's bound, from a server
+	// that serves no objects to read the rest by.
+	ErrTooLarge = errors.New("remote: the session is past what the server sends in a snapshot")
 	// ErrBadEntry is an entry line the server refused as malformed. A
 	// problem whose reason names a library rule matches that rule's
 	// sentinel too.
@@ -193,6 +214,8 @@ var codes = map[string]struct {
 	CodeHeaderDiffers: {http.StatusConflict, cas.ErrHeaderDiffers},
 	CodeNotRecord:     {http.StatusConflict, cas.ErrNotRecord},
 	CodeBadRefTarget:  {http.StatusUnprocessableEntity, ErrBadRefTarget},
+
+	CodeTooLarge: {http.StatusRequestEntityTooLarge, ErrTooLarge},
 }
 
 // reasons are the library rules a bad_entry or bad_base problem's
@@ -366,11 +389,12 @@ func (t *Target) lib() agentsession.RefTarget {
 type record struct {
 	Seq   int             `json:"seq"`
 	Entry string          `json:"entry"`
-	Line  json.RawMessage `json:"line"`
+	Line  json.RawMessage `json:"line,omitempty"`
 }
 
 // snapshotData is a snapshot or reset event: the session from the
-// start, every entry inlined.
+// start, every entry inlined up to the server's snapshot bound, and past
+// it, from a server that serves objects, the records alone.
 type snapshotData struct {
 	Session     string          `json:"session"`
 	Header      json.RawMessage `json:"header"`
@@ -387,11 +411,15 @@ type appendedData struct {
 	Line    json.RawMessage `json:"line"`
 	Outcome string          `json:"outcome"`
 	Head    *string         `json:"head"`
+	// Durable is set on a durable follow, whose every record is
+	// committed, and omitted otherwise.
+	Durable *bool `json:"durable,omitempty"`
 }
 
 // headData is a head event: a head move no append explains.
 type headData struct {
-	Head *string `json:"head"`
+	Head    *string `json:"head"`
+	Durable *bool   `json:"durable,omitempty"`
 }
 
 func headOut(leaf string) *string {
@@ -415,6 +443,8 @@ const (
 	eventHead     = "head"
 	eventReset    = "reset"
 	eventError    = "error"
+	// eventTarget is a followed ref's target and state.
+	eventTarget = "target"
 )
 
 // eventID is an SSE id: the cursor after the event, a dot, and the

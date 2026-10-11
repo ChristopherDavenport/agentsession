@@ -174,6 +174,11 @@ func (c *Client) Capabilities(ctx context.Context) (Capabilities, error) {
 // frame. A listing that stops without one, or ends with an error frame,
 // yields the error.
 func (c *Client) lines(ctx context.Context, path string, q url.Values) iter.Seq2[json.RawMessage, error] {
+	return c.linesTo(ctx, path, q, nil)
+}
+
+// linesTo is lines, keeping the end frame in end when end is not nil.
+func (c *Client) linesTo(ctx context.Context, path string, q url.Values, end *json.RawMessage) iter.Seq2[json.RawMessage, error] {
 	return func(yield func(json.RawMessage, error) bool) {
 		resp, err := c.get(ctx, path, q, nil)
 		if err != nil {
@@ -199,6 +204,9 @@ func (c *Client) lines(ctx context.Context, path string, q url.Values) iter.Seq2
 					yield(nil, frame.Error)
 					return
 				case frame.End:
+					if end != nil {
+						*end = append(json.RawMessage(nil), line...)
+					}
 					return
 				}
 				if !yield(json.RawMessage(line), nil) {
@@ -301,7 +309,7 @@ func (c *Client) Session(ctx context.Context, id string) (SessionInfo, error) {
 func (c *Client) Read(ctx context.Context, id string) (*agentsession.Session, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	for ch, err := range c.stream(ctx, id, "", nil, false) {
+	for ch, err := range c.stream(ctx, id, "", nil, false, false) {
 		if err != nil {
 			return nil, err
 		}
@@ -322,6 +330,11 @@ func (c *Client) Read(ctx context.Context, id string) (*agentsession.Session, er
 // resume from, and which a consumer handles by dropping what it derived
 // before.
 func (c *Client) Follow(ctx context.Context, id string, from agentsession.Cursor) iter.Seq2[agentsession.Change, error] {
+	return c.follow(ctx, id, from, false)
+}
+
+// follow is Follow, or FollowCommitted with durable.
+func (c *Client) follow(ctx context.Context, id string, from agentsession.Cursor, durable bool) iter.Seq2[agentsession.Change, error] {
 	return func(yield func(agentsession.Change, error) bool) {
 		var rep *replica
 		reset := false
@@ -342,7 +355,7 @@ func (c *Client) Follow(ctx context.Context, id string, from agentsession.Cursor
 				from, reset = "", true
 			}
 		}
-		for ch, err := range c.stream(ctx, id, from, rep, reset) {
+		for ch, err := range c.stream(ctx, id, from, rep, reset, durable) {
 			if !yield(ch, err) || err != nil {
 				return
 			}
@@ -353,7 +366,8 @@ func (c *Client) Follow(ctx context.Context, id string, from agentsession.Cursor
 // stream follows id from the event ID from, with rep the session there,
 // or from the start when from is empty. reset reports the first
 // snapshot as a Reset: a fresh start answering a cursor the caller gave.
-func (c *Client) stream(ctx context.Context, id string, from agentsession.Cursor, rep *replica, reset bool) iter.Seq2[agentsession.Change, error] {
+// durable follows only what is committed.
+func (c *Client) stream(ctx context.Context, id string, from agentsession.Cursor, rep *replica, reset, durable bool) iter.Seq2[agentsession.Change, error] {
 	return func(yield func(agentsession.Change, error) bool) {
 		resumed := from != "" || reset
 		last := string(from)
@@ -369,7 +383,11 @@ func (c *Client) stream(ctx context.Context, id string, from agentsession.Cursor
 			if last != "" {
 				h.Set("Last-Event-ID", last)
 			}
-			resp, err := c.get(ctx, "/sessions/"+url.PathEscape(id)+"/follow", nil, h)
+			var q url.Values
+			if durable {
+				q = url.Values{"durable": {"true"}}
+			}
+			resp, err := c.get(ctx, "/sessions/"+url.PathEscape(id)+"/follow", q, h)
 			if err != nil {
 				if ctx.Err() == nil {
 					yield(agentsession.Change{}, err)
@@ -409,6 +427,11 @@ func (c *Client) read(ctx context.Context, resp *http.Response, id string, rep *
 			var d snapshotData
 			if err := json.Unmarshal(ev.data, &d); err != nil {
 				return fail(fmt.Errorf("remote: follow of %s: %w", id, err))
+			}
+			// Records past the server's snapshot bound come without their
+			// lines, which are read as objects.
+			if err := c.fill(ctx, &d); err != nil {
+				return fail(err)
 			}
 			r, err := newReplica(&d)
 			if err != nil {

@@ -197,8 +197,14 @@ func TestCapabilitiesDifferByStore(t *testing.T) {
 	}
 	for _, caps := range []remote.Capabilities{a, b} {
 		f := caps.Features
-		if f.Objects || f.Shallow || f.Exchange || f.Marks || f.Commit || f.CommittedView || f.RefFollow || !f.Leases {
-			t.Errorf("features %+v: over a memory store, leases alone of them", f)
+		// Over a memory store: leases, and the shallow path, which the
+		// server reads from the session; no log of records, no committed
+		// view, no objects or exchange; a ref followed where refs are kept.
+		if f.Objects || f.Exchange || f.Marks || f.Commit || f.CommittedView || f.Log || !f.Shallow || !f.Leases || f.RefFollow != f.Refs {
+			t.Errorf("features %+v: over a memory store, leases, shallow and refs as kept", f)
+		}
+		if caps.Limits.SnapshotBytes <= 0 {
+			t.Errorf("no snapshot bound published: %+v", caps.Limits)
 		}
 		if caps.Reads != agentsession.Format || caps.Limits.FollowBuffer <= 0 {
 			t.Errorf("capabilities %+v", caps)
@@ -227,11 +233,10 @@ func TestUnservedIsUnsupported(t *testing.T) {
 		{http.MethodPost, "/v1/sessions/" + s.ID() + "/commit"},
 		{http.MethodPost, "/v1/sessions/" + s.ID() + "/entries?commit=true"},
 		{http.MethodGet, "/v1/sessions/" + s.ID() + "/log"},
-		{http.MethodGet, "/v1/sessions/" + s.ID() + "/path?contents=since-fold"},
+		{http.MethodGet, "/v1/sessions/" + s.ID() + "/log?durable=true"},
 		{http.MethodGet, "/v1/sessions/" + s.ID() + "/follow?durable=true"},
 		{http.MethodGet, "/v1/objects/entries/sha256:00"},
 		{http.MethodPost, "/v1/objects/missing"},
-		{http.MethodGet, "/v1/refs/main?view=follow"},
 	} {
 		req, _ := http.NewRequest(r.method, url+r.path, nil)
 		resp, err := http.DefaultClient.Do(req)

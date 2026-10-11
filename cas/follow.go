@@ -268,6 +268,44 @@ func (src *source) Load(ctx context.Context, upTo agentsession.Cursor) (*agentse
 
 // Tail reads the records the log gained since the cursor.
 func (src *source) Tail(ctx context.Context, cur agentsession.Cursor) ([]follow.Item, error) {
+	lines, err := src.lines(cur, true)
+	var items []follow.Item
+	for _, l := range lines {
+		for _, r := range l.recs {
+			it := follow.Item{Skip: true, Cursor: l.cursor}
+			switch {
+			case r.rec.Op == opAppend && r.entry != nil:
+				it = follow.Item{Entry: r.entry, Cursor: l.cursor}
+			case r.rec.Op == opHead:
+				it = follow.Item{Leaf: r.rec.Head, Cursor: l.cursor}
+			}
+			items = append(items, it)
+		}
+	}
+	return items, err
+}
+
+// tailLine is one whole line of a session's log as lines reads it: its
+// records, each append's entry loaded when asked for, and the cursor
+// after the line.
+type tailLine struct {
+	recs   []lineRecord
+	cursor agentsession.Cursor
+}
+
+type lineRecord struct {
+	rec   logRecord
+	entry agentsession.Entry
+}
+
+// lines reads the whole lines the log holds after the cursor, as a
+// follower's tail reads them. With entries, each append's entry is
+// loaded, and the read stops before the line of an append whose objects
+// the store does not hold yet, which a follower waits for. It reports
+// follow.ErrStale for a cursor that names no place in the log, and the
+// session's absence as ErrNoSession. Damage ends the read with an error,
+// after the lines before it.
+func (src *source) lines(cur agentsession.Cursor, entries bool) ([]tailLine, error) {
 	p, ok := parsePos(cur)
 	if !ok {
 		return nil, follow.ErrStale
@@ -312,7 +350,7 @@ func (src *source) Tail(ctx context.Context, cur agentsession.Cursor) ([]follow.
 	}
 	buf = buf[:n]
 	end := bytes.LastIndexByte(buf, '\n') + 1 // a record without its newline waits
-	var items []follow.Item
+	var out []tailLine
 	off := p.off
 	for _, line := range bytes.SplitAfter(buf[:end], []byte{'\n'}) {
 		if len(line) == 0 {
@@ -324,33 +362,29 @@ func (src *source) Tail(ctx context.Context, cur agentsession.Cursor) ([]follow.
 			derr = errSkipped
 		}
 		if derr != nil {
-			return items, fmt.Errorf("cas: session %s: log line ending at byte %d: %w", src.id, off, derr)
+			return out, fmt.Errorf("cas: session %s: log line ending at byte %d: %w", src.id, off, derr)
 		}
 		q := p
 		q.off = off
 		q.tail = fmt.Sprintf("%x.%x", crc32.Checksum(line, crcTable), len(line))
+		l := tailLine{cursor: q.cursor()}
 		for _, r := range recs {
-			it := follow.Item{Skip: true, Cursor: q.cursor()}
-			switch r.Op {
-			case opAppend:
-				if r.Entry == "" {
-					break
-				}
+			lr := lineRecord{rec: r}
+			if entries && r.Op == opAppend && r.Entry != "" {
 				e, ok, err := src.entry(r.Entry)
 				if err != nil {
-					return items, err
+					return out, err
 				}
 				if !ok {
-					return items, nil // its objects are not there yet
+					return out, nil // its objects are not there yet
 				}
-				it = follow.Item{Entry: e, Cursor: q.cursor()}
-			case opHead:
-				it = follow.Item{Leaf: r.Head, Cursor: q.cursor()}
+				lr.entry = e
 			}
-			items = append(items, it)
+			l.recs = append(l.recs, lr)
 		}
+		out = append(out, l)
 	}
-	return items, nil
+	return out, nil
 }
 
 // entry loads and decodes an entry the log appends. It reports false

@@ -246,9 +246,25 @@ those and posts the session's closure, which the server admits as RFC
 0002's exchange does: the log merged as a set, the head moved by
 compare-and-swap from the head expected. With `Handover` the server
 becomes the record and the local store a mirror; `DeclareRecord` makes
-the server the record for a mirror whose writer died, and `HandOver` gives
-the session back to a client store. Objects and exchange need a store
+the server the record for a mirror whose writer died, and `TakeBack`
+gives the session back to a client store: it fetches what the server's
+writers added, hands the server's record over at that head, and
+declares the local store the record. Objects and exchange need a store
 with object spaces and marks (`cas`), and the `exchange` scope.
+
+The reads beyond a follow: `Log`, the session's records after a cursor,
+each with the head after it and whether it is committed, from which a
+follow resumes; with durable, and `FollowCommitted`, only what is
+committed, which the server commits first where it holds the writer
+(both need a store that keeps a log of records, `cas`); `Path`, the
+entries from the root to a leaf, verified envelope by envelope, whole,
+envelopes alone, or shallow (`since-fold`: only the contents the newest
+compaction kept, which rebuilds the request at the leaf, and `Lacks`
+names the rest); `FollowRef`, a ref's target as it moves; and `Fetch`, a
+session read from the server's committed log into a local `cas` store.
+A follow's snapshot carries entries up to the server's
+`WithSnapshotLimit`, past which a `cas` server sends the records alone
+and the client reads them as objects.
 
 ## Exporting to ATIF
 
@@ -382,7 +398,7 @@ _, err := otel.Export(ctx, tracer, sess, sess.Leaf()) // a stored session, after
 | `otel` | the OpenTelemetry projection, as a nested module: replay a session as spans, or wrap a store so a live run emits them |
 | `atif` | Go types for ATIF v1.8 with unknown-member passthrough and validation |
 | `export` | trajectories, ATIF conversion, redactors, writer |
-| `remote` | RFC 0003 over HTTP: a server over any store (capabilities, listing, a session's state, its path, following as server-sent events, refs; create, leases, append, head, commit, delete, ref updates; over `cas`, objects, push, declare-record and handover) and a client that is the library's `Store`, `Writer`, `Reader`, `Follower` and `RefStore`, with an object cache and `Push`, the local-first writer's helper |
+| `remote` | RFC 0003 over HTTP: a server over any store (capabilities, listing, a session's state, its path, following as server-sent events, refs and their follow, shallow paths; create, leases, append, head, commit, delete, ref updates; over `cas`, the log read, durable reads and follows, objects, push, declare-record and handover) and a client that is the library's `Store`, `Writer`, `Reader`, `Follower` and `RefStore`, with an object cache, `Log`, `Path`, `FollowCommitted`, `FollowRef`, and `Push`, `Fetch` and `TakeBack` for a local `cas` store |
 | `storetest` | the conformance suite every store runs |
 | `cmd/agentsession` | the command: show, verify, export and list session files and the sessions of a jsonl or cas store |
 
