@@ -219,7 +219,10 @@ DELETE /v1/sessions/{id}
   `cwd`, `parent_session`, `harness`, `top_level`, `after` and `before`
   (RFC 3339), `limit`, `with_names`, `current`; and `extra`, which is
   repeated as `extra=<name>:<canonical JSON value>` and matches as the
-  library does, by canonical form. A server MAY page with a `page`
+  library does, by canonical form. A member's name is namespaced with
+  colons of its own (`acme:platform`), so the value starts after the
+  first colon the rest of which is JSON: a colon outside a string or an
+  object is never JSON, so no part of a name passes for one. A server MAY page with a `page`
   token returned in the `end` frame. A summary carries the header, the
   name, `superseded_by`, the size and the modified time, and never a
   file path.
@@ -287,7 +290,8 @@ GET /v1/sessions/{id}/path?leaf={entry}&contents={all|since-fold|none}
   envelope inline, so the chain verifies from the response alone, and
   the content according to `contents`. The first line also carries the
   head and cursor the path was read at, and the incarnation, so a client
-  can follow from it with no gap. A `leaf` that is no entry of a session
+  can follow from it with no gap. A `leaf` that is no entry of a session A path with no entries (a
+  session nothing was appended to) carries them in its `end` frame.
   the caller may read is `no_entry`. Across a fork's base the path
   crosses into the origin's entries, whose session the caller must also
   be able to read, or the base is `no_entry`.
@@ -358,6 +362,10 @@ the reference stores, so a server MAY rate-limit resumes.
     start in the shape of the log lines above, with the header,
     incarnation, mark and head, and the entries inlined (below) up to
     the size a server publishes, past which the client reads `path`.
+    The head, mark and cursor are the snapshot's, given once: a record
+    in a snapshot carries `seq`, `entry` and its `line`, the entry's
+    RFC 0001 line. A server that serves no objects inlines every entry,
+    since its client has no other way to read the whole session.
   - An `appended` carries the record: the entry line and its content
     inline, so a follower needs no per-entry object fetch, plus `seq`,
     `outcome` (continued, branched, held, leaf_moved or leaf_not_moved),
@@ -373,7 +381,8 @@ the reference stores, so a server MAY rate-limit resumes.
     one when a commit covers records it sent as not durable.
   - `durable` on each event is new in the protocol; the reference
     library adds it to its `Change` so a library follower reports what
-    the wire says.
+    the wire says. A server whose store has no committed view cannot
+    say, and omits it; such a server never sends `committed`.
 - Every event has its own SSE `id`: the cursor after it, then `.`, then
   its index among the events of that cursor (`<cursor>.<n>`). A client
   resumes with `Last-Event-ID` (or `after`, with `Last-Event-ID`
@@ -394,6 +403,9 @@ the reference stores, so a server MAY rate-limit resumes.
   covered. The stream is gated like the `durable` log read.
 - A server SHOULD send a comment line every 15 seconds on an idle
   stream, so intermediaries do not close it.
+- A server MAY cut a follow that falls behind, rather than wait on it,
+  with an `error` event, `overflow`. The client resumes after the last
+  event it read, as after any cut; nothing was skipped.
 - **Following a ref** is an optional feature (`ref_follow`), not in the
   reference library. It sends a `target` event with the current
   `{name, target, state}`, `state` being `live` or `dangling` (RFC
@@ -588,7 +600,8 @@ RFC 0002's refs, unchanged.
 
 - **Resolve** returns the target as `{"session", "entry"}` (`entry`
   empty for the zero-entry form) with the incarnation the ref was set
-  against. A ref that names no session the store holds is 404 `no_ref`
+  against, when the store reports it (the reference library's
+  `RefTarget` does not carry it). A ref that names no session the store holds is 404 `no_ref`
   when the ref is absent, and a dangling ref, whose session is gone or
   another now holds its ID, is 409 `ref_dangling` with the target in the
   body, so a client can see which session it was.
@@ -759,6 +772,7 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | `read_only` | 403 | a write to a store open read-only |
 | `unsupported` | 501 | a feature the store lacks (marks, exchange, commit, committed view, refs, objects) |
 | `store_fault` | 500/503 | a store failure the client cannot fix: corrupt object, stopped store, layout, a session modified outside the store |
+| `overflow` | 503 | a follow the server cut because the client fell behind; resume after the last event read |
 
 `no_session` on a ref update means `next` names a session the server
 does not hold. On a dangling ref the library's refusal of a same-target
@@ -817,7 +831,22 @@ Not carried, because they are a local operator's or a file's:
 
 ## Reference implementation
 
-`agentsession/remote`, a nested module:
+`agentsession/remote`, a package of the root module: it needs the
+standard library alone, which the root module's dependency rule
+allows, and the repository's nested modules exist for dependencies the
+root must not take.
+
+The first slice is the read side: capabilities, the session
+listing and state, the path (`contents` `all` and `none`), following,
+and refs' resolve, listing and log, with the client's `Reader`,
+`Follower` and `RefStore` reads. Everything else is 501 `unsupported`
+and its capability false. Over the reference stores no server has a
+committed view, so `durable` is omitted and `durable=true` refused, and
+a client reads a whole session from a follow's snapshot. Its client
+resumes a follow only from a cursor of a follow it served, holding the
+session there; for any other cursor it follows afresh and yields a
+`Reset`, which the library's contract allows. The whole
+implementation is:
 - **A server** that wraps a store the reference library offers, with
   following fanned out from one in-process follower per session, and
   leases kept in the store's own holds. Of the reference stores only

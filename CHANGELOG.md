@@ -5,6 +5,35 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Added: package `remote`, RFC 0003's read side over HTTP (#211).**
+  `NewHandler` serves any store the library offers: `GET /v1/` says
+  what it supports, and the session listing, a session's state, its
+  path, following and refs' resolve, listing and log are served; the
+  rest of the protocol answers 501 `unsupported`. Errors are RFC 9457
+  problems with the RFC's codes, and every response about a session
+  carries its incarnation. Following is server-sent events from one
+  follower per session that every client shares, which keeps the
+  recent events, so a client that resumes from one is served without a
+  load, and cuts a client that falls behind with `overflow`. Requests
+  are authenticated (`WithAuthenticator`, `BearerTokens`, a `read`
+  scope; `WithInsecureNoAuth` for tests), and with no authenticator the
+  handler refuses everything. `Dial` returns a `Client` that implements
+  `Reader`, `Follower` and `RefStore` (reads; `UpdateRef` is refused
+  with `ErrReadOnly`), verifies every entry by its hash before it yields
+  it, treats a stream cut before its terminal frame as an error, and
+  resumes by itself from an `overflow`. The library's conformance suite
+  passes over it on the memory, JSONL and cas stores.
+- RFC 0003: the extra filter's name and value split at the first colon
+  after which the rest is JSON (names are namespaced with colons); a
+  snapshot's records carry `seq`, `entry` and `line`, with the head
+  given once; a server without a committed view omits `durable`; the
+  `overflow` code; an empty path's state goes in its `end` frame; a
+  ref's incarnation is sent when the store reports it; the reference
+  implementation is a package of the root module, and its first slice
+  is described.
+
 ## v0.0.21 - 2026-10-02
 
 - **Fixed: the memory store keeps a copy of each entry appended through

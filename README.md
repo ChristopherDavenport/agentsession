@@ -199,6 +199,30 @@ for _, e := range sess.Entries() {
 }
 ```
 
+## Reading one over HTTP
+
+Package `remote` is the read side of RFC 0003, the store protocol: a
+server over any store the library offers, and a client that reads,
+follows and resolves refs through it as the library's `Reader`,
+`Follower` and `RefStore`.
+
+```go
+h := remote.NewHandler(store, remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
+    token: {Name: "viewer", Scopes: []remote.Scope{remote.ScopeRead}},
+})))
+defer h.Close()
+go http.ListenAndServe(addr, h) // over TLS where anyone else can reach it
+
+c, _ := remote.Dial("https://"+addr, remote.WithBearerToken(token))
+for ch, err := range c.Follow(ctx, sessionID, "") {
+    // a Snapshot, then each change, every entry verified by its hash
+}
+```
+
+Every client following a session shares one follower of it; one that
+falls behind is cut and resumes where it stopped. Writing, leases,
+objects and exchange are not served yet, and answer `unsupported`.
+
 ## Exporting to ATIF
 
 ```go
@@ -331,6 +355,7 @@ _, err := otel.Export(ctx, tracer, sess, sess.Leaf()) // a stored session, after
 | `otel` | the OpenTelemetry projection, as a nested module: replay a session as spans, or wrap a store so a live run emits them |
 | `atif` | Go types for ATIF v1.8 with unknown-member passthrough and validation |
 | `export` | trajectories, ATIF conversion, redactors, writer |
+| `remote` | RFC 0003's read side over HTTP: a server over any store (capabilities, listing, a session's state, its path, following as server-sent events, refs) and a client that is the library's `Reader`, `Follower` and `RefStore` |
 | `storetest` | the conformance suite every store runs |
 | `cmd/agentsession` | the command: show, verify, export and list session files and the sessions of a jsonl or cas store |
 
