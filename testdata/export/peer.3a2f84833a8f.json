@@ -1,0 +1,203 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000019",
+  "trajectory_id": "sha256:3a2f84833a8fca655bca29f629b381d5648fce9120dc8a30fa21ccd8a51eddba",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-10-11T11:00:02Z",
+      "source": "user",
+      "message": "Ask the billing agent, and have the search agent look too.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:ee3b67f3af4e176d093978cbfa49154708ac27065612d76b3f837df2febe35ad"
+        },
+        "config_entries": [
+          "sha256:8bd68a5d5ae66b435170faa32b3d4e27e112af2697e50ec14bce7e8ba5b01fda"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Ask the billing agent, and have the search agent look too."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-10-11T11:00:05Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_billing",
+          "function_name": "billing",
+          "arguments": {
+            "message": "refund order 7"
+          }
+        },
+        {
+          "tool_call_id": "call_search",
+          "function_name": "search",
+          "arguments": {
+            "message": "find order 7"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_billing",
+            "content": "refund queued",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_billing",
+                  "output": "refund queued"
+                }
+              }
+            }
+          },
+          {
+            "source_call_id": "call_search",
+            "content": "order 7 found",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_search",
+                  "output": "order 7 found"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:968fbad9b831134e939fd9711841c8bcdb113d9b87eee8322010c9e508108940"
+        },
+        "calls": {
+          "call_billing": {
+            "dispatch": {
+              "entry_id": "sha256:4d0e94381b38c622b763cb8b4d217a03d133fdc7218fe2e35ffd90a55985e21c"
+            }
+          },
+          "call_search": {
+            "dispatch": {
+              "entry_id": "sha256:0f28c72c9d73ec81d208b8b2f718c8fab27714e23a4639c271bf133fabeb7d25"
+            },
+            "dispatches": [
+              {
+                "entry_id": "sha256:0f28c72c9d73ec81d208b8b2f718c8fab27714e23a4639c271bf133fabeb7d25"
+              },
+              {
+                "entry_id": "sha256:10c9966a91e80d5fa57da0de5a7b07fc7e0aad73e27c646c07512aa6581ecb16"
+              }
+            ]
+          }
+        },
+        "item_entry_ids": [
+          "sha256:2631375a970e2b953bd2a110c57f2a6a8555313180341147825458c519372542",
+          "sha256:3bf9a25d3df25df4ab40bec4d034edce71b8c96242856a5b430a233c4bc06cd0"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_1",
+              "call_id": "call_billing",
+              "name": "billing",
+              "arguments": "{\"message\":\"refund order 7\"}"
+            },
+            {
+              "type": "function_call",
+              "id": "fc_2",
+              "call_id": "call_search",
+              "name": "search",
+              "arguments": "{\"message\":\"find order 7\"}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:968fbad9b831134e939fd9711841c8bcdb113d9b87eee8322010c9e508108940",
+            "model": "gpt-5",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-10-11T11:00:05Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 1 model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its 2 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 1
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.12",
+      "leaf": "sha256:3a2f84833a8fca655bca29f629b381d5648fce9120dc8a30fa21ccd8a51eddba",
+      "main": true,
+      "records": [
+        "dispatch"
+      ]
+    },
+    "links": [
+      {
+        "call_id": "call_billing",
+        "context": "ctx-b1",
+        "entry_id": "sha256:21f6eb9514042ba9b8dee10a53cc5813ca2b4584d0aa3286dc99e956cf8cbe06",
+        "rel": "peer",
+        "session": "",
+        "url": "https://billing.example/a2a"
+      },
+      {
+        "call_id": "call_search",
+        "context": "ctx-s1",
+        "entry_id": "sha256:b88ccb234e5ff61ad5eb21b06d6834f9649fb7408e2a124cffcfafdcecee917b",
+        "rel": "subsession",
+        "session": "",
+        "task": "task-s1",
+        "url": "https://search.example/a2a"
+      },
+      {
+        "call_id": "call_search",
+        "cancel": "sent",
+        "entry_id": "sha256:f6a9ce2f561f69ae4cb7007d037a41999c69908ba0eaca53393c05abe9162ffd",
+        "rel": "subsession",
+        "session": "",
+        "target": "sha256:b88ccb234e5ff61ad5eb21b06d6834f9649fb7408e2a124cffcfafdcecee917b"
+      },
+      {
+        "call_id": "call_search",
+        "context": "ctx-s1",
+        "entry_id": "sha256:0833892198b06b2169f41fbc9a12c179772b1933c48bed5818976930589d7649",
+        "rel": "subsession",
+        "session": "search-session-2",
+        "task": "task-s2",
+        "url": "https://search.example/a2a"
+      }
+    ],
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

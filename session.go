@@ -253,8 +253,42 @@ func (s *Session) ResetLeaf() {
 // the leaf and does not reach any context. On success e is owned by the
 // session and must not be modified.
 func (s *Session) Append(e Entry) (string, error) {
+	if err := s.checkNew(e); err != nil {
+		return "", err
+	}
 	r, err := s.Commit(e)
 	return r.ID, err
+}
+
+// checkNew applies the rules a writer is held to for an entry it is
+// adding, which a reader does not apply to one a store already holds:
+// [Session.Append] and [Session.Prepare] run it, Commit and Extend,
+// which read paths use, do not. A peer link names its call and a url
+// or a session, and a cancel notice names a subsession or peer link of
+// its call and relation on the path it is appended to.
+func (s *Session) checkNew(e Entry) error {
+	l, ok := e.(*LinkEntry)
+	if !ok || !l.callee() {
+		return nil
+	}
+	if l.Rel == RelPeer && l.Cancel == "" && (l.CallID == "" || l.URL == "" && l.Session == "") {
+		return fmt.Errorf("%w: a peer link names its call and a url or a session", ErrCalleeLink)
+	}
+	if l.Cancel == "" {
+		return nil
+	}
+	parent := l.Parent
+	if parent == "" {
+		parent = s.Leaf()
+	}
+	return checkCallee(l, func(id string) *LinkEntry {
+		for _, p := range s.Path(parent) {
+			if to, ok := p.(*LinkEntry); ok && p.Base().ID == id && to.callee() && to.Cancel == "" {
+				return to
+			}
+		}
+		return nil
+	})
 }
 
 // Outcome is what an append did, which the format has a store report.
@@ -321,6 +355,9 @@ type Result struct {
 // Commit of the same entry afterwards recomputes the same values.
 func (s *Session) Prepare(e Entry) (Result, error) {
 	if err := validateEntry(e); err != nil {
+		return Result{}, err
+	}
+	if err := s.checkNew(e); err != nil {
 		return Result{}, err
 	}
 	s.mu.Lock()
@@ -1056,8 +1093,24 @@ func validateEntry(e Entry) error {
 	case *ConfigEntry:
 		return validateConfig(v)
 	case *LinkEntry:
-		if v.Target != "" && v.Rel != RelJudgedBy {
-			return fmt.Errorf("agentsession: a link target is defined for the %s relation alone, not %q", RelJudgedBy, v.Rel)
+		// Every check here holds of a link the decoder built, which
+		// takes a member only where the format defines it, so a stored
+		// link is never refused on read; what a reader may still meet
+		// in a foreign file is VerifyRecords' to report.
+		if v.Target != "" && v.Rel != RelJudgedBy && (!v.callee() || v.Cancel == "") {
+			return fmt.Errorf("agentsession: a link target is defined for the %s relation and a cancel notice alone, not %q", RelJudgedBy, v.Rel)
+		}
+		if (v.URL != "" || v.Task != "" || v.Context != "" || v.Cancel != "") && !v.callee() {
+			return fmt.Errorf("agentsession: a link's url, task, context and cancel are defined for the %s and %s relations alone, not %q", RelSubsession, RelPeer, v.Rel)
+		}
+		if v.Cancel != "" && v.Cancel != CancelSent {
+			return fmt.Errorf("agentsession: a link's cancel is %q or absent, not %q", CancelSent, v.Cancel)
+		}
+		if v.Cancel != "" && v.Target == "" {
+			return errors.New("agentsession: a cancel notice names the link it is about: target is empty")
+		}
+		if (v.Task != "" || v.Context != "") && v.URL == "" {
+			return errors.New("agentsession: a link's task and context name a callee at a url: url is empty")
 		}
 	case *UnknownEntry:
 		if len(v.Raw) == 0 {

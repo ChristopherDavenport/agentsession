@@ -26,6 +26,7 @@
 package otel
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -91,6 +92,18 @@ const (
 	AttrOutcomePass    = "agentsession.outcome.pass"
 	AttrLinkRel        = "agentsession.link.rel"
 	AttrLinkSession    = "agentsession.link.session"
+	// AttrLinkURL, AttrLinkTask and AttrLinkContext name a callee in
+	// another system, reached over a protocol such as A2A, on a
+	// subsession or peer link; AttrLinkTarget is the link a cancel
+	// notice is about.
+	AttrLinkURL     = "agentsession.link.url"
+	AttrLinkTask    = "agentsession.link.task"
+	AttrLinkContext = "agentsession.link.context"
+	AttrLinkTarget  = "agentsession.link.target"
+	// AttrPeer is set on a call's tool span to the URL of the peer the
+	// call reached, a callee whose work outlives the call, or its
+	// session when the link names no URL.
+	AttrPeer = "agentsession.peer"
 	// AttrSubstitution marks an env event, after a response on the
 	// path, whose workspace is not the one in force before it, which
 	// RFC 0001 calls a substitution. Before the first env entry the
@@ -117,6 +130,9 @@ const (
 	EventEnv      = "env"
 	EventOutcome  = "outcome"
 	EventLink     = "link"
+	// EventCancel is a cancel notice: the caller told a callee it no
+	// longer wanted the work, which says nothing of whether it stopped.
+	EventCancel = "cancel"
 )
 
 // Export replays the path to leaf into tracer as spans, with the
@@ -336,6 +352,9 @@ type callState struct {
 	closedState agentsession.CallState
 	// gone reports that the call's last span has ended for good.
 	gone bool
+	// callee holds the span attributes a subsession or peer link
+	// names, for the span the call's next hand-off opens.
+	callee []attribute.KeyValue
 }
 
 // Links a tool span carries to an earlier span of the same call: the
@@ -371,6 +390,7 @@ func (t *tracker) lastHandOff(c *callState) trace.SpanContext {
 }
 
 type pendingEvent struct {
+	name  string
 	at    time.Time
 	attrs []attribute.KeyValue
 }
@@ -579,14 +599,7 @@ func (t *tracker) entry(e agentsession.Entry) {
 		}
 		t.session.AddEvent(EventOutcome, trace.WithTimestamp(ts), trace.WithAttributes(attrs...))
 	case *agentsession.LinkEntry:
-		attrs := []attribute.KeyValue{attribute.String(AttrEntryID, v.ID), attribute.String(AttrLinkRel, v.Rel), attribute.String(AttrLinkSession, v.Session)}
-		if c, ok := t.calls[v.CallID]; ok && v.Rel == agentsession.RelSubsession {
-			c.events = append(c.events, pendingEvent{at: ts, attrs: attrs})
-			if c.span != nil {
-				c.span.SetAttributes(attribute.String(AttrSubsession, v.Session))
-			}
-		}
-		t.session.AddEvent(EventLink, trace.WithTimestamp(ts), trace.WithAttributes(attrs...))
+		t.link(v, ts)
 	case *agentsession.InfoEntry:
 		if v.Name != "" {
 			t.session.SetAttributes(attribute.String(AttrSessionName, v.Name))
@@ -727,8 +740,57 @@ func (t *tracker) decision(d *agentsession.DecisionEntry, ts time.Time) {
 		c.span.AddEvent(EventDecision, trace.WithTimestamp(ts), trace.WithAttributes(attrs...))
 		return
 	}
-	c.events = append(c.events, pendingEvent{at: ts, attrs: attrs})
+	c.events = append(c.events, pendingEvent{name: EventDecision, at: ts, attrs: attrs})
 	t.spans[d.ID] = trace.SpanContext{}
+}
+
+// link records a link entry on the session span. A subsession or peer
+// link, and a cancel notice, also annotate the tool span of the call
+// they name: the span open now, or the one the call's next hand-off
+// opens. One that comes after a run end closed the call's span is the
+// session's alone, so it opens no second span for the call.
+func (t *tracker) link(v *agentsession.LinkEntry, ts time.Time) {
+	name := EventLink
+	attrs := []attribute.KeyValue{attribute.String(AttrEntryID, v.ID), attribute.String(AttrLinkRel, v.Rel)}
+	if v.Session != "" {
+		attrs = append(attrs, attribute.String(AttrLinkSession, v.Session))
+	}
+	for _, a := range [][2]string{{AttrLinkURL, v.URL}, {AttrLinkTask, v.Task}, {AttrLinkContext, v.Context}} {
+		if a[1] != "" {
+			attrs = append(attrs, attribute.String(a[0], a[1]))
+		}
+	}
+	if v.Cancel != "" {
+		name = EventCancel
+		attrs = append(attrs, attribute.String(AttrLinkTarget, v.Target))
+	}
+	t.session.AddEvent(name, trace.WithTimestamp(ts), trace.WithAttributes(attrs...))
+	if v.Rel != agentsession.RelSubsession && v.Rel != agentsession.RelPeer {
+		return
+	}
+	c, ok := t.calls[v.CallID]
+	if !ok {
+		return
+	}
+	var callee []attribute.KeyValue
+	if v.Cancel == "" && v.Rel == agentsession.RelSubsession && v.Session != "" {
+		callee = append(callee, attribute.String(AttrSubsession, v.Session))
+	}
+	if v.Cancel == "" && v.Rel == agentsession.RelPeer {
+		// A peer is named by the url it was reached at, or by its own
+		// session when it was linked by that alone.
+		if peer := cmp.Or(v.URL, v.Session); peer != "" {
+			callee = append(callee, attribute.String(AttrPeer, peer))
+		}
+	}
+	switch {
+	case c.span != nil:
+		c.span.AddEvent(name, trace.WithTimestamp(ts), trace.WithAttributes(attrs...))
+		c.span.SetAttributes(callee...)
+	case !c.closed:
+		c.events = append(c.events, pendingEvent{name: name, at: ts, attrs: attrs})
+		c.callee = append(c.callee, callee...)
+	}
 }
 
 // dispatch opens a tool span for one hand-off of a call to its tool. A
@@ -783,6 +845,8 @@ func (t *tracker) startCall(c *callState, at time.Time, entryID string, prev tra
 	if c.rewritten {
 		attrs = append(attrs, attribute.Bool(AttrArgsRewritten, true))
 	}
+	attrs = append(attrs, c.callee...)
+	c.callee = nil
 	opts := []trace.SpanStartOption{trace.WithTimestamp(at), trace.WithSpanKind(trace.SpanKindInternal), trace.WithAttributes(attrs...)}
 	if sc, ok := t.inference[c.responseID]; ok {
 		opts = append(opts, trace.WithLinks(trace.Link{SpanContext: sc, Attributes: []attribute.KeyValue{attribute.String("agentsession.link", "produced_by")}}))
@@ -794,7 +858,7 @@ func (t *tracker) startCall(c *callState, at time.Time, entryID string, prev tra
 	_, c.span = t.tracer.Start(t.runCtx, OpTool+" "+c.name, opts...)
 	c.closed = false
 	for _, ev := range c.events {
-		c.span.AddEvent(EventDecision, trace.WithTimestamp(ev.at), trace.WithAttributes(ev.attrs...))
+		c.span.AddEvent(ev.name, trace.WithTimestamp(ev.at), trace.WithAttributes(ev.attrs...))
 	}
 	c.events = nil
 	t.spans[entryID] = c.span.SpanContext()

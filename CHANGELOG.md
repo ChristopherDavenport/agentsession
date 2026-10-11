@@ -5,6 +5,54 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Changed: the format is 0.12.** A writer raises every file it appends
+  to, so a reader of 0.11 refuses those files until it is upgraded. A
+  0.5 to 0.11 file reads as it stands; no hash moves.
+- **Added: callees in another system, and the `peer` relation (RFC 0001
+  0.12, `link`).** The link that names a call's callee follows the
+  callee's lifetime: one the call started, whose work the caller ends or
+  asks to stop when it gives the call up, is a `subsession` wherever it
+  runs, and one whose work outlives the call and keeps its own record is
+  a `peer` (`RelPeer`). A link naming a callee reached over a protocol
+  such as A2A carries `url` (the endpoint called, never a name the
+  callee claims), `task` (absent when the callee answered with a
+  message) and `context`, and `session` only when the callee publishes
+  one (`LinkEntry.URL`, `Task`, `Context`; `Callee`, `NewPeerLink`,
+  `NewCalleeSubsessionLink`). A call dispatched again gets a link for
+  each callee it reached. A caller that tells such a callee it no longer
+  wants the work records a cancel notice, a later link of the call with
+  `cancel: "sent"` and a `target` naming the callee's link
+  (`CancelSent`, `NewCancelSentLink`): that it asked, not that the work
+  stopped. `Callees` reads a path's callee links in order, each with the
+  dispatch it belongs to, whether a notice named it (`Cancelled`) and
+  whether the call's output came from it (`Answered`: the output
+  follows its call's last dispatch, no notice names it, no `answer`
+  decision between).
+- `Append` and `Prepare` refuse a new peer link with no call or neither
+  a url nor a session, and a cancel notice whose target is not a callee
+  link of its call and relation on its path (`ErrCalleeLink`); `Commit`
+  and `Extend`, which read paths use, do not. The decoder takes each new
+  member only where the format defines it (task and context beside a
+  url, cancel beside a target), so a stored link is never refused on
+  read, and `VerifyRecords` reports a stored link that carries a 0.12
+  member and breaks its rules. Its rules, and `VerifyLinks`' skipping a
+  callee in another system or a cancel notice, turn on the members a
+  link carries, not the file's header, so a raised file verifies as it
+  did. Migration rewrites a cancel notice's target. The ATIF export lists callees in another system and cancel
+  notices under the root's links rather than embedding them; `describe`
+  shows url, task, context and cancel.
+- **Changed (otel): links annotate the call's tool span.** A link after
+  the call's hand-off is an event on the span it opened, not a pending
+  decision that opened a second span at the record's end; a cancel
+  notice is a `cancel` event (`EventCancel`). Link events carry
+  `agentsession.link.url`, `.task`, `.context` and, on a notice,
+  `.target`; a peer sets `agentsession.peer` on the span (its url, or
+  its session when linked by that alone), and a callee with no session
+  sets no empty `agentsession.subsession`.
+- Added: the `peer.jsonl` conformance fixture.
+
 ## v0.0.23 - 2026-10-11
 
 - **Added: the rest of `remote`'s reads (closes #213).** The log read

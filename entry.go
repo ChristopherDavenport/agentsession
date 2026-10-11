@@ -42,7 +42,17 @@ const (
 	// RelJudgedBy is written into a judged session and names the
 	// session of its judge; see [NewJudgedByLink] and [Judges].
 	RelJudgedBy = "judged_by"
+	// RelPeer names a callee whose work outlives the call that reached
+	// it and which keeps its own record; see [NewPeerLink]. A callee the
+	// caller started and ends with the call is a [RelSubsession],
+	// wherever it runs: the relation follows the callee's lifetime.
+	RelPeer = "peer"
 )
+
+// CancelSent is the one value of a link's Cancel member: the caller
+// told the callee it no longer wanted the work, which says nothing of
+// whether the work stopped; see [NewCancelSentLink].
+const CancelSent = "sent"
 
 // Kinds an [OutcomeEntry] may carry.
 const (
@@ -786,12 +796,39 @@ type LinkEntry struct {
 	CallID string `json:"call_id,omitempty"`
 	// Target, on a [RelJudgedBy] link, names the entry of the judged
 	// session the judgement is about: the entry the judge's outcome
-	// names. It is a member of that relation alone: a target member on
-	// a link of another relation, or one that is not a non-empty
-	// string, which a file from before the member was defined may hold,
-	// is kept as written in Unknown and Target is empty.
+	// names. On a cancel notice (Cancel set) it names the link, in this
+	// session, of the callee the cancel was sent to. It is a member of
+	// those links alone: a target member on another link, or one that
+	// is not a non-empty string, which a file from before the member
+	// was defined may hold, is kept as written in Unknown and Target is
+	// empty.
 	Target string `json:"-" member:"target"`
+	// URL, Task and Context, on a [RelSubsession] or [RelPeer] link,
+	// name a callee in another system, reached over a protocol such as
+	// A2A: the endpoint the call was sent to as the caller resolved it,
+	// never a name the callee claims; the callee's ID for the work the
+	// call started, absent when the callee answered without one (an A2A
+	// message rather than a task); and its ID for the conversation that
+	// work belongs to. Task and Context come with a URL. Session is then
+	// the callee's own session ID when it publishes one, and otherwise
+	// empty. Like Target, each is a member of those relations alone,
+	// kept as written in Unknown on any other, when it is not a
+	// non-empty string, or (task, context) when no url is beside it.
+	URL     string `json:"-" member:"url"`
+	Task    string `json:"-" member:"task"`
+	Context string `json:"-" member:"context"`
+	// Cancel, on a later [RelSubsession] or [RelPeer] link of the same
+	// call, is [CancelSent]: the caller told the callee the link Target
+	// names that it no longer wanted the work. It records the request,
+	// not that the work stopped. A link carrying it names no new
+	// callee; see [NewCancelSentLink]. Any other value, or one with no
+	// target beside it, is kept as written in Unknown.
+	Cancel string `json:"-" member:"cancel"`
 }
+
+// callee reports whether the relation is one a callee's members (url,
+// task, context, cancel) are defined for.
+func (e *LinkEntry) callee() bool { return e.Rel == RelSubsession || e.Rel == RelPeer }
 
 // EntryType returns "link".
 func (*LinkEntry) EntryType() string { return TypeLink }
@@ -2103,15 +2140,22 @@ func (e *OutcomeEntry) decodeMembers(data []byte, all map[string]json.RawMessage
 // MarshalJSON emits the entry as one JSON object.
 func (e *LinkEntry) MarshalJSON() ([]byte, error) {
 	type plain LinkEntry
-	if e.Target != "" {
-		if _, dup := e.Unknown["target"]; dup {
-			return nil, errors.New("agentsession: link entry has target both typed and unknown")
+	for _, m := range [][2]string{{"target", e.Target}, {"url", e.URL}, {"task", e.Task}, {"context", e.Context}, {"cancel", e.Cancel}} {
+		if m[1] == "" {
+			continue
+		}
+		if _, dup := e.Unknown[m[0]]; dup {
+			return nil, fmt.Errorf("agentsession: link entry has %s both typed and unknown", m[0])
 		}
 	}
 	return marshalEntry(TypeLink, &e.EntryBase, struct {
 		*plain
-		Target string `json:"target,omitempty"`
-	}{(*plain)(e), e.Target})
+		Target  string `json:"target,omitempty"`
+		URL     string `json:"url,omitempty"`
+		Task    string `json:"task,omitempty"`
+		Context string `json:"context,omitempty"`
+		Cancel  string `json:"cancel,omitempty"`
+	}{(*plain)(e), e.Target, e.URL, e.Task, e.Context, e.Cancel})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -2125,12 +2169,31 @@ func (e *LinkEntry) UnmarshalJSON(data []byte) error {
 
 func (e *LinkEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain LinkEntry
-	e.Target = ""
+	e.Target, e.URL, e.Task, e.Context, e.Cancel = "", "", "", "", ""
 	if err := unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), linkKeys); err != nil {
 		return err
 	}
 	if e.Rel == RelJudgedBy {
 		promote(&e.EntryBase, "target", &e.Target)
+	}
+	if e.callee() {
+		// Each member is taken only where the format defines it, so a
+		// link read back always holds what a writer may write: task
+		// and context beside a url, and cancel beside the target that
+		// names the link it is about. What is not taken is kept as
+		// written.
+		promote(&e.EntryBase, "url", &e.URL)
+		if e.URL != "" {
+			promote(&e.EntryBase, "task", &e.Task)
+			promote(&e.EntryBase, "context", &e.Context)
+		}
+		var target string
+		if raw, ok := e.Unknown["target"]; ok && holdsExactly(raw, &target) && target != "" {
+			promoteIf(&e.EntryBase, "cancel", &e.Cancel, func(v string) bool { return v == CancelSent })
+		}
+		if e.Cancel != "" {
+			promote(&e.EntryBase, "target", &e.Target)
+		}
 	}
 	return nil
 }

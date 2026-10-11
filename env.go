@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // HashFile returns the content hash of a file in the form the env entry
@@ -267,6 +269,167 @@ func NewSubsessionLink(session, callID string) *LinkEntry {
 // which it is. [Judges] reads these links back.
 func NewJudgedByLink(judge, target string) *LinkEntry {
 	return &LinkEntry{Rel: RelJudgedBy, Session: judge, Target: target}
+}
+
+// Callee names a callee in another system, reached over a protocol
+// such as A2A, for a [RelSubsession] or [RelPeer] link: the endpoint
+// the call was sent to as the caller resolved it (never a name the
+// callee claims for itself), the callee's task (empty when it answered
+// without one, as an A2A message does) and conversation IDs, and its
+// own session ID when it publishes one.
+type Callee struct {
+	URL     string
+	Task    string
+	Context string
+	Session string
+}
+
+// NewPeerLink builds the link a caller records for a callee whose work
+// outlives the call callID: the caller does not end it when it gives
+// the call up, and the callee keeps its own record. It is written as
+// soon as the caller learns the callee's task, or its answer when it
+// gives none. From it a reader may conclude that the call's output came
+// from that work, and not that the work can be replayed or that it
+// ended with the call. A peer link names its call and a url or a
+// session, which [Session.Append] and [Session.Prepare] hold a new one
+// to.
+func NewPeerLink(callID string, c Callee) *LinkEntry {
+	return &LinkEntry{Rel: RelPeer, Session: c.Session, CallID: callID, URL: c.URL, Task: c.Task, Context: c.Context}
+}
+
+// NewCalleeSubsessionLink builds the subsession link for a callee in
+// another system that the call callID started, whose work the caller
+// ends, or asks to stop, when it gives the call up: the relation
+// follows the callee's lifetime, not where it runs. It is written as
+// soon as the caller learns the callee's task, after the call's
+// dispatch; a call dispatched again starts another task and gets a
+// link of its own. [Session.VerifyLinks] does not check its session's
+// header, which was not derived from this one.
+func NewCalleeSubsessionLink(callID string, c Callee) *LinkEntry {
+	return &LinkEntry{Rel: RelSubsession, Session: c.Session, CallID: callID, URL: c.URL, Task: c.Task, Context: c.Context}
+}
+
+// NewCancelSentLink builds the notice a caller records when it tells
+// the callee link names that it no longer wants the work: a link of the
+// same relation and call, carrying [CancelSent], whose Target is link's
+// entry ID, so link must have been appended, on the path the notice is
+// appended to. It records that the caller asked, not that the work
+// stopped; the caller does not wait for the callee's answer. It names
+// no new callee, and [Callees] reads it as a notice about link. Its
+// target names an entry of this session: whoever copies or re-points
+// links, onto a new branch or into another store, re-points the notice
+// with them.
+func NewCancelSentLink(link *LinkEntry) *LinkEntry {
+	return &LinkEntry{Rel: link.Rel, Session: link.Session, CallID: link.CallID, Target: link.ID, Cancel: CancelSent}
+}
+
+// CalleeLink is one callee of a call as a path records it: a
+// subsession or peer link, the hand-off it belongs to, and what became
+// of it.
+type CalleeLink struct {
+	*LinkEntry
+	// Dispatch is the entry ID of the dispatch the link belongs to: for
+	// a callee in another system (URL set), the latest dispatch of its
+	// call before it on the path, since the callee names its work only
+	// when it answers; for a subsession of this store, written before
+	// the hand-off it starts, the first dispatch of its call after it.
+	// It is empty when the path records no such dispatch.
+	Dispatch string
+	// Cancelled is true when a cancel notice on the path names this
+	// link: the caller asked the callee to stop. It does not say the
+	// work stopped.
+	Cancelled bool
+	// Answered is true when the call's output on the path came from
+	// this callee: the output follows the link, the link belongs to the
+	// call's last dispatch before the output, no cancel notice names
+	// it, and no answer decision of the call comes between the link
+	// and the output, which would make the output the harness's.
+	Answered bool
+}
+
+// Callees returns the callees of the calls on a root-first path, every
+// subsession and peer link in path order. A link is identified by its
+// entry and the dispatch it belongs to, not by its task, which a
+// callee that answered with a message has none of: a call dispatched
+// more than once, to a callee that starts new work each time, has a
+// link for each hand-off that reached one. A cancel notice is not a
+// callee; it marks the link its target names, and one naming no link
+// on the path is passed over.
+func Callees(path []Entry) []CalleeLink {
+	var out []CalleeLink
+	byID := make(map[string]int)
+	last := make(map[string]string)  // call -> latest dispatch so far
+	before := make(map[string][]int) // call -> in-store links awaiting their dispatch
+	open := make(map[string][]int)   // call -> links not yet followed by an output
+	blocked := make(map[int]bool)    // link index -> an answer decision came after it
+	for _, e := range path {
+		switch v := e.(type) {
+		case *DispatchEntry:
+			last[v.CallID] = v.ID
+			for _, i := range before[v.CallID] {
+				out[i].Dispatch = v.ID
+			}
+			delete(before, v.CallID)
+		case *DecisionEntry:
+			if v.Verdict == VerdictAnswer {
+				for _, i := range open[v.CallID] {
+					blocked[i] = true
+				}
+			}
+		case *LinkEntry:
+			if !v.callee() {
+				continue
+			}
+			if v.Cancel != "" {
+				if i, ok := byID[v.Target]; ok {
+					out[i].Cancelled = true
+				}
+				continue
+			}
+			i := len(out)
+			byID[v.ID] = i
+			c := CalleeLink{LinkEntry: v}
+			if v.URL != "" {
+				c.Dispatch = last[v.CallID]
+			} else {
+				before[v.CallID] = append(before[v.CallID], i)
+			}
+			out = append(out, c)
+			open[v.CallID] = append(open[v.CallID], i)
+		case *ItemEntry:
+			o, ok := v.Item.(*openresponses.FunctionCallOutput)
+			if !ok {
+				continue
+			}
+			links := open[o.CallID]
+			delete(open, o.CallID)
+			for j := len(links) - 1; j >= 0; j-- {
+				i := links[j]
+				if blocked[i] || out[i].Dispatch != last[o.CallID] {
+					continue
+				}
+				out[i].Answered = true
+				break
+			}
+		}
+	}
+	// A cancel notice may come after the output it would have
+	// answered; a cancelled callee did not answer.
+	for i := range out {
+		if out[i].Cancelled {
+			out[i].Answered = false
+		}
+	}
+	return out
+}
+
+// Callees returns the callees on the path to leaf; see [Callees].
+func (s *Session) Callees(leaf string) ([]CalleeLink, error) {
+	path := s.Path(leaf)
+	if path == nil {
+		return nil, fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
+	}
+	return Callees(path), nil
 }
 
 // Judges returns the judged_by links on a root-first path, in path

@@ -115,6 +115,16 @@ func TestEntryEncoding(t *testing.T) {
 			want:  `{"type":"link","id":"k","parent":"a","ts":"2026-09-17T12:00:01.5Z","rel":"judged_by","session":"s9","target":"r1"}`,
 		},
 		{
+			name:  "peer link",
+			entry: &LinkEntry{EntryBase: base("k", "a"), Rel: RelPeer, CallID: "call_1", URL: "https://peer.example/a2a", Task: "t1", Context: "c1"},
+			want:  `{"type":"link","id":"k","parent":"a","ts":"2026-09-17T12:00:01.5Z","rel":"peer","session":"","call_id":"call_1","url":"https://peer.example/a2a","task":"t1","context":"c1"}`,
+		},
+		{
+			name:  "cancel notice",
+			entry: &LinkEntry{EntryBase: base("k", "a"), Rel: RelSubsession, Session: "s3", CallID: "call_2", Target: "j", Cancel: CancelSent},
+			want:  `{"type":"link","id":"k","parent":"a","ts":"2026-09-17T12:00:01.5Z","rel":"subsession","session":"s3","call_id":"call_2","target":"j","cancel":"sent"}`,
+		},
+		{
 			name:  "custom",
 			entry: &CustomEntry{EntryBase: base("u", "a"), NS: "acme", Data: json.RawMessage(`[1,"<two>"]`)},
 			want:  `{"type":"custom","id":"u","parent":"a","ts":"2026-09-17T12:00:01.5Z","ns":"acme","data":[1,"<two>"]}`,

@@ -809,3 +809,127 @@ func TestSubstitutionAfterResponse(t *testing.T) {
 		t.Errorf("resumed env events marked %v, want the first marked", marked)
 	}
 }
+
+// TestCalleeLinkOnTheToolSpan: a callee link written after the call's
+// hand-off annotates the span the hand-off opened, as a link event and
+// not a decision, and a cancel notice is a cancel event; neither opens
+// a second tool span when a run end closes the call pending, with or
+// without an output. A callee in another system with no session sets
+// no subsession attribute, and a peer names its url on the span.
+func TestCalleeLinkOnTheToolSpan(t *testing.T) {
+	callee := agentsession.Callee{URL: "https://search.example/a2a", Task: "task-1", Context: "ctx-1"}
+	tests := []struct {
+		name   string
+		peer   bool
+		cancel bool
+		output bool
+		state  agentsession.CallState
+	}{
+		{"pending at the run end", false, false, false, agentsession.CallInFlight},
+		{"cancelled and pending at the run end", false, true, false, agentsession.CallInFlight},
+		{"answered before the run end", false, false, true, agentsession.CallCompleted},
+		{"a peer answered before the run end", true, false, true, agentsession.CallCompleted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := agentsession.New(agentsession.Header{ID: "callee", Records: agentsession.AllRecords})
+			must := func(e agentsession.Entry) string {
+				t.Helper()
+				id, err := s.Append(e)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return id
+			}
+			must(agentsession.NewRunStart("r1", agentsession.SourceInput, ""))
+			target := must(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "search", Arguments: "{}"}})
+			must(agentsession.NewDispatch("c", target))
+			link := agentsession.NewCalleeSubsessionLink("c", callee)
+			if tt.peer {
+				link = agentsession.NewPeerLink("c", callee)
+			}
+			must(link)
+			if tt.cancel {
+				must(agentsession.NewCancelSentLink(link))
+			}
+			pending := []string{"c"}
+			if tt.output {
+				must(agentsession.NewItemEntry(&openresponses.FunctionCallOutput{CallID: "c", Output: openresponses.FunctionCallOutputData{Text: "found"}}))
+				pending = nil
+			}
+			reason := agentsession.ReasonAborted
+			if tt.output {
+				reason = agentsession.ReasonDone
+			}
+			must(agentsession.NewRunEnd("r1", reason, "", pending))
+
+			sr, tracer := recorder()
+			if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+				t.Fatal(err)
+			}
+			tool := spans(sr.Ended()).named(OpTool + " search")
+			if len(tool) != 1 {
+				t.Fatalf("%d tool spans, want 1", len(tool))
+			}
+			if got := attr(tool[0], AttrCallState); got != tt.state.String() {
+				t.Errorf("state = %s, want %s", got, tt.state)
+			}
+			if got := eventAttr(tool[0], EventLink, AttrLinkTask); len(got) != 1 || got[0] != "task-1" {
+				t.Errorf("link events' task = %v", got)
+			}
+			if got := eventAttr(tool[0], EventLink, AttrLinkURL); len(got) != 1 || got[0] != callee.URL {
+				t.Errorf("link events' url = %v", got)
+			}
+			if got := eventAttr(tool[0], EventDecision, AttrLinkRel); len(got) != 0 {
+				t.Errorf("a link went out as a decision event: %v", got)
+			}
+			if got := attr(tool[0], AttrSubsession); got != "" {
+				t.Errorf("subsession attribute = %q, want none for a callee with no session", got)
+			}
+			wantCancel := 0
+			if tt.cancel {
+				wantCancel = 1
+			}
+			if got := eventAttr(tool[0], EventCancel, AttrLinkTarget); len(got) != wantCancel || wantCancel == 1 && got[0] != link.ID {
+				t.Errorf("cancel events' target = %v, want the link %s", got, link.ID)
+			}
+			if got := attr(tool[0], AttrPeer); tt.peer != (got == callee.URL) {
+				t.Errorf("peer attribute = %q", got)
+			}
+		})
+	}
+}
+
+// TestPeerBySessionOnTheToolSpan: a peer linked by its session alone,
+// with no url, is named on the call's tool span by that session.
+func TestPeerBySessionOnTheToolSpan(t *testing.T) {
+	s := agentsession.New(agentsession.Header{ID: "peer-session", Records: agentsession.AllRecords})
+	if _, err := s.Append(agentsession.NewRunStart("r1", agentsession.SourceInput, "")); err != nil {
+		t.Fatal(err)
+	}
+	target, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "ask", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []agentsession.Entry{
+		agentsession.NewDispatch("c", target),
+		agentsession.NewPeerLink("c", agentsession.Callee{Session: "colleague-session"}),
+		agentsession.NewItemEntry(&openresponses.FunctionCallOutput{CallID: "c", Output: openresponses.FunctionCallOutputData{Text: "ok"}}),
+		agentsession.NewRunEnd("r1", agentsession.ReasonDone, "", nil),
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sr, tracer := recorder()
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	tool := spans(sr.Ended()).named(OpTool + " ask")
+	if len(tool) != 1 {
+		t.Fatalf("%d tool spans, want 1", len(tool))
+	}
+	if got := attr(tool[0], AttrPeer); got != "colleague-session" {
+		t.Errorf("peer attribute = %q, want the peer's session", got)
+	}
+}
