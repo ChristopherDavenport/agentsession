@@ -143,6 +143,9 @@ type hub struct {
 	// end is the problem the follow ended with; done says it ended.
 	end  *Problem
 	done bool
+	// changed is closed, and replaced, at each event and at the end, for
+	// a caller waiting for the replica to catch up.
+	changed chan struct{}
 }
 
 // sub is one client's place in a hub.
@@ -226,6 +229,8 @@ func (hb *hub) publish(ev *event) error {
 	default:
 		close(hb.ready)
 	}
+	close(hb.changed)
+	hb.changed = make(chan struct{})
 	return nil
 }
 
@@ -244,6 +249,8 @@ func (hb *hub) finish(p *Problem) {
 	default:
 		close(hb.ready)
 	}
+	close(hb.changed)
+	hb.changed = make(chan struct{})
 	hb.mu.Unlock()
 	hb.h.forget(hb)
 }
@@ -255,6 +262,44 @@ func (hb *hub) wait(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// catchUp waits until the replica holds every entry of held, the session
+// as the store held it when a caller asked. The follower runs behind the
+// store: it learns of an append when the store wakes it, or when it next
+// looks, while a reader is owed what the store holds when it reads. The
+// log is in append order and the replica takes it in that order, so
+// holding held's newest entry is holding them all.
+func (hb *hub) catchUp(ctx context.Context, held *agentsession.Session) error {
+	entries := held.Entries()
+	if len(entries) == 0 {
+		return nil
+	}
+	newest := entries[len(entries)-1].Base().ID
+	for {
+		hb.mu.Lock()
+		if hb.done {
+			end := hb.end
+			hb.mu.Unlock()
+			if end != nil {
+				return end
+			}
+			return problem(CodeStoreFault, "the follow ended", "")
+		}
+		if hb.rep != nil {
+			if _, ok := hb.rep.sess.Entry(newest); ok {
+				hb.mu.Unlock()
+				return nil
+			}
+		}
+		ch := hb.changed
+		hb.mu.Unlock()
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
@@ -330,7 +375,7 @@ func (h *Handler) acquire(id string) *hub {
 	hb := h.hubs[id]
 	if hb == nil {
 		ctx, cancel := context.WithCancel(h.ctx)
-		hb = &hub{h: h, id: id, cancel: cancel, ready: make(chan struct{}), subs: map[*sub]struct{}{}}
+		hb = &hub{h: h, id: id, cancel: cancel, ready: make(chan struct{}), subs: map[*sub]struct{}{}, changed: make(chan struct{})}
 		h.hubs[id] = hb
 		go hb.run(ctx)
 	}

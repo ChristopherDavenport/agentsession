@@ -30,7 +30,10 @@ type Handler struct {
 	replay    int
 	linger    time.Duration
 	heartbeat time.Duration
-	logf      func(error)
+	// catchUpWait bounds how long a read waits for the session's
+	// follower to catch up with the store.
+	catchUpWait time.Duration
+	logf        func(error)
 
 	mux    *http.ServeMux
 	ctx    context.Context
@@ -102,12 +105,13 @@ func WithErrorLog(fn func(error)) Option { return func(h *Handler) { h.logf = fn
 // refs through its [agentsession.RefStore] when it keeps them.
 func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 	h := &Handler{
-		store:     store,
-		buffer:    256,
-		replay:    1024,
-		linger:    2 * time.Second,
-		heartbeat: 15 * time.Second,
-		hubs:      map[string]*hub{},
+		store:       store,
+		buffer:      256,
+		replay:      1024,
+		linger:      2 * time.Second,
+		heartbeat:   15 * time.Second,
+		hubs:        map[string]*hub{},
+		catchUpWait: 30 * time.Second,
 	}
 	h.reader, _ = store.(agentsession.Reader)
 	h.follower, _ = store.(agentsession.Follower)
@@ -372,6 +376,43 @@ func (h *Handler) following(w http.ResponseWriter, r *http.Request) *hub {
 	return hb
 }
 
+// current returns the session's hub caught up to what the store holds
+// now, or answers the request and returns nil: what a read of the
+// session's state, its path or a fresh follow starts from. The store is
+// read first, so a session it does not hold is answered without a
+// follower.
+func (h *Handler) current(w http.ResponseWriter, r *http.Request) *hub {
+	if h.reader == nil || h.follower == nil {
+		writeProblem(w, problem(CodeUnsupported, "the store cannot be read without a hold", ""))
+		return nil
+	}
+	held, err := h.reader.Read(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if r.Context().Err() == nil {
+			h.fail(w, err)
+		}
+		return nil
+	}
+	hb := h.following(w, r)
+	if hb == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), h.catchUpWait)
+	defer cancel()
+	if err := hb.catchUp(ctx, held); err != nil {
+		h.release(hb)
+		if r.Context().Err() != nil {
+			return nil
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			err = fmt.Errorf("remote: the follower of %s did not catch up with the store in %s", hb.id, h.catchUpWait)
+		}
+		h.fail(w, err)
+		return nil
+	}
+	return hb
+}
+
 // checkIncarnation refuses a request whose If-Incarnation names another
 // session than the one under the ID.
 func checkIncarnation(r *http.Request, inc string) error {
@@ -393,7 +434,7 @@ type sessionInfo struct {
 }
 
 func (h *Handler) session(w http.ResponseWriter, r *http.Request) {
-	hb := h.following(w, r)
+	hb := h.current(w, r)
 	if hb == nil {
 		return
 	}
@@ -439,7 +480,7 @@ func (h *Handler) path(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, problem(CodeBadRequest, "contents is all, since-fold or none", ""))
 		return
 	}
-	hb := h.following(w, r)
+	hb := h.current(w, r)
 	if hb == nil {
 		return
 	}
@@ -578,7 +619,14 @@ func (h *Handler) follow(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, problem(CodeStoreFault, "the connection cannot stream", ""))
 		return
 	}
-	hb := h.following(w, r)
+	// A fresh follow starts from what the store holds now; a resume
+	// from the events after its cursor.
+	var hb *hub
+	if from == "" {
+		hb = h.current(w, r)
+	} else {
+		hb = h.following(w, r)
+	}
 	if hb == nil {
 		return
 	}

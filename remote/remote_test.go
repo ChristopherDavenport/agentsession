@@ -569,3 +569,47 @@ func TestAForeignCursorIsAReset(t *testing.T) {
 		})
 	}
 }
+
+// A Read, a session's state and a fresh follow give what the store
+// holds when they are asked, even while the session's shared follower
+// runs behind it. Appends through the session Open returns ring no
+// follower of the memory store's, which finds them only by its slow
+// look, so the follower a running follow keeps is behind each of them.
+func TestAReadRightAfterAnAppendSeesIt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st, s, _ := seeded(t, 1)
+	c := dial(t, server(t, st, remote.WithInsecureNoAuth()))
+	// A follow kept running keeps the session's follower alive.
+	go func() {
+		for _, err := range c.Follow(ctx, s.ID(), "") {
+			if err != nil {
+				return
+			}
+		}
+	}()
+	live, err := st.Open(ctx, s.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 5 {
+		id, err := live.Append(user(fmt.Sprint("quiet ", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		read, err := c.Read(ctx, s.ID())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := read.Entry(id); !ok || read.Leaf() != id {
+			t.Fatalf("append %d: Read holds %d entries at leaf %s, not the append %s the store holds", i, len(read.Entries()), read.Leaf(), id)
+		}
+		info, err := c.Session(ctx, s.ID())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Length != i+2 || info.Head != id {
+			t.Fatalf("append %d: state %d entries at %s, want %d at %s", i, info.Length, info.Head, i+2, id)
+		}
+	}
+}
