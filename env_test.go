@@ -313,10 +313,10 @@ func TestLinkTargetOfAnotherRelation(t *testing.T) {
 }
 
 // TestPeerLink: a peer link names a callee whose work outlives its
-// call, a callee subsession one the call started; Callees reads the
-// first link of each call and folds a later cancel notice into it, and
-// the callee's members belong to the subsession and peer relations
-// alone.
+// call, a callee subsession one the call started; Callees reads every
+// callee link in path order, a cancel notice marking the link its
+// target names, and the callee's members belong to the subsession and
+// peer relations alone.
 func TestPeerLink(t *testing.T) {
 	c := Callee{URL: "https://peer.example/a2a", Task: "t1", Context: "c1"}
 	p := NewPeerLink("call_1", c)
@@ -327,14 +327,20 @@ func TestPeerLink(t *testing.T) {
 	if sub.Rel != RelSubsession || sub.Session != "sub-session" || sub.Task != "t2" {
 		t.Errorf("subsession link = %+v", sub)
 	}
-	cancel := NewCancelSentLink(sub)
-	if cancel.Rel != RelSubsession || cancel.CallID != "call_2" || cancel.Task != "t2" || cancel.Session != "sub-session" || cancel.Cancel != CancelSent {
-		t.Errorf("cancel notice = %+v", cancel)
-	}
 
 	s := New(Header{})
 	a := appendText(t, s, "work")
-	for _, e := range []Entry{p, NewLinkEntry(RelForkOf, "elsewhere"), sub, NewSubsessionLink("child", "call_3"), cancel} {
+	for _, e := range []Entry{p, NewLinkEntry(RelForkOf, "elsewhere"), sub} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cancel := NewCancelSentLink(sub)
+	if cancel.Rel != RelSubsession || cancel.CallID != "call_2" || cancel.Target != sub.ID || cancel.Target == "" || cancel.Cancel != CancelSent || cancel.Task != "" {
+		t.Errorf("cancel notice = %+v", cancel)
+	}
+	again := NewCalleeSubsessionLink("call_2", Callee{URL: "https://sub.example/a2a", Task: "t3"})
+	for _, e := range []Entry{cancel, again, NewSubsessionLink("child", "call_3")} {
 		if _, err := s.Append(e); err != nil {
 			t.Fatal(err)
 		}
@@ -343,17 +349,20 @@ func TestPeerLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(callees) != 3 {
+	if len(callees) != 4 {
 		t.Fatalf("Callees = %+v", callees)
 	}
-	if callees[0].Rel != RelPeer || callees[0].CancelSent {
+	if callees[0].Rel != RelPeer || callees[0].Cancelled {
 		t.Errorf("first callee = %+v", callees[0])
 	}
-	if callees[1].CallID != "call_2" || callees[1].Cancel != "" || !callees[1].CancelSent {
-		t.Errorf("second callee = %+v, cancel sent %v", callees[1].LinkEntry, callees[1].CancelSent)
+	if callees[1].Task != "t2" || !callees[1].Cancelled {
+		t.Errorf("the cancelled callee = %+v, cancelled %v", callees[1].LinkEntry, callees[1].Cancelled)
 	}
-	if callees[2].CallID != "call_3" || callees[2].URL != "" || callees[2].CancelSent {
-		t.Errorf("third callee = %+v", callees[2])
+	if callees[2].Task != "t3" || callees[2].Cancelled {
+		t.Errorf("the callee of the second dispatch = %+v, cancelled %v", callees[2].LinkEntry, callees[2].Cancelled)
+	}
+	if callees[3].CallID != "call_3" || callees[3].URL != "" || callees[3].Cancelled {
+		t.Errorf("the in-store subsession = %+v", callees[3])
 	}
 	if len(Callees(s.Path(a))) != 0 {
 		t.Error("a path above the links holds a callee")
@@ -361,16 +370,58 @@ func TestPeerLink(t *testing.T) {
 	if _, err := s.Callees("nowhere"); !errors.Is(err, ErrNoEntry) {
 		t.Errorf("Callees of a missing entry = %v, want ErrNoEntry", err)
 	}
+	if err := s.VerifyRecords(s.Leaf()); err != nil {
+		t.Errorf("VerifyRecords: %v", err)
+	}
 
 	for name, bad := range map[string]*LinkEntry{
-		"a url on a fork_of link":     {Rel: RelForkOf, Session: "x", URL: "https://x"},
-		"a task on a judged_by link":  {Rel: RelJudgedBy, Session: "x", Task: "t"},
-		"a cancel other than sent":    {Rel: RelSubsession, Session: "x", CallID: "call_1", Cancel: "done"},
-		"a peer link with no call_id": {Rel: RelPeer, URL: "https://x"},
+		"a url on a fork_of link":                    {Rel: RelForkOf, Session: "x", URL: "https://x"},
+		"a task on a judged_by link":                 {Rel: RelJudgedBy, Session: "x", Task: "t"},
+		"a cancel other than sent":                   {Rel: RelSubsession, Session: "x", CallID: "call_1", Target: "k", Cancel: "done"},
+		"a cancel notice with no target":             {Rel: RelSubsession, Session: "x", CallID: "call_1", Cancel: CancelSent},
+		"a target on a subsession link, no cancel":   {Rel: RelSubsession, Session: "x", CallID: "call_1", Target: "k"},
+		"a task with no url":                         {Rel: RelPeer, CallID: "call_1", Task: "t"},
+		"a context with no url on a subsession link": {Rel: RelSubsession, Session: "x", CallID: "call_1", Context: "c"},
 	} {
 		if _, err := s.Append(bad); err == nil {
 			t.Errorf("%s was appended", name)
 		}
+	}
+}
+
+// TestCalleeLinksVerified: what a writer must not write, and the
+// decoder still reads as written, VerifyRecords reports for a file of
+// 0.12: a peer link with no call or neither a url nor a session, and a
+// cancel notice naming no callee link of its call before it. A file of
+// an earlier minor is not held to them.
+func TestCalleeLinksVerified(t *testing.T) {
+	for name, link := range map[string]*LinkEntry{
+		"a peer link with no call":               {Rel: RelPeer, URL: "https://x"},
+		"a peer link with no url and no session": {Rel: RelPeer, CallID: "call_1"},
+		"a cancel notice naming no link":         {Rel: RelSubsession, CallID: "call_1", Target: "sha256:nowhere", Cancel: CancelSent},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := New(Header{})
+			appendText(t, s, "work")
+			if _, err := s.Append(link); err != nil {
+				t.Fatalf("the writer refused what only a verifier reports: %v", err)
+			}
+			if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrCalleeLink) {
+				t.Errorf("VerifyRecords = %v, want ErrCalleeLink", err)
+			}
+			var buf bytes.Buffer
+			if err := Write(&buf, s); err != nil {
+				t.Fatal(err)
+			}
+			older := strings.Replace(buf.String(), `"format":"`+Format+`"`, `"format":"agentsession/0.11"`, 1)
+			back, err := Read(strings.NewReader(older))
+			if err != nil {
+				t.Fatalf("a stored link is refused on read: %v", err)
+			}
+			if err := back.VerifyRecords(back.Leaf()); err != nil {
+				t.Errorf("an 0.11 file is held to 0.12's rule: %v", err)
+			}
+		})
 	}
 }
 
@@ -383,13 +434,16 @@ func TestLinkCalleeMembersOfAnotherRelation(t *testing.T) {
 		`{"type":"link","id":"k","parent":null,"ts":"2026-09-17T12:00:01Z","rel":"fork_of","session":"s2","url":"https://x","task":"t","context":"c","cancel":"sent"}`,
 		`{"type":"link","id":"k","parent":null,"ts":"2026-09-17T12:00:01Z","rel":"subsession","session":"s2","call_id":"call_1","cancel":"maybe"}`,
 		`{"type":"link","id":"k","parent":null,"ts":"2026-09-17T12:00:01Z","rel":"peer","session":"","call_id":"call_1","task":7}`,
+		`{"type":"link","id":"k","parent":null,"ts":"2026-09-17T12:00:01Z","rel":"peer","session":"","call_id":"call_1","task":"t","context":"c"}`,
+		`{"type":"link","id":"k","parent":null,"ts":"2026-09-17T12:00:01Z","rel":"subsession","session":"s2","call_id":"call_1","cancel":"sent"}`,
+		`{"type":"link","id":"k","parent":null,"ts":"2026-09-17T12:00:01Z","rel":"subsession","session":"s2","call_id":"call_1","target":"sha256:x"}`,
 	} {
 		e, err := UnmarshalEntry([]byte(line))
 		if err != nil {
 			t.Fatal(err)
 		}
 		l := e.(*LinkEntry)
-		if l.URL != "" || l.Task != "" || l.Context != "" || l.Cancel != "" || len(l.Unknown) == 0 {
+		if l.URL != "" || l.Task != "" || l.Context != "" || l.Cancel != "" || l.Target != "" || len(l.Unknown) == 0 {
 			t.Errorf("%s: read as %+v, unknown %v", line, l, l.Unknown)
 		}
 		back, err := MarshalEntry(l)
@@ -421,5 +475,33 @@ func TestALinkOfAnUnknownRelationIsKept(t *testing.T) {
 	}
 	if !sameJSON(t, back, []byte(line)) {
 		t.Errorf("rewritten as %s", back)
+	}
+}
+
+// TestVerifyLinksOfACalleeByFormat: in a file of 0.12 a subsession link
+// naming a callee in another system is not checked against a header,
+// since its session was not derived from this one; in an earlier file,
+// where url meant nothing, the link is checked as it was.
+func TestVerifyLinksOfACalleeByFormat(t *testing.T) {
+	s := New(Header{ID: "caller"})
+	appendText(t, s, "work")
+	if _, err := s.Append(NewCalleeSubsessionLink("call_1", Callee{URL: "https://x", Task: "t", Session: "remote"})); err != nil {
+		t.Fatal(err)
+	}
+	stranger := New(Header{ID: "remote", ParentSession: "someone-else"})
+	resolve := func(string) (*Session, error) { return stranger, nil }
+	if err := s.VerifyLinks(resolve); err != nil {
+		t.Errorf("0.12: VerifyLinks = %v, want nil", err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	older, err := Read(strings.NewReader(strings.Replace(buf.String(), `"format":"`+Format+`"`, `"format":"agentsession/0.11"`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := older.VerifyLinks(resolve); !errors.Is(err, ErrLinkMismatch) {
+		t.Errorf("0.11: VerifyLinks = %v, want ErrLinkMismatch", err)
 	}
 }

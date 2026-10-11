@@ -1363,7 +1363,9 @@ A reference to another session, for subagents and forks.
 ```json
 {"type":"link","id":"…","parent":"…","ts":"…",
  "rel":"subsession|peer|fork_of|continued_in|judged_by","session":"…","call_id":"…",
- "target":"entry-id","url":"…","task":"…","context":"…","cancel":"sent"}
+ "target":"entry-id","url":"…","task":"…","context":"…"}
+{"type":"link","id":"…","parent":"…","ts":"…",
+ "rel":"subsession","session":"…","call_id":"…","target":"link-entry-id","cancel":"sent"}
 ```
 
 `call_id` ties a subsession to the function call that spawned it. A
@@ -1395,55 +1397,72 @@ conversation with a model, and its header says only which session it
 was derived from: `parent_session` holds a judge, a subagent and a fork
 alike, and cannot say which. The link can. A reader selecting the
 judges of a run reads the `judged_by` links on its path, and `target`
-tells the several judgements a session may hold apart. `target` is
-defined for this relation alone, and names an entry on a path in the
-judged session, which a store does not check, as it does not check an
-`outcome`'s. A `judged_by` link's `call_id` means nothing, and the
+tells the several judgements a session may hold apart. On this
+relation `target` names an entry on a path in the judged session, which
+a store does not check, as it does not check an `outcome`'s; it is
+defined for it and for a cancel notice, below, alone. A `judged_by` link's `call_id` means nothing, and the
 checks below are the `subsession` link's alone.
 
 A call's callee may run in another system, reached over a protocol
 such as A2A, rather than as a session this store holds. Which relation
 links it follows the callee's lifetime, not where it runs or whether it
 publishes a record. A callee the caller started for the call, whose
-work ends when the caller gives the call up, is a `subsession`, here or
-elsewhere. A callee whose work outlives the call, which the caller does
-not end when it gives the call up and which keeps its own record, is a
-`peer`. A `peer` link is written into the caller's session, carries the
-`call_id` of the call it answers, and is a record entry like any link.
-From a `peer` link a reader may conclude that the call's output came
-from that callee's work, and nothing more: not that the work can be
-replayed, since its record is the peer's, and not that it ended with
-the call, since a peer's work may go on after the caller's run ends.
+work the caller ends, or asks to stop, when it gives the call up, is a
+`subsession`, here or elsewhere. A callee whose work outlives the call,
+which the caller does not stop when it gives the call up and which
+keeps its own record, is a `peer`. A `peer` link is written into the
+caller's session, carries the `call_id` of the call it answers, and is
+a record entry like any link. From a `peer` link a reader may conclude
+that the call's output came from that callee's work, and nothing more:
+not that the work can be replayed, since its record is the peer's, and
+not that it ended with the call, since a peer's work may go on after
+the caller's run ends.
 
 A `subsession` or `peer` link that names a callee in another system
 carries `url`, the endpoint the call was sent to as the caller resolved
 it, never a name the callee's own description claims for itself;
 `task`, the callee's ID for the unit of work the call started; and
 `context`, the callee's ID for the conversation that work belongs to,
-when the protocol has one. `session` is the callee's own session ID when
-it publishes one, and otherwise the empty string. The three members are
-defined for these two relations alone: on a link of another relation, or
-as anything but a non-empty string, a reader keeps them as written, as
-members it does not know. Such a callee names its task only when it
-answers, so the link is written as soon as the caller learns the task,
-after the call's `dispatch`; a call dispatched with no such link reached
-no task the caller learned of. The header check above is the in-store
-subsession's: a callee in another system did not derive its session
-from this one, so a verifier does not check the session a link carrying
-`url` names against it.
+when the protocol has one. A callee may answer without starting a unit
+of work, as an A2A server answers `message/send` with a message: the
+link then carries `url`, and `context` when the answer names one, and
+no `task`, and is written when the answer arrives. `task` and `context`
+are written only beside `url`. `session` is the callee's own session ID
+when it publishes one, and otherwise the empty string; a `peer` link
+MUST carry `call_id` and a `url` or a non-empty `session`. The members
+are defined for these two relations alone: on a link of another
+relation, as anything but a non-empty string, or (`task`, `context`)
+with no `url` beside them, a reader keeps them as written, as members
+it does not know. Such a callee names its task only when it answers, so
+the link is written as soon as the caller learns the task, after the
+call's `dispatch`; a call dispatched with no such link reached no task
+the caller learned of. A call dispatched again, after a restart or by
+the rule that replays a call, starts new work at the callee, and its
+link is written again: a later link of the call that is not a cancel
+notice names the callee of a later `dispatch`. A reader tells a call's
+callees apart by `call_id` and `task`, and the latest link of a call is
+the callee of its latest `dispatch`, the one that answered when the
+call's output follows it. In a file of 0.12 or later the header check
+above is the in-store subsession's alone: a callee in another system did
+not derive its session from this one, so a verifier does not check a
+link carrying `url`, or naming no session, against it. A link of an
+earlier file is checked as it was.
 
 A caller that gives up a call whose callee it linked, and tells the
-callee it no longer wants the work, MAY record that it did by a second
-link of the same `rel`, `session`, `call_id` and members, carrying
-`cancel: "sent"`, written when the request was sent. It records that
-the caller asked, not that the callee stopped: the caller does not wait
-for the callee's answer, so it knows nothing more, and the callee's
-work may still have run to its end. A link carrying `cancel` names no
-new callee. A reader listing a call's callees takes the first link for
-the call and reads a later one carrying `cancel` as a notice about it,
-and a verifier checks the first alone. `cancel` is defined for the
-`subsession` and `peer` relations, with the value `sent`; any other
-value, or the member on another relation, a reader keeps as written.
+callee it no longer wants the work, MAY record that it did by a cancel
+notice: a later link of the same `rel` and `call_id` carrying `cancel:
+"sent"` and `target`, the ID of the link entry, on the same path, of the
+callee the cancel was sent to. It records that the caller asked, not
+that the callee stopped: the caller does not wait for the callee's
+answer, so it knows nothing more, and the callee's work may still have
+run to its end. A cancel notice names no new callee and need not repeat
+the members of the link it names. `cancel` is defined for the
+`subsession` and `peer` relations, with the value `sent` and a `target`
+beside it; any other value, one with no `target`, or the member on
+another relation, a reader keeps as written. A verifier reports a cancel
+notice whose `target` names no callee link of its call before it, and a
+`peer` link with no `call_id` or with neither `url` nor `session`; a
+reader reads either as written and does not refuse the file.
 
 A link names a session, not a point in one, and at the moment it is
 written there is no point to name. The other half of the round trip is
@@ -1872,7 +1891,10 @@ out of force among them, and its omitted list by `of`, a two-model session
 whose `omit` is written at each switch, every response hashed and
 verifying, beside the same session written as 0.10 does, and one whose
 `omit` a compaction's checkpoint carries into a switch of model, a `judged_by`
-link with its `target`, an `of` naming no `config` entry on the path,
+link with its `target`, calls to callees in another system, each linked
+after its `dispatch` in a file that promises them: a `peer` that answered
+without a task, and a `subsession` call whose first task a cancel notice
+names and whose second dispatch's task answered, an `of` naming no `config` entry on the path,
 or one before a compaction's checkpoint, kept as written and noted by a
 tool that checks a file, and
 negative cases, each a file broken in one way, for a broken parent link,
@@ -1909,25 +1931,30 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.11
 
-One relation and four members of `link`, all optional. A 0.11 file is a
-0.12 file that holds none of them. No hash changes, and no rule reads an
-earlier file differently.
+One relation, four members of `link` and a second use of `target`, all
+optional. A 0.11 file is a 0.12 file that holds none of them. No hash
+changes, and no rule reads an earlier file differently: the header check
+a verifier skips for a callee in another system is skipped in files of
+0.12 alone.
 
 - A `peer` relation on `link` names a callee whose work outlives the
   call that reached it (`link`). Which relation links a callee follows
-  its lifetime: a callee the caller started and ends with the call is a
-  `subsession`, wherever it runs. A header's `parent_session` and the
-  subsession check cannot describe a callee in another system that the
-  caller did not spawn.
+  its lifetime: a callee the caller started, whose work the caller ends
+  or asks to stop with the call, is a `subsession`, wherever it runs. A
+  header's `parent_session` and the subsession check cannot describe a
+  callee in another system that the caller did not spawn.
 - `url`, `task` and `context` on a `subsession` or `peer` link name a
   callee in another system, reached over a protocol such as A2A: the
-  endpoint called, the callee's task and its conversation (`link`). A
-  call to such a callee left the record with nothing that said which
-  work answered it.
-- `cancel: "sent"` on a later link of the same call records that the
-  caller told the callee it no longer wanted the work, and not that the
-  work stopped (`link`). A caller that gives up a call does not wait for
-  the callee to confirm, so the record can say only what it sent.
+  endpoint called, the callee's task, absent when it answered with a
+  message, and its conversation (`link`). A call dispatched again gets a
+  link for each callee it reached, told apart by `task`. A call to such a
+  callee left the record with nothing that said which work answered it.
+- A cancel notice, a later link of the call with `cancel: "sent"` and a
+  `target` naming the link of the callee it was sent to, records that
+  the caller told the callee it no longer wanted the work, and not that
+  the work stopped (`link`). A caller that gives up a call does not wait
+  for the callee to confirm, so the record can say only what it sent,
+  and `target` says which of a call's callees it was sent to.
 
 A writer of 0.12 raises every file it appends to, as Versioning says, so
 every reader of 0.11 refuses those files until it is upgraded. A member

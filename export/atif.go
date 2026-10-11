@@ -1111,9 +1111,9 @@ func (b *builder) subsessions() {
 		if l.Target != "" {
 			rec["target"] = l.Target
 		}
-		for k, v := range map[string]string{"url": l.URL, "task": l.Task, "context": l.Context, "cancel": l.Cancel} {
-			if v != "" {
-				rec[k] = v
+		for _, m := range [][2]string{{"url", l.URL}, {"task", l.Task}, {"context", l.Context}, {"cancel", l.Cancel}} {
+			if m[1] != "" {
+				rec[m[0]] = m[1]
 			}
 		}
 		copyUnknown(rec, l.Unknown)

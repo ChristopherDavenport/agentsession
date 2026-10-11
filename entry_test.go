@@ -121,8 +121,8 @@ func TestEntryEncoding(t *testing.T) {
 		},
 		{
 			name:  "cancel notice",
-			entry: &LinkEntry{EntryBase: base("k", "a"), Rel: RelSubsession, Session: "s3", CallID: "call_2", Task: "t2", Cancel: CancelSent},
-			want:  `{"type":"link","id":"k","parent":"a","ts":"2026-09-17T12:00:01.5Z","rel":"subsession","session":"s3","call_id":"call_2","task":"t2","cancel":"sent"}`,
+			entry: &LinkEntry{EntryBase: base("k", "a"), Rel: RelSubsession, Session: "s3", CallID: "call_2", Target: "j", Cancel: CancelSent},
+			want:  `{"type":"link","id":"k","parent":"a","ts":"2026-09-17T12:00:01.5Z","rel":"subsession","session":"s3","call_id":"call_2","target":"j","cancel":"sent"}`,
 		},
 		{
 			name:  "custom",

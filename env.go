@@ -272,8 +272,9 @@ func NewJudgedByLink(judge, target string) *LinkEntry {
 // Callee names a callee in another system, reached over a protocol
 // such as A2A, for a [RelSubsession] or [RelPeer] link: the endpoint
 // the call was sent to as the caller resolved it (never a name the
-// callee claims for itself), the callee's task and conversation IDs,
-// and its own session ID when it publishes one.
+// callee claims for itself), the callee's task (empty when it answered
+// without one, as an A2A message does) and conversation IDs, and its
+// own session ID when it publishes one.
 type Callee struct {
 	URL     string
 	Task    string
@@ -284,49 +285,57 @@ type Callee struct {
 // NewPeerLink builds the link a caller records for a callee whose work
 // outlives the call callID: the caller does not end it when it gives
 // the call up, and the callee keeps its own record. It is written as
-// soon as the caller learns the callee's task. From it a reader may
-// conclude that the call's output came from that work, and not that
-// the work can be replayed or that it ended with the call.
+// soon as the caller learns the callee's task, or its answer when it
+// gives none. From it a reader may conclude that the call's output came
+// from that work, and not that the work can be replayed or that it
+// ended with the call. A peer link names its call and a url or a
+// session; [Session.VerifyRecords] reports one that does not.
 func NewPeerLink(callID string, c Callee) *LinkEntry {
 	return &LinkEntry{Rel: RelPeer, Session: c.Session, CallID: callID, URL: c.URL, Task: c.Task, Context: c.Context}
 }
 
 // NewCalleeSubsessionLink builds the subsession link for a callee in
-// another system that the call callID started and that ends with the
-// call: the relation follows the callee's lifetime, not where it runs.
-// It is written as soon as the caller learns the callee's task, after
-// the call's dispatch, and [Session.VerifyLinks] does not check its
-// session's header, which was not derived from this one.
+// another system that the call callID started, whose work the caller
+// ends, or asks to stop, when it gives the call up: the relation
+// follows the callee's lifetime, not where it runs. It is written as
+// soon as the caller learns the callee's task, after the call's
+// dispatch; a call dispatched again starts another task and gets a
+// link of its own. [Session.VerifyLinks] does not check its session's
+// header, which was not derived from this one.
 func NewCalleeSubsessionLink(callID string, c Callee) *LinkEntry {
 	return &LinkEntry{Rel: RelSubsession, Session: c.Session, CallID: callID, URL: c.URL, Task: c.Task, Context: c.Context}
 }
 
 // NewCancelSentLink builds the notice a caller records when it tells
-// the callee link names that it no longer wants the work: a link of
-// the same relation, session, call and callee, carrying [CancelSent].
-// It records that the caller asked, not that the work stopped; the
-// caller does not wait for the callee's answer. It names no new
-// callee, and [Callees] reads it as a notice about the first link.
+// the callee link names that it no longer wants the work: a link of the
+// same relation and call, carrying [CancelSent], whose Target is link's
+// entry ID, so link must have been appended. It records that the caller
+// asked, not that the work stopped; the caller does not wait for the
+// callee's answer. It names no new callee, and [Callees] reads it as a
+// notice about link.
 func NewCancelSentLink(link *LinkEntry) *LinkEntry {
-	return &LinkEntry{Rel: link.Rel, Session: link.Session, CallID: link.CallID, URL: link.URL, Task: link.Task, Context: link.Context, Cancel: CancelSent}
+	return &LinkEntry{Rel: link.Rel, Session: link.Session, CallID: link.CallID, Target: link.ID, Cancel: CancelSent}
 }
 
-// CalleeLink is a call's callee as a path records it: the first
-// subsession or peer link for the call, and whether a later one sent
-// it a cancel.
+// CalleeLink is one callee of a call as a path records it: a
+// subsession or peer link, and whether a cancel notice on the path
+// names it.
 type CalleeLink struct {
 	*LinkEntry
-	// CancelSent is true when a later link of the call carries
-	// [CancelSent]: the caller asked the callee to stop. It does not
-	// say the work stopped.
-	CancelSent bool
+	// Cancelled is true when a later cancel notice names this link:
+	// the caller asked the callee to stop. It does not say the work
+	// stopped.
+	Cancelled bool
 }
 
-// Callees returns the callees of the calls on a root-first path, in the
-// order their first links appear: for each call ID, the first
-// subsession or peer link, with CancelSent set when a later link of the
-// call carries [CancelSent]. A cancel notice with no link before it is
-// returned as the call's link, with CancelSent set.
+// Callees returns the callees of the calls on a root-first path, every
+// subsession and peer link in path order, each with Cancelled set when
+// a cancel notice later on the path names it. A call dispatched more
+// than once, to a callee that starts new work each time, has a link
+// for each; the latest of a call's links is the callee of its latest
+// dispatch, which is the one that answered when an output follows. A
+// cancel notice is not a callee, and one naming no link on the path is
+// passed over.
 func Callees(path []Entry) []CalleeLink {
 	var out []CalleeLink
 	at := make(map[string]int)
@@ -335,14 +344,14 @@ func Callees(path []Entry) []CalleeLink {
 		if !ok || !l.callee() {
 			continue
 		}
-		if i, seen := at[l.CallID]; seen && l.CallID != "" {
-			if l.Cancel == CancelSent {
-				out[i].CancelSent = true
+		if l.Cancel != "" {
+			if i, ok := at[l.Target]; ok {
+				out[i].Cancelled = true
 			}
 			continue
 		}
-		at[l.CallID] = len(out)
-		out = append(out, CalleeLink{LinkEntry: l, CancelSent: l.Cancel == CancelSent})
+		at[l.ID] = len(out)
+		out = append(out, CalleeLink{LinkEntry: l})
 	}
 	return out
 }

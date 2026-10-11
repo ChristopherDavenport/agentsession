@@ -875,6 +875,11 @@ func (s *Session) VerifyRecords(leaf string) error {
 	if err := verifyTargets(path); err != nil {
 		return err
 	}
+	if _, minor, err := ParseFormat(s.DeclaredFormat()); err == nil && minor >= 12 {
+		if err := verifyCallees(path); err != nil {
+			return err
+		}
+	}
 	calls := Calls(path)
 	for _, r := range Runs(path) {
 		if err := r.Verify(); err != nil {
@@ -967,23 +972,28 @@ func (e *LinkError) Unwrap() error { return e.Err }
 // a fork's prefix is the origin's, to be checked there against the
 // origin's id, since the child it names was spawned by the origin; it
 // is passed over, as are links of other relations, which name no
-// spawn, a link naming a callee in another system (its URL set), whose
-// session was not derived from this one, and a cancel notice. It returns the first problem found, a [*LinkError], and with
+// spawn, and a cancel notice; in a file of format 0.12 or later, a
+// link naming a callee in another system (its URL set, or its session
+// empty) is passed over too, since its session was not derived from
+// this one. It returns the first problem found, a [*LinkError], and with
 // a nil resolve checks nothing.
 func (s *Session) VerifyLinks(resolve func(id string) (*Session, error)) error {
 	if resolve == nil {
 		return nil
 	}
 	self := s.ID()
+	_, minor, err := ParseFormat(s.DeclaredFormat())
+	current := err == nil && minor >= 12
 	for _, e := range s.Entries() {
 		l, ok := e.(*LinkEntry)
 		if !ok || l.Rel != RelSubsession || s.Prefix(l.ID) {
 			continue
 		}
-		if l.URL != "" || l.Cancel != "" || l.Session == "" {
-			// A callee in another system did not derive its session
-			// from this one, and a cancel notice repeats the link it
-			// is about, which is checked on its own.
+		if l.Cancel != "" || current && (l.URL != "" || l.Session == "") {
+			// A cancel notice names a link, which is checked on its
+			// own. In a file of 0.12 or later a callee in another
+			// system did not derive its session from this one, and an
+			// earlier file reads as it did.
 			continue
 		}
 		target, err := resolve(l.Session)
@@ -1031,6 +1041,37 @@ func (s *Session) verifyCallIDs() error {
 // verifyTargets reports a decision or dispatch on the path whose target
 // is not a function call before it on the path, or names one with
 // another call ID.
+// ErrCalleeLink is returned by [Session.VerifyRecords] for a peer link
+// that names no call, or neither a url nor a session, and for a cancel
+// notice that names no subsession or peer link of its call before it on
+// the path. The decoder reads such a link as written, so a stored one
+// is reported here rather than refused on read.
+var ErrCalleeLink = errors.New("agentsession: callee link is not one the format allows")
+
+// verifyCallees checks the subsession and peer links of a 0.12 file's
+// path as RFC 0001 has a writer write them.
+func verifyCallees(path []Entry) error {
+	seen := make(map[string]*LinkEntry)
+	for _, e := range path {
+		l, ok := e.(*LinkEntry)
+		if !ok || !l.callee() {
+			continue
+		}
+		if l.Cancel != "" {
+			to, ok := seen[l.Target]
+			if !ok || to.CallID != l.CallID {
+				return fmt.Errorf("%w: cancel notice %s names %q, not a callee link of call %q before it", ErrCalleeLink, l.ID, l.Target, l.CallID)
+			}
+			continue
+		}
+		if l.Rel == RelPeer && (l.CallID == "" || l.URL == "" && l.Session == "") {
+			return fmt.Errorf("%w: peer link %s names no call, or neither a url nor a session", ErrCalleeLink, l.ID)
+		}
+		seen[l.ID] = l
+	}
+	return nil
+}
+
 func verifyTargets(path []Entry) error {
 	calls := map[string]string{}
 	check := func(e Entry, callID, target string) error {

@@ -1056,8 +1056,12 @@ func validateEntry(e Entry) error {
 	case *ConfigEntry:
 		return validateConfig(v)
 	case *LinkEntry:
-		if v.Target != "" && v.Rel != RelJudgedBy {
-			return fmt.Errorf("agentsession: a link target is defined for the %s relation alone, not %q", RelJudgedBy, v.Rel)
+		// Every check here holds of a link the decoder built, which
+		// takes a member only where the format defines it, so a stored
+		// link is never refused on read; what a reader may still meet
+		// in a foreign file is VerifyRecords' to report.
+		if v.Target != "" && v.Rel != RelJudgedBy && (!v.callee() || v.Cancel == "") {
+			return fmt.Errorf("agentsession: a link target is defined for the %s relation and a cancel notice alone, not %q", RelJudgedBy, v.Rel)
 		}
 		if (v.URL != "" || v.Task != "" || v.Context != "" || v.Cancel != "") && !v.callee() {
 			return fmt.Errorf("agentsession: a link's url, task, context and cancel are defined for the %s and %s relations alone, not %q", RelSubsession, RelPeer, v.Rel)
@@ -1065,8 +1069,11 @@ func validateEntry(e Entry) error {
 		if v.Cancel != "" && v.Cancel != CancelSent {
 			return fmt.Errorf("agentsession: a link's cancel is %q or absent, not %q", CancelSent, v.Cancel)
 		}
-		if v.Rel == RelPeer && v.CallID == "" {
-			return errors.New("agentsession: a peer link names the call it answers: call_id is empty")
+		if v.Cancel != "" && v.Target == "" {
+			return errors.New("agentsession: a cancel notice names the link it is about: target is empty")
+		}
+		if (v.Task != "" || v.Context != "") && v.URL == "" {
+			return errors.New("agentsession: a link's task and context name a callee at a url: url is empty")
 		}
 	case *UnknownEntry:
 		if len(v.Raw) == 0 {

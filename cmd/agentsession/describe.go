@@ -172,7 +172,7 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		if v.CallID != "" {
 			s += " via " + v.CallID
 		}
-		if v.Target != "" {
+		if v.Target != "" && v.Cancel == "" {
 			s += " judging " + shortID(v.Target)
 		}
 		if v.URL != "" {
@@ -181,8 +181,11 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		if v.Task != "" {
 			s += " task " + v.Task
 		}
+		if v.Context != "" {
+			s += " context " + v.Context
+		}
 		if v.Cancel != "" {
-			s += " cancel " + v.Cancel
+			s += " cancel " + v.Cancel + " for " + shortID(v.Target)
 		}
 		return s
 	case *agentsession.RunEntry:

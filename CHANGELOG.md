@@ -12,25 +12,38 @@ versions may break the API.
   0.5 to 0.11 file reads as it stands; no hash moves.
 - **Added: callees in another system, and the `peer` relation (RFC 0001
   0.12, `link`).** The link that names a call's callee follows the
-  callee's lifetime: one the call started, which ends when the caller
-  gives the call up, is a `subsession` wherever it runs, and one whose
-  work outlives the call and keeps its own record is a `peer`
-  (`RelPeer`). A link naming a callee reached over a protocol such as
-  A2A carries `url` (the endpoint called, never a name the callee
-  claims), `task` and `context`, and `session` only when the callee
-  publishes one (`LinkEntry.URL`, `Task`, `Context`; `Callee`,
-  `NewPeerLink`, `NewCalleeSubsessionLink`). A caller that tells such a
-  callee it no longer wants the work records a later link of the call
-  with `cancel: "sent"` (`CancelSent`, `NewCancelSentLink`): that it
-  asked, not that the work stopped. `Callees` reads a path's callees,
-  the first link of each call with a cancel notice folded in.
-  `VerifyLinks` does not check the header of a callee in another
-  system, whose session was not derived from this one, or a cancel
-  notice; the ATIF export lists both under the root's links rather than
-  embedding them, and `describe` shows the url, task and cancel. The
-  members belong to the subsession and peer relations alone: on another
-  relation, or as a value the format does not define, they are kept as
-  written.
+  callee's lifetime: one the call started, whose work the caller ends or
+  asks to stop when it gives the call up, is a `subsession` wherever it
+  runs, and one whose work outlives the call and keeps its own record is
+  a `peer` (`RelPeer`). A link naming a callee reached over a protocol
+  such as A2A carries `url` (the endpoint called, never a name the
+  callee claims), `task` (absent when the callee answered with a
+  message) and `context`, and `session` only when the callee publishes
+  one (`LinkEntry.URL`, `Task`, `Context`; `Callee`, `NewPeerLink`,
+  `NewCalleeSubsessionLink`). A call dispatched again gets a link for
+  each callee it reached. A caller that tells such a callee it no longer
+  wants the work records a cancel notice, a later link of the call with
+  `cancel: "sent"` and a `target` naming the callee's link
+  (`CancelSent`, `NewCancelSentLink`): that it asked, not that the work
+  stopped. `Callees` reads a path's callee links in order, each marked
+  `Cancelled` when a notice names it.
+- The decoder takes each new member only where the format defines it
+  (task and context beside a url, cancel beside a target), so a stored
+  link is never refused on read; `VerifyRecords` reports, in a file of
+  0.12, a peer link with no call or neither a url nor a session and a
+  cancel notice naming no callee link of its call (`ErrCalleeLink`).
+  `VerifyLinks` does not check the header of a callee in another system,
+  or a cancel notice, in a file of 0.12; an earlier file is checked as
+  before. The ATIF export lists callees in another system and cancel
+  notices under the root's links rather than embedding them; `describe`
+  shows url, task, context and cancel.
+- **Changed (otel): links annotate the call's tool span.** A link after
+  the call's hand-off is an event on the span it opened, not a pending
+  decision that opened a second span at the record's end; a cancel
+  notice is a `cancel` event (`EventCancel`). Link events carry
+  `agentsession.link.url`, `.task`, `.context` and, on a notice,
+  `.target`; a peer sets `agentsession.peer` on the span, and a callee
+  with no session sets no empty `agentsession.subsession`.
 - Added: the `peer.jsonl` conformance fixture.
 
 ## v0.0.23 - 2026-10-11

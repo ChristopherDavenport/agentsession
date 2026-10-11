@@ -1357,14 +1357,17 @@ func TestJudgedFixture(t *testing.T) {
 }
 
 // peerFixture builds the session peer.jsonl holds: one response with
-// two calls to agents in another system. The first reaches a peer,
-// whose work outlives the call; the second starts a task the caller
-// owns, a subsession, which the caller cancels when it gives the call
-// up, recording that it sent the cancel and no more.
+// two calls to agents in another system, each handed off, its callee
+// linked after the hand-off. The first reaches a peer, whose work
+// outlives the call and which answered with a message rather than a
+// task. The second starts a task the caller owns, a subsession, which
+// the caller cancels when it gives the call up, recording that it sent
+// the cancel and no more; dispatched again, it starts another task,
+// which answers.
 func peerFixture(t *testing.T) *Session {
 	t.Helper()
 	at, _ := time.Parse(time.RFC3339, "2026-10-11T11:00:00Z")
-	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000019", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000019", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: []string{TypeDispatch}})
 	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
 	must := func(e Entry) string {
 		t.Helper()
@@ -1376,22 +1379,26 @@ func peerFixture(t *testing.T) *Session {
 	}
 	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Delegate.")})
 	must(NewItemEntry(openresponses.UserText("Ask the billing agent, and have the search agent look too.")))
-	must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_billing", Name: "billing", Arguments: `{"message":"refund order 7"}`}, ResponseID: "resp_1"})
-	must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_2", CallID: "call_search", Name: "search", Arguments: `{"message":"find order 7"}`}, ResponseID: "resp_1"})
+	billing := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_billing", Name: "billing", Arguments: `{"message":"refund order 7"}`}, ResponseID: "resp_1"})
+	search := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_2", CallID: "call_search", Name: "search", Arguments: `{"message":"find order 7"}`}, ResponseID: "resp_1"})
 	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted})
-	must(NewPeerLink("call_billing", Callee{URL: "https://billing.example/a2a", Task: "task-b1", Context: "ctx-b1"}))
-	search := NewCalleeSubsessionLink("call_search", Callee{URL: "https://search.example/a2a", Task: "task-s1", Context: "ctx-s1", Session: "search-session-1"})
-	must(search)
+	must(NewDispatch("call_billing", billing))
+	must(NewPeerLink("call_billing", Callee{URL: "https://billing.example/a2a", Context: "ctx-b1"}))
 	must(NewItemEntry(&openresponses.FunctionCallOutput{CallID: "call_billing", Output: openresponses.FunctionCallOutputData{Text: "refund queued"}}))
-	must(NewCancelSentLink(search))
-	must(NewItemEntry(&openresponses.FunctionCallOutput{CallID: "call_search", Output: openresponses.FunctionCallOutputData{Text: "aborted"}}))
+	must(NewDispatch("call_search", search))
+	first := NewCalleeSubsessionLink("call_search", Callee{URL: "https://search.example/a2a", Task: "task-s1", Context: "ctx-s1"})
+	must(first)
+	must(NewCancelSentLink(first))
+	must(NewDispatch("call_search", search))
+	must(NewCalleeSubsessionLink("call_search", Callee{URL: "https://search.example/a2a", Task: "task-s2", Context: "ctx-s1", Session: "search-session-2"}))
+	must(NewItemEntry(&openresponses.FunctionCallOutput{CallID: "call_search", Output: openresponses.FunctionCallOutputData{Text: "order 7 found"}}))
 	return s
 }
 
-// TestPeerFixture reads the 0.12 conformance fixture: a peer link and
-// a callee subsession are read back with the callee they name, the
-// cancel notice is read as a notice about the subsession's link and
-// not as another callee, and the file is what the builder writes.
+// TestPeerFixture reads the 0.12 conformance fixture: a peer link with
+// no task and two callee subsessions of one call are read back with the
+// callees they name, the cancel notice marks the link it names and is
+// no callee, and the file is what the builder writes.
 func TestPeerFixture(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", "peer.jsonl"))
 	if err != nil {
@@ -1404,23 +1411,26 @@ func TestPeerFixture(t *testing.T) {
 	if !bytes.Equal(buf.Bytes(), raw) {
 		t.Error("peer.jsonl is not what peerFixture builds; run go test -update")
 	}
-	if !bytes.Contains(raw, []byte(`"rel":"peer"`)) || !bytes.Contains(raw, []byte(`"cancel":"sent"`)) {
-		t.Error("the fixture lacks a peer link or a cancel notice")
+	if !bytes.Contains(raw, []byte(`"rel":"peer"`)) || !bytes.Contains(raw, []byte(`"cancel":"sent"`)) || !bytes.Contains(raw, []byte(`"records":["dispatch"]`)) {
+		t.Error("the fixture lacks a peer link, a cancel notice or its records promise")
 	}
 	s := loadFixture(t, "peer")
 	callees, err := s.Callees(s.Leaf())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(callees) != 2 {
-		t.Fatalf("%d callees, want 2: %+v", len(callees), callees)
+	if len(callees) != 3 {
+		t.Fatalf("%d callees, want 3: %+v", len(callees), callees)
 	}
-	billing, search := callees[0], callees[1]
-	if billing.Rel != RelPeer || billing.CallID != "call_billing" || billing.URL != "https://billing.example/a2a" || billing.Task != "task-b1" || billing.Context != "ctx-b1" || billing.Session != "" || billing.CancelSent {
+	billing, cut, answered := callees[0], callees[1], callees[2]
+	if billing.Rel != RelPeer || billing.CallID != "call_billing" || billing.URL != "https://billing.example/a2a" || billing.Task != "" || billing.Context != "ctx-b1" || billing.Session != "" || billing.Cancelled {
 		t.Errorf("billing = %+v", billing)
 	}
-	if search.Rel != RelSubsession || search.CallID != "call_search" || search.Task != "task-s1" || search.Session != "search-session-1" || !search.CancelSent || search.Cancel != "" {
-		t.Errorf("search = %+v, cancel sent %v", search.LinkEntry, search.CancelSent)
+	if cut.Rel != RelSubsession || cut.CallID != "call_search" || cut.Task != "task-s1" || !cut.Cancelled {
+		t.Errorf("the cancelled search = %+v, cancelled %v", cut.LinkEntry, cut.Cancelled)
+	}
+	if answered.CallID != "call_search" || answered.Task != "task-s2" || answered.Session != "search-session-2" || answered.Cancelled {
+		t.Errorf("the answering search = %+v, cancelled %v", answered.LinkEntry, answered.Cancelled)
 	}
 	if err := s.VerifyRecords(s.Leaf()); err != nil {
 		t.Errorf("VerifyRecords: %v", err)
@@ -1428,7 +1438,7 @@ func TestPeerFixture(t *testing.T) {
 	// The callee subsession's session is another system's: the header
 	// check does not apply, so a resolver that finds a session of that
 	// ID with another parent is not consulted.
-	other := New(Header{ID: "search-session-1", ParentSession: "someone-else"})
+	other := New(Header{ID: "search-session-2", ParentSession: "someone-else"})
 	if err := s.VerifyLinks(func(id string) (*Session, error) { return other, nil }); err != nil {
 		t.Errorf("VerifyLinks: %v", err)
 	}

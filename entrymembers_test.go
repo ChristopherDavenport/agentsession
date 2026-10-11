@@ -128,11 +128,11 @@ func entryVariants(e Entry) []variant {
 			}},
 			{"peer", func(e Entry) {
 				l := e.(*LinkEntry)
-				l.Rel, l.Target = RelPeer, ""
+				l.Rel, l.Target, l.Cancel = RelPeer, "", ""
 			}},
-			{"subsession", func(e Entry) {
-				l := e.(*LinkEntry)
-				l.Rel, l.Target = RelSubsession, ""
+			{"cancel notice", func(e Entry) {
+				// A cancel notice's target names the link it is about.
+				e.(*LinkEntry).Rel = RelSubsession
 			}},
 		}
 	}
