@@ -50,6 +50,11 @@ type Limits struct {
 	// FollowReplay is how many recent events a resume can be served from
 	// without loading the session again.
 	FollowReplay int `json:"follow_replay"`
+	// UploadGraceMS is how long an object uploaded for a push is kept
+	// for its uploader's push before nothing reaches it: the grace a
+	// sweep of the store must give unreferenced objects. Zero where the
+	// server takes no objects.
+	UploadGraceMS int64 `json:"upload_grace_ms,omitempty"`
 }
 
 // The error codes of RFC 0003's Errors table this slice uses, and
@@ -84,6 +89,14 @@ const (
 	CodeBaseRule       = "base_rule"
 	CodeBadBase        = "bad_base"
 	CodeRefMoved       = "ref_moved"
+
+	// Exchange's.
+	CodeNoObject      = "no_object"
+	CodeBadObject     = "bad_object"
+	CodeMissingObject = "missing_object"
+	CodeHeaderDiffers = "header_differs"
+	CodeNotRecord     = "not_record"
+	CodeBadRefTarget  = "bad_ref_target"
 )
 
 // Errors a [Client] call returns, matched with errors.Is, beside the
@@ -125,6 +138,13 @@ var (
 	ErrMirror = errors.New("remote: the session is a mirror on this server")
 	// ErrSynthetic is a leaf label carrying synthetic.
 	ErrSynthetic = errors.New("remote: a synthetic leaf label is a projection's")
+	// ErrMissingObject is a push naming objects the server cannot find
+	// for the caller: the problem's Missing says which. Upload them and
+	// push again.
+	ErrMissingObject = errors.New("remote: the push names objects the server lacks")
+	// ErrBadRefTarget is a pushed ref whose next is not the pushed
+	// session.
+	ErrBadRefTarget = errors.New("remote: a pushed ref names another session")
 	// ErrBadEntry is an entry line the server refused as malformed. A
 	// problem whose reason names a library rule matches that rule's
 	// sentinel too.
@@ -166,6 +186,13 @@ var codes = map[string]struct {
 	CodeBaseRule:       {http.StatusUnprocessableEntity, agentsession.ErrBaseRule},
 	CodeBadBase:        {http.StatusUnprocessableEntity, agentsession.ErrNoEntry},
 	CodeRefMoved:       {http.StatusConflict, agentsession.ErrRefMoved},
+
+	CodeNoObject:      {http.StatusNotFound, cas.ErrNoObject},
+	CodeBadObject:     {http.StatusUnprocessableEntity, cas.ErrBadObject},
+	CodeMissingObject: {http.StatusConflict, ErrMissingObject},
+	CodeHeaderDiffers: {http.StatusConflict, cas.ErrHeaderDiffers},
+	CodeNotRecord:     {http.StatusConflict, cas.ErrNotRecord},
+	CodeBadRefTarget:  {http.StatusUnprocessableEntity, ErrBadRefTarget},
 }
 
 // reasons are the library rules a bad_entry or bad_base problem's
@@ -208,6 +235,13 @@ type Problem struct {
 	// Holder is the label of the lease holder on a session_locked
 	// refusal, for a caller with write scope.
 	Holder string `json:"holder,omitempty"`
+	// Missing is the objects a push named that the server could not
+	// find for the caller, on missing_object.
+	Missing *Objects `json:"missing,omitempty"`
+	// Push is what a push did before it was refused, on a handover's
+	// head_moved after its entries were admitted: the push's response,
+	// its refs not attempted.
+	Push *PushResult `json:"push,omitempty"`
 }
 
 func (p *Problem) Error() string {
@@ -284,6 +318,16 @@ func problemOf(err error) *Problem {
 		return problem(CodeHeadMoved, "the head is not the expected entry", "")
 	case errors.Is(err, cas.ErrMirror):
 		return problem(CodeMirror, "the session is a mirror here", "")
+	case errors.Is(err, cas.ErrHeadTarget):
+		return problem(CodeHeadTarget, "the head never rests on a leaf label", "")
+	case errors.Is(err, cas.ErrNoObject):
+		return problem(CodeNoObject, "no such object", "")
+	case errors.Is(err, cas.ErrBadObject):
+		return problem(CodeBadObject, "the bytes do not hash to the name", "")
+	case errors.Is(err, cas.ErrHeaderDiffers):
+		return problem(CodeHeaderDiffers, "the server holds another session under this ID", "")
+	case errors.Is(err, cas.ErrNotRecord):
+		return problem(CodeNotRecord, "only the record may push a session", "")
 	case errors.Is(err, cas.ErrSynthetic):
 		return problem(CodeSynthetic, "a synthetic leaf label is a projection's", "")
 	}

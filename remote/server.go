@@ -49,6 +49,14 @@ type Handler struct {
 	leaseTTL    time.Duration
 	maxLeaseTTL time.Duration
 	idem        idempotent
+
+	// Exchange: the store's objects and marks where it has them, the
+	// objects each principal uploaded for a push and how long they are
+	// kept for it, and which objects the store's sessions reach.
+	ex          exchanger
+	uploads     uploads
+	uploadGrace time.Duration
+	reach       reach
 }
 
 // Option configures a [Handler].
@@ -121,6 +129,18 @@ func WithLeaseLimits(def, max time.Duration) Option {
 	}
 }
 
+// WithUploadGrace sets how long an object uploaded for a push stays
+// usable by its uploader's push (default 1h). It is published in the
+// capabilities, and it is the least grace a Sweep of the store must give
+// unreferenced objects, since an upload is one until a push names it.
+func WithUploadGrace(d time.Duration) Option {
+	return func(h *Handler) {
+		if d > 0 {
+			h.uploadGrace = d
+		}
+	}
+}
+
 // WithErrorLog receives the errors the handler answers as
 // `store_fault`, whose text a client is not sent.
 func WithErrorLog(fn func(error)) Option { return func(h *Handler) { h.logf = fn } }
@@ -141,7 +161,9 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 		held:        map[string]*held{},
 		leaseTTL:    30 * time.Second,
 		maxLeaseTTL: 5 * time.Minute,
+		uploadGrace: time.Hour,
 	}
+	h.ex, _ = store.(exchanger)
 	h.reader, _ = store.(agentsession.Reader)
 	h.follower, _ = store.(agentsession.Follower)
 	h.refs, _ = store.(agentsession.RefStore)
@@ -167,6 +189,12 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 	mux.HandleFunc("POST /v1/sessions/{id}/commit", h.guard(ScopeWrite, h.commit))
 	mux.HandleFunc("PUT /v1/sessions/{id}/head", h.guard(ScopeWrite, h.setHead))
 	mux.HandleFunc("PUT /v1/refs/{name...}", h.guard(ScopeRefs, h.updateRef))
+	mux.HandleFunc("GET /v1/objects/{space}/{hash}", h.guard(ScopeRead, h.objectGet))
+	mux.HandleFunc("PUT /v1/objects/{space}/{hash}", h.guard(ScopeExchange, h.objectPut))
+	mux.HandleFunc("POST /v1/objects/missing", h.guard(ScopeExchange, h.missing))
+	mux.HandleFunc("POST /v1/sessions/{id}/push", h.guard(ScopeExchange, h.push))
+	mux.HandleFunc("POST /v1/sessions/{id}/record", h.guard(ScopeExchange, h.record))
+	mux.HandleFunc("POST /v1/sessions/{id}/handover", h.guard(ScopeWrite, h.handover))
 	mux.HandleFunc("/v1/", h.guard("", func(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, problem(CodeUnsupported, "not served", r.Method+" "+r.URL.Path+" is not in what this server serves"))
 	}))
@@ -200,15 +228,23 @@ func (h *Handler) Close() error {
 // Capabilities are what this handler serves of its store.
 func (h *Handler) Capabilities() Capabilities {
 	_, commit := h.store.(syncer)
-	return Capabilities{
+	exchange := h.ex != nil && h.reader != nil
+	c := Capabilities{
 		Reads: agentsession.Format,
 		Features: Features{
-			Refs:   h.refs != nil,
-			Leases: true,
-			Commit: commit,
+			Refs:     h.refs != nil,
+			Leases:   true,
+			Commit:   commit,
+			Objects:  exchange,
+			Exchange: exchange,
+			Marks:    h.ex != nil,
 		},
 		Limits: Limits{FollowBuffer: h.buffer, FollowReplay: h.replay},
 	}
+	if exchange {
+		c.Limits.UploadGraceMS = h.uploadGrace.Milliseconds()
+	}
+	return c
 }
 
 func (h *Handler) logError(err error) {
@@ -486,6 +522,9 @@ type sessionInfo struct {
 	Length      int                 `json:"length"`
 	Incarnation string              `json:"incarnation"`
 	Cursor      string              `json:"cursor"`
+	// Mark is the server's record mark for the session, record or
+	// mirror, where its store keeps one.
+	Mark string `json:"mark,omitempty"`
 }
 
 func (h *Handler) session(w http.ResponseWriter, r *http.Request) {
@@ -506,6 +545,7 @@ func (h *Handler) session(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
+	info.Mark = h.markOf(r.Context(), r.PathValue("id"))
 	w.Header().Set("Incarnation", info.Incarnation)
 	writeJSON(w, info)
 }

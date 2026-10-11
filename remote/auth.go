@@ -9,9 +9,8 @@ import (
 	"strings"
 )
 
-// Scope is what a principal may do through a [Handler]. RFC 0003 names
-// read, write (lease), refs, exchange and admin; this server serves the
-// first three and admin's lease break.
+// Scope is what a principal may do through a [Handler]: RFC 0003's
+// read, write (lease), refs, exchange and admin.
 type Scope string
 
 const (
@@ -23,12 +22,17 @@ const (
 	// ScopeRefs updates refs. A ref is the store's state, not a
 	// session's, so an update needs this and no lease.
 	ScopeRefs Scope = "refs"
+	// ScopeExchange uploads objects, asks which a push needs, pushes a
+	// session (RFC 0002's exchange, over the wire) and declares this
+	// server the record for a session it holds as a mirror. A push's
+	// refs need ScopeRefs as well.
+	ScopeExchange Scope = "exchange"
 	// ScopeAdmin breaks a lease another holder has.
 	ScopeAdmin Scope = "admin"
 )
 
 // AllScopes are every scope this server checks.
-var AllScopes = []Scope{ScopeRead, ScopeWrite, ScopeRefs, ScopeAdmin}
+var AllScopes = []Scope{ScopeRead, ScopeWrite, ScopeRefs, ScopeExchange, ScopeAdmin}
 
 // Principal is who a request is from, as an [Authenticator] resolved
 // it, and what they may do.

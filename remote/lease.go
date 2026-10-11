@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/cas"
 )
 
 // held is one session ID's write state on the server: its lease, the
@@ -142,6 +143,13 @@ func (h *Handler) take(ctx context.Context, st *held, holder string, ttl time.Du
 		// keep no working state beyond what an append made durable by
 		// their policy, so there is nothing to commit first.
 		h.end(st)
+	}
+	if h.ex != nil {
+		// A mirror refuses local writes and takes only exchange, so it
+		// cannot be leased.
+		if m, _, err := h.ex.MarkOf(ctx, st.id); err == nil && m == cas.MarkMirror {
+			return nil, problem(CodeMirror, "a mirror cannot be leased", "")
+		}
 	}
 	sess, err := h.store.Open(ctx, st.id)
 	if err != nil {

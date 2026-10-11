@@ -229,8 +229,26 @@ its write arrives. The session the client hands out is its own, kept up
 to date with its appends; moving its leaf steers the next append, which
 moves the server's head with it. Every client following a session
 shares one follower of it; one that falls behind is cut and resumes
-where it stopped. Objects, exchange and push are not served yet, and
-answer `unsupported`.
+where it stopped.
+
+A local-first writer records into its own `cas` store, with no network
+in its loop, and pushes to a server that holds the session as a mirror,
+which followers read:
+
+```go
+local, _ := cas.Open(dir)
+// ... the harness records into local ...
+x, err := remote.Push(ctx, local, c, id, cas.PushOptions{Expected: lastHead})
+```
+
+A push asks the server which objects of the session it lacks, uploads
+those and posts the session's closure, which the server admits as RFC
+0002's exchange does: the log merged as a set, the head moved by
+compare-and-swap from the head expected. With `Handover` the server
+becomes the record and the local store a mirror; `DeclareRecord` makes
+the server the record for a mirror whose writer died, and `HandOver` gives
+the session back to a client store. Objects and exchange need a store
+with object spaces and marks (`cas`), and the `exchange` scope.
 
 ## Exporting to ATIF
 
@@ -364,7 +382,7 @@ _, err := otel.Export(ctx, tracer, sess, sess.Leaf()) // a stored session, after
 | `otel` | the OpenTelemetry projection, as a nested module: replay a session as spans, or wrap a store so a live run emits them |
 | `atif` | Go types for ATIF v1.8 with unknown-member passthrough and validation |
 | `export` | trajectories, ATIF conversion, redactors, writer |
-| `remote` | RFC 0003 over HTTP: a server over any store (capabilities, listing, a session's state, its path, following as server-sent events, refs; create, leases, append, head, commit, delete, ref updates) and a client that is the library's `Store`, `Writer`, `Reader`, `Follower` and `RefStore` |
+| `remote` | RFC 0003 over HTTP: a server over any store (capabilities, listing, a session's state, its path, following as server-sent events, refs; create, leases, append, head, commit, delete, ref updates; over `cas`, objects, push, declare-record and handover) and a client that is the library's `Store`, `Writer`, `Reader`, `Follower` and `RefStore`, with an object cache and `Push`, the local-first writer's helper |
 | `storetest` | the conformance suite every store runs |
 | `cmd/agentsession` | the command: show, verify, export and list session files and the sessions of a jsonl or cas store |
 

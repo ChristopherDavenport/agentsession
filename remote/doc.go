@@ -22,12 +22,19 @@
 //	GET    /v1/refs?prefix=                 ref listing, NDJSON
 //	GET    /v1/refs/{name}                  resolve; PUT is the ref's compare-and-swap
 //	GET    /v1/refs/{name}?view=log         the ref's log, NDJSON
+//	GET    /v1/objects/{space}/{hash}       an object; HEAD too; PUT uploads one
+//	POST   /v1/objects/missing              which objects the caller cannot reach
+//	POST   /v1/sessions/{id}/push           RFC 0002's push, admitted here
+//	POST   /v1/sessions/{id}/record         declare this server the record
+//	POST   /v1/sessions/{id}/handover       hand the session to a client store
 //
 // Every write to a session carries its lease's fencing token, and one
 // whose lease is not the session's current one is refused, so a writer
-// that lost its lease cannot write after the next holder. Objects and
-// negotiation, exchange and push, declare-record, the log read, shallow
-// reads, ref following and the committed view are not served yet.
+// that lost its lease cannot write after the next holder. A push is not
+// leased: it is governed by the record mark, as RFC 0002's exchange is,
+// and the objects and exchange routes need a store with object spaces
+// and marks (the cas store). The log read, shallow reads, ref following
+// and the committed view are not served yet.
 //
 // One follower per session is shared by every client that follows it,
 // and a client that falls behind is cut with an `overflow` error and
@@ -38,5 +45,7 @@
 // and [agentsession.RefStore] over these calls. It verifies every entry
 // it receives by its hash, treats a stream cut before its terminal frame
 // as an error, never as a short result, and writes under leases it
-// renews until it lets them go.
+// renews until it lets them go. [Push] sends a session a local cas store
+// is the record for, uploading only the objects the server lacks: the
+// helper of a local-first writer.
 package remote
