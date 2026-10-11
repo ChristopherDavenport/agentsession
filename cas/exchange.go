@@ -17,6 +17,9 @@ import (
 // for the session: RFC 0002 lets only the record initiate a push.
 var ErrNotRecord = errors.New("cas: only the record may push a session")
 
+// ErrHeadTarget is a head an exchange would rest on a leaf label.
+var ErrHeadTarget = errors.New("cas: the head never rests on a leaf label")
+
 // ErrHeaderDiffers is returned when an exchange names a session the
 // receiver holds under a different header: two sessions alike only in
 // ID are not one session.
@@ -504,7 +507,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 		case p == "" && b.header.Base == "":
 		case p != "" && (p == b.header.Base || held[p]):
 		default:
-			return Exchange{}, fmt.Errorf("cas: exchange: own entry %s hangs from %s, which is neither the base nor an own entry", eid, orNone(p))
+			return Exchange{}, fmt.Errorf("%w: exchange: own entry %s hangs from %s, which is neither the base nor an own entry", agentsession.ErrBaseRule, eid, orNone(p))
 		}
 		held[eid] = true
 		fresh = append(fresh, e)
@@ -537,7 +540,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if x.HeadMoved {
 		target, ok := all[newHead]
 		if l, isLabel := target.(*agentsession.LabelEntry); ok && isLabel && l.Label != nil && *l.Label == agentsession.LeafLabel {
-			return Exchange{}, errors.New("cas: exchange: the head never rests on a leaf label")
+			return Exchange{}, fmt.Errorf("%w: exchange", ErrHeadTarget)
 		}
 	}
 	guard, err := s.writeGuard(ctx)

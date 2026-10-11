@@ -171,7 +171,9 @@ POST /v1/objects/missing
 `entries` or `contents` object is `sha256:` over its canonical bytes. A
 `media` object is a sidecar blob: its hash is the SHA-256 of its raw
 bytes, written as RFC 0001 names a sidecar file (`sidecar:sha256:` and
-the hex digest in an item's URL). An inline data URL needs no object: it
+the hex digest in an item's URL). On these routes every hash is written
+`sha256:` and the hex digest, a media blob's being its item URL's
+without the `sidecar:` scheme. An inline data URL needs no object: it
 is part of its entry's content. The server stores a session's media in
 the form the session was written in and MUST NOT convert (RFC 0002,
 Media).
@@ -194,16 +196,19 @@ Media).
   that the bytes hash to the name and refuse them with `bad_object`
   otherwise. Uploading an object it holds is a no-op that succeeds, and
   the response does not say whether it was held. An uploaded object is
-  reachable from nothing, so by no one but its uploader's push, until a
-  push names it; it is collected as RFC 0002's sweep collects any
+  reachable from nothing but its uploader until a push names it: the
+  uploader may name it in a push, and is told it holds it (`missing`,
+  `GET`, `HEAD`), so a retried push uploads nothing twice; no other
+  caller is. It is collected as RFC 0002's sweep collects any
   unreferenced object (Deletion and retention), and the grace period
-  that spares it is the server's, published in the capabilities. An
-  object swept before its push is `missing_object` at the push.
+  that spares it is the server's, published in the capabilities as
+  `upload_grace_ms`. An object swept before its push is
+  `missing_object` at the push.
   Entry-level rules (reserved members, `ts` form, I-JSON, parent) are
   not checked at `PUT`, which sees one object; admission checks them.
-- `POST /v1/objects/missing` takes `{"entries": [...], "contents":
-  [...], "media": [...]}` and returns, in the same shape, the hashes the
-  server lacks **for this caller**: every hash not reachable by the
+- `POST /v1/objects/missing` (exchange scope) takes `{"entries": [...],
+  "contents": [...], "media": [...]}` and returns, in the same shape, the
+  hashes the server lacks **for this caller**: every hash not reachable by the
   caller is reported missing, including one another tenant's session
   holds. It is the negotiation RFC 0002 allows a sender ("MAY negotiate
   what the receiver lacks"), and it can neither disclose that a hash
@@ -531,9 +536,10 @@ POST /v1/sessions/{id}/entries
 POST /v1/sessions/{id}/commit
 PUT  /v1/sessions/{id}/head
 POST /v1/sessions/{id}/record
+POST /v1/sessions/{id}/handover
 ```
 
-All four need a lease, except where the record section below says
+All of them need a lease, except where the record section below says
 otherwise. A write names the format minor of the client that built it in
 a `Session-Format` request header, which is RFC 0002's rule that an
 append carries its writer's `format` (Append). The server refuses an
@@ -606,10 +612,23 @@ later one, as RFC 0002's Sessions say.
   handing it over (Exchange, the record mark). The guard: the request
   carries `{"basis": "record_deleted"|"sole_copy", "head": h}`, the head
   the caller believes the server holds, and the server refuses with
-  `head_moved` if its head is another, which is the compare-and-swap
-  that reveals two records. The mark is committed before the response.
-  A mark that stays a mirror elsewhere is the caller's to clear; the
-  protocol cannot see the other store.
+  `head_moved` (with the head) if its head is another, which is the
+  compare-and-swap that reveals two records. The mark is committed
+  before the response, `{"mark": "record", "head": h}`. A mark that
+  stays a mirror elsewhere is the caller's to clear; the protocol cannot
+  see the other store. It needs no lease, since a mirror cannot be
+  leased (Leases), and takes the session's per-session lock instead; it
+  needs exchange scope, as the push that makes a mirror does, and
+  declaring the record of a session the server already holds as the
+  record, at the head named, succeeds and changes nothing.
+- **Handover** is the server's side of handing a session it is the
+  record for to a client store (Which store is the record): `POST
+  /v1/sessions/{id}/handover` with `{"to": "client", "head": h}`. It is a
+  mark change, so it needs write scope and the lease's token; the server
+  refuses with `head_moved` (with the head) if its head is not `h`, and
+  with `mirror` if it holds the session as a mirror. It commits its mark
+  as a mirror before it answers `{"mark": "mirror", "head": h}`, and the
+  lease ends with it, since a mirror cannot be leased.
 
 A client that writes to a remote store pays a round trip per append. A
 harness that cannot afford that in its loop writes to a local store and
@@ -715,8 +734,9 @@ A push is RFC 0002's, over the wire.
 3. The server admits the closure as RFC 0002 says: hash verified,
    parent first, the log merged as a set, the `call_id` collision
    refused, a header that differs from a held one refused. Every object
-   the push names that the server cannot find is `missing_object` with
-   the hashes, and nothing is admitted. Only then does it take the head
+   the push names that the server cannot find for the caller is
+   `missing_object`, its `missing` member the hashes in `missing`'s
+   shape, and nothing is admitted. Only then does it take the head
    step and the ref steps.
 4. The response is 200 with `{"admitted": n, "created": bool, "head":
    {"moved": bool, "forced": bool, "current": h, "why": s}, "mark":
@@ -733,8 +753,9 @@ Failures after the closure was admitted are not a 200 with silence:
 - A handover whose head would not move is refused before anything lands,
   with `head_moved`. A handover whose head step fails after admission
   lands the entries, changes no mark, and answers 409 `head_moved` with
-  the same body as above, the entries and `head.why` reported, and
-  `refs` left `null`: refs are not attempted when a handover fails.
+  the body above as the problem's `push` member, the entries and
+  `head.why` reported, and `refs` left `null`: refs are not attempted
+  when a handover fails.
 - A ref step that is already at its `next` succeeds, with `moved: true`:
   a retried push is safe. The admission of a retried push is a no-op, and
   the head step is a no-op when the head already equals `to`.
@@ -900,10 +921,32 @@ server's and not the protocol's:
   store handle is not excluded by it, and the server is then the only
   writer of that handle.
 
+The third is exchange: objects (`GET`, `HEAD`, `PUT`, `missing`), push,
+`record` and `handover`, under the scope `exchange` (and `write` for a
+handover), over a store that has object spaces and marks: of the
+reference stores, `cas`, whose capabilities then say `objects`,
+`exchange` and `marks`. A session's state carries its mark, and a mirror
+is not leased. A push is RFC 0002's push at the receiver (the `cas`
+store's `Receive`), its closure read as a session file is, header and
+lines, so every entry is hashed and decoded by the format's own reader
+before it is admitted. Its client is the push helper, `remote.Push`,
+which sends a session a local `cas` store is the record for: it asks
+`missing`, uploads what the server lacks, pushes, and after a handover
+clears the local mark. Its client reads objects through a cache keyed
+by hash. Three things in it are the reference server's:
+- **Reach** is answered by reading the store's sessions, rebuilt when
+  the listing changes. A server for many sessions keeps an index.
+- **Uploads** go into the store's object space at once, where a sweep
+  collects them as any unreferenced object, and the server keeps in
+  memory which principal uploaded each, for `upload_grace_ms`. An
+  operator sweeps with at least that grace.
+- **Read scope reads every session**, so an object a session holds is
+  reachable by every reader; per-session authorization would narrow it.
+
 A commit answers `durable` and not yet the cursor, which waits on the
 committed view. Everything else is 501 `unsupported` and its capability
-false: objects and negotiation, exchange and push, `record`, log reads,
-`since-fold`, ref following and `durable=true`.
+false: log reads, `since-fold`, ref following and `durable=true`, and so
+the client's fetch, which reads the log from a committed view.
 
 The whole
 implementation is:

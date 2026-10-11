@@ -46,6 +46,8 @@ type Client struct {
 	// last is each session's replica where its last follow stopped, so a
 	// follow resumed from that cursor goes on from it.
 	last map[string]resumable
+	// cache is the objects the client read, by hash.
+	cache objectCache
 }
 
 type resumable struct {
@@ -274,6 +276,9 @@ type SessionInfo struct {
 	Incarnation string
 	// Cursor is where a follow from this state resumes.
 	Cursor agentsession.Cursor
+	// Mark is the server's record mark for the session, record or
+	// mirror, where its store keeps one, and "" where it does not.
+	Mark string
 }
 
 // Session returns the session's state.
@@ -287,7 +292,7 @@ func (c *Client) Session(ctx context.Context, id string) (SessionInfo, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
 		return SessionInfo{}, fmt.Errorf("remote: session %s: %w", id, err)
 	}
-	return SessionInfo{Header: info.Header, Head: headIn(info.Head), Length: info.Length, Incarnation: info.Incarnation, Cursor: agentsession.Cursor(info.Cursor)}, nil
+	return SessionInfo{Header: info.Header, Head: headIn(info.Head), Length: info.Length, Incarnation: info.Incarnation, Cursor: agentsession.Cursor(info.Cursor), Mark: info.Mark}, nil
 }
 
 // Read implements [agentsession.Reader]: the whole session, as a

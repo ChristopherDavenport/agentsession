@@ -29,6 +29,40 @@ versions may break the API.
   errors: `ErrLeaseLost`, `ErrHeadMoved`, `ErrHeadTarget`, `ErrMirror`,
   `ErrSynthetic`, `ErrBadEntry`, and the RFC's write-side codes; a
   problem's `reason` matches the library rule's sentinel too.
+- **Added: `remote` exchange (part of #213).** Over a store with object
+  spaces and marks (`cas`) the handler serves objects (`GET`/`HEAD`/`PUT
+  /v1/objects/{space}/{hash}`, checked against the hash, `private`
+  and immutable; `POST /v1/objects/missing`, the negotiation, per
+  caller), push (`POST …/push`: the closure by hash, admitted as RFC
+  0002's exchange, the head by compare-and-swap, the refs carried, a
+  handover with `mark: "record"`), declare-record (`POST …/record`, a
+  compare-and-swap on the head) and handover to a client (`POST
+  …/handover`, under the lease). An object is served, and reported held,
+  only to a caller a session reaches it for, or that uploaded it;
+  `WithUploadGrace` sets how long an upload is kept for its uploader
+  (published as `upload_grace_ms`). A session's state carries its mark,
+  and a mirror is not leased (`mirror`). Scope `exchange` joins the
+  others. The client reads objects through a cache keyed by hash
+  (`Object`), and has `Missing`, `PutObject`, `DeclareRecord`,
+  `HandOver` and `SessionInfo.Mark`; `remote.Push` is the local-first
+  writer's helper, a push from a local `cas` store that reports what
+  `cas.Store.Push` between two stores reports. New errors and codes:
+  `no_object`, `bad_object`, `missing_object` (`ErrMissingObject`, the
+  problem's `Missing`), `header_differs`, `not_record`, `bad_ref_target`
+  (`ErrBadRefTarget`); a failed handover's problem carries what the push
+  did as `Push`.
+- Added: `cas` for an exchange across a wire: `Object`, `HasObject` and
+  `PutObject` in RFC 0003's spaces (`SpaceEntries`, `SpaceContents`,
+  `SpaceMedia`; `ErrNoObject`, `ErrBadObject`), `SplitEntry`,
+  `JoinLine`, `ContentOf`, `BlobsNamedBy`, `Closure` (a session's closure
+  as a push sends it) and `Receive` (a push admitted, as Push's receiver
+  does), `MarkOf` (the mark and head from the committed log, without
+  holding the session), `Head`, `DeclareRecordAt` and `HandOver` (mark
+  changes as compare-and-swaps on the head).
+- Changed: `cas`'s exchange refuses an own entry that hangs from neither
+  the base nor an own entry with `agentsession.ErrBaseRule`, and a head
+  on a leaf label with the new `ErrHeadTarget`, where it returned plain
+  errors.
 - Added: `Writer`, a store that reports what an append did (`Write`,
   with its `Result`). The cas store and the remote client implement it.
 - Changed: `remote.Client.UpdateRef` writes, where it was refused with
@@ -43,6 +77,16 @@ versions may break the API.
   filled as a store fills an entry; a head is not moved to none; the
   problem members `reason`, `head`, `holder` and `target`; and the
   reference implementation's slices, its tokens and its one mechanism.
+- RFC 0003, exchange: hashes on the object routes are `sha256:` and the
+  hex digest, a media blob's its sidecar URL's; an upload is reachable by
+  its uploader, who may push it and is told it holds it, for
+  `upload_grace_ms`; `missing` needs exchange scope; `missing_object`
+  carries the hashes as `missing`; a failed handover's 409 carries the
+  push's response as `push`; declare-record needs no lease (a mirror
+  cannot be leased) and exchange scope, and answers `{mark, head}`; the
+  handover route is listed under Writing, needs write scope and the
+  lease, and ends the lease; and the reference implementation's third
+  slice.
 
 ## v0.0.22 - 2026-10-10
 
