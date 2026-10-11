@@ -1,9 +1,11 @@
 package cas
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 )
@@ -214,5 +216,129 @@ func TestReceiveFetch(t *testing.T) {
 	}
 	if x, err = mir.Receive(ctx, c, ReceiveOptions{Fetch: true}); err != nil || x.Admitted != 1 || !x.HeadMoved || x.Head != third {
 		t.Errorf("a second fetch: %+v (%v)", x, err)
+	}
+}
+
+// A log line can hold more than one record. When the follower reads one
+// whose second append's objects are not there yet, it yields neither
+// append until they land, then both, in order: before, it yielded the
+// first with the line's cursor and went on past the line, so it, and a
+// follower resuming from the cursor it was given, never saw the second.
+func TestTheFollowerWaitsForAWholeLine(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	st, err := Open(t.TempDir(), WithFollowInterval(5*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, st, "s", item("one"))
+
+	changes := make(chan agentsession.Change, 16)
+	go func() {
+		for c, err := range st.Follow(ctx, "s", "") {
+			if err != nil {
+				return
+			}
+			changes <- c
+		}
+	}()
+	snap := <-changes
+	if snap.Kind != agentsession.Snapshot {
+		t.Fatalf("the first change is %v", snap.Kind)
+	}
+
+	// Two appends prepared on a copy of the session, the first's objects
+	// stored and the second's not, their records written as one line.
+	sess, err := st.Read(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e1, e2 := item("two"), item("three")
+	for _, e := range []agentsession.Entry{e1, e2} {
+		if _, err := sess.Commit(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	size1, _, err := st.storeEntry(e1, true, newPendSet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1, err := logRecord{Op: opAppend, Session: "s", Entry: e1.Base().ID, Head: e1.Base().ID, Seq: 2, Size: size1}.encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2, err := logRecord{Op: opAppend, Session: "s", Entry: e2.Base().ID, Head: e2.Base().ID, Seq: 3, Size: 1}.encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := st.sessionDir("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := openLog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := append(bytes.TrimSuffix(r1, []byte{'\n'}), r2...)
+	if _, err := f.Write(line); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	st.hub.Notify("s")
+
+	select {
+	case c := <-changes:
+		t.Fatalf("a change before the line's objects are all there: %v %s", c.Kind, c.ID)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	if _, _, err := st.storeEntry(e2, true, newPendSet()); err != nil {
+		t.Fatal(err)
+	}
+	st.hub.Notify("s")
+	var got []string
+	var cursor agentsession.Cursor
+	for len(got) < 2 {
+		select {
+		case c := <-changes:
+			if c.Kind == agentsession.Appended {
+				got = append(got, c.ID)
+				cursor = c.Cursor
+			}
+		case <-ctx.Done():
+			t.Fatalf("the follower yielded %v, never both appends", got)
+		}
+	}
+	if got[0] != e1.Base().ID || got[1] != e2.Base().ID {
+		t.Errorf("the follower yielded %v, want %s then %s", got, e1.Base().ID, e2.Base().ID)
+	}
+
+	// A follower resuming from the cursor before the line sees both; one
+	// resuming from the line's cursor, given with the second, sees none
+	// again.
+	resumed := func(from agentsession.Cursor) []string {
+		t.Helper()
+		rctx, rcancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer rcancel()
+		var ids []string
+		for c, err := range st.Follow(rctx, "s", from) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Kind == agentsession.Appended {
+				ids = append(ids, c.ID)
+			}
+		}
+		return ids
+	}
+	if ids := resumed(snap.Cursor); len(ids) != 2 || ids[1] != e2.Base().ID {
+		t.Errorf("resumed before the line: %v, want both appends", ids)
+	}
+	if ids := resumed(cursor); len(ids) != 0 {
+		t.Errorf("resumed from the line's cursor: %v, want nothing", ids)
 	}
 }
