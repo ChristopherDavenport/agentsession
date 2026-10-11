@@ -57,6 +57,13 @@ type Handler struct {
 	uploads     uploads
 	uploadGrace time.Duration
 	reach       reach
+
+	// The remaining reads: the log where the store reads its log record
+	// by record, the snapshot bound, and how often a followed ref is
+	// read again.
+	lr            logReader
+	snapshotLimit int64
+	refPoll       time.Duration
 }
 
 // Option configures a [Handler].
@@ -141,6 +148,30 @@ func WithUploadGrace(d time.Duration) Option {
 	}
 }
 
+// WithSnapshotLimit bounds the entry lines a follow's snapshot or reset
+// carries inline, in bytes (default 64 MiB). Past it, a server that
+// serves objects sends the rest of the records without their lines,
+// which a client reads as objects; one that serves none refuses the
+// snapshot with `too_large`, since its client has no other way to read
+// the whole session. It is published in the capabilities.
+func WithSnapshotLimit(n int64) Option {
+	return func(h *Handler) {
+		if n > 0 {
+			h.snapshotLimit = n
+		}
+	}
+}
+
+// WithRefPoll sets how often a followed ref is resolved again, the
+// reference stores having no watch on a ref (default 1s).
+func WithRefPoll(d time.Duration) Option {
+	return func(h *Handler) {
+		if d > 0 {
+			h.refPoll = d
+		}
+	}
+}
+
 // WithErrorLog receives the errors the handler answers as
 // `store_fault`, whose text a client is not sent.
 func WithErrorLog(fn func(error)) Option { return func(h *Handler) { h.logf = fn } }
@@ -151,19 +182,22 @@ func WithErrorLog(fn func(error)) Option { return func(h *Handler) { h.logf = fn
 // refs through its [agentsession.RefStore] when it keeps them.
 func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 	h := &Handler{
-		store:       store,
-		buffer:      256,
-		replay:      1024,
-		linger:      2 * time.Second,
-		heartbeat:   15 * time.Second,
-		hubs:        map[string]*hub{},
-		catchUpWait: 30 * time.Second,
-		held:        map[string]*held{},
-		leaseTTL:    30 * time.Second,
-		maxLeaseTTL: 5 * time.Minute,
-		uploadGrace: time.Hour,
+		store:         store,
+		buffer:        256,
+		replay:        1024,
+		linger:        2 * time.Second,
+		heartbeat:     15 * time.Second,
+		hubs:          map[string]*hub{},
+		catchUpWait:   30 * time.Second,
+		held:          map[string]*held{},
+		leaseTTL:      30 * time.Second,
+		maxLeaseTTL:   5 * time.Minute,
+		uploadGrace:   time.Hour,
+		snapshotLimit: 64 << 20,
+		refPoll:       time.Second,
 	}
 	h.ex, _ = store.(exchanger)
+	h.lr, _ = store.(logReader)
 	h.reader, _ = store.(agentsession.Reader)
 	h.follower, _ = store.(agentsession.Follower)
 	h.refs, _ = store.(agentsession.RefStore)
@@ -176,6 +210,7 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 	mux.HandleFunc("GET /v1/sessions", h.guard(ScopeRead, h.list))
 	mux.HandleFunc("GET /v1/sessions/{id}", h.guard(ScopeRead, h.session))
 	mux.HandleFunc("GET /v1/sessions/{id}/path", h.guard(ScopeRead, h.path))
+	mux.HandleFunc("GET /v1/sessions/{id}/log", h.guard(ScopeRead, h.log))
 	mux.HandleFunc("GET /v1/sessions/{id}/follow", h.guard(ScopeRead, h.follow))
 	mux.HandleFunc("GET /v1/refs", h.guard(ScopeRead, h.listRefs))
 	mux.HandleFunc("GET /v1/refs/{name...}", h.guard(ScopeRead, h.ref))
@@ -229,17 +264,22 @@ func (h *Handler) Close() error {
 func (h *Handler) Capabilities() Capabilities {
 	_, commit := h.store.(syncer)
 	exchange := h.ex != nil && h.reader != nil
+	reads := h.reader != nil && h.follower != nil
 	c := Capabilities{
 		Reads: agentsession.Format,
 		Features: Features{
-			Refs:     h.refs != nil,
-			Leases:   true,
-			Commit:   commit,
-			Objects:  exchange,
-			Exchange: exchange,
-			Marks:    h.ex != nil,
+			Refs:          h.refs != nil,
+			RefFollow:     h.refs != nil,
+			Leases:        true,
+			Commit:        commit,
+			Objects:       exchange,
+			Exchange:      exchange,
+			Marks:         h.ex != nil,
+			Shallow:       reads,
+			Log:           h.lr != nil,
+			CommittedView: h.lr != nil,
 		},
-		Limits: Limits{FollowBuffer: h.buffer, FollowReplay: h.replay},
+		Limits: Limits{FollowBuffer: h.buffer, FollowReplay: h.replay, SnapshotBytes: h.snapshotLimit},
 	}
 	if exchange {
 		c.Limits.UploadGraceMS = h.uploadGrace.Milliseconds()
@@ -567,10 +607,7 @@ func (h *Handler) path(w http.ResponseWriter, r *http.Request) {
 	switch contents {
 	case "":
 		contents = "all"
-	case "all", "none":
-	case "since-fold":
-		writeProblem(w, problem(CodeUnsupported, "shallow reads are not served", ""))
-		return
+	case "all", "none", "since-fold":
 	default:
 		writeProblem(w, problem(CodeBadRequest, "contents is all, since-fold or none", ""))
 		return
@@ -597,18 +634,28 @@ func (h *Handler) path(w http.ResponseWriter, r *http.Request) {
 				return problem(CodeNoEntry, "no such entry", leaf)
 			}
 		}
+		served := contents
+		var keep func(int) bool
+		switch contents {
+		case "all":
+			keep = func(int) bool { return true }
+		case "none":
+			keep = func(int) bool { return false }
+		case "since-fold":
+			keep, served = sinceFold(path)
+		}
 		for i, e := range path {
-			l, err := pathLineOf(e, contents == "all")
+			l, err := pathLineOf(e, keep(i))
 			if err != nil {
 				return err
 			}
 			if i == 0 {
-				l.Head, l.Cursor, l.Incarnation, l.Contents = headOut(rep.sess.Leaf()), last, in, contents
+				l.Head, l.Cursor, l.Incarnation, l.Contents = headOut(rep.sess.Leaf()), last, in, served
 			}
 			lines = append(lines, l)
 		}
 		if len(path) == 0 {
-			lines = append(lines, pathLine{Head: headOut(rep.sess.Leaf()), Cursor: last, Incarnation: in, Contents: contents})
+			lines = append(lines, pathLine{Head: headOut(rep.sess.Leaf()), Cursor: last, Incarnation: in, Contents: served})
 		}
 		return nil
 	})
@@ -705,13 +752,18 @@ func (h *Handler) follow(w http.ResponseWriter, r *http.Request) {
 		}
 		resume, from = c, eventID(c, n)
 	}
-	if r.URL.Query().Get("durable") == "true" {
-		writeProblem(w, problem(CodeUnsupported, "the store has no committed view", ""))
-		return
-	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeProblem(w, problem(CodeStoreFault, "the connection cannot stream", ""))
+		return
+	}
+	switch r.URL.Query().Get("durable") {
+	case "", "false":
+	case "true":
+		h.followDurable(w, r, flusher, resume)
+		return
+	default:
+		writeProblem(w, problem(CodeBadRequest, "durable is true or false", ""))
 		return
 	}
 	// A fresh follow starts from what the store holds now; a resume
@@ -809,6 +861,7 @@ func (h *Handler) followFrom(w http.ResponseWriter, r *http.Request, flusher htt
 			}
 		}
 		enc := newEncoder()
+		enc.bound = h.bound
 		checked := false
 		for change, err := range h.follower.Follow(ctx, r.PathValue("id"), c) {
 			if err != nil {
@@ -830,6 +883,10 @@ func (h *Handler) followFrom(w http.ResponseWriter, r *http.Request, flusher htt
 			if err != nil {
 				h.logError(err)
 				send(errorEvent(problem(CodeStoreFault, "the follow could not be served", "")))
+				return
+			}
+			if ev != nil && ev.cut != nil {
+				send(errorEvent(ev.cut))
 				return
 			}
 			if ev != nil && !send(ev) {
@@ -953,7 +1010,7 @@ func (h *Handler) ref(w http.ResponseWriter, r *http.Request) {
 			return refUpdateLine{Name: u.Name, Old: targetOut(u.Old), New: targetOut(u.New), Time: u.Time, Reason: u.Reason}
 		})
 	case "follow":
-		writeProblem(w, problem(CodeUnsupported, "ref following is not served", ""))
+		h.followRef(w, r, name)
 	default:
 		writeProblem(w, problem(CodeBadRequest, "view is log or follow", ""))
 	}

@@ -115,10 +115,13 @@ from RFC 0001 and RFC 0002 keep their meanings.
   `GET /v1/` with its capabilities: the RFC 0001 format minors it
   reads, and for each optional feature whether this server's store
   supports it: `objects`, `shallow`, `exchange`, `marks`, `commit`,
-  `committed_view` (which `durable=true` needs), `refs`, `ref_follow`,
-  `leases`, plus its limits. A request for a feature the store lacks is
-  501 `unsupported`. A server over a store that keeps no commit or
-  mark (the reference memory, JSONL and SQLite stores) offers a subset.
+  `committed_view` (which `durable=true` needs), `log` (the log read,
+  which needs a store that keeps a log of records with a cursor after
+  each), `refs`, `ref_follow`, `durable_marks` (Following), `leases`,
+  plus its limits, `snapshot_bytes` among them (Following). A request
+  for a feature the store lacks is 501 `unsupported`. A server over a
+  store that keeps no commit or mark (the reference memory, JSONL and
+  SQLite stores) offers a subset.
 - Request and response bodies are JSON, except object bodies, which are
   their canonical bytes (`application/octet-stream`), and streams.
 - Streams are NDJSON (`application/x-ndjson`) or server-sent events
@@ -276,11 +279,23 @@ GET /v1/sessions/{id}/path?leaf={entry}&contents={all|since-fold|none}
   is `{"seq", "entry": hash, "head": hash|null, "outcome", "durable",
   "cursor"}`: the entry the record appended, the head after it, and the
   cursor after it. A head move that appends nothing (a compare-and-swap)
-  is `{"seq", "head": hash, "durable", "cursor"}` with no `entry`. The
-  first line, or the `end` frame when the log is empty, also carries the
-  session's header, incarnation and mark. A client fetches the envelopes
+  is `{"seq", "head": hash, "durable", "cursor"}` with no `entry`, its
+  `seq` the number of entries before it. Records a follower does not
+  see (a commit, a mark, the session's creation) are not lines; the
+  cursor moves past them. A cursor is a follow event's ID as much as a
+  log line's, so a follow resumes from a log read and the reverse. The
+  first line, or the `end` frame when no record follows the cursor,
+  also carries the session's header, incarnation and mark, and
+  `"reset": true` when the cursor named no place in the log (it was
+  replaced, or the cursor is none of this server's): the lines are then
+  the whole log, never a silent skip. The `end` frame always carries the
+  `cursor` and `head` the read ended at. A client fetches the envelopes
   and contents it lacks through Objects, or reads `path`, and builds the
-  session as the reference library's reader does.
+  session as the reference library's reader does. The log read is the
+  feature `log`: a store that keeps a session's entries but no log of
+  records with a cursor after each (the reference memory, JSONL and
+  SQLite stores) cannot serve it, and its follow serves the same records
+  as they come.
 - **`durable=true`** serves only committed records, and it is the reading
   RFC 0002's exchange requires of a sender ("a sender MUST commit the
   session before it pushes or serves it").
@@ -306,11 +321,12 @@ GET /v1/sessions/{id}/path?leaf={entry}&contents={all|since-fold|none}
   envelope inline, so the chain verifies from the response alone, and
   the content according to `contents`. The first line also carries the
   head and cursor the path was read at, and the incarnation, so a client
-  can follow from it with no gap. A `leaf` that is no entry of a session A path with no entries (a
-  session nothing was appended to) carries them in its `end` frame.
-  the caller may read is `no_entry`. Across a fork's base the path
-  crosses into the origin's entries, whose session the caller must also
-  be able to read, or the base is `no_entry`.
+  can follow from it with no gap. A path with no entries (a session
+  nothing was appended to) carries them in its `end` frame. A `leaf`
+  that is no entry of a session the caller may read is `no_entry`.
+  Across a fork's base the path crosses into the origin's entries, whose
+  session the caller must also be able to read, or the base is
+  `no_entry`.
   - `all`: every content.
   - `since-fold`: the contents RFC 0001's context building needs to
     rebuild the request at `leaf`, and the contents of every entry that
@@ -376,12 +392,17 @@ the reference stores, so a server MAY rate-limit resumes.
   kinds; `committed` and `error` belong to the wire.
   - A `snapshot` or `reset` carries the session's records from the
     start in the shape of the log lines above, with the header,
-    incarnation, mark and head, and the entries inlined (below) up to
-    the size a server publishes, past which the client reads `path`.
-    The head, mark and cursor are the snapshot's, given once: a record
-    in a snapshot carries `seq`, `entry` and its `line`, the entry's
-    RFC 0001 line. A server that serves no objects inlines every entry,
-    since its client has no other way to read the whole session.
+    incarnation, mark and head, and the entries inlined up to the size a
+    server publishes (`snapshot_bytes`). The head, mark and cursor are
+    the snapshot's, given once: a record in a snapshot carries `seq`,
+    `entry` and its `line`, the entry's RFC 0001 line. Past the bound, a
+    server that serves objects sends every later record without its
+    `line`, and the client reads those entries' envelopes and contents
+    as objects. A server that serves no objects has no other way to give
+    its client the whole session, so it refuses a snapshot past its
+    bound with 413 `too_large`, before the stream starts or, for a
+    `reset` on a stream already open, as its `error` event, and the
+    stream ends; the client reads the head's line with `path`.
   - An `appended` carries the record: the entry line and its content
     inline, so a follower needs no per-entry object fetch, plus `seq`,
     `outcome` (continued, branched, held, leaf_moved or leaf_not_moved),
@@ -395,10 +416,14 @@ the reference stores, so a server MAY rate-limit resumes.
     committed. Every earlier record sent with `durable: false` at or
     before that cursor is durable from then, and the server MUST send
     one when a commit covers records it sent as not durable.
-  - `durable` on each event is new in the protocol; the reference
-    library adds it to its `Change` so a library follower reports what
-    the wire says. A server whose store has no committed view cannot
-    say, and omits it; such a server never sends `committed`.
+  - `durable` on each event of a follow that is not `durable=true`, and
+    the `committed` event, are the optional feature `durable_marks`. A
+    server whose store has no committed view cannot say, and omits them.
+    One that has a committed view MAY omit them too, when its follow is
+    a store's follower that does not report durability (the reference
+    server's is): a client that needs to know what is committed follows
+    with `durable=true`, where every record sent is committed and is
+    marked `"durable": true`.
 - Every event has its own SSE `id`: the cursor after it, then `.`, then
   its index among the events of that cursor (`<cursor>.<n>`). A client
   resumes with `Last-Event-ID` (or `after`, with `Last-Event-ID`
@@ -429,8 +454,12 @@ the reference stores, so a server MAY rate-limit resumes.
   on connect and again whenever the target or the state changes. A live
   to dangling flip, from a session's deletion or re-creation, is a
   `target` event although the ref did not move. A ref update to none is
-  a `target` event with a null target. A ref has no cursor; a
-  reconnecting client gets the current state again. A client following a
+  a `target` event with a null target and no `state`. A ref that is not
+  there when the follow starts is refused as a resolve is (404
+  `no_ref`), before the stream starts. A ref has no cursor; a
+  reconnecting client gets the current state again. A store with no
+  watch on its refs is polled; the server MAY say how often in its
+  limits. A client following a
   conversation follows its ref, and switches to following the session
   it points to.
 
@@ -823,6 +852,7 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | `unsupported` | 501 | a feature the store lacks (marks, exchange, commit, committed view, refs, objects) |
 | `store_fault` | 500/503 | a store failure the client cannot fix: corrupt object, stopped store, layout, a session modified outside the store |
 | `overflow` | 503 | a follow the server cut because the client fell behind; resume after the last event read |
+| `too_large` | 413 | a snapshot or reset past the server's `snapshot_bytes` from a server that serves no objects; read the session another way |
 
 `no_session` on a ref update means `next` names a session the server
 does not hold. On a dangling ref the library's refusal of a same-target
@@ -889,10 +919,8 @@ root must not take.
 It is built in slices. The first is the read side: capabilities, the
 session listing and state, the path (`contents` `all` and `none`),
 following, and refs' resolve, listing and log, with the client's
-`Reader`, `Follower` and `RefStore` reads. Over the reference stores no
-server has a committed view, so `durable` is omitted and
-`durable=true` refused, and a client reads a whole session from a
-follow's snapshot. Its client resumes a follow only from a cursor of a
+`Reader`, `Follower` and `RefStore` reads. A client reads a whole
+session from a follow's snapshot. Its client resumes a follow only from a cursor of a
 follow it served, holding the session there; for any other cursor it
 follows afresh and yields a `Reset`, which the library's contract
 allows.
@@ -943,19 +971,50 @@ by hash. Three things in it are the reference server's:
 - **Read scope reads every session**, so an object a session holds is
   reachable by every reader; per-session authorization would narrow it.
 
-A commit answers `durable` and not yet the cursor, which waits on the
-committed view. Everything else is 501 `unsupported` and its capability
-false: log reads, `since-fold`, ref following and `durable=true`, and so
-the client's fetch, which reads the log from a committed view.
+The fourth is the remaining reads. The log read and `durable=true`
+(log and follow) are served over a store that reads its log record by
+record (the `cas` store's `ReadLog`, whose cursors are its follower's),
+so its capabilities say `log` and `committed_view`; a `durable` read
+commits a session the server holds the writer of, and reads a session
+it does not hold as its committed view. A commit answers its cursor. A
+`durable` follow is woken by the session's shared follower and also
+polls, for a commit made elsewhere. `contents=since-fold` is computed
+from the session the server holds, over every store (`shallow`), and a
+ref is followed by resolving it again on a timer (`ref_follow`), the
+reference stores having no watch on a ref. A snapshot past the bound
+(`snapshot_bytes`, 64 MiB by default) sends the rest of its records
+without their lines over `cas`, and is `too_large` over the others. Its
+client adds `Log`, `Path` (which verifies every envelope and content
+and names what a shallow path lacks), `FollowCommitted`, `FollowRef`,
+the fetch, `remote.Fetch`, which reads the committed log and its
+objects into a local `cas` store as `cas.Store.Fetch` would, and
+`remote.TakeBack`, which fetches, hands the server's record over at the
+head it fetched and declares the local store the record. A snapshot's
+records sent without lines are read as objects.
 
-The whole
-implementation is:
+With it the reference implementation covers the protocol. What it
+leaves, each the reference server's choice and not the protocol's:
+- **`durable_marks`.** A plain follow is a store's follower, which does
+  not report durability, so the server sends no `durable` on its events
+  and no `committed`; `durable=true` is how a client follows what is
+  committed. The reference library's `Change` has no `durable` field.
+- **The log read over memory, JSONL and SQLite.** Their followers'
+  cursors are not addressable record by record from outside, so they
+  serve no `log`; a follow serves the same records.
+- **A shallow session.** The client returns a shallow path as a
+  verified list of entries that names what it lacks, not as a library
+  `Session`, which would claim the whole session.
+- **The principal of a push or an append** is not recorded (Open
+  questions), reach is computed by reading the store's sessions rather
+  than from an index, and read scope reads every session.
+
+The whole implementation is:
 - **A server** that wraps a store the reference library offers, with
   following fanned out from one in-process follower per session, and
   leases kept in the store's own holds. Of the reference stores only
   the `cas` store has marks, exchange, a per-session commit, a committed
-  view and the object spaces; a server over memory, JSONL or SQLite
-  publishes the subset it has (see Conventions).
+  view, a log of records and the object spaces; a server over memory,
+  JSONL or SQLite publishes the subset it has (see Conventions).
 - **A client** that implements the library's `Store`, `Reader`,
   `Follower` and `RefStore` over these calls, with an object cache keyed
   by hash. That is not the claim that code written against a local store
@@ -966,10 +1025,10 @@ implementation is:
   that is not shared with the store, so `Session.Branch` does not reach
   the server by itself: the client's next append moves the server's head
   to the writer's leaf by the compare-and-swap before it lands; `Open`
-  acquires a lease; and `Follow` yields `Change`s with the durable field
-  the library adds. A caller that needs
-  the wire's extra information uses those additions.
-- **A push helper** for local-first writers.
+  acquires a lease; and the reads the library has no call for (the log,
+  a path, a committed follow, a ref's follow) are methods of their own.
+- **A push helper** for local-first writers, and a fetch and take-back
+  for a client that holds a session the server was the record for.
 
 ## Open questions
 

@@ -12,8 +12,9 @@
 //	POST   /v1/sessions[?lease_ttl_ms=n]    create, leased from its first instant
 //	GET    /v1/sessions/{id}                header, head, length, incarnation, cursor
 //	DELETE /v1/sessions/{id}                delete, under the lease
-//	GET    /v1/sessions/{id}/path           the path, NDJSON (contents=all or none)
-//	GET    /v1/sessions/{id}/follow         following, server-sent events
+//	GET    /v1/sessions/{id}/path           the path, NDJSON (contents=all, since-fold or none)
+//	GET    /v1/sessions/{id}/log            the log's records after a cursor, NDJSON; durable=true
+//	GET    /v1/sessions/{id}/follow         following, server-sent events; durable=true
 //	POST   /v1/sessions/{id}/lease          acquire; PUT renews, DELETE releases
 //	POST   /v1/sessions/{id}/lease/break    end another holder's lease (admin)
 //	POST   /v1/sessions/{id}/entries        append, NDJSON lines, under the lease
@@ -22,6 +23,7 @@
 //	GET    /v1/refs?prefix=                 ref listing, NDJSON
 //	GET    /v1/refs/{name}                  resolve; PUT is the ref's compare-and-swap
 //	GET    /v1/refs/{name}?view=log         the ref's log, NDJSON
+//	GET    /v1/refs/{name}?view=follow      the ref's target as it moves, server-sent events
 //	GET    /v1/objects/{space}/{hash}       an object; HEAD too; PUT uploads one
 //	POST   /v1/objects/missing              which objects the caller cannot reach
 //	POST   /v1/sessions/{id}/push           RFC 0002's push, admitted here
@@ -33,12 +35,15 @@
 // that lost its lease cannot write after the next holder. A push is not
 // leased: it is governed by the record mark, as RFC 0002's exchange is,
 // and the objects and exchange routes need a store with object spaces
-// and marks (the cas store). The log read, shallow reads, ref following
-// and the committed view are not served yet.
+// and marks (the cas store). The log read and durable=true need a store
+// that keeps a log of records with a commit (the cas store); a shallow
+// path is computed from the session, over any store.
 //
 // One follower per session is shared by every client that follows it,
 // and a client that falls behind is cut with an `overflow` error and
-// resumes from the last event it read.
+// resumes from the last event it read. A snapshot carries entries up to
+// [WithSnapshotLimit]; past it a server with objects sends the records
+// alone, which the client reads as objects, and one without refuses.
 //
 // [Dial] returns a [Client] that is the library's [agentsession.Store],
 // [agentsession.Writer], [agentsession.Reader], [agentsession.Follower]
@@ -47,5 +52,7 @@
 // as an error, never as a short result, and writes under leases it
 // renews until it lets them go. [Push] sends a session a local cas store
 // is the record for, uploading only the objects the server lacks: the
-// helper of a local-first writer.
+// helper of a local-first writer; [Fetch] reads one from the server's
+// committed log into a local cas store, and [TakeBack] makes the local
+// store the record again.
 package remote

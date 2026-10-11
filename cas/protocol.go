@@ -175,6 +175,13 @@ type ReceiveOptions struct {
 	Force bool
 	// Handover makes this store the record.
 	Handover bool
+	// Fetch admits c as Fetch does rather than as a push: c need not be
+	// the record's, and the head moves only when this store is a mirror
+	// of the session and c's head descends from its own, or it has none;
+	// a session this store lacked is created as a mirror. Expected, Force
+	// and Handover are not read. It is how a client admits a session it
+	// read from a server (RFC 0003's fetch).
+	Fetch bool
 }
 
 // Receive admits a push of c from the record, as Push does at its
@@ -186,7 +193,8 @@ type ReceiveOptions struct {
 // c.Mark is not read. A handover whose head does not move is refused
 // with ErrHeadMoved, before anything lands for a session this store
 // lacked and after the entries land for one it holds, with the Exchange
-// saying what landed.
+// saying what landed. With o.Fetch it admits c as Fetch admits a
+// session, as ReceiveOptions says.
 func (s *Store) Receive(ctx context.Context, c Closure, o ReceiveOptions) (Exchange, error) {
 	if err := ctx.Err(); err != nil {
 		return Exchange{}, err
@@ -204,6 +212,10 @@ func (s *Store) Receive(ctx context.Context, c Closure, o ReceiveOptions) (Excha
 	b := &bundle{header: c.Header, mark: MarkRecord, head: c.Head, prefix: c.Prefix, own: c.Own, blobs: c.Blobs}
 	if b.blobs == nil {
 		b.blobs = map[string][]byte{}
+	}
+	if o.Fetch {
+		b.mark = c.Mark
+		return s.receive(ctx, b, receiveOptions{})
 	}
 	return s.receive(ctx, b, receiveOptions{push: true, expected: o.Expected, force: o.Force, handover: o.Handover})
 }

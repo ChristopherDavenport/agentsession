@@ -19,6 +19,10 @@ type event struct {
 	// v is the decoded payload, which the hub applies to its replica:
 	// *snapshotData, *appendedData or *headData.
 	v any
+	// cut is set on a snapshot or reset a client cannot be sent, past the
+	// snapshot bound of a server that serves no objects: the client's
+	// follow ends with it.
+	cut *Problem
 }
 
 // encoder turns a store's follow into events. It drops the Head change
@@ -34,6 +38,9 @@ type encoder struct {
 	last       agentsession.Cursor
 	n          int
 	started    bool
+	// bound is what a client is sent of a snapshot or reset, under the
+	// server's snapshot limit; nil sends it whole.
+	bound func(*snapshotData) (*snapshotData, *Problem)
 }
 
 func newEncoder() *encoder { return &encoder{seq: -1} }
@@ -83,11 +90,20 @@ func (e *encoder) encode(c agentsession.Change) (*event, error) {
 	default:
 		return nil, nil
 	}
-	data, err := json.Marshal(ev.v)
-	if err != nil {
-		return nil, err
+	send := ev.v
+	if d, ok := ev.v.(*snapshotData); ok && e.bound != nil {
+		var cut *Problem
+		if send, cut = e.bound(d); cut != nil {
+			ev.cut, send = cut, nil
+		}
 	}
-	ev.data = data
+	if send != nil {
+		data, err := json.Marshal(send)
+		if err != nil {
+			return nil, err
+		}
+		ev.data = data
+	}
 	if e.started && c.Cursor == e.last {
 		e.n++
 	} else {
@@ -160,6 +176,7 @@ type sub struct {
 // ends or the hub is stopped.
 func (hb *hub) run(ctx context.Context) {
 	enc := newEncoder()
+	enc.bound = hb.h.bound
 	for c, err := range hb.h.follower.Follow(ctx, hb.id, "") {
 		if err != nil {
 			hb.finish(problemOf(err))
@@ -216,6 +233,14 @@ func (hb *hub) publish(ev *event) error {
 		hb.ring = hb.ring[n:]
 	}
 	for s := range hb.subs {
+		if ev.cut != nil {
+			// A reset past the bound the client cannot be sent: its
+			// follow ends, and it reads the session another way.
+			s.err = ev.cut
+			close(s.ch)
+			delete(hb.subs, s)
+			continue
+		}
 		select {
 		case s.ch <- ev:
 		default:
@@ -335,11 +360,15 @@ func (hb *hub) attach(from string) (s *sub, first []*event, ok bool, err error) 
 		if err != nil {
 			return nil, nil, false, err
 		}
-		data, err := json.Marshal(d)
+		ev, cut, err := hb.h.snapshotEvent(d, false)
 		if err != nil {
 			return nil, nil, false, err
 		}
-		first = []*event{{name: eventSnapshot, id: hb.last, data: data}}
+		if cut != nil {
+			return nil, nil, false, cut
+		}
+		ev.id, ev.v = hb.last, nil
+		first = []*event{ev}
 	} else {
 		i := -1
 		for j, ev := range hb.ring {
@@ -350,11 +379,26 @@ func (hb *hub) attach(from string) (s *sub, first []*event, ok bool, err error) 
 		if i < 0 {
 			return nil, nil, false, nil
 		}
+		for _, ev := range hb.ring[i+1:] {
+			if ev.cut != nil {
+				// A reset after the cursor that the client cannot be
+				// sent: its follow ends as a live one's did.
+				return nil, nil, false, ev.cut
+			}
+		}
 		first = append(first, hb.ring[i+1:]...)
 	}
 	s = &sub{ch: make(chan *event, hb.h.buffer)}
 	hb.subs[s] = struct{}{}
 	return s, first, true, nil
+}
+
+// changes returns the channel the hub closes at its next event, and
+// done when the hub's follow has ended and no event will come.
+func (hb *hub) changes() (ch <-chan struct{}, done bool) {
+	hb.mu.Lock()
+	defer hb.mu.Unlock()
+	return hb.changed, hb.done
 }
 
 // detach removes a client that went away.

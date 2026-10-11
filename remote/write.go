@@ -517,7 +517,18 @@ func (h *Handler) commit(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"durable": true})
+	out := map[string]any{"durable": true}
+	if h.lr != nil {
+		// The cursor through which everything is committed: the log's end,
+		// which this commit's sync record closes.
+		c, err := h.lr.LogCursor(r.Context(), r.PathValue("id"))
+		if err != nil {
+			h.fail(w, err)
+			return
+		}
+		out["cursor"] = wireCursor(c)
+	}
+	writeJSON(w, out)
 }
 
 // headRequest is a head compare-and-swap.
