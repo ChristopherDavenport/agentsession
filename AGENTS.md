@@ -14,7 +14,11 @@ Three Go modules in one repository, joined by `go.work`:
 | `otel`   | `…/agentsession/otel`    | yes       |
 
 The root module depends on `openresponses` and the standard library
-alone; `make deps` enforces it. Anything needing another dependency —
+alone; `make deps` enforces it. `remote`, RFC 0003's store protocol
+over HTTP, is a package of it for that reason: `net/http` is the
+standard library, and a fourth nested module would also push a fourth
+tag, which `make release` refuses (GitHub sends no events for a push of
+more than three). Anything needing another dependency —
 a database driver, an OpenTelemetry SDK — is a nested module listed in
 `SUBMODULES` in the Makefile.
 
