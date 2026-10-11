@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // HashFile returns the content hash of a file in the form the env entry
@@ -289,7 +291,8 @@ type Callee struct {
 // gives none. From it a reader may conclude that the call's output came
 // from that work, and not that the work can be replayed or that it
 // ended with the call. A peer link names its call and a url or a
-// session; [Session.VerifyRecords] reports one that does not.
+// session, which [Session.Append] and [Session.Prepare] hold a new one
+// to.
 func NewPeerLink(callID string, c Callee) *LinkEntry {
 	return &LinkEntry{Rel: RelPeer, Session: c.Session, CallID: callID, URL: c.URL, Task: c.Task, Context: c.Context}
 }
@@ -309,49 +312,113 @@ func NewCalleeSubsessionLink(callID string, c Callee) *LinkEntry {
 // NewCancelSentLink builds the notice a caller records when it tells
 // the callee link names that it no longer wants the work: a link of the
 // same relation and call, carrying [CancelSent], whose Target is link's
-// entry ID, so link must have been appended. It records that the caller
-// asked, not that the work stopped; the caller does not wait for the
-// callee's answer. It names no new callee, and [Callees] reads it as a
-// notice about link.
+// entry ID, so link must have been appended, on the path the notice is
+// appended to. It records that the caller asked, not that the work
+// stopped; the caller does not wait for the callee's answer. It names
+// no new callee, and [Callees] reads it as a notice about link. Its
+// target names an entry of this session: whoever copies or re-points
+// links, onto a new branch or into another store, re-points the notice
+// with them.
 func NewCancelSentLink(link *LinkEntry) *LinkEntry {
 	return &LinkEntry{Rel: link.Rel, Session: link.Session, CallID: link.CallID, Target: link.ID, Cancel: CancelSent}
 }
 
 // CalleeLink is one callee of a call as a path records it: a
-// subsession or peer link, and whether a cancel notice on the path
-// names it.
+// subsession or peer link, the hand-off it belongs to, and what became
+// of it.
 type CalleeLink struct {
 	*LinkEntry
-	// Cancelled is true when a later cancel notice names this link:
-	// the caller asked the callee to stop. It does not say the work
-	// stopped.
+	// Dispatch is the entry ID of the dispatch the link belongs to: for
+	// a callee in another system (URL set), the latest dispatch of its
+	// call before it on the path, since the callee names its work only
+	// when it answers; for a subsession of this store, written before
+	// the hand-off it starts, the first dispatch of its call after it.
+	// It is empty when the path records no such dispatch.
+	Dispatch string
+	// Cancelled is true when a cancel notice on the path names this
+	// link: the caller asked the callee to stop. It does not say the
+	// work stopped.
 	Cancelled bool
+	// Answered is true when the call's output on the path came from
+	// this callee: the output follows the link, the link belongs to the
+	// call's last dispatch before the output, no cancel notice names
+	// it, and no answer decision of the call comes between the link
+	// and the output, which would make the output the harness's.
+	Answered bool
 }
 
 // Callees returns the callees of the calls on a root-first path, every
-// subsession and peer link in path order, each with Cancelled set when
-// a cancel notice later on the path names it. A call dispatched more
-// than once, to a callee that starts new work each time, has a link
-// for each; the latest of a call's links is the callee of its latest
-// dispatch, which is the one that answered when an output follows. A
-// cancel notice is not a callee, and one naming no link on the path is
-// passed over.
+// subsession and peer link in path order. A link is identified by its
+// entry and the dispatch it belongs to, not by its task, which a
+// callee that answered with a message has none of: a call dispatched
+// more than once, to a callee that starts new work each time, has a
+// link for each hand-off that reached one. A cancel notice is not a
+// callee; it marks the link its target names, and one naming no link
+// on the path is passed over.
 func Callees(path []Entry) []CalleeLink {
 	var out []CalleeLink
-	at := make(map[string]int)
+	byID := make(map[string]int)
+	last := make(map[string]string)  // call -> latest dispatch so far
+	before := make(map[string][]int) // call -> in-store links awaiting their dispatch
+	open := make(map[string][]int)   // call -> links not yet followed by an output
+	blocked := make(map[int]bool)    // link index -> an answer decision came after it
 	for _, e := range path {
-		l, ok := e.(*LinkEntry)
-		if !ok || !l.callee() {
-			continue
-		}
-		if l.Cancel != "" {
-			if i, ok := at[l.Target]; ok {
-				out[i].Cancelled = true
+		switch v := e.(type) {
+		case *DispatchEntry:
+			last[v.CallID] = v.ID
+			for _, i := range before[v.CallID] {
+				out[i].Dispatch = v.ID
 			}
-			continue
+			delete(before, v.CallID)
+		case *DecisionEntry:
+			if v.Verdict == VerdictAnswer {
+				for _, i := range open[v.CallID] {
+					blocked[i] = true
+				}
+			}
+		case *LinkEntry:
+			if !v.callee() {
+				continue
+			}
+			if v.Cancel != "" {
+				if i, ok := byID[v.Target]; ok {
+					out[i].Cancelled = true
+				}
+				continue
+			}
+			i := len(out)
+			byID[v.ID] = i
+			c := CalleeLink{LinkEntry: v}
+			if v.URL != "" {
+				c.Dispatch = last[v.CallID]
+			} else {
+				before[v.CallID] = append(before[v.CallID], i)
+			}
+			out = append(out, c)
+			open[v.CallID] = append(open[v.CallID], i)
+		case *ItemEntry:
+			o, ok := v.Item.(*openresponses.FunctionCallOutput)
+			if !ok {
+				continue
+			}
+			links := open[o.CallID]
+			delete(open, o.CallID)
+			for j := len(links) - 1; j >= 0; j-- {
+				i := links[j]
+				if blocked[i] || out[i].Dispatch != last[o.CallID] {
+					continue
+				}
+				out[i].Answered = true
+				break
+			}
 		}
-		at[l.ID] = len(out)
-		out = append(out, CalleeLink{LinkEntry: l})
+	}
+	// A cancel notice may come after the output it would have
+	// answered; a cancelled callee did not answer.
+	for i := range out {
+		if out[i].Cancelled {
+			out[i].Answered = false
+		}
 	}
 	return out
 }

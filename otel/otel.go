@@ -26,6 +26,7 @@
 package otel
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -99,8 +100,9 @@ const (
 	AttrLinkTask    = "agentsession.link.task"
 	AttrLinkContext = "agentsession.link.context"
 	AttrLinkTarget  = "agentsession.link.target"
-	// AttrPeer is set on a call's tool span to the URL of the peer that
-	// answered it, a callee whose work outlives the call.
+	// AttrPeer is set on a call's tool span to the URL of the peer the
+	// call reached, a callee whose work outlives the call, or its
+	// session when the link names no URL.
 	AttrPeer = "agentsession.peer"
 	// AttrSubstitution marks an env event, after a response on the
 	// path, whose workspace is not the one in force before it, which
@@ -774,8 +776,12 @@ func (t *tracker) link(v *agentsession.LinkEntry, ts time.Time) {
 	if v.Cancel == "" && v.Rel == agentsession.RelSubsession && v.Session != "" {
 		callee = append(callee, attribute.String(AttrSubsession, v.Session))
 	}
-	if v.Cancel == "" && v.Rel == agentsession.RelPeer && v.URL != "" {
-		callee = append(callee, attribute.String(AttrPeer, v.URL))
+	if v.Cancel == "" && v.Rel == agentsession.RelPeer {
+		// A peer is named by the url it was reached at, or by its own
+		// session when it was linked by that alone.
+		if peer := cmp.Or(v.URL, v.Session); peer != "" {
+			callee = append(callee, attribute.String(AttrPeer, peer))
+		}
 	}
 	switch {
 	case c.span != nil:

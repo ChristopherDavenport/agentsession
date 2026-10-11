@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 func TestHashFiles(t *testing.T) {
@@ -389,40 +391,139 @@ func TestPeerLink(t *testing.T) {
 	}
 }
 
-// TestCalleeLinksVerified: what a writer must not write, and the
-// decoder still reads as written, VerifyRecords reports for a file of
-// 0.12: a peer link with no call or neither a url nor a session, and a
-// cancel notice naming no callee link of its call before it. A file of
-// an earlier minor is not held to them.
+// TestCalleeLinksVerified: a writer may not add a peer link with no
+// call or neither a url nor a session, or a cancel notice that names no
+// callee link of its call and relation on its path; a store that holds
+// one anyway reads it, and VerifyRecords reports the ones that carry a
+// member 0.12 defines. A peer link with none of them, which an earlier
+// file may hold under an extension's meaning, is read as before.
 func TestCalleeLinksVerified(t *testing.T) {
-	for name, link := range map[string]*LinkEntry{
-		"a peer link with no call":               {Rel: RelPeer, URL: "https://x"},
-		"a peer link with no url and no session": {Rel: RelPeer, CallID: "call_1"},
-		"a cancel notice naming no link":         {Rel: RelSubsession, CallID: "call_1", Target: "sha256:nowhere", Cancel: CancelSent},
-	} {
-		t.Run(name, func(t *testing.T) {
-			s := New(Header{})
-			appendText(t, s, "work")
-			if _, err := s.Append(link); err != nil {
-				t.Fatalf("the writer refused what only a verifier reports: %v", err)
+	build := func(t *testing.T) (*Session, *LinkEntry) {
+		t.Helper()
+		s := New(Header{})
+		appendText(t, s, "work")
+		sub := NewCalleeSubsessionLink("call_1", Callee{URL: "https://x", Task: "t"})
+		if _, err := s.Append(sub); err != nil {
+			t.Fatal(err)
+		}
+		return s, sub
+	}
+	tests := []struct {
+		name     string
+		link     func(sub *LinkEntry) *LinkEntry
+		verified bool // VerifyRecords reports it
+	}{
+		{"a peer link with a url and no call", func(*LinkEntry) *LinkEntry { return &LinkEntry{Rel: RelPeer, URL: "https://x"} }, true},
+		{"a peer link with no url and no session", func(*LinkEntry) *LinkEntry { return &LinkEntry{Rel: RelPeer, CallID: "call_1"} }, false},
+		{"a cancel notice naming no link", func(*LinkEntry) *LinkEntry {
+			return &LinkEntry{Rel: RelSubsession, CallID: "call_1", Target: "sha256:nowhere", Cancel: CancelSent}
+		}, true},
+		{"a cancel notice naming a link of another relation", func(sub *LinkEntry) *LinkEntry {
+			return &LinkEntry{Rel: RelPeer, CallID: "call_1", Target: sub.ID, Cancel: CancelSent}
+		}, true},
+		{"a cancel notice naming a link of another call", func(sub *LinkEntry) *LinkEntry {
+			return &LinkEntry{Rel: RelSubsession, CallID: "call_2", Target: sub.ID, Cancel: CancelSent}
+		}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, sub := build(t)
+			if _, err := s.Append(tt.link(sub)); !errors.Is(err, ErrCalleeLink) {
+				t.Errorf("Append = %v, want ErrCalleeLink", err)
 			}
-			if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrCalleeLink) {
-				t.Errorf("VerifyRecords = %v, want ErrCalleeLink", err)
+			if _, err := s.Prepare(tt.link(sub)); !errors.Is(err, ErrCalleeLink) {
+				t.Errorf("Prepare = %v, want ErrCalleeLink", err)
+			}
+			// Commit, which a store reading what it holds uses, takes it.
+			if _, err := s.Commit(tt.link(sub)); err != nil {
+				t.Fatalf("Commit refused a link a store may hold: %v", err)
+			}
+			err := s.VerifyRecords(s.Leaf())
+			if tt.verified != errors.Is(err, ErrCalleeLink) {
+				t.Errorf("VerifyRecords = %v, reported %v", err, tt.verified)
 			}
 			var buf bytes.Buffer
 			if err := Write(&buf, s); err != nil {
 				t.Fatal(err)
 			}
-			older := strings.Replace(buf.String(), `"format":"`+Format+`"`, `"format":"agentsession/0.11"`, 1)
-			back, err := Read(strings.NewReader(older))
-			if err != nil {
-				t.Fatalf("a stored link is refused on read: %v", err)
-			}
-			if err := back.VerifyRecords(back.Leaf()); err != nil {
-				t.Errorf("an 0.11 file is held to 0.12's rule: %v", err)
+			if _, err := Read(&buf); err != nil {
+				t.Errorf("a stored link is refused on read: %v", err)
 			}
 		})
 	}
+	// An extension's peer link in a file a writer of 0.12 raised reads
+	// and verifies as it did before the raise.
+	s := New(Header{Format: "agentsession/0.11"})
+	appendText(t, s, "work")
+	if _, err := s.Commit(&LinkEntry{Rel: RelPeer, Session: "colleague"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.VerifyRecords(s.Leaf()); err != nil {
+		t.Errorf("an earlier extension peer link fails verification: %v", err)
+	}
+}
+
+// TestCalleesAnswered: a callee link belongs to its call's dispatch,
+// and answered only when the output follows its call's last dispatch,
+// no cancel notice names it and no answer decision of the call comes
+// between it and the output.
+func TestCalleesAnswered(t *testing.T) {
+	callee := Callee{URL: "https://x", Task: "t1"}
+	tests := []struct {
+		name     string
+		steps    func(t *testing.T, s *Session, call string, link *LinkEntry)
+		answered bool
+	}{
+		{"the output follows its dispatch", func(t *testing.T, s *Session, call string, _ *LinkEntry) {}, true},
+		{"a later dispatch reached no callee", func(t *testing.T, s *Session, call string, _ *LinkEntry) {
+			mustAppend(t, s, NewDispatch("call_1", call))
+		}, false},
+		{"the link was cancelled", func(t *testing.T, s *Session, call string, link *LinkEntry) {
+			mustAppend(t, s, NewCancelSentLink(link))
+		}, false},
+		{"the harness answered", func(t *testing.T, s *Session, call string, _ *LinkEntry) {
+			mustAppend(t, s, NewDecision("call_1", call, VerdictAnswer, ByPolicy))
+		}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := New(Header{})
+			appendText(t, s, "work")
+			call := mustAppend(t, s, &ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "call_1", Name: "search", Arguments: "{}"}})
+			dispatch := mustAppend(t, s, NewDispatch("call_1", call))
+			link := NewCalleeSubsessionLink("call_1", callee)
+			mustAppend(t, s, link)
+			tt.steps(t, s, call, link)
+			mustAppend(t, s, NewItemEntry(&openresponses.FunctionCallOutput{CallID: "call_1", Output: openresponses.FunctionCallOutputData{Text: "done"}}))
+			callees := Callees(s.Path(s.Leaf()))
+			if len(callees) != 1 {
+				t.Fatalf("Callees = %+v", callees)
+			}
+			if callees[0].Dispatch != dispatch || callees[0].Answered != tt.answered {
+				t.Errorf("dispatch %q (want %q), answered %v (want %v)", callees[0].Dispatch, dispatch, callees[0].Answered, tt.answered)
+			}
+		})
+	}
+	// A subsession of this store is linked before the hand-off it
+	// starts, and belongs to the dispatch after it.
+	s := New(Header{})
+	appendText(t, s, "work")
+	call := mustAppend(t, s, &ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "call_1", Name: "task", Arguments: "{}"}})
+	mustAppend(t, s, NewSubsessionLink("child", "call_1"))
+	dispatch := mustAppend(t, s, NewDispatch("call_1", call))
+	mustAppend(t, s, NewItemEntry(&openresponses.FunctionCallOutput{CallID: "call_1", Output: openresponses.FunctionCallOutputData{Text: "done"}}))
+	if c := Callees(s.Path(s.Leaf())); len(c) != 1 || c[0].Dispatch != dispatch || !c[0].Answered {
+		t.Errorf("in-store subsession: %+v", c)
+	}
+}
+
+func mustAppend(t *testing.T, s *Session, e Entry) string {
+	t.Helper()
+	id, err := s.Append(e)
+	if err != nil {
+		t.Fatalf("append %T: %v", e, err)
+	}
+	return id
 }
 
 // TestLinkCalleeMembersOfAnotherRelation: url, task, context and cancel
@@ -478,30 +579,28 @@ func TestALinkOfAnUnknownRelationIsKept(t *testing.T) {
 	}
 }
 
-// TestVerifyLinksOfACalleeByFormat: in a file of 0.12 a subsession link
-// naming a callee in another system is not checked against a header,
-// since its session was not derived from this one; in an earlier file,
-// where url meant nothing, the link is checked as it was.
-func TestVerifyLinksOfACalleeByFormat(t *testing.T) {
-	s := New(Header{ID: "caller"})
-	appendText(t, s, "work")
-	if _, err := s.Append(NewCalleeSubsessionLink("call_1", Callee{URL: "https://x", Task: "t", Session: "remote"})); err != nil {
-		t.Fatal(err)
-	}
+// TestVerifyLinksOfACallee: a subsession link naming a callee in
+// another system is not checked against a header, since its session was
+// not derived from this one, whatever format the file was written in;
+// it is told by its url, which an earlier file's link without one does
+// not carry, so such a link is checked as it was.
+func TestVerifyLinksOfACallee(t *testing.T) {
 	stranger := New(Header{ID: "remote", ParentSession: "someone-else"})
 	resolve := func(string) (*Session, error) { return stranger, nil }
-	if err := s.VerifyLinks(resolve); err != nil {
-		t.Errorf("0.12: VerifyLinks = %v, want nil", err)
-	}
-	var buf bytes.Buffer
-	if err := Write(&buf, s); err != nil {
-		t.Fatal(err)
-	}
-	older, err := Read(strings.NewReader(strings.Replace(buf.String(), `"format":"`+Format+`"`, `"format":"agentsession/0.11"`, 1)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := older.VerifyLinks(resolve); !errors.Is(err, ErrLinkMismatch) {
-		t.Errorf("0.11: VerifyLinks = %v, want ErrLinkMismatch", err)
+	for _, format := range []string{Format, "agentsession/0.11"} {
+		s := New(Header{ID: "caller", Format: format})
+		appendText(t, s, "work")
+		if _, err := s.Append(NewCalleeSubsessionLink("call_1", Callee{URL: "https://x", Task: "t", Session: "remote"})); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.VerifyLinks(resolve); err != nil {
+			t.Errorf("%s: VerifyLinks = %v, want nil", format, err)
+		}
+		if _, err := s.Append(NewSubsessionLink("remote", "call_2")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.VerifyLinks(resolve); !errors.Is(err, ErrLinkMismatch) {
+			t.Errorf("%s: an in-store subsession link: VerifyLinks = %v, want ErrLinkMismatch", format, err)
+		}
 	}
 }

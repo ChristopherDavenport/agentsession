@@ -1435,34 +1435,59 @@ relation, as anything but a non-empty string, or (`task`, `context`)
 with no `url` beside them, a reader keeps them as written, as members
 it does not know. Such a callee names its task only when it answers, so
 the link is written as soon as the caller learns the task, after the
-call's `dispatch`; a call dispatched with no such link reached no task
-the caller learned of. A call dispatched again, after a restart or by
-the rule that replays a call, starts new work at the callee, and its
-link is written again: a later link of the call that is not a cancel
-notice names the callee of a later `dispatch`. A reader tells a call's
-callees apart by `call_id` and `task`, and the latest link of a call is
-the callee of its latest `dispatch`, the one that answered when the
-call's output follows it. In a file of 0.12 or later the header check
-above is the in-store subsession's alone: a callee in another system did
-not derive its session from this one, so a verifier does not check a
-link carrying `url`, or naming no session, against it. A link of an
-earlier file is checked as it was.
+call's `dispatch`; a hand-off with no such link after it reached no
+work the caller learned of. A link belongs to a `dispatch` of its call:
+one carrying `url` to the latest `dispatch` of its call before it on
+the path, and an in-store subsession's, written before the hand-off it
+starts, to the first after it. A call dispatched again, after a restart
+or by the rule that replays a call, starts new work at the callee, and a
+later link of the call that is not a cancel notice belongs to that later
+`dispatch`. A reader tells a call's callees apart by the link's entry
+and the `dispatch` it belongs to, not by `task`, which a callee that
+answered with a message has none of. A callee answered the call when the
+call's output follows its link, the link belongs to the call's last
+`dispatch` before the output, no cancel notice names the link, and no
+`answer` decision of the call comes between the link and the output,
+which would make the output the harness's; a reader concludes nothing
+of a link that is not so. The header check above is the in-store
+subsession's alone: a callee in another system did not derive its
+session from this one, so a verifier does not check a link carrying
+`url` against it. A link without `url` is checked as it was, in a file
+of any minor.
 
 A caller that gives up a call whose callee it linked, and tells the
 callee it no longer wants the work, MAY record that it did by a cancel
 notice: a later link of the same `rel` and `call_id` carrying `cancel:
 "sent"` and `target`, the ID of the link entry, on the same path, of the
-callee the cancel was sent to. It records that the caller asked, not
+callee the cancel was sent to. That `target` names an entry of this
+session, as a `dispatch`'s does: migration and redaction rewrite it
+with the other entry-naming members, and whoever copies or re-points a
+call's links, onto a new branch or into another store by exchange,
+re-points the notice with them. It records that the caller asked, not
 that the callee stopped: the caller does not wait for the callee's
 answer, so it knows nothing more, and the callee's work may still have
 run to its end. A cancel notice names no new callee and need not repeat
 the members of the link it names. `cancel` is defined for the
 `subsession` and `peer` relations, with the value `sent` and a `target`
 beside it; any other value, one with no `target`, or the member on
-another relation, a reader keeps as written. A verifier reports a cancel
-notice whose `target` names no callee link of its call before it, and a
-`peer` link with no `call_id` or with neither `url` nor `session`; a
-reader reads either as written and does not refuse the file.
+another relation, a reader keeps as written. A writer MUST NOT append a
+`peer` link with no `call_id` or with neither `url` nor `session`, or a
+cancel notice whose `target` is not a `subsession` or `peer` link of
+the same `rel` and `call_id` before it on its path. A reader reads
+either as written and does not refuse the file; a verifier reports the
+ones that carry a member this section defines (`url`, or `cancel` and
+its `target`), and holds a link that carries none of them, which an
+earlier file may hold under an extension's meaning, to nothing new.
+
+A reader of 0.12 reads `url`, `task`, `context` and `cancel` on a
+`subsession` or `peer` link of a file of any minor as this section
+defines them, since a link does not say which minor wrote it; an
+earlier file that held one of those names under an extension's meaning
+is read as though a writer of 0.12 had written it, which is the one
+exception to such a member being kept as one the reader does not know.
+A verifier's rules turn on the members a link carries, not on the
+file's header, so raising a file's `format` never makes an entry that
+verified before fail.
 
 A link names a session, not a point in one, and at the moment it is
 written there is no point to name. The other half of the round trip is
@@ -1933,9 +1958,11 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 One relation, four members of `link` and a second use of `target`, all
 optional. A 0.11 file is a 0.12 file that holds none of them. No hash
-changes, and no rule reads an earlier file differently: the header check
-a verifier skips for a callee in another system is skipped in files of
-0.12 alone.
+changes. The new rules turn on the members a link carries, not on the
+header, so a file reads and verifies the same before and after a writer
+raises it, save one exception `link` states: a reader of 0.12 reads the
+four members on an earlier file's `subsession` or `peer` link as 0.12
+defines them.
 
 - A `peer` relation on `link` names a callee whose work outlives the
   call that reached it (`link`). Which relation links a callee follows
@@ -1954,7 +1981,13 @@ a verifier skips for a callee in another system is skipped in files of
   the caller told the callee it no longer wanted the work, and not that
   the work stopped (`link`). A caller that gives up a call does not wait
   for the callee to confirm, so the record can say only what it sent,
-  and `target` says which of a call's callees it was sent to.
+  and `target` says which of a call's callees it was sent to. The
+  `target` is an entry-naming member, rewritten by migration and
+  redaction and re-pointed by whoever copies the links.
+- A link belongs to a `dispatch` of its call, and a callee answered the
+  call only when the output follows its link and its call's last
+  `dispatch`, with no cancel notice naming it and no `answer` between
+  (`link`).
 
 A writer of 0.12 raises every file it appends to, as Versioning says, so
 every reader of 0.11 refuses those files until it is upgraded. A member

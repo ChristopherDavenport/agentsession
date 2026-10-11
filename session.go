@@ -253,8 +253,42 @@ func (s *Session) ResetLeaf() {
 // the leaf and does not reach any context. On success e is owned by the
 // session and must not be modified.
 func (s *Session) Append(e Entry) (string, error) {
+	if err := s.checkNew(e); err != nil {
+		return "", err
+	}
 	r, err := s.Commit(e)
 	return r.ID, err
+}
+
+// checkNew applies the rules a writer is held to for an entry it is
+// adding, which a reader does not apply to one a store already holds:
+// [Session.Append] and [Session.Prepare] run it, Commit and Extend,
+// which read paths use, do not. A peer link names its call and a url
+// or a session, and a cancel notice names a subsession or peer link of
+// its call and relation on the path it is appended to.
+func (s *Session) checkNew(e Entry) error {
+	l, ok := e.(*LinkEntry)
+	if !ok || !l.callee() {
+		return nil
+	}
+	if l.Rel == RelPeer && l.Cancel == "" && (l.CallID == "" || l.URL == "" && l.Session == "") {
+		return fmt.Errorf("%w: a peer link names its call and a url or a session", ErrCalleeLink)
+	}
+	if l.Cancel == "" {
+		return nil
+	}
+	parent := l.Parent
+	if parent == "" {
+		parent = s.Leaf()
+	}
+	return checkCallee(l, func(id string) *LinkEntry {
+		for _, p := range s.Path(parent) {
+			if to, ok := p.(*LinkEntry); ok && p.Base().ID == id && to.callee() && to.Cancel == "" {
+				return to
+			}
+		}
+		return nil
+	})
 }
 
 // Outcome is what an append did, which the format has a store report.
@@ -321,6 +355,9 @@ type Result struct {
 // Commit of the same entry afterwards recomputes the same values.
 func (s *Session) Prepare(e Entry) (Result, error) {
 	if err := validateEntry(e); err != nil {
+		return Result{}, err
+	}
+	if err := s.checkNew(e); err != nil {
 		return Result{}, err
 	}
 	s.mu.Lock()

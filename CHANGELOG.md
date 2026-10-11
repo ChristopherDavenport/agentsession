@@ -25,16 +25,22 @@ versions may break the API.
   wants the work records a cancel notice, a later link of the call with
   `cancel: "sent"` and a `target` naming the callee's link
   (`CancelSent`, `NewCancelSentLink`): that it asked, not that the work
-  stopped. `Callees` reads a path's callee links in order, each marked
-  `Cancelled` when a notice names it.
-- The decoder takes each new member only where the format defines it
-  (task and context beside a url, cancel beside a target), so a stored
-  link is never refused on read; `VerifyRecords` reports, in a file of
-  0.12, a peer link with no call or neither a url nor a session and a
-  cancel notice naming no callee link of its call (`ErrCalleeLink`).
-  `VerifyLinks` does not check the header of a callee in another system,
-  or a cancel notice, in a file of 0.12; an earlier file is checked as
-  before. The ATIF export lists callees in another system and cancel
+  stopped. `Callees` reads a path's callee links in order, each with the
+  dispatch it belongs to, whether a notice named it (`Cancelled`) and
+  whether the call's output came from it (`Answered`: the output
+  follows its call's last dispatch, no notice names it, no `answer`
+  decision between).
+- `Append` and `Prepare` refuse a new peer link with no call or neither
+  a url nor a session, and a cancel notice whose target is not a callee
+  link of its call and relation on its path (`ErrCalleeLink`); `Commit`
+  and `Extend`, which read paths use, do not. The decoder takes each new
+  member only where the format defines it (task and context beside a
+  url, cancel beside a target), so a stored link is never refused on
+  read, and `VerifyRecords` reports a stored link that carries a 0.12
+  member and breaks its rules. Its rules, and `VerifyLinks`' skipping a
+  callee in another system or a cancel notice, turn on the members a
+  link carries, not the file's header, so a raised file verifies as it
+  did. Migration rewrites a cancel notice's target. The ATIF export lists callees in another system and cancel
   notices under the root's links rather than embedding them; `describe`
   shows url, task, context and cancel.
 - **Changed (otel): links annotate the call's tool span.** A link after
@@ -42,8 +48,9 @@ versions may break the API.
   decision that opened a second span at the record's end; a cancel
   notice is a `cancel` event (`EventCancel`). Link events carry
   `agentsession.link.url`, `.task`, `.context` and, on a notice,
-  `.target`; a peer sets `agentsession.peer` on the span, and a callee
-  with no session sets no empty `agentsession.subsession`.
+  `.target`; a peer sets `agentsession.peer` on the span (its url, or
+  its session when linked by that alone), and a callee with no session
+  sets no empty `agentsession.subsession`.
 - Added: the `peer.jsonl` conformance fixture.
 
 ## v0.0.23 - 2026-10-11

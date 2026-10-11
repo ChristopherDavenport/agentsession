@@ -899,3 +899,37 @@ func TestCalleeLinkOnTheToolSpan(t *testing.T) {
 		})
 	}
 }
+
+// TestPeerBySessionOnTheToolSpan: a peer linked by its session alone,
+// with no url, is named on the call's tool span by that session.
+func TestPeerBySessionOnTheToolSpan(t *testing.T) {
+	s := agentsession.New(agentsession.Header{ID: "peer-session", Records: agentsession.AllRecords})
+	if _, err := s.Append(agentsession.NewRunStart("r1", agentsession.SourceInput, "")); err != nil {
+		t.Fatal(err)
+	}
+	target, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "ask", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []agentsession.Entry{
+		agentsession.NewDispatch("c", target),
+		agentsession.NewPeerLink("c", agentsession.Callee{Session: "colleague-session"}),
+		agentsession.NewItemEntry(&openresponses.FunctionCallOutput{CallID: "c", Output: openresponses.FunctionCallOutputData{Text: "ok"}}),
+		agentsession.NewRunEnd("r1", agentsession.ReasonDone, "", nil),
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sr, tracer := recorder()
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	tool := spans(sr.Ended()).named(OpTool + " ask")
+	if len(tool) != 1 {
+		t.Fatalf("%d tool spans, want 1", len(tool))
+	}
+	if got := attr(tool[0], AttrPeer); got != "colleague-session" {
+		t.Errorf("peer attribute = %q, want the peer's session", got)
+	}
+}

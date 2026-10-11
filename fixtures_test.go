@@ -1423,13 +1423,13 @@ func TestPeerFixture(t *testing.T) {
 		t.Fatalf("%d callees, want 3: %+v", len(callees), callees)
 	}
 	billing, cut, answered := callees[0], callees[1], callees[2]
-	if billing.Rel != RelPeer || billing.CallID != "call_billing" || billing.URL != "https://billing.example/a2a" || billing.Task != "" || billing.Context != "ctx-b1" || billing.Session != "" || billing.Cancelled {
+	if billing.Rel != RelPeer || billing.CallID != "call_billing" || billing.URL != "https://billing.example/a2a" || billing.Task != "" || billing.Context != "ctx-b1" || billing.Session != "" || billing.Cancelled || !billing.Answered || billing.Dispatch == "" {
 		t.Errorf("billing = %+v", billing)
 	}
-	if cut.Rel != RelSubsession || cut.CallID != "call_search" || cut.Task != "task-s1" || !cut.Cancelled {
+	if cut.Rel != RelSubsession || cut.CallID != "call_search" || cut.Task != "task-s1" || !cut.Cancelled || cut.Answered || cut.Dispatch == answered.Dispatch {
 		t.Errorf("the cancelled search = %+v, cancelled %v", cut.LinkEntry, cut.Cancelled)
 	}
-	if answered.CallID != "call_search" || answered.Task != "task-s2" || answered.Session != "search-session-2" || answered.Cancelled {
+	if answered.CallID != "call_search" || answered.Task != "task-s2" || answered.Session != "search-session-2" || answered.Cancelled || !answered.Answered {
 		t.Errorf("the answering search = %+v, cancelled %v", answered.LinkEntry, answered.Cancelled)
 	}
 	if err := s.VerifyRecords(s.Leaf()); err != nil {

@@ -255,6 +255,11 @@ func (m *migration) rewrite(e Entry, s *Session) error {
 		ref(&v.Target)
 	case *DecisionEntry:
 		ref(&v.Target)
+	case *LinkEntry:
+		// A cancel notice names the link of its callee in this file.
+		if v.Cancel != "" {
+			ref(&v.Target)
+		}
 	case *UnknownEntry:
 		unresolved = true
 	}
