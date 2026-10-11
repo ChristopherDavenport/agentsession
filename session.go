@@ -1059,6 +1059,15 @@ func validateEntry(e Entry) error {
 		if v.Target != "" && v.Rel != RelJudgedBy {
 			return fmt.Errorf("agentsession: a link target is defined for the %s relation alone, not %q", RelJudgedBy, v.Rel)
 		}
+		if (v.URL != "" || v.Task != "" || v.Context != "" || v.Cancel != "") && !v.callee() {
+			return fmt.Errorf("agentsession: a link's url, task, context and cancel are defined for the %s and %s relations alone, not %q", RelSubsession, RelPeer, v.Rel)
+		}
+		if v.Cancel != "" && v.Cancel != CancelSent {
+			return fmt.Errorf("agentsession: a link's cancel is %q or absent, not %q", CancelSent, v.Cancel)
+		}
+		if v.Rel == RelPeer && v.CallID == "" {
+			return errors.New("agentsession: a peer link names the call it answers: call_id is empty")
+		}
 	case *UnknownEntry:
 		if len(v.Raw) == 0 {
 			return errors.New("agentsession: unknown entry has no raw bytes")

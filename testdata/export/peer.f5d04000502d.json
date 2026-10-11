@@ -1,0 +1,174 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000019",
+  "trajectory_id": "sha256:f5d04000502d307c916c006bd2d735939f54206e8a6523b2daa84ffc626cccbd",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-10-11T11:00:02Z",
+      "source": "user",
+      "message": "Ask the billing agent, and have the search agent look too.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:ee3b67f3af4e176d093978cbfa49154708ac27065612d76b3f837df2febe35ad"
+        },
+        "config_entries": [
+          "sha256:8bd68a5d5ae66b435170faa32b3d4e27e112af2697e50ec14bce7e8ba5b01fda"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Ask the billing agent, and have the search agent look too."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-10-11T11:00:05Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_billing",
+          "function_name": "billing",
+          "arguments": {
+            "message": "refund order 7"
+          }
+        },
+        {
+          "tool_call_id": "call_search",
+          "function_name": "search",
+          "arguments": {
+            "message": "find order 7"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_billing",
+            "content": "refund queued",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_billing",
+                  "output": "refund queued"
+                }
+              }
+            }
+          },
+          {
+            "source_call_id": "call_search",
+            "content": "aborted",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_search",
+                  "output": "aborted"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:968fbad9b831134e939fd9711841c8bcdb113d9b87eee8322010c9e508108940"
+        },
+        "item_entry_ids": [
+          "sha256:2631375a970e2b953bd2a110c57f2a6a8555313180341147825458c519372542",
+          "sha256:3bf9a25d3df25df4ab40bec4d034edce71b8c96242856a5b430a233c4bc06cd0"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_1",
+              "call_id": "call_billing",
+              "name": "billing",
+              "arguments": "{\"message\":\"refund order 7\"}"
+            },
+            {
+              "type": "function_call",
+              "id": "fc_2",
+              "call_id": "call_search",
+              "name": "search",
+              "arguments": "{\"message\":\"find order 7\"}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:968fbad9b831134e939fd9711841c8bcdb113d9b87eee8322010c9e508108940",
+            "model": "gpt-5",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-10-11T11:00:05Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 1 model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its 2 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 1
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.12",
+      "leaf": "sha256:f5d04000502d307c916c006bd2d735939f54206e8a6523b2daa84ffc626cccbd",
+      "main": true
+    },
+    "links": [
+      {
+        "call_id": "call_billing",
+        "context": "ctx-b1",
+        "entry_id": "sha256:cd74e3623400e2104d2e025f321513d19d066ee5cbc4172729f5d31155a1ac51",
+        "rel": "peer",
+        "session": "",
+        "task": "task-b1",
+        "url": "https://billing.example/a2a"
+      },
+      {
+        "call_id": "call_search",
+        "context": "ctx-s1",
+        "entry_id": "sha256:89f3864c544e1b3f223808ec52bdc3bf610eec8fd5cbbf87b6e8d46c8149181f",
+        "rel": "subsession",
+        "session": "search-session-1",
+        "task": "task-s1",
+        "url": "https://search.example/a2a"
+      },
+      {
+        "call_id": "call_search",
+        "cancel": "sent",
+        "context": "ctx-s1",
+        "entry_id": "sha256:7feada65391ebf38d06b1e2e8a7067b66a437d41f4808c18580f4fa2810e2df3",
+        "rel": "subsession",
+        "session": "search-session-1",
+        "task": "task-s1",
+        "url": "https://search.example/a2a"
+      }
+    ],
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

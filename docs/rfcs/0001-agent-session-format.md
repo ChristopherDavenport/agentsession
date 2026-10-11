@@ -200,7 +200,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.11","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.12","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -1362,12 +1362,13 @@ A reference to another session, for subagents and forks.
 
 ```json
 {"type":"link","id":"…","parent":"…","ts":"…",
- "rel":"subsession|fork_of|continued_in|judged_by","session":"…","call_id":"…",
- "target":"entry-id"}
+ "rel":"subsession|peer|fork_of|continued_in|judged_by","session":"…","call_id":"…",
+ "target":"entry-id","url":"…","task":"…","context":"…","cancel":"sent"}
 ```
 
 `call_id` ties a subsession to the function call that spawned it. A
-`subsession` link SHOULD be written when the call is dispatched,
+`subsession` link naming a session of this store, or one derived for
+it, SHOULD be written when the call is dispatched,
 before the `dispatch` entry and before the child's header exists, so a
 link whose session cannot be found means the child never started
 rather than a child that was never linked.
@@ -1399,6 +1400,50 @@ defined for this relation alone, and names an entry on a path in the
 judged session, which a store does not check, as it does not check an
 `outcome`'s. A `judged_by` link's `call_id` means nothing, and the
 checks below are the `subsession` link's alone.
+
+A call's callee may run in another system, reached over a protocol
+such as A2A, rather than as a session this store holds. Which relation
+links it follows the callee's lifetime, not where it runs or whether it
+publishes a record. A callee the caller started for the call, whose
+work ends when the caller gives the call up, is a `subsession`, here or
+elsewhere. A callee whose work outlives the call, which the caller does
+not end when it gives the call up and which keeps its own record, is a
+`peer`. A `peer` link is written into the caller's session, carries the
+`call_id` of the call it answers, and is a record entry like any link.
+From a `peer` link a reader may conclude that the call's output came
+from that callee's work, and nothing more: not that the work can be
+replayed, since its record is the peer's, and not that it ended with
+the call, since a peer's work may go on after the caller's run ends.
+
+A `subsession` or `peer` link that names a callee in another system
+carries `url`, the endpoint the call was sent to as the caller resolved
+it, never a name the callee's own description claims for itself;
+`task`, the callee's ID for the unit of work the call started; and
+`context`, the callee's ID for the conversation that work belongs to,
+when the protocol has one. `session` is the callee's own session ID when
+it publishes one, and otherwise the empty string. The three members are
+defined for these two relations alone: on a link of another relation, or
+as anything but a non-empty string, a reader keeps them as written, as
+members it does not know. Such a callee names its task only when it
+answers, so the link is written as soon as the caller learns the task,
+after the call's `dispatch`; a call dispatched with no such link reached
+no task the caller learned of. The header check above is the in-store
+subsession's: a callee in another system did not derive its session
+from this one, so a verifier does not check the session a link carrying
+`url` names against it.
+
+A caller that gives up a call whose callee it linked, and tells the
+callee it no longer wants the work, MAY record that it did by a second
+link of the same `rel`, `session`, `call_id` and members, carrying
+`cancel: "sent"`, written when the request was sent. It records that
+the caller asked, not that the callee stopped: the caller does not wait
+for the callee's answer, so it knows nothing more, and the callee's
+work may still have run to its end. A link carrying `cancel` names no
+new callee. A reader listing a call's callees takes the first link for
+the call and reads a later one carrying `cancel` as a notice about it,
+and a verifier checks the first alone. `cancel` is defined for the
+`subsession` and `peer` relations, with the value `sent`; any other
+value, or the member on another relation, a reader keeps as written.
 
 A link names a session, not a point in one, and at the moment it is
 written there is no point to name. The other half of the round trip is
@@ -1762,13 +1807,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.11 reads a 0.5 to 0.10 file
-as it stands, since 0.6 to 0.11 add optional members and elements, 0.10
-and 0.11 relax one rule each, and the hashes do not change, save for the few rules each minor's changes below say read
+it begins at 1.0. A reader of 0.12 reads a 0.5 to 0.11 file
+as it stands, since 0.6 to 0.12 add optional members, elements and
+relations, 0.10 and 0.11 relax one rule each, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.11 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.12 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -1861,6 +1906,34 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.11
+
+One relation and four members of `link`, all optional. A 0.11 file is a
+0.12 file that holds none of them. No hash changes, and no rule reads an
+earlier file differently.
+
+- A `peer` relation on `link` names a callee whose work outlives the
+  call that reached it (`link`). Which relation links a callee follows
+  its lifetime: a callee the caller started and ends with the call is a
+  `subsession`, wherever it runs. A header's `parent_session` and the
+  subsession check cannot describe a callee in another system that the
+  caller did not spawn.
+- `url`, `task` and `context` on a `subsession` or `peer` link name a
+  callee in another system, reached over a protocol such as A2A: the
+  endpoint called, the callee's task and its conversation (`link`). A
+  call to such a callee left the record with nothing that said which
+  work answered it.
+- `cancel: "sent"` on a later link of the same call records that the
+  caller told the callee it no longer wanted the work, and not that the
+  work stopped (`link`). A caller that gives up a call does not wait for
+  the callee to confirm, so the record can say only what it sent.
+
+A writer of 0.12 raises every file it appends to, as Versioning says, so
+every reader of 0.11 refuses those files until it is upgraded. A member
+0.12 defines that an earlier file holds in another form, which it was
+free to while the name was undefined, is a member the reader does not
+know, and is kept as written.
 
 ## Changes since 0.10
 

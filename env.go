@@ -269,6 +269,93 @@ func NewJudgedByLink(judge, target string) *LinkEntry {
 	return &LinkEntry{Rel: RelJudgedBy, Session: judge, Target: target}
 }
 
+// Callee names a callee in another system, reached over a protocol
+// such as A2A, for a [RelSubsession] or [RelPeer] link: the endpoint
+// the call was sent to as the caller resolved it (never a name the
+// callee claims for itself), the callee's task and conversation IDs,
+// and its own session ID when it publishes one.
+type Callee struct {
+	URL     string
+	Task    string
+	Context string
+	Session string
+}
+
+// NewPeerLink builds the link a caller records for a callee whose work
+// outlives the call callID: the caller does not end it when it gives
+// the call up, and the callee keeps its own record. It is written as
+// soon as the caller learns the callee's task. From it a reader may
+// conclude that the call's output came from that work, and not that
+// the work can be replayed or that it ended with the call.
+func NewPeerLink(callID string, c Callee) *LinkEntry {
+	return &LinkEntry{Rel: RelPeer, Session: c.Session, CallID: callID, URL: c.URL, Task: c.Task, Context: c.Context}
+}
+
+// NewCalleeSubsessionLink builds the subsession link for a callee in
+// another system that the call callID started and that ends with the
+// call: the relation follows the callee's lifetime, not where it runs.
+// It is written as soon as the caller learns the callee's task, after
+// the call's dispatch, and [Session.VerifyLinks] does not check its
+// session's header, which was not derived from this one.
+func NewCalleeSubsessionLink(callID string, c Callee) *LinkEntry {
+	return &LinkEntry{Rel: RelSubsession, Session: c.Session, CallID: callID, URL: c.URL, Task: c.Task, Context: c.Context}
+}
+
+// NewCancelSentLink builds the notice a caller records when it tells
+// the callee link names that it no longer wants the work: a link of
+// the same relation, session, call and callee, carrying [CancelSent].
+// It records that the caller asked, not that the work stopped; the
+// caller does not wait for the callee's answer. It names no new
+// callee, and [Callees] reads it as a notice about the first link.
+func NewCancelSentLink(link *LinkEntry) *LinkEntry {
+	return &LinkEntry{Rel: link.Rel, Session: link.Session, CallID: link.CallID, URL: link.URL, Task: link.Task, Context: link.Context, Cancel: CancelSent}
+}
+
+// CalleeLink is a call's callee as a path records it: the first
+// subsession or peer link for the call, and whether a later one sent
+// it a cancel.
+type CalleeLink struct {
+	*LinkEntry
+	// CancelSent is true when a later link of the call carries
+	// [CancelSent]: the caller asked the callee to stop. It does not
+	// say the work stopped.
+	CancelSent bool
+}
+
+// Callees returns the callees of the calls on a root-first path, in the
+// order their first links appear: for each call ID, the first
+// subsession or peer link, with CancelSent set when a later link of the
+// call carries [CancelSent]. A cancel notice with no link before it is
+// returned as the call's link, with CancelSent set.
+func Callees(path []Entry) []CalleeLink {
+	var out []CalleeLink
+	at := make(map[string]int)
+	for _, e := range path {
+		l, ok := e.(*LinkEntry)
+		if !ok || !l.callee() {
+			continue
+		}
+		if i, seen := at[l.CallID]; seen && l.CallID != "" {
+			if l.Cancel == CancelSent {
+				out[i].CancelSent = true
+			}
+			continue
+		}
+		at[l.CallID] = len(out)
+		out = append(out, CalleeLink{LinkEntry: l, CancelSent: l.Cancel == CancelSent})
+	}
+	return out
+}
+
+// Callees returns the callees on the path to leaf; see [Callees].
+func (s *Session) Callees(leaf string) ([]CalleeLink, error) {
+	path := s.Path(leaf)
+	if path == nil {
+		return nil, fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
+	}
+	return Callees(path), nil
+}
+
 // Judges returns the judged_by links on a root-first path, in path
 // order: the sessions that judged what the path holds, each with the
 // entry it judged in its Target when the writer named one. A link is a

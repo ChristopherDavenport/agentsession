@@ -5,6 +5,34 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Changed: the format is 0.12.** A writer raises every file it appends
+  to, so a reader of 0.11 refuses those files until it is upgraded. A
+  0.5 to 0.11 file reads as it stands; no hash moves.
+- **Added: callees in another system, and the `peer` relation (RFC 0001
+  0.12, `link`).** The link that names a call's callee follows the
+  callee's lifetime: one the call started, which ends when the caller
+  gives the call up, is a `subsession` wherever it runs, and one whose
+  work outlives the call and keeps its own record is a `peer`
+  (`RelPeer`). A link naming a callee reached over a protocol such as
+  A2A carries `url` (the endpoint called, never a name the callee
+  claims), `task` and `context`, and `session` only when the callee
+  publishes one (`LinkEntry.URL`, `Task`, `Context`; `Callee`,
+  `NewPeerLink`, `NewCalleeSubsessionLink`). A caller that tells such a
+  callee it no longer wants the work records a later link of the call
+  with `cancel: "sent"` (`CancelSent`, `NewCancelSentLink`): that it
+  asked, not that the work stopped. `Callees` reads a path's callees,
+  the first link of each call with a cancel notice folded in.
+  `VerifyLinks` does not check the header of a callee in another
+  system, whose session was not derived from this one, or a cancel
+  notice; the ATIF export lists both under the root's links rather than
+  embedding them, and `describe` shows the url, task and cancel. The
+  members belong to the subsession and peer relations alone: on another
+  relation, or as a value the format does not define, they are kept as
+  written.
+- Added: the `peer.jsonl` conformance fixture.
+
 ## v0.0.23 - 2026-10-11
 
 - **Added: the rest of `remote`'s reads (closes #213).** The log read

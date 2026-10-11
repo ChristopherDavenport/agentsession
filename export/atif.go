@@ -1111,8 +1111,15 @@ func (b *builder) subsessions() {
 		if l.Target != "" {
 			rec["target"] = l.Target
 		}
+		for k, v := range map[string]string{"url": l.URL, "task": l.Task, "context": l.Context, "cancel": l.Cancel} {
+			if v != "" {
+				rec[k] = v
+			}
+		}
 		copyUnknown(rec, l.Unknown)
-		if l.Rel != agentsession.RelSubsession {
+		// A callee in another system has no trajectory here to embed,
+		// and a cancel notice repeats the link it is about.
+		if l.Rel != agentsession.RelSubsession || l.URL != "" || l.Cancel != "" || l.Session == "" {
 			others = append(others, rec)
 			continue
 		}

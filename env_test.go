@@ -311,3 +311,115 @@ func TestLinkTargetOfAnotherRelation(t *testing.T) {
 		t.Errorf("a numeric target: %q, unknown %v", l.Target, l.Unknown)
 	}
 }
+
+// TestPeerLink: a peer link names a callee whose work outlives its
+// call, a callee subsession one the call started; Callees reads the
+// first link of each call and folds a later cancel notice into it, and
+// the callee's members belong to the subsession and peer relations
+// alone.
+func TestPeerLink(t *testing.T) {
+	c := Callee{URL: "https://peer.example/a2a", Task: "t1", Context: "c1"}
+	p := NewPeerLink("call_1", c)
+	if p.Rel != RelPeer || p.CallID != "call_1" || p.URL != c.URL || p.Task != "t1" || p.Context != "c1" || p.Session != "" || p.Cancel != "" {
+		t.Errorf("peer link = %+v", p)
+	}
+	sub := NewCalleeSubsessionLink("call_2", Callee{URL: "https://sub.example/a2a", Task: "t2", Session: "sub-session"})
+	if sub.Rel != RelSubsession || sub.Session != "sub-session" || sub.Task != "t2" {
+		t.Errorf("subsession link = %+v", sub)
+	}
+	cancel := NewCancelSentLink(sub)
+	if cancel.Rel != RelSubsession || cancel.CallID != "call_2" || cancel.Task != "t2" || cancel.Session != "sub-session" || cancel.Cancel != CancelSent {
+		t.Errorf("cancel notice = %+v", cancel)
+	}
+
+	s := New(Header{})
+	a := appendText(t, s, "work")
+	for _, e := range []Entry{p, NewLinkEntry(RelForkOf, "elsewhere"), sub, NewSubsessionLink("child", "call_3"), cancel} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	callees, err := s.Callees(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(callees) != 3 {
+		t.Fatalf("Callees = %+v", callees)
+	}
+	if callees[0].Rel != RelPeer || callees[0].CancelSent {
+		t.Errorf("first callee = %+v", callees[0])
+	}
+	if callees[1].CallID != "call_2" || callees[1].Cancel != "" || !callees[1].CancelSent {
+		t.Errorf("second callee = %+v, cancel sent %v", callees[1].LinkEntry, callees[1].CancelSent)
+	}
+	if callees[2].CallID != "call_3" || callees[2].URL != "" || callees[2].CancelSent {
+		t.Errorf("third callee = %+v", callees[2])
+	}
+	if len(Callees(s.Path(a))) != 0 {
+		t.Error("a path above the links holds a callee")
+	}
+	if _, err := s.Callees("nowhere"); !errors.Is(err, ErrNoEntry) {
+		t.Errorf("Callees of a missing entry = %v, want ErrNoEntry", err)
+	}
+
+	for name, bad := range map[string]*LinkEntry{
+		"a url on a fork_of link":     {Rel: RelForkOf, Session: "x", URL: "https://x"},
+		"a task on a judged_by link":  {Rel: RelJudgedBy, Session: "x", Task: "t"},
+		"a cancel other than sent":    {Rel: RelSubsession, Session: "x", CallID: "call_1", Cancel: "done"},
+		"a peer link with no call_id": {Rel: RelPeer, URL: "https://x"},
+	} {
+		if _, err := s.Append(bad); err == nil {
+			t.Errorf("%s was appended", name)
+		}
+	}
+}
+
+// TestLinkCalleeMembersOfAnotherRelation: url, task, context and cancel
+// on a link of a relation they are not defined for, or as a value the
+// format does not define, which a file from before 0.12 may hold, are
+// not the members this document defines, and are kept as written.
+func TestLinkCalleeMembersOfAnotherRelation(t *testing.T) {
+	for _, line := range []string{
+		`{"type":"link","id":"k","parent":null,"ts":"2026-09-17T12:00:01Z","rel":"fork_of","session":"s2","url":"https://x","task":"t","context":"c","cancel":"sent"}`,
+		`{"type":"link","id":"k","parent":null,"ts":"2026-09-17T12:00:01Z","rel":"subsession","session":"s2","call_id":"call_1","cancel":"maybe"}`,
+		`{"type":"link","id":"k","parent":null,"ts":"2026-09-17T12:00:01Z","rel":"peer","session":"","call_id":"call_1","task":7}`,
+	} {
+		e, err := UnmarshalEntry([]byte(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		l := e.(*LinkEntry)
+		if l.URL != "" || l.Task != "" || l.Context != "" || l.Cancel != "" || len(l.Unknown) == 0 {
+			t.Errorf("%s: read as %+v, unknown %v", line, l, l.Unknown)
+		}
+		back, err := MarshalEntry(l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sameJSON(t, back, []byte(line)) {
+			t.Errorf("%s: rewritten as %s", line, back)
+		}
+	}
+}
+
+// TestALinkOfAnUnknownRelationIsKept: a relation a reader does not
+// know, as a reader of 0.11 meets peer, reads as a link with that
+// relation and its members kept, and is written back as it was.
+func TestALinkOfAnUnknownRelationIsKept(t *testing.T) {
+	line := `{"type":"link","id":"k","parent":null,"ts":"2026-09-17T12:00:01Z","rel":"colleague","session":"s2","call_id":"call_1","url":"https://x","task":"t"}`
+	e, err := UnmarshalEntry([]byte(line))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := e.(*LinkEntry)
+	if l.Rel != "colleague" || l.URL != "" || string(l.Unknown["url"]) != `"https://x"` {
+		t.Errorf("read as %+v, unknown %v", l, l.Unknown)
+	}
+	back, err := MarshalEntry(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameJSON(t, back, []byte(line)) {
+		t.Errorf("rewritten as %s", back)
+	}
+}

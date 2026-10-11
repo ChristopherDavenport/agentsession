@@ -175,6 +175,15 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		if v.Target != "" {
 			s += " judging " + shortID(v.Target)
 		}
+		if v.URL != "" {
+			s += " at " + v.URL
+		}
+		if v.Task != "" {
+			s += " task " + v.Task
+		}
+		if v.Cancel != "" {
+			s += " cancel " + v.Cancel
+		}
 		return s
 	case *agentsession.RunEntry:
 		parts := []string{v.Phase, v.RunID}

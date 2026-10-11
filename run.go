@@ -967,7 +967,8 @@ func (e *LinkError) Unwrap() error { return e.Err }
 // a fork's prefix is the origin's, to be checked there against the
 // origin's id, since the child it names was spawned by the origin; it
 // is passed over, as are links of other relations, which name no
-// spawn. It returns the first problem found, a [*LinkError], and with
+// spawn, a link naming a callee in another system (its URL set), whose
+// session was not derived from this one, and a cancel notice. It returns the first problem found, a [*LinkError], and with
 // a nil resolve checks nothing.
 func (s *Session) VerifyLinks(resolve func(id string) (*Session, error)) error {
 	if resolve == nil {
@@ -977,6 +978,12 @@ func (s *Session) VerifyLinks(resolve func(id string) (*Session, error)) error {
 	for _, e := range s.Entries() {
 		l, ok := e.(*LinkEntry)
 		if !ok || l.Rel != RelSubsession || s.Prefix(l.ID) {
+			continue
+		}
+		if l.URL != "" || l.Cancel != "" || l.Session == "" {
+			// A callee in another system did not derive its session
+			// from this one, and a cancel notice repeats the link it
+			// is about, which is checked on its own.
 			continue
 		}
 		target, err := resolve(l.Session)

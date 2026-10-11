@@ -117,6 +117,25 @@ func entryVariants(e Entry) []variant {
 			{"end", func(e Entry) { e.(*RunEntry).Phase = RunEnd }},
 		}
 	}
+	if _, ok := e.(*LinkEntry); ok {
+		// A link's target is judged_by's and its callee members are
+		// subsession's and peer's, so each relation has to be
+		// exercised with the members it defines.
+		return []variant{
+			{"judged_by", func(e Entry) {
+				l := e.(*LinkEntry)
+				l.Rel, l.URL, l.Task, l.Context, l.Cancel = RelJudgedBy, "", "", "", ""
+			}},
+			{"peer", func(e Entry) {
+				l := e.(*LinkEntry)
+				l.Rel, l.Target = RelPeer, ""
+			}},
+			{"subsession", func(e Entry) {
+				l := e.(*LinkEntry)
+				l.Rel, l.Target = RelSubsession, ""
+			}},
+		}
+	}
 	return []variant{{"default", func(Entry) {}}}
 }
 
@@ -140,6 +159,12 @@ func wireForm(t *testing.T, entry Entry) []byte {
 		}
 		name, ok := memberName(f)
 		if !ok {
+			continue
+		}
+		if f.Tag.Get("json") == "-" && v.Field(i).IsZero() {
+			// A member decoded by hand is left out when empty, and a
+			// variant empties the ones its discriminator does not
+			// define.
 			continue
 		}
 		obj[name] = mustJSON(t, v.Field(i).Interface())
@@ -279,6 +304,8 @@ func fillString(name string) string {
 	switch name {
 	case "Rel":
 		return RelJudgedBy // the relation a link's target is defined for
+	case "Cancel":
+		return CancelSent // the one value a link's cancel is defined with
 	case "Phase":
 		return RunStart // overridden per variant
 	case "Verdict":
