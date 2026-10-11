@@ -720,8 +720,9 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 	return onPrefix, nil
 }
 
-// Append implements agentsession.Store: the entry joins the in-memory
-// tree, then its line is inserted in one immediate transaction. If the
+// Append implements agentsession.Store: the entry is held to the rules
+// a writer is held to ([agentsession.Session.Prepare]) and joins the
+// in-memory tree, then its line is inserted in one immediate transaction. If the
 // insert fails the cached session is dropped so the next Open reloads
 // the database's view. The first append to a session whose header names
 // an earlier minor raises the header's format in the same transaction.
@@ -736,6 +737,11 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 		return "", err
 	}
 	defer s.hub.Notify(sessionID)
+	// Prepare holds the entry to the rules a writer is held to, which
+	// Commit, a read path's, does not apply.
+	if _, err := sess.Prepare(e); err != nil {
+		return "", err
+	}
 	r, err := sess.Commit(e)
 	if err != nil {
 		return "", err

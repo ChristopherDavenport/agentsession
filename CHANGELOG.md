@@ -5,6 +5,17 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Fixed: the SQLite store holds an append to the writer's rules.**
+  `sqlite.Store.Append` committed the entry without
+  `Session.Prepare`, so it took what every other store refuses with
+  `ErrCalleeLink`: a peer link that names no call, and a cancel notice
+  whose target is not a callee link of its call on its path. It now
+  prepares the entry first, and stores nothing of one it refuses. The
+  conformance suite (`storetest`) gains the case, which every store
+  runs.
+
 ## v0.0.24 - 2026-10-11
 
 - **Changed: the format is 0.12.** A writer raises every file it appends
