@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.22 - 2026-10-10
 
 - **Added: package `remote`, RFC 0003's read side over HTTP (#211).**
   `NewHandler` serves any store the library offers: `GET /v1/` says
