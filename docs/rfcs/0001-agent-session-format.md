@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.11
+Status: draft 0.12
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
