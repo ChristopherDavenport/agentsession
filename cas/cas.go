@@ -3290,6 +3290,7 @@ func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header,
 }
 
 var (
+	_ agentsession.Writer = (*Store)(nil)
 	_ agentsession.Store  = (*Store)(nil)
 	_ agentsession.Reader = (*Store)(nil)
 )

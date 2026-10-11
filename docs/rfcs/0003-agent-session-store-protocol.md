@@ -133,7 +133,13 @@ from RFC 0001 and RFC 0002 keep their meanings.
 - An entry crosses the wire as its RFC 0001 line: the same bytes a
   projection holds, hashed the same way. A server MUST verify every
   entry it receives by recomputing its hash, as an append does.
-- Errors are `application/problem+json` (RFC 9457) with a stable `code`
+- Errors are `application/problem+json` (RFC 9457), with members of this
+  document's beside RFC 9457's: `reason` (the rule a `bad_entry` or
+  `bad_base` broke, named as the library names it: `bad_id`,
+  `reserved_member`, `bad_convergence`, `call_id_empty`, …), `head` (the
+  head on `head_moved`), `holder` (the lease holder's label on
+  `session_locked`), `target` (a ref's on `ref_moved` and
+  `ref_dangling`) and `incarnation`, and with a stable `code`
   from the table under Errors. A client branches on `code`, never on
   the HTTP status alone.
 - Every response about one session carries its incarnation (an
@@ -238,8 +244,13 @@ DELETE /v1/sessions/{id}
   and under the same header (compared without `format`) returns the
   existing session. A header the server must fill is not retry-safe
   without an `Idempotency-Key`. With `lease_ttl_ms` the new session
-  comes back leased, with the lease in the response: the creator holds
-  the session from its first instant.
+  comes back leased, with the lease in the response, labelled with the
+  `holder` query parameter: the creator holds the session from its first
+  instant. A retry under the same header while that lease holds is
+  `session_locked`; the lease is its holder's and is not handed out
+  again. The response is `{"session", "header", "incarnation", "lease"}`,
+  `session` being the session as a follow's snapshot carries it (a
+  fork's with its prefix), so a client builds its own copy from it.
 - **Get** returns the header, the head, the record mark, the log's
   length, the incarnation and the log's current cursor, from one
   committed view when the store has one (see Reading). It is not a read
@@ -440,8 +451,11 @@ apart from a dead one, and an append the server accepts from a writer
 that lost its place cannot be taken back.
 
 - **Acquire** takes `{"holder": "...", "ttl_ms": n}` and returns
-  `{"lease_id": s, "token": t, "expires": time}`, or 409
-  `session_locked`. The `holder` is a label, not an identity; the 409
+  `{"lease_id": s, "token": t, "expires": time, "head": h|null}`, or 409
+  `session_locked`. `head` is the session's head as the lease starts, so
+  a writer's session starts where the record's does. The token goes as
+  a decimal string, since it may pass 2^53, where a JSON number loses
+  digits in some readers. The `holder` is a label, not an identity; the 409
   carries it to callers with write scope. The server MAY cap `ttl_ms`.
   A session held as a mirror cannot be leased: `mirror`.
 - **Renew** and **Release** take the `Lease-ID` and need no token. The
@@ -455,8 +469,8 @@ that lost its place cannot be taken back.
   request, less a margin, and stops writing before it. An expired lease
   is not current, whether or not anyone has taken it since.
 - **Fencing.** Every write to a session (append, commit, head move,
-  delete, mark change) MUST carry the lease's numeric token in a
-  `Lease-Token` header, and the server MUST refuse with `lease_lost` a
+  delete, mark change) MUST carry the lease's numeric token, in decimal,
+  in a `Lease-Token` header, and the server MUST refuse with `lease_lost` a
   write whose token is not the session's current, unexpired lease.
   - The check and the write happen under the same per-session lock as
     acquire, renew and expiry, so a write that passed the check cannot
@@ -534,6 +548,18 @@ later one, as RFC 0002's Sessions say.
   the index of the refused line and its problem body. The applied entries
   stay in the log, visible to followers; a client resumes from the
   index.
+  - The response also gives the session's `head` after the batch, so a
+    writer keeps the record's head in step with its own. A batch whose
+    first line is refused is answered with that line's problem, as a
+    single append's refusal, with nothing applied.
+  - A complete line is taken as written, its parent included: a null
+    parent is a root, and the server puts the session's head to none
+    before appending it, as a writer appending a root has reset its
+    leaf. A line whose `id` is missing or empty is incomplete, and the
+    server fills it as a store fills an entry it is handed: the time now
+    for a missing or zero `ts`, the session's head for a missing or null
+    `parent`, and the ID the line then hashes to. Only a complete line
+    can say its parent is null.
   - `outcome` is the library's: `continued`, `branched`, `held`,
     `leaf_moved` or `leaf_not_moved`. These name what an append did;
     they are not error codes. (`head_moved` is the compare-and-swap's
@@ -565,7 +591,10 @@ later one, as RFC 0002's Sessions say.
   the log (RFC 0002, Following a log), and the response is an error:
   the entries did not land, and followers get a `reset`.
 - **Head** is the compare-and-swap: `{"expected": e|null, "to": t,
-  "durable": bool}`, `null` meaning no head. It is `head_moved` with the
+  "durable": bool}`, `null` meaning no head; `to` names an entry, and a
+  head is not moved to none. A store with no durable head of its own
+  moves its live head, which a later append records, and refuses
+  `durable: true` as `unsupported`. It is `head_moved` with the
   current head on a mismatch, `no_entry` for a target that is not the
   base or an own entry, and `head_target` for a `leaf` label. The
   response says whether the move was committed, and `durable: true`
@@ -836,16 +865,47 @@ standard library alone, which the root module's dependency rule
 allows, and the repository's nested modules exist for dependencies the
 root must not take.
 
-The first slice is the read side: capabilities, the session
-listing and state, the path (`contents` `all` and `none`), following,
-and refs' resolve, listing and log, with the client's `Reader`,
-`Follower` and `RefStore` reads. Everything else is 501 `unsupported`
-and its capability false. Over the reference stores no server has a
-committed view, so `durable` is omitted and `durable=true` refused, and
-a client reads a whole session from a follow's snapshot. Its client
-resumes a follow only from a cursor of a follow it served, holding the
-session there; for any other cursor it follows afresh and yields a
-`Reset`, which the library's contract allows. The whole
+It is built in slices. The first is the read side: capabilities, the
+session listing and state, the path (`contents` `all` and `none`),
+following, and refs' resolve, listing and log, with the client's
+`Reader`, `Follower` and `RefStore` reads. Over the reference stores no
+server has a committed view, so `durable` is omitted and
+`durable=true` refused, and a client reads a whole session from a
+follow's snapshot. Its client resumes a follow only from a cursor of a
+follow it served, holding the session there; for any other cursor it
+follows afresh and yields a `Reset`, which the library's contract
+allows.
+
+The second is the writer: create, delete, leases (acquire, renew,
+release, break), append with `Idempotency-Key`, commit and the head
+compare-and-swap where the store has them (the `cas` store's `Sync` and
+`SetHead`), and ref updates, under the scopes `write`, `refs` and
+`admin`. Its client is the library's `Store` and `Writer`: `Create` and
+`Open` take a lease and renew it until `Release`, `Delete` or `Close`;
+an append is prepared on the client's session and sent as a complete
+line, and when the writer moved its session's leaf the client first
+moves the server's head there by compare-and-swap, so the record's head
+is the writer's leaf. The library's store suite runs through it over
+the memory, JSONL and `cas` stores. Two things in it are the reference
+server's and not the protocol's:
+- **Tokens.** The reference stores keep no lease state, so the server
+  keeps its lease table in memory beside the store's hold, which a lease
+  takes through the store's `Open` and lets go at its end. A token is
+  the wall clock's nanoseconds, or one more than the last token under
+  the ID, so tokens increase across a restart as long as the clock does
+  not step back past the last one issued; a store that keeps lease
+  state would persist the counter as Leases asks.
+- **One mechanism.** The store's hold excludes a writer in another
+  process; one in the server's own process writing through the same
+  store handle is not excluded by it, and the server is then the only
+  writer of that handle.
+
+A commit answers `durable` and not yet the cursor, which waits on the
+committed view. Everything else is 501 `unsupported` and its capability
+false: objects and negotiation, exchange and push, `record`, log reads,
+`since-fold`, ref following and `durable=true`.
+
+The whole
 implementation is:
 - **A server** that wraps a store the reference library offers, with
   following fanned out from one in-process follower per session, and
@@ -857,12 +917,14 @@ implementation is:
   `Follower` and `RefStore` over these calls, with an object cache keyed
   by hash. That is not the claim that code written against a local store
   runs unchanged. `Append` returns the entry's ID, and the outcome,
-  durable and unresolved fields come from the response through a result
-  type the library adds (`Write`); `Open` returns a client-side session
-  that the client keeps up to date and that is not shared with the store,
-  so `Session.Branch` does not reach the server (a head move is the
-  compare-and-swap); `Open` acquires a lease; and `Follow` yields
-  `Change`s with the durable field the library adds. A caller that needs
+  durable and unresolved fields come from the response through the
+  library's `Writer` (`Write`, which returns its `Result`); `Open`
+  returns a client-side session that the client keeps up to date and
+  that is not shared with the store, so `Session.Branch` does not reach
+  the server by itself: the client's next append moves the server's head
+  to the writer's leaf by the compare-and-swap before it lands; `Open`
+  acquires a lease; and `Follow` yields `Change`s with the durable field
+  the library adds. A caller that needs
   the wire's extra information uses those additions.
 - **A push helper** for local-first writers.
 

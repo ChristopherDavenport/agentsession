@@ -19,14 +19,28 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 )
 
-// Client reads and follows the sessions of a store a [Handler] serves.
-// It implements [agentsession.Reader], [agentsession.Follower] and
-// [agentsession.RefStore]; UpdateRef, a write, is refused, since this
-// slice of the protocol serves reads alone.
+// Client is a store a [Handler] serves, over the wire. It implements
+// [agentsession.Store], [agentsession.Writer], [agentsession.Reader],
+// [agentsession.Follower] and [agentsession.RefStore].
+//
+// It writes under leases, RFC 0003's form of a store's hold: Create and
+// Open take one on the session, which the client renews until Release,
+// Delete or Close ends it, and every write carries its fencing token.
+// The session Create and Open return is the client's own, kept up to
+// date with the client's appends and not shared with the server, as a
+// local store's session is shared with that store: moving its leaf
+// (Session.Branch, ResetLeaf) steers the client's next append, and that
+// append moves the server's head with it, by RFC 0003's compare-and-swap,
+// so the record's head is the writer's leaf.
 type Client struct {
 	base  *url.URL
 	hc    *http.Client
 	token string
+
+	holder   string
+	leaseTTL time.Duration
+	holdMu   sync.Mutex
+	holds    map[string]*holding
 
 	mu sync.Mutex
 	// last is each session's replica where its last follow stopped, so a
@@ -40,6 +54,8 @@ type resumable struct {
 }
 
 var (
+	_ agentsession.Store    = (*Client)(nil)
+	_ agentsession.Writer   = (*Client)(nil)
 	_ agentsession.Reader   = (*Client)(nil)
 	_ agentsession.Follower = (*Client)(nil)
 	_ agentsession.RefStore = (*Client)(nil)
@@ -54,6 +70,20 @@ func WithHTTPClient(hc *http.Client) ClientOption { return func(c *Client) { c.h
 // WithBearerToken sends token as every request's bearer token.
 func WithBearerToken(token string) ClientOption { return func(c *Client) { c.token = token } }
 
+// WithHolder labels the leases the client takes, which a refused
+// acquire shows another writer. It is a label, not an identity.
+func WithHolder(label string) ClientOption { return func(c *Client) { c.holder = label } }
+
+// WithLeaseTTL sets the time to live the client asks for its leases
+// (default 30s); it renews each at a third of it.
+func WithLeaseTTL(d time.Duration) ClientOption {
+	return func(c *Client) {
+		if d > 0 {
+			c.leaseTTL = d
+		}
+	}
+}
+
 // Dial returns a client of the server at baseURL, the URL the /v1
 // routes are under. It does not contact the server.
 func Dial(baseURL string, opts ...ClientOption) (*Client, error) {
@@ -64,7 +94,8 @@ func Dial(baseURL string, opts ...ClientOption) (*Client, error) {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("remote: %q is not an http or https URL", baseURL)
 	}
-	c := &Client{base: u, hc: http.DefaultClient, last: map[string]resumable{}}
+	c := &Client{base: u, hc: http.DefaultClient, last: map[string]resumable{}, holds: map[string]*holding{},
+		holder: "remote-client", leaseTTL: 30 * time.Second}
 	for _, o := range opts {
 		o(c)
 	}
@@ -74,12 +105,26 @@ func Dial(baseURL string, opts ...ClientOption) (*Client, error) {
 // get sends a GET for path under /v1 and returns the response, or the
 // problem a status other than 200 carries.
 func (c *Client) get(ctx context.Context, path string, q url.Values, header http.Header) (*http.Response, error) {
+	return c.do(ctx, http.MethodGet, path, q, header, nil)
+}
+
+// do sends a request for path under /v1 and returns the response, or
+// the problem a status outside 2xx carries. A body is JSON unless the
+// header names another type.
+func (c *Client) do(ctx context.Context, method, path string, q url.Values, header http.Header, body []byte) (*http.Response, error) {
 	u := *c.base
 	u.Path += Version + path
 	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), rd)
 	if err != nil {
 		return nil, fmt.Errorf("remote: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	for k, v := range header {
 		req.Header[k] = v
@@ -91,7 +136,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, header http
 	if err != nil {
 		return nil, fmt.Errorf("remote: %w", err)
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()
 		return nil, problemFrom(resp)
 	}
@@ -503,12 +548,6 @@ func (c *Client) ResolveRef(ctx context.Context, name string) (agentsession.RefT
 		return agentsession.RefTarget{}, fmt.Errorf("remote: ref %s: %w", name, err)
 	}
 	return l.Target.lib(), nil
-}
-
-// UpdateRef implements [agentsession.RefStore] by refusing: this slice
-// of the protocol serves reads alone.
-func (c *Client) UpdateRef(context.Context, string, agentsession.RefTarget, agentsession.RefTarget, string) error {
-	return fmt.Errorf("remote: update ref: %w: this client reads only", agentsession.ErrReadOnly)
 }
 
 // ListRefs implements [agentsession.RefStore].

@@ -95,6 +95,17 @@ type Reader interface {
 	Read(ctx context.Context, id string) (*Session, error)
 }
 
+// Writer is implemented by a store that reports what an append did, as
+// RFC 0002 asks of a store: the outcome (continued, branched, held, a
+// leaf label's move or not), whether the entry was durable when the
+// call returned, and the references it could not resolve. Write is
+// Append with that [Result]; a store that implements it keeps the two
+// the same append. A store over a network (RFC 0003's remote client)
+// returns what the server answered.
+type Writer interface {
+	Write(ctx context.Context, sessionID string, e Entry) (Result, error)
+}
+
 // ListFilter narrows a List. Zero fields do not filter, so the zero
 // filter lists every session. The header fields cost no scan: every
 // store reads the header to list a session, and Matches decides on it

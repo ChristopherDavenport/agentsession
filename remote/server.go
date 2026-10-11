@@ -16,8 +16,9 @@ import (
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 )
 
-// Handler serves a store over RFC 0003's read side. Close stops the
-// followers it runs.
+// Handler serves a store over RFC 0003: reading, following and refs,
+// and writing under leases. Close stops the followers it runs and ends
+// its leases.
 type Handler struct {
 	store    agentsession.Store
 	reader   agentsession.Reader
@@ -40,6 +41,14 @@ type Handler struct {
 	cancel context.CancelFunc
 	mu     sync.Mutex
 	hubs   map[string]*hub
+
+	// The write side: each session ID's lease and token, the lease
+	// times, and the answers kept for an Idempotency-Key.
+	wmu         sync.Mutex
+	held        map[string]*held
+	leaseTTL    time.Duration
+	maxLeaseTTL time.Duration
+	idem        idempotent
 }
 
 // Option configures a [Handler].
@@ -95,6 +104,23 @@ func WithHeartbeat(d time.Duration) Option {
 	}
 }
 
+// WithLeaseLimits sets a lease's time to live when an acquire names none
+// (default 30s), and the most an acquire or renew may ask for (default
+// 5m). A lease not renewed within its time ends.
+func WithLeaseLimits(def, max time.Duration) Option {
+	return func(h *Handler) {
+		if def > 0 {
+			h.leaseTTL = def
+		}
+		if max > 0 {
+			h.maxLeaseTTL = max
+		}
+		if h.leaseTTL > h.maxLeaseTTL {
+			h.leaseTTL = h.maxLeaseTTL
+		}
+	}
+}
+
 // WithErrorLog receives the errors the handler answers as
 // `store_fault`, whose text a client is not sent.
 func WithErrorLog(fn func(error)) Option { return func(h *Handler) { h.logf = fn } }
@@ -112,6 +138,9 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 		heartbeat:   15 * time.Second,
 		hubs:        map[string]*hub{},
 		catchUpWait: 30 * time.Second,
+		held:        map[string]*held{},
+		leaseTTL:    30 * time.Second,
+		maxLeaseTTL: 5 * time.Minute,
 	}
 	h.reader, _ = store.(agentsession.Reader)
 	h.follower, _ = store.(agentsession.Follower)
@@ -128,6 +157,16 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 	mux.HandleFunc("GET /v1/sessions/{id}/follow", h.guard(ScopeRead, h.follow))
 	mux.HandleFunc("GET /v1/refs", h.guard(ScopeRead, h.listRefs))
 	mux.HandleFunc("GET /v1/refs/{name...}", h.guard(ScopeRead, h.ref))
+	mux.HandleFunc("POST /v1/sessions", h.guard(ScopeWrite, h.create))
+	mux.HandleFunc("DELETE /v1/sessions/{id}", h.guard(ScopeWrite, h.deleteSession))
+	mux.HandleFunc("POST /v1/sessions/{id}/lease", h.guard(ScopeWrite, h.leaseAcquire))
+	mux.HandleFunc("PUT /v1/sessions/{id}/lease", h.guard(ScopeWrite, h.leaseRenew))
+	mux.HandleFunc("DELETE /v1/sessions/{id}/lease", h.guard(ScopeWrite, h.leaseRelease))
+	mux.HandleFunc("POST /v1/sessions/{id}/lease/break", h.guard(ScopeAdmin, h.leaseBreak))
+	mux.HandleFunc("POST /v1/sessions/{id}/entries", h.guard(ScopeWrite, h.appendEntries))
+	mux.HandleFunc("POST /v1/sessions/{id}/commit", h.guard(ScopeWrite, h.commit))
+	mux.HandleFunc("PUT /v1/sessions/{id}/head", h.guard(ScopeWrite, h.setHead))
+	mux.HandleFunc("PUT /v1/refs/{name...}", h.guard(ScopeRefs, h.updateRef))
 	mux.HandleFunc("/v1/", h.guard("", func(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, problem(CodeUnsupported, "not served", r.Method+" "+r.URL.Path+" is not in what this server serves"))
 	}))
@@ -138,19 +177,35 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.mux.ServeHTTP(w, r) }
 
-// Close stops every follower the handler runs; the follows it serves
-// end.
+// Close stops every follower the handler runs, so the follows it serves
+// end, and ends every lease it granted, letting the store's holds go.
 func (h *Handler) Close() error {
 	h.cancel()
+	h.wmu.Lock()
+	all := make([]*held, 0, len(h.held))
+	for _, st := range h.held {
+		all = append(all, st)
+	}
+	h.wmu.Unlock()
+	for _, st := range all {
+		st.mu.Lock()
+		if st.lease != nil {
+			h.end(st)
+		}
+		st.mu.Unlock()
+	}
 	return nil
 }
 
 // Capabilities are what this handler serves of its store.
 func (h *Handler) Capabilities() Capabilities {
+	_, commit := h.store.(syncer)
 	return Capabilities{
 		Reads: agentsession.Format,
 		Features: Features{
-			Refs: h.refs != nil,
+			Refs:   h.refs != nil,
+			Leases: true,
+			Commit: commit,
 		},
 		Limits: Limits{FollowBuffer: h.buffer, FollowReplay: h.replay},
 	}
@@ -169,7 +224,7 @@ func (h *Handler) guard(scope Scope, next http.HandlerFunc) http.HandlerFunc {
 		var p Principal
 		switch {
 		case h.insecure:
-			p = Principal{Name: "insecure", Scopes: []Scope{ScopeRead}}
+			p = Principal{Name: "insecure", Scopes: AllScopes}
 		case h.auth == nil:
 			writeProblem(w, problem(CodeAuth, "no authenticator is configured", ""))
 			return

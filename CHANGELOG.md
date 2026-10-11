@@ -5,6 +5,45 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Added: `remote` writes, under leases (part of #213).** The handler
+  serves create (`POST /v1/sessions`, leased from its first instant
+  with `lease_ttl_ms`), leases (acquire, renew, release, and an admin's
+  break), append (`POST …/entries`, NDJSON lines, stopping at the first
+  refusal, with each entry's outcome, durable and unresolved fields, the
+  head after the batch, and `Idempotency-Key`), the head's
+  compare-and-swap, commit where the store has one (`cas`'s `Sync` and
+  `SetHead`), delete, and ref updates (`PUT /v1/refs/…`). Every write to
+  a session carries its lease's fencing token (`Lease-Token`), and one
+  whose lease is not the current one is `lease_lost`. Scopes `write`,
+  `refs` and `admin` join `read` (`AllScopes`); `WithLeaseLimits` sets a
+  lease's default and longest time. The client is now the library's
+  `Store` and `Writer`: `Create` and `Open` take a lease it renews until
+  `Release`, `Delete` or `Close` (`WithHolder`, `WithLeaseTTL`); an
+  append is prepared on the client's own session and sent as a complete
+  line, and a leaf the writer moved moves the server's head first, by
+  compare-and-swap; `UpdateRef` is the ref's compare-and-swap, a lost one
+  a `RefMovedError`. The library's store suite now runs through the
+  client, writes included, on the memory, JSONL and cas stores. New
+  errors: `ErrLeaseLost`, `ErrHeadMoved`, `ErrHeadTarget`, `ErrMirror`,
+  `ErrSynthetic`, `ErrBadEntry`, and the RFC's write-side codes; a
+  problem's `reason` matches the library rule's sentinel too.
+- Added: `Writer`, a store that reports what an append did (`Write`,
+  with its `Result`). The cas store and the remote client implement it.
+- Changed: `remote.Client.UpdateRef` writes, where it was refused with
+  `ErrReadOnly`; `Problem.Unwrap` returns the code's sentinel and the
+  reason's.
+- RFC 0003: a lease's acquire returns the head it starts from and its
+  token as a decimal string; create's lease takes its holder from the
+  `holder` query parameter, and a retry while that lease holds is
+  `session_locked`; an append's response gives the head after the
+  batch, and a batch refused at its first line is that line's problem;
+  a complete line's null parent is a root, and an incomplete line is
+  filled as a store fills an entry; a head is not moved to none; the
+  problem members `reason`, `head`, `holder` and `target`; and the
+  reference implementation's slices, its tokens and its one mechanism.
+
 ## v0.0.22 - 2026-10-10
 
 - **Added: package `remote`, RFC 0003's read side over HTTP (#211).**

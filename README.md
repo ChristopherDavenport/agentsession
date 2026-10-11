@@ -199,29 +199,38 @@ for _, e := range sess.Entries() {
 }
 ```
 
-## Reading one over HTTP
+## Reaching one over HTTP
 
-Package `remote` is the read side of RFC 0003, the store protocol: a
-server over any store the library offers, and a client that reads,
-follows and resolves refs through it as the library's `Reader`,
-`Follower` and `RefStore`.
+Package `remote` is RFC 0003, the store protocol: a server over any
+store the library offers, and a client that is the library's `Store`,
+`Writer`, `Reader`, `Follower` and `RefStore` through it.
 
 ```go
 h := remote.NewHandler(store, remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
-    token: {Name: "viewer", Scopes: []remote.Scope{remote.ScopeRead}},
+    viewer: {Name: "viewer", Scopes: []remote.Scope{remote.ScopeRead}},
+    agent:  {Name: "agent", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeRefs}},
 })))
 defer h.Close()
 go http.ListenAndServe(addr, h) // over TLS where anyone else can reach it
 
-c, _ := remote.Dial("https://"+addr, remote.WithBearerToken(token))
-for ch, err := range c.Follow(ctx, sessionID, "") {
+c, _ := remote.Dial("https://"+addr, remote.WithBearerToken(agent))
+defer c.Close() // lets its leases go
+s, _ := c.Create(ctx, agentsession.Header{})        // leased from its first instant
+c.Append(ctx, s.ID(), agentsession.NewItemEntry(item)) // under the lease's fencing token
+for ch, err := range c.Follow(ctx, s.ID(), "") {
     // a Snapshot, then each change, every entry verified by its hash
 }
 ```
 
-Every client following a session shares one follower of it; one that
-falls behind is cut and resumes where it stopped. Writing, leases,
-objects and exchange are not served yet, and answer `unsupported`.
+A writer holds a session by a lease, which the client renews until it
+lets it go: another writer is refused the session while it holds, and
+one whose lease was taken is refused by its fencing token, however late
+its write arrives. The session the client hands out is its own, kept up
+to date with its appends; moving its leaf steers the next append, which
+moves the server's head with it. Every client following a session
+shares one follower of it; one that falls behind is cut and resumes
+where it stopped. Objects, exchange and push are not served yet, and
+answer `unsupported`.
 
 ## Exporting to ATIF
 
@@ -355,7 +364,7 @@ _, err := otel.Export(ctx, tracer, sess, sess.Leaf()) // a stored session, after
 | `otel` | the OpenTelemetry projection, as a nested module: replay a session as spans, or wrap a store so a live run emits them |
 | `atif` | Go types for ATIF v1.8 with unknown-member passthrough and validation |
 | `export` | trajectories, ATIF conversion, redactors, writer |
-| `remote` | RFC 0003's read side over HTTP: a server over any store (capabilities, listing, a session's state, its path, following as server-sent events, refs) and a client that is the library's `Reader`, `Follower` and `RefStore` |
+| `remote` | RFC 0003 over HTTP: a server over any store (capabilities, listing, a session's state, its path, following as server-sent events, refs; create, leases, append, head, commit, delete, ref updates) and a client that is the library's `Store`, `Writer`, `Reader`, `Follower` and `RefStore` |
 | `storetest` | the conformance suite every store runs |
 | `cmd/agentsession` | the command: show, verify, export and list session files and the sessions of a jsonl or cas store |
 

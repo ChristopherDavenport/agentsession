@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/cas"
 )
 
 // Version is the path prefix every route is under.
@@ -70,6 +71,19 @@ const (
 	CodeScope           = "scope"
 	CodeOverflow        = "overflow"
 	CodeBadRequest      = "bad_request"
+
+	// The write side's.
+	CodeSessionExists  = "session_exists"
+	CodeHeadMoved      = "head_moved"
+	CodeHeadTarget     = "head_target"
+	CodeLeaseLost      = "lease_lost"
+	CodeMirror         = "mirror"
+	CodeCallIDRepeated = "call_id_repeated"
+	CodeSynthetic      = "synthetic"
+	CodeBadEntry       = "bad_entry"
+	CodeBaseRule       = "base_rule"
+	CodeBadBase        = "bad_base"
+	CodeRefMoved       = "ref_moved"
 )
 
 // Errors a [Client] call returns, matched with errors.Is, beside the
@@ -96,6 +110,25 @@ var (
 	ErrCut = errors.New("remote: the stream was cut")
 	// ErrBadRequest is a request the server could not parse.
 	ErrBadRequest = errors.New("remote: bad request")
+	// ErrLeaseLost is a write whose lease is no longer the session's
+	// current one: it expired, was released or another holder took the
+	// session. A writer that wants to go on takes a lease again, reads
+	// the log to learn whether its last write landed, and resumes.
+	ErrLeaseLost = errors.New("remote: the lease is not the session's current one")
+	// ErrHeadMoved is a head compare-and-swap whose expected head is not
+	// the session's.
+	ErrHeadMoved = errors.New("remote: the head is not the expected entry")
+	// ErrHeadTarget is a head move to an entry the head may not rest on:
+	// a leaf label, or one that is not the base or an own entry.
+	ErrHeadTarget = errors.New("remote: the head may not rest there")
+	// ErrMirror is a write to a session the server holds as a mirror.
+	ErrMirror = errors.New("remote: the session is a mirror on this server")
+	// ErrSynthetic is a leaf label carrying synthetic.
+	ErrSynthetic = errors.New("remote: a synthetic leaf label is a projection's")
+	// ErrBadEntry is an entry line the server refused as malformed. A
+	// problem whose reason names a library rule matches that rule's
+	// sentinel too.
+	ErrBadEntry = errors.New("remote: a malformed entry")
 )
 
 // codes maps each code to the HTTP status it is sent with and the error
@@ -121,6 +154,38 @@ var codes = map[string]struct {
 	CodeScope:         {http.StatusForbidden, ErrForbidden},
 	CodeOverflow:      {http.StatusServiceUnavailable, ErrOverflow},
 	CodeBadRequest:    {http.StatusBadRequest, ErrBadRequest},
+
+	CodeSessionExists:  {http.StatusConflict, agentsession.ErrSessionExists},
+	CodeHeadMoved:      {http.StatusConflict, ErrHeadMoved},
+	CodeHeadTarget:     {http.StatusUnprocessableEntity, ErrHeadTarget},
+	CodeLeaseLost:      {http.StatusConflict, ErrLeaseLost},
+	CodeMirror:         {http.StatusConflict, ErrMirror},
+	CodeCallIDRepeated: {http.StatusConflict, agentsession.ErrCallIDRepeated},
+	CodeSynthetic:      {http.StatusUnprocessableEntity, ErrSynthetic},
+	CodeBadEntry:       {http.StatusUnprocessableEntity, ErrBadEntry},
+	CodeBaseRule:       {http.StatusUnprocessableEntity, agentsession.ErrBaseRule},
+	CodeBadBase:        {http.StatusUnprocessableEntity, agentsession.ErrNoEntry},
+	CodeRefMoved:       {http.StatusConflict, agentsession.ErrRefMoved},
+}
+
+// reasons are the library rules a bad_entry or bad_base problem's
+// reason names, so a client matches the library's sentinel as a local
+// store's caller would.
+var reasons = map[string]error{
+	"bad_id":                agentsession.ErrBadID,
+	"reserved_member":       agentsession.ErrReservedMember,
+	"bad_convergence":       agentsession.ErrBadConvergence,
+	"bad_target":            agentsession.ErrBadTarget,
+	"call_id_empty":         agentsession.ErrCallIDEmpty,
+	"call_rejected":         agentsession.ErrCallRejected,
+	"call_answered":         agentsession.ErrCallAnswered,
+	"call_completed":        agentsession.ErrCallCompleted,
+	"source_mismatch":       agentsession.ErrSourceMismatch,
+	"reject_dispatched":     agentsession.ErrRejectDispatched,
+	"answer_not_dispatched": agentsession.ErrAnswerNotDispatched,
+	"reason_mismatch":       agentsession.ErrReasonMismatch,
+	"link_mismatch":         agentsession.ErrLinkMismatch,
+	"bad_normalisation":     agentsession.ErrBadNormalisation,
 }
 
 // Problem is an error that crossed the wire, as RFC 9457's problem
@@ -136,6 +201,13 @@ type Problem struct {
 	Target *Target `json:"target,omitempty"`
 	// Incarnation is the session's, on a problem about one.
 	Incarnation string `json:"incarnation,omitempty"`
+	// Reason names the library rule a bad_entry or bad_base broke.
+	Reason string `json:"reason,omitempty"`
+	// Head is the session's head on a head_moved refusal, "" for none.
+	Head *string `json:"head,omitempty"`
+	// Holder is the label of the lease holder on a session_locked
+	// refusal, for a caller with write scope.
+	Holder string `json:"holder,omitempty"`
 }
 
 func (p *Problem) Error() string {
@@ -149,9 +221,18 @@ func (p *Problem) Error() string {
 	return s
 }
 
-// Unwrap returns the sentinel the code names, nil for a code that names
-// none.
-func (p *Problem) Unwrap() error { return codes[p.Code].err }
+// Unwrap returns the sentinels the code and the reason name: the
+// code's, and the library rule's for a reason that names one.
+func (p *Problem) Unwrap() []error {
+	var out []error
+	if err := codes[p.Code].err; err != nil {
+		out = append(out, err)
+	}
+	if err := reasons[p.Reason]; err != nil {
+		out = append(out, err)
+	}
+	return out
+}
 
 // problem builds the problem a server sends for code.
 func problem(code, title, detail string) *Problem {
@@ -173,6 +254,12 @@ func problemOf(err error) *Problem {
 	switch {
 	case errors.Is(err, agentsession.ErrNoSession):
 		return problem(CodeNoSession, "no such session", "")
+	case errors.Is(err, agentsession.ErrBaseRule):
+		return problem(CodeBaseRule, "the parent breaks the session's parent rule", err.Error())
+	case errors.Is(err, agentsession.ErrBadConvergence):
+		p := problem(CodeBadBase, "the fork's prefix converges an entry off its path", err.Error())
+		p.Reason = "bad_convergence"
+		return p
 	case errors.Is(err, agentsession.ErrNoEntry):
 		return problem(CodeNoEntry, "no such entry", "")
 	case errors.Is(err, agentsession.ErrNoRef):
@@ -187,6 +274,25 @@ func problemOf(err error) *Problem {
 		return problem(CodeSessionLocked, "the session is held", "")
 	case errors.Is(err, agentsession.ErrUnsupportedFormat):
 		return problem(CodeFormat, "a format the server does not read", "")
+	case errors.Is(err, agentsession.ErrSessionExists):
+		return problem(CodeSessionExists, "a session is held under this ID", "")
+	case errors.Is(err, agentsession.ErrRefMoved):
+		return problem(CodeRefMoved, "the ref is not at the expected target", "")
+	case errors.Is(err, agentsession.ErrCallIDRepeated):
+		return problem(CodeCallIDRepeated, "the entry repeats a call_id", err.Error())
+	case errors.Is(err, cas.ErrHeadMoved):
+		return problem(CodeHeadMoved, "the head is not the expected entry", "")
+	case errors.Is(err, cas.ErrMirror):
+		return problem(CodeMirror, "the session is a mirror here", "")
+	case errors.Is(err, cas.ErrSynthetic):
+		return problem(CodeSynthetic, "a synthetic leaf label is a projection's", "")
+	}
+	for reason, sentinel := range reasons {
+		if errors.Is(err, sentinel) {
+			p := problem(CodeBadEntry, "the entry breaks a rule of the format", err.Error())
+			p.Reason = reason
+			return p
+		}
 	}
 	return problem(CodeStoreFault, "the store failed", "")
 }
