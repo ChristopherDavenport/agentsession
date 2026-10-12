@@ -45,6 +45,7 @@ func Run(t *testing.T, opts Options) {
 	t.Run("CreateAndOpen", func(t *testing.T) { testCreateAndOpen(t, opts) })
 	t.Run("Append", func(t *testing.T) { testAppend(t, opts) })
 	t.Run("HeldAppend", func(t *testing.T) { testHeldAppend(t, opts) })
+	t.Run("WriterChecks", func(t *testing.T) { testWriterChecks(t, opts) })
 	t.Run("ReadLine", func(t *testing.T) { testReadLine(t, opts) })
 	t.Run("List", func(t *testing.T) { testList(t, opts) })
 	t.Run("Continue", func(t *testing.T) { testContinue(t, opts) })
@@ -251,6 +252,60 @@ func testHeldAppend(t *testing.T, opts Options) {
 	}
 	if s2.Len() != 2 || len(s2.Repeated()) != 0 {
 		t.Errorf("after reopening: %d entries, repeated %v; want 2 and none", s2.Len(), s2.Repeated())
+	}
+}
+
+// testWriterChecks appends entries a writer may not add, though a
+// reader keeps them where a store holds them: a peer link that names no
+// call, and a cancel notice whose target is no callee link on its path.
+// Every store refuses both with [agentsession.ErrCalleeLink] and keeps
+// nothing of them, in memory or, after reopening, in what it stored,
+// and takes the valid link and notice.
+func testWriterChecks(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	if _, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("root"))); err != nil {
+		t.Fatal(err)
+	}
+	callee := agentsession.Callee{URL: "https://peer.example/a2a", Task: "t1"}
+	link := agentsession.NewPeerLink("call-1", callee)
+	if link.ID, err = st.Append(ctx, id, link); err != nil {
+		t.Fatalf("appending a peer link: %v", err)
+	}
+	want := entryIDs(s)
+	for _, c := range []struct {
+		name string
+		e    agentsession.Entry
+	}{
+		{"peer link with no call", agentsession.NewPeerLink("", callee)},
+		{"cancel notice with no target on the path", &agentsession.LinkEntry{Rel: agentsession.RelPeer, CallID: "call-1", Target: "no-such-entry", Cancel: agentsession.CancelSent}},
+		{"cancel notice of another call", &agentsession.LinkEntry{Rel: agentsession.RelPeer, CallID: "call-2", Target: link.ID, Cancel: agentsession.CancelSent}},
+	} {
+		if _, err := st.Append(ctx, id, c.e); !errors.Is(err, agentsession.ErrCalleeLink) {
+			t.Errorf("%s: %v, want ErrCalleeLink", c.name, err)
+		}
+		if got := entryIDs(s); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: session holds %v after the refusal, want %v", c.name, got, want)
+		}
+	}
+	if _, err := st.Append(ctx, id, agentsession.NewCancelSentLink(link)); err != nil {
+		t.Fatalf("appending the cancel notice of the link: %v", err)
+	}
+	want = entryIDs(s)
+	if opts.Reopen == nil {
+		return
+	}
+	s2, err := opts.Reopen(t, st).Open(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := entryIDs(s2); !reflect.DeepEqual(got, want) {
+		t.Errorf("after reopening: %v, want %v", got, want)
 	}
 }
 
