@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.25 - 2026-10-13
 
 - **Fixed: the SQLite store holds an append to the writer's rules.**
   `sqlite.Store.Append` committed the entry without
