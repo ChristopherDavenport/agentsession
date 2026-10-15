@@ -150,8 +150,9 @@ func (s *Store) Root() string { return s.root }
 
 // ProjectKey derives the directory name for a working directory: the
 // leading separator stripped and path separators and colons replaced
-// by "-", so "/home/u/proj" becomes "home-u-proj". An empty directory
-// maps to "default".
+// by "-", so "/home/u/proj" becomes "home-u-proj". An empty directory,
+// and one whose key would be "." or "..", which name a directory other
+// than a project's own, maps to "default".
 func ProjectKey(cwd string) string {
 	if cwd == "" {
 		return "default"
@@ -159,10 +160,40 @@ func ProjectKey(cwd string) string {
 	key := filepath.ToSlash(cwd)
 	key = strings.TrimLeft(key, "/")
 	key = strings.NewReplacer("/", "-", "\\", "-", ":", "-").Replace(key)
-	if key == "" {
+	if key == "" || key == "." || key == ".." {
 		return "default"
 	}
 	return key
+}
+
+// ErrBadName is returned by Create for a session ID that cannot be
+// used in a file name: an ID is letters, digits, '.', '_' and '-', at
+// most 200 of them, and is neither "." nor "..", the rule the cas store
+// keeps. A header comes from whoever creates the session, a remote
+// client or an imported file among them, so its ID is checked before
+// it names a path.
+var ErrBadName = errors.New("jsonl: not a usable name")
+
+// validSessionID is cas's rule for a session ID used as a path.
+func validSessionID(id string) bool {
+	if id == "" || id == "." || id == ".." || len(id) > 200 {
+		return false
+	}
+	for _, c := range id {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '.', c == '_', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// within reports whether path lies under root, which every file the
+// store writes must.
+func within(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // Path returns the file a session lives in, whether or not it is open.
@@ -220,6 +251,9 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 		}
 	}
 	h = sess.Header()
+	if !validSessionID(h.ID) {
+		return nil, fmt.Errorf("%w: session id %q", ErrBadName, h.ID)
+	}
 	if _, ok := s.open[h.ID]; ok {
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
@@ -227,6 +261,9 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
 	path := sessionPath(s.root, h)
+	if !within(s.root, path) {
+		return nil, fmt.Errorf("%w: session %q in %q is outside the store", ErrBadName, h.ID, h.CWD)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("jsonl: create project directory: %w", err)
 	}

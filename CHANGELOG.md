@@ -5,6 +5,19 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Fixed: the jsonl store keeps every session file under its root.**
+  `jsonl.Store.Create` built a file name from the header's `id` and
+  `cwd` without checking either, so a header from a remote client or an
+  imported file could write outside the store: an ID holding `../`, or
+  a working directory of `/..`, whose project key was `..`. Create now
+  refuses an ID outside the cas store's rule (letters, digits, `.`,
+  `_` and `-`, at most 200, not `.` or `..`) with the new
+  `jsonl.ErrBadName`, `ProjectKey` maps a key of `.` or `..` to
+  `default`, and Create checks the path it is about to write lies under
+  the root. Sessions already in a store are found as before.
+
 ## v0.0.25 - 2026-10-13
 
 - **Fixed: the SQLite store holds an append to the writer's rules.**
