@@ -69,11 +69,60 @@ func TestProjectKey(t *testing.T) {
 		{"", "default"},
 		{"C:\\Users\\u\\proj", "C--Users-u-proj"},
 		{"relative/dir", "relative-dir"},
+		{"/..", "default"},
+		{"/.", "default"},
+		{"..", "default"},
+		{"/../x", "..-x"},
 	}
 	for _, tt := range tests {
 		if got := jsonl.ProjectKey(tt.in); got != tt.want {
 			t.Errorf("ProjectKey(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+// TestCreateConfined is the store's promise that a header cannot name
+// a file outside the root: the ID and the working directory both come
+// from whoever creates the session.
+func TestCreateConfined(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	root := filepath.Join(parent, "store")
+	st, err := jsonl.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{
+		"../escape", "x/../../escape", "a/b", `a\b`, ".", "..", "a*", "a b",
+		strings.Repeat("x", 201),
+	} {
+		if _, err := st.Create(ctx, agentsession.Header{ID: id}); !errors.Is(err, jsonl.ErrBadName) {
+			t.Errorf("Create(id %q) = %v, want ErrBadName", id, err)
+		}
+	}
+	for i, cwd := range []string{"/..", "/.", ".."} {
+		h := agentsession.Header{ID: "cwd-" + strconv.Itoa(i), CWD: cwd}
+		if _, err := st.Create(ctx, h); err != nil {
+			t.Fatalf("Create(cwd %q): %v", cwd, err)
+		}
+		path, err := st.Path(h.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rel, err := filepath.Rel(root, path); err != nil || strings.HasPrefix(rel, "..") {
+			t.Errorf("cwd %q put the session at %s, outside %s", cwd, path, root)
+		}
+	}
+	ents, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 1 || ents[0].Name() != "store" {
+		var names []string
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		t.Errorf("files outside the store: %v", names)
 	}
 }
 
