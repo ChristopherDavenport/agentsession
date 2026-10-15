@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.26 - 2026-10-15
 
 - **Fixed: the jsonl store keeps every session file under its root.**
   `jsonl.Store.Create` built a file name from the header's `id` and
