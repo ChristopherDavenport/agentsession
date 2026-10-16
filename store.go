@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"sort"
 	"sync"
@@ -244,13 +245,11 @@ type MemoryStore struct {
 type MemoryOption func(*MemoryStore)
 
 // MemoryRedactedOnly sets the store to hold only redacted sessions, as
-// RFC 0002 lets a store be set: it refuses to create any session, with
-// [ErrNotRedacted] for one whose header does not carry redacted, a fork
-// of a redacted session among them, and [ErrRedacted] for one that
-// does, which no store creates. A memory store has no import or
-// exchange, the paths a redacted session enters a store by, so one set
-// this way holds nothing; the option is here so that a host written
-// against the stores that do configures this one alike.
+// RFC 0002 lets a store be set: Import refuses a session whose header
+// does not carry redacted, a fork of a redacted session among them,
+// with [ErrNotRedacted], and Create refuses every session, with
+// ErrNotRedacted or, for a redacted header, which no store creates,
+// [ErrRedacted]. A redacted session enters it whole, by Import.
 func MemoryRedactedOnly() MemoryOption {
 	return func(m *MemoryStore) { m.redactedOnly = true }
 }
@@ -291,6 +290,41 @@ func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
 	}
 	m.sessions[s.ID()] = s
 	m.gens[s.ID()] = memoryGen.Add(1)
+	return s, nil
+}
+
+// Import implements [Importer]: the file is read with [ReadForImport],
+// and the session it holds is kept as read, its leaf the resume rule's,
+// and returned as the store holds it, as Create returns one. A session
+// this store holds is refused, as is a fork whose media differs from
+// that of a held session whose own entries include the base, and, in a
+// store set with MemoryRedactedOnly, a session that is not redacted.
+// The store keeps no record mark, so asRecord is not read.
+func (m *MemoryStore) Import(ctx context.Context, r io.Reader, asRecord bool) (*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s, err := ReadForImport(r)
+	if err != nil {
+		return nil, err
+	}
+	h := s.Header()
+	if m.redactedOnly && !h.Redacted {
+		return nil, fmt.Errorf("%w: import %s in a store that holds only redacted sessions", ErrNotRedacted, h.ID)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.sessions[h.ID]; exists {
+		return nil, fmt.Errorf("%w: %s", ErrSessionExists, h.ID)
+	}
+	if h.Base != "" {
+		if err := CheckImportMedia(h, m.forkOrigin(h.ParentSession, h.Base)); err != nil {
+			return nil, err
+		}
+	}
+	m.sessions[h.ID] = s
+	m.gens[h.ID] = memoryGen.Add(1)
+	m.hub.Notify(h.ID)
 	return s, nil
 }
 
@@ -425,4 +459,5 @@ var (
 	_ Store    = (*MemoryStore)(nil)
 	_ Reader   = (*MemoryStore)(nil)
 	_ Follower = (*MemoryStore)(nil)
+	_ Importer = (*MemoryStore)(nil)
 )

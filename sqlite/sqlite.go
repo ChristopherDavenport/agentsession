@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"net/url"
 	"os"
@@ -107,7 +108,7 @@ type Option func(*Store)
 
 // WithReadOnly opens the store for reading: Open takes no hold on a
 // session, so a session another process holds can be read while it is
-// held, and Create, Append, Delete and BreakLock return
+// held, and Create, Import, Append, Delete and BreakLock return
 // [agentsession.ErrReadOnly]. Nothing in a session is written.
 //
 // Two things it is not. Opening the database still creates or
@@ -134,14 +135,14 @@ func WithStaleLockReport(report func(LockInfo)) Option {
 }
 
 // WithRedactedOnly sets the store to hold only redacted sessions, as
-// RFC 0002 lets a store be set: Create refuses every session, with
-// [agentsession.ErrNotRedacted] for a header that does not carry
-// redacted, a fork of a redacted session among them, and
-// [agentsession.ErrRedacted] for one that does, which no store creates.
-// This store has no import or exchange, the paths a redacted session
-// enters a store by, so one set this way holds nothing; and the option
-// is this process's, not the database's, so a store that must fail
-// closed against every process is a cas store set this way.
+// RFC 0002 lets a store be set: Import refuses a session whose header
+// does not carry redacted, a fork of a redacted session among them,
+// with [agentsession.ErrNotRedacted], and Create refuses every session,
+// with ErrNotRedacted or, for a redacted header, which no store
+// creates, [agentsession.ErrRedacted]. A redacted session enters it
+// whole, by Import. The option is this process's, not the database's,
+// so a store that must fail closed against every process is a cas
+// store set this way.
 func WithRedactedOnly() Option {
 	return func(s *Store) { s.redactedOnly = true }
 }
@@ -449,7 +450,50 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 			return nil, err
 		}
 	}
-	h = sess.Header()
+	return s.insert(ctx, sess)
+}
+
+// Import implements [agentsession.Importer]: the file is read with
+// [agentsession.ReadForImport] and its session written as Create writes
+// one, its header and every line, the prefix first, in one transaction
+// committed before Import returns; the session is then held as Create
+// holds it. A session the store holds is refused, as is a fork whose
+// media differs from that of a held session whose own entries include
+// the base, and, in a store set with [WithRedactedOnly], a session whose
+// header does not carry redacted. This store keeps a session's head
+// only in its entries, so a file whose head only a projection's
+// synthetic leaf marker names is refused. It keeps no record mark, so
+// asRecord is not read.
+func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agentsession.Session, error) {
+	if s.readOnly {
+		return nil, agentsession.ErrReadOnly
+	}
+	sess, err := agentsession.ReadForImport(r)
+	if err != nil {
+		return nil, err
+	}
+	h := sess.Header()
+	if s.redactedOnly && !h.Redacted {
+		return nil, fmt.Errorf("%w: import %s in a store that holds only redacted sessions", agentsession.ErrNotRedacted, h.ID)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if h.Base != "" {
+		origin, err := s.forkOrigin(ctx, h.ParentSession, h.Base)
+		if err != nil && !errors.Is(err, agentsession.ErrNoEntry) {
+			return nil, err
+		}
+		if err := agentsession.CheckImportMedia(h, origin); err != nil {
+			return nil, err
+		}
+	}
+	return s.insert(ctx, sess)
+}
+
+// insert writes a new session, its header and every entry it holds in
+// file order, and holds it, in one transaction. The caller holds s.mu.
+func (s *Store) insert(ctx context.Context, sess *agentsession.Session) (*agentsession.Session, error) {
+	h := sess.Header()
 	line, err := h.MarshalJSON()
 	if err != nil {
 		return nil, err
@@ -1073,4 +1117,5 @@ var (
 	_ agentsession.Store    = (*Store)(nil)
 	_ agentsession.Reader   = (*Store)(nil)
 	_ agentsession.RefStore = (*Store)(nil)
+	_ agentsession.Importer = (*Store)(nil)
 )
