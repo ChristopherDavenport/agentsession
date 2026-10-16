@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/internal/followtest"
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // The log read lists the session's records in log order, an append with
@@ -341,4 +344,88 @@ func TestTheFollowerWaitsForAWholeLine(t *testing.T) {
 	if ids := resumed(cursor); len(ids) != 0 {
 		t.Errorf("resumed from the line's cursor: %v, want nothing", ids)
 	}
+}
+
+// TestGatedEntryReadAndFollowed: a session whose header names 0.12 and
+// one of whose entries holds redacted, which 0.12 does not define, is
+// read by ReadLog, durable or not, and by a follow that meets the entry
+// in the log's tail, with the entry not redacted and the session one
+// that may not be raised.
+func TestGatedEntryReadAndFollowed(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	if _, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("first"))); err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.LogCursor(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := agentsession.NewItemEntry(openresponses.UserText("hi"))
+	if err := agentsession.SetRedacted(e, []agentsession.Span{{From: 1, To: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	eid, err := st.Append(ctx, id, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	lowerHeader(t, root, id, "agentsession/0.12")
+	st, err = Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	gated := func(what string, e agentsession.Entry, sess *agentsession.Session) {
+		t.Helper()
+		if spans, ok := agentsession.RedactedOf(e); ok {
+			t.Errorf("%s: the entry reads as redacted %v under 0.12", what, spans)
+		}
+		if err := sess.RaiseRefused(agentsession.Format); !errors.Is(err, agentsession.ErrNoRaise) {
+			t.Errorf("%s: RaiseRefused = %v, want ErrNoRaise", what, err)
+		}
+		if f := sess.Header().Format; f != "agentsession/0.12" {
+			t.Errorf("%s: the session is at %s", what, f)
+		}
+	}
+	for _, durable := range []bool{false, true} {
+		lg, err := st.ReadLog(ctx, id, "", durable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, r := range lg.Records {
+			if r.Entry != nil && r.Entry.Base().ID == eid {
+				found = true
+				gated(fmt.Sprintf("ReadLog durable=%v", durable), r.Entry, lg.Session)
+			}
+		}
+		if !found {
+			t.Errorf("ReadLog durable=%v: no record of %s", durable, eid)
+		}
+		lg, err = st.ReadLog(ctx, id, before, durable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(lg.Records) != 1 || lg.Reset {
+			t.Fatalf("ReadLog from the cursor before the entry: %d records, reset %v", len(lg.Records), lg.Reset)
+		}
+		gated(fmt.Sprintf("ReadLog from a cursor, durable=%v", durable), lg.Records[0].Entry, lg.Session)
+	}
+	w := followtest.Start(t, st, id, before)
+	defer w.Stop()
+	c := w.NextKind(agentsession.Appended)
+	if c.ID != eid {
+		t.Fatalf("the follow appended %s, want %s", c.ID, eid)
+	}
+	gated("Follow", c.Entry, c.Session)
 }
