@@ -5,6 +5,31 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Changed: the format is 0.13.** A writer raises every file it appends
+  to, so a reader of 0.12 refuses those files until it is upgraded. A
+  0.5 to 0.12 file reads as it stands; no hash moves.
+- **Added: a redacted session names its original (RFC 0001 0.13,
+  Redaction).** `Header.RedactedFrom` is the header's `redacted_from`
+  member (`RedactedFrom`): the original's `Session`, how many `Entries`
+  it held when the redaction was made, the redaction's `Profile` and,
+  for a redaction that wrote one entry per entry in file order,
+  `Aligned`. Members it does not define, the namespaced ones a
+  redaction records about itself among them, stay in its `Extra` and
+  write back as read. A header carrying it on a session that is not
+  `Redacted` is refused with `ErrRedactedFrom`, by `Header.Validate`
+  and so by `Read` and `Scan`. The
+  member is defined from 0.13: in a file that declares an earlier minor,
+  which was free to hold the name in any form, it stays in
+  `Header.Extra` and is neither decoded nor refused, as is one in a 0.13
+  file that does not decode as the object.
+- **Added: `RedactedSessionID`,** the ID RFC 0001 recommends for a
+  redacted session whose redaction writes a profile: a UUIDv5 under the
+  nil namespace over `redacted/<original>/<entries>/<profile>`, derived
+  as `SubsessionID` derives a subsession's, so the same redaction of the
+  same entries gives the same session.
+
 ## v0.0.26 - 2026-10-15
 
 - **Fixed: the jsonl store keeps every session file under its root.**
