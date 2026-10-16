@@ -238,7 +238,8 @@ func (s *Session) ResetLeaf() {
 // is set to the current leaf, so an explicit Parent branches in place;
 // a zero Timestamp is set to now, and any timestamp is taken to UTC,
 // the one spelling the format admits. In a session with a base, the
-// parent must be the base or an own entry.
+// parent must be the base or an own entry. A redacted session takes no
+// append, [ErrRedacted]: a redactor writes one whole, with Commit.
 //
 // An append under the leaf makes the entry the leaf; an append elsewhere
 // is a branch and the leaf does not move. A leaf label makes its target
@@ -268,11 +269,17 @@ func (s *Session) Append(e Entry) (string, error) {
 // its call and relation on the path it is appended to. A session whose
 // header may not be raised to this package's format takes no entry
 // ([ErrNoRaise]), since appending under the raised header is what a
-// writer does.
+// writer does, and a redacted session takes none either ([ErrRedacted]),
+// since it is written whole: an entry appended after the redaction was
+// not redacted. A redactor builds one with Commit, which does not check.
 func (s *Session) checkNew(e Entry) error {
 	s.mu.RLock()
+	redacted := s.header.Redacted
 	err := s.header.raiseRefused(Format)
 	s.mu.RUnlock()
+	if redacted {
+		return fmt.Errorf("%w: append to %s", ErrRedacted, s.ID())
+	}
 	if err != nil {
 		return fmt.Errorf("agentsession: append to %s: %w", s.ID(), err)
 	}

@@ -236,17 +236,43 @@ type MemoryStore struct {
 	gens map[string]uint64
 	hub  wake.Hub
 	refs refState
+	// redactedOnly says the store holds only redacted sessions.
+	redactedOnly bool
+}
+
+// MemoryOption configures a [MemoryStore].
+type MemoryOption func(*MemoryStore)
+
+// MemoryRedactedOnly sets the store to hold only redacted sessions, as
+// RFC 0002 lets a store be set: it refuses to create any session, with
+// [ErrNotRedacted] for one whose header does not carry redacted, a fork
+// of a redacted session among them, and [ErrRedacted] for one that
+// does, which no store creates. A memory store has no import or
+// exchange, the paths a redacted session enters a store by, so one set
+// this way holds nothing; the option is here so that a host written
+// against the stores that do configures this one alike.
+func MemoryRedactedOnly() MemoryOption {
+	return func(m *MemoryStore) { m.redactedOnly = true }
 }
 
 // NewMemoryStore returns an empty store.
-func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{},
+func NewMemoryStore(opts ...MemoryOption) *MemoryStore {
+	m := &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{},
 		refs: refState{refs: map[string]RefTarget{}, idents: map[string]string{}, logs: map[string][]RefUpdate{}}}
+	for _, o := range opts {
+		o(m)
+	}
+	return m
 }
 
 // Create implements Store. A header whose Base is set makes a fork of
-// the session holding the base, as [Fork] does.
+// the session holding the base, as [Fork] does. A header that carries
+// redacted is refused with [ErrRedacted], since a redacted session is
+// written whole.
 func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
+	if err := CheckCreate(h, m.redactedOnly); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := New(h)

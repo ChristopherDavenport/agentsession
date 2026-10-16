@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -250,5 +251,104 @@ func TestNoRaise(t *testing.T) {
 		if tt.ok && (err != nil || h.Format != tt.to) || !tt.ok && (!errors.Is(err, ErrNoRaise) || h.Format != tt.h.Format) {
 			t.Errorf("%s: Raise(%s) = %v, format %s", tt.name, tt.to, err, h.Format)
 		}
+	}
+}
+
+// TestRedactedTakesNoAppend: a redacted session is written whole, with
+// Commit, and takes no append, from Append or from Prepare, which every
+// store's append runs; a fork of it is not redacted and takes one.
+func TestRedactedTakesNoAppend(t *testing.T) {
+	s := New(Header{ID: "r", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o", Entries: 1}})
+	if _, err := s.Commit(NewItemEntry(openresponses.UserText("written whole"))); err != nil {
+		t.Fatalf("a redactor's Commit: %v", err)
+	}
+	for name, add := range map[string]func(Entry) error{
+		"Append":  func(e Entry) error { _, err := s.Append(e); return err },
+		"Prepare": func(e Entry) error { _, err := s.Prepare(e); return err },
+	} {
+		if err := add(NewItemEntry(openresponses.UserText("more"))); !errors.Is(err, ErrRedacted) {
+			t.Errorf("%s = %v, want ErrRedacted", name, err)
+		}
+	}
+	if s.Len() != 1 {
+		t.Errorf("the session holds %d entries", s.Len())
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatalf("Write of a redacted session: %v", err)
+	}
+	f, err := Fork(s, s.Leaf(), Header{ID: "f"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Append(NewItemEntry(openresponses.UserText("continued"))); err != nil {
+		t.Errorf("a fork of a redacted session: %v", err)
+	}
+}
+
+// TestCheckCreate: a redacted header is never created, and a store that
+// holds only redacted sessions creates nothing else either.
+func TestCheckCreate(t *testing.T) {
+	for _, tt := range []struct {
+		h    Header
+		only bool
+		want error
+	}{
+		{Header{}, false, nil},
+		{Header{Redacted: true}, false, ErrRedacted},
+		{Header{}, true, ErrNotRedacted},
+		{Header{Base: "x"}, true, ErrNotRedacted},
+		{Header{Redacted: true}, true, ErrRedacted},
+	} {
+		if err := CheckCreate(tt.h, tt.only); !errors.Is(err, tt.want) || (tt.want == nil) != (err == nil) {
+			t.Errorf("CheckCreate(%+v, %v) = %v, want %v", tt.h, tt.only, err, tt.want)
+		}
+	}
+}
+
+// TestOriginalRefusesMisalignment: an aligned redaction is mapped back
+// only when it holds the count it names, the store holds at least that
+// many of the original's, and each pair is of one type; otherwise
+// Original refuses rather than map an entry to the wrong one.
+func TestOriginalRefusesMisalignment(t *testing.T) {
+	ctx := context.Background()
+	st := NewMemoryStore()
+	if _, err := st.Create(ctx, Header{ID: "o"}); err != nil {
+		t.Fatal(err)
+	}
+	root, err := st.Append(ctx, "o", NewItemEntry(openresponses.UserText("a")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, "o", NewLabelEntry(root, "x")); err != nil {
+		t.Fatal(err)
+	}
+	redacted := func(n int, entries ...Entry) *Session {
+		s := New(Header{ID: "r", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o", Entries: n, Aligned: true}})
+		for _, e := range entries {
+			if _, err := s.Commit(e); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return s
+	}
+	item := func() Entry { return NewItemEntry(openresponses.UserText("[a]")) }
+	good := redacted(2, item())
+	if _, err := good.Commit(NewLabelEntry(good.Leaf(), "x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, m, err := Original(ctx, st, good); err != nil || len(m) != 2 {
+		t.Fatalf("Original of a good aligned redaction: %v, %v", m, err)
+	}
+	short := redacted(2, item())
+	bad := redacted(2, item(), item())
+	beyond := redacted(3, item(), item(), item())
+	for name, s := range map[string]*Session{"fewer entries than it names": short, "a type changed": bad, "more than the store holds": beyond} {
+		if _, m, err := Original(ctx, st, s); !errors.Is(err, ErrRedactedFrom) || m != nil {
+			t.Errorf("%s: %v, mapping %v; want ErrRedactedFrom", name, err, m)
+		}
+	}
+	if _, _, err := Original(ctx, st, New(Header{ID: "r", Redacted: true})); !errors.Is(err, ErrNoSession) {
+		t.Errorf("a redacted session naming no original: %v, want ErrNoSession", err)
 	}
 }
