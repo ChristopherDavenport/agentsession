@@ -790,7 +790,10 @@ from the base or from each other, or from null in a baseless session,
 and `media` equals that of a held session whose own entries include the
 base. The marker names the head and is then discarded, so an export and
 import cycle adds nothing, and a genuine `leaf` label a writer appended
-is an entry like any other. Two refusals follow. The imported session
+is an entry like any other. A store that keeps a session's head only in
+its entries cannot hold a head the marker names, since keeping it would
+add an entry the session never had, and MUST refuse a file carrying one
+rather than lose the head. Two refusals follow. The imported session
 keeps the header's `id`, and a store already holding a session with that
 ID MUST refuse the import. An import is committed before it is
 acknowledged. An importer MUST verify each line's hash and

@@ -841,7 +841,7 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | `header_differs` | 409 | the receiver holds another session under this ID |
 | `call_id_repeated` | 409 | an append or exchange that would repeat a `call_id` |
 | `synthetic` | 422 | a `leaf` label carrying `synthetic` |
-| `bad_entry` | 422 | malformed: `id` differs, reserved member, `ts` form, not I-JSON, unknown prefix |
+| `bad_entry` | 422 | malformed: `id` differs, reserved member, `ts` form, not I-JSON, unknown prefix; also a pushed or created header RFC 0001 calls malformed, such as `redacted_from` without `redacted` |
 | `base_rule` | 422 | a parent that is not the base, an own entry, or null; a null parent in a session with a base |
 | `bad_base` | 422 | a fork whose base is a `leaf` label, or whose `media` differs from the origin's |
 | `bad_object` | 422 | bytes that do not hash to the name |
