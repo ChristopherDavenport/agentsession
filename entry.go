@@ -1329,43 +1329,6 @@ func unfoldValue(raw, seen any) (any, bool) {
 	return raw, false
 }
 
-// remapKeptParents applies a migration's rewrite of parents to the kept
-// copy, so each reference's extras stay on the reference they described:
-// ref returns the new entry ID for a reference it rewrites.
-func (b *EntryBase) remapKeptParents(ref func(session, entry string) (string, bool)) {
-	k, ok := b.kept["parents"]
-	if !ok || k.seen == nil {
-		return
-	}
-	remap := func(data json.RawMessage) json.RawMessage {
-		v, err := parseValue(data)
-		if err != nil {
-			return data
-		}
-		list, ok := v.([]any)
-		if !ok {
-			return data
-		}
-		for _, el := range list {
-			obj, ok := el.(map[string]any)
-			if !ok {
-				continue
-			}
-			entry, _ := obj["entry"].(string)
-			session, _ := obj["session"].(string)
-			if id, ok := ref(session, entry); ok {
-				obj["entry"] = id
-			}
-		}
-		out, err := jsonx.MarshalNoEscape(list)
-		if err != nil {
-			return data
-		}
-		return out
-	}
-	b.kept["parents"] = keptMember{raw: remap(k.raw), seen: remap(k.seen)}
-}
-
 func (b *EntryBase) keep(key string, raw, seen json.RawMessage) {
 	if b.kept == nil {
 		b.kept = map[string]keptMember{}
