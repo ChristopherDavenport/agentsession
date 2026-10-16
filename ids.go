@@ -6,8 +6,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"strconv"
 	"time"
+
+	"github.com/ChristopherDavenport/agentsession/internal/jcs"
+	"github.com/ChristopherDavenport/agentsession/internal/jsonx"
 )
 
 // NewSessionID returns a UUIDv7 in its canonical text form. The
@@ -66,15 +68,32 @@ func SubsessionID(parentSessionID, callID string) string {
 
 // RedactedSessionID derives the session ID the format recommends for a
 // redacted session whose redacted_from writes a profile: a UUIDv5
-// under the nil namespace over "redacted/<original>/<entries>/<profile>",
-// original being the original's session ID and entries the count its
-// [RedactedFrom] carries. The same redaction of the same entries then
-// gives the same session, so repeating one over a store adds only the
-// sessions that grew; the leading "redacted" keeps the name apart from
-// a subsession's, which starts with a session ID. A profile names one
-// set of rules, since two under one name give two sessions one ID.
+// under the nil namespace over the name
+// ["redacted","<original>",<entries>,"<profile>"], a JSON array in the
+// canonical form the entry hash uses, original being the original's
+// session ID and entries the count its [RedactedFrom] carries. An
+// array cannot be read two ways, as a slash-joined name can when an ID
+// holds a slash, and it is not a subsession's name, which starts with a
+// session ID. The same redaction of the same entries then gives the
+// same session, so repeating one over a store adds only the sessions
+// that grew. A profile names one set of rules, since two under one name
+// give two sessions one ID. A string that is not UTF-8 is encoded as
+// the JSON encoder does, its invalid bytes as U+FFFD.
 func RedactedSessionID(original string, entries int, profile string) string {
-	return uuidv5("redacted/" + original + "/" + strconv.Itoa(entries) + "/" + profile)
+	return uuidv5(string(redactedName(original, entries, profile)))
+}
+
+// redactedName is the name [RedactedSessionID] hashes.
+func redactedName(original string, entries int, profile string) []byte {
+	data, err := jsonx.MarshalNoEscape([]any{"redacted", original, entries, profile})
+	if err == nil {
+		data, err = jcs.Transform(data)
+	}
+	if err != nil {
+		// Strings and an int always encode, and the encoding is JSON.
+		panic(fmt.Sprintf("agentsession: redacted session name: %v", err))
+	}
+	return data
 }
 
 // uuidv5 returns the UUIDv5 of name under the nil namespace.
