@@ -179,6 +179,25 @@ versions may break the API.
   through a store's `Importer`; `Options.Import` is for a store whose
   import is not one, a remote client over a store that has one, and
   `Options.Push` and `RedactedOnly` give it the other paths.
+- **Fixed: `agentsession verify` of a redacted file (#234).** It
+  reported every `request_hash` as a MISMATCH and said each id was
+  checked as if against the original. Now it says the ids verify the
+  redacted file and not its original, prints `redacted_from` (the
+  original's session, its entry count, the profile and `aligned` when
+  present, and the names of its other members), or that a 0.12 redacted
+  file names no original, and counts a `request_hash` that no longer
+  matches apart, as expected of a redacted session, failing nothing over
+  it; a store's verify no longer prints one as a failure either. A line
+  whose id does not verify still fails. `show` prints the link in a
+  `redacted from` row.
+- **Added: ATIF from a redacted session links to its original (#235).**
+  The root `extra.agentsession` of a document `ToATIF` builds from a
+  redacted session carries `redacted: true` and `redacted_from`, the
+  header's object with every member it holds, extras included, so a
+  published document names its original as the session file does.
+  Nothing in `export` checks a `request_hash`, so a redacted session
+  exports, through `Trajectories`, `ToATIF`, `Items` and the CLI's
+  `export`, like any other.
 
 ## v0.0.26 - 2026-10-15
 
