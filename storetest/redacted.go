@@ -3,6 +3,7 @@ package storetest
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -179,13 +180,20 @@ func sameRedacted(t *testing.T, st agentsession.Store, want *agentsession.Sessio
 	}
 }
 
-// taker is the hook a case takes a session in whole by: the store's
-// Import, else Place, else nil.
-func taker(opts Options) func(t *testing.T, s agentsession.Store, file []byte) error {
+// importer is how a case takes a session file into st whole: the
+// Import hook when the store gives one, else the store's own
+// [agentsession.Importer], else nil.
+func importer(opts Options, st agentsession.Store) func(t *testing.T, s agentsession.Store, file []byte) error {
 	if opts.Import != nil {
 		return opts.Import
 	}
-	return opts.Place
+	if im, ok := st.(agentsession.Importer); ok {
+		return func(t *testing.T, s agentsession.Store, file []byte) error {
+			_, err := im.Import(context.Background(), bytes.NewReader(file), true)
+			return err
+		}
+	}
+	return nil
 }
 
 // hooks skips a case that needs a hook the store lacks.
@@ -206,7 +214,8 @@ func wantErr(t *testing.T, what string, err, want error) {
 }
 
 // redactedCreate: no store creates a session whose header carries
-// redacted, linked or not, and nothing is left of the attempt.
+// redacted, linked or not, or one carrying redacted_from without it,
+// and nothing is left of the attempt.
 func redactedCreate(t *testing.T, opts Options) {
 	ctx := context.Background()
 	st := opts.New(t)
@@ -218,6 +227,10 @@ func redactedCreate(t *testing.T, opts Options) {
 		_, err := st.Create(ctx, h)
 		wantErr(t, "Create of a redacted header "+h.ID, err, agentsession.ErrRedacted)
 	}
+	_, err := st.Create(ctx, agentsession.Header{ID: "r-unmarked", RedactedFrom: &agentsession.RedactedFrom{Session: "o", Entries: 1}})
+	wantErr(t, "Create of a redacted_from without redacted", err, agentsession.ErrRedactedFrom)
+	_, err = st.Create(ctx, agentsession.Header{ID: "r-unmarked-extra", Extra: map[string]json.RawMessage{"redacted_from": json.RawMessage(`{"entries":1,"session":"o"}`)}})
+	wantErr(t, "Create of a redacted_from without redacted, held in Extra", err, agentsession.ErrRedactedFrom)
 	if n := countSessions(t, st); n != 0 {
 		t.Errorf("the store holds %d sessions after the refusals", n)
 	}
@@ -226,9 +239,9 @@ func redactedCreate(t *testing.T, opts Options) {
 // redactedImport: a redacted file taken whole is held as written and
 // verifies, beside the original.
 func redactedImport(t *testing.T, opts Options) {
-	take := taker(opts)
-	hooks(t, take != nil)
 	st := opts.New(t)
+	take := importer(opts, st)
+	hooks(t, take != nil)
 	orig := original(t, "orig-import")
 	red, file := redaction(t, orig, "test.secret@1", true)
 	if err := take(t, st, fileOf(t, orig)); err != nil {
@@ -243,10 +256,10 @@ func redactedImport(t *testing.T, opts Options) {
 // redactedAppend: a held redacted session takes no append, an entry or
 // a leaf label, and is as it was, read again and after a reopen.
 func redactedAppend(t *testing.T, opts Options) {
-	take := taker(opts)
-	hooks(t, take != nil)
 	ctx := context.Background()
 	st := opts.New(t)
+	take := importer(opts, st)
+	hooks(t, take != nil)
 	red, file := redaction(t, original(t, "orig-append"), "test.secret@1", true)
 	if err := take(t, st, file); err != nil {
 		t.Fatal(err)
@@ -326,9 +339,10 @@ func redactedOnly(t *testing.T, opts Options) {
 	wantErr(t, "Create of a redacted header", err, agentsession.ErrRedacted)
 
 	held := false
-	if opts.Import != nil {
-		wantErr(t, "import of an original", opts.Import(t, st, origFile), agentsession.ErrNotRedacted)
-		if err := opts.Import(t, st, file); err != nil {
+	take := importer(opts, st)
+	if take != nil {
+		wantErr(t, "import of an original", take(t, st, origFile), agentsession.ErrNotRedacted)
+		if err := take(t, st, file); err != nil {
 			t.Fatalf("import of a redacted session: %v", err)
 		}
 		held = true
@@ -354,8 +368,8 @@ func redactedOnly(t *testing.T, opts Options) {
 			t.Fatal(err)
 		}
 		forkFile := fileOf(t, fork)
-		if opts.Import != nil {
-			wantErr(t, "import of a fork of a redacted session", opts.Import(t, st, forkFile), agentsession.ErrNotRedacted)
+		if take != nil {
+			wantErr(t, "import of a fork of a redacted session", take(t, st, forkFile), agentsession.ErrNotRedacted)
 		}
 		if opts.Push != nil {
 			wantErr(t, "push of a fork of a redacted session", opts.Push(t, st, forkFile), agentsession.ErrNotRedacted)
@@ -437,10 +451,10 @@ func redactedOriginal(t *testing.T, opts Options) {
 // redactedRedactions: Redactions lists the redacted sessions the store
 // holds that name the original, and no other.
 func redactedRedactions(t *testing.T, opts Options) {
-	take := taker(opts)
-	hooks(t, take != nil)
 	ctx := context.Background()
 	st := opts.New(t)
+	take := importer(opts, st)
+	hooks(t, take != nil)
 	orig, other := original(t, "orig-listed"), original(t, "orig-other")
 	if err := take(t, st, fileOf(t, orig)); err != nil {
 		t.Fatal(err)

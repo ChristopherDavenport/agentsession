@@ -54,10 +54,6 @@ func TestConformance(t *testing.T) {
 			t.Cleanup(func() { st.Close() })
 			return st
 		},
-		Import: func(t *testing.T, s agentsession.Store, file []byte) error {
-			_, err := s.(*Store).Import(context.Background(), bytes.NewReader(file), true)
-			return err
-		},
 		Push: func(t *testing.T, s agentsession.Store, file []byte) error {
 			return pushFile(t, s.(*Store), file)
 		},
