@@ -233,6 +233,10 @@ A session is created with a header and optionally a base.
   took is harmless. A store never lowers it, and a fork's header names
   a format no earlier than that of the session whose own entries
   include its base, since its prefix was written under that one.
+- A store MUST refuse to create a session whose header carries
+  `redacted`, and MUST refuse an append to one, whoever the writer. A
+  redacted session (RFC 0001) is written whole, so it enters a store
+  whole, by import or push, as Redacted sessions says.
 
 A fork is a session created with a base. Nothing is copied: the fork's
 prefix is the origin's entries, stored once. The header's `base` says
@@ -712,6 +716,35 @@ once only as that content is. An item names a sidecar blob as RFC 0001
 says, by a `sidecar:` URL carrying the blob's hash, so a push's closure
 over media is computable: the blobs the pushed entries' items name.
 
+## Redacted sessions
+
+A store holds a redacted session (RFC 0001) beside its original, as a
+session of its own. Redacting is writing new sessions, and publishing
+is choosing which sessions leave: a redacted session moves to another
+store by push, or out by projection, as any session does. Its closure
+is its own entries, its prefix and the blobs its items name, and holds
+nothing of its original's but blobs the redaction kept, which are the
+same blobs.
+
+- A redacted session enters a store whole, by import or push, and is
+  never appended to, as the sessions section says.
+- A store MAY be set to hold only redacted sessions. Such a store MUST
+  refuse to create, import or receive by push a session whose header
+  does not carry `redacted`, a fork of a redacted session among them,
+  since a fork's own entries were not redacted. It is the store a
+  publisher pushes to, and it fails closed: an original sent to it by
+  mistake is refused, not published.
+- A store SHOULD answer which of the sessions it holds name a given
+  session in `redacted_from`, so that the holder of an original finds
+  what was made from it. Nothing is written into the original.
+- The ref `redacted/<profile>/<original id>` names the newest session
+  redacted from the original under that profile, as RFC 0001 derives
+  its ID, and a redactor moves it as it adds one. A publisher pushes
+  those refs and their targets.
+- Deleting an original deletes nothing a redacted session made from it
+  holds: a blob both name stays while the redacted session names it, as
+  deletion and retention says.
+
 ## Projection to JSONL
 
 `ToJSONL(session)` builds an RFC 0001 file:
@@ -761,10 +794,13 @@ is an entry like any other. Two refusals follow. The imported session
 keeps the header's `id`, and a store already holding a session with that
 ID MUST refuse the import. An import is committed before it is
 acknowledged. An importer MUST verify each line's hash and
-MUST refuse a file in which one fails, and MUST refuse a file whose
-header carries `redacted` whether or not its lines verify against
-themselves, which RFC 0001 requires they do: a redacted projection is a
-record to read, not one to hold.
+MUST refuse a file in which one fails. A file whose header carries
+`redacted` is imported as any other is: a redacted session is a session
+of its own, under an ID of its own, and RFC 0001 requires its lines to
+verify against themselves. Import is how one is created in a store. An
+importer MUST refuse a header carrying `redacted_from` without
+`redacted`, which RFC 0001 calls malformed. Earlier drafts refused every
+redacted file, from when redaction left a file that did not verify.
 
 ## Exchange between stores
 

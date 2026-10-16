@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.12
+Status: draft 0.13
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -200,7 +200,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.12","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.13","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -211,7 +211,7 @@ RFC 2119.
 |---|---|---|
 | `type` | MUST | the string `session` |
 | `format` | MUST | `agentsession/<major>.<minor>`; raised by a later writer, never lowered, as Versioning says |
-| `id` | MUST | globally unique; UUIDv7 RECOMMENDED. For a subsession, a UUIDv5 under the nil namespace over `<parent session id>/<call_id>` is RECOMMENDED, so a reader can compute the child's ID from the parent's `link` or `function_call` alone. A retry of the call is another session, derived the same way over `<parent session id>/<call_id>/<n>` for the n-th attempt after the first |
+| `id` | MUST | globally unique; UUIDv7 RECOMMENDED. For a subsession, a UUIDv5 under the nil namespace over `<parent session id>/<call_id>` is RECOMMENDED, so a reader can compute the child's ID from the parent's `link` or `function_call` alone. A retry of the call is another session, derived the same way over `<parent session id>/<call_id>/<n>` for the n-th attempt after the first. A redacted session's is new, and derived as Redaction says |
 | `created_at` | MUST | RFC 3339 |
 | `payload` | MUST | payload profile; `openresponses/<spec-date>` is the only profile this RFC defines |
 | `harness` | SHOULD | name and version of the writer |
@@ -221,7 +221,8 @@ RFC 2119.
 | `base` | MAY | hash of the entry this session continues from, never a `leaf` label, since the base is a fork's first leaf; `parent_session` names a session holding it, as provenance. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it, which is the `call_id` of the parent's `subsession` link naming this session. A session a `subsession` link names carries it and `parent_session` both, since the check `link` describes compares each; a subsession's header without one reads as disagreeing with the link |
 | `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
-| `redacted` | MAY | `true` when bodies were changed after they were written, as export redaction does. The redactor MUST recompute every content hash and `id` over the redacted bodies and rewrite `parent`, every entry-naming member — `parents` into this file, `target`, `first_kept`, `from`, `queued_from` — and last the header's `base`, once the prefix is hashed, to the IDs assigned earlier in the file, as migration does, leaving a reference into another session's file as it was since it still names the unredacted original; the file then walks and verifies against itself; its IDs are then not the original's and its `request_hash` values are the original's and no longer match. A reader MUST NOT report such a file's hashes as verifying the original |
+| `redacted` | MAY | `true` for a redacted session: one made from another, its original, by changing bodies after they were written, as Redaction says. Its hashes verify it and not the original, and a writer MUST NOT append to it |
+| `redacted_from` | MAY | for a redacted session, the session it was made from: `{"session":"<original id>","entries":<n>}`, n being how many of the original's entries, prefix included and in file order, it was made from. A redactor SHOULD write it, and it MUST NOT appear without `redacted` |
 
 Unknown header fields MUST be preserved by any tool that rewrites the
 file.
@@ -363,12 +364,11 @@ prefix, and a reader MUST refuse an `id` carrying another.
 
 A reader MUST verify each entry's `id` by computing its content hash and
 then its envelope hash, and MUST report a line that fails. It is
-corruption, not an extension, and a reader MUST NOT repair it. A file
-that has been redacted has had its hashes recomputed over the redacted
-bodies, as the header's `redacted` row requires, so it walks and
-verifies against itself and not against the original; such a file MUST
-say so in its header, and a reader MUST NOT report its hashes as
-verifying the original.
+corruption, not an extension, and a reader MUST NOT repair it. A
+redacted session has had its hashes recomputed over the redacted
+bodies, as Redaction requires, so it walks and verifies against itself
+and not against its original; its header says so, and a reader MUST NOT
+report its hashes as verifying the original.
 
 Appending an entry of either kind under the leaf makes it the leaf; an
 append elsewhere is a branch and the leaf does not move. A `leaf` label
@@ -1729,6 +1729,84 @@ is predict that the provider's cache will hit.
   A value the model is genuinely meant to act on is not this: that one
   is in the request on purpose, and pays its cost knowingly.
 
+## Redaction
+
+A redacted session is made from another session, its original, by
+changing bodies after they were written: a secret replaced, a home
+directory shortened, an image swapped for a placeholder. It is a session
+of its own. Its header carries `redacted: true`, an `id` of its own and
+`redacted_from`, which names the original. The original is unchanged.
+It is usually absent wherever the redacted session travels, but a holder
+of it can resolve the link, and that is where what is learned about a
+published copy finds its way back to.
+
+A redactor:
+
+- walks the original's entries in file order, prefix included, and
+  writes one entry for each, in that order, whether it changed it or
+  not. No entry is dropped, merged or added, so the n-th entry of the
+  redacted session is the n-th entry of the original, and a holder of
+  the original maps a redacted entry to the one it was made from by
+  position. A projection's synthetic leaf marker (RFC 0002) belongs to
+  the projection, not the session, and is neither redacted nor counted;
+- MAY change any string in a body, in a member it does not know and in
+  an extension entry's members as well, and MUST NOT change an entry's
+  type, an envelope member, a member that names an entry or a member
+  that holds a hash, other than by the rewriting below;
+- MUST recompute the `hash` of every instruction part whose text it
+  changed;
+- MUST keep media in its form: an inline item stays inline and a sidecar
+  item stays sidecar. A sidecar blob it replaces is stored under the
+  replacement's hash, and the item's `sidecar:` URL names that;
+- MUST recompute every content hash and `id` over the redacted bodies,
+  and rewrite `parent` and every entry-naming member to the IDs assigned
+  earlier in the file, as migration does — `parents` into this file,
+  `target`, `first_kept`, `from`, `queued_from`, `omit`'s `items` and
+  `instructions_omitted`'s `of` — and last the header's `base`, once the
+  prefix is hashed;
+- MUST leave a reference into another session as it was, since it names
+  that session's original entries, unless it holds that session's
+  redacted twin, made by the same redaction. Then it rewrites the
+  reference to the twin: `parent_session`, a `parents` entry, a `link`'s
+  `session` and the entry its `target` names there. A redaction of a
+  whole store holds a twin of every session in it, and so re-points every
+  reference that stays inside the store.
+
+The redacted session then walks and verifies against itself. Its
+`request_hash` values are the original's and no longer match the
+requests it rebuilds. A reader MUST NOT report its hashes as verifying
+the original, and SHOULD NOT report a `request_hash` of a redacted
+session that does not match as a fault.
+
+A redactor writes a redacted session whole, and a writer MUST NOT
+append to one afterwards, since an entry appended after the redaction
+was not redacted and `redacted` says every body was.
+Continuing from a redacted session is a fork: a session of its own,
+whose prefix is the redacted session's entries and whose header does not
+carry `redacted`.
+
+The redacted session's `id` is new, since its entries are not the
+original's and a store or dataset may hold both. A redactor applying one
+named set of rules — its profile — to many sessions SHOULD derive each
+redacted session's ID as a UUIDv5 under the nil namespace over
+`redacted/<original id>/<n>/<profile>`, n being `redacted_from`'s
+`entries`, as a subsession's is derived; the leading `redacted` keeps
+the name apart from a subsession's, which starts with a session ID. The
+same redaction of the same entries then
+gives the same session, and repeating a redaction over a store adds only
+the sessions that grew. Two sets of rules under one profile give two
+different sessions one ID, which a store refuses; a profile names one
+set.
+
+Each original hash a redacted session keeps — a `request_hash`, a
+reference into a session not redacted alongside it — lets anyone who can
+guess a redacted value confirm the guess, by putting it back and
+recomputing the hash. That matters for a value with few possibilities:
+a username, a home directory, an email address. It does not matter for
+a random key. `redacted_from` carries a count rather than the hash of
+the original's last entry for this reason. Redaction alone does not
+hide a value that can be guessed.
+
 ## Projections
 
 ### ATIF
@@ -1851,13 +1929,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.12 reads a 0.5 to 0.11 file
-as it stands, since 0.6 to 0.12 add optional members, elements and
+it begins at 1.0. A reader of 0.13 reads a 0.5 to 0.12 file
+as it stands, since 0.6 to 0.13 add optional members, elements and
 relations, 0.10 and 0.11 relax one rule each, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.12 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.13 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -1953,6 +2031,40 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.12
+
+One header member and the rules for a redacted session, which were the
+`redacted` row's. A 0.12 file is a 0.13 file that holds no
+`redacted_from`. No hash changes.
+
+- A redacted session is a session of its own (Redaction): an `id` of its
+  own, `redacted_from` naming its original and how many of the
+  original's entries it was made from, and one entry for each of those
+  in file order. A 0.12 redacted file kept the original's `id` under
+  different entry IDs, so a store or dataset holding both held two
+  sessions under one ID, and nothing linked the copy to what it was made
+  from.
+- A redactor that holds the redacted twin of a session another
+  references rewrites the reference to the twin. Left as it was, the
+  reference named entries a set redacted together does not hold, by
+  hashes that confirm a guessed value.
+- A writer MUST NOT append to a redacted session.
+- A redacted session's ID SHOULD be derived from its original's, the
+  count and the redaction's profile, so a redaction repeated over a
+  store is a no-op for what did not change.
+- The members a redactor rewrites include `omit`'s `items` and
+  `instructions_omitted`'s `of`, and an instruction part's `hash` is
+  recomputed when its text changes. Both followed from "every
+  entry-naming member" and from the part hash's definition; the 0.12 row
+  listed neither.
+- What an original hash kept in a redacted session lets a reader confirm
+  is stated, and is why `redacted_from` carries a count.
+
+A writer of 0.13 raises every file it appends to, as Versioning says, so
+every reader of 0.12 refuses those files until it is upgraded. A 0.12
+redacted file is read as it stands: a redacted session without
+`redacted_from`, whose `id` may be its original's.
 
 ## Changes since 0.11
 
