@@ -1766,6 +1766,10 @@ A redactor:
   prefix is hashed;
 - MUST recompute the `hash` of every instruction part whose text it
   changed;
+- MUST treat a `normalised` record as holding the member it describes:
+  `was` is that member's original source text and `raw` its original
+  bytes, so what the redactor removes from the member it removes from
+  the record too, decoding `raw` to find it;
 - MUST keep media in its form: an inline item stays inline and a sidecar
   item stays sidecar. A sidecar blob it replaces is stored under the
   replacement's hash, and the item's `sidecar:` URL names that;
