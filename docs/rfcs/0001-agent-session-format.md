@@ -1901,7 +1901,10 @@ One ATIF document per root-to-leaf path. `session_id` is the header ID;
 its original as the session file does, and a step made from a redacted
 entry carries that entry's `redacted` under `agentsession` in the
 step's `extra`, so a reader tells redacted steps from steps appended
-natively. The mapping is given in the
+natively. A step made from several entries — an agent step, from its
+items, its response and the outputs observed in it — carries under
+`redacted_entries` there an object from each redacted entry's `id` to
+its `redacted`. The mapping is given in the
 accompanying session plan and is normative for the Open Responses
 profile: user and system items to steps, one `response` with its items
 to one agent step with `tool_calls`, `reasoning_content` and `metrics`,
@@ -2163,7 +2166,10 @@ A writer of 0.13 raises every file it appends to, as Versioning says, so
 every reader of 0.12 refuses those files until it is upgraded. A 0.12
 redacted file is read as it stands: a redacted session without
 `redacted_from` whose entries carry no `redacted`, and whose `id` may be
-its original's.
+its original's. Every entry of it is the redaction's, since 0.12 marked
+none and forbade appending to one, so a reader treats each as redacted
+where the difference matters, as for a `request_hash` that does not
+match.
 
 In a file whose header names a minor before 0.13, `redacted_from` in
 the header and `redacted` on an entry are members the reader does not
