@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 
@@ -40,10 +41,28 @@ func verify(args []string, stdout, stderr io.Writer) error {
 		}
 		return errFailed
 	}
-	if migrated, _ := s.Migrated(); migrated {
+	// A redacted file's ids are hashes of what was written to it, by the
+	// redactor or natively after, so they verify it and never its
+	// original, which the line has to say rather than leave a reader to
+	// assume (RFC 0001, Redaction).
+	redacted := s.Header().Redacted
+	switch migrated, _ := s.Migrated(); {
+	case migrated:
 		fmt.Fprintf(stdout, "%d entries read, migrated from an earlier format: ids assigned, not checked\n", s.Len())
-	} else {
+	case redacted:
+		fmt.Fprintf(stdout, "%d entries read, each id checked against its hash: the ids verify this redacted file, not its original\n", s.Len())
+	default:
 		fmt.Fprintf(stdout, "%d entries read, each id checked against its hash\n", s.Len())
+	}
+	if redacted {
+		fmt.Fprintf(stdout, "redacted_from %s\n", describeRedactedFrom(s.Header()))
+	}
+	if n, native := countRedacted(s, declared); redacted || n > 0 {
+		line := fmt.Sprintf("%d redacted entries, %d native", n, native)
+		if legacyRedacted(s, declared) {
+			line += ": a redacted file before 0.13 marks no entry and took no appends, so every entry is the redaction's"
+		}
+		fmt.Fprintln(stdout, line)
 	}
 	problem, notes := checkSession(s, declared, "", stdout, true)
 	// A link's target is found through the store the session is in; a
@@ -60,6 +79,61 @@ func verify(args []string, stdout, stderr io.Writer) error {
 		return errFailed
 	}
 	return nil
+}
+
+// describeRedactedFrom describes a redacted session's link to its
+// original, from its header's redacted_from: the original's session,
+// the profile when present, and the names of the members a redaction
+// recorded about itself. A redacted file without the member, as 0.12
+// wrote one, names no original, and one whose member does not read as
+// the link, kept as written, names none either.
+func describeRedactedFrom(h agentsession.Header) string {
+	from := h.RedactedFrom
+	if from == nil {
+		if raw, ok := h.Extra["redacted_from"]; ok {
+			return fmt.Sprintf("%s, kept as written and not read as a link: this file names no original", raw)
+		}
+		return "absent: this file names no original"
+	}
+	text := "session " + from.Session
+	if from.Profile != "" {
+		text += ", profile " + from.Profile
+	}
+	if len(from.Extra) > 0 {
+		text += ", also " + strings.Join(slices.Sorted(maps.Keys(from.Extra)), ", ")
+	}
+	return text
+}
+
+// legacyRedacted reports whether s is a redacted file of a minor before
+// 0.13, as its header declared: such a file marks no entry redacted,
+// since the member is not defined there, and its writer could not
+// append to it, so every entry it holds is the redaction's.
+func legacyRedacted(s *agentsession.Session, declared string) bool {
+	major, minor, err := agentsession.ParseFormat(declared)
+	return s.Header().Redacted && err == nil && major == 0 && minor < 13
+}
+
+// isRedacted reports whether e is an entry a redaction made: one that
+// carries redacted, or any entry of a redacted file before 0.13; see
+// legacyRedacted. A request hash it kept is the original's.
+func isRedacted(e agentsession.Entry, legacy bool) bool {
+	_, ok := agentsession.RedactedOf(e)
+	return ok || legacy
+}
+
+// countRedacted counts the entries of s a redaction made and the ones
+// appended natively, as isRedacted tells them apart.
+func countRedacted(s *agentsession.Session, declared string) (redacted, native int) {
+	legacy := legacyRedacted(s, declared)
+	for _, e := range s.Entries() {
+		if isRedacted(e, legacy) {
+			redacted++
+		} else {
+			native++
+		}
+	}
+	return redacted, native
 }
 
 // earlyNote follows a records error a 0.9 file of an early writer may
@@ -91,16 +165,31 @@ const earlierNote = "note: this file declares a minor before 0.9, which did not 
 // omitted list by an of the path cannot resolve fails nothing, since
 // the format keeps such an element as written and the list reaches no
 // request, but it names the entry, so its note is printed under prefix
-// rather than returned.
+// rather than returned. A request hash a redacted entry kept that does
+// not match fails nothing: it is the original's, as the format allows,
+// and it is counted apart, as expected. A native entry's is held to the
+// rule in a redacted session as in any other.
 func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Writer, all bool) (problem bool, notes []string) {
-	var checked, unhashed, failed int
+	var checked, unhashed, differ, failed int
+	legacy := legacyRedacted(s, declared)
+	redacted, _ := countRedacted(s, declared)
+	marked := s.Header().Redacted || redacted > 0
 	for _, e := range s.Entries() {
 		r, ok := e.(*agentsession.ResponseEntry)
 		if !ok {
 			continue
 		}
 		id := prefix + shortID(r.ID)
-		switch err := s.Verify(r.ID); {
+		err := s.Verify(r.ID)
+		switch {
+		case isRedacted(r, legacy) && (errors.Is(err, agentsession.ErrHashMismatch) || errors.Is(err, agentsession.ErrOmitDivergence)):
+			// A redacted entry's request_hash is its original's, so it
+			// need not match the request the redacted bodies rebuild,
+			// and the format says not to call that a fault.
+			differ++
+			if all {
+				fmt.Fprintf(stdout, "%s  differs from recorded %s, as a redacted entry's request_hash may\n", id, r.RequestHash)
+			}
 		case errors.Is(err, agentsession.ErrNoHash):
 			unhashed++
 			if all {
@@ -123,7 +212,11 @@ func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Wr
 		}
 	}
 	if all {
-		fmt.Fprintf(stdout, "%d verified, %d without hash, %d failed\n", checked, unhashed, failed)
+		if marked {
+			fmt.Fprintf(stdout, "%d verified, %d without hash, %d redacted differ as expected, %d failed\n", checked, unhashed, differ, failed)
+		} else {
+			fmt.Fprintf(stdout, "%d verified, %d without hash, %d failed\n", checked, unhashed, failed)
+		}
 	}
 	problem = failed > 0
 	noted := map[string]bool{}

@@ -49,6 +49,19 @@ type Options struct {
 // Root extra members the exporter writes.
 const (
 	ExtraOpenResponses = "openresponses"
+	// ExtraAgentSession carries, in the root extra, the session's facts:
+	// its format and the trajectory's leaf, and when present its cwd,
+	// parent_session, spawned_by, records, name, labels, main, and for
+	// a redacted session redacted and redacted_from, the latter the
+	// header's object with every member it holds. In a step's extra it
+	// carries the entry_id the step was built from and, when that entry
+	// is redacted, its redacted member as the entry writes it, under
+	// redacted. A step built from more than one entry, an agent step from
+	// its items, its response and the outputs observed in it, also
+	// carries redacted_entries when any of them is redacted: an object
+	// from the ID of each redacted one, entry_id's among them, to its
+	// redacted member. A step built from native entries alone carries
+	// neither.
 	ExtraAgentSession  = "agentsession"
 	ExtraEnvironment   = "environment"
 	ExtraOutcome       = "outcome"
@@ -89,7 +102,7 @@ const (
 // so [Items] can rebuild the item list; the mapping is documented in
 // docs/plans/session-layer.md.
 func ToATIF(t Trajectory, opts Options) (*atif.Trajectory, error) {
-	b := &builder{t: t, opts: opts, stepByEntry: map[string]int{}, callStep: map[string]int{},
+	b := &builder{t: t, opts: opts, stepByEntry: map[string]int{}, stepFrom: map[int][]agentsession.Entry{}, callStep: map[string]int{},
 		callFrom: map[string][]agentsession.EntryRef{}, omitted: map[string]string{}}
 	for _, o := range t.Context.OmittedItems {
 		b.omitted[o.Entry.ID] = o.Reason
@@ -132,9 +145,10 @@ type builder struct {
 	settings     agentsession.Settings
 	pending      map[string]any // extra members for the next step
 	group        *agentGroup
-	stepByEntry  map[string]int // entry ID -> step index (0-based)
-	callStep     map[string]int // call ID -> step index
-	copied       bool           // inside the kept window after a compaction
+	stepByEntry  map[string]int               // entry ID -> step index (0-based)
+	stepFrom     map[int][]agentsession.Entry // step index -> the entries it was built from
+	callStep     map[string]int               // call ID -> step index
+	copied       bool                         // inside the kept window after a compaction
 	compactionID string
 	// window is the settings in force inside the kept window after a
 	// compaction, which the checkpoint does not describe: the
@@ -461,6 +475,7 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 				Extra:        b.itemExtra(e),
 			})
 			b.stepByEntry[e.ID] = idx
+			b.stepFrom[idx] = append(b.stepFrom[idx], e)
 			return nil
 		}
 		// An output without its call in this path: a system step so the
@@ -722,6 +737,9 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 	idx := b.addStep(step, anchor)
 	for _, e := range g.entries {
 		b.stepByEntry[e.ID] = idx
+		if e != anchor {
+			b.stepFrom[idx] = append(b.stepFrom[idx], e)
+		}
 		if fc, ok := e.Item.(*openresponses.FunctionCall); ok {
 			b.callStep[fc.CallID] = idx
 		}
@@ -782,6 +800,7 @@ func (b *builder) addStep(step atif.Step, e agentsession.Entry) int {
 	b.doc.Steps = append(b.doc.Steps, step)
 	idx := len(b.doc.Steps) - 1
 	b.stepByEntry[e.Base().ID] = idx
+	b.stepFrom[idx] = append(b.stepFrom[idx], e)
 	return idx
 }
 
@@ -928,6 +947,7 @@ func (b *builder) outcome(o *agentsession.OutcomeEntry) {
 // finish writes the root extras, final metrics, subagent links and
 // anything still pending.
 func (b *builder) finish() {
+	b.markRedacted()
 	root := b.rootExtra()
 	root[ExtraOpenResponses] = map[string]any{"payload": b.t.Header.Payload}
 	as := map[string]any{"format": b.t.Header.Format, "leaf": b.t.LeafID}
@@ -942,6 +962,12 @@ func (b *builder) finish() {
 	}
 	if len(b.t.Header.Records) > 0 {
 		as["records"] = b.t.Header.Records
+	}
+	if b.t.Header.Redacted {
+		as["redacted"] = true
+	}
+	if from := b.t.Header.RedactedFrom; from != nil {
+		as["redacted_from"] = redactedFrom(from)
 	}
 	if b.t.Name != "" {
 		as["name"] = b.t.Name
@@ -997,6 +1023,58 @@ func (b *builder) finish() {
 			note = b.doc.Notes + "\n" + note
 		}
 		b.doc.Notes = note
+	}
+}
+
+// redactedFrom is a redacted session's redacted_from as the root
+// extra carries it: the object the header holds, the original's
+// session and the profile with the members a redaction recorded about
+// itself as written, so a document published from a redacted session
+// links back to its original as the session file does. A typed member
+// wins over an Extra one of the same name, which the header could not
+// have written either.
+func redactedFrom(from *agentsession.RedactedFrom) map[string]any {
+	out := make(map[string]any, len(from.Extra)+2)
+	for k, v := range from.Extra {
+		out[k] = v
+	}
+	out["session"] = from.Session
+	if from.Profile != "" {
+		out["profile"] = from.Profile
+	}
+	return out
+}
+
+// markRedacted records, under each step's extra.agentsession, the
+// redacted member of the entries it was built from, written as each
+// entry writes it, so a reader tells the steps a redaction made from
+// the steps appended natively: "redacted" is that of the entry
+// entry_id names, and a step built from more than one entry, an agent
+// step from its items, its response and the outputs observed in it,
+// carries "redacted_entries", an object from the ID of each of those
+// entries that is redacted, entry_id's among them, to its member. A
+// step built from native entries alone carries neither.
+func (b *builder) markRedacted() {
+	for idx, from := range b.stepFrom {
+		as, ok := b.doc.Steps[idx].Extra[ExtraAgentSession].(map[string]any)
+		if !ok {
+			continue
+		}
+		each := map[string]any{}
+		for _, e := range from {
+			spans, ok := agentsession.RedactedOf(e)
+			if !ok {
+				continue
+			}
+			raw, _ := json.Marshal(spans) // a Span always encodes
+			each[e.Base().ID] = json.RawMessage(raw)
+		}
+		if v, ok := each[as["entry_id"].(string)]; ok {
+			as["redacted"] = v
+		}
+		if len(from) > 1 && len(each) > 0 {
+			as["redacted_entries"] = each
+		}
 	}
 }
 
