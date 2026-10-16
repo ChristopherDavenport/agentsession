@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -27,17 +28,40 @@ var ErrRedacted = errors.New("agentsession: a redacted session is written whole 
 var ErrNotRedacted = errors.New("agentsession: not a redacted session")
 
 // CheckCreate is the refusal RFC 0002 makes of a create: [ErrRedacted]
-// for a header that carries redacted, which no store creates, and, in a
-// store that holds only redacted sessions, [ErrNotRedacted] for every
-// other. A store calls it before it creates anything; nil means it may.
+// for a header that carries redacted, which no store creates,
+// [ErrRedactedFrom] for one carrying redacted_from without it, which
+// RFC 0001 calls malformed, and, in a store that holds only redacted
+// sessions, [ErrNotRedacted] for every other. A store calls it before
+// it creates anything; nil means it may.
 func CheckCreate(h Header, redactedOnly bool) error {
 	switch {
 	case h.Redacted:
 		return fmt.Errorf("%w: create %s", ErrRedacted, h.ID)
+	case h.RedactedFrom != nil || unmarkedRedactedFrom(h):
+		return fmt.Errorf("%w: create %s: on a session that is not redacted", ErrRedactedFrom, h.ID)
 	case redactedOnly:
 		return fmt.Errorf("%w: create %s in a store that holds only redacted sessions", ErrNotRedacted, h.ID)
 	}
 	return nil
+}
+
+// unmarkedRedactedFrom reports whether a header holds in Extra a
+// redacted_from that its file would decode as the object, which a
+// header decoded without a format holds there: a store writes a header
+// with no format at this package's, which defines the member, so Read
+// would then refuse the file. A member in another form is kept as
+// written, as a reader keeps it.
+func unmarkedRedactedFrom(h Header) bool {
+	raw, ok := h.Extra["redacted_from"]
+	format := h.Format
+	if format == "" {
+		format = Format
+	}
+	if !ok || !definesRedactedFrom(format) {
+		return false
+	}
+	var r RedactedFrom
+	return json.Unmarshal(raw, &r) == nil
 }
 
 // FileOrder returns a session's entries in file order, as RFC 0002

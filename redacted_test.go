@@ -299,6 +299,9 @@ func TestCheckCreate(t *testing.T) {
 		{Header{}, true, ErrNotRedacted},
 		{Header{Base: "x"}, true, ErrNotRedacted},
 		{Header{Redacted: true}, true, ErrRedacted},
+		{Header{RedactedFrom: &RedactedFrom{Session: "o"}}, false, ErrRedactedFrom},
+		{Header{Extra: map[string]json.RawMessage{"redacted_from": json.RawMessage(`{"entries":1,"session":"o"}`)}}, false, ErrRedactedFrom},
+		{Header{Format: "agentsession/0.12", Extra: map[string]json.RawMessage{"redacted_from": json.RawMessage(`"o"`)}}, false, nil},
 	} {
 		if err := CheckCreate(tt.h, tt.only); !errors.Is(err, tt.want) || (tt.want == nil) != (err == nil) {
 			t.Errorf("CheckCreate(%+v, %v) = %v, want %v", tt.h, tt.only, err, tt.want)

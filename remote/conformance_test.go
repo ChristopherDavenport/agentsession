@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 
@@ -23,6 +21,7 @@ import (
 type wire struct {
 	*remote.Client
 	backing agentsession.Store
+	url     string
 	once    sync.Once
 	down    func()
 }
@@ -42,7 +41,7 @@ func serve(t *testing.T, st agentsession.Store, closer func() error, opts ...rem
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &wire{Client: c, backing: st}
+	w := &wire{Client: c, backing: st, url: srv.URL}
 	w.down = func() {
 		c.Close()
 		srv.CloseClientConnections()
@@ -58,7 +57,8 @@ func serve(t *testing.T, st agentsession.Store, closer func() error, opts ...rem
 
 func TestConformanceOverMemory(t *testing.T) {
 	storetest.Run(t, storetest.Options{
-		New: func(t *testing.T) agentsession.Store { return serve(t, agentsession.NewMemoryStore(), nil) },
+		New:    func(t *testing.T) agentsession.Store { return serve(t, agentsession.NewMemoryStore(), nil) },
+		Import: importBehind,
 		RedactedOnly: func(t *testing.T) agentsession.Store {
 			return serve(t, agentsession.NewMemoryStore(agentsession.MemoryRedactedOnly()), nil)
 		},
@@ -84,9 +84,7 @@ func TestConformanceOverJSONL(t *testing.T) {
 		ReadOnly: func(t *testing.T, s agentsession.Store) agentsession.Store {
 			return open(t, root(s), jsonl.WithReadOnly())
 		},
-		Place: func(t *testing.T, s agentsession.Store, file []byte) error {
-			return placeFile(root(s), file)
-		},
+		Import: importBehind,
 		RedactedOnly: func(t *testing.T) agentsession.Store {
 			return open(t, t.TempDir(), jsonl.WithRedactedOnly())
 		},
@@ -112,12 +110,7 @@ func TestConformanceOverCAS(t *testing.T) {
 		ReadOnly: func(t *testing.T, s agentsession.Store) agentsession.Store {
 			return open(t, root(s), cas.WithReadOnly())
 		},
-		// The server has no import: a session file reaches the store
-		// behind it, as the record, and over the wire only by push.
-		Import: func(t *testing.T, s agentsession.Store, file []byte) error {
-			_, err := s.(*wire).backing.(*cas.Store).Import(context.Background(), bytes.NewReader(file), true)
-			return err
-		},
+		Import: importBehind,
 		Push: func(t *testing.T, s agentsession.Store, file []byte) error {
 			return pushFile(t, s.(*wire).Client, file)
 		},
@@ -127,19 +120,12 @@ func TestConformanceOverCAS(t *testing.T) {
 	})
 }
 
-// placeFile writes a session file under a jsonl store's root where the
-// store finds it, as a redactor writing a redacted session whole does.
-func placeFile(root string, file []byte) error {
-	s, err := agentsession.Read(bytes.NewReader(file))
-	if err != nil {
-		return err
-	}
-	h := s.Header()
-	dir := filepath.Join(root, jsonl.ProjectKey(h.CWD))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, h.CreatedAt.UTC().Format("2006-01-02T15-04-05.000Z")+"_"+h.ID+".jsonl"), file, 0o600)
+// importBehind imports a session file into the store behind the
+// server, as the record: the server has no import, so a session file
+// reaches it over the wire only by push.
+func importBehind(t *testing.T, s agentsession.Store, file []byte) error {
+	_, err := s.(*wire).backing.(agentsession.Importer).Import(context.Background(), bytes.NewReader(file), true)
+	return err
 }
 
 // pushFile pushes the session file holds to the server c reaches, from

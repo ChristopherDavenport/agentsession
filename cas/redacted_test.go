@@ -166,3 +166,43 @@ func TestFetchRedacted(t *testing.T) {
 		t.Errorf("a push of an original into a redacted-only store: %v, want ErrNotRedacted", err)
 	}
 }
+
+// TestExchangeValidatesHeader: a header that arrives by push or fetch
+// is held to the rules import holds a file's to, so a redacted_from
+// without redacted, or naming the session itself, is refused and lands
+// nothing.
+func TestExchangeValidatesHeader(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	s := agentsession.New(agentsession.Header{ID: "x"})
+	if _, err := s.Append(agentsession.NewItemEntry(openresponses.UserText("hi"))); err != nil {
+		t.Fatal(err)
+	}
+	for name, h := range map[string]agentsession.Header{
+		"redacted_from without redacted": func() agentsession.Header {
+			h := s.Header()
+			h.RedactedFrom = &agentsession.RedactedFrom{Session: "o", Entries: 1}
+			return h
+		}(),
+		"redacted_from naming itself": func() agentsession.Header {
+			h := s.Header()
+			h.Redacted = true
+			h.RedactedFrom = &agentsession.RedactedFrom{Session: "x", Entries: 1}
+			return h
+		}(),
+	} {
+		c := Closure{Header: h, Own: s.Entries(), Head: s.Leaf()}
+		for _, o := range []ReceiveOptions{{}, {Fetch: true}} {
+			if _, err := st.Receive(ctx, c, o); !errors.Is(err, agentsession.ErrRedactedFrom) {
+				t.Errorf("%s (fetch %v): %v, want ErrRedactedFrom", name, o.Fetch, err)
+			}
+		}
+	}
+	if _, err := st.Read(ctx, "x"); !errors.Is(err, agentsession.ErrNoSession) {
+		t.Errorf("a refused exchange left the session: %v", err)
+	}
+}

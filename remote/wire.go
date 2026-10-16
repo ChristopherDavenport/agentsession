@@ -240,6 +240,9 @@ var reasons = map[string]error{
 	"reason_mismatch":       agentsession.ErrReasonMismatch,
 	"link_mismatch":         agentsession.ErrLinkMismatch,
 	"bad_normalisation":     agentsession.ErrBadNormalisation,
+	// A header's: a redacted_from without redacted, or naming the
+	// session itself, in a pushed header.
+	"redacted_from": agentsession.ErrRedactedFrom,
 }
 
 // Problem is an error that crossed the wire, as RFC 9457's problem

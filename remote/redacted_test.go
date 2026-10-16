@@ -2,8 +2,10 @@ package remote_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -90,5 +92,40 @@ func TestFetchIntoRedactedOnly(t *testing.T) {
 	defer local.Close()
 	if _, err := remote.Fetch(ctx, local, w.Client, "o"); !errors.Is(err, agentsession.ErrNotRedacted) {
 		t.Errorf("Fetch of an original: %v, want ErrNotRedacted", err)
+	}
+}
+
+// TestPushValidatesHeader: a pushed header is held to the rules an
+// import holds a file's to, before any object is looked for: a
+// redacted_from without redacted is bad_entry with the reason
+// redacted_from, which matches ErrRedactedFrom on the client, and
+// nothing lands.
+func TestPushValidatesHeader(t *testing.T) {
+	backing, err := cas.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := serve(t, backing, backing.Close)
+	h := agentsession.New(agentsession.Header{ID: "x"}).Header()
+	h.RedactedFrom = &agentsession.RedactedFrom{Session: "o", Entries: 0}
+	hdr, err := json.Marshal(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"header":` + string(hdr) + `,"entries":[],"prefix":[],"head":{"expected":null,"to":null,"force":false},"mark":"mirror","refs":[]}`
+	resp, err := http.Post(w.url+"/v1/sessions/x/push", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var p remote.Problem
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusUnprocessableEntity || p.Code != remote.CodeBadEntry || !errors.Is(&p, agentsession.ErrRedactedFrom) {
+		t.Errorf("push of a malformed header: %d %+v, want 422 bad_entry matching ErrRedactedFrom", resp.StatusCode, p)
+	}
+	if _, err := backing.Read(context.Background(), "x"); !errors.Is(err, agentsession.ErrNoSession) {
+		t.Errorf("the refused push left the session: %v", err)
 	}
 }

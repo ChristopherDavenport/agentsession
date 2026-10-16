@@ -420,6 +420,12 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if laterFormat(b.header.Format, agentsession.Format) {
 		return Exchange{}, fmt.Errorf("%w: %s is later than this store's %s", agentsession.ErrUnsupportedFormat, b.header.Format, agentsession.Format)
 	}
+	// The header is held to the rules import holds a file's to: a
+	// redacted_from without redacted, or naming the session itself, is
+	// refused, whichever store sent it.
+	if err := b.header.Validate(); err != nil {
+		return Exchange{}, fmt.Errorf("cas: exchange: %w", err)
+	}
 	// A store holding only redacted sessions receives no other, held or
 	// not; placeSession refuses one again under the sweep's lock.
 	if err := s.refuseOriginal(b.header); err != nil {
