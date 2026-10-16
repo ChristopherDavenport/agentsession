@@ -410,6 +410,20 @@ func descends(entries map[string]agentsession.Entry, head, anc string) bool {
 	return false
 }
 
+// gateBundle reads the bundle's prefix and own entries under its
+// header's format, as agentsession.GateEntry has it. It changes them in
+// place, which leaves their bytes, and so their hashes, as they were,
+// and changes nothing in an entry read under that header already, as a
+// bundle a store reads with agentsession.Read is.
+func gateBundle(b *bundle) {
+	for _, e := range b.prefix {
+		agentsession.GateEntry(b.header.Format, e)
+	}
+	for _, e := range b.own {
+		agentsession.GateEntry(b.header.Format, e)
+	}
+}
+
 // receive admits a bundle.
 func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Exchange, error) {
 	if err := s.writable(); err != nil {
@@ -421,6 +435,11 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if laterFormat(b.header.Format, agentsession.Format) {
 		return Exchange{}, fmt.Errorf("%w: %s is later than this store's %s", agentsession.ErrUnsupportedFormat, b.header.Format, agentsession.Format)
 	}
+	// Every entry is read under the format the bundle's header names,
+	// as Read reads a file, before anything is checked: a closure its
+	// caller decoded line by line, as UnmarshalEntry does, would
+	// otherwise carry a redacted member from before 0.13 as a marker.
+	gateBundle(b)
 	// The header is held to the rules import holds a file's to: a
 	// redacted_from without redacted, or naming the session itself, is
 	// refused, whichever store sent it.

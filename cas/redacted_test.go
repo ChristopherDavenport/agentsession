@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/openresponses"
@@ -145,17 +146,22 @@ func TestRedactedOnlyPlacesNoOriginal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer before.Close()
+	second, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
 	setter, err := Open(root, WithRedactedOnly())
 	if err != nil {
 		t.Fatal(err)
 	}
 	setter.Close()
-	if before.redactedOnly.Load() {
+	if before.redactedOnly.Load() || second.redactedOnly.Load() {
 		t.Fatal("the store opened before the setting already knows it")
 	}
-	if err := before.placeSession(filepath.Join(root, "sessions", "o"), agentsession.Header{ID: "o"}, nil, "", MarkRecord); !errors.Is(err, agentsession.ErrNotRedacted) {
-		t.Errorf("placeSession of an original: %v, want ErrNotRedacted", err)
-	}
+	// admitNew first, so the setting it reads is read from the file and
+	// not the flag a refusal caches; placeSession in a second store that
+	// has not read it either.
 	s := agentsession.New(agentsession.Header{ID: "o2"})
 	id, err := s.Append(agentsession.NewItemEntry(openresponses.UserText("an original's secret")))
 	if err != nil {
@@ -167,6 +173,12 @@ func TestRedactedOnlyPlacesNoOriginal(t *testing.T) {
 	}
 	if held, err := before.HasObject(ctx, SpaceEntries, id); err != nil || held {
 		t.Errorf("the refused original's entry is in the store: %v, %v", held, err)
+	}
+	if before.redactedOnly.Load() != true {
+		t.Error("the refusal did not come from the setting")
+	}
+	if err := second.placeSession(filepath.Join(root, "sessions", "o"), agentsession.Header{ID: "o"}, nil, "", MarkRecord); !errors.Is(err, agentsession.ErrNotRedacted) {
+		t.Errorf("placeSession of an original: %v, want ErrNotRedacted", err)
 	}
 }
 
@@ -325,8 +337,19 @@ func TestRedactedOnlyAppend(t *testing.T) {
 		t.Errorf("a redacted append: %v", err)
 	}
 	native := agentsession.NewItemEntry(openresponses.UserText("native"))
+	// Its ID, as the session would give it, to look for its object.
+	probe, err := before.Read(ctx, "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := probe.Prepare(native); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := before.Append(ctx, "r", native); !errors.Is(err, agentsession.ErrNotRedacted) {
 		t.Errorf("a native append: %v, want ErrNotRedacted", err)
+	}
+	if held, err := before.HasObject(ctx, SpaceEntries, native.Base().ID); err != nil || held {
+		t.Errorf("the refused entry's object is in the store: %v, %v", held, err)
 	}
 	if s, err := before.Read(ctx, "r"); err != nil || s.Len() != 2 {
 		t.Errorf("after the refused append: %v", err)
@@ -388,5 +411,89 @@ func TestExchangeRaiseRefused(t *testing.T) {
 	}
 	if ok, err := st.HasObject(ctx, SpaceEntries, n.Base().ID); err != nil || ok {
 		t.Errorf("the refused entry's object is in the store: %v, %v", ok, err)
+	}
+}
+
+// TestReceiveGatesTheBundle: a closure its caller read under another
+// header, as a line read alone or under this package's format reads,
+// carries a redacted member as a marker where its own header names a
+// minor before 0.13, which does not define it: Receive reads it under
+// the closure's header, so a store holding only redacted entries
+// refuses it as not redacted, and nothing lands.
+func TestReceiveGatesTheBundle(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir(), WithRedactedOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	h := agentsession.Header{ID: "s", Redacted: true, CreatedAt: time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC), Payload: agentsession.Payload}
+	marked := agentsession.New(h)
+	e := agentsession.NewItemEntry(openresponses.UserText("[one]"))
+	if err := agentsession.SetRedacted(e, []agentsession.Span{{From: 1, To: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := marked.Commit(e); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := agentsession.Write(&buf, marked); err != nil {
+		t.Fatal(err)
+	}
+	read, err := agentsession.Read(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := read.Entries()
+	if _, ok := agentsession.RedactedOf(own[0]); !ok {
+		t.Fatal("the entry does not read as redacted under this package's format")
+	}
+	h.Format = "agentsession/0.12"
+	for _, o := range []ReceiveOptions{{}, {Fetch: true}} {
+		if _, err := st.Receive(ctx, Closure{Header: h, Own: own, Head: own[0].Base().ID}, o); !errors.Is(err, agentsession.ErrNotRedacted) {
+			t.Errorf("a 0.12 closure with a redacted member (fetch %v): %v, want ErrNotRedacted", o.Fetch, err)
+		}
+	}
+	if held, err := st.HasObject(ctx, SpaceEntries, own[0].Base().ID); err != nil || held {
+		t.Errorf("the refused entry's object is in the store: %v, %v", held, err)
+	}
+}
+
+// TestRedactedOnlyScanHoldsWriters: the setting is written under the
+// sweep's lock held exclusive, so a create in another store that passed
+// its first look at the setting waits for the scan and the write, and is
+// then refused, rather than land between them.
+func TestRedactedOnlyScanHoldsWriters(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	other, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	done := make(chan error, 1)
+	redactedOnlyScanned = func() {
+		go func() {
+			_, err := other.Create(ctx, agentsession.Header{ID: "racer"})
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			t.Errorf("a create finished while the setting was being written: %v", err)
+			done <- err
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	defer func() { redactedOnlyScanned = nil }()
+	st, err := Open(root, WithRedactedOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := <-done; !errors.Is(err, agentsession.ErrNotRedacted) {
+		t.Errorf("the create that waited: %v, want ErrNotRedacted", err)
+	}
+	if _, err := st.Read(ctx, "racer"); !errors.Is(err, agentsession.ErrNoSession) {
+		t.Errorf("the racer is in the store: %v", err)
 	}
 }

@@ -194,7 +194,11 @@ type ReceiveOptions struct {
 // with ErrHeadMoved, before anything lands for a session this store
 // lacked and after the entries land for one it holds, with the Exchange
 // saying what landed. With o.Fetch it admits c as Fetch admits a
-// session, as ReceiveOptions says. Either way it is held to Push's
+// session, as ReceiveOptions says. c's entries are read under c's
+// header's format first, as agentsession.GateEntry reads them, which it
+// applies to them in place, so a closure decoded line by line carries no
+// redacted member a minor before 0.13 does not define. Either way it is
+// held to Push's
 // rules for a redacted session and for a store set with
 // WithRedactedOnly.
 func (s *Store) Receive(ctx context.Context, c Closure, o ReceiveOptions) (Exchange, error) {
