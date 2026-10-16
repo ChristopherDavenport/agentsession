@@ -34,10 +34,18 @@ and policy the format has no reason to own.
 - **A redacted session is a session of its own** (#231): a new `id` and
   `redacted_from: {session, entries}`. Sharing the original's ID put two
   sessions under one ID in any store holding both.
-- **Entries correspond by position.** A redactor writes one entry for
-  each of the original's in file order, so a holder of the original maps
-  a redacted entry back without a per-entry member. This is how feedback
-  on a published copy reaches the original.
+- **The format fixes validity, not method.** Other kinds of redaction
+  will exist: leaving out a tool output or a branch, replacing an entry
+  with a placeholder of another type, removing `request_hash`. RFC 0001
+  requires only what makes a redacted session valid and linked, and a
+  redaction names itself in `redacted_from.profile` and says more in
+  namespaced members there, which `Header.RedactedFrom` preserves.
+- **Aligned redaction is one kind, declared.** One entry for each of
+  the original's in file order, only bodies changed, marked
+  `aligned: true`; a holder of the original then maps a redacted entry
+  back by position, which is how feedback on a published copy reaches
+  it. A redaction that is not aligned records its own mapping if it
+  wants one.
 - **A count, not a hash, pins the version.** Sessions are append-only,
   so `entries` pins what was redacted, and it gives no hash against
   which a guessed value can be confirmed. `request_hash` stays the
@@ -71,7 +79,8 @@ and policy the format has no reason to own.
    SECURITY.md.
 2. **Format 0.13** (#231, #232): `Format` to 0.13 and the fixtures'
    headers; `Header.RedactedFrom`, refused without `Redacted`;
-   `RedactedSessionID(original string, entries int, profile string)`
+   `profile`, `aligned` and namespaced members preserved;
+  `RedactedSessionID(original string, entries int, profile string)`
    beside `SubsessionID`. Check whether a pre-0.5 file can hold
    `omit.items` or `instructions_omitted[].of`, and if one can, add them
    to migration's switch (`codec.go:243`).
@@ -96,6 +105,9 @@ One release carries 2–6. Siblings move to 0.13 through the usual bump.
 
 ## Open questions
 
+- Helpers beyond aligned redaction (#236 covers rewriting bodies and
+  re-pointing references): leaving an entry out and re-parenting its
+  children is the obvious next one, once a redactor needs it.
 - Should `RewriteStrings` report what it changed (member paths, not
   values), so a publisher can review a redaction without the old
   values?
