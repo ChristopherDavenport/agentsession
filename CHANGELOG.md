@@ -85,6 +85,59 @@ versions may break the API.
   and a judged_by link's target in such a file are rewritten too, and
   one that names no earlier entry leaves the session unresolved, as RFC
   0001's versioning section asks. No fixture moves.
+- **Changed: stores hold redacted sessions, and never create or append
+  to one (RFC 0002, Redacted sessions, #233).** A redacted session is
+  written whole. `Session.Append` and `Prepare`, and so every store's
+  `Append` and `Write`, refuse an entry to a session whose header
+  carries `redacted` with `ErrRedacted`, whoever the writer; a
+  redactor builds one with `Commit` and `Write`, as before, and
+  continuing from one is a fork, which is not redacted. Every store's
+  `Create` refuses a redacted header with `ErrRedacted` (the jsonl and
+  sqlite stores created one until now). cas `Import` no longer refuses
+  a redacted projection: it verifies every line and holds it as any
+  other, which is how one enters a store whole, and a push or a fetch
+  that delivers one the receiver lacks is taken. An exchange that would
+  add entries to a held redacted session is refused with `ErrRedacted`
+  before anything lands; a repeat that adds nothing is not.
+  `CheckCreate` is the create refusal, for a store elsewhere.
+- **Added: a store set to hold only redacted sessions.** The store a
+  publisher pushes to, which fails closed: it refuses to create, import
+  or receive by push or fetch a session whose header does not carry
+  `redacted`, a fork of a redacted session among them, with
+  `ErrNotRedacted`. `cas.WithRedactedOnly` records the setting in the
+  store's layout file, so every later open obeys it, with the option or
+  without, every create, import and exchange reads it again, so a store
+  opened before it was set obeys it too, and a release that does not
+  know it refuses the store with `ErrLayout`; the open that sets it
+  refuses a store that already holds an original, and nothing unsets
+  it. `jsonl.WithRedactedOnly`, `sqlite.WithRedactedOnly` and
+  `MemoryRedactedOnly`, which `NewMemoryStore` now takes as a
+  `MemoryOption`, set the process's store only; those stores have no
+  import or exchange, so they refuse every create. A remote client
+  given `remote.WithRedactedOnly` refuses to create or push an original
+  before it sends anything.
+- **Added: `Original` and `Redactions`.** `Original(ctx, store, s)`
+  reads the original a redacted session names in `redacted_from` from
+  the store, `ErrNoSession` when it lacks it, and for an aligned
+  redaction maps each of the session's entry IDs to the original's
+  entry in its place, by position over the first `entries` entries in
+  file order, prefix included; a count or a type that does not line up
+  is refused with `ErrRedactedFrom` rather than mapped wrong.
+  `Redactions(ctx, store, id)` lists the sessions the store holds whose
+  `redacted_from` names `id`, from `List`. `FileOrder` is the order both
+  count in, RFC 0002's projection order: the prefix root first, then
+  the own entries.
+- **Added: remote carries RFC 0003's `redacted` (409) and
+  `not_redacted` (403).** Both match `ErrRedacted` and `ErrNotRedacted`
+  on the client (`CodeRedacted`, `CodeNotRedacted`). The server has no
+  import; a redacted session reaches it by push.
+- **Added: `storetest` runs the redacted cases on every store:** create
+  refused, a redacted file held whole and verifying, appends refused, a
+  push taken and a push adding entries refused, a redacted-only store
+  refusing an original and a fork by every path it has, `Original`
+  aligned and not, and `Redactions`. A store gives the suite its paths
+  with the new `Options.Import`, `Place` (a file written into its
+  storage, as under a jsonl store's root), `Push` and `RedactedOnly`.
 
 ## v0.0.26 - 2026-10-15
 
