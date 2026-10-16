@@ -2,7 +2,6 @@ package agentsession
 
 import (
 	"encoding/json"
-	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -394,7 +393,7 @@ var coreStringMembers = map[string][]string{
 	TypeItem:          {"response", "source/kind", "source/ref", "source/source"},
 	TypeResponse:      {"response_id", "model", "status"},
 	TypeConfig:        {"model", "instructions", "instructions_parts/[]/id", "instructions_parts/[]/text", "instructions_parts/[]/source", "instructions_omitted/[]/id", "instructions_omitted/[]/reason", "instructions_omitted/[]/source", "tools_removed/[]", "omit/reasoning"},
-	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_parts/[]/source", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/source", "config/omit/reasoning"},
+	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_parts/[]/source", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/source", "config/instructions_omitted/[]/of", "config/omit/reasoning"},
 	TypeBranchSummary: {},
 	TypeRun:           {"run_id", "phase", "source", "reason", "ref", "trigger/kind", "trigger/ref", "trigger/source"},
 	TypeDispatch:      {"idempotency_key"},
@@ -420,8 +419,8 @@ func TestRewriteTableClassifiesEveryMember(t *testing.T) {
 	pkg := reflect.TypeOf(Session{}).PkgPath()
 	for name, mk := range coreEntries {
 		typ := reflect.TypeOf(mk()).Elem()
-		got := map[string]bool{}
-		stringMembers(typ, nil, pkg, got)
+		got, payload := map[string]bool{}, map[string]bool{}
+		stringMembers(typ, nil, pkg, got, payload)
 		known := map[string]bool{}
 		for _, sp := range bodyMembers[name] {
 			m := strings.Join(sp.path, "/")
@@ -450,7 +449,13 @@ func TestRewriteTableClassifiesEveryMember(t *testing.T) {
 				t.Errorf("%s: member %s holds a string and is unclassified: add it to bodyMembers if it names an entry or a session or holds a hash, and to coreStringMembers if it is text", name, m)
 			}
 		}
+	table:
 		for m := range known {
+			for p := range payload {
+				if strings.HasPrefix(m, p+"/") {
+					continue table // a member of an item, which the payload defines
+				}
+			}
 			if !got[m] {
 				t.Errorf("%s: the table names %s, which is no member of the type", name, m)
 			}
@@ -459,23 +464,27 @@ func TestRewriteTableClassifiesEveryMember(t *testing.T) {
 }
 
 // stringMembers adds to out the path of every member of typ that holds a
-// string, walking the structs of package pkg.
-func stringMembers(typ reflect.Type, path []string, pkg string, out map[string]bool) {
+// string, walking the structs of package pkg, and to payload the path of
+// every member holding a payload item, whose members the payload defines.
+func stringMembers(typ reflect.Type, path []string, pkg string, out, payload map[string]bool) {
 	switch typ.Kind() {
+	case reflect.Interface:
+		payload[strings.Join(path, "/")] = true
+		return
 	case reflect.String:
 		out[strings.Join(path, "/")] = true
 		return
 	case reflect.Pointer:
-		stringMembers(typ.Elem(), path, pkg, out)
+		stringMembers(typ.Elem(), path, pkg, out, payload)
 		return
 	case reflect.Slice, reflect.Array:
 		if typ == rawType {
 			return // a JSON value, whose strings are text
 		}
-		stringMembers(typ.Elem(), append(path, "[]"), pkg, out)
+		stringMembers(typ.Elem(), append(path, "[]"), pkg, out, payload)
 		return
 	case reflect.Map:
-		stringMembers(typ.Elem(), append(path, "*"), pkg, out)
+		stringMembers(typ.Elem(), append(path, "*"), pkg, out, payload)
 		return
 	case reflect.Struct:
 		if typ.PkgPath() != pkg {
@@ -493,7 +502,7 @@ func stringMembers(typ reflect.Type, path []string, pkg string, out map[string]b
 		if !ok {
 			continue // Unknown: members the format does not define
 		}
-		stringMembers(f.Type, append(slices.Clone(path), name), pkg, out)
+		stringMembers(f.Type, append(slices.Clone(path), name), pkg, out, payload)
 	}
 }
 
@@ -506,28 +515,64 @@ func sortedSet(m map[string]bool) []string {
 	return out
 }
 
+// rfcMember is a member of the table, by entry type ("" for every
+// entry's envelope, "header" for RemapHeaderRefs) and path.
+type rfcMember struct {
+	typ, path string
+	role      memberRole
+}
+
+// rfcNames maps each name RFC 0001 uses in its lists of references to
+// the members of the table it stands for. A name the RFC adds and this
+// map does not hold fails TestRewriteTableCoversRFC, and so does a row
+// this map holds and the table does not.
+var rfcNames = func() map[string][]rfcMember {
+	targets := []rfcMember{{TypeDispatch, "target", roleEntry}, {TypeDecision, "target", roleEntry}, {TypeLabel, "target", roleEntry}, {TypeOutcome, "target", roleEntry}, {TypeLink, "target", roleEntry}}
+	omit := []rfcMember{{TypeConfig, "omit/items/[]", roleEntry}, {TypeCompaction, "config/omit/items/[]", roleEntry}}
+	of := []rfcMember{{TypeConfig, "instructions_omitted/[]/of", roleEntry}}
+	session := []rfcMember{{TypeLink, "session", roleSession}}
+	return map[string][]rfcMember{
+		"parent":               {{"", "parent", roleEntry}},
+		"parents":              {{"", "parents/[]/entry", roleEntry}, {"", "parents/[]/session", roleSession}},
+		"target":               targets,
+		"first_kept":           {{TypeCompaction, "first_kept", roleEntry}},
+		"from":                 {{TypeBranchSummary, "from", roleEntry}},
+		"queued_from":          {{TypeItem, "queued_from", roleEntry}},
+		"omit":                 omit,
+		"items":                omit,
+		"config":               append(append([]rfcMember{}, omit[:1]...), of...),
+		"instructions_omitted": of,
+		"of":                   of,
+		"keep":                 of,  // of beside a positive keep
+		"id":                   nil, // "names it by id", "and no id"
+		"base":                 {{"header", "base", roleEntry}},
+		"parent_session":       {{"header", "parent_session", roleSession}},
+		"session":              session,
+		"link":                 session,
+	}
+}()
+
 // TestRewriteTableCoversRFC: every member RFC 0001 lists as naming an
-// entry or a session is one the table re-points, and the member it says
-// keeps data in its member names is one the table keys by data. The lists are read
-// from the RFC itself, so a member added there and not here fails.
+// entry or a session is a row of the table, at its path and in its role,
+// and the member it says keeps data in its member names is one the
+// table keys by data. The lists are read from the RFC itself, so a name
+// added there fails until rfcNames maps it, and a row dropped from the
+// table fails.
 func TestRewriteTableCoversRFC(t *testing.T) {
 	rfc, err := os.ReadFile(filepath.Join("docs", "rfcs", "0001-agent-session-format.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := strings.Join(strings.Fields(string(rfc)), " ")
-	refs := map[string]bool{"base": true, "parent_session": true} // RemapHeaderRefs
-	for _, sps := range append([][]special{envelopeMembers}, slices.Collect(maps.Values(bodyMembers))...) {
-		for _, sp := range sps {
-			if sp.role == roleEntry || sp.role == roleSession {
-				for _, s := range sp.path {
-					refs[s] = true
-				}
-			}
+	has := func(m rfcMember) bool {
+		switch m.typ {
+		case "header":
+			h, _ := RemapHeaderRefs(Header{Base: "o-b", ParentSession: "s-p"}, prefixRemap)
+			return m.path == "base" && h.Base == "n-b" || m.path == "parent_session" && h.ParentSession == "t-p"
+		case "":
+			return slices.ContainsFunc(envelopeMembers, func(sp special) bool { return strings.Join(sp.path, "/") == m.path && sp.role == m.role })
 		}
-	}
-	for typ := range coreEntries {
-		refs[typ] = true // "a `link`'s `session`"
+		return slices.ContainsFunc(bodyMembers[m.typ], func(sp special) bool { return strings.Join(sp.path, "/") == m.path && sp.role == m.role })
 	}
 	tick := regexp.MustCompile("`([a-z_]+)`")
 	for _, span := range [][2]string{
@@ -541,9 +586,22 @@ func TestRewriteTableCoversRFC(t *testing.T) {
 			t.Fatalf("RFC 0001 no longer says %q ... %q; find the list again", span[0], span[1])
 		}
 		for _, m := range tick.FindAllStringSubmatch(text[i:i+j], -1) {
-			if !refs[m[1]] && m[1] != "id" {
-				t.Errorf("RFC 0001 names %s as a reference (%q) and the table does not re-point it", m[1], span[0])
+			rows, ok := rfcNames[m[1]]
+			if !ok {
+				t.Errorf("RFC 0001 names %s in a list of references (%q) that rfcNames does not map to the table", m[1], span[0])
 			}
+			for _, row := range rows {
+				if !has(row) {
+					t.Errorf("RFC 0001 names %s (%q) and the table has no %s %s as %d", m[1], span[0], row.typ, row.path, row.role)
+				}
+			}
+		}
+	}
+	// of is defined beside a positive keep and no id, and the table says
+	// so.
+	for _, sp := range bodyMembers[TypeConfig] {
+		if strings.Join(sp.path, "/") == "instructions_omitted/[]/of" && sp.holds == nil {
+			t.Error("the table takes of on every omitted part, and the RFC defines it beside a positive keep and no id")
 		}
 	}
 	// The data the format keeps in member names, which RewriteStrings
@@ -566,5 +624,74 @@ func TestRewriteTableCoversRFC(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("RFC 0001 keeps data in the member names of %s's %s and the table does not key it by data", typ, member)
+	}
+}
+
+// TestRemapRefsOfWhereDefined: an omitted part's of names an entry beside
+// a positive keep and no id, and in no other place, so one beside an id
+// or a keep that is not positive is neither re-pointed nor reported.
+func TestRemapRefsOfWhereDefined(t *testing.T) {
+	line := `{"type":"config","id":"x","parent":null,` + tsLine + `,"instructions_omitted":[{"id":"AGENTS.md","reason":"r","of":"o-1"},{"keep":0,"of":"o-2"},{"keep":"3","of":"o-3"},{"keep":2,"of":"o-4"}]}`
+	r, err := RemapRefs(entryOf(t, line), prefixRemap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := canonicalEntry(t, r.Entry), withValues(t, line, map[string]string{"/instructions_omitted/3/of": "n-4"}); got != want {
+		t.Errorf("remapped\n got %s\nwant %s", got, want)
+	}
+	r, err = RemapRefs(entryOf(t, line), Remap{Entry: func(string, string) (string, bool) { return "", false }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []Reference{{At: "/instructions_omitted/3/of", Entry: "o-4"}}; !reflect.DeepEqual(r.Unmapped, want) {
+		t.Errorf("Unmapped %+v, want %+v", r.Unmapped, want)
+	}
+}
+
+// TestMigrationLeavesOfBesideAnID: a file before 0.5 whose omitted part
+// carries of beside an id, a member the format does not define there,
+// reads and writes as it did before RemapRefs: not unresolved, the
+// member as written.
+func TestMigrationLeavesOfBesideAnID(t *testing.T) {
+	file := `{"type":"session","format":"agentsession/0.4","id":"01995b2a-0000-7000-8000-0000000000f2","created_at":"2026-09-17T12:00:00Z","payload":"openresponses/2026-04-24"}
+{"type":"item","id":"root","parent":null,"ts":"2026-09-17T12:00:00Z","item":{"type":"message","role":"user","content":[]}}
+{"type":"config","id":"c1","parent":"root","ts":"2026-09-17T12:00:01Z","instructions_omitted":[{"id":"x","reason":"r","of":"root"}]}
+`
+	s, err := Read(strings.NewReader(file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, unresolved := s.Migrated(); len(unresolved) > 0 {
+		t.Errorf("unresolved %v", unresolved)
+	}
+	e, _ := s.Entry(lid(t, s, "c1"))
+	if got := e.(*ConfigEntry).InstructionsOmitted[0]; got.ID != "x" || !strings.Contains(canonicalEntry(t, e), `"of":"root"`) {
+		t.Errorf("omitted %+v in %s", got, canonicalEntry(t, e))
+	}
+	var buf strings.Builder
+	if err := Write(&buf, s); err != nil {
+		t.Errorf("Write: %v", err)
+	}
+}
+
+// TestRemapRefsSortsExtensionParents: an extension entry's re-pointed
+// parents are sorted as a core entry's are, since a commit does not
+// sort a read entry's.
+func TestRemapRefsSortsExtensionParents(t *testing.T) {
+	e := entryOf(t, `{"type":"x:thing","id":"x","parent":"p",`+tsLine+`,"parents":[{"entry":"o-a"},{"entry":"o-b"}]}`)
+	r, err := RemapRefs(e, Remap{Entry: func(_, entry string) (string, bool) {
+		return map[string]string{"o-a": "z", "o-b": "a"}[entry], strings.HasPrefix(entry, "o-")
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Entry.Base().Parents; got[0].Entry != "a" || got[1].Entry != "z" {
+		t.Errorf("parents %+v", got)
+	}
+	if got := canonicalEntry(t, r.Entry); !strings.Contains(got, `"parents":[{"entry":"a"},{"entry":"z"}]`) {
+		t.Errorf("line %s", got)
+	}
+	if e.Base().Parents[0].Entry != "o-a" {
+		t.Error("the input changed")
 	}
 }

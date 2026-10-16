@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -104,10 +105,12 @@ func TestRewriteStringsNormalised(t *testing.T) {
 
 // protectedEntries hold, in every member that is not body text, a value
 // beginning P- or a hash, and in body text values beginning B-: the
-// envelope, legacy_id, every reference, every hash, every call_id, a
-// sidecar URL, a member name, a normalised record's at and a record of
-// a member that is not body text. An env entry's file paths are data in
-// member names, and body.
+// envelope, legacy_id, every reference, every hash, every call_id where
+// the format defines one, a sidecar URL, a member name, a normalised
+// record's at and a record of a member that is not body text. An env
+// entry's file paths are data in member names, and body; so are a
+// call_id inside data the format does not define and an of where the
+// format does not define it.
 var protectedEntries = []string{
 	`{"type":"item","id":"P-id","parent":"P-parent",` + tsLine + `,"parents":[{"entry":"P-entry","session":"P-session","x:note":"P-extra"}],"legacy_id":"P-legacy","item":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"` + sidecarURL + `"},{"type":"input_text","text":"B-text"}]},"queued_from":"P-queued","P-name":"B-value","normalised":[{"at":"/P-name","was":"\"B-was\""}]}`,
 	`{"type":"response","id":"P-id","parent":"P-parent",` + tsLine + `,"response_id":"B-resp","status":"completed","request_hash":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}`,
@@ -124,8 +127,12 @@ var protectedEntries = []string{
 	`{"type":"item","id":"P-id","parent":"P-parent",` + tsLine + `,"item":{"type":"function_call","call_id":"P-call","name":"B-name","arguments":"B-args"},"normalised":[{"at":"/item/call_id","was":"\"P-call\""}]}`,
 	`{"type":"item","id":"P-id","parent":"P-parent",` + tsLine + `,"item":{"type":"function_call_output","call_id":"P-call","output":"B-out"}}`,
 	`{"type":"run","id":"P-id","parent":"P-parent",` + tsLine + `,"run_id":"B-run","phase":"end","reason":"input_required","pending":["P-call","P-call2"]}`,
-	`{"type":"custom","id":"P-id","parent":"P-parent",` + tsLine + `,"ns":"B-ns","call_id":"P-call","data":{"call_id":"P-call","note":"B-note"}}`,
-	`{"type":"x:note","id":"P-id","parent":"P-parent",` + tsLine + `,"parents":[{"entry":"P-entry"}],"legacy_id":"P-legacy","text":"B-text","P-name":"` + sidecarURL + `","call_id":"P-call"}`,
+	`{"type":"custom","id":"P-id","parent":"P-parent",` + tsLine + `,"ns":"B-ns","call_id":"P-call","data":{"call_id":"B-data-call","note":"B-note"}}`,
+	`{"type":"decision","id":"P-id","parent":"P-parent",` + tsLine + `,"call_id":"P-call","target":"P-target","verdict":"proceed","args":{"call_id":"B-args-call"},"x:note":{"call_id":"B-unknown-call"}}`,
+	`{"type":"queued","id":"P-id","parent":"P-parent",` + tsLine + `,"item":{"type":"function_call","call_id":"P-call","name":"B-name","arguments":"B-args"},"mode":"steer"}`,
+	`{"type":"compaction","id":"P-id","parent":"P-parent",` + tsLine + `,"first_kept":"P-first","summary":{"type":"message","role":"user","content":[]},"pinned":[{"type":"function_call","call_id":"P-call","name":"B-name","arguments":"B-args"}],"config":{"instructions_omitted":[{"id":"B-part","reason":"B-reason","of":"B-of-beside-an-id"}],"omit":{"items":["P-omit"]}}}`,
+	`{"type":"config","id":"P-id","parent":"P-parent",` + tsLine + `,"instructions_omitted":[{"id":"B-part","reason":"B-reason","of":"B-of-beside-an-id"},{"keep":2,"of":"P-of"},{"keep":0,"of":"B-of-no-keep"}]}`,
+	`{"type":"x:note","id":"P-id","parent":"P-parent",` + tsLine + `,"parents":[{"entry":"P-entry"}],"legacy_id":"P-legacy","text":"B-text","P-name":"` + sidecarURL + `","call_id":"B-ext-call"}`,
 }
 
 // TestRewriteStringsNeverSeesProtected: f is handed every body string
@@ -158,8 +165,8 @@ func TestRewriteStringsNeverSeesProtected(t *testing.T) {
 				t.Errorf("f was given %d body strings of %d: %q", body, want, seen)
 			}
 			before, after := canonicalEntry(t, e), canonicalEntry(t, got)
-			if strings.ReplaceAll(after, `"R-B-`, `"B-`) != before && !strings.Contains(line, `"was"`) {
-				t.Errorf("a member other than body text changed:\n%s\n%s", before, after)
+			if want := strings.ReplaceAll(before, "B-", "R-B-"); after != want {
+				t.Errorf("a member other than body text changed:\n got %s\nwant %s", after, want)
 			}
 		})
 	}
@@ -198,11 +205,56 @@ func TestRewriteStringsPartHashes(t *testing.T) {
 	}
 
 	join := entryOf(t, `{"type":"config","id":"x","parent":null,`+tsLine+`,"instructions":"ab\n\ncd","instructions_parts":[{"id":"a","text":"ab"},{"id":"b","text":"cd"}]}`)
-	if _, err := RewriteStrings(join, func(s string) string { return strings.ReplaceAll(s, "b\n\nc", "-") }); !errors.Is(err, ErrInstructionsJoin) {
-		t.Errorf("a rewrite across the join: %v, want ErrInstructionsJoin", err)
+	got, err = RewriteStrings(join, func(s string) string { return strings.ReplaceAll(s, "b\n\nc", "-") })
+	if err != nil {
+		t.Fatalf("a rewrite across the join: %v", err)
 	}
-	if _, err := RewriteStrings(join, func(s string) string { return strings.ReplaceAll(s, "b", "B") }); err != nil {
+	if c := got.(*ConfigEntry); *c.Instructions != "ab\n\ncd" {
+		t.Errorf("instructions %q crossed the part boundary", *c.Instructions)
+	}
+	got, err = RewriteStrings(join, func(s string) string { return strings.ReplaceAll(s, "b", "B") })
+	if err != nil || *got.(*ConfigEntry).Instructions != "aB\n\ncd" {
 		t.Errorf("a rewrite within the parts: %v", err)
+	}
+	notJoin := entryOf(t, `{"type":"config","id":"x","parent":null,`+tsLine+`,"instructions":"SECRET whole","instructions_parts":[{"id":"a","text":"other"}]}`)
+	if got, err := RewriteStrings(notJoin, hideSecret); err != nil || *got.(*ConfigEntry).Instructions != "gone whole" {
+		t.Errorf("instructions that are no join are not given to f whole: %v", err)
+	}
+}
+
+// TestRewriteStringsJoinResolved: instructions beside parts named by keep
+// or hash are rebuilt from the rewritten parts as the path resolves
+// them, by a Rewriter given the earlier entries, and refused when the
+// parts cannot be resolved and f would change the instructions, the
+// review's case of a rewrite across a keep.
+func TestRewriteStringsJoinResolved(t *testing.T) {
+	first := `{"type":"config","id":"c1","parent":null,` + tsLine + `,"instructions_parts":[{"id":"a","text":"A SECRET"},{"id":"m","text":"memory"}]}`
+	keep := `{"type":"config","id":"c2","parent":"c1",` + tsLine + `,"instructions":"A SECRET\n\nSECRET-B","instructions_parts":[{"keep":1},{"id":"b","text":"SECRET-B"}]}`
+	hash := `{"type":"config","id":"c3","parent":"c2",` + tsLine + `,"instructions":"A SECRET\n\nSECRET-B\n\nmemory","instructions_parts":[{"keep":2},{"id":"m","hash":"` + HashText("memory") + `"}]}`
+	across := func(s string) string { return strings.ReplaceAll(s, "SECRET\n\nSECRET", "X") }
+	if _, err := RewriteStrings(entryOf(t, keep), across); !errors.Is(err, ErrInstructionsJoin) {
+		t.Errorf("unresolvable keep, f changes the instructions: %v, want ErrInstructionsJoin", err)
+	}
+	if got, err := RewriteStrings(entryOf(t, keep), func(s string) string { return s }); err != nil || *got.(*ConfigEntry).Instructions != "A SECRET\n\nSECRET-B" {
+		t.Errorf("unresolvable keep, f leaves the instructions: %v", err)
+	}
+	for _, f := range []func(string) string{hideSecret, across} {
+		r := NewRewriter(f)
+		var out []*ConfigEntry
+		for _, line := range []string{first, keep, hash} {
+			got, err := r.Rewrite(entryOf(t, line))
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, got.(*ConfigEntry))
+		}
+		want2 := f("A SECRET") + "\n\n" + f("SECRET-B")
+		if got := *out[1].Instructions; got != want2 {
+			t.Errorf("keep: instructions %q, want %q", got, want2)
+		}
+		if got, want := *out[2].Instructions, want2+"\n\n"+f("memory"); got != want {
+			t.Errorf("keep and hash: instructions %q, want %q", got, want)
+		}
 	}
 }
 
@@ -238,95 +290,124 @@ func TestRewriteStringsWritesNoReadLine(t *testing.T) {
 // callee links and judges.
 var redactableFixtures = []string{"basic", "branch", "compaction", "converge", "extensions", "fork", "handback", "instructions", "interleaved", "judged", "normalised", "omit", "omitted", "parts", "peer", "pinned", "queued", "replay", "resume", "runs"}
 
+// redaction is an aligned redaction of a session, read back from the
+// file it writes.
+type redaction struct {
+	back    *Session
+	entries []string          // the redacted file's entry lines
+	byOrig  map[string]string // each original entry's id to its redacted line
+}
+
+// redact makes an aligned redaction of orig with the exported API alone,
+// as a redactor outside the package would make one: every entry in file
+// order through one Rewriter for the file and RemapRefs, its id cleared
+// and committed to a new session whose header carries redacted and
+// redacted_from and, last, the remapped base. The file it writes must
+// read, which verifies every hash.
+func redact(t *testing.T, orig *Session, f func(string) string, profile string) redaction {
+	t.Helper()
+	oh := orig.Header()
+	ids := map[string]string{}
+	remap := Remap{Entry: func(session, entry string) (string, bool) {
+		if session != "" && session != oh.ID {
+			return "", false // not redacted alongside
+		}
+		id, ok := ids[entry]
+		return id, ok
+	}}
+	h := oh
+	h.ID = RedactedSessionID(oh.ID, orig.Len(), profile)
+	h.Base = ""
+	h.Redacted = true
+	h.RedactedFrom = &RedactedFrom{Session: oh.ID, Entries: orig.Len(), Profile: profile, Aligned: true}
+	red := New(h)
+	rw := NewRewriter(f)
+	var order []string
+	for _, e := range orig.Entries() {
+		old := e.Base().ID
+		body, err := rw.Rewrite(e)
+		if err != nil {
+			t.Fatalf("rewrite %s: %v", old, err)
+		}
+		r, err := RemapRefs(body, remap)
+		if err != nil {
+			t.Fatalf("remap %s: %v", old, err)
+		}
+		for _, u := range r.Unmapped {
+			if u.Session == "" || u.Session == oh.ID {
+				t.Errorf("%s: %s names %s in this file and was not mapped", old, u.At, u.Entry)
+			}
+		}
+		n := r.Entry
+		n.Base().ID = ""
+		res, err := red.Commit(n)
+		if err != nil {
+			t.Fatalf("commit %s: %v", old, err)
+		}
+		if res.Outcome == Held {
+			t.Fatalf("%s: the redaction merged two entries", old)
+		}
+		ids[old] = res.ID
+		order = append(order, old)
+	}
+	if oh.Base != "" {
+		var unmapped []Reference
+		h.Base = oh.Base
+		if h, unmapped = RemapHeaderRefs(h, Remap{Entry: remap.Entry}); len(unmapped) > 0 {
+			t.Fatalf("base not mapped: %v", unmapped)
+		}
+	}
+	var head, body bytes.Buffer
+	if err := Write(&head, New(h)); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(&body, red); err != nil {
+		t.Fatal(err)
+	}
+	entries := strings.SplitAfterN(body.String(), "\n", 2)[1]
+	back, err := Read(strings.NewReader(head.String() + entries))
+	if err != nil {
+		t.Fatalf("the redacted file does not read: %v\n%s%s", err, head.String(), entries)
+	}
+	if back.Len() != orig.Len() {
+		t.Errorf("%d entries, original %d", back.Len(), orig.Len())
+	}
+	if bh := back.Header(); !bh.Redacted || bh.RedactedFrom == nil || bh.RedactedFrom.Session != oh.ID || bh.Base != h.Base {
+		t.Errorf("header %+v", bh)
+	}
+	out := redaction{back: back, entries: strings.Split(strings.TrimSuffix(entries, "\n"), "\n"), byOrig: map[string]string{}}
+	for i, old := range order {
+		out.byOrig[old] = out.entries[i]
+	}
+	return out
+}
+
 // TestAlignedRedactionVerifies makes an aligned redaction of each fixture
-// with the exported API alone, as a redactor outside the package would
-// make one:
-// every entry in file order through a Rewriter and RemapRefs, its id
-// cleared and committed to a new session whose header carries redacted
-// and redacted_from and the remapped base. The file written verifies as
-// it is read, holds one entry for each of the original's, every string
-// the rewrite was to change is changed, and the instructions every path
-// rebuilds are the rewritten ones.
+// with redact. The file holds one entry for each of the original's,
+// every string the rewrite was to change is changed, a normalised raw's
+// decoded bytes among them, and the instructions every path rebuilds are
+// the rewritten ones.
 func TestAlignedRedactionVerifies(t *testing.T) {
 	// No closed value of the format or the payload holds a space, and
-	// no ID or hash does, so every space a redacted line holds would be
-	// one the rewrite missed.
+	// no ID, hash or call_id does, so every space a redacted line holds,
+	// or the bytes a raw record decodes to, would be one the rewrite
+	// missed.
 	f := func(s string) string { return strings.ReplaceAll(s, " ", "_") }
 	for _, name := range redactableFixtures {
 		t.Run(name, func(t *testing.T) {
 			orig := loadFixture(t, name)
-			oh := orig.Header()
-			ids := map[string]string{}
-			remap := Remap{Entry: func(session, entry string) (string, bool) {
-				if session != "" && session != oh.ID {
-					return "", false // not redacted alongside
-				}
-				id, ok := ids[entry]
-				return id, ok
-			}}
-			h := oh
-			h.ID = RedactedSessionID(oh.ID, orig.Len(), "test.spaces@1")
-			h.Base = ""
-			h.Redacted = true
-			h.RedactedFrom = &RedactedFrom{Session: oh.ID, Entries: orig.Len(), Profile: "test.spaces@1", Aligned: true}
-			red := New(h)
-			rw := NewRewriter(f)
-			for _, e := range orig.Entries() {
-				old := e.Base().ID
-				body, err := rw.Rewrite(e)
-				if err != nil {
-					t.Fatalf("rewrite %s: %v", old, err)
-				}
-				r, err := RemapRefs(body, remap)
-				if err != nil {
-					t.Fatalf("remap %s: %v", old, err)
-				}
-				for _, u := range r.Unmapped {
-					if u.Session == "" || u.Session == oh.ID {
-						t.Errorf("%s: %s names %s in this file and was not mapped", old, u.At, u.Entry)
-					}
-				}
-				n := r.Entry
-				n.Base().ID = ""
-				res, err := red.Commit(n)
-				if err != nil {
-					t.Fatalf("commit %s: %v", old, err)
-				}
-				if res.Outcome == Held {
-					t.Fatalf("%s: the redaction merged two entries", old)
-				}
-				ids[old] = res.ID
-			}
-			if oh.Base != "" {
-				// Last the header's base, once the prefix is hashed.
-				var unmapped []Reference
-				h.Base = oh.Base
-				if h, unmapped = RemapHeaderRefs(h, Remap{Entry: remap.Entry}); len(unmapped) > 0 {
-					t.Fatalf("base not mapped: %v", unmapped)
-				}
-			}
-			var head, body bytes.Buffer
-			if err := Write(&head, New(h)); err != nil {
-				t.Fatal(err)
-			}
-			if err := Write(&body, red); err != nil {
-				t.Fatal(err)
-			}
-			entries := strings.SplitAfterN(body.String(), "\n", 2)[1]
-			file := head.String() + entries
-			back, err := Read(strings.NewReader(file))
-			if err != nil {
-				t.Fatalf("the redacted file does not read: %v\n%s", err, file)
-			}
-			if back.Len() != orig.Len() {
-				t.Errorf("%d entries, original %d", back.Len(), orig.Len())
-			}
-			if bh := back.Header(); !bh.Redacted || bh.RedactedFrom == nil || bh.RedactedFrom.Session != oh.ID || bh.Base != h.Base {
-				t.Errorf("header %+v", bh)
-			}
-			for i, line := range strings.Split(strings.TrimSuffix(entries, "\n"), "\n") {
+			red := redact(t, orig, f, "test.spaces@1")
+			for i, line := range red.entries {
 				if strings.Contains(line, " ") {
 					t.Errorf("entry %d keeps a space: %s", i, line)
+				}
+			}
+			for i, e := range red.back.Entries() {
+				for _, n := range e.Base().Normalised {
+					raw, err := base64.StdEncoding.DecodeString(n.Raw)
+					if err != nil || bytes.Contains(raw, []byte(" ")) {
+						t.Errorf("entry %d: raw at %s keeps a space (%v): %q", i, n.At, err, raw)
+					}
 				}
 			}
 			for i, e := range orig.Entries() {
@@ -334,7 +415,7 @@ func TestAlignedRedactionVerifies(t *testing.T) {
 				if err != nil {
 					continue
 				}
-				rc, err := back.ContextAt(back.Entries()[i].Base().ID)
+				rc, err := red.back.ContextAt(red.back.Entries()[i].Base().ID)
 				if err != nil {
 					t.Fatalf("entry %d: the original builds a context and the redaction does not: %v", i, err)
 				}
@@ -343,6 +424,34 @@ func TestAlignedRedactionVerifies(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRedactedForkConverges: a fork and its origin, each redacted with a
+// Rewriter of its own, give the prefix they share the same bytes, and so
+// the same IDs: one redaction of a store converges.
+func TestRedactedForkConverges(t *testing.T) {
+	f := strings.NewReplacer("2+2", "[sum]", "brief", "[style]").Replace
+	origin := redact(t, loadFixture(t, "basic"), f, "test.words@1")
+	fork := loadFixture(t, "fork")
+	red := redact(t, fork, f, "test.words@1")
+	shared, changed := 0, 0
+	for _, e := range fork.Entries() {
+		old := e.Base().ID
+		want, ok := origin.byOrig[old]
+		if !ok {
+			continue
+		}
+		shared++
+		if got := red.byOrig[old]; got != want {
+			t.Errorf("prefix entry %s redacts two ways:\nfork   %s\norigin %s", old, got, want)
+		}
+		if strings.Contains(want, "[sum]") || strings.Contains(want, "[style]") {
+			changed++
+		}
+	}
+	if shared == 0 || changed == 0 {
+		t.Fatalf("the fork shares %d entries with its origin, %d of them redacted; the test proves nothing", shared, changed)
 	}
 }
 
@@ -371,5 +480,54 @@ func TestRewriteStringsPathKeys(t *testing.T) {
 	merge := entryOf(t, `{"type":"env","id":"x","parent":null,`+tsLine+`,"files":{"read":{"/home/a/f":"`+h1+`","/home/b/f":"`+h2+`"}}}`)
 	if _, err := RewriteStrings(merge, func(s string) string { return strings.NewReplacer("/home/a", "/~", "/home/b", "/~").Replace(s) }); !errors.Is(err, ErrKeyCollision) {
 		t.Errorf("two paths made one: %v, want ErrKeyCollision", err)
+	}
+}
+
+// TestRewriteStringsNumberWas: a was holding the digits of a member the
+// payload carries as a string is given to f as those digits, and where f
+// changes them it holds the JSON string of the result, not the value.
+func TestRewriteStringsNumberWas(t *testing.T) {
+	e := entryOf(t, `{"type":"item","id":"x","parent":null,`+tsLine+`,"item":{"type":"function_call_output","call_id":"c","output":"12345678901234567890"},"normalised":[{"at":"/item/output","was":"12345678901234567890"},{"at":"/x:n","was":"42"}],"x:n":42}`)
+	mask := regexp.MustCompile(`[0-9]{16,}`)
+	got, err := RewriteStrings(e, func(s string) string { return mask.ReplaceAllString(s, "[ACCT]") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := canonicalEntry(t, got)
+	if strings.Contains(out, "1234567890123456") {
+		t.Errorf("the digits survived: %s", out)
+	}
+	if n := got.Base().Normalised; n[0].Was != `"[ACCT]"` || n[1].Was != "42" {
+		t.Errorf("normalised %+v", n)
+	}
+	if err := checkNormalisations(got.Base().Normalised); err != nil {
+		t.Error(err)
+	}
+}
+
+// TestRewriteStringsCallOrder: f is called in one order, so a rewrite
+// that numbers what it meets, which one string to one result allows,
+// gives the same bytes on every run.
+func TestRewriteStringsCallOrder(t *testing.T) {
+	line := `{"type":"item","id":"x","parent":null,` + tsLine + `,"item":{"type":"message","role":"user","content":[{"type":"input_text","text":"alice"},{"type":"input_text","text":"bob"}]},"x:a":"carol","x:b":{"z":"dave","a":"erin","m":["frank","gina"]},"x:c":"hal","normalised":[{"at":"/x:a","was":"\"ivan\"","x:z":"judy","x:a":"kim"}]}`
+	run := func() string {
+		names := map[string]string{}
+		pseudonym := func(s string) string {
+			if _, ok := names[s]; !ok {
+				names[s] = fmt.Sprintf("PERSON_%d", len(names)+1)
+			}
+			return names[s]
+		}
+		got, err := RewriteStrings(entryOf(t, line), pseudonym)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return canonicalEntry(t, got)
+	}
+	first := run()
+	for range 20 {
+		if again := run(); again != first {
+			t.Fatalf("two runs differ:\n%s\n%s", first, again)
+		}
 	}
 }

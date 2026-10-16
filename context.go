@@ -1004,14 +1004,7 @@ func buildContext(path []Entry, omit bool) (Context, error) {
 		if kept < 0 {
 			return Context{}, fmt.Errorf("agentsession: compaction %s: first_kept %q is not on the path before it", comp.ID, comp.FirstKept)
 		}
-		settings = comp.Config
-		settings.InstructionsParts = cloneParts(comp.Config.InstructionsParts)
-		settings.InstructionsOmitted = cloneOmitted(comp.Config.InstructionsOmitted)
-		// The checkpoint writes what was in force whole: no entry before
-		// it is named by a later keep, and no part that left force
-		// before it by a later hash.
-		settings.left, settings.lists = nil, nil
-		settings.Omit.Items = slices.Clone(comp.Config.Omit.Items)
+		settings = checkpointSettings(comp)
 		ctx.Entries = append(ctx.Entries, comp)
 		ctx.Items = append(ctx.Items, comp.Summary)
 		ctx.ItemEntries = append(ctx.ItemEntries, comp)
@@ -1045,6 +1038,18 @@ func buildContext(path []Entry, omit bool) (Context, error) {
 		ctx.leaveOut(path)
 	}
 	return ctx, nil
+}
+
+// checkpointSettings returns the settings a compaction's checkpoint
+// puts in force, as context building takes them: written whole, so no
+// entry before it is named by a later keep or hash.
+func checkpointSettings(c *CompactionEntry) Settings {
+	s := c.Config
+	s.InstructionsParts = cloneParts(c.Config.InstructionsParts)
+	s.InstructionsOmitted = cloneOmitted(c.Config.InstructionsOmitted)
+	s.Omit.Items = slices.Clone(c.Config.Omit.Items)
+	s.left, s.lists = nil, nil
+	return s
 }
 
 // leaveOut removes from the items the entries the omit in force

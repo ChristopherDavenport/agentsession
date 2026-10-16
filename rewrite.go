@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -23,11 +24,12 @@ var partLists = map[string][2][]string{
 }
 
 // ErrInstructionsJoin is returned by [RewriteStrings] for an entry
-// whose instructions were its parts joined and are not after the
-// rewrite: the function changed a string that spans two parts, or
-// changes a part by what is beside it, and the entry would break the
-// rule that the instructions are their parts joined with "\n\n".
-var ErrInstructionsJoin = errors.New("agentsession: rewritten instructions are not the rewritten parts joined")
+// whose instructions sit beside parts it cannot resolve, a part named
+// by hash or by keep whose text is in an entry the [Rewriter] was not
+// given, when f would change the instructions: the rewritten string
+// could no longer be shown to be the rewritten parts joined, which the
+// format requires it to stay, so the rewrite fails closed.
+var ErrInstructionsJoin = errors.New("agentsession: rewritten instructions cannot be shown to be the rewritten parts joined")
 
 // ErrKeyCollision is returned by [RewriteStrings] for an entry in which
 // the rewrite gives two member names that hold data the same name, two
@@ -35,25 +37,38 @@ var ErrInstructionsJoin = errors.New("agentsession: rewritten instructions are n
 // redaction to keep.
 var ErrKeyCollision = errors.New("agentsession: a rewrite makes two member names one")
 
-// Rewriter is [RewriteStrings] over the entries of a session, given to
-// it in file order. An instruction part a delta does not repeat is
-// named by the hash of its text, which an earlier entry holds; the
-// Rewriter remembers what each text it rewrote hashes to now, so a later
-// part naming it by hash names the rewritten text. A part named by a
-// hash whose text the Rewriter has not met keeps its hash, which then
-// names the original's text. The zero value is not usable; see
-// [NewRewriter].
+// Rewriter is [RewriteStrings] over the entries of one session file,
+// given to it in file order, prefix included: one Rewriter per file. It
+// carries what one entry cannot see. An instruction part a delta does
+// not repeat is named by the hash of its text, which an earlier entry
+// holds, so the Rewriter remembers what each text it rewrote hashes to
+// now, and a later part naming it by hash names the rewritten text. And
+// instructions beside parts named by hash or keep are their join only
+// as the path resolves the parts, so the Rewriter replays the settings
+// along each entry's path as context building does, and rebuilds such
+// instructions from the rewritten parts.
+//
+// A part named by a hash whose text the Rewriter has not met keeps its
+// hash, which then names the original's text. What it has met depends
+// on what it was given, so a Rewriter fed another file's entries, or a
+// file's out of order, can rewrite one entry two ways: a fork and its
+// origin each redacted by a Rewriter of their own give their shared
+// prefix the same bytes. A Rewriter is not safe for concurrent use. The
+// zero value is not usable; see [NewRewriter].
 type Rewriter struct {
 	f func(string) string
 	// parts maps the hash of each part text met to the hash of what f
 	// made of it.
 	parts map[string]string
+	// settings holds the settings in force after each entry met, by its
+	// ID in the original, as context building replays them.
+	settings map[string]Settings
 }
 
 // NewRewriter returns a Rewriter applying f, under the contract
 // [RewriteStrings] states.
 func NewRewriter(f func(string) string) *Rewriter {
-	return &Rewriter{f: f, parts: map[string]string{}}
+	return &Rewriter{f: f, parts: map[string]string{}, settings: map[string]Settings{}}
 }
 
 // RewriteStrings returns a new entry with f applied to every string in
@@ -68,40 +83,61 @@ func NewRewriter(f func(string) string) *Rewriter {
 // paths the rewrite makes one are refused with [ErrKeyCollision].
 //
 // f is never given any other member name, a number or a boolean. A tool
-// name in an env entry's tools and an extra key in a config entry's
-// settings are names a writer chose, not data in that sense, and stay
-// as written. Nor is it given the envelope (type, id, parent, parents,
-// ts) or legacy_id; a member naming an entry or a session, which
-// [RemapRefs] re-points; a member holding a hash (request_hash, an
-// instruction part's hash, an env entry's file hashes); or a sidecar
-// media URL, sidecar:sha256: and the blob's hash, whose blob a redactor
-// replaces under the replacement's hash, as the format has it. A
-// call_id, wherever it appears, and a run end's pending call IDs are
-// left too: a call_id pairs a call with its output, its dispatches,
-// decisions and links, and a subsession's ID is derived from it, so a
-// redactor that must change call IDs changes every one in step itself,
-// and the subsessions' IDs with them.
+// name keying an env entry's tools, an extra key in a config entry's
+// settings, and a key inside a custom entry's data or an outcome's
+// details, which may hold a task or a test name, are names a writer
+// chose and stay as written, though the same string elsewhere, a tool's
+// name in a config entry or a function call, is rewritten. Nor is f
+// given the envelope (type, id, parent, parents, ts) or legacy_id; a
+// member naming an entry or a session, which [RemapRefs] re-points; a
+// member holding a hash (request_hash, an instruction part's hash, an
+// env entry's file hashes); or a sidecar media URL, sidecar:sha256: and
+// the blob's hash, whose blob a redactor replaces under the
+// replacement's hash, as the format has it. A call_id where the format
+// defines one, on an item, a dispatch, a decision, a link or a custom
+// entry, and a run end's pending call IDs, are left too: a call_id
+// pairs a call with its output, its dispatches, decisions and links, and
+// a subsession's ID is derived from it, so a redactor that must change
+// call IDs changes every one in step itself, and the subsessions' IDs
+// with them. A call_id inside a decision's args, a custom entry's data
+// or any member the format does not define is the writer's text and is
+// given to f. Each member is taken where the format defines it: one of
+// those names in another form or place, such as an of beside an id, is
+// body text.
 //
 // An instruction part whose text changed has its hash, where it carries
-// one, recomputed. A part named by its hash alone has its text in an
-// earlier entry, which RewriteStrings does not see; a writer rewriting
-// a whole session uses a [Rewriter], which does. Instructions that were
-// their parts joined must be after the rewrite, or the entry is refused
-// with [ErrInstructionsJoin]. In normalised, each was is JSON source
-// text, and f is applied to each string value in it, which is written
-// again in canonical form where f changed it, a lone surrogate escaped
-// as it was; each raw is the base64 of the original bytes of a string,
-// which f is given decoded, its escapes resolved and an ill-formed
-// sequence as the bytes it was, and which is encoded again with the
-// ill-formed bytes kept. Without that the original value would survive
-// in the record, and in raw no string rewrite would ever see it. A
-// record is rewritten as the member it describes: its at follows a path
-// the rewrite renamed, and a record of a member f is not given is left.
+// one, recomputed, and a part named by its hash alone, whose text is in
+// an earlier entry, is given the hash of the rewritten text by a
+// [Rewriter] that met it. Instructions that are the join of their parts,
+// as the path resolves them, are not given to f whole: they are rebuilt
+// as the join of the rewritten parts, so a rewrite cannot cross a part
+// boundary. Instructions that are not such a join are given to f whole.
+// Instructions beside a part the rewrite cannot resolve, a part named by
+// hash or keep with its text in an entry it was not given, which
+// RewriteStrings alone never is, are left when f leaves them and refused
+// with [ErrInstructionsJoin] when it would change them.
+//
+// In normalised, each was is JSON source text, and f is applied to each
+// string value in it, which is written again in canonical form where f
+// changed it, a lone surrogate escaped as it was; a was that is a number,
+// the digits of a member the payload carries as a string, is given to f
+// as those digits and written as the JSON string of what f returns when
+// it changes them, since the record can then no longer be the original
+// text and must not keep the value. Each raw is the base64 of the
+// original bytes of a string, which f is given decoded, its escapes
+// resolved and an ill-formed sequence as the bytes it was, and which is
+// encoded again with the ill-formed bytes kept. Without that the
+// original value would survive in the record, and in raw no string
+// rewrite would ever see it. A record is rewritten as the member it
+// describes: its at follows a path the rewrite renamed, and a record of
+// a member f is not given is left.
 //
 // f must be deterministic: one string gives one result wherever it
 // appears, since a response_id and a part's text are named across
 // entries by their value, and a rewrite that differs between two
-// entries breaks the names. A result that is not valid UTF-8 is
+// entries breaks the names. It is called in the same order on every
+// run: an entry's members in sorted order, the elements of an array in
+// index order, at every depth. A result that is not valid UTF-8 is
 // repaired by the encoder, and a value the entry's type cannot hold,
 // such as a closed member given a value it does not define, is an
 // error from the decode.
@@ -114,29 +150,133 @@ func RewriteStrings(e Entry, f func(string) string) (Entry, error) {
 	return NewRewriter(f).Rewrite(e)
 }
 
-// Rewrite is [RewriteStrings] with what earlier entries' instruction
-// parts were rewritten to.
+// Rewrite is [RewriteStrings] with what the entries the Rewriter was
+// given before, earlier in the file, say about this one: the rewritten
+// hashes of the instruction parts they hold, and the parts in force on
+// its path.
 func (r *Rewriter) Rewrite(e Entry) (Entry, error) {
 	if e == nil {
 		return nil, errors.New("agentsession: nil entry")
 	}
+	var (
+		out Entry
+		err error
+	)
 	if u, ok := e.(*UnknownEntry); ok {
-		return r.rewriteUnknown(u)
+		out, err = r.rewriteUnknown(u)
+	} else {
+		out, err = r.rewriteCore(e)
 	}
+	if err != nil {
+		return nil, fmt.Errorf("agentsession: entry %s: %w", e.Base().ID, err)
+	}
+	r.record(e)
+	return out, nil
+}
+
+// rewriteCore is Rewrite for a core entry.
+func (r *Rewriter) rewriteCore(e Entry) (Entry, error) {
 	root, err := entryJSON(e)
 	if err != nil {
 		return nil, err
 	}
-	out, err := r.rewriteObject(root, specialsOf(e))
-	if err != nil {
-		return nil, fmt.Errorf("agentsession: entry %s: %w", e.Base().ID, err)
+	specials := specialsOf(e)
+	lists, hasParts := partLists[e.EntryType()]
+	instr, rebuilt := "", false
+	if hasParts {
+		if instr, rebuilt, err = r.joinedInstructions(e); err != nil {
+			return nil, err
+		}
+		if rebuilt {
+			specials = append(specials, special{path: lists[1], role: roleFixed})
+		}
 	}
-	if lists, ok := partLists[e.EntryType()]; ok {
-		if err := r.rewriteParts(root, out, lists[0], lists[1]); err != nil {
-			return nil, fmt.Errorf("agentsession: entry %s: %w", e.Base().ID, err)
+	out, err := r.rewriteObject(root, specials)
+	if err != nil {
+		return nil, err
+	}
+	if hasParts {
+		r.rewriteParts(root, out, lists[0])
+		if rebuilt {
+			if obj, ok := lookup(out, lists[1][:len(lists[1])-1]).(map[string]any); ok {
+				obj[lists[1][len(lists[1])-1]] = instr
+			}
 		}
 	}
 	return entryFromJSON(e, out)
+}
+
+// record replays e into the settings in force after it: a compaction's
+// checkpoint starts them afresh, a config entry applies to those of its
+// parent, and any other entry has its parent's.
+func (r *Rewriter) record(e Entry) {
+	id := e.Base().ID
+	if id == "" {
+		return
+	}
+	prev, _ := r.settingsAt(e.Base().Parent)
+	switch v := e.(type) {
+	case *CompactionEntry:
+		r.settings[id] = checkpointSettings(v)
+	case *ConfigEntry:
+		r.settings[id] = prev.Apply(v)
+	default:
+		r.settings[id] = prev
+	}
+}
+
+// settingsAt returns the settings in force after the entry id, and
+// whether the Rewriter met it: a root's parent has none in force.
+func (r *Rewriter) settingsAt(id string) (Settings, bool) {
+	if id == "" {
+		return Settings{}, true
+	}
+	s, ok := r.settings[id]
+	return s, ok
+}
+
+// joinedInstructions decides how e's instructions are rewritten when it
+// carries them beside parts. When they are the join of the parts as the
+// path resolves them, it returns the join of the rewritten parts and
+// rebuilt; when they are not, f is to be given them whole. When a part
+// cannot be resolved, it returns them unchanged and rebuilt if f leaves
+// them, and ErrInstructionsJoin if f would change them.
+func (r *Rewriter) joinedInstructions(e Entry) (string, bool, error) {
+	var (
+		instr string
+		parts []InstructionPart
+	)
+	switch v := e.(type) {
+	case *ConfigEntry:
+		if v.Instructions == nil || len(v.InstructionsParts) == 0 {
+			return "", false, nil
+		}
+		prev, _ := r.settingsAt(v.Parent)
+		instr, parts = *v.Instructions, prev.Apply(v).InstructionsParts
+	case *CompactionEntry:
+		if v.Config.Instructions == "" || len(v.Config.InstructionsParts) == 0 {
+			return "", false, nil
+		}
+		instr, parts = v.Config.Instructions, v.Config.InstructionsParts
+	default:
+		return "", false, nil
+	}
+	if unresolvedParts(parts) {
+		if r.f(instr) != instr {
+			return "", false, ErrInstructionsJoin
+		}
+		return instr, true, nil
+	}
+	if JoinInstructions(parts) != instr {
+		return "", false, nil
+	}
+	texts := make([]string, len(parts))
+	for i, p := range parts {
+		if p.Text != "" {
+			texts[i] = r.f(p.Text)
+		}
+	}
+	return strings.Join(texts, PartSeparator), true, nil
 }
 
 // rewriteUnknown is Rewrite for an extension entry: its line is written
@@ -160,7 +300,7 @@ func (r *Rewriter) rewriteUnknown(u *UnknownEntry) (Entry, error) {
 	}
 	rewritten, err := r.rewriteObject(root, specialsOf(u))
 	if err != nil {
-		return nil, fmt.Errorf("agentsession: entry %s: %w", u.ID, err)
+		return nil, err
 	}
 	data, err := jsonx.MarshalNoEscape(rewritten)
 	if err != nil {
@@ -179,19 +319,17 @@ func (r *Rewriter) rewriteUnknown(u *UnknownEntry) (Entry, error) {
 
 // rewriteObject returns a copy of an entry's top-level object with f
 // applied to its body strings, the members specials names left as they
-// are and normalised rewritten as its records need.
+// are and normalised rewritten as its records need. Members are taken
+// in sorted order, so f is called in one order.
 func (r *Rewriter) rewriteObject(root map[string]any, specials []special) (map[string]any, error) {
 	out := make(map[string]any, len(root))
-	for k, v := range root {
+	for _, k := range sortedKeys(root) {
+		v := root[k]
 		if k == "normalised" {
-			out[k] = r.rewriteNormalised(v, specials)
+			out[k] = r.rewriteNormalised(v, root, specials)
 			continue
 		}
-		if _, ok := v.(string); ok && k == callIDMember {
-			out[k] = v
-			continue
-		}
-		w, err := r.walk(v, onward(specials, 0, k, false), 1)
+		w, err := r.walk(v, onward(specials, 0, k, false), 1, root)
 		if err != nil {
 			return nil, err
 		}
@@ -216,28 +354,29 @@ func onward(specials []special, depth int, key string, elem bool) []special {
 	return out
 }
 
-// ending reports whether a special of one of roles ends at depth.
-func ending(specials []special, depth int, roles ...memberRole) bool {
+// ending reports whether a special of one of roles ends at depth, at a
+// member of holder it applies to.
+func ending(specials []special, depth int, holder map[string]any, roles ...memberRole) bool {
 	for _, sp := range specials {
-		if len(sp.path) == depth && slices.Contains(roles, sp.role) {
+		if len(sp.path) == depth && slices.Contains(roles, sp.role) && sp.applies(holder) {
 			return true
 		}
 	}
 	return false
 }
 
-// walk returns a copy of v with f applied to its body strings. specials
-// are the members whose path has led here, depth steps down. One that
-// ends here leaves v as it is, wholly when it is fixed and as a string
-// otherwise, since a reference or a hash in another form names nothing,
-// except an object whose member names are data, whose names f is
-// applied to as well. A string member named call_id is left wherever it
-// is.
-func (r *Rewriter) walk(v any, specials []special, depth int) (any, error) {
-	if ending(specials, depth, roleFixed) {
+// walk returns a copy of v, a member of holder or an element when holder
+// is nil, with f applied to its body strings. specials are the members
+// whose path has led here, depth steps down. One that ends here leaves v
+// as it is, wholly when it is fixed and as a string otherwise, since a
+// reference, a hash or a call_id in another form names nothing, except
+// an object whose member names are data, whose names f is applied to as
+// well. Members are taken in sorted order and elements in index order.
+func (r *Rewriter) walk(v any, specials []special, depth int, holder map[string]any) (any, error) {
+	if ending(specials, depth, holder, roleFixed) {
 		return v, nil
 	}
-	if _, ok := v.(string); ok && ending(specials, depth, roleEntry, roleSession, roleHash, roleCallID) {
+	if _, ok := v.(string); ok && ending(specials, depth, holder, roleEntry, roleSession, roleHash, roleCallID) {
 		return v, nil
 	}
 	switch x := v.(type) {
@@ -247,19 +386,10 @@ func (r *Rewriter) walk(v any, specials []special, depth int) (any, error) {
 		}
 		return r.f(x), nil
 	case map[string]any:
-		dataKeys := ending(specials, depth, roleDataKeys)
+		dataKeys := ending(specials, depth, holder, roleDataKeys)
 		out := make(map[string]any, len(x))
 		from := map[string]string{}
 		for _, k := range sortedKeys(x) {
-			child := x[k]
-			if _, ok := child.(string); ok && k == callIDMember {
-				out[k] = child
-				continue
-			}
-			w, err := r.walk(child, onward(specials, depth, k, false), depth+1)
-			if err != nil {
-				return nil, err
-			}
 			name := k
 			if dataKeys {
 				name = r.f(k)
@@ -268,6 +398,10 @@ func (r *Rewriter) walk(v any, specials []special, depth int) (any, error) {
 				}
 				from[name] = k
 			}
+			w, err := r.walk(x[k], onward(specials, depth, k, false), depth+1, x)
+			if err != nil {
+				return nil, err
+			}
 			out[name] = w
 		}
 		return out, nil
@@ -275,7 +409,7 @@ func (r *Rewriter) walk(v any, specials []special, depth int) (any, error) {
 		out := make([]any, len(x))
 		next := onward(specials, depth, "", true)
 		for i, child := range x {
-			w, err := r.walk(child, next, depth+1)
+			w, err := r.walk(child, next, depth+1, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -293,17 +427,21 @@ func isSidecarURL(s string) bool {
 	return ok && ValidHash(h)
 }
 
-// rewriteNormalised rewrites the records of a normalised member, each
-// as holding the member it describes: at is a pointer of member names,
-// rewritten where it passes through a member named by data; was is JSON
-// text whose string values are rewritten, and raw a string's bytes in
-// base64, rewritten decoded, unless at names a member that is not body
-// text; anything else is body. The records are sorted again when an at
-// changed.
-func (r *Rewriter) rewriteNormalised(v any, specials []special) any {
+// jsonNumber matches a JSON number token.
+var jsonNumber = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`)
+
+// rewriteNormalised rewrites the records of a normalised member of the
+// entry root, each as holding the member it describes: at is a pointer
+// of member names, rewritten where it passes through a member named by
+// data; was is JSON text whose string values are rewritten, or a number
+// given to f as its digits, and raw a string's bytes in base64,
+// rewritten decoded, unless at names a member that is not body text;
+// anything else is body. The records are taken in order, each one's
+// members sorted, and sorted again when an at changed.
+func (r *Rewriter) rewriteNormalised(v any, root map[string]any, specials []special) any {
 	list, ok := v.([]any)
 	if !ok {
-		w, _ := r.walk(v, nil, 1)
+		w, _ := r.walk(v, nil, 1, nil)
 		return w
 	}
 	out := make([]any, len(list))
@@ -311,25 +449,24 @@ func (r *Rewriter) rewriteNormalised(v any, specials []special) any {
 	for i, el := range list {
 		rec, ok := el.(map[string]any)
 		if !ok {
-			out[i], _ = r.walk(el, nil, 2)
+			out[i], _ = r.walk(el, nil, 2, nil)
 			continue
 		}
 		body, newAt := true, ""
 		if at, ok := rec["at"].(string); ok {
-			newAt, body = r.rewriteAt(at, specials)
+			newAt, body = r.rewriteAt(at, root, specials)
 			moved = moved || newAt != at
 		}
 		cp := make(map[string]any, len(rec))
-		for k, x := range rec {
+		for _, k := range sortedKeys(rec) {
+			x := rec[k]
 			s, isString := x.(string)
 			switch {
 			case k == "at" && isString:
 				cp[k] = newAt
 			case k == "was" && isString:
 				if body {
-					if text, changed := rewriteJSONText([]byte(s), r.f, false); changed {
-						s = string(text)
-					}
+					s = r.rewriteWas(s)
 				}
 				cp[k] = s
 			case k == "raw" && isString:
@@ -340,7 +477,7 @@ func (r *Rewriter) rewriteNormalised(v any, specials []special) any {
 				}
 				cp[k] = s
 			default:
-				cp[k], _ = r.walk(x, nil, 3)
+				cp[k], _ = r.walk(x, nil, 3, nil)
 			}
 		}
 		out[i] = cp
@@ -352,11 +489,27 @@ func (r *Rewriter) rewriteNormalised(v any, specials []special) any {
 	return out
 }
 
-// rewriteAt returns the pointer at with f applied to each token that is
-// a member name the format keeps data in, and whether the member it
-// names is body text: not inside a fixed member, not a reference, a
-// hash or a call_id.
-func (r *Rewriter) rewriteAt(at string, specials []special) (string, bool) {
+// rewriteWas rewrites a was record: a number, the digits of a member
+// carried as a string, is given to f as those digits, and any other
+// text has f applied to its string values.
+func (r *Rewriter) rewriteWas(was string) string {
+	if jsonNumber.MatchString(was) {
+		if t := r.f(was); t != was {
+			return string(quoteLoose(t, false))
+		}
+		return was
+	}
+	if text, changed := rewriteJSONText([]byte(was), r.f, false); changed {
+		return string(text)
+	}
+	return was
+}
+
+// rewriteAt returns the pointer at into the entry root with f applied to
+// each token that is a member name the format keeps data in, and whether
+// the member it names is body text: not inside a fixed member, and not a
+// reference, a hash or a call_id where the format defines one.
+func (r *Rewriter) rewriteAt(at string, root map[string]any, specials []special) (string, bool) {
 	if !strings.HasPrefix(at, "/") {
 		return at, true
 	}
@@ -364,23 +517,34 @@ func (r *Rewriter) rewriteAt(at string, specials []special) (string, bool) {
 	for i, t := range tokens {
 		tokens[i] = strings.ReplaceAll(strings.ReplaceAll(t, "~1", "/"), "~0", "~")
 	}
-	cur := specials
+	var (
+		cur        = specials
+		node   any = root
+		holder map[string]any
+	)
 	for i, t := range tokens {
-		if ending(cur, i, roleFixed) {
+		if ending(cur, i, holder, roleFixed) {
 			return at, false
 		}
-		if ending(cur, i, roleDataKeys) {
+		if ending(cur, i, holder, roleDataKeys) {
 			tokens[i] = r.f(t)
 		}
-		_, index := strconv.Atoi(t)
-		next := onward(cur, i, t, false)
-		if index == nil {
-			next = append(next, onward(cur, i, "", true)...)
+		var next []special
+		switch n := node.(type) {
+		case map[string]any:
+			next, holder, node = onward(cur, i, t, false), n, n[t]
+		case []any:
+			k, err := strconv.Atoi(t)
+			next, holder, node = onward(cur, i, "", true), nil, nil
+			if err == nil && k >= 0 && k < len(n) {
+				node = n[k]
+			}
+		default:
+			next, holder, node = nil, nil, nil
 		}
 		cur = next
 	}
-	body := tokens[len(tokens)-1] != callIDMember &&
-		!ending(cur, len(tokens), roleFixed, roleEntry, roleSession, roleHash, roleCallID)
+	body := !ending(cur, len(tokens), holder, roleFixed, roleEntry, roleSession, roleHash, roleCallID)
 	for i, t := range tokens {
 		tokens[i] = pointerToken(t)
 	}
@@ -391,13 +555,12 @@ func (r *Rewriter) rewriteAt(at string, specials []special) (string, bool) {
 // copy of before, the hash of its rewritten text: one carrying its text
 // and a hash has the hash recomputed when the text changed, and one
 // named by a hash alone takes the hash of the rewritten text it names
-// when an earlier entry's part held that text. It refuses instructions
-// that were their parts joined and are not after the rewrite.
-func (r *Rewriter) rewriteParts(before, after map[string]any, partsPath, instrPath []string) error {
+// when an earlier entry's part held that text.
+func (r *Rewriter) rewriteParts(before, after map[string]any, partsPath []string) {
 	oldList, _ := lookup(before, partsPath).([]any)
 	newList, _ := lookup(after, partsPath).([]any)
 	if oldList == nil || len(oldList) != len(newList) {
-		return nil
+		return
 	}
 	for i := range oldList {
 		o, _ := oldList[i].(map[string]any)
@@ -423,44 +586,6 @@ func (r *Rewriter) rewriteParts(before, after map[string]any, partsPath, instrPa
 			}
 		}
 	}
-	oldInstr, ok1 := lookup(before, instrPath).(string)
-	newInstr, ok2 := lookup(after, instrPath).(string)
-	if !ok1 || !ok2 {
-		return nil
-	}
-	oldJoin, ok := joinedTexts(oldList)
-	if !ok || oldJoin != oldInstr {
-		return nil // not their join before, or not one this entry can say
-	}
-	if newJoin, _ := joinedTexts(newList); newJoin != newInstr {
-		return ErrInstructionsJoin
-	}
-	return nil
-}
-
-// joinedTexts returns the texts of a list of parts joined as the format
-// joins them, when every part carries its text in the list: one with an
-// id and neither a text nor a hash has empty text, and a part named by
-// hash or by keep has its text elsewhere.
-func joinedTexts(list []any) (string, bool) {
-	texts := make([]string, 0, len(list))
-	for _, el := range list {
-		part, ok := el.(map[string]any)
-		if !ok {
-			return "", false
-		}
-		if t, ok := part["text"].(string); ok {
-			texts = append(texts, t)
-			continue
-		}
-		_, hash := part["hash"]
-		_, keep := part["keep"]
-		if id, ok := part["id"].(string); !ok || id == "" || hash || keep {
-			return "", false
-		}
-		texts = append(texts, "")
-	}
-	return strings.Join(texts, "\n\n"), true
 }
 
 // lookup returns the value a path of member names reaches in v, nil if
@@ -477,17 +602,14 @@ func lookup(v any, path []string) any {
 }
 
 // rewriteJSONText applies f to each string value in src, JSON text,
-// leaving member names, a call_id's value, every other token and every
-// string f leaves unchanged as written. A string f is given has its escapes resolved, a
+// leaving member names, every other token and every string f leaves
+// unchanged as written. A string f is given has its escapes resolved, a
 // lone surrogate as the three bytes its code unit would encode to, and
 // is written back canonically, such a surrogate escaped again; with
 // keepInvalid, a byte that is not UTF-8 is written as it is, and
 // otherwise as U+FFFD. It reports whether any string changed.
 func rewriteJSONText(src []byte, f func(string) string, keepInvalid bool) ([]byte, bool) {
-	type frame struct {
-		object, expectKey bool
-		key               string
-	}
+	type frame struct{ object, expectKey bool }
 	var (
 		stack   []frame
 		out     = make([]byte, 0, len(src))
@@ -517,11 +639,6 @@ func rewriteJSONText(src []byte, f func(string) string, keepInvalid bool) ([]byt
 			i = end
 			if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].expectKey {
 				stack[n-1].expectKey = false
-				stack[n-1].key = unquoteLoose(tok)
-				out = append(out, tok...)
-				continue
-			}
-			if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].key == callIDMember {
 				out = append(out, tok...)
 				continue
 			}
