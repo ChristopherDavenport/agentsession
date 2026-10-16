@@ -37,6 +37,14 @@ func TestRedactedCodes(t *testing.T) {
 	}
 	_, err = c.Append(ctx, "r", agentsession.NewItemEntry(openresponses.UserText("native")))
 	check("a native append", err)
+
+	// A created header RFC 0001 calls malformed is bad_entry, its reason
+	// the redacted_from rule.
+	_, err = c.Create(ctx, agentsession.Header{ID: "self", Redacted: true, RedactedFrom: &agentsession.RedactedFrom{Session: "self"}})
+	var p *remote.Problem
+	if !errors.As(err, &p) || p.Code != remote.CodeBadEntry || p.Status != http.StatusUnprocessableEntity || !errors.Is(err, agentsession.ErrRedactedFrom) {
+		t.Errorf("a create naming itself in redacted_from: %v, want bad_entry 422 matching ErrRedactedFrom", err)
+	}
 }
 
 // TestClientRedactedOnly: a client set to send only redacted entries
@@ -281,5 +289,45 @@ func TestAPathReadIsGatedByTheCaller(t *testing.T) {
 	agentsession.GateEntry(info.Header.Format, pe)
 	if spans, ok := agentsession.RedactedOf(pe); ok {
 		t.Errorf("after GateEntry the entry reads as redacted %v", spans)
+	}
+}
+
+// TestClientRedactedOnlyHeaderless: a client set to send only redacted
+// entries refuses a marked entry to a session whose header does not
+// carry redacted once it has the lease and the session, before any
+// write: its server grants the lease and serves the session, and fails
+// the test on an append or any other write.
+func TestClientRedactedOnlyHeaderless(t *testing.T) {
+	ctx := context.Background()
+	st := agentsession.NewMemoryStore()
+	if _, err := st.Create(ctx, agentsession.Header{ID: "o"}); err != nil {
+		t.Fatal(err)
+	}
+	h := remote.NewHandler(st, remote.WithInsecureNoAuth(), remote.WithLinger(0))
+	defer h.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		write := r.Method != http.MethodGet && !strings.HasSuffix(r.URL.Path, "/lease")
+		if write {
+			t.Errorf("the client sent %s %s", r.Method, r.URL.Path)
+			http.Error(w, "no", http.StatusTeapot)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	c, err := remote.Dial(srv.URL, remote.WithRedactedOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	marked := agentsession.NewItemEntry(openresponses.UserText("marked"))
+	if err := agentsession.SetRedacted(marked, []agentsession.Span{{From: 1, To: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Write(ctx, "o", marked); !errors.Is(err, agentsession.ErrNotRedacted) {
+		t.Errorf("a marked entry to a session without redacted: %v, want ErrNotRedacted", err)
+	}
+	if s, err := st.Read(ctx, "o"); err != nil || s.Len() != 0 {
+		t.Errorf("the server's session after the refusal: %v", err)
 	}
 }

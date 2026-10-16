@@ -298,7 +298,10 @@ func WithReadOnly() Option {
 // so an open racing the setting cannot erase it. The open that sets it
 // refuses with ErrNotRedacted, and sets nothing, when the store already
 // holds a session whose header does not carry redacted or an entry
-// without it, and holds the sweep's lock
+// without it, which it finds by reading every session the store holds,
+// so on a large store turning the setting on is slow and blocks every
+// writer while it runs, and fails if it outlasts a minute; it holds the
+// sweep's lock
 // exclusive while it looks, so no create lands between the look and the
 // setting. Nothing unsets it.
 //
@@ -599,6 +602,9 @@ func (s *Store) markRedactedOnly() error {
 			return fmt.Errorf("%w; the store is not set to hold only redacted entries", err)
 		}
 	}
+	if redactedOnlyScanned != nil {
+		redactedOnlyScanned()
+	}
 	if err := s.objs.writeAtomic(filepath.Join(s.root, layoutFile), []byte(layout+"\n"+layoutRedactedOnly+"\n")); err != nil {
 		return fmt.Errorf("cas: layout: %w", err)
 	}
@@ -606,10 +612,17 @@ func (s *Store) markRedactedOnly() error {
 	return nil
 }
 
+// redactedOnlyScanned, when set, runs once markRedactedOnly has scanned
+// the store, under the sweep's lock, before it writes the setting: a
+// test puts another store's create there.
+var redactedOnlyScanned func()
+
 // onlyRedacted reports whether the store holds only redacted entries:
 // set here, or by any process since, which the layout file says. It is
 // read again at each call until it is set, so a process that opened the
-// store before another set it obeys it from then on.
+// store before another set it obeys it from then on; a store not set
+// this way pays a read of the layout file on each create, import,
+// exchange and append for it, since a negative cannot be cached.
 func (s *Store) onlyRedacted() (bool, error) {
 	if s.redactedOnly.Load() {
 		return true, nil
@@ -1993,16 +2006,17 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		if prefix, err = s.pathLines(h.Base); err != nil {
 			return nil, err
 		}
-		// The fork is written at this package's format, so a prefix
-		// holding a redacted member from before 0.13 would take a
-		// meaning it was not written with: the origin, read under its
-		// own header, says so, as agentsession.Fork does.
-		if owner != "" {
-			if origin, err := s.Read(ctx, owner); err == nil {
-				if _, err := agentsession.Fork(origin, h.Base, agentsession.Header{ID: h.ID, Media: h.Media}); errors.Is(err, agentsession.ErrNoRaise) {
-					return nil, fmt.Errorf("cas: %w", err)
-				}
-			}
+		// The prefix is read below under the fork's header, so a member
+		// it holds would take the fork's minor: a redacted member from
+		// before 0.13 written at 0.13 or later, or a redacted entry
+		// written under a minor before it, takes a meaning it was not
+		// written with. agentsession.Fork refuses both, asked of the
+		// session that holds the base, read under its own header. Only
+		// a holder before 0.13 holds the first, and only a fork before
+		// it can meet the second, so the holder is read whole only then;
+		// a holder that cannot be found or read refuses the fork.
+		if err := s.forkRaiseRefused(ctx, owner, h); err != nil {
+			return nil, err
 		}
 	}
 	tmp := agentsession.New(h)
@@ -2038,7 +2052,8 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		}
 		// A fork's prefix is held already, but in a store holding only
 		// redacted entries a fork of a session that has native entries on
-		// its path brings none of them in.
+		// its path brings none of them in. It is read again under the
+		// sweep's lock below.
 		if err := s.refuseUnredacted(h, sess.Entries()); err != nil {
 			return fail(err)
 		}
@@ -2064,6 +2079,11 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		return fail(err)
 	}
 	defer guard.release()
+	if h.Base != "" {
+		if err := s.refuseUnredacted(h, sess.Entries()); err != nil {
+			return fail(err)
+		}
+	}
 	if h.Base != "" {
 		pend := newPendSet()
 		if err := s.freshenPath(h.Base, pend); err != nil {
@@ -2093,6 +2113,84 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 	return sess, nil
 }
 
+// forkRaiseRefused refuses a fork with header h whose base the store
+// holds, owned by owner or, when owner is "", only on a prefix, when
+// agentsession.Fork would: a prefix holding a redacted member read under
+// a minor before 0.13, written at 0.13 or later (agentsession.ErrNoRaise),
+// or a redacted prefix entry written under a minor before 0.13. It asks
+// the session that holds the base, read under its own header, and reads
+// it whole only when one of the two can arise: its header, or the
+// fork's, names a minor before 0.13.
+func (s *Store) forkRaiseRefused(ctx context.Context, owner string, h agentsession.Header) error {
+	holder := owner
+	if holder == "" {
+		var err error
+		if holder, err = s.prefixHolder(h.Base, h.ParentSession); err != nil {
+			return err
+		}
+	}
+	dir, err := s.sessionDir(holder)
+	if err != nil {
+		return fmt.Errorf("cas: fork: the session holding the base: %w", err)
+	}
+	hh, err := readHeader(dir)
+	if err != nil {
+		return fmt.Errorf("cas: fork: the session holding the base, %s: %w", holder, err)
+	}
+	if !before013(hh.Format) && !before013(h.Format) {
+		return nil
+	}
+	origin, err := s.Read(ctx, holder)
+	if err != nil {
+		return fmt.Errorf("cas: fork: the session holding the base, %s: %w", holder, err)
+	}
+	if _, err := agentsession.Fork(origin, h.Base, agentsession.Header{ID: h.ID, Media: h.Media, Format: h.Format}); errors.Is(err, agentsession.ErrUnsupportedFormat) {
+		return fmt.Errorf("cas: %w", err)
+	}
+	return nil
+}
+
+// before013 reports whether format, this package's when empty, names a
+// minor before 0.13, under which redacted and redacted_from are not
+// defined.
+func before013(format string) bool {
+	if format == "" {
+		return false
+	}
+	return laterFormat("agentsession/0.13", format)
+}
+
+// prefixHolder returns a session that holds base on its prefix, owning
+// it in no log: named, when its prefix holds it, else the first by ID
+// whose prefix the index finds it on. It refuses when it finds none.
+func (s *Store) prefixHolder(base, named string) (string, error) {
+	if named != "" {
+		if dir, err := s.sessionDir(named); err == nil {
+			if nh, err := readHeader(dir); err == nil && nh.Base != "" {
+				if on, err := s.onPath(base, nh.Base); err == nil && on {
+					return named, nil
+				}
+			}
+		}
+	}
+	if err := s.ensureIndex(); err != nil {
+		return "", err
+	}
+	s.idx.Lock()
+	var ids []string
+	for id, path := range s.entries.paths {
+		if slices.Contains(path, base) {
+			ids = append(ids, id)
+		}
+	}
+	s.idx.Unlock()
+	if len(ids) == 0 {
+		return "", fmt.Errorf("cas: fork: no session holding base %s on its prefix could be found", base)
+	}
+	slices.Sort(ids)
+	return ids[0], nil
+}
+
 // placeSession creates a session in one step, as RFC 0002 requires:
 // its header, log, head and mark are written and fsynced in a directory
 // of their own under tmp, which is then renamed to the session's place.
@@ -2102,8 +2200,9 @@ func (s *Store) placeSession(dir string, h agentsession.Header, recs []logRecord
 	// placed here, under the sweep's lock held shared, so this is where a
 	// store holding only redacted entries refuses a header without
 	// redacted last, and where the setting, which is written under that
-	// lock held exclusive, is read last; the entries were checked under
-	// the same lock before their objects were written.
+	// lock held exclusive, is read last. The entries were checked under
+	// the same lock by the caller: admitNew before it wrote their
+	// objects, createLocked for a fork's prefix once it took the lock.
 	if err := s.refuseUnredacted(h, nil); err != nil {
 		return err
 	}

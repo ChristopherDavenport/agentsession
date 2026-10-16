@@ -141,7 +141,10 @@ func WithStaleLockReport(report func(LockInfo)) Option {
 // redacted member, however it arrives: an Append, an Import, the prefix
 // of a fork Create makes. A fork's own entries and a resumed redacted
 // session's native entries are refused alike, since neither was
-// redacted. The option is this process's, not the database's,
+// redacted. Open with the option reads every session the database holds
+// and refuses, with ErrNotRedacted, one that already holds a session
+// whose header lacks redacted or an entry without it. The option is
+// this process's, not the database's,
 // so a store that must fail closed against every process is a cas
 // store set this way.
 func WithRedactedOnly() Option {
@@ -228,6 +231,12 @@ func Open(path string, opts ...Option) (*Store, error) {
 	s := &Store{w: w, r: r, open: map[string]*agentsession.Session{}, refused: map[string]error{}, stale: map[string]bool{}, pid: os.Getpid(), host: host, token: newToken()}
 	for _, opt := range opts {
 		opt(s)
+	}
+	if s.redactedOnly {
+		if err := agentsession.CheckHoldsRedacted(context.Background(), s); err != nil {
+			s.Close()
+			return nil, fmt.Errorf("sqlite: not set to hold only redacted entries: %w", err)
+		}
 	}
 	return s, nil
 }

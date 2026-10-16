@@ -25,6 +25,7 @@ import (
 // the fork would give it a meaning it was not written with.
 func testRedacted(t *testing.T, opts Options) {
 	t.Run("CreateAndGrow", func(t *testing.T) { redactedGrow(t, opts) })
+	t.Run("CreateMalformed", func(t *testing.T) { redactedCreateMalformed(t, opts) })
 	t.Run("Import", func(t *testing.T) { redactedImport(t, opts) })
 	t.Run("PushGrown", func(t *testing.T) { redactedPushGrown(t, opts) })
 	t.Run("RedactedOnly", func(t *testing.T) { redactedOnly(t, opts) })
@@ -426,6 +427,30 @@ func redactedOnly(t *testing.T, opts Options) {
 		}
 		wantErr(t, "push of the session resumed natively", opts.Push(t, st, fileOf(t, pushed.red)), agentsession.ErrNotRedacted)
 	}
+	// An entry whose redacted member is not a marker: one from before
+	// 0.13, which that minor does not define, and one in a form no minor
+	// defines. Neither is redacted, by import, append or push.
+	oldFile, oldRead := oldRedacted(t, "old-only")
+	badFile := malformedRedacted(t, orig, "test.malformed@1")
+	// A remote client's own Prepare refuses this entry first, as one it
+	// may not append anywhere (ErrNoRaise); a store refuses it as not
+	// redacted.
+	_, err = st.Append(ctx, r.red.ID(), oldRead.Entries()[0])
+	if !errors.Is(err, agentsession.ErrNotRedacted) && !errors.Is(err, agentsession.ErrNoRaise) {
+		t.Errorf("an append of an entry read with a redacted member from before 0.13: %v, want ErrNotRedacted", err)
+	}
+	bad := agentsession.NewItemEntry(openresponses.UserText("[bad]"))
+	bad.Unknown = map[string]json.RawMessage{"redacted": json.RawMessage(`[[2,1]]`)}
+	_, err = st.Append(ctx, r.red.ID(), bad)
+	wantErr(t, "an append of an entry with a malformed redacted", err, agentsession.ErrNotRedacted)
+	if take := importer(opts, st); take != nil {
+		wantErr(t, "import of a 0.12 file with redacted members", take(t, st, oldFile), agentsession.ErrNotRedacted)
+		wantErr(t, "import of a file with a malformed redacted", take(t, st, badFile), agentsession.ErrNotRedacted)
+	}
+	if opts.Push != nil {
+		wantErr(t, "push of a 0.12 session with redacted members", opts.Push(t, st, oldFile), agentsession.ErrNotRedacted)
+		wantErr(t, "push of a session with a malformed redacted", opts.Push(t, st, badFile), agentsession.ErrNotRedacted)
+	}
 	for sum, err := range st.List(ctx, agentsession.ListFilter{}) {
 		if err != nil {
 			t.Fatal(err)
@@ -619,6 +644,63 @@ func redactedOriginalFork(t *testing.T, opts Options) {
 	if !reflect.DeepEqual(m, want) {
 		t.Errorf("the mapping %v, want %v", m, want)
 	}
+
+	// Two hops: RF2, a fork of RF at the same base, whose parent holds
+	// the prefix only on its own prefix, so the walk goes on to RO.
+	f2, err := agentsession.Fork(o, base, agentsession.Header{ID: "fo-f2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f2.Append(user("second fork")); err != nil {
+		t.Fatal(err)
+	}
+	if err := take(t, st, fileOf(t, f2)); err != nil {
+		t.Fatal(err)
+	}
+	rf2, err := agentsession.Fork(held, roBase, agentsession.Header{ID: "fo-rf2", ParentSession: "fo-rf", Redacted: true,
+		RedactedFrom: &agentsession.RedactedFrom{Session: "fo-f2", Profile: "test.secret@1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2order := agentsession.FileOrder(f2)
+	own2 := user("[redacted second]")
+	if err := agentsession.SetRedacted(own2, []agentsession.Span{{From: len(f2order), To: len(f2order)}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rf2.Commit(own2); err != nil {
+		t.Fatal(err)
+	}
+	if err := take(t, st, fileOf(t, rf2)); err != nil {
+		t.Fatalf("import the second redacted fork: %v", err)
+	}
+	held2 := readBack(t, st, "fo-rf2")
+	_, m2, err := agentsession.Original(ctx, st, held2)
+	if err != nil {
+		t.Fatalf("Original two hops away: %v", err)
+	}
+	want2 := map[string][]string{own2.Base().ID: {f2order[len(f2order)-1].Base().ID}}
+	for _, e := range agentsession.FileOrder(held2) {
+		if held2.Prefix(e.Base().ID) {
+			want2[e.Base().ID] = want[e.Base().ID]
+		}
+	}
+	if !reflect.DeepEqual(m2, want2) {
+		t.Errorf("the mapping two hops away %v, want %v", m2, want2)
+	}
+
+	// An ancestor's original held short: the prefix's positions name
+	// entries past it, which is ErrStaleOriginal, as for s's own.
+	short := opts.New(t)
+	takeShort := importer(opts, short)
+	ofile := fileOf(t, o)
+	lines := strings.SplitAfter(string(ofile), "\n")
+	for _, file := range [][]byte{[]byte(lines[0] + lines[1]), fileOf(t, ro.red), fileOf(t, f), fileOf(t, rf)} {
+		if err := takeShort(t, short, file); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, err = agentsession.Original(ctx, short, readBack(t, short, "fo-rf"))
+	wantErr(t, "Original whose ancestor's original is held short", err, agentsession.ErrStaleOriginal)
 }
 
 // redactedRedactions: Redactions lists the redacted sessions the store
@@ -683,5 +765,100 @@ func redactedForkRaise(t *testing.T, opts Options) {
 	wantErr(t, "a fork whose prefix holds a redacted member from before 0.13", err, agentsession.ErrUnsupportedFormat)
 	if _, err := st.Create(ctx, agentsession.Header{ID: "above-it", Base: first.ID, ParentSession: "old-redacted"}); err != nil {
 		t.Errorf("a fork above the old member: %v", err)
+	}
+
+	// The base held only on a prefix: F is a 0.12 fork of an origin the
+	// store does not hold, and its prefix holds the old member.
+	o := agentsession.New(agentsession.Header{ID: "absent-origin", Format: "agentsession/0.12"})
+	if _, err := o.Commit(user("before")); err != nil {
+		t.Fatal(err)
+	}
+	g := agentsession.NewItemEntry(openresponses.UserText("an old redacted member"))
+	g.Unknown = map[string]json.RawMessage{"redacted": json.RawMessage(`[1]`)}
+	gr, err := o.Commit(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := agentsession.Fork(o, gr.ID, agentsession.Header{ID: "held-fork", Format: "agentsession/0.12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Commit(user("on the fork")); err != nil {
+		t.Fatal(err)
+	}
+	if err := take(t, st, fileOf(t, f)); err != nil {
+		t.Fatalf("import of a 0.12 fork without its origin: %v", err)
+	}
+	_, err = st.Create(ctx, agentsession.Header{Base: gr.ID, ParentSession: "held-fork"})
+	wantErr(t, "a fork at an old member held only on a prefix", err, agentsession.ErrUnsupportedFormat)
+
+	// The other way round: a fork written under 0.12 over a prefix of
+	// redacted entries, which that minor would read as not redacted.
+	r := newRedactor(original(t, "orig-raise"), "test.secret@1", agentsession.Header{})
+	if _, err := st.Create(ctx, r.red.Header()); err != nil {
+		t.Fatal(err)
+	}
+	appendAll(t, st, r.red.ID(), r.redact(t, original(t, "orig-raise")))
+	_, err = st.Create(ctx, agentsession.Header{Format: "agentsession/0.12", Base: r.red.Leaf(), ParentSession: r.red.ID()})
+	wantErr(t, "a fork under 0.12 over a redacted prefix", err, agentsession.ErrUnsupportedFormat)
+}
+
+// oldRedacted is a 0.12 redacted session whose entries carry redacted
+// members, which that minor does not define, so none is redacted; its
+// file and the session as Read gives it.
+func oldRedacted(t *testing.T, id string) ([]byte, *agentsession.Session) {
+	t.Helper()
+	old := agentsession.New(agentsession.Header{ID: id, Format: "agentsession/0.12", Redacted: true})
+	for i, text := range []string{"[one]", "[two]"} {
+		e := agentsession.NewItemEntry(openresponses.UserText(text))
+		e.Unknown = map[string]json.RawMessage{"redacted": json.RawMessage(fmt.Sprintf("[%d]", i+1))}
+		if _, err := old.Commit(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file := fileOf(t, old)
+	read, err := agentsession.Read(bytes.NewReader(file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range read.Entries() {
+		if _, ok := agentsession.RedactedOf(e); ok {
+			t.Fatalf("a 0.12 redacted member reads as a marker: %s", e.Base().ID)
+		}
+	}
+	return file, read
+}
+
+// malformedRedacted is a redaction of orig under profile, one of whose
+// entries carries a redacted member in a form no minor defines.
+func malformedRedacted(t *testing.T, orig *agentsession.Session, profile string) []byte {
+	t.Helper()
+	r := newRedactor(orig, profile, agentsession.Header{})
+	r.redact(t, orig)
+	bad := agentsession.NewItemEntry(openresponses.UserText("[bad]"))
+	bad.Unknown = map[string]json.RawMessage{"redacted": json.RawMessage(`[0]`)}
+	if _, err := r.red.Commit(bad); err != nil {
+		t.Fatal(err)
+	}
+	return fileOf(t, r.red)
+}
+
+// redactedCreateMalformed: a create of a header whose redacted_from RFC
+// 0001 calls malformed, naming the session itself, with its format
+// given or for the store to fill, is refused with ErrRedactedFrom in
+// every store, and leaves nothing; a store would otherwise hold a
+// session it could not read back.
+func redactedCreateMalformed(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	for _, h := range []agentsession.Header{
+		{ID: "r-itself", Redacted: true, RedactedFrom: &agentsession.RedactedFrom{Session: "r-itself"}},
+		{ID: "r-itself-later", Format: agentsession.Format, Redacted: true, RedactedFrom: &agentsession.RedactedFrom{Session: "r-itself-later", Profile: "p"}},
+	} {
+		_, err := st.Create(ctx, h)
+		wantErr(t, "Create of "+h.ID, err, agentsession.ErrRedactedFrom)
+		if _, err := st.Open(ctx, h.ID); !errors.Is(err, agentsession.ErrNoSession) {
+			t.Errorf("the refused create left %s: %v", h.ID, err)
+		}
 	}
 }

@@ -24,17 +24,29 @@ var ErrNotRedacted = errors.New("agentsession: not redacted")
 // original and asking again may answer.
 var ErrStaleOriginal = errors.New("agentsession: the store's copy of the original is behind the version redacted")
 
-// CheckCreate is the refusal RFC 0002 makes of a create: a header
-// carrying redacted_from without redacted, which RFC 0001 calls
-// malformed ([ErrRedactedFrom]), whether typed or held in Extra as a
-// header decoded without a format holds it, and, in a store that holds
+// CheckCreate is the refusal a store makes of a create for what the
+// redaction rules forbid: a redacted_from RFC 0001 calls malformed
+// ([ErrRedactedFrom]), one on a session that is not redacted, whether
+// typed or held in Extra as a header decoded without a format holds
+// it, one naming no session, or one naming the session itself, as
+// [Header.Validate] refuses it on a read; and, in a store that holds
 // only redacted entries, a header that does not carry redacted
 // ([ErrNotRedacted]). A store calls it before it creates anything; nil
-// means it may. A redacted session is created as any other is.
+// means it may. A header whose ID the store fills names no session
+// yet, so cannot name itself. A redacted session is created as any
+// other is.
 func CheckCreate(h Header, redactedOnly bool) error {
+	r := h.RedactedFrom
+	if r == nil {
+		r = extraRedactedFrom(h)
+	}
 	switch {
-	case !h.Redacted && (h.RedactedFrom != nil || unmarkedRedactedFrom(h)):
+	case !h.Redacted && r != nil:
 		return fmt.Errorf("%w: create %s: on a session that is not redacted", ErrRedactedFrom, h.ID)
+	case r != nil && r.Session == "":
+		return fmt.Errorf("%w: create %s: names no session", ErrRedactedFrom, h.ID)
+	case r != nil && h.ID != "" && r.Session == h.ID:
+		return fmt.Errorf("%w: create %s: names the session itself", ErrRedactedFrom, h.ID)
 	case redactedOnly && !h.Redacted:
 		return fmt.Errorf("%w: create %s in a store that holds only redacted entries", ErrNotRedacted, h.ID)
 	}
@@ -59,23 +71,48 @@ func CheckRedacted(h Header, entries []Entry) error {
 	return nil
 }
 
-// unmarkedRedactedFrom reports whether a header holds in Extra a
-// redacted_from that its file would decode as the object, which a
-// header decoded without a format holds there: a store writes a header
-// with no format at this package's, which defines the member, so Read
-// would then refuse the file. A member in another form is kept as
-// written, as a reader keeps it.
-func unmarkedRedactedFrom(h Header) bool {
+// CheckHoldsRedacted reads every session st lists and refuses, with
+// [ErrNotRedacted], the first whose header does not carry redacted or
+// that holds an entry without it, as [CheckRedacted] does: what a store
+// set to hold only redacted entries does at its open, so it is not set
+// that way over what it already holds. A session it cannot read, or a
+// listing error, refuses too.
+func CheckHoldsRedacted(ctx context.Context, st Store) error {
+	for sum, err := range st.List(ctx, ListFilter{}) {
+		if err != nil {
+			return err
+		}
+		s, err := readHeld(ctx, st, sum.Header.ID)
+		if err != nil {
+			return fmt.Errorf("agentsession: checking %s holds only redacted entries: %w", sum.Header.ID, err)
+		}
+		if err := CheckRedacted(s.Header(), s.Entries()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// extraRedactedFrom is the redacted_from a header holds in Extra that
+// its file would decode as the object, which a header decoded without a
+// format holds there, or nil: a store writes a header with no format at
+// this package's, which defines the member, so Read would then hold it
+// to the member's rules. A member in another form is kept as written,
+// as a reader keeps it.
+func extraRedactedFrom(h Header) *RedactedFrom {
 	raw, ok := h.Extra["redacted_from"]
 	format := h.Format
 	if format == "" {
 		format = Format
 	}
 	if !ok || !definesRedactedFrom(format) {
-		return false
+		return nil
 	}
 	var r RedactedFrom
-	return json.Unmarshal(raw, &r) == nil
+	if json.Unmarshal(raw, &r) != nil {
+		return nil
+	}
+	return &r
 }
 
 // FileOrder returns a session's entries in file order, as RFC 0002
