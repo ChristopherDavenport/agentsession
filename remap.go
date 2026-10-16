@@ -186,9 +186,10 @@ type Remapped struct {
 // define among them, comes through unchanged, and so does the order of
 // parents unless an element of it was re-pointed: then the elements are
 // sorted by session and entry, as a writer must write them, since the
-// entry is a new one. Its ID is the input's, so a writer clears it, or
-// commits the entry to a session that computes its own, and the
-// content hash is empty until it does. A writer that re-points parent
+// entry is a new one. Its ID is the input's, which no longer hashes it,
+// so a writer clears it before a commit, which would refuse it with
+// [ErrBadID], and the content hash is empty until the commit computes
+// both. A writer that re-points parent
 // here, rather than setting it afterwards, keeps a line the fields did
 // not reproduce as the line, with the references changed.
 //
