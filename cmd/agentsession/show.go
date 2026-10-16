@@ -114,6 +114,9 @@ func printHeader(w io.Writer, s *agentsession.Session) {
 	if h.Media != "" {
 		fmt.Fprintf(tw, "media\t%s\n", h.Media)
 	}
+	if h.Redacted {
+		fmt.Fprintf(tw, "redacted from\t%s\n", describeRedactedFrom(h))
+	}
 	if name := s.Name(); name != "" {
 		fmt.Fprintf(tw, "name\t%s\n", name)
 	}
