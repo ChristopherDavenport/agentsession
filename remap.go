@@ -1,8 +1,10 @@
 package agentsession
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,14 +40,6 @@ const (
 	roleDataKeys
 )
 
-// callIDMember is the member that names a function call by its call_id,
-// wherever it appears: in a function call item and its output, a
-// dispatch, a decision, a link, a custom entry, and the payload's other
-// call items. It pairs entries across a session and a subsession's ID is
-// derived from it, so a rewrite of the body leaves it, at any depth and
-// in an extension entry as well.
-const callIDMember = "call_id"
-
 // special is one member of an entry's JSON that is not body text.
 type special struct {
 	// path names the member from the top of the entry: a member name at
@@ -61,6 +55,29 @@ type special struct {
 	// a relation that does not define it, as written, and a member so
 	// kept names nothing: it is body.
 	when func(Entry) bool
+	// holds, if set, says the same of the member's place: whether the
+	// object it is a member of, an element of a list, is one the format
+	// defines the member on.
+	holds func(holder map[string]any) bool
+}
+
+// applies reports whether sp names the member that holder holds.
+func (sp special) applies(holder map[string]any) bool {
+	return sp.holds == nil || sp.holds(holder)
+}
+
+// keepOf reports whether an omitted part is a keep, where alone of is
+// defined: a positive integer keep, as the decoder takes one, and no id.
+func keepOf(el map[string]any) bool {
+	if id, _ := el["id"].(string); id != "" {
+		return false
+	}
+	n, ok := el["keep"].(json.Number)
+	if !ok {
+		return false
+	}
+	k, err := strconv.ParseInt(string(n), 10, 32)
+	return err == nil && k > 0
 }
 
 // memberPath is a path, for the table.
@@ -82,30 +99,41 @@ var envelopeMembers = []special{
 }
 
 // bodyMembers are, by core type, the members of the body that are not
-// body text: every member RFC 0001 has name an entry or a session, and
-// every one holding a hash. A judged_by link's target and a cancel
-// notice's name an entry of this session, as a dispatch's does; on any
-// other link the member is not defined and is body. A compaction's
-// checkpoint holds the settings in force, whose omit items name entries
-// as a config entry's do; its omitted parts carry no of, which is taken
-// as an entry should a checkpoint hold one. An env entry's files map a
-// path to the hash of the file: the hash is not body text, and the path
-// is data in a member name, which a rewrite of the body reaches. Every
-// call_id names a call (callIDMember), and so does each element of a run
-// end's pending list.
+// body text: every member RFC 0001 has name an entry or a session, every
+// one holding a hash, and every call_id the format defines. Each is
+// taken only where the format defines it, and a member of one of those
+// names in another form or place is body text. A judged_by link's
+// target and a cancel notice's name an entry of this session, as a
+// dispatch's does; on any other link the member is body. An omitted
+// part's of names an entry beside a positive keep and no id, and on no
+// other element. A compaction's checkpoint holds the settings in force,
+// whose omit items name entries as a config entry's do; it writes its
+// omitted parts whole, so carries no of. An env entry's files map a path
+// to the hash of the file: the hash is not body text, and the path is
+// data in a member name, which a rewrite of the body reaches.
+//
+// A call_id pairs a call with its output, its dispatches, decisions and
+// links, and a subsession's ID is derived from it, so a rewrite of the
+// body leaves it where the format defines it: on an item (and so on a
+// queued entry's item and a compaction's pinned items), on a dispatch, a
+// decision, a link and a custom entry, and in a run end's pending list.
+// A call_id inside data the format does not define, a decision's args,
+// a custom entry's data, an outcome's details or a member it does not
+// define, is the writer's text and body.
 var bodyMembers = map[string][]special{
-	TypeItem:     {{path: memberPath("queued_from"), role: roleEntry}},
+	TypeItem:     {{path: memberPath("queued_from"), role: roleEntry}, {path: memberPath("item", "call_id"), role: roleCallID}},
+	TypeQueued:   {{path: memberPath("item", "call_id"), role: roleCallID}},
 	TypeResponse: {{path: memberPath("request_hash"), role: roleHash}},
 	TypeConfig: {
 		{path: memberPath("omit", "items", "[]"), role: roleEntry, when: func(e Entry) bool { return e.(*ConfigEntry).Omit != nil }},
-		{path: memberPath("instructions_omitted", "[]", "of"), role: roleEntry},
+		{path: memberPath("instructions_omitted", "[]", "of"), role: roleEntry, holds: keepOf},
 		{path: memberPath("instructions_parts", "[]", "hash"), role: roleHash},
 	},
 	TypeCompaction: {
 		{path: memberPath("first_kept"), role: roleEntry},
-		{path: memberPath("config", "omit", "items", "[]"), role: roleEntry},
-		{path: memberPath("config", "instructions_omitted", "[]", "of"), role: roleEntry},
+		{path: memberPath("config", "omit", "items", "[]"), role: roleEntry, when: func(e Entry) bool { return !e.(*CompactionEntry).Config.Omit.IsZero() }},
 		{path: memberPath("config", "instructions_parts", "[]", "hash"), role: roleHash},
+		{path: memberPath("pinned", "[]", "call_id"), role: roleCallID},
 	},
 	TypeBranchSummary: {{path: memberPath("from"), role: roleEntry}},
 	TypeRun:           {{path: memberPath("pending", "[]"), role: roleCallID}},
@@ -193,21 +221,22 @@ type Remapped struct {
 // session, through m, and returns the result as a new entry; e is not
 // changed. The entry references are parent, each parents element's
 // entry, an item's queued_from, a compaction's first_kept and the omit
-// items and omitted parts' of of its checkpoint, a branch summary's
-// from, the target of a label, an outcome, a dispatch and a decision, a
-// config entry's omit items and each omitted part's of, and the target
-// of a judged_by link and of a cancel notice, which name an entry of
-// this session. The session references are each parents element's
-// session and a link's session. A member the decoder kept as written,
-// because it is not in the form the format defines or not on a relation
-// that defines it, names nothing and is left alone, as is an item's
-// response, which is a provider's ID and not an entry's.
+// items of its checkpoint, a branch summary's from, the target of a
+// label, an outcome, a dispatch and a decision, a config entry's omit
+// items and the of of each omitted part that is a keep, a positive keep
+// and no id, and the target of a judged_by link and of a cancel notice,
+// which name an entry of this session. The session references are each
+// parents element's session and a link's session. A member of one of
+// those names in a form or place the format does not define it in, kept
+// as written by the decoder, such as an of beside an id, names nothing
+// and is left alone, as is an item's response, which is a provider's ID
+// and not an entry's.
 //
 // Every other member, kept extras and members the format does not
 // define among them, comes through unchanged, and so does the order of
 // parents unless an element of it was re-pointed: then the elements are
 // sorted by session and entry, as a writer must write them, since the
-// entry is a new one. Its ID is the input's, which no longer hashes it,
+// entry is a new one, an extension entry's as a core entry's. Its ID is the input's, which no longer hashes it,
 // so a writer clears it before a commit, which would refuse it with
 // [ErrBadID], and the content hash is empty until the commit computes
 // both. A writer that re-points parent
@@ -269,8 +298,8 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 			continue
 		}
 		eachString(root, sp.path, "", nil, func(at, s string, holder map[string]any) (string, bool) {
-			if s == "" {
-				return s, false // names nothing
+			if s == "" || !sp.applies(holder) {
+				return s, false // names nothing, or is not the member defined here
 			}
 			id, ok := mapped(at, s, holder)
 			if ok && id != s && sp.path[0] == "parents" {
@@ -318,6 +347,9 @@ func remapUnknown(u *UnknownEntry, m Remap) (Remapped, error) {
 				out.Unmapped = append(out.Unmapped, Reference{At: at + "/session", Session: r.Session})
 			}
 		}
+	}
+	if !slices.Equal(cp.Parents, u.Parents) {
+		sortParents(cp.Parents) // a re-pointed reference is a writer's, sorted
 	}
 	raw, err := rewriteEnvelope(&cp)
 	if err != nil {
