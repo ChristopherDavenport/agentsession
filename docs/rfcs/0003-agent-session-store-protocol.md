@@ -849,7 +849,7 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | `bad_ref_target` | 422 | a pushed ref whose `next` is not the pushed session |
 | `format` | 422 | a format the server does not read, or earlier than the session's; also an append or push that would raise a header RFC 0001 forbids raising, one before 0.13 holding `redacted_from` |
 | `redacted` | 409 | a create of a session whose header carries `redacted`, or an append or push that adds entries to a held redacted session; a redacted session arrives whole, by push |
-| `not_redacted` | 403 | a create or push of a session whose header does not carry `redacted`, to a store that holds only redacted sessions |
+| `not_redacted` | 403 | a create, push or fetch that would bring a session whose header does not carry `redacted` into a store that holds only redacted sessions |
 | `read_only` | 403 | a write to a store open read-only |
 | `unsupported` | 501 | a feature the store lacks (marks, exchange, commit, committed view, refs, objects) |
 | `store_fault` | 500/503 | a store failure the client cannot fix: corrupt object, stopped store, layout, a session modified outside the store |

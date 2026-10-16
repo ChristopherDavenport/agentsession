@@ -342,8 +342,8 @@ history it does not hold in full, and a body is held once however many
 entries name it, which RFC 0002 builds on. Wherever this document has a
 member name an entry — `parent`, `parents`, `target`, `first_kept`,
 `from`, `queued_from`, `omit`'s `items` in a `config` and in a
-compaction's checkpoint, `instructions_omitted`'s `of` — it names it by
-`id`.
+compaction's checkpoint, `instructions_omitted`'s `of` beside a positive
+`keep` and no `id`, where alone it is defined — it names it by `id`.
 
 Two entries with the same type, content, parent, `parents` and `ts` are
 one entry. A writer that means two makes them differ, and sub-second
@@ -1765,7 +1765,9 @@ A redactor:
   earlier in the file, as migration does — `parents` into this file,
   `target`, `first_kept`, `from`, `queued_from`, `omit`'s `items` in a
   `config` and in a compaction's checkpoint, and `instructions_omitted`'s
-  `of` — and last the header's `base`, once the prefix is hashed;
+  `of` where it is defined — and last the header's `base`, once the
+  prefix is hashed. A member of one of those names in a form or place
+  this document does not define there is body text, not a reference;
 - MUST keep instructions whole: where it changes a part's text, the
   later parts that name that text by `hash` name it by the hash of the
   new text, and instructions that were the join of their parts stay the
