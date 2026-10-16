@@ -1859,7 +1859,7 @@ itself in namespaced members of `redacted_from`. A reader keeps as
 written a member of `redacted_from` it does not know, namespaced or
 not, and `session` or `profile` in another form, as it does any member
 it does not know; the refusal of `redacted_from` without `redacted`
-binds the object that carries `session` as a string.
+binds the object that carries `session` as a non-empty string.
 
 The redacted session's `id` is new, since its entries are not the
 original's and a store or dataset may hold both. A redactor that writes
@@ -2174,7 +2174,9 @@ not. These are the 0.13 rules that turn on the header rather than on
 the member. For the same reason a writer MUST NOT raise to 0.13 or
 later a header that holds `redacted_from`, or a file an entry of which
 holds `redacted`, and refuses to append to such a file, since the raise
-would give the member a meaning it was not written with.
+would give the member a meaning it was not written with. A writer MUST
+NOT create a session at 0.13 or later whose prefix holds such an entry,
+a fork of such a file among them, for the same reason.
 
 ## Changes since 0.11
 
