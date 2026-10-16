@@ -65,10 +65,15 @@ versions may break the API.
   the extras a reader keeps beside a typed member, an extension entry's
   members, items and inline media, and a normalised record's `was`,
   rewritten as the JSON text it is, and `raw`, decoded and encoded
-  again, so the original value does not survive in the record. Never
-  the envelope, legacy_id, a reference, a hash (`request_hash`, an
-  instruction part's `hash`, an env entry's file hashes) or a sidecar
-  URL. A part carrying its text and a hash has the hash recomputed; a
+  again, so the original value does not survive in the record, and the
+  paths an env entry's `files` are keyed by, the one place the format
+  keeps data in member names; two paths made one are refused with
+  `ErrKeyCollision`. Never another member name (a tool name, an extra
+  key), the envelope, legacy_id, a reference, a hash (`request_hash`,
+  an instruction part's `hash`, an env entry's file hashes), a sidecar
+  URL, or a `call_id` wherever it appears, with a run end's pending
+  list: it pairs entries and derives subsession IDs, so a redactor that
+  must change one changes them all itself. A part carrying its text and a hash has the hash recomputed; a
   `Rewriter` (`NewRewriter`) given a session's entries in file order
   also gives a part named by hash alone the hash of the rewritten text,
   which one entry alone cannot. Instructions that were their parts
