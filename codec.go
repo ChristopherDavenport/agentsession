@@ -151,12 +151,14 @@ type migration struct {
 // id is the same entry, kept once and reported. rule, for a file with a
 // base, holds the line to the base rule, as Scan holds it.
 func (s *Session) link(e Entry, m *migration, data, c []byte, rule *baseRule) error {
-	b := e.Base()
 	if m != nil {
-		if err := m.rewrite(e, s); err != nil {
+		var err error
+		if e, err = m.rewrite(e, s); err != nil {
 			return err
 		}
-	} else {
+	}
+	b := e.Base()
+	if m == nil {
 		if c == nil {
 			var err error
 			if c, err = jcs.Transform(data); err != nil {
@@ -188,104 +190,68 @@ func (s *Session) link(e Entry, m *migration, data, c []byte, rule *baseRule) er
 	return nil
 }
 
-// rewrite migrates one entry of an earlier minor version in place: every
-// member that names an entry in this file takes the hash assigned to
-// that entry earlier in the file, the old id moves to legacy_id, ts
-// takes its one spelling with the instant unchanged, and the entry is
-// hashed. An extension entry's members are opaque, so it is rewritten
-// only in its envelope and recorded as unresolved.
-func (m *migration) rewrite(e Entry, s *Session) error {
+// rewrite migrates one entry of an earlier minor version: the old id
+// moves to legacy_id, ts takes its one spelling with the instant
+// unchanged, every member that names an entry in this file takes the
+// hash assigned to that entry earlier in the file, through
+// [RemapRefs] with the order of parents kept, and the entry is hashed.
+// It returns the migrated entry, which replaces e. A reference left as
+// written, but parent, which link refuses when it names no entry, and
+// an extension entry, whose members are opaque and which is rewritten
+// only in its envelope, are recorded as unresolved.
+func (m *migration) rewrite(e Entry, s *Session) (Entry, error) {
 	b := e.Base()
 	b.line = nil // the line is rewritten, so the fields write it
 	old := b.ID
 	if old == "" {
-		return fmt.Errorf("%w: missing id", ErrBadID)
+		return nil, fmt.Errorf("%w: missing id", ErrBadID)
 	}
 	b.LegacyID = old
 	b.Timestamp = b.Timestamp.UTC().Truncate(time.Nanosecond)
-	if b.Parent != "" {
-		if id, ok := m.ids[b.Parent]; ok {
-			b.Parent = id
-		}
-	}
-	unresolved := false
-	b.remapKeptParents(func(session, entry string) (string, bool) {
+	r, err := remapRefs(e, Remap{Entry: func(session, entry string) (string, bool) {
+		// A reference into another session names an entry by an id
+		// this reader cannot rewrite; it keeps its string and the file
+		// is not re-emitted as 0.5.
 		if session != "" && session != s.header.ID {
 			return "", false
 		}
 		id, ok := m.ids[entry]
 		return id, ok
-	})
-	for i, r := range b.Parents {
-		if r.Session == "" || r.Session == s.header.ID {
-			if id, ok := m.ids[r.Entry]; ok {
-				b.Parents[i].Entry = id
-			} else {
-				unresolved = true
-			}
-		} else {
-			// A reference into another session names an entry by an id
-			// this reader cannot rewrite; it keeps its string and the
-			// file is not re-emitted as 0.5.
+	}}, false)
+	if err != nil {
+		return nil, err
+	}
+	unresolved := r.Opaque
+	for _, ref := range r.Unmapped {
+		if ref.At != "/parent" {
 			unresolved = true
 		}
-	}
-	ref := func(p *string) {
-		if *p == "" {
-			return
-		}
-		if id, ok := m.ids[*p]; ok {
-			*p = id
-		} else {
-			unresolved = true
-		}
-	}
-	switch v := e.(type) {
-	case *ItemEntry:
-		ref(&v.QueuedFrom)
-	case *CompactionEntry:
-		ref(&v.FirstKept)
-	case *BranchSummaryEntry:
-		ref(&v.From)
-	case *LabelEntry:
-		ref(&v.Target)
-	case *OutcomeEntry:
-		ref(&v.Target)
-	case *DispatchEntry:
-		ref(&v.Target)
-	case *DecisionEntry:
-		ref(&v.Target)
-	case *LinkEntry:
-		// A cancel notice names the link of its callee in this file.
-		if v.Cancel != "" {
-			ref(&v.Target)
-		}
-	case *UnknownEntry:
-		unresolved = true
 	}
 	if unresolved {
 		s.unresolved = append(s.unresolved, old)
 	}
+	e = r.Entry
+	b = e.Base()
 	b.ID = ""
 	if u, ok := e.(*UnknownEntry); ok {
 		raw, err := rewriteEnvelope(u)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		u.Raw = raw
 	}
 	if err := s.hashEntry(e, nil); err != nil {
-		return err
+		return nil, err
 	}
 	if u, ok := e.(*UnknownEntry); ok {
 		raw, err := rewriteEnvelope(u)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		u.Raw = raw
 	}
 	m.ids[old] = b.ID
-	return nil
+	return e, nil
 }
 
 // Write encodes the session as JSONL: the header, then every entry in

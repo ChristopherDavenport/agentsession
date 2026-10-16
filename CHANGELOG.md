@@ -42,6 +42,61 @@ versions may break the API.
   `["redacted","<original>",<entries>,"<profile>"]`, so the same
   redaction of the same entries gives the same session, and an ID
   holding a slash cannot make two names one.
+- **Added: `RemapRefs` and `RemapHeaderRefs`, for a writer that
+  re-points a session's references (#236).** `RemapRefs` re-points every
+  member of an entry that names an entry or a session through a `Remap`
+  of two callbacks, `Entry(session, entry)` and `Session(id)`, and
+  returns a new entry (`Remapped.Entry`) with the references a callback
+  left as written (`Unmapped`, each a `Reference` with its JSON
+  Pointer) and whether it was an extension entry, whose own members it
+  cannot read (`Opaque`). The members are parent, parents, an item's
+  queued_from, a compaction's first_kept and its checkpoint's omit
+  items, a branch summary's from, the target of a label, an outcome, a
+  dispatch, a decision, a judged_by link and a cancel notice, a config
+  entry's omit items and the of of an omitted part that is a keep, and
+  a link's session. Each is taken only where the format defines it: an
+  of beside an id, or one of those names in another form, is body text.
+  Kept extras stay beside the member they were beside, re-pointed
+  parents are sorted as a writer writes them, an extension entry's as a
+  core entry's, and an entry whose fields did not write its line back
+  is written as that line with the references changed.
+  `RemapHeaderRefs` re-points base and parent_session, and leaves
+  redacted_from.
+- **Added: `RewriteStrings` and `Rewriter`, for a writer that rewrites
+  a session's bodies (#236).** `RewriteStrings` applies a deterministic
+  function to every string of an entry's body: typed members, Unknown,
+  the extras a reader keeps beside a typed member, an extension entry's
+  members, items and inline media, and a normalised record's `was`,
+  rewritten as the JSON text it is or, for a number, as its digits, and
+  `raw`, decoded and encoded again, so the original value does not
+  survive in the record; and the paths an env entry's `files` are keyed
+  by, the one place the format keeps data in member names, two paths
+  made one being refused with `ErrKeyCollision`. Never another member
+  name (a tool name, an extra key, a key inside custom data), the
+  envelope, legacy_id, a reference, a hash (`request_hash`, an
+  instruction part's `hash`, an env entry's file hashes), a sidecar
+  URL, or a `call_id` where the format defines one (an item, a
+  dispatch, a decision, a link, a custom entry, a run end's pending
+  list): it pairs entries and derives subsession IDs, so a redactor
+  that must change one changes them all itself. A `call_id` inside data
+  the format does not define is text. The function is called in one
+  order: members sorted, elements in index order. Instructions that are
+  the join of their parts are rebuilt from the rewritten parts rather
+  than rewritten whole, so a rewrite cannot cross a part boundary; a
+  `Rewriter` (`NewRewriter`), one per session file given its entries in
+  file order and not safe for concurrent use, resolves parts named by
+  hash or keep as context building does and gives a part named by hash
+  the hash of the rewritten text. Instructions beside a part it cannot
+  resolve are refused with `ErrInstructionsJoin` when the function would
+  change them. The result never writes the line its input was read
+  with.
+- **Changed: migration from before 0.5 rewrites every entry-naming
+  member.** It runs on `RemapRefs`, so omit items, an omitted keep's of
+  and a judged_by link's target in such a file are rewritten too, and
+  one that names no earlier entry leaves the session unresolved, as RFC
+  0001's versioning section asks. An of where the format does not
+  define it, beside an id, is left as written, as before. No fixture
+  moves.
 
 ## v0.0.26 - 2026-10-15
 
