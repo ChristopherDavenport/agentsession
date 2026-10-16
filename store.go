@@ -329,14 +329,27 @@ func (m *MemoryStore) Import(ctx context.Context, r io.Reader, asRecord bool) (*
 }
 
 // forkOrigin returns the session a fork at base continues from: named, when
-// the named session holds base, else one whose own entries include it,
+// the named session's own entries include base, or the session up its
+// parent_session line that owns it when named holds it on its prefix,
+// else one whose own entries include it,
 // else one that holds it on its prefix, the first by ID when several
 // do. The caller holds m.mu.
 func (m *MemoryStore) forkOrigin(named, base string) *Session {
-	if s, ok := m.sessions[named]; ok {
-		if _, ok := s.Entry(base); ok {
+	// Named on its prefix, the base is its own origin's: parent_session
+	// is followed up to the session whose own entries include it, as
+	// cas finds it, since an import holds a fork to that one's media.
+	for seen := 0; named != "" && seen < 64; seen++ {
+		s, ok := m.sessions[named]
+		if !ok {
+			break
+		}
+		if _, ok := s.Entry(base); !ok {
+			break
+		}
+		if !s.Prefix(base) || s.Header().ParentSession == "" {
 			return s
 		}
+		named = s.Header().ParentSession
 	}
 	ids := make([]string, 0, len(m.sessions))
 	for id := range m.sessions {

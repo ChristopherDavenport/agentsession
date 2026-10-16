@@ -332,10 +332,22 @@ func (s *Store) place(sess *agentsession.Session) (*agentsession.Session, error)
 	if !within(s.root, path) {
 		return nil, fmt.Errorf("%w: session %q in %q is outside the store", ErrBadName, h.ID, h.CWD)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// A project directory this call makes is removed again on a
+	// refusal, when nothing else has come to live in it, so a refused
+	// create or import leaves nothing under the root.
+	dir := filepath.Dir(path)
+	_, statErr := os.Stat(dir)
+	made := errors.Is(statErr, os.ErrNotExist)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("jsonl: create project directory: %w", err)
 	}
+	unmake := func() {
+		if made {
+			os.Remove(dir) // fails, harmlessly, if it is not empty
+		}
+	}
 	if err := acquireLock(path, s.staleReport); err != nil {
+		unmake()
 		return nil, err
 	}
 	// The header and any prefix are written beside the file and linked
@@ -348,6 +360,7 @@ func (s *Store) place(sess *agentsession.Session) (*agentsession.Session, error)
 	fail := func(err error) (*agentsession.Session, error) {
 		os.Remove(tmp)
 		releaseLock(path)
+		unmake()
 		return nil, err
 	}
 	t, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -404,7 +417,9 @@ func syncDir(dir string) {
 }
 
 // forkOrigin returns the session a fork at base continues from: named, when
-// the named session holds base, else one whose own entries include it,
+// the named session's own entries include base, or the session up its
+// parent_session line that owns it when named holds it on its prefix,
+// else one whose own entries include it,
 // else one that holds it on its prefix. Finding it without a name reads
 // every session under the root. A session not open here is read without
 // taking its lock. The caller holds s.mu.
@@ -419,14 +434,25 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 		}
 		return h.session
 	}
-	if named != "" {
-		if path, err := s.find(named); err == nil {
-			if sess := read(named, path); sess != nil {
-				if _, ok := sess.Entry(base); ok {
-					return sess, nil
-				}
-			}
+	// Named on its prefix, the base is its own origin's: parent_session
+	// is followed up to the session whose own entries include it, as
+	// cas finds it, since an import holds a fork to that one's media.
+	for seen := 0; named != "" && seen < 64; seen++ {
+		path, err := s.find(named)
+		if err != nil {
+			break
 		}
+		sess := read(named, path)
+		if sess == nil {
+			break
+		}
+		if _, ok := sess.Entry(base); !ok {
+			break
+		}
+		if !sess.Prefix(base) || sess.Header().ParentSession == "" {
+			return sess, nil
+		}
+		named = sess.Header().ParentSession
 	}
 	matches, err := filepath.Glob(filepath.Join(s.root, "*", "*.jsonl"))
 	if err != nil {

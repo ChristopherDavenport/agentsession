@@ -465,6 +465,9 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 // synthetic leaf marker names is refused. It keeps no record mark, so
 // asRecord is not read.
 func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agentsession.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s.readOnly {
 		return nil, agentsession.ErrReadOnly
 	}
@@ -731,7 +734,9 @@ func (s *Store) Read(ctx context.Context, id string) (*agentsession.Session, err
 }
 
 // forkOrigin returns the session a fork at base continues from: named, when
-// the named session holds base, else one whose own entries include it,
+// the named session's own entries include base, or the session up its
+// parent_session line that owns it when named holds it on its prefix,
+// else one whose own entries include it,
 // else one that holds it on its prefix. A session not open here is read
 // without being claimed, so a fork can be made from a session another
 // process is writing. The caller holds s.mu.
@@ -743,12 +748,21 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 		sess, _, err := s.load(ctx, id)
 		return sess, err
 	}
-	if named != "" {
-		if sess, err := read(named); err == nil {
-			if _, ok := sess.Entry(base); ok {
-				return sess, nil
-			}
+	// Named on its prefix, the base is its own origin's: parent_session
+	// is followed up to the session whose own entries include it, as
+	// cas finds it, since an import holds a fork to that one's media.
+	for seen := 0; named != "" && seen < 64; seen++ {
+		sess, err := read(named)
+		if err != nil {
+			break
 		}
+		if _, ok := sess.Entry(base); !ok {
+			break
+		}
+		if !sess.Prefix(base) || sess.Header().ParentSession == "" {
+			return sess, nil
+		}
+		named = sess.Header().ParentSession
 	}
 	rows, err := s.r.QueryContext(ctx, `SELECT DISTINCT session_id FROM entries WHERE id = ? ORDER BY session_id`, base)
 	if err != nil {
