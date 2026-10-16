@@ -42,6 +42,44 @@ versions may break the API.
   `["redacted","<original>",<entries>,"<profile>"]`, so the same
   redaction of the same entries gives the same session, and an ID
   holding a slash cannot make two names one.
+- **Added: `RemapRefs` and `RemapHeaderRefs`, for a writer that
+  re-points a session's references (#236).** `RemapRefs` re-points every
+  member of an entry that names an entry or a session through a `Remap`
+  of two callbacks, `Entry(session, entry)` and `Session(id)`, and
+  returns a new entry (`Remapped.Entry`) with the references a callback
+  left as written (`Unmapped`, each a `Reference` with its JSON
+  Pointer) and whether it was an extension entry, whose own members it
+  cannot read (`Opaque`). The members are parent, parents, an item's
+  queued_from, a compaction's first_kept and its checkpoint's omit
+  items, a branch summary's from, the target of a label, an outcome, a
+  dispatch, a decision, a judged_by link and a cancel notice, a config
+  entry's omit items and an omitted part's of, and a link's session.
+  Kept extras stay beside the member they were beside, re-pointed
+  parents are sorted as a writer writes them, and an entry whose fields
+  did not write its line back is written as that line with the
+  references changed. `RemapHeaderRefs` re-points base and
+  parent_session, and leaves redacted_from.
+- **Added: `RewriteStrings` and `Rewriter`, for a writer that rewrites
+  a session's bodies (#236).** `RewriteStrings` applies a deterministic
+  function to every string of an entry's body: typed members, Unknown,
+  the extras a reader keeps beside a typed member, an extension entry's
+  members, items and inline media, and a normalised record's `was`,
+  rewritten as the JSON text it is, and `raw`, decoded and encoded
+  again, so the original value does not survive in the record. Never
+  the envelope, legacy_id, a reference, a hash (`request_hash`, an
+  instruction part's `hash`, an env entry's file hashes) or a sidecar
+  URL. A part carrying its text and a hash has the hash recomputed; a
+  `Rewriter` (`NewRewriter`) given a session's entries in file order
+  also gives a part named by hash alone the hash of the rewritten text,
+  which one entry alone cannot. Instructions that were their parts
+  joined and would not be after the rewrite are refused with
+  `ErrInstructionsJoin`. The result never writes the line its input
+  was read with.
+- **Changed: migration from before 0.5 rewrites every entry-naming
+  member.** It runs on `RemapRefs`, so omit items, an omitted part's of
+  and a judged_by link's target in such a file are rewritten too, and
+  one that names no earlier entry leaves the session unresolved, as RFC
+  0001's versioning section asks. No fixture moves.
 
 ## v0.0.26 - 2026-10-15
 
