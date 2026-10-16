@@ -52,8 +52,9 @@ and policy the format has no reason to own.
   original's, as RFC 0001 always said; the confirmation risk is stated
   in the RFC and SECURITY.md instead.
 - **Derived IDs** make a store-wide redaction repeatable: UUIDv5 over
-  `redacted/<original id>/<n>/<profile>`. The leading `redacted` keeps
-  it apart from a subsession retry's `<parent>/<call_id>/<n>`.
+  the canonical JSON name `["redacted","<original>",<n>,"<profile>"]`.
+  An array cannot be read two ways when an ID holds a `/`, and is not a
+  subsession's `<parent>/<call_id>` name.
 - **References into a held twin are re-pointed.** A redaction of a
   whole store holds every session's twin, so references inside it name
   twins, and the original's hashes stay out of the published set.
