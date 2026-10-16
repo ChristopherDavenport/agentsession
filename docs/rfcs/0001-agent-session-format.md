@@ -1854,7 +1854,10 @@ only bodies changed. The n-th entry of the redacted session is then the
 n-th entry of the original, and a holder of the original maps a
 redacted entry to the one it was made from by position, with nothing
 recorded per entry. An aligned redaction says so with `aligned: true`
-in `redacted_from`, and a redaction that is not aligned MUST NOT. A
+in `redacted_from`, and a redaction that is not aligned MUST NOT. An
+aligned redacted session holds exactly `entries` entries, prefix
+included, and a reader MUST refuse one that says `aligned` and holds
+another number, since its entries could not map back by position. A
 redaction that is not aligned and wants its entries mapped back records
 the mapping itself, in namespaced members.
 
