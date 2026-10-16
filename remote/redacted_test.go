@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -42,10 +43,15 @@ func TestRedactedCodes(t *testing.T) {
 // TestClientRedactedOnly: a client set to send only redacted sessions
 // refuses to create or push any other before it sends anything, so it
 // fails closed against a server whose store is not so set. Its server
-// is one nothing listens at: a request sent would fail otherwise.
+// fails the test on any request.
 func TestClientRedactedOnly(t *testing.T) {
 	ctx := context.Background()
-	c, err := remote.Dial("http://127.0.0.1:9", remote.WithRedactedOnly())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the client sent %s %s", r.Method, r.URL.Path)
+		http.Error(w, "no", http.StatusTeapot)
+	}))
+	defer srv.Close()
+	c, err := remote.Dial(srv.URL, remote.WithRedactedOnly())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,18 +118,25 @@ func TestPushValidatesHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := `{"header":` + string(hdr) + `,"entries":[],"prefix":[],"head":{"expected":null,"to":null,"force":false},"mark":"mirror","refs":[]}`
-	resp, err := http.Post(w.url+"/v1/sessions/x/push", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
+	push := func(hdr string) (int, remote.Problem) {
+		body := `{"header":` + hdr + `,"entries":[],"prefix":[],"head":{"expected":null,"to":null,"force":false},"mark":"mirror","refs":[]}`
+		resp, err := http.Post(w.url+"/v1/sessions/x/push", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var p remote.Problem
+		if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, p
 	}
-	defer resp.Body.Close()
-	var p remote.Problem
-	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
-		t.Fatal(err)
+	if status, p := push(string(hdr)); status != http.StatusUnprocessableEntity || p.Code != remote.CodeBadEntry || !errors.Is(&p, agentsession.ErrRedactedFrom) {
+		t.Errorf("push of a redacted_from without redacted: %d %+v, want 422 bad_entry matching ErrRedactedFrom", status, p)
 	}
-	if resp.StatusCode != http.StatusUnprocessableEntity || p.Code != remote.CodeBadEntry || !errors.Is(&p, agentsession.ErrRedactedFrom) {
-		t.Errorf("push of a malformed header: %d %+v, want 422 bad_entry matching ErrRedactedFrom", resp.StatusCode, p)
+	// A header missing what every header carries is malformed too.
+	if status, p := push(`{"type":"session","id":"x","format":"` + agentsession.Format + `"}`); status != http.StatusUnprocessableEntity || p.Code != remote.CodeBadEntry {
+		t.Errorf("push of a header with no created_at: %d %+v, want 422 bad_entry", status, p)
 	}
 	if _, err := backing.Read(context.Background(), "x"); !errors.Is(err, agentsession.ErrNoSession) {
 		t.Errorf("the refused push left the session: %v", err)

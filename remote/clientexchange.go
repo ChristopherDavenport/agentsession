@@ -144,8 +144,10 @@ func (c *Client) HandOver(ctx context.Context, id, head string) error {
 // never none. A server refuses a push that would add entries to a
 // redacted session it holds (agentsession.ErrRedacted) and, when its
 // store holds only redacted sessions, one of any other
-// (agentsession.ErrNotRedacted), as [WithRedactedOnly] has the client
-// refuse before it sends anything.
+// (agentsession.ErrNotRedacted). It refuses at the post, after the
+// objects were uploaded, which stay in its store, named by no session,
+// until a sweep (#244); [WithRedactedOnly] has the client refuse an
+// original before it sends anything.
 func Push(ctx context.Context, local *cas.Store, c *Client, id string, opts cas.PushOptions) (cas.Exchange, error) {
 	targets := make([]agentsession.RefTarget, len(opts.Refs))
 	for i, r := range opts.Refs {
