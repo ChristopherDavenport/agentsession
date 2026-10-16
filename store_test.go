@@ -14,6 +14,9 @@ import (
 func TestMemoryStore(t *testing.T) {
 	storetest.Run(t, storetest.Options{
 		New: func(t *testing.T) agentsession.Store { return agentsession.NewMemoryStore() },
+		RedactedOnly: func(t *testing.T) agentsession.Store {
+			return agentsession.NewMemoryStore(agentsession.MemoryRedactedOnly())
+		},
 	})
 }
 

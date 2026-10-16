@@ -1,6 +1,7 @@
 package jsonl_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -57,9 +58,35 @@ func TestStoreSuite(t *testing.T) {
 					t.Cleanup(func() { st.Close() })
 					return st
 				},
+				Place: func(t *testing.T, s agentsession.Store, file []byte) error {
+					return placeFile(s.(*jsonl.Store).Root(), file)
+				},
+				RedactedOnly: func(t *testing.T) agentsession.Store {
+					st, err := jsonl.Open(t.TempDir(), jsonl.WithSync(policy), jsonl.WithRedactedOnly())
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { st.Close() })
+					return st
+				},
 			})
 		})
 	}
+}
+
+// placeFile writes a session file under root where the store finds it,
+// as a redactor writing a redacted session whole does.
+func placeFile(root string, file []byte) error {
+	s, err := agentsession.Read(bytes.NewReader(file))
+	if err != nil {
+		return err
+	}
+	h := s.Header()
+	dir := filepath.Join(root, jsonl.ProjectKey(h.CWD))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, h.CreatedAt.UTC().Format("2006-01-02T15-04-05.000Z")+"_"+h.ID+".jsonl"), file, 0o600)
 }
 
 func TestProjectKey(t *testing.T) {

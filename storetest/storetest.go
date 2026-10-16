@@ -34,6 +34,25 @@ type Options struct {
 	// that has no read-only form; the Follow cases use Second then, and
 	// skip the second-store case when that is nil too.
 	ReadOnly func(t *testing.T, s agentsession.Store) agentsession.Store
+	// Import takes a session file into s whole through the store's own
+	// import, a cas store's Import as the record, which holds it to the
+	// store's rules. It is nil for a store that has none.
+	Import func(t *testing.T, s agentsession.Store, file []byte) error
+	// Place writes a session file into s's storage as a writer beside
+	// the store does, which the store finds there but is not asked about:
+	// a file under a jsonl store's root, as a redactor writes one. It is
+	// for a store without Import; the redacted cases that need a session
+	// held take it by Import, else by Place, and skip without either.
+	Place func(t *testing.T, s agentsession.Store, file []byte) error
+	// Push pushes the session a file holds to s by exchange, from a store
+	// of the hook's own that took the file as the record, and returns
+	// what the push returned. It is nil for a store that receives no
+	// push.
+	Push func(t *testing.T, s agentsession.Store, file []byte) error
+	// RedactedOnly returns a fresh, empty store set to hold only redacted
+	// sessions, which Import and Push are given too. It is nil for a
+	// store that cannot be set so.
+	RedactedOnly func(t *testing.T) agentsession.Store
 }
 
 // Run exercises a store through the whole interface.
@@ -56,6 +75,7 @@ func Run(t *testing.T, opts Options) {
 	t.Run("Read", func(t *testing.T) { testRead(t, opts) })
 	t.Run("Follow", func(t *testing.T) { testFollow(t, opts) })
 	t.Run("Refs", func(t *testing.T) { testRefs(t, opts) })
+	t.Run("Redacted", func(t *testing.T) { testRedacted(t, opts) })
 	if opts.Reopen != nil {
 		t.Run("Persistence", func(t *testing.T) { testPersistence(t, opts) })
 		t.Run("DurableLeaf", func(t *testing.T) { testDurableLeaf(t, opts) })

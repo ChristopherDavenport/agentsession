@@ -54,7 +54,40 @@ func TestConformance(t *testing.T) {
 			t.Cleanup(func() { st.Close() })
 			return st
 		},
+		Import: func(t *testing.T, s agentsession.Store, file []byte) error {
+			_, err := s.(*Store).Import(context.Background(), bytes.NewReader(file), true)
+			return err
+		},
+		Push: func(t *testing.T, s agentsession.Store, file []byte) error {
+			return pushFile(t, s.(*Store), file)
+		},
+		RedactedOnly: func(t *testing.T) agentsession.Store {
+			st, err := Open(t.TempDir(), WithRedactedOnly())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		},
 	})
+}
+
+// pushFile pushes the session file holds to st from a store of its own
+// that imported the file as the record.
+func pushFile(t *testing.T, st *Store, file []byte) error {
+	t.Helper()
+	ctx := context.Background()
+	src, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	s, err := src.Import(ctx, bytes.NewReader(file), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = src.Push(ctx, st, s.ID(), PushOptions{})
+	return err
 }
 
 func mustAppend(t *testing.T, st *Store, id string, e agentsession.Entry) string {

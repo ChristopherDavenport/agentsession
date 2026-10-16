@@ -58,6 +58,14 @@ func TestStoreSuite(t *testing.T) {
 			t.Cleanup(func() { st.Close() })
 			return st
 		},
+		RedactedOnly: func(t *testing.T) agentsession.Store {
+			st, err := sqlite.Open(filepath.Join(t.TempDir(), "sessions.db"), sqlite.WithRedactedOnly())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		},
 	})
 }
 
