@@ -22,10 +22,18 @@ import (
 // session's display name is carried over; and the old session gets a
 // continued_in link naming the successor, which is what a store reads
 // to mark it superseded. It returns the successor.
+//
+// A redacted session takes no continued_in link, since it takes no
+// append, so Continue refuses one with [ErrRedacted] before it creates
+// anything; continuing from a redacted session is a fork, whose header
+// does not carry redacted.
 func Continue(ctx context.Context, store Store, id string, summary openresponses.Item) (*Session, error) {
 	old, err := store.Open(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if old.Header().Redacted {
+		return nil, fmt.Errorf("%w: continue %s: fork it instead", ErrRedacted, id)
 	}
 	cx, err := old.Context()
 	if err != nil {

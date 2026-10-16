@@ -346,10 +346,15 @@ func TestOriginalRefusesMisalignment(t *testing.T) {
 	short := redacted(2, item())
 	bad := redacted(2, item(), item())
 	beyond := redacted(3, item(), item(), item())
-	for name, s := range map[string]*Session{"fewer entries than it names": short, "a type changed": bad, "more than the store holds": beyond} {
+	for name, s := range map[string]*Session{"fewer entries than it names": short, "a type changed": bad} {
 		if _, m, err := Original(ctx, st, s); !errors.Is(err, ErrRedactedFrom) || m != nil {
 			t.Errorf("%s: %v, mapping %v; want ErrRedactedFrom", name, err, m)
 		}
+	}
+	// A copy of the original behind the version redacted is told apart:
+	// a fetch may cure it.
+	if _, m, err := Original(ctx, st, beyond); !errors.Is(err, ErrStaleOriginal) || errors.Is(err, ErrRedactedFrom) || m != nil {
+		t.Errorf("more than the store holds: %v, mapping %v; want ErrStaleOriginal", err, m)
 	}
 	if _, _, err := Original(ctx, st, New(Header{ID: "r", Redacted: true})); !errors.Is(err, ErrNoSession) {
 		t.Errorf("a redacted session naming no original: %v, want ErrNoSession", err)

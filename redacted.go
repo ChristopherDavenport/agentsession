@@ -20,12 +20,20 @@ import (
 var ErrRedacted = errors.New("agentsession: a redacted session is written whole and never created empty or appended to")
 
 // ErrNotRedacted is returned by a store set to hold only redacted
-// sessions for a session whose header does not carry redacted, by
-// whatever path it would enter: create, import or a push received. A
+// sessions for a session whose header does not carry redacted, at its
+// create, its import, or a push or fetch it receives. A
 // fork of a redacted session is among them, since a fork's own entries
 // were not redacted. [Original] returns it for a session that is not
 // redacted.
 var ErrNotRedacted = errors.New("agentsession: not a redacted session")
+
+// ErrStaleOriginal is returned by [Original] for an aligned redaction
+// whose original the store holds fewer entries of than redacted_from
+// names: a copy, a mirror say, that has not reached the version
+// redacted. Fetching the original and asking again may answer, where
+// [ErrRedactedFrom], a redaction whose own claim does not hold, will
+// not.
+var ErrStaleOriginal = errors.New("agentsession: the store's copy of the original is behind the version redacted")
 
 // CheckCreate is the refusal RFC 0002 makes of a create: [ErrRedacted]
 // for a header that carries redacted, which no store creates,
@@ -101,9 +109,11 @@ func FileOrder(s *Session) []Entry {
 // over the first redacted_from.entries entries of the original, prefix
 // included. That holds only when s has exactly that many entries, the
 // original at least that many, and each pair is of one type, so a
-// mismatch is refused with [ErrRedactedFrom] rather than mapped wrong:
-// the claim is false, or the store holds another session under the
-// original's ID, or a copy that has not reached the version redacted. A
+// mismatch is refused rather than mapped wrong: an original the store
+// holds fewer entries of is a copy that has not reached the version
+// redacted, [ErrStaleOriginal], which a fetch may cure; a count or a
+// type that does not line up is [ErrRedactedFrom], since the claim is
+// false or the store holds another session under the original's ID. A
 // redaction that is not aligned gets no mapping; one that records its
 // own keeps it in namespaced members of redacted_from, which
 // [RedactedFrom].Extra holds.
@@ -139,7 +149,7 @@ func Original(ctx context.Context, st Store, s *Session) (*Session, map[string]s
 	case len(red) != from.Entries:
 		return nil, nil, fmt.Errorf("%w: %s is aligned to %d entries of %s and holds %d", ErrRedactedFrom, h.ID, from.Entries, from.Session, len(red))
 	case len(held) < from.Entries:
-		return nil, nil, fmt.Errorf("%w: %s is aligned to %d entries of %s, of which the store holds %d", ErrRedactedFrom, h.ID, from.Entries, from.Session, len(held))
+		return nil, nil, fmt.Errorf("%w: %s is aligned to %d entries of %s, of which the store holds %d", ErrStaleOriginal, h.ID, from.Entries, from.Session, len(held))
 	}
 	m := make(map[string]string, len(red))
 	for i, e := range red {

@@ -318,6 +318,9 @@ func SessionFor(ctx context.Context, st Store, name string, h Header) (s *Sessio
 // When the ref moved while the continuation ran, the error is
 // [ErrRefMoved] and the successor is returned with it: it exists, the
 // old session is retired, and the caller decides where the name goes.
+// A ref naming a redacted session is refused as Continue refuses it,
+// with [ErrRedacted], before anything is created, and is left as it
+// was.
 func ContinueRef(ctx context.Context, st Store, name string, summary openresponses.Item) (*Session, error) {
 	rs, err := refsOf(st)
 	if err != nil {
