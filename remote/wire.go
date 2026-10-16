@@ -103,7 +103,6 @@ const (
 	CodeBaseRule       = "base_rule"
 	CodeBadBase        = "bad_base"
 	CodeRefMoved       = "ref_moved"
-	CodeRedacted       = "redacted"
 	CodeNotRedacted    = "not_redacted"
 
 	// Exchange's.
@@ -209,7 +208,6 @@ var codes = map[string]struct {
 	CodeBaseRule:       {http.StatusUnprocessableEntity, agentsession.ErrBaseRule},
 	CodeBadBase:        {http.StatusUnprocessableEntity, agentsession.ErrNoEntry},
 	CodeRefMoved:       {http.StatusConflict, agentsession.ErrRefMoved},
-	CodeRedacted:       {http.StatusConflict, agentsession.ErrRedacted},
 	CodeNotRedacted:    {http.StatusForbidden, agentsession.ErrNotRedacted},
 
 	CodeNoObject:      {http.StatusNotFound, cas.ErrNoObject},
@@ -316,10 +314,8 @@ func problemOf(err error) *Problem {
 		return p
 	}
 	switch {
-	case errors.Is(err, agentsession.ErrRedacted):
-		return problem(CodeRedacted, "a redacted session is written whole and never created empty or appended to", err.Error())
 	case errors.Is(err, agentsession.ErrNotRedacted):
-		return problem(CodeNotRedacted, "the store holds only redacted sessions", "")
+		return problem(CodeNotRedacted, "the store holds only redacted entries", "")
 	case errors.Is(err, agentsession.ErrNoSession):
 		return problem(CodeNoSession, "no such session", "")
 	case errors.Is(err, agentsession.ErrBaseRule):

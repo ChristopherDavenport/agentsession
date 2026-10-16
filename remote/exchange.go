@@ -376,14 +376,15 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The header is held to the rules an import holds a file's to,
-	// before any object is looked for: a malformed redacted_from is
-	// bad_entry with its reason, a format the server does not read is
-	// format, and a header missing what every header carries is a bad
-	// request.
+	// before any object is looked for: a format the server does not read
+	// is format, and a header RFC 0001 calls malformed is bad_entry, as
+	// RFC 0003's row has it, with the reason redacted_from for that
+	// member's rule.
 	if err := req.Header.Validate(); err != nil {
 		p := problemOf(err)
 		if p.Code == CodeStoreFault {
-			p = problem(CodeBadRequest, "the header is not a valid session header", err.Error())
+			p = problem(CodeBadEntry, "the header is malformed", err.Error())
+			p.Reason = "header"
 		}
 		h.fail(w, p)
 		return

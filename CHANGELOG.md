@@ -12,36 +12,81 @@ versions may break the API.
   0.5 to 0.12 file reads as it stands; no hash moves.
 - **Added: a redacted session names its original (RFC 0001 0.13,
   Redaction).** `Header.RedactedFrom` is the header's `redacted_from`
-  member (`RedactedFrom`): the original's `Session`, how many `Entries`
-  it held when the redaction was made, the redaction's `Profile` and,
-  for a redaction that wrote one entry per entry in file order,
-  `Aligned`. Members it does not define, the namespaced ones a
-  redaction records about itself among them, and a profile or aligned
-  in another form, stay in its `Extra` and write back as read. A header
-  carrying it on a session that is not `Redacted`, or naming the
-  session itself as its original, is refused with `ErrRedactedFrom`, by
+  member (`RedactedFrom`): the original's `Session` and the redaction's
+  `Profile`. Members it does not define, the namespaced ones a
+  redaction records about itself among them, a profile in another form,
+  and an `entries` or `aligned` member, stay in its `Extra` and write
+  back as read. A header carrying it, with `session` a non-empty
+  string, on a session that is not `Redacted`, or naming the session
+  itself as its original, is refused with `ErrRedactedFrom`, by
   `Header.Validate` and so by `Read` and `Scan`. The member is defined
   from 0.13: in a file that declares an earlier minor, which was free to
   hold the name in any form, it stays in `Header.Extra` and is neither
   decoded nor refused, as is one in a 0.13 file that does not decode as
   the object.
-- **Added: a header holding `redacted_from` from before 0.13 is never
-  raised.** `Header.Raise` is the raise a writer makes before it appends
-  to a session of an earlier minor, and refuses that one with
-  `ErrNoRaise`, an `ErrUnsupportedFormat`, since the raise would give
-  the member a meaning it was not written with. `Read` holds such a
-  header at its own format in memory, so `Write` keeps it (a file
-  before 0.5 takes 0.12, since its entries are rehashed as 0.5's);
-  `Session.Append` and `Prepare` refuse an entry to its session; the
-  jsonl, cas and sqlite stores raise through `Raise`, and cas refuses an
-  exchange that would raise one before anything lands. The conformance
-  suite (`storetest`) gains the case, which every store runs.
+- **Added: a redacted entry says what it was made from (RFC 0001 0.13,
+  Redacted entries).** The body member `redacted`, which any entry may
+  carry, as `legacy_id` is, lists the positions in the original's file
+  order of the entries the entry was made from: each element a position
+  `n` or an inclusive range `[from, to]`, ascending and not
+  overlapping, and `[]` for an entry the redaction added. `RedactedOf`
+  reports whether an entry is redacted and returns its `Span`s, a
+  single position having `From == To`; `SetRedacted` marks an entry,
+  refusing spans not in that form with `ErrBadRedacted`, and writes a
+  position as `n` and a range as `[from, to]`; `ClearRedacted` takes
+  the member off. The member round-trips byte for byte through `Read`
+  and `Write` and is hashed as body content. A value in another form is
+  kept as written in `Unknown`, and the entry is not redacted. In a file
+  that declares a minor before 0.13 the member is unknown whatever its
+  form, and kept as written: `Read`, `RawEntry.Decode` and
+  `Session.Extend` read each entry under the minor its file declared;
+  `UnmarshalEntry`, given a line alone, reads it as this package writes
+  it, and `GateEntry(format, e)` applies a header's minor to an entry
+  so decoded. The cas store's log read (`ReadLog`) and the followers of
+  the cas and sqlite stores apply it by the stored header, and every
+  follower (memory, jsonl, cas, sqlite, and so remote) reads the session
+  again, as a `Reset`, when the store raises the header, so an entry
+  appended after the raise is read under the raised format. The remote
+  client's path read (`Client.Path`) carries no header and decodes as
+  `UnmarshalEntry` does; a caller gates it with the session's format.
+  `RewriteStrings` and `RemapRefs` keep a member read that way unknown.
+- **Added: a file holding `redacted_from` or `redacted` from before
+  0.13 is never raised, and no 0.13 session is made over one.**
+  `Session.RaiseRefused(format)` is the rule: it refuses with
+  `ErrNoRaise`, an `ErrUnsupportedFormat`, to write a session at 0.13
+  or later whose header holds `redacted_from` from before 0.13, or one
+  of whose entries holds a `redacted` member read under such a header,
+  since the format would give the member a meaning it was not written
+  with. `Header.Raise`, the raise a writer makes before it appends to a
+  session of an earlier minor, applies the header's half. `Read` holds
+  such a file at its own format in memory, so `Write` keeps it (a file
+  before 0.5 takes 0.12, since its entries are rehashed as 0.5's), and
+  `Session.Extend` does the same for an entry it adds; `Session.Append`
+  and `Prepare` refuse an entry to its session, and refuse an entry so
+  read to any session until the writer clears it (`ClearRedacted`) or
+  marks it (`SetRedacted`). `Fork` refuses a fork at 0.13 or later whose
+  prefix holds such an entry, and a fork written under a minor before
+  0.13 whose prefix holds a redacted entry. The memory, jsonl, cas and
+  sqlite stores raise the header on an append after their session's
+  `Prepare`, so an entry's member stops an append's raise too; the
+  memory store now raises at all. cas refuses an exchange that would
+  raise a header holding `redacted_from` before anything lands. A store
+  that raises a header outside an append, as an exchange or a fork's
+  create does, is to call `RaiseRefused` on the session it holds. The
+  conformance suite
+  (`storetest`) gains the header case, an entry case (with the new
+  `Options.Lower`, which a store that can rewrite a stored header's
+  format provides) and a follow across a raise, which every store runs.
+- **Changed: the context hash leaves `redacted` out,** in whatever form,
+  as it leaves `legacy_id` and `normalised`, since RFC 0002 counts it as
+  provenance. No context hash of a session without the member moves.
 - **Added: `RedactedSessionID`,** the ID RFC 0001 recommends for a
   redacted session whose redaction writes a profile: a UUIDv5 under the
   nil namespace over the canonical JSON array
-  `["redacted","<original>",<entries>,"<profile>"]`, so the same
-  redaction of the same entries gives the same session, and an ID
-  holding a slash cannot make two names one.
+  `["redacted","<original>","<profile>"]`, so one original under one
+  profile has one redacted session, whose ID stays as it grows and
+  which a redaction repeated over a store finds again, and an ID holding
+  a slash cannot make two names one.
 - **Added: `RemapRefs` and `RemapHeaderRefs`, for a writer that
   re-points a session's references (#236).** `RemapRefs` re-points every
   member of an entry that names an entry or a session through a `Remap`
@@ -60,8 +105,9 @@ versions may break the API.
   parents are sorted as a writer writes them, an extension entry's as a
   core entry's, and an entry whose fields did not write its line back
   is written as that line with the references changed.
-  `RemapHeaderRefs` re-points base and parent_session, and leaves
-  redacted_from.
+  An entry's `redacted` names entries of the original by position, not
+  by id, and is left as it was. `RemapHeaderRefs` re-points base and
+  parent_session, and leaves redacted_from.
 - **Added: `RewriteStrings` and `Rewriter`, for a writer that rewrites
   a session's bodies (#236).** `RewriteStrings` applies a deterministic
   function to every string of an entry's body: typed members, Unknown,
@@ -73,7 +119,7 @@ versions may break the API.
   by, the one place the format keeps data in member names, two paths
   made one being refused with `ErrKeyCollision`. Never another member
   name (a tool name, an extra key, a key inside custom data), the
-  envelope, legacy_id, a reference, a hash (`request_hash`, an
+  envelope, legacy_id, `redacted` in any form, a reference, a hash (`request_hash`, an
   instruction part's `hash`, an env entry's file hashes), a sidecar
   URL, or a `call_id` where the format defines one (an item, a
   dispatch, a decision, a link, a custom entry, a run end's pending
@@ -97,88 +143,105 @@ versions may break the API.
   0001's versioning section asks. An of where the format does not
   define it, beside an id, is left as written, as before. No fixture
   moves.
-- **Changed: stores hold redacted sessions, and never create or append
-  to one (RFC 0002, Redacted sessions, #233).** A redacted session is
-  written whole. `Session.Append` and `Prepare`, and so every store's
-  `Append` and `Write`, refuse an entry to a session whose header
-  carries `redacted` with `ErrRedacted`, whoever the writer; a
-  redactor builds one with `Commit` and `Write`, as before, and
-  continuing from one is a fork, which is not redacted. Every store's
-  `Create` refuses a redacted header with `ErrRedacted` (the jsonl and
-  sqlite stores created one until now). cas `Import` no longer refuses
-  a redacted projection: it verifies every line and holds it as any
-  other, which is how one enters a store whole, and a push or a fetch
-  that delivers one the receiver lacks is taken. An exchange that would
-  add entries to a held redacted session is refused with `ErrRedacted`
-  before anything lands; a repeat that adds nothing is not.
-  `CheckCreate` is the create refusal, for a store elsewhere; it also
-  refuses a header carrying `redacted_from` without `redacted`
-  (`ErrRedactedFrom`), typed or held in `Extra` as a header decoded
-  without a format holds it, which the store would have written as a
-  file `Read` refuses.
-- **Added: an import for every store (`Importer`).** A redacted session
-  enters a store whole, so the memory, jsonl and sqlite stores gain
-  `Import(ctx, r, asRecord)`, cas's signature, and the root package
-  names it as an optional interface. Each follows RFC 0002's import:
-  every line verifies, a cut last line and a session ID the store holds
-  (`ErrSessionExists`) are refused, as are a `redacted_from` without
-  `redacted` or naming the session itself (`ErrRedactedFrom`), an own
-  entry above the base, a fork whose media differs from that of a held
-  session whose own entries include the base, and an original in a
-  store set to hold only redacted sessions; what it imports is committed
-  before it returns. Those three keep a session's head only in its
-  entries and no record mark: they refuse a file whose head only a
-  projection's synthetic leaf marker names (`ErrSyntheticMarker`),
-  where cas discards the marker and keeps the head, and do not read
-  `asRecord`. `ReadForImport` and `CheckImportMedia` are the checks, for
-  a store elsewhere.
+- **Changed: stores hold redacted sessions as any other (RFC 0002,
+  Redacted sessions, #233).** A redacted session is created, appended
+  to with redacted entries as its original grows, resumed with native
+  entries, imported and exchanged, grown since or not, in every store;
+  `Continue` continues one. cas `Import` no longer refuses a redacted
+  projection: it verifies every line and holds it. `CheckCreate` is the
+  create refusal, for a store elsewhere: a header carrying
+  `redacted_from` without `redacted` (`ErrRedactedFrom`), typed or held
+  in `Extra` as a header decoded without a format holds it, which the
+  store would have written as a file `Read` refuses.
+- **Added: an import for every store (`Importer`).** The memory, jsonl
+  and sqlite stores gain `Import(ctx, r, asRecord)`, cas's signature,
+  and the root package names it as an optional interface. Each follows
+  RFC 0002's import: every line verifies; a session ID the store holds
+  (`ErrSessionExists`), a `redacted_from` without `redacted` or naming
+  the session itself (`ErrRedactedFrom`), an own entry above the base
+  (`ErrBaseRule`), and a fork whose media differs from that of the held
+  session whose own entries include the base (`ErrMediaDiffers`, which
+  cas's import, exchange and create of a fork return too), found by
+  following `parent_session` up to it as cas does, are refused; a cut
+  last line is a `*TruncatedLine`. What it imports is committed before
+  it returns, and a refused jsonl import leaves no project directory
+  behind. Those three keep a session's head only in its entries and no
+  record mark: they refuse a file whose head only a projection's
+  synthetic leaf marker names (`ErrSyntheticMarker`), where cas discards
+  the marker and keeps the head, and do not read `asRecord`.
+  `ReadForImport` and `CheckImportMedia` are the checks, for a store
+  elsewhere.
 - **Changed: a header that arrives by push or fetch is validated.** cas
   runs `Header.Validate` on it as import does, so a `redacted_from`
   without `redacted`, or naming the session itself, is refused before
   anything lands. remote validates a pushed header before it looks for
-  any object: a malformed `redacted_from` is `bad_entry` with the reason
-  `redacted_from`, which matches `ErrRedactedFrom` on the client, and a
-  header missing what every header carries is `bad_request`.
-- **Added: a store set to hold only redacted sessions.** The store a
-  publisher pushes to, which fails closed: it refuses to create, import
-  or receive by push or fetch a session whose header does not carry
-  `redacted`, a fork of a redacted session among them, with
-  `ErrNotRedacted`. `cas.WithRedactedOnly` records the setting in the
-  store's layout file, so every later open obeys it, with the option or
-  without, every create, import and exchange reads it again, so a store
-  opened before it was set obeys it too, and a release that does not
-  know it refuses the store with `ErrLayout`; the open that sets it
-  refuses a store that already holds an original, and nothing unsets
-  it. `jsonl.WithRedactedOnly`, `sqlite.WithRedactedOnly` and
+  any object: a header RFC 0001 calls malformed is `bad_entry`, with the
+  reason `redacted_from` for that member's rule, which matches
+  `ErrRedactedFrom` on the client.
+- **Changed: no store writes an old redacted member under 0.13.** cas's
+  exchange asks the held session's `RaiseRefused` before it raises the
+  header to a pushed or fetched format, so a 0.12 session one of whose
+  entries holds `redacted` is not raised by an exchange, and cas's
+  create of a fork asks it of the origin, read under its own header, as
+  `Fork`, which the other stores create through, does: a fork at 0.13
+  whose prefix holds such an entry is refused (`ErrNoRaise`).
+- **Added: a store set to hold only redacted entries.** The store a
+  publisher pushes to, which fails closed: it refuses, with
+  `ErrNotRedacted`, a session whose header does not carry `redacted`,
+  by create, import, push or fetch, and every entry that carries no
+  `redacted` member, by append, import, push or fetch, a prefix entry
+  included: a fork's own entries and a resumed redacted session's
+  native entries alike. `CheckRedacted` is the check, for a store
+  elsewhere. `cas.WithRedactedOnly` records the setting in the store's
+  layout file, so every later open obeys it, with the option or
+  without, every create, import, append and exchange reads it again,
+  so a store opened before it was set obeys it too, and a release that
+  does not know it refuses the store with `ErrLayout`; the open that
+  sets it refuses a store that already holds a session or an entry
+  that is not redacted, and nothing unsets it. A layout file is never
+  written over one that is there, so an open racing the setting cannot
+  erase it, and what another process's setting refuses after a first
+  check leaves no object behind. A writer of an earlier release that
+  already has the store open never reads the setting: stop every one
+  before setting it. Over RFC 0003 a refused push leaves the objects it
+  uploaded in the server's store, named by no session, until a sweep
+  (#244). `jsonl.WithRedactedOnly`, `sqlite.WithRedactedOnly` and
   `MemoryRedactedOnly`, which `NewMemoryStore` now takes as a
-  `MemoryOption`, set the process's store only, and refuse every create
-  and the import of an original. A remote client
-  given `remote.WithRedactedOnly` refuses to create or push an original
-  before it sends anything.
+  `MemoryOption`, set the process's store only. A remote client given
+  `remote.WithRedactedOnly` refuses, before it sends anything, to
+  create a session without `redacted`, to append or write an entry
+  without it, and to push a session holding either.
 - **Added: `Original` and `Redactions`.** `Original(ctx, store, s)`
   reads the original a redacted session names in `redacted_from` from
-  the store, `ErrNoSession` when it lacks it, and for an aligned
-  redaction maps each of the session's entry IDs to the original's
-  entry in its place, by position over the first `entries` entries in
-  file order, prefix included; a count or a type that does not line up
-  is refused with `ErrRedactedFrom` rather than mapped wrong.
-  `Redactions(ctx, store, id)` lists the sessions the store holds whose
-  `redacted_from` names `id`, from `List`. `FileOrder` is the order both
-  count in, RFC 0002's projection order: the prefix root first, then
-  the own entries.
-- **Added: remote carries RFC 0003's `redacted` (409) and
-  `not_redacted` (403).** Both match `ErrRedacted` and `ErrNotRedacted`
-  on the client (`CodeRedacted`, `CodeNotRedacted`). The server has no
-  import; a redacted session reaches it by push.
+  the store, `ErrNoSession` when it lacks it, and maps each redacted
+  entry to the original's entries its positions name, ranges expanded,
+  over the original's file order; a native entry and an added one (`[]`)
+  map to nothing, and a position past the original the store holds is
+  `ErrStaleOriginal`, which a fetch may cure. A fork's prefix, another
+  session's own entries, is mapped in the original that session names,
+  following `parent_session`, where the store holds it. `Redactions(ctx,
+  store, id)` lists the sessions the store holds whose `redacted_from`
+  names `id`, from `List`. `FileOrder` is the order positions count in,
+  RFC 0002's projection order: the prefix root first, then the own
+  entries.
+- **Added: remote carries RFC 0003's `not_redacted` (403),** which
+  matches `ErrNotRedacted` on the client (`CodeNotRedacted`). The server
+  has no import; a session reaches it by create and append, or push.
 - **Added: `storetest` runs import and the redacted cases on every
   store:** an import held in file order, a fork included, and its
-  refusals; create refused, a redacted file held whole and verifying,
-  appends refused, a push taken and a push adding entries refused, a
-  redacted-only store refusing an original and a fork by every path it
-  has, `Original` aligned and not, and `Redactions`. The suite imports
-  through a store's `Importer`; `Options.Import` is for a store whose
-  import is not one, a remote client over a store that has one, and
-  `Options.Push` and `RedactedOnly` give it the other paths.
+  refusals, the media of a fork naming a fork that holds the base on its
+  prefix, and a projection with a synthetic marker; a redacted session
+  created and grown, resumed natively, imported and grown, and pushed
+  again grown; a redacted-only store refusing an original, a fork and
+  a native entry by create, append, import and push, and taking a
+  grown redacted session; `Original` over positions, a fork's prefix
+  included; `Redactions`; and a fork over an old redacted member
+  refused. The suite imports through a store's `Importer`;
+  `Options.Import` is for a store whose import is not one, a remote
+  client over a store that has one, and `Options.Push` and
+  `RedactedOnly` give it the other paths. Every store here gives
+  `Options.Lower`, the memory store by importing the session, its
+  header lowered, into a store of its own.
 - **Fixed: `agentsession verify` of a redacted file (#234).** It
   reported every `request_hash` as a MISMATCH and said each id was
   checked as if against the original. Now it says the ids verify the

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -17,7 +18,36 @@ func TestMemoryStore(t *testing.T) {
 		RedactedOnly: func(t *testing.T) agentsession.Store {
 			return agentsession.NewMemoryStore(agentsession.MemoryRedactedOnly())
 		},
+		Lower: func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store {
+			return lowerMemory(t, s.(*agentsession.MemoryStore), id, format)
+		},
 	})
+}
+
+// lowerMemory is a memory store holding the session id of old, its
+// header naming format, as a writer of that earlier minor would have
+// left it: the session's file, its format rewritten, imported into a
+// store of its own, since a memory store's storage is the store.
+func lowerMemory(t *testing.T, old *agentsession.MemoryStore, id, format string) *agentsession.MemoryStore {
+	t.Helper()
+	ctx := context.Background()
+	s, err := old.Read(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := agentsession.Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	cur := `"format":"` + agentsession.Format + `"`
+	if !strings.Contains(buf.String(), cur) {
+		t.Fatalf("the header holds no %s", cur)
+	}
+	st := agentsession.NewMemoryStore()
+	if _, err := st.Import(ctx, strings.NewReader(strings.Replace(buf.String(), cur, `"format":"`+format+`"`, 1)), true); err != nil {
+		t.Fatal(err)
+	}
+	return st
 }
 
 // TestListFilterMatches: the header-level filters decide on the header

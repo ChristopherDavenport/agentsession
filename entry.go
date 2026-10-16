@@ -109,6 +109,23 @@ type EntryBase struct {
 	// U+FFFD, an integer outside binary64 to a string or to its rounded
 	// value. It is sorted by At as UTF-16 code units.
 	Normalised []Normalisation
+	// redacted is the entry's redacted member, a body member any entry
+	// may carry from format 0.13: the positions, in the original's file
+	// order, of the entries a redactor made this entry from. isRedacted
+	// says the entry carries it, so that [] (an entry the redaction
+	// added) is told from no member. A member in another form, or read
+	// under a header naming an earlier minor, stays in Unknown. See
+	// [RedactedOf] and [SetRedacted].
+	redacted   []Span
+	isRedacted bool
+	// redactedRaw is the member as the line spelled it, for an entry
+	// that was read, so it writes back and is kept as written; nil for
+	// one set in memory.
+	redactedRaw json.RawMessage
+	// gated is set on an entry read under a header naming a minor before
+	// 0.13 that holds a redacted member, which the gate left unknown: a
+	// file holding it may not be written at 0.13 or later.
+	gated bool
 	// Unknown holds body members this package does not define,
 	// preserved so a later minor version's optional fields survive a
 	// rewrite. It is nil when there are none.
@@ -903,6 +920,7 @@ func (e *UnknownEntry) decodeMembers(data []byte, all map[string]json.RawMessage
 	if e.LegacyID, e.Normalised, err = commonBody(all["legacy_id"], all["normalised"]); err != nil {
 		return err
 	}
+	e.takeRedacted(all)
 	e.Raw = append(json.RawMessage(nil), data...)
 	return nil
 }
@@ -1720,12 +1738,13 @@ func collides(head, body []byte, extra map[string]json.RawMessage) bool {
 }
 
 // extraMembers returns the unknown members with the common body members
-// the base carries added, for marshalling.
+// the base carries added, for marshalling: legacy_id, normalised and a
+// typed redacted.
 func (b *EntryBase) extraMembers() map[string]json.RawMessage {
-	if b.LegacyID == "" && len(b.Normalised) == 0 {
+	if b.LegacyID == "" && len(b.Normalised) == 0 && !b.isRedacted {
 		return b.Unknown
 	}
-	out := make(map[string]json.RawMessage, len(b.Unknown)+2)
+	out := make(map[string]json.RawMessage, len(b.Unknown)+3)
 	for k, v := range b.Unknown {
 		out[k] = v
 	}
@@ -1736,6 +1755,9 @@ func (b *EntryBase) extraMembers() map[string]json.RawMessage {
 	if len(b.Normalised) > 0 {
 		raw, _ := json.Marshal(b.Normalised)
 		out["normalised"] = raw
+	}
+	if b.isRedacted {
+		out["redacted"] = b.redactedJSON()
 	}
 	return out
 }
@@ -1775,6 +1797,7 @@ func fillBase(all map[string]json.RawMessage, base *EntryBase, known map[string]
 		return err
 	}
 	base.Unknown = jsonx.ExtraKeys(all, known, append(append([]string{}, envelopeKeys...), commonBodyKeys...)...)
+	base.takeRedacted(all)
 	return nil
 }
 

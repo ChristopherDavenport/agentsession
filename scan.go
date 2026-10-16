@@ -23,12 +23,22 @@ type RawEntry struct {
 	// Repeat is set for a line whose id an earlier line had, which a
 	// reader treats as that same entry.
 	Repeat bool
+	// format is the format the file's header declared, which Decode
+	// reads the line under; empty, for a RawEntry Scan did not make,
+	// is this package's.
+	format string
 }
 
-// Decode decodes the entry, as [Read] decodes each line. Its id is the
-// one Scan verified.
+// Decode decodes the entry, as [Read] decodes each line, under the
+// format the file's header declared: before 0.13 the entry's redacted
+// member is unknown whatever its form ([RedactedOf]). Its id is the one
+// Scan verified.
 func (r RawEntry) Decode() (Entry, error) {
-	return UnmarshalEntry(r.Line)
+	e, err := UnmarshalEntry(r.Line)
+	if err == nil && r.format != "" {
+		gateRedacted(e, r.format)
+	}
+	return e, err
 }
 
 // ErrScanMigrated is returned by [Scan] for a file of a minor before
@@ -114,6 +124,7 @@ func Scan(r io.Reader) (Header, iter.Seq2[RawEntry, error], error) {
 				break
 			}
 			e, err := scanLine(data, h.ID, seen, rule)
+			e.format = h.Format
 			if err != nil {
 				// Only a last line that is not JSON is cut short, and a
 				// line is the last only when nothing at all follows it.

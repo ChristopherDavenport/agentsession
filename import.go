@@ -10,15 +10,16 @@ import (
 
 // Importer is implemented by a store that takes a session in whole from
 // an RFC 0001 file, as RFC 0002's projection section has a store import
-// a projection. It is how a redacted session enters a store, since no
-// store creates one. Import verifies every line and refuses a file one
-// of whose lines fails, a last line cut short, a header carrying
+// a projection, a redacted session among them. Import verifies every
+// line and refuses a file one of whose lines fails, a last line cut
+// short, a header carrying
 // redacted_from without redacted ([ErrRedactedFrom]), a session ID the
 // store holds ([ErrSessionExists]), an own entry that does not hang
 // from the base or another own entry, and a fork whose media differs
 // from that of a held session whose own entries include the base; a
-// store set to hold only redacted sessions refuses a file whose header
-// does not carry redacted ([ErrNotRedacted]). What it imports is
+// store set to hold only redacted entries refuses a file whose header
+// does not carry redacted or that holds an entry without it, prefix
+// included ([ErrNotRedacted]). What it imports is
 // committed before it returns, and the session comes back as the store
 // holds it.
 //
@@ -29,6 +30,12 @@ import (
 type Importer interface {
 	Import(ctx context.Context, r io.Reader, asRecord bool) (*Session, error)
 }
+
+// ErrMediaDiffers is returned by an import, an exchange or a create of
+// a fork whose media differs from that of the session whose own entries
+// include its base, which RFC 0002 refuses: the prefix was written in
+// that session's form, and a projection carries media in one.
+var ErrMediaDiffers = errors.New("agentsession: a fork's media differs from that of the session holding its base")
 
 // ErrSyntheticMarker is returned by [ReadForImport] for a file holding
 // a projection's synthetic leaf marker: a label carrying synthetic,
@@ -41,9 +48,10 @@ var ErrSyntheticMarker = errors.New("agentsession: the file's head is named by a
 // ReadForImport reads an RFC 0001 file a store is to import and holds
 // it to the checks of RFC 0002's import that need nothing of the
 // store: [Read]'s, every line verified and a header with redacted_from
-// without redacted refused among them, and then a last line cut short,
+// without redacted refused among them, and then a last line cut short
+// (a [*TruncatedLine]),
 // a migration from before 0.5 that left an entry unresolved, an own
-// entry above the base, and a synthetic leaf marker
+// entry above the base ([ErrBaseRule]), and a synthetic leaf marker
 // ([ErrSyntheticMarker]) are refused. A store then checks the session
 // ID, the media against a held session whose own entries include the
 // base, and its own settings, and stores the session's entries in file
@@ -55,7 +63,7 @@ func ReadForImport(r io.Reader) (*Session, error) {
 		return nil, err
 	}
 	if t := s.Truncated(); t != nil {
-		return nil, fmt.Errorf("agentsession: import: line %d is cut short: %w", t.Line, t.Err)
+		return nil, fmt.Errorf("agentsession: import: %w", t)
 	}
 	if migrated, unresolved := s.Migrated(); migrated && len(unresolved) > 0 {
 		return nil, ErrUnresolvedMigration
@@ -88,14 +96,16 @@ func synthetic(l *LabelEntry) bool {
 // CheckImportMedia is the media check RFC 0002's import makes, for a
 // store that has found origin, the session holding the base, or nil
 // when it holds none: a fork whose media differs from origin's is
-// refused when origin's own entries include the base, since the prefix
-// was written in origin's form and a projection carries media in one.
+// refused with [ErrMediaDiffers] when origin's own entries include the
+// base. A store finds origin by following parent_session up to the
+// session that owns the base, so one that holds it only on its prefix
+// is not taken for it.
 func CheckImportMedia(h Header, origin *Session) error {
 	if origin == nil || h.Base == "" || origin.Prefix(h.Base) {
 		return nil
 	}
 	if om := origin.Header().Media; mediaForm(h.Media) != mediaForm(om) {
-		return fmt.Errorf("agentsession: import: media %q differs from %q of %s, whose own entries include the base", mediaForm(h.Media), mediaForm(om), origin.ID())
+		return fmt.Errorf("%w: import: media %q, where %s, whose own entries include the base, is %q", ErrMediaDiffers, mediaForm(h.Media), origin.ID(), mediaForm(om))
 	}
 	return nil
 }

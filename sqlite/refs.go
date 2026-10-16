@@ -46,7 +46,7 @@ func (s *Store) ResolveRef(ctx context.Context, name string) (agentsession.RefTa
 	if !header.Valid {
 		return t, fmt.Errorf("%w: %s, which ref %s names", agentsession.ErrNoSession, sess, name)
 	}
-	if now, err := identOf(header.String); err != nil || (ident != "" && now != ident) {
+	if now, _, err := identOf(header.String); err != nil || (ident != "" && now != ident) {
 		return t, fmt.Errorf("%w: %s was created again after ref %s was set", agentsession.ErrNoSession, sess, name)
 	}
 	return t, nil
@@ -88,7 +88,7 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 		if err != nil {
 			return fmt.Errorf("sqlite: update ref: %w", err)
 		}
-		if nextIdent, err = identOf(header); err != nil {
+		if nextIdent, _, err = identOf(header); err != nil {
 			return fmt.Errorf("sqlite: update ref: %w", err)
 		}
 		if next.Entry != "" {

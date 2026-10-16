@@ -141,11 +141,12 @@ func (c *Client) HandOver(ctx context.Context, id, head string) error {
 // is what the server did, as Push between two stores reports it. A
 // handover ends with the local store a mirror, once the server has
 // committed its mark; a failure between the two leaves two records,
-// never none. A server refuses a push that would add entries to a
-// redacted session it holds (agentsession.ErrRedacted) and, when its
-// store holds only redacted sessions, one of any other
-// (agentsession.ErrNotRedacted), as [WithRedactedOnly] has the client
-// refuse before it sends anything.
+// never none. A server whose store holds only redacted entries refuses
+// a push of a session whose header does not carry redacted or that
+// carries an entry without it (agentsession.ErrNotRedacted). It refuses
+// at the post, after the objects were uploaded, which stay in its
+// store, named by no session, until a sweep (#244); [WithRedactedOnly]
+// has the client refuse before it sends anything.
 func Push(ctx context.Context, local *cas.Store, c *Client, id string, opts cas.PushOptions) (cas.Exchange, error) {
 	targets := make([]agentsession.RefTarget, len(opts.Refs))
 	for i, r := range opts.Refs {
@@ -165,8 +166,10 @@ func Push(ctx context.Context, local *cas.Store, c *Client, id string, opts cas.
 	if cl.Mark != cas.MarkRecord {
 		return cas.Exchange{}, fmt.Errorf("%w: the local store holds %s as a mirror", cas.ErrNotRecord, id)
 	}
-	if c.redactedOnly && !cl.Header.Redacted {
-		return cas.Exchange{}, fmt.Errorf("%w: push %s through a client that sends only redacted sessions", agentsession.ErrNotRedacted, id)
+	if c.redactedOnly {
+		if err := agentsession.CheckRedacted(cl.Header, append(append([]agentsession.Entry(nil), cl.Prefix...), cl.Own...)); err != nil {
+			return cas.Exchange{}, fmt.Errorf("push through a client that sends only redacted entries: %w", err)
+		}
 	}
 	objects := map[objKey][]byte{}
 	var all Objects
