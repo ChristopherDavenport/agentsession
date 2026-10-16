@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -118,26 +117,21 @@ type Harness struct {
 }
 
 // RedactedFrom is a redacted session's link to its original, the
-// header's redacted_from member. Session is the original's ID and
-// Entries how many entries the original held, prefix included and in
-// file order, when the redaction was made: sessions are append-only, so
-// the count pins the version redacted, whatever of it the redaction
-// kept, and unlike the hash of its last entry it confirms no guessed
-// value. Profile names the redaction, its kind and its rules at a
-// version, so two redactions of one original are told apart; a
-// redaction that writes one derives the session's ID with
-// [RedactedSessionID]. Aligned says the redaction wrote one entry for
-// each of the original's, in file order, each made from the one in its
-// place with only its body changed, so the n-th entry maps back to the
-// original's n-th by position. Extra holds the members this package
-// does not define, the namespaced ones a redaction records about itself
-// among them, and a profile that is not a non-empty string or an
-// aligned that is not true, each kept as written.
+// header's redacted_from member. Session is the original's ID. Profile
+// names the redaction, its kind and its rules at a version, so two
+// redactions of one original are told apart; a redaction that writes
+// one derives the session's ID with [RedactedSessionID]. Which entries
+// of the original each redacted entry was made from is the entry's own
+// redacted member ([RedactedOf]), so the object pins no version: the
+// session grows as the original does. Extra holds the members this
+// package does not define, the namespaced ones a redaction records
+// about itself among them, and a profile that is not a non-empty
+// string, each kept as written. The entries and aligned members of an
+// earlier draft of the format are members this package does not define,
+// and are kept there too.
 type RedactedFrom struct {
 	Session string `json:"session"`
-	Entries int    `json:"entries"`
 	Profile string `json:"profile,omitempty"`
-	Aligned bool   `json:"aligned,omitempty"`
 
 	// Extra holds redacted_from members this package does not define.
 	Extra map[string]json.RawMessage `json:"-"`
@@ -146,7 +140,7 @@ type RedactedFrom struct {
 // ErrRedactedFrom is returned for a header whose redacted_from the
 // format forbids: one on a session that is not redacted, one that names
 // the session itself as its original, or, built in memory, one that
-// names no original or a negative count.
+// names no original.
 var ErrRedactedFrom = errors.New("agentsession: malformed redacted_from")
 
 // redactedFromMinor is the first minor that defines redacted_from.
@@ -157,7 +151,7 @@ const redactedFromMinor = 13
 // would hold it twice.
 func (r RedactedFrom) MarshalJSON() ([]byte, error) {
 	for k := range r.Extra {
-		if k == "session" || k == "entries" || k == "profile" && r.Profile != "" || k == "aligned" && r.Aligned {
+		if k == "session" || k == "profile" && r.Profile != "" {
 			return nil, fmt.Errorf("%w: %s both typed and in Extra", ErrRedactedFrom, k)
 		}
 	}
@@ -166,9 +160,8 @@ func (r RedactedFrom) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON decodes the object, matching members by their exact
-// names. It is refused unless session is a non-empty string and entries
-// a count written as digits; a profile that is not a non-empty string
-// and an aligned that is not true stay in Extra with the members this
+// names. It is refused unless session is a non-empty string; a profile
+// that is not a non-empty string stays in Extra with the members this
 // package does not define, so the object writes back as it was read.
 func (r *RedactedFrom) UnmarshalJSON(data []byte) error {
 	var all map[string]json.RawMessage
@@ -182,21 +175,11 @@ func (r *RedactedFrom) UnmarshalJSON(data []byte) error {
 	if json.Unmarshal(all["session"], &v.Session) != nil || v.Session == "" {
 		return fmt.Errorf("%w: session is not a session id", ErrRedactedFrom)
 	}
-	n, err := strconv.ParseUint(string(all["entries"]), 10, 0)
-	if err != nil || n > math.MaxInt {
-		return fmt.Errorf("%w: entries is not a count", ErrRedactedFrom)
-	}
-	v.Entries = int(n)
 	delete(all, "session")
-	delete(all, "entries")
 	if raw, ok := all["profile"]; ok && json.Unmarshal(raw, &v.Profile) == nil && v.Profile != "" {
 		delete(all, "profile")
 	} else {
 		v.Profile = ""
-	}
-	if string(all["aligned"]) == "true" {
-		v.Aligned = true
-		delete(all, "aligned")
 	}
 	if len(all) > 0 {
 		v.Extra = all
@@ -310,8 +293,6 @@ func (h Header) Validate() error {
 			return fmt.Errorf("%w: names no session", ErrRedactedFrom)
 		case r.Session == h.ID:
 			return fmt.Errorf("%w: names the session itself, %s", ErrRedactedFrom, h.ID)
-		case r.Entries < 0:
-			return fmt.Errorf("%w: entries %d", ErrRedactedFrom, r.Entries)
 		}
 	}
 	return nil

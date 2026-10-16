@@ -327,7 +327,7 @@ func TestRemapRefsKeepsLine(t *testing.T) {
 // TestRemapHeaderRefs: base names an entry of this file, parent_session
 // a session, and redacted_from the original, which stays.
 func TestRemapHeaderRefs(t *testing.T) {
-	h := Header{ID: "s", Base: "o-b", ParentSession: "s-parent", Redacted: true, RedactedFrom: &RedactedFrom{Session: "s-orig", Entries: 3}}
+	h := Header{ID: "s", Base: "o-b", ParentSession: "s-parent", Redacted: true, RedactedFrom: &RedactedFrom{Session: "s-orig", Profile: "p"}}
 	got, unmapped := RemapHeaderRefs(h, prefixRemap)
 	if got.Base != "n-b" || got.ParentSession != "t-parent" || got.RedactedFrom.Session != "s-orig" || len(unmapped) > 0 {
 		t.Errorf("base %s parent_session %s redacted_from %s unmapped %v", got.Base, got.ParentSession, got.RedactedFrom.Session, unmapped)
@@ -577,8 +577,8 @@ func TestRewriteTableCoversRFC(t *testing.T) {
 	tick := regexp.MustCompile("`([a-z_]+)`")
 	for _, span := range [][2]string{
 		{"Wherever this document has a member name an entry", "it names it by `id`"},
-		{"rewrite `parent` and every entry-naming member", "once the prefix is hashed"},
-		{"Then it rewrites the reference to the twin:", "A redaction of a whole store"},
+		{"rewrite `parent` and every entry-naming member", "A member of one of those names"},
+		{"Then it rewrites the reference to it:", "A redaction of a whole store"},
 	} {
 		i := strings.Index(text, span[0])
 		j := strings.Index(text[max(i, 0):], span[1])

@@ -364,7 +364,7 @@ func remapUnknown(u *UnknownEntry, m Remap) (Remapped, error) {
 // session continues from, which the file holds as the last line of its
 // prefix and so names in this file, and parent_session names a session.
 // redacted_from names the original a redacted session was made from,
-// which a twin does not replace, so it stays as written.
+// which a redaction does not re-point, so it stays as written.
 func RemapHeaderRefs(h Header, m Remap) (Header, []Reference) {
 	var unmapped []Reference
 	if m.Entry != nil && h.Base != "" {

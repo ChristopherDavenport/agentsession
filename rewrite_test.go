@@ -316,10 +316,10 @@ func redact(t *testing.T, orig *Session, f func(string) string, profile string) 
 		return id, ok
 	}}
 	h := oh
-	h.ID = RedactedSessionID(oh.ID, orig.Len(), profile)
+	h.ID = RedactedSessionID(oh.ID, profile)
 	h.Base = ""
 	h.Redacted = true
-	h.RedactedFrom = &RedactedFrom{Session: oh.ID, Entries: orig.Len(), Profile: profile, Aligned: true}
+	h.RedactedFrom = &RedactedFrom{Session: oh.ID, Profile: profile}
 	red := New(h)
 	rw := NewRewriter(f)
 	var order []string

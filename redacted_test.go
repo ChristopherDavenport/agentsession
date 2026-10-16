@@ -18,9 +18,9 @@ func redactedHeader(format, redacted string) string {
 }
 
 // TestRedactedFromRoundTrip: a 0.13 header's redacted_from decodes into
-// its typed members, keeps a namespaced member and a profile and an
-// aligned in forms it does not take in Extra, and writes back byte for
-// byte.
+// its typed members, keeps a namespaced member, a profile in a form it
+// does not take and the first draft's entries and aligned in Extra, and
+// writes back byte for byte.
 func TestRedactedFromRoundTrip(t *testing.T) {
 	for _, tt := range []struct {
 		name, member string
@@ -28,20 +28,25 @@ func TestRedactedFromRoundTrip(t *testing.T) {
 	}{
 		{
 			"every member",
-			`"redacted":true,"redacted_from":{"aligned":true,"entries":12,"profile":"example.redact-home@1","session":"01995b2a-0000-7000-8000-000000000001","x.mapping":{"kept":[0,2],"of":3}}`,
-			RedactedFrom{Session: "01995b2a-0000-7000-8000-000000000001", Entries: 12, Profile: "example.redact-home@1", Aligned: true,
+			`"redacted":true,"redacted_from":{"profile":"example.redact-home@1","session":"01995b2a-0000-7000-8000-000000000001","x.mapping":{"kept":[0,2],"of":3}}`,
+			RedactedFrom{Session: "01995b2a-0000-7000-8000-000000000001", Profile: "example.redact-home@1",
 				Extra: map[string]json.RawMessage{"x.mapping": json.RawMessage(`{"kept":[0,2],"of":3}`)}},
 		},
 		{
 			"only what is required",
-			`"redacted":true,"redacted_from":{"entries":0,"session":"o"}`,
+			`"redacted":true,"redacted_from":{"session":"o"}`,
 			RedactedFrom{Session: "o"},
 		},
 		{
-			"profile and aligned in other forms",
-			`"redacted":true,"redacted_from":{"aligned":false,"entries":3,"profile":"","session":"o"}`,
-			RedactedFrom{Session: "o", Entries: 3,
-				Extra: map[string]json.RawMessage{"aligned": json.RawMessage(`false`), "profile": json.RawMessage(`""`)}},
+			"profile in another form",
+			`"redacted":true,"redacted_from":{"profile":"","session":"o"}`,
+			RedactedFrom{Session: "o", Extra: map[string]json.RawMessage{"profile": json.RawMessage(`""`)}},
+		},
+		{
+			"the first draft's entries and aligned",
+			`"redacted":true,"redacted_from":{"aligned":true,"entries":12,"profile":"p","session":"o"}`,
+			RedactedFrom{Session: "o", Profile: "p",
+				Extra: map[string]json.RawMessage{"aligned": json.RawMessage(`true`), "entries": json.RawMessage(`12`)}},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -58,7 +63,7 @@ func TestRedactedFromRoundTrip(t *testing.T) {
 				t.Error("redacted_from both typed and in Extra")
 			}
 			got := *h.RedactedFrom
-			if got.Session != tt.want.Session || got.Entries != tt.want.Entries || got.Profile != tt.want.Profile || got.Aligned != tt.want.Aligned || len(got.Extra) != len(tt.want.Extra) {
+			if got.Session != tt.want.Session || got.Profile != tt.want.Profile || len(got.Extra) != len(tt.want.Extra) {
 				t.Errorf("redacted_from = %+v, want %+v", got, tt.want)
 			}
 			for k, v := range tt.want.Extra {
@@ -79,12 +84,14 @@ func TestRedactedFromRoundTrip(t *testing.T) {
 
 // TestRedactedFromRefused: a 0.13 header carrying redacted_from on a
 // session that is not redacted, or naming the session itself as its
-// original, is malformed, wherever it is read.
+// original, is malformed, wherever it is read. The refusal binds the
+// object whose session is a non-empty string, whatever else it holds.
 func TestRedactedFromRefused(t *testing.T) {
 	for name, redacted := range map[string]string{
-		"absent": `"redacted_from":{"entries":1,"session":"o"}`,
-		"false":  `"redacted":false,"redacted_from":{"entries":1,"session":"o"}`,
-		"itself": `"redacted":true,"redacted_from":{"entries":1,"session":"01995b2a-0000-7000-8000-0000000000aa"}`,
+		"absent":                `"redacted_from":{"session":"o"}`,
+		"false":                 `"redacted":false,"redacted_from":{"session":"o"}`,
+		"itself":                `"redacted":true,"redacted_from":{"session":"01995b2a-0000-7000-8000-0000000000aa"}`,
+		"absent, other members": `"redacted_from":{"entries":"1","profile":7,"session":"o"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			in := redactedHeader(Format, redacted)
@@ -97,9 +104,8 @@ func TestRedactedFromRefused(t *testing.T) {
 		})
 	}
 	for name, r := range map[string]*RedactedFrom{
-		"no session":     {Entries: 1},
-		"negative count": {Session: "o", Entries: -1},
-		"itself":         {Session: "x", Entries: 1},
+		"no session": {Profile: "p"},
+		"itself":     {Session: "x"},
 	} {
 		h := Header{Format: Format, ID: "x", Payload: Payload, Redacted: true, RedactedFrom: r}
 		h.fill(utcNow())
@@ -116,13 +122,12 @@ func TestRedactedFromRefused(t *testing.T) {
 func TestRedactedFromOtherForms(t *testing.T) {
 	for _, tt := range []struct{ name, format, member string }{
 		{"0.13, a string", Format, `"redacted":true,"redacted_from":"o"`},
-		{"0.13, no entries", Format, `"redacted":true,"redacted_from":{"session":"o"}`},
-		{"0.13, entries as a string", Format, `"redacted_from":{"entries":"1","session":"o"}`},
-		{"0.13, an empty session", Format, `"redacted_from":{"entries":1,"session":""}`},
-		{"0.13, a fraction", Format, `"redacted_from":{"entries":1.5,"session":"o"}`},
-		{"0.13, a session in another case", Format, `"redacted_from":{"Session":"o","entries":1}`},
-		{"0.12, the object, not redacted", "agentsession/0.12", `"redacted_from":{"entries":1,"session":"o"}`},
-		{"0.12, the object, redacted", "agentsession/0.12", `"redacted":true,"redacted_from":{"aligned":true,"entries":1,"session":"o"}`},
+		{"0.13, no session", Format, `"redacted_from":{"profile":"p"}`},
+		{"0.13, an empty session", Format, `"redacted_from":{"session":""}`},
+		{"0.13, a session that is a number", Format, `"redacted_from":{"session":1}`},
+		{"0.13, a session in another case", Format, `"redacted_from":{"Session":"o"}`},
+		{"0.12, the object, not redacted", "agentsession/0.12", `"redacted_from":{"session":"o"}`},
+		{"0.12, the object, redacted", "agentsession/0.12", `"redacted":true,"redacted_from":{"profile":"p","session":"o"}`},
 		{"0.5, another form", "agentsession/0.5", `"redacted_from":["o",1]`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -157,9 +162,10 @@ func TestRedactedFromOtherForms(t *testing.T) {
 }
 
 // TestRedactedFromMarshalConflict: a member written both typed and in
-// an Extra map would appear twice, so it is refused.
+// an Extra map would appear twice, so it is refused; the first draft's
+// entries and aligned are untyped and may be in Extra.
 func TestRedactedFromMarshalConflict(t *testing.T) {
-	r := &RedactedFrom{Session: "o", Entries: 1}
+	r := &RedactedFrom{Session: "o"}
 	h := Header{Format: Format, ID: "x", Payload: Payload, Redacted: true, RedactedFrom: r,
 		Extra: map[string]json.RawMessage{"redacted_from": json.RawMessage(`{}`)}}
 	if _, err := json.Marshal(h); !errors.Is(err, ErrRedactedFrom) {
@@ -171,10 +177,9 @@ func TestRedactedFromMarshalConflict(t *testing.T) {
 		bad bool
 	}{
 		{"session", RedactedFrom{Session: "o"}, true},
-		{"entries", RedactedFrom{Session: "o"}, true},
 		{"profile", RedactedFrom{Session: "o", Profile: "p"}, true},
 		{"profile", RedactedFrom{Session: "o"}, false},
-		{"aligned", RedactedFrom{Session: "o", Aligned: true}, true},
+		{"entries", RedactedFrom{Session: "o"}, false},
 		{"aligned", RedactedFrom{Session: "o"}, false},
 	} {
 		tt.r.Extra = map[string]json.RawMessage{tt.key: json.RawMessage(`null`)}
@@ -192,7 +197,7 @@ func TestRedactedFromMarshalConflict(t *testing.T) {
 func TestNoRaise(t *testing.T) {
 	file, _ := hashedLines(t, "agentsession/0.12",
 		`"type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`)
-	file = strings.Replace(file, `"records":`, `"redacted_from":{"entries":1,"session":"o"},"records":`, 1)
+	file = strings.Replace(file, `"records":`, `"redacted_from":{"session":"o"},"records":`, 1)
 	s, err := Read(strings.NewReader(file))
 	if err != nil {
 		t.Fatal(err)
