@@ -118,6 +118,10 @@ type EntryBase struct {
 	// [RedactedOf] and [SetRedacted].
 	redacted   []Span
 	isRedacted bool
+	// redactedRaw is the member as the line spelled it, for an entry
+	// that was read, so it writes back and is kept as written; nil for
+	// one set in memory.
+	redactedRaw json.RawMessage
 	// gated is set on an entry read under a header naming a minor before
 	// 0.13 that holds a redacted member, which the gate left unknown: a
 	// file holding it may not be written at 0.13 or later.

@@ -50,9 +50,10 @@ func WithFollowInterval(d time.Duration) Option {
 // a [agentsession.Reset]. A session deleted ends the follow with
 // [agentsession.ErrNoSession], and so does one created again under its
 // ID, which the stored header tells: its ID, creation stamp and members,
-// but not its format, which the first append of a newer writer raises
-// and which changes nothing a follower holds. The cursor names the last
-// seq and that header's hash.
+// but not its format, which the first append of a newer writer raises.
+// A raise is a [agentsession.Reset] instead: the follower reads the
+// session again under the raised format, by which an entry's redacted
+// member is read. The cursor names the last seq and that header's hash.
 func (s *Store) Follow(ctx context.Context, id string, from agentsession.Cursor) iter.Seq2[agentsession.Change, error] {
 	return follow.Run(ctx, &source{store: s, id: id}, from)
 }
@@ -80,13 +81,15 @@ func parsePos(c agentsession.Cursor) (pos, bool) {
 	return pos{seq, b}, true
 }
 
-// identOf hashes a stored header without its format.
-func identOf(header string) (string, error) {
+// identOf hashes a stored header without its format, and returns the
+// format.
+func identOf(header string) (ident, format string, err error) {
 	var h agentsession.Header
 	if err := h.UnmarshalJSON([]byte(header)); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return agentsession.HeaderIdent(h)
+	ident, err = agentsession.HeaderIdent(h)
+	return ident, h.Format, err
 }
 
 func (src *source) gone() error {
@@ -108,7 +111,7 @@ func (src *source) Load(ctx context.Context, upTo agentsession.Cursor) (*agentse
 	if err != nil {
 		return nil, "", err
 	}
-	ident, err := identOf(header)
+	ident, _, err := identOf(header)
 	if err != nil {
 		return nil, "", fmt.Errorf("sqlite: session %s: header: %w", src.id, err)
 	}
@@ -137,7 +140,7 @@ func (src *source) Tail(ctx context.Context, cur agentsession.Cursor) ([]follow.
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: follow %s: %w", src.id, err)
 	}
-	ident, err := identOf(header)
+	ident, format, err := identOf(header)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: session %s: header: %w", src.id, err)
 	}
@@ -170,7 +173,7 @@ func (src *source) Tail(ctx context.Context, cur agentsession.Cursor) ([]follow.
 		if err != nil {
 			return nil, follow.ErrStale // for Read to judge
 		}
-		items = append(items, follow.Item{Entry: e, Cursor: pos{seq, ident}.cursor()})
+		items = append(items, follow.Item{Entry: e, Cursor: pos{seq, ident}.cursor(), Format: format})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("sqlite: follow %s: %w", src.id, err)

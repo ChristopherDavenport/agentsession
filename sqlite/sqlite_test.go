@@ -66,6 +66,28 @@ func TestStoreSuite(t *testing.T) {
 			t.Cleanup(func() { st.Close() })
 			return st
 		},
+		Lower: func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store {
+			path := paths[s]
+			if err := s.(*sqlite.Store).Close(); err != nil {
+				t.Fatal(err)
+			}
+			db, err := sql.Open("sqlite", "file:"+path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`UPDATE sessions SET header = replace(header, ?, ?) WHERE id = ?`,
+				`"format":"`+agentsession.Format+`"`, `"format":"`+format+`"`, id); err != nil {
+				t.Fatal(err)
+			}
+			db.Close()
+			st, err := sqlite.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			paths[st] = path
+			return st
+		},
 	})
 }
 

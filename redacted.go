@@ -1,7 +1,6 @@
 package agentsession
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -112,7 +111,7 @@ func position(raw json.RawMessage) (int, bool) {
 // its members in its raw line and has no Unknown, so there it only sets
 // the field.
 func (b *EntryBase) takeRedacted(all map[string]json.RawMessage) {
-	b.redacted, b.isRedacted = nil, false
+	b.redacted, b.isRedacted, b.redactedRaw, b.gated = nil, false, nil, false
 	raw, ok := all["redacted"]
 	if !ok {
 		return
@@ -122,6 +121,7 @@ func (b *EntryBase) takeRedacted(all map[string]json.RawMessage) {
 		return
 	}
 	b.redacted, b.isRedacted = spans, true
+	b.redactedRaw = append(json.RawMessage(nil), raw...)
 	if _, held := b.Unknown["redacted"]; held {
 		delete(b.Unknown, "redacted")
 		if len(b.Unknown) == 0 {
@@ -130,8 +130,13 @@ func (b *EntryBase) takeRedacted(all map[string]json.RawMessage) {
 	}
 }
 
-// redactedJSON is the typed redacted member as written.
+// redactedJSON is the typed redacted member as written: as the line
+// spelled it, for an entry read and not marked since, so a member such
+// as [3.0] writes back as it was read.
 func (b *EntryBase) redactedJSON() json.RawMessage {
+	if b.redactedRaw != nil {
+		return b.redactedRaw
+	}
 	spans := b.redacted
 	if spans == nil {
 		spans = []Span{}
@@ -150,7 +155,8 @@ func (b *EntryBase) redactedJSON() json.RawMessage {
 // on an extension entry, in its raw line) as written, and RedactedOf
 // reports false. [Read], [RawEntry.Decode] and [Session.Extend] apply
 // the header's minor; [UnmarshalEntry], given a line alone, decodes it
-// as this package writes it. The spans are the entry's own, so a caller
+// as this package writes it, and [GateEntry] applies the minor to it.
+// The spans are the entry's own, so a caller
 // must not modify them.
 func RedactedOf(e Entry) ([]Span, bool) {
 	if e == nil {
@@ -183,7 +189,7 @@ func SetRedacted(e Entry, spans []Span) error {
 		return err
 	}
 	b := e.Base()
-	b.redacted, b.isRedacted, b.gated = append([]Span{}, spans...), true, false
+	b.redacted, b.isRedacted, b.gated, b.redactedRaw = append([]Span{}, spans...), true, false, nil
 	return setRawRedacted(e, b.redactedJSON())
 }
 
@@ -196,7 +202,7 @@ func ClearRedacted(e Entry) error {
 		return errors.New("agentsession: nil entry")
 	}
 	b := e.Base()
-	b.redacted, b.isRedacted, b.gated = nil, false, false
+	b.redacted, b.isRedacted, b.gated, b.redactedRaw = nil, false, false, nil
 	return setRawRedacted(e, nil)
 }
 
@@ -232,6 +238,24 @@ func setRawRedacted(e Entry, raw json.RawMessage) error {
 	return nil
 }
 
+// GateEntry reads e, an entry decoded from its line alone, as
+// [UnmarshalEntry] decodes it, under format, the format its file's
+// header names: before 0.13 the redacted member is not defined, so one
+// in any form becomes a member this package does not know, kept as
+// written, and [RedactedOf] reports e as not redacted. The entry is
+// then marked as holding such a member, so a session it joins, by
+// [Session.Commit] or any other path, may not be written at 0.13 or
+// later ([Session.RaiseRefused]) and [Session.Append] refuses it. Read,
+// [RawEntry.Decode] and [Session.Extend] apply it themselves; a store
+// that decodes a line and commits it to a session it read, as a log
+// reader or a follower does, calls GateEntry with the format of the
+// header it read the line under. From 0.13 on it changes nothing.
+func GateEntry(format string, e Entry) {
+	if e != nil {
+		gateRedacted(e, format)
+	}
+}
+
 // gateRedacted applies the minor gate to a decoded entry read from a
 // file whose header named format: before 0.13 the redacted member is
 // not defined, so a redacted member in any form stays a member this
@@ -248,14 +272,15 @@ func gateRedacted(e Entry, format string) bool {
 }
 
 // demoteRedacted moves a typed redacted member into the members e keeps
-// as written, as the typed field wrote it, so e writes the same bytes
-// and is not redacted. It reports whether e holds a redacted member in
-// any form afterwards.
+// as written, as the line spelled it (or, for one set in memory, as the
+// typed field writes it), so e writes the same bytes and is not
+// redacted. It reports whether e holds a redacted member in any form
+// afterwards.
 func demoteRedacted(e Entry) bool {
 	b := e.Base()
 	if b.isRedacted {
 		raw := b.redactedJSON()
-		b.redacted, b.isRedacted = nil, false
+		b.redacted, b.isRedacted, b.redactedRaw = nil, false, nil
 		if _, ok := e.(*UnknownEntry); !ok {
 			if b.Unknown == nil {
 				b.Unknown = map[string]json.RawMessage{}
@@ -273,8 +298,10 @@ func holdsRedactedMember(e Entry) bool {
 	if _, ok := e.Base().Unknown["redacted"]; ok {
 		return true
 	}
+	// The raw line is split, not searched: a key may be spelled with
+	// escapes.
 	u, ok := e.(*UnknownEntry)
-	if !ok || len(u.Raw) == 0 || !bytes.Contains(u.Raw, []byte(`"redacted"`)) {
+	if !ok || len(u.Raw) == 0 {
 		return false
 	}
 	all, err := splitMembers(u.Raw)

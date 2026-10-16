@@ -423,8 +423,18 @@ func (m *MemoryStore) Append(ctx context.Context, sessionID string, e Entry) (st
 	// takes a copy, so a caller that writes to its entry afterwards, as
 	// a recorder setting the ID it was given does, shares nothing with
 	// what the store holds or what a follower is reading.
-	if _, err := s.Prepare(e); err != nil {
+	pre, err := s.Prepare(e)
+	if err != nil {
 		return "", err
+	}
+	if pre.Outcome != Held {
+		// The first append to a session whose header names an earlier
+		// minor raises it, as RFC 0002 has a store do, so the entry is
+		// read under the format it was written with. Prepare has
+		// refused a session that may not be raised.
+		if err := s.raiseHeader(Format); err != nil {
+			return "", err
+		}
 	}
 	b, err := MarshalEntry(e)
 	if err != nil {

@@ -716,3 +716,211 @@ func TestRaiseRefused(t *testing.T) {
 		t.Errorf("Append to a 0.12 fork over the old redacted = %v, want ErrNoRaise", err)
 	}
 }
+
+// TestGatedThroughHelpersAndSessions: the mark a gated entry carries
+// survives RewriteStrings and RemapRefs, so a session that takes the
+// result by Commit may not be written at 0.13, and Append refuses it
+// until the writer clears or marks it, the review's copy of a 0.12
+// file into a new session among them.
+func TestGatedThroughHelpersAndSessions(t *testing.T) {
+	msg := `"type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`
+	in, _ := hashedLines(t, "agentsession/0.12", msg, msg+`,"redacted":[1]`, `"type":"x:note","redacted":[2]`, msg)
+	orig, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, e := range orig.Entries()[1:3] {
+		rw, err := RewriteStrings(e, strings.ToUpper)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rm, err := RemapRefs(e, Remap{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, out := range map[string]Entry{"RewriteStrings": rw, "RemapRefs": rm.Entry} {
+			out.Base().ID, out.Base().Parent = "", ""
+			s := New(Header{Format: "agentsession/0.12"})
+			if _, err := s.Commit(out); err != nil {
+				t.Fatalf("entry %d, %s: Commit: %v", i+1, name, err)
+			}
+			if err := s.RaiseRefused(Format); !errors.Is(err, ErrNoRaise) {
+				t.Errorf("entry %d, %s: RaiseRefused = %v, want ErrNoRaise", i+1, name, err)
+			}
+		}
+	}
+
+	// Copying the file's entries into a new session with Append stops
+	// at the gated entry, which a 0.13 file would give a meaning, and
+	// takes it once the writer has said what it means.
+	cp := New(Header{})
+	ids := map[string]string{}
+	for i, e := range orig.Entries() {
+		data, err := MarshalEntry(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := UnmarshalEntry(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		GateEntry(orig.DeclaredFormat(), c)
+		c.Base().ID = ""
+		c.Base().Parent = ids[e.Base().Parent]
+		_, err = cp.Append(c)
+		switch i {
+		case 1, 2:
+			if !errors.Is(err, ErrNoRaise) || !strings.Contains(err.Error(), "ClearRedacted") {
+				t.Fatalf("Append of gated entry %d = %v, want ErrNoRaise naming ClearRedacted", i, err)
+			}
+			fix := ClearRedacted
+			if i == 2 {
+				fix = func(e Entry) error { return SetRedacted(e, []Span{{2, 2}}) }
+			}
+			if err := fix(c); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = cp.Append(c); err != nil {
+				t.Fatalf("Append once marked: %v", err)
+			}
+		default:
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		ids[e.Base().ID] = c.Base().ID
+	}
+	if err := cp.RaiseRefused(Format); err != nil {
+		t.Errorf("the copy: RaiseRefused = %v", err)
+	}
+	back, err := Read(strings.NewReader(writeFile(t, cp)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := RedactedOf(back.Entries()[1]); ok {
+		t.Error("the cleared entry reads as redacted")
+	}
+	if got, ok := RedactedOf(back.Entries()[2]); !ok || !slices.Equal(got, []Span{{2, 2}}) {
+		t.Errorf("the marked entry reads back %v %v", got, ok)
+	}
+}
+
+// TestForkFormats: a fork over a 0.12 origin whose gated entry is on a
+// sibling branch, not on the fork's prefix, is taken at 0.13; a fork
+// written under 0.12 over a 0.13 origin's redacted prefix entry is
+// refused, since 0.12 would read the member as one it does not know.
+func TestForkFormats(t *testing.T) {
+	msg := `"type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`
+	root := `{"id":"ROOT",` + `"type":"item","parent":null,"ts":"2026-09-17T16:00:01Z","item":{"type":"message","role":"user","content":[]}}`
+	rid, _, err := EntryHashes([]byte(`{` + root[len(`{"id":"ROOT",`):]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := func(body string) (string, string) {
+		l := `{` + body + `,"parent":"` + rid + `","ts":"2026-09-17T16:00:02Z"}`
+		id, _, err := EntryHashes([]byte(l))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return `{"id":"` + id + `",` + l[1:], id
+	}
+	gated, _ := line(msg + `,"redacted":[1]`)
+	sibling, sid := line(`"type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"other"}]}`)
+	head := `{"type":"session","format":"agentsession/0.12","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}`
+	file := head + "\n" + strings.Replace(root, "ROOT", rid, 1) + "\n" + gated + "\n" + sibling + "\n"
+	origin, err := Read(strings.NewReader(file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := origin.RaiseRefused(Format); !errors.Is(err, ErrNoRaise) {
+		t.Fatalf("the origin: RaiseRefused = %v", err)
+	}
+	if f, err := Fork(origin, sid, Header{}); err != nil {
+		t.Errorf("Fork at the sibling: %v", err)
+	} else if err := f.RaiseRefused(Format); err != nil {
+		t.Errorf("the sibling's fork: RaiseRefused = %v", err)
+	}
+
+	in, ids := hashedLines(t, Format, msg+`,"redacted":[1]`, msg)
+	s13, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Fork(s13, ids[1], Header{Format: "agentsession/0.12"}); !errors.Is(err, ErrUnsupportedFormat) {
+		t.Errorf("Fork under 0.12 over a redacted prefix entry = %v, want ErrUnsupportedFormat", err)
+	}
+	if _, err := Fork(s13, ids[1], Header{}); err != nil {
+		t.Errorf("Fork at 0.13: %v", err)
+	}
+}
+
+// TestGateOtherForms: under 0.12 a member in another form is unknown
+// too, and forbids the raise: on a core entry, on an extension entry,
+// spelled with an escape in the key, and through Extend. A valid member
+// spelled in a non-canonical form is kept as written.
+func TestGateOtherForms(t *testing.T) {
+	msg := `"type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`
+	for name, body := range map[string]string{
+		"malformed, core":             msg + `,"redacted":["x"]`,
+		"malformed, extension":        `"type":"x:note","redacted":0`,
+		"escaped key, extension":      `"type":"x:note","redacted":"x"`,
+		"non-canonical, core":         msg + `,"redacted":[3.0]`,
+		"non-canonical, extension":    `"type":"x:note","redacted":[1e0]`,
+		"malformed escaped key, core": msg + `,"redacted":{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			in, _ := hashedLines(t, "agentsession/0.12", body)
+			s, err := Read(strings.NewReader(in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := s.Entries()[0]
+			if _, ok := RedactedOf(e); ok {
+				t.Error("reads as redacted")
+			}
+			if err := s.RaiseRefused(Format); !errors.Is(err, ErrNoRaise) {
+				t.Errorf("RaiseRefused = %v, want ErrNoRaise", err)
+			}
+			if f := s.Header().Format; f != "agentsession/0.12" {
+				t.Errorf("held at %s", f)
+			}
+			if out, want := writeFile(t, s), canonicalFile(t, in); out != want {
+				t.Errorf("rewrite\n got %s want %s", out, want)
+			}
+		})
+	}
+	// Kept as written: [3.0] stays [3.0] in Unknown.
+	in, _ := hashedLines(t, "agentsession/0.12", msg+`,"redacted":[3.0]`)
+	s, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw := s.Entries()[0].Base().Unknown["redacted"]; string(raw) != `[3.0]` {
+		t.Errorf("kept %s, want [3.0]", raw)
+	}
+
+	// Through Extend: a malformed member arriving at a 0.12 session.
+	in, ids := hashedLines(t, "agentsession/0.12", msg)
+	s, err = Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"x:note","parent":"` + ids[0] + `","ts":"2026-09-17T16:00:02Z","redacted":"x"}`
+	id, _, err := EntryHashes([]byte(line))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := UnmarshalEntry([]byte(`{"id":"` + id + `",` + line[1:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Extend(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RaiseRefused(Format); !errors.Is(err, ErrNoRaise) {
+		t.Errorf("after Extend: RaiseRefused = %v, want ErrNoRaise", err)
+	}
+	if f := s.Header().Format; f != "agentsession/0.12" {
+		t.Errorf("after Extend the header is %s", f)
+	}
+}
