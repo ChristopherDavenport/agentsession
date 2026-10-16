@@ -396,16 +396,16 @@ var coreStringMembers = map[string][]string{
 	TypeConfig:        {"model", "instructions", "instructions_parts/[]/id", "instructions_parts/[]/text", "instructions_parts/[]/source", "instructions_omitted/[]/id", "instructions_omitted/[]/reason", "instructions_omitted/[]/source", "tools_removed/[]", "omit/reasoning"},
 	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_parts/[]/source", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/source", "config/omit/reasoning"},
 	TypeBranchSummary: {},
-	TypeRun:           {"run_id", "phase", "source", "reason", "ref", "trigger/kind", "trigger/ref", "trigger/source", "pending/[]"},
-	TypeDispatch:      {"call_id", "idempotency_key"},
-	TypeDecision:      {"call_id", "verdict", "by", "reason"},
+	TypeRun:           {"run_id", "phase", "source", "reason", "ref", "trigger/kind", "trigger/ref", "trigger/source"},
+	TypeDispatch:      {"idempotency_key"},
+	TypeDecision:      {"verdict", "by", "reason"},
 	TypeQueued:        {"mode", "trigger/kind", "trigger/ref", "trigger/source", "ref"},
 	TypeLabel:         {"label"},
 	TypeInfo:          {"name"},
 	TypeEnv:           {"cwd", "vcs/system", "vcs/revision", "tools/*", "workspace/kind", "workspace/ref"},
 	TypeOutcome:       {"kind", "label"},
-	TypeLink:          {"rel", "call_id", "url", "task", "context", "cancel"},
-	TypeCustom:        {"ns", "call_id"},
+	TypeLink:          {"rel", "url", "task", "context", "cancel"},
+	TypeCustom:        {"ns"},
 }
 
 // TestRewriteTableClassifiesEveryMember walks every core type's struct
@@ -424,7 +424,16 @@ func TestRewriteTableClassifiesEveryMember(t *testing.T) {
 		stringMembers(typ, nil, pkg, got)
 		known := map[string]bool{}
 		for _, sp := range bodyMembers[name] {
-			known[strings.Join(sp.path, "/")] = true
+			m := strings.Join(sp.path, "/")
+			if sp.role == roleDataKeys {
+				// An object keyed by data: its keys are not a member
+				// the walk finds, its values are.
+				if !got[m+"/*"] {
+					t.Errorf("%s: the table keys %s by data, and it is no object of the type", name, m)
+				}
+				continue
+			}
+			known[m] = true
 		}
 		listed := map[string]bool{}
 		for _, m := range coreStringMembers[name] {
@@ -498,7 +507,8 @@ func sortedSet(m map[string]bool) []string {
 }
 
 // TestRewriteTableCoversRFC: every member RFC 0001 lists as naming an
-// entry or a session is one the table re-points. The lists are read
+// entry or a session is one the table re-points, and the member it says
+// keeps data in its member names is one the table keys by data. The lists are read
 // from the RFC itself, so a member added there and not here fails.
 func TestRewriteTableCoversRFC(t *testing.T) {
 	rfc, err := os.ReadFile(filepath.Join("docs", "rfcs", "0001-agent-session-format.md"))
@@ -535,5 +545,26 @@ func TestRewriteTableCoversRFC(t *testing.T) {
 				t.Errorf("RFC 0001 names %s as a reference (%q) and the table does not re-point it", m[1], span[0])
 			}
 		}
+	}
+	// The data the format keeps in member names, which RewriteStrings
+	// reaches: the RFC names the type and the member, and the table keys
+	// a member of that type by data.
+	const keys = "MUST reach data the format keeps in member names:"
+	i := strings.Index(text, keys)
+	j := strings.Index(text[max(i, 0):], "MUST NOT both be kept")
+	if i < 0 || j < 0 {
+		t.Fatalf("RFC 0001 no longer says %q; find the rule again", keys)
+	}
+	names := tick.FindAllStringSubmatch(text[i:i+j], -1)
+	if len(names) < 2 {
+		t.Fatalf("the rule names no member: %s", text[i:i+j])
+	}
+	typ, member := names[0][1], names[1][1]
+	found := false
+	for _, sp := range bodyMembers[typ] {
+		found = found || sp.role == roleDataKeys && sp.path[0] == member
+	}
+	if !found {
+		t.Errorf("RFC 0001 keeps data in the member names of %s's %s and the table does not key it by data", typ, member)
 	}
 }

@@ -31,7 +31,20 @@ const (
 	roleSession
 	// roleHash is a string holding a hash of something else.
 	roleHash
+	// roleCallID is a string naming a function call by its call_id.
+	roleCallID
+	// roleDataKeys is an object whose member names are data, not names
+	// a writer chose: a rewrite of the body reaches them.
+	roleDataKeys
 )
+
+// callIDMember is the member that names a function call by its call_id,
+// wherever it appears: in a function call item and its output, a
+// dispatch, a decision, a link, a custom entry, and the payload's other
+// call items. It pairs entries across a session and a subsession's ID is
+// derived from it, so a rewrite of the body leaves it, at any depth and
+// in an extension entry as well.
+const callIDMember = "call_id"
 
 // special is one member of an entry's JSON that is not body text.
 type special struct {
@@ -76,7 +89,10 @@ var envelopeMembers = []special{
 // checkpoint holds the settings in force, whose omit items name entries
 // as a config entry's do; its omitted parts carry no of, which is taken
 // as an entry should a checkpoint hold one. An env entry's files map a
-// path, a member name, to the hash of the file.
+// path to the hash of the file: the hash is not body text, and the path
+// is data in a member name, which a rewrite of the body reaches. Every
+// call_id names a call (callIDMember), and so does each element of a run
+// end's pending list.
 var bodyMembers = map[string][]special{
 	TypeItem:     {{path: memberPath("queued_from"), role: roleEntry}},
 	TypeResponse: {{path: memberPath("request_hash"), role: roleHash}},
@@ -92,15 +108,20 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("config", "instructions_parts", "[]", "hash"), role: roleHash},
 	},
 	TypeBranchSummary: {{path: memberPath("from"), role: roleEntry}},
-	TypeDispatch:      {{path: memberPath("target"), role: roleEntry}},
-	TypeDecision:      {{path: memberPath("target"), role: roleEntry}},
+	TypeRun:           {{path: memberPath("pending", "[]"), role: roleCallID}},
+	TypeDispatch:      {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
+	TypeDecision:      {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
 	TypeLabel:         {{path: memberPath("target"), role: roleEntry}},
 	TypeOutcome:       {{path: memberPath("target"), role: roleEntry}},
 	TypeLink: {
 		{path: memberPath("target"), role: roleEntry, when: func(e Entry) bool { return e.(*LinkEntry).Target != "" }},
 		{path: memberPath("session"), role: roleSession},
+		{path: memberPath("call_id"), role: roleCallID},
 	},
+	TypeCustom: {{path: memberPath("call_id"), role: roleCallID}},
 	TypeEnv: {
+		{path: memberPath("files", "read"), role: roleDataKeys},
+		{path: memberPath("files", "written"), role: roleDataKeys},
 		{path: memberPath("files", "read", "*"), role: roleHash},
 		{path: memberPath("files", "written", "*"), role: roleHash},
 	},

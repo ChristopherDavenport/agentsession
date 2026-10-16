@@ -24,7 +24,7 @@ const sidecarURL = "sidecar:sha256:5ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec
 // write back.
 var plantedEntries = []struct{ name, line string }{
 	{"item message, inline media, source, unknowns", `{"type":"item","id":"x","parent":"p",` + tsLine + `,"item":{"type":"message","role":"user","content":[{"type":"input_text","text":"a SECRET","x:extra":"SECRET kept beside a typed member"},{"type":"input_image","image_url":"data:text/plain,SECRET"},{"type":"input_file","filename":"SECRET.txt","file_data":"data:text/plain;base64,U0VDUkVU SECRET"}]},"response":"resp-SECRET","source":{"kind":"human","ref":"SECRET-ref","x:when":"SECRET"},"x:note":{"deep":["SECRET",{"a-name":"SECRET"}]}}`},
-	{"item function call", `{"type":"item","id":"x","parent":"p",` + tsLine + `,"item":{"type":"function_call","call_id":"call-SECRET","name":"run","arguments":"{\"cmd\":\"cat /home/SECRET\"}"}}`},
+	{"item function call", `{"type":"item","id":"x","parent":"p",` + tsLine + `,"item":{"type":"function_call","call_id":"call-1","name":"run","arguments":"{\"cmd\":\"cat /home/SECRET\"}"}}`},
 	{"response", `{"type":"response","id":"x","parent":"p",` + tsLine + `,"response_id":"resp-SECRET","model":"SECRET-model","status":"failed","error":{"code":"x","message":"SECRET failed","param":""},"x:note":"SECRET"}`},
 	{"response the fields do not write back", `{"type":"response","id":"x","parent":"p",` + tsLine + `,"status":"completed","model":"SECRET-model","x:note":{"k":"SECRET"}}`},
 	{"config", `{"type":"config","id":"x","parent":null,` + tsLine + `,"model":"m","instructions":"one SECRET\n\ntwo","instructions_parts":[{"id":"a","text":"one SECRET","source":"SECRET-layer"},{"id":"b","text":"two"}],"instructions_omitted":[{"id":"SECRET.md","reason":"SECRET budget","size":3}],"tools_added":[{"type":"function","name":"lookup","description":"Look up SECRET","parameters":{"type":"object"}}],"extra":{"user":"SECRET"}}`},
@@ -36,10 +36,10 @@ var plantedEntries = []struct{ name, line string }{
 	{"queued", `{"type":"queued","id":"x","parent":"p",` + tsLine + `,"item":{"type":"message","role":"user","content":[{"type":"input_text","text":"steer SECRET"}]},"mode":"steer","trigger":{"kind":"human","ref":"slack:SECRET"},"ref":"inbox-SECRET"}`},
 	{"label", `{"type":"label","id":"x","parent":"p",` + tsLine + `,"target":"t","label":"SECRET checkpoint"}`},
 	{"info with normalised was and raw", `{"type":"info","id":"x","parent":"p",` + tsLine + `,"name":"SECRET \ufffd","x:cut":"SECRET \ufffd","normalised":[{"at":"/name","was":"\"SECRET \\ud83d\""},{"at":"/x:cut","raw":"` + base64.StdEncoding.EncodeToString([]byte("\"SECRET \xff\"")) + `"}]}`},
-	{"env with a workspace's host kept", `{"type":"env","id":"x","parent":"p",` + tsLine + `,"cwd":"/home/SECRET/proj","vcs":{"system":"git","revision":"r","x:tree":"SECRET"},"tools":{"bash":"SECRET-5.2"},"workspace":{"kind":"container","ref":"img-SECRET","host":"SECRET.example"}}`},
+	{"env with a workspace's host kept", `{"type":"env","id":"x","parent":"p",` + tsLine + `,"cwd":"/home/SECRET/proj","files":{"read":{"/home/SECRET/a.go":"sha256:4444444444444444444444444444444444444444444444444444444444444444"},"written":{"/home/SECRET/b.go":"sha256:4444444444444444444444444444444444444444444444444444444444444444"}},"vcs":{"system":"git","revision":"r","x:tree":"SECRET"},"tools":{"bash":"SECRET-5.2"},"workspace":{"kind":"container","ref":"img-SECRET","host":"SECRET.example"}}`},
 	{"outcome", `{"type":"outcome","id":"x","parent":"p",` + tsLine + `,"kind":"feedback","target":"t","label":"SECRET says","details":{"note":"SECRET"}}`},
-	{"link", `{"type":"link","id":"x","parent":"p",` + tsLine + `,"rel":"peer","session":"","call_id":"call-SECRET","url":"https://SECRET.example/a2a","task":"task-SECRET","context":"ctx-SECRET"}`},
-	{"custom", `{"type":"custom","id":"x","parent":"p",` + tsLine + `,"ns":"SECRET-app","data":{"text":"SECRET"},"call_id":"call-SECRET"}`},
+	{"link", `{"type":"link","id":"x","parent":"p",` + tsLine + `,"rel":"peer","session":"","call_id":"call-1","url":"https://SECRET.example/a2a","task":"task-SECRET","context":"ctx-SECRET"}`},
+	{"custom", `{"type":"custom","id":"x","parent":"p",` + tsLine + `,"ns":"SECRET-app","data":{"text":"SECRET"},"call_id":"call-1"}`},
 	{"extension entry", `{"type":"x:note","id":"x","parent":"p",` + tsLine + `,"text":"SECRET","nested":{"list":["SECRET"]},"normalised":[{"at":"/text","was":"\"SECRET\""}]}`},
 }
 
@@ -104,22 +104,28 @@ func TestRewriteStringsNormalised(t *testing.T) {
 
 // protectedEntries hold, in every member that is not body text, a value
 // beginning P- or a hash, and in body text values beginning B-: the
-// envelope, legacy_id, every reference, every hash, a sidecar URL, a
-// member name, a normalised record's at.
+// envelope, legacy_id, every reference, every hash, every call_id, a
+// sidecar URL, a member name, a normalised record's at and a record of
+// a member that is not body text. An env entry's file paths are data in
+// member names, and body.
 var protectedEntries = []string{
 	`{"type":"item","id":"P-id","parent":"P-parent",` + tsLine + `,"parents":[{"entry":"P-entry","session":"P-session","x:note":"P-extra"}],"legacy_id":"P-legacy","item":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"` + sidecarURL + `"},{"type":"input_text","text":"B-text"}]},"queued_from":"P-queued","P-name":"B-value","normalised":[{"at":"/P-name","was":"\"B-was\""}]}`,
 	`{"type":"response","id":"P-id","parent":"P-parent",` + tsLine + `,"response_id":"B-resp","status":"completed","request_hash":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}`,
 	`{"type":"config","id":"P-id","parent":"P-parent",` + tsLine + `,"omit":{"reasoning":"other_models","items":["P-omit"]},"instructions_omitted":[{"keep":1,"of":"P-of"}],"instructions_parts":[{"id":"B-id","hash":"sha256:2222222222222222222222222222222222222222222222222222222222222222"}]}`,
 	`{"type":"compaction","id":"P-id","parent":"P-parent",` + tsLine + `,"first_kept":"P-first","summary":{"type":"message","role":"user","content":[{"type":"input_text","text":"B-sum"}]},"config":{"omit":{"items":["P-omit"]},"instructions_parts":[{"id":"B-id","text":"B-part"}]}}`,
 	`{"type":"branch_summary","id":"P-id","parent":"P-parent",` + tsLine + `,"from":"P-from","summary":{"type":"message","role":"user","content":[{"type":"input_text","text":"B-sum"}]}}`,
-	`{"type":"dispatch","id":"P-id","parent":"P-parent",` + tsLine + `,"call_id":"B-call","target":"P-target"}`,
-	`{"type":"decision","id":"P-id","parent":"P-parent",` + tsLine + `,"call_id":"B-call","target":"P-target","verdict":"proceed"}`,
+	`{"type":"dispatch","id":"P-id","parent":"P-parent",` + tsLine + `,"call_id":"P-call","target":"P-target"}`,
+	`{"type":"decision","id":"P-id","parent":"P-parent",` + tsLine + `,"call_id":"P-call","target":"P-target","verdict":"proceed"}`,
 	`{"type":"label","id":"P-id","parent":"P-parent",` + tsLine + `,"target":"P-target","label":"B-label"}`,
 	`{"type":"outcome","id":"P-id","parent":"P-parent",` + tsLine + `,"kind":"eval","target":"P-target"}`,
 	`{"type":"link","id":"P-id","parent":"P-parent",` + tsLine + `,"rel":"judged_by","session":"P-session","target":"P-target"}`,
-	`{"type":"link","id":"P-id","parent":"P-parent",` + tsLine + `,"rel":"subsession","session":"P-session","call_id":"B-call","target":"P-target","cancel":"sent"}`,
-	`{"type":"env","id":"P-id","parent":"P-parent",` + tsLine + `,"cwd":"B-cwd","files":{"read":{"P-path":"sha256:3333333333333333333333333333333333333333333333333333333333333333"}}}`,
-	`{"type":"x:note","id":"P-id","parent":"P-parent",` + tsLine + `,"parents":[{"entry":"P-entry"}],"legacy_id":"P-legacy","text":"B-text","P-name":"` + sidecarURL + `"}`,
+	`{"type":"link","id":"P-id","parent":"P-parent",` + tsLine + `,"rel":"subsession","session":"P-session","call_id":"P-call","target":"P-target","cancel":"sent"}`,
+	`{"type":"env","id":"P-id","parent":"P-parent",` + tsLine + `,"cwd":"B-cwd","files":{"read":{"B-path":"sha256:3333333333333333333333333333333333333333333333333333333333333333"}}}`,
+	`{"type":"item","id":"P-id","parent":"P-parent",` + tsLine + `,"item":{"type":"function_call","call_id":"P-call","name":"B-name","arguments":"B-args"},"normalised":[{"at":"/item/call_id","was":"\"P-call\""}]}`,
+	`{"type":"item","id":"P-id","parent":"P-parent",` + tsLine + `,"item":{"type":"function_call_output","call_id":"P-call","output":"B-out"}}`,
+	`{"type":"run","id":"P-id","parent":"P-parent",` + tsLine + `,"run_id":"B-run","phase":"end","reason":"input_required","pending":["P-call","P-call2"]}`,
+	`{"type":"custom","id":"P-id","parent":"P-parent",` + tsLine + `,"ns":"B-ns","call_id":"P-call","data":{"call_id":"P-call","note":"B-note"}}`,
+	`{"type":"x:note","id":"P-id","parent":"P-parent",` + tsLine + `,"parents":[{"entry":"P-entry"}],"legacy_id":"P-legacy","text":"B-text","P-name":"` + sidecarURL + `","call_id":"P-call"}`,
 }
 
 // TestRewriteStringsNeverSeesProtected: f is handed every body string
@@ -337,5 +343,33 @@ func TestAlignedRedactionVerifies(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRewriteStringsPathKeys: an env entry's file paths are rewritten
+// with their hashes kept, a record of a normalised hash follows its
+// renamed path in sorted order, and two paths made one are refused.
+func TestRewriteStringsPathKeys(t *testing.T) {
+	h1, h2 := "sha256:"+strings.Repeat("1", 64), "sha256:"+strings.Repeat("2", 64)
+	e := entryOf(t, `{"type":"env","id":"x","parent":null,`+tsLine+`,"files":{"read":{"/home/SECRET/z":"`+h1+`","/a":"`+h2+`"},"written":{"/home/SECRET/w":"`+h1+`"}},"tools":{"SECRET-tool":"1"},"normalised":[{"at":"/files/read/~1home~1SECRET~1z","was":"\"SECRET\""},{"at":"/files/read/~1x","was":"\"SECRET\""}]}`)
+	got, err := RewriteStrings(e, func(s string) string { return strings.ReplaceAll(s, "/home/SECRET", "/~") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := got.(*EnvEntry)
+	if env.Files.Read["/~/z"] != h1 || env.Files.Read["/a"] != h2 || env.Files.Written["/~/w"] != h1 || len(env.Files.Read) != 2 {
+		t.Errorf("files %+v", env.Files)
+	}
+	if _, ok := env.Tools["SECRET-tool"]; !ok {
+		t.Errorf("a tool name was rewritten: %v", env.Tools)
+	}
+	n := env.Normalised
+	if n[0].At != "/files/read/~1x" || n[1].At != "/files/read/~1~0~1z" || n[1].Was != `"SECRET"` {
+		t.Errorf("normalised %+v", n)
+	}
+
+	merge := entryOf(t, `{"type":"env","id":"x","parent":null,`+tsLine+`,"files":{"read":{"/home/a/f":"`+h1+`","/home/b/f":"`+h2+`"}}}`)
+	if _, err := RewriteStrings(merge, func(s string) string { return strings.NewReplacer("/home/a", "/~", "/home/b", "/~").Replace(s) }); !errors.Is(err, ErrKeyCollision) {
+		t.Errorf("two paths made one: %v, want ErrKeyCollision", err)
 	}
 }
