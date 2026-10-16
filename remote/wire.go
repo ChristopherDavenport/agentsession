@@ -241,6 +241,9 @@ var reasons = map[string]error{
 	// A header's: a redacted_from without redacted, or naming the
 	// session itself, in a pushed header.
 	"redacted_from": agentsession.ErrRedactedFrom,
+	// A fork's: its media differs from that of the session holding its
+	// base, a bad_base.
+	"media_differs": agentsession.ErrMediaDiffers,
 }
 
 // Problem is an error that crossed the wire, as RFC 9457's problem
@@ -314,6 +317,10 @@ func problemOf(err error) *Problem {
 		return p
 	}
 	switch {
+	case errors.Is(err, agentsession.ErrMediaDiffers):
+		p := problem(CodeBadBase, "the fork's media differs from its origin's", err.Error())
+		p.Reason = "media_differs"
+		return p
 	case errors.Is(err, agentsession.ErrNotRedacted):
 		return problem(CodeNotRedacted, "the store holds only redacted entries", "")
 	case errors.Is(err, agentsession.ErrNoSession):
