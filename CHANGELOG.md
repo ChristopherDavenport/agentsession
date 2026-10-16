@@ -38,10 +38,18 @@ versions may break the API.
   and `Write` and is hashed as body content. A value in another form is
   kept as written in `Unknown`, and the entry is not redacted. In a file
   that declares a minor before 0.13 the member is unknown whatever its
-  form: `Read`, `RawEntry.Decode` and `Session.Extend` read each entry
-  under the minor its file declared, and `UnmarshalEntry`, given a line
-  alone, reads it as this package writes it. `RewriteStrings` and
-  `RemapRefs` keep a member read that way unknown.
+  form, and kept as written: `Read`, `RawEntry.Decode` and
+  `Session.Extend` read each entry under the minor its file declared;
+  `UnmarshalEntry`, given a line alone, reads it as this package writes
+  it, and `GateEntry(format, e)` applies a header's minor to an entry
+  so decoded. The cas store's log read (`ReadLog`) and the followers of
+  the cas and sqlite stores apply it by the stored header, and every
+  follower (memory, jsonl, cas, sqlite, and so remote) reads the session
+  again, as a `Reset`, when the store raises the header, so an entry
+  appended after the raise is read under the raised format. The remote
+  client's path read (`Client.Path`) carries no header and decodes as
+  `UnmarshalEntry` does; a caller gates it with the session's format.
+  `RewriteStrings` and `RemapRefs` keep a member read that way unknown.
 - **Added: a file holding `redacted_from` or `redacted` from before
   0.13 is never raised, and no 0.13 session is made over one.**
   `Session.RaiseRefused(format)` is the rule: it refuses with
@@ -54,14 +62,21 @@ versions may break the API.
   such a file at its own format in memory, so `Write` keeps it (a file
   before 0.5 takes 0.12, since its entries are rehashed as 0.5's), and
   `Session.Extend` does the same for an entry it adds; `Session.Append`
-  and `Prepare` refuse an entry to its session, and `Fork` refuses a
-  fork at 0.13 or later whose prefix holds such an entry. The jsonl, cas
-  and sqlite stores raise through `Raise` after their session's
-  `Prepare`, so an entry's member stops an append's raise too, and cas
-  refuses an exchange that would raise a header holding `redacted_from`
-  before anything lands; a store raising a header outside an append
-  calls `RaiseRefused` on the session it holds. The conformance suite
-  (`storetest`) gains the header case, which every store runs.
+  and `Prepare` refuse an entry to its session, and refuse an entry so
+  read to any session until the writer clears it (`ClearRedacted`) or
+  marks it (`SetRedacted`). `Fork` refuses a fork at 0.13 or later whose
+  prefix holds such an entry, and a fork written under a minor before
+  0.13 whose prefix holds a redacted entry. The memory, jsonl, cas and
+  sqlite stores raise the header on an append after their session's
+  `Prepare`, so an entry's member stops an append's raise too; the
+  memory store now raises at all. cas refuses an exchange that would
+  raise a header holding `redacted_from` before anything lands. A store
+  that raises a header outside an append, as an exchange or a fork's
+  create does, is to call `RaiseRefused` on the session it holds. The
+  conformance suite
+  (`storetest`) gains the header case, an entry case (with the new
+  `Options.Lower`, which a store that can rewrite a stored header's
+  format provides) and a follow across a raise, which every store runs.
 - **Changed: the context hash leaves `redacted` out,** in whatever form,
   as it leaves `legacy_id` and `normalised`, since RFC 0002 counts it as
   provenance. No context hash of a session without the member moves.
