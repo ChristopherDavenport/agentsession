@@ -433,11 +433,12 @@ var ErrNoRaise = fmt.Errorf("%w: the file holds redacted_from or redacted from b
 // later one.
 //
 // Raise sees the header alone, and so not an entry holding redacted
-// under it, which also forbids the raise. [Session.Append] and
-// [Session.Prepare] refuse an entry to such a session with
-// [ErrNoRaise], and a store prepares every entry on its session before
-// it raises the stored header, so a raise that reaches Raise has
-// already passed the entries' check.
+// under it, which also forbids the raise. [Session.RaiseRefused] is the
+// whole rule, header and entries. [Session.Append] and
+// [Session.Prepare] apply it, and a store prepares every entry on its
+// session before it raises the stored header on an append; a store that
+// raises one outside an append, as an exchange or a fork's create does,
+// calls RaiseRefused first.
 func (h *Header) Raise(format string) error {
 	if err := h.raiseRefused(format); err != nil {
 		return err

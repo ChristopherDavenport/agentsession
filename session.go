@@ -53,9 +53,10 @@ type Session struct {
 	// declared is the format the file's header named when Read met it,
 	// before the header was brought up to this package's.
 	declared string
-	// heldRedacted is set when an entry read under a declared format
-	// before 0.13 holds a redacted member, which that minor does not
-	// define, so the file may not be raised: see [ErrNoRaise].
+	// heldRedacted is set when the session holds an entry read under a
+	// declared format before 0.13 with a redacted member, which that
+	// minor does not define, so the file may not be written at 0.13 or
+	// later: see [Session.RaiseRefused].
 	heldRedacted bool
 	// read is the state Extend keeps of Read's leaf rule, so each entry
 	// it adds places the leaf without a pass over the whole session.
@@ -272,11 +273,11 @@ func (s *Session) Append(e Entry) (string, error) {
 // its call and relation on the path it is appended to. A session whose
 // file may not be raised to this package's format takes no entry
 // ([ErrNoRaise]), since appending under the raised header is what a
-// writer does: one whose header holds redacted_from from before 0.13,
-// or one an entry of which holds redacted under such a header. A store
-// raises the stored header only after its session's Prepare has run
-// this check, so the store's raise, which sees the header alone, never
-// raises a file whose entries forbid it.
+// writer does: [Session.RaiseRefused] decides it, for the header's
+// redacted_from and every entry's redacted. A store raises the stored
+// header only after its session's Prepare has run this check, so the
+// store's raise, which sees the header alone, never raises a file whose
+// entries forbid it.
 func (s *Session) checkNew(e Entry) error {
 	s.mu.RLock()
 	err := s.raiseRefused(Format)
@@ -308,22 +309,38 @@ func (s *Session) checkNew(e Entry) error {
 	})
 }
 
-// raiseRefused is [ErrNoRaise] when the session's file may not be
-// raised to format: its header holds redacted_from from before 0.13, or
-// an entry read under such a header holds redacted. The caller holds
-// s.mu.
+// RaiseRefused reports whether the session may be written under format,
+// as a writer raising its header to format would write it: nil when it
+// may, and [ErrNoRaise], wrapped, when format is 0.13 or later and the
+// session holds a member that minor would give a meaning it was not
+// written with: its header names a minor before 0.13 and holds
+// redacted_from, or an entry holds a redacted member it was read with
+// under a header naming such a minor, which [RedactedOf] reports as not
+// redacted. That is one rule for a raise and for a new file: an append
+// ([Session.Append] and [Session.Prepare] refuse with it), [Fork], which
+// refuses a fork at 0.13 or later whose prefix holds such an entry, and
+// a store. [Header.Raise] sees the header alone, so a store that raises
+// a session's header outside an append, as an exchange or a fork's
+// create does, calls RaiseRefused on the session it holds first.
+func (s *Session) RaiseRefused(format string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.raiseRefused(format)
+}
+
+// raiseRefused is [Session.RaiseRefused] with s.mu held.
 func (s *Session) raiseRefused(format string) error {
 	if err := s.header.raiseRefused(format); err != nil {
 		return err
 	}
-	if s.heldRedacted && !definesRedactedFrom(s.header.Format) && definesRedactedFrom(format) {
-		return fmt.Errorf("%w: %s to %s: an entry holds redacted", ErrNoRaise, s.header.Format, format)
+	if s.heldRedacted && definesRedactedFrom(format) {
+		return fmt.Errorf("%w: %s to %s: an entry holds redacted from before 0.13", ErrNoRaise, s.header.Format, format)
 	}
 	return nil
 }
 
-// holdRedacted records that e, an entry read from a file that declared
-// a format before 0.13, holds a redacted member, which the gate has left
+// holdRedacted records that an entry read from a file that declared a
+// format before 0.13 holds a redacted member, which the gate has left
 // unknown: the file may not be raised, so a header Read raised in memory
 // goes back to the format it holds, as [heldFormat] says. The caller
 // holds s.mu or owns s.
@@ -1276,6 +1293,9 @@ func validateOmitted(c *ConfigEntry) error {
 // add links an already-validated entry into the indexes.
 func (s *Session) add(e Entry) {
 	b := e.Base()
+	if b.gated {
+		s.heldRedacted = true
+	}
 	s.entries = append(s.entries, e)
 	s.byID[b.ID] = e
 	s.children[b.Parent] = append(s.children[b.Parent], b.ID)
@@ -1524,7 +1544,11 @@ func utcNow() time.Time { return time.Now().UTC().Round(0) }
 // Fork refuses a prefix that could not stand alone: one holding an
 // entry that converges an entry of origin off the path
 // ([ErrBadConvergence]), or an entry of a migrated origin that the
-// migration could not rewrite ([ErrUnresolvedMigration]).
+// migration could not rewrite ([ErrUnresolvedMigration]). It refuses a
+// fork written at 0.13 or later whose prefix holds an entry with a
+// redacted member read under a minor before 0.13 ([ErrNoRaise]), as
+// [Session.RaiseRefused] says, since the fork's format would give the
+// member a meaning it was not written with.
 //
 // A store's Create does the same for a header whose Base is set, so
 // Fork is the in-memory form and a store's Create the persistent one.
@@ -1559,6 +1583,9 @@ func Fork(origin *Session, at string, h Header) (*Session, error) {
 	for _, e := range path {
 		s.add(e)
 		s.prefix[e.Base().ID] = true
+	}
+	if err := s.raiseRefused(s.header.Format); err != nil {
+		return nil, fmt.Errorf("agentsession: fork of %s at %s: %w", origin.header.ID, at, err)
 	}
 	s.leaf = at
 	return s, nil

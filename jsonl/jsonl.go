@@ -600,8 +600,9 @@ func raises(format string) bool {
 //
 // Raise sees the header alone. An entry holding redacted under a
 // header before 0.13 also forbids the raise, and that is the
-// session's Prepare to refuse, with agentsession.ErrNoRaise: every
-// append prepares its entry on the session before it reaches here.
+// session's Prepare to refuse, by Session.RaiseRefused, with
+// agentsession.ErrNoRaise: every append prepares its entry on the
+// session before it reaches here.
 func (s *Store) raiseFormat(id string, h *handle) error {
 	fail := func(err error) error {
 		return fmt.Errorf("jsonl: raise the header's format of %s: %w", h.path, err)

@@ -1689,8 +1689,9 @@ func writeHeader(o *objects, dir string, h agentsession.Header) error {
 //
 // Raise sees the header alone. An entry holding redacted under a
 // header before 0.13 also forbids the raise, and that is the
-// session's Prepare to refuse, with agentsession.ErrNoRaise: every
-// append prepares its entry on the session before it reaches here.
+// session's Prepare to refuse, by Session.RaiseRefused, with
+// agentsession.ErrNoRaise: every append prepares its entry on the
+// session before it reaches here.
 func (s *Store) raiseFormat(h *handle) error {
 	_, minor, err := agentsession.ParseFormat(h.diskFormat)
 	if err == nil && minor >= agentsession.FormatMinor {

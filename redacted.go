@@ -183,7 +183,7 @@ func SetRedacted(e Entry, spans []Span) error {
 		return err
 	}
 	b := e.Base()
-	b.redacted, b.isRedacted = append([]Span{}, spans...), true
+	b.redacted, b.isRedacted, b.gated = append([]Span{}, spans...), true, false
 	return setRawRedacted(e, b.redactedJSON())
 }
 
@@ -196,7 +196,7 @@ func ClearRedacted(e Entry) error {
 		return errors.New("agentsession: nil entry")
 	}
 	b := e.Base()
-	b.redacted, b.isRedacted = nil, false
+	b.redacted, b.isRedacted, b.gated = nil, false, false
 	return setRawRedacted(e, nil)
 }
 
@@ -242,7 +242,9 @@ func gateRedacted(e Entry, format string) bool {
 	if definesRedactedFrom(format) {
 		return false
 	}
-	return demoteRedacted(e)
+	held := demoteRedacted(e)
+	e.Base().gated = held
+	return held
 }
 
 // demoteRedacted moves a typed redacted member into the members e keeps
@@ -286,9 +288,11 @@ func holdsRedactedMember(e Entry) bool {
 // keepRedactedForm carries in's redacted member's standing onto out, an
 // entry a helper made from in by way of its JSON: a member in did not
 // hold typed, unknown or read under a minor before 0.13, is not typed in
-// out either, which decoding the JSON alone would make it.
+// out either, which decoding the JSON alone would make it, and one the
+// gate left unknown in in is gated in out.
 func keepRedactedForm(in, out Entry) {
 	if _, ok := RedactedOf(in); !ok {
-		demoteRedacted(out)
+		held := demoteRedacted(out)
+		out.Base().gated = held && in.Base().gated
 	}
 }

@@ -675,3 +675,44 @@ func TestContextHashLeavesRedacted(t *testing.T) {
 		})
 	}
 }
+
+// TestRaiseRefused: a session may not be written at 0.13 or later when
+// its header holds redacted_from from before 0.13 or an entry holds a
+// redacted member read under such a header; Fork refuses a fork at 0.13
+// whose prefix holds such an entry, and takes one whose prefix does not
+// or that is written under the earlier minor.
+func TestRaiseRefused(t *testing.T) {
+	msg := `"type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`
+	in, ids := hashedLines(t, "agentsession/0.12", msg, msg+`,"redacted":[1]`, msg)
+	s, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RaiseRefused(Format); !errors.Is(err, ErrNoRaise) {
+		t.Errorf("RaiseRefused(%s) = %v, want ErrNoRaise", Format, err)
+	}
+	if err := s.RaiseRefused("agentsession/0.12"); err != nil {
+		t.Errorf("RaiseRefused(0.12) = %v", err)
+	}
+	if err := New(Header{}).RaiseRefused(Format); err != nil {
+		t.Errorf("a new session: %v", err)
+	}
+	h := Header{Format: "agentsession/0.12", Extra: map[string]json.RawMessage{"redacted_from": json.RawMessage(`{"session":"o"}`)}}
+	if err := New(h).RaiseRefused(Format); !errors.Is(err, ErrNoRaise) {
+		t.Errorf("a header holding redacted_from from 0.12: %v", err)
+	}
+
+	if _, err := Fork(s, ids[2], Header{}); !errors.Is(err, ErrNoRaise) {
+		t.Errorf("Fork over the old redacted at %s = %v, want ErrNoRaise", Format, err)
+	}
+	if f, err := Fork(s, ids[0], Header{}); err != nil {
+		t.Errorf("Fork before the old redacted: %v", err)
+	} else if _, err := f.Append(NewItemEntry(openresponses.UserText("more"))); err != nil {
+		t.Errorf("Append to that fork: %v", err)
+	}
+	if f, err := Fork(s, ids[2], Header{Format: "agentsession/0.12"}); err != nil {
+		t.Errorf("Fork under 0.12: %v", err)
+	} else if _, err := f.Append(NewItemEntry(openresponses.UserText("more"))); !errors.Is(err, ErrNoRaise) {
+		t.Errorf("Append to a 0.12 fork over the old redacted = %v, want ErrNoRaise", err)
+	}
+}

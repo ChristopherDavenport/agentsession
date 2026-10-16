@@ -118,6 +118,10 @@ type EntryBase struct {
 	// [RedactedOf] and [SetRedacted].
 	redacted   []Span
 	isRedacted bool
+	// gated is set on an entry read under a header naming a minor before
+	// 0.13 that holds a redacted member, which the gate left unknown: a
+	// file holding it may not be written at 0.13 or later.
+	gated bool
 	// Unknown holds body members this package does not define,
 	// preserved so a later minor version's optional fields survive a
 	// rewrite. It is nil when there are none.
