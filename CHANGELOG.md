@@ -239,7 +239,9 @@ versions may break the API.
   refused. The suite imports through a store's `Importer`;
   `Options.Import` is for a store whose import is not one, a remote
   client over a store that has one, and `Options.Push` and
-  `RedactedOnly` give it the other paths.
+  `RedactedOnly` give it the other paths. Every store here gives
+  `Options.Lower`, the memory store by importing the session, its
+  header lowered, into a store of its own.
 
 ## v0.0.26 - 2026-10-15
 
