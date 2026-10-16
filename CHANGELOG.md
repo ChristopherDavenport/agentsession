@@ -43,20 +43,28 @@ versions may break the API.
   alone, reads it as this package writes it. `RewriteStrings` and
   `RemapRefs` keep a member read that way unknown.
 - **Added: a file holding `redacted_from` or `redacted` from before
-  0.13 is never raised.** `Header.Raise` is the raise a writer makes
-  before it appends to a session of an earlier minor, and refuses a
-  header holding `redacted_from` with `ErrNoRaise`, an
-  `ErrUnsupportedFormat`, since the raise would give the member a
-  meaning it was not written with. `Read` holds such a file at its own
-  format in memory, whether the member is in the header or on an entry,
-  so `Write` keeps it (a file before 0.5 takes 0.12, since its entries
-  are rehashed as 0.5's), and `Session.Extend` does the same for an
-  entry it adds; `Session.Append` and `Prepare` refuse an entry to its
-  session. The jsonl, cas and sqlite stores raise through `Raise` after
-  their session's `Prepare`, so an entry's member stops the raise too,
-  and cas refuses an exchange that would raise a header holding
-  `redacted_from` before anything lands. The conformance suite
+  0.13 is never raised, and no 0.13 session is made over one.**
+  `Session.RaiseRefused(format)` is the rule: it refuses with
+  `ErrNoRaise`, an `ErrUnsupportedFormat`, to write a session at 0.13
+  or later whose header holds `redacted_from` from before 0.13, or one
+  of whose entries holds a `redacted` member read under such a header,
+  since the format would give the member a meaning it was not written
+  with. `Header.Raise`, the raise a writer makes before it appends to a
+  session of an earlier minor, applies the header's half. `Read` holds
+  such a file at its own format in memory, so `Write` keeps it (a file
+  before 0.5 takes 0.12, since its entries are rehashed as 0.5's), and
+  `Session.Extend` does the same for an entry it adds; `Session.Append`
+  and `Prepare` refuse an entry to its session, and `Fork` refuses a
+  fork at 0.13 or later whose prefix holds such an entry. The jsonl, cas
+  and sqlite stores raise through `Raise` after their session's
+  `Prepare`, so an entry's member stops an append's raise too, and cas
+  refuses an exchange that would raise a header holding `redacted_from`
+  before anything lands; a store raising a header outside an append
+  calls `RaiseRefused` on the session it holds. The conformance suite
   (`storetest`) gains the header case, which every store runs.
+- **Changed: the context hash leaves `redacted` out,** in whatever form,
+  as it leaves `legacy_id` and `normalised`, since RFC 0002 counts it as
+  provenance. No context hash of a session without the member moves.
 - **Added: `RedactedSessionID`,** the ID RFC 0001 recommends for a
   redacted session whose redaction writes a profile: a UUIDv5 under the
   nil namespace over the canonical JSON array
