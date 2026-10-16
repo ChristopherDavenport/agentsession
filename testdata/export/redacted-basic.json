@@ -1,7 +1,7 @@
 {
   "schema_version": "ATIF-v1.8",
-  "session_id": "b99c8eb9-47ef-5ce6-9104-cf9160f12edd",
-  "trajectory_id": "sha256:4728be54629149ba7de4bef9682296899a988143776911b7e4836c2bab2c3bbe",
+  "session_id": "13180cc1-b6f4-5a32-92d2-8d996f95c305",
+  "trajectory_id": "sha256:f0b1984d4a689464d2664bbc4bb8267bd93eb58a8b03126b708455759f839be9",
   "agent": {
     "name": "fixture",
     "version": "1",
@@ -35,10 +35,13 @@
       "message": "What is 2+2?",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:f27ee964a73655c5235067e9b45513b6a3bf8782e28fd091a371c55f680904f0"
+          "entry_id": "sha256:2736b082b786e21a31a47b83e2a5b9e63e42e53063e2043e6ad176ffd9013130",
+          "redacted": [
+            2
+          ]
         },
         "config_entries": [
-          "sha256:315d501de2a8de2894e81df8b33412d172347001eab703c2676ae43cb2e0c17a"
+          "sha256:bb6a29fddf1e5f2ee8bec26c70b704c2e1bb2716b8906c37830ec1b96595d8f5"
         ],
         "openresponses": {
           "item": {
@@ -104,11 +107,28 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:f2a302d79e17ca7b888cf6ce1a43480cdb4f4372efad77c2a1a2dfcf8860600b"
+          "entry_id": "sha256:3dcba05ae05661629a05e7208d433684b8a959cf7a7b7d3fdf97417f27b3f790",
+          "redacted": [
+            5
+          ],
+          "redacted_entries": {
+            "sha256:2909fa8eda24663d8cb8f7581fa4efa778233745c4b0573a85a451afca920168": [
+              4
+            ],
+            "sha256:36a05597fb484070459b2226f64d2bbea7993b8331871643413c0c66b082bbae": [
+              3
+            ],
+            "sha256:3dcba05ae05661629a05e7208d433684b8a959cf7a7b7d3fdf97417f27b3f790": [
+              5
+            ],
+            "sha256:8969138eba9eaa0980dd23fe572576f841ee16dc0e600af13c3fce55724614ca": [
+              6
+            ]
+          }
         },
         "item_entry_ids": [
-          "sha256:9b1aa7339b4022229055cdf18c27772c63079d41004c8c9b0f0faebe4f24b16e",
-          "sha256:7e7ae3c9a0973952a857af76db536c443fd831830bdabdbd2e33493cf35b11de"
+          "sha256:36a05597fb484070459b2226f64d2bbea7993b8331871643413c0c66b082bbae",
+          "sha256:2909fa8eda24663d8cb8f7581fa4efa778233745c4b0573a85a451afca920168"
         ],
         "latency_ms": 500,
         "openresponses": {
@@ -133,10 +153,13 @@
             }
           ],
           "response": {
-            "entry_id": "sha256:f2a302d79e17ca7b888cf6ce1a43480cdb4f4372efad77c2a1a2dfcf8860600b",
+            "entry_id": "sha256:3dcba05ae05661629a05e7208d433684b8a959cf7a7b7d3fdf97417f27b3f790",
             "latency_ms": 500,
             "legacy_id": "r0000001",
             "model": "gpt-5",
+            "redacted": [
+              5
+            ],
             "request_hash": "sha256:e62ea2aa2e8159c4f9c5f045de715e5ab7c2c5f2c3f10ab8af031944194a1e2c",
             "response_id": "resp_1",
             "status": "completed",
@@ -171,10 +194,21 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:20e4a3132ef81bd97011fb2dfa6cb059b2a1df0ac2fbf5ab629f353e938fae0e"
+          "entry_id": "sha256:326495427ba43d56525c1ee7d0f322a3fa3705d87a0f628c53da2a28168ef860",
+          "redacted": [
+            8
+          ],
+          "redacted_entries": {
+            "sha256:326495427ba43d56525c1ee7d0f322a3fa3705d87a0f628c53da2a28168ef860": [
+              8
+            ],
+            "sha256:ccef1b74716261c11c9bdbc07e81b25dd21d7723e8aa467c689a115b58457122": [
+              7
+            ]
+          }
         },
         "item_entry_ids": [
-          "sha256:427fad572da3aed9865c2e0de2cac3de5309dce4c51212612fe916d137ab103d"
+          "sha256:ccef1b74716261c11c9bdbc07e81b25dd21d7723e8aa467c689a115b58457122"
         ],
         "latency_ms": 300,
         "openresponses": {
@@ -195,10 +229,13 @@
             }
           ],
           "response": {
-            "entry_id": "sha256:20e4a3132ef81bd97011fb2dfa6cb059b2a1df0ac2fbf5ab629f353e938fae0e",
+            "entry_id": "sha256:326495427ba43d56525c1ee7d0f322a3fa3705d87a0f628c53da2a28168ef860",
             "latency_ms": 300,
             "legacy_id": "r0000002",
             "model": "gpt-5",
+            "redacted": [
+              8
+            ],
             "request_hash": "sha256:00c0227db7d8043eb3dfc141045f339e3869b8ff3c09fbcd70627f1e8f6d9fb5",
             "response_id": "resp_2",
             "status": "completed",
@@ -218,33 +255,80 @@
         },
         "outcome": [
           {
-            "entry_id": "sha256:4728be54629149ba7de4bef9682296899a988143776911b7e4836c2bab2c3bbe",
+            "entry_id": "sha256:376e5fe95a6a7400331ec50af53213cd17ab2a56b9cbfe3a2bfe83c68a324f2e",
             "kind": "feedback",
             "label": "thumbs_up",
             "score": 1,
-            "target": "sha256:20e4a3132ef81bd97011fb2dfa6cb059b2a1df0ac2fbf5ab629f353e938fae0e"
+            "target": "sha256:326495427ba43d56525c1ee7d0f322a3fa3705d87a0f628c53da2a28168ef860"
           }
         ],
         "phases": [
           "final_answer"
         ]
       }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-09-17T12:01:00Z",
+      "source": "user",
+      "message": "and 3+3?",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:ca87e30820ff0f5c903452b0ccc2e69248db99fe433d883a5154067d9391dffc"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "and 3+3?"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 5,
+      "timestamp": "2026-09-17T12:01:01Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "reasoning_effort": "low",
+      "message": "",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:f0b1984d4a689464d2664bbc4bb8267bd93eb58a8b03126b708455759f839be9"
+        },
+        "openresponses": {
+          "items": [],
+          "response": {
+            "entry_id": "sha256:f0b1984d4a689464d2664bbc4bb8267bd93eb58a8b03126b708455759f839be9",
+            "model": "gpt-5",
+            "response_id": "resp_3",
+            "status": "completed",
+            "ts": "2026-09-17T12:01:01Z"
+          }
+        }
+      }
     }
   ],
-  "notes": "total_steps counts the path's 2 model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its 3 steps.",
+  "notes": "total_steps counts the path's 3 model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its 5 steps.",
   "final_metrics": {
     "total_prompt_tokens": 100,
     "total_completion_tokens": 20,
     "total_cached_tokens": 40,
-    "total_steps": 2,
+    "total_steps": 3,
     "extra": {
       "outcome": [
         {
-          "entry_id": "sha256:4728be54629149ba7de4bef9682296899a988143776911b7e4836c2bab2c3bbe",
+          "entry_id": "sha256:376e5fe95a6a7400331ec50af53213cd17ab2a56b9cbfe3a2bfe83c68a324f2e",
           "kind": "feedback",
           "label": "thumbs_up",
           "score": 1,
-          "target": "sha256:20e4a3132ef81bd97011fb2dfa6cb059b2a1df0ac2fbf5ab629f353e938fae0e"
+          "target": "sha256:326495427ba43d56525c1ee7d0f322a3fa3705d87a0f628c53da2a28168ef860"
         }
       ]
     }
@@ -253,12 +337,10 @@
     "agentsession": {
       "cwd": "/home/u/proj",
       "format": "agentsession/0.13",
-      "leaf": "sha256:4728be54629149ba7de4bef9682296899a988143776911b7e4836c2bab2c3bbe",
+      "leaf": "sha256:f0b1984d4a689464d2664bbc4bb8267bd93eb58a8b03126b708455759f839be9",
       "main": true,
       "redacted": true,
       "redacted_from": {
-        "aligned": true,
-        "entries": 9,
         "ex.tool": {
           "name": "scrub",
           "version": 1
