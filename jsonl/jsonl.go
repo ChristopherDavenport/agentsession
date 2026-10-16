@@ -610,7 +610,9 @@ func (s *Store) raiseFormat(id string, h *handle) error {
 	if err := hdr.UnmarshalJSON(bytes.TrimRight(line, "\r")); err != nil {
 		return fail(err)
 	}
-	hdr.Format = agentsession.Format
+	if err := hdr.Raise(agentsession.Format); err != nil {
+		return fail(err)
+	}
 	info, err := os.Stat(h.path)
 	if err != nil {
 		return fail(err)

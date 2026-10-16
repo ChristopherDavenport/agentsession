@@ -484,6 +484,15 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if !sameSession(hdr, b.header) {
 		return Exchange{}, fmt.Errorf("%w: %s", ErrHeaderDiffers, id)
 	}
+	// A later format the bundle carries raises the held header, unless
+	// the header may not be raised, which refuses the exchange before
+	// anything lands.
+	raised := hdr
+	if laterFormat(b.header.Format, hdr.Format) {
+		if err := raised.Raise(b.header.Format); err != nil {
+			return Exchange{}, fmt.Errorf("cas: %w", err)
+		}
+	}
 	if err := s.untouched(h); err != nil {
 		return Exchange{}, err
 	}
@@ -553,9 +562,8 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if err != nil {
 		return Exchange{}, err
 	}
-	if laterFormat(b.header.Format, hdr.Format) {
-		hdr.Format = b.header.Format
-		if err := writeHeader(s.objs, h.dir, hdr); err != nil {
+	if raised.Format != hdr.Format {
+		if err := writeHeader(s.objs, h.dir, raised); err != nil {
 			return Exchange{}, err
 		}
 	}

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // redactedHeader is a canonical header line of format with the given
@@ -144,9 +146,10 @@ func TestRedactedFromOtherForms(t *testing.T) {
 			if err := Write(&out, s); err != nil {
 				t.Fatal(err)
 			}
-			// The header takes this package's format, as any earlier
-			// file's does; the member is as it was read.
-			if want := strings.Replace(in, tt.format, Format, 1); out.String() != want {
+			// A 0.13 header writes back as read. An earlier one keeps
+			// its own format, since raising it would give the member a
+			// meaning it was not written with.
+			if want := in; out.String() != want {
 				t.Errorf("rewrite\n got %s want %s", out.String(), want)
 			}
 		})
@@ -178,6 +181,74 @@ func TestRedactedFromMarshalConflict(t *testing.T) {
 		_, err := json.Marshal(tt.r)
 		if got := errors.Is(err, ErrRedactedFrom); got != tt.bad {
 			t.Errorf("%+v: Marshal = %v", tt.r, err)
+		}
+	}
+}
+
+// TestNoRaise: a header that names a minor before 0.13 and holds
+// redacted_from, in any form, is not raised: not in memory by Read, so
+// it writes back under its own format, not by [Header.Raise], and not
+// by an append, which is refused.
+func TestNoRaise(t *testing.T) {
+	file, _ := hashedLines(t, "agentsession/0.12",
+		`"type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`)
+	file = strings.Replace(file, `"records":`, `"redacted_from":{"entries":1,"session":"o"},"records":`, 1)
+	s, err := Read(strings.NewReader(file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := s.Header().Format; f != "agentsession/0.12" {
+		t.Errorf("held at %s, want agentsession/0.12", f)
+	}
+	var out bytes.Buffer
+	if err := Write(&out, s); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Read(&out)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if f := back.Header().Format; f != "agentsession/0.12" {
+		t.Errorf("written as %s", f)
+	}
+	for name, add := range map[string]func(Entry) error{
+		"Append":  func(e Entry) error { _, err := s.Append(e); return err },
+		"Prepare": func(e Entry) error { _, err := s.Prepare(e); return err },
+	} {
+		err := add(NewItemEntry(openresponses.UserText("more")))
+		if !errors.Is(err, ErrNoRaise) || !errors.Is(err, ErrUnsupportedFormat) {
+			t.Errorf("%s = %v, want ErrNoRaise", name, err)
+		}
+	}
+	if s.Len() != 1 {
+		t.Errorf("the session holds %d entries", s.Len())
+	}
+
+	// A file before 0.5 is rehashed as 0.5's, so it takes the last
+	// minor that does not define the member.
+	old := `{"type":"session","format":"agentsession/0.4","id":"s","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24","redacted_from":"o"}` + "\n"
+	if s, err := Read(strings.NewReader(old)); err != nil {
+		t.Fatal(err)
+	} else if f := s.Header().Format; f != "agentsession/0.12" {
+		t.Errorf("a 0.4 header holding redacted_from read as %s", f)
+	}
+
+	for _, tt := range []struct {
+		name string
+		h    Header
+		to   string
+		ok   bool
+	}{
+		{"0.12, in Extra", Header{Format: "agentsession/0.12", Extra: map[string]json.RawMessage{"redacted_from": json.RawMessage(`"o"`)}}, Format, false},
+		{"0.12, typed", Header{Format: "agentsession/0.12", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o"}}, Format, false},
+		{"0.10, in Extra, to 0.12", Header{Format: "agentsession/0.10", Extra: map[string]json.RawMessage{"redacted_from": json.RawMessage(`{}`)}}, "agentsession/0.12", true},
+		{"0.12, without", Header{Format: "agentsession/0.12", Extra: map[string]json.RawMessage{"x.y": json.RawMessage(`1`)}}, Format, true},
+		{"0.13, typed, to 0.14", Header{Format: Format, Redacted: true, RedactedFrom: &RedactedFrom{Session: "o"}}, "agentsession/0.14", true},
+	} {
+		h := tt.h
+		err := h.Raise(tt.to)
+		if tt.ok && (err != nil || h.Format != tt.to) || !tt.ok && (!errors.Is(err, ErrNoRaise) || h.Format != tt.h.Format) {
+			t.Errorf("%s: Raise(%s) = %v, format %s", tt.name, tt.to, err, h.Format)
 		}
 	}
 }

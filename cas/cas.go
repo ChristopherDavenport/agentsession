@@ -1695,7 +1695,9 @@ func (s *Store) raiseFormat(h *handle) error {
 	if err != nil {
 		return err
 	}
-	hdr.Format = agentsession.Format
+	if err := hdr.Raise(agentsession.Format); err != nil {
+		return fmt.Errorf("cas: %w", err)
+	}
 	if err := writeHeader(s.objs, h.dir, hdr); err != nil {
 		return fmt.Errorf("cas: raise the header's format: %w", err)
 	}

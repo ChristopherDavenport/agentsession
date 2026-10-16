@@ -82,6 +82,9 @@ type Header struct {
 	// in a file that declares an earlier minor, which was free to hold
 	// one in any form, or one in a later file that does not decode as
 	// the object, is kept in Extra as written and RedactedFrom is nil.
+	// A header naming an earlier minor that holds one is never raised
+	// to 0.13 or later, by Read in memory or by a writer before an
+	// append, which is refused: see [Header.Raise].
 	RedactedFrom *RedactedFrom `json:"-"`
 
 	// Extra holds header fields this package does not define.
@@ -373,7 +376,7 @@ func (h *Header) fill(now time.Time) {
 // callee in another system, and its cancel member. 0.13 adds the
 // redacted_from header member and makes a redacted session one of its
 // own; a 0.12 file is a 0.13 file without the member, and one it holds
-// there is kept in Extra as written.
+// there is kept in Extra as written, and its header is not raised.
 const FormatMinor = 13
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.
@@ -385,7 +388,7 @@ const hashedMinor = 5
 // version changes nothing a reader depends on, so a reader reads a
 // file before 0.5 by rewriting it; the entries are rewritten by Read,
 // and the header takes the current format, as a 0.5 header does with
-// nothing rewritten.
+// nothing rewritten, unless [Header.Raise] refuses it.
 func migrate(h *Header) error {
 	major, _, err := ParseFormat(h.Format)
 	if err != nil {
@@ -394,8 +397,60 @@ func migrate(h *Header) error {
 	if major != FormatMajor {
 		return fmt.Errorf("%w: %s", ErrUnsupportedFormat, h.Format)
 	}
-	if _, minor, _ := ParseFormat(h.Format); minor < FormatMinor {
-		h.Format = Format
+	_, minor, _ := ParseFormat(h.Format)
+	if minor >= FormatMinor {
+		return nil
+	}
+	if h.Raise(Format) == nil {
+		return nil
+	}
+	// A header holding redacted_from from before 0.13 is not raised
+	// there, so a session read from it writes back under its own
+	// format, and an append to it is refused. One before 0.5 still
+	// takes the last minor that does not define the member, since its
+	// entries are rehashed as 0.5's.
+	if minor < hashedMinor {
+		h.Format = lastBeforeRedactedFrom
 	}
 	return nil
+}
+
+// lastBeforeRedactedFrom is the last format that does not define
+// redacted_from.
+var lastBeforeRedactedFrom = fmt.Sprintf("agentsession/%d.%d", FormatMajor, redactedFromMinor-1)
+
+// ErrNoRaise is returned for a header a writer may not raise to the
+// format it writes, and so for an append to its session: one that
+// names a minor before 0.13 and holds a redacted_from member, in any
+// form, which the raise would give a meaning it was not written with.
+// It is an [ErrUnsupportedFormat], since this writer cannot append
+// under the header's own format either.
+var ErrNoRaise = fmt.Errorf("%w: the header holds redacted_from from before 0.13 and is not raised", ErrUnsupportedFormat)
+
+// Raise sets the header's format to format, as a writer does to the
+// header of a session whose header names an earlier minor before it
+// appends to it, so a reader of that minor refuses the session rather
+// than misread what was appended. It refuses with [ErrNoRaise], and
+// leaves the header as it was, to raise to 0.13 or later a header that
+// names an earlier minor and holds redacted_from, typed or in Extra.
+// Raise does not compare the two formats: the caller raises only to a
+// later one.
+func (h *Header) Raise(format string) error {
+	if err := h.raiseRefused(format); err != nil {
+		return err
+	}
+	h.Format = format
+	return nil
+}
+
+// raiseRefused is [ErrNoRaise], wrapped with the formats, when the
+// header may not be raised to format, and nil when it may.
+func (h *Header) raiseRefused(format string) error {
+	if definesRedactedFrom(h.Format) || !definesRedactedFrom(format) {
+		return nil
+	}
+	if _, held := h.Extra["redacted_from"]; !held && h.RedactedFrom == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %s to %s", ErrNoRaise, h.Format, format)
 }

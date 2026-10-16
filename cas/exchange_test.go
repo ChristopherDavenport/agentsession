@@ -2,9 +2,12 @@ package cas
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/openresponses"
@@ -340,5 +343,40 @@ func TestLaterFormatRefused(t *testing.T) {
 	}
 	if _, err := a.Create(ctx, agentsession.Header{ID: "f", Base: ids[0]}); !errors.Is(err, agentsession.ErrUnsupportedFormat) {
 		t.Errorf("a fork of a later-format origin: %v", err)
+	}
+}
+
+// TestExchangeNoRaise: an exchange whose bundle names a later format
+// than the receiver's header raises that header, unless the header
+// names a minor before 0.13 and holds redacted_from, which a writer may
+// not raise; the exchange is then refused and nothing lands.
+func TestExchangeNoRaise(t *testing.T) {
+	ctx := context.Background()
+	here, there := twoStores(t)
+	created := time.Date(2026, 9, 17, 16, 0, 0, 0, time.UTC)
+	header := func(format string) agentsession.Header {
+		return agentsession.Header{ID: "s", Format: format, CreatedAt: created,
+			Extra: map[string]json.RawMessage{"redacted_from": json.RawMessage(`"o"`)}}
+	}
+	if _, err := here.Create(ctx, header("agentsession/0.12")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := there.Create(ctx, header(agentsession.Format)); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, there, "s", item("one"))
+	if _, err := here.Fetch(ctx, there, "s"); !errors.Is(err, agentsession.ErrNoRaise) || !strings.HasPrefix(err.Error(), "cas: ") {
+		t.Fatalf("Fetch = %v, want ErrNoRaise", err)
+	}
+	dir, _ := here.sessionDir("s")
+	hdr, err := readHeader(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hdr.Format != "agentsession/0.12" {
+		t.Errorf("the header was raised to %s", hdr.Format)
+	}
+	if s, err := here.Open(ctx, "s"); err != nil || s.Len() != 0 {
+		t.Errorf("after the refusal: %v, %v", s, err)
 	}
 }
