@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/internal/followtest"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -34,6 +35,11 @@ type Options struct {
 	// that has no read-only form; the Follow cases use Second then, and
 	// skip the second-store case when that is nil too.
 	ReadOnly func(t *testing.T, s agentsession.Store) agentsession.Store
+	// Lower closes s, rewrites the format the stored header of session
+	// id names to format, as a writer of that earlier minor would have
+	// left it, and returns a store on the same storage that reads it. It
+	// is nil for a store that cannot; the EntryNoRaise case then skips.
+	Lower func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store
 }
 
 // Run exercises a store through the whole interface.
@@ -47,6 +53,8 @@ func Run(t *testing.T, opts Options) {
 	t.Run("HeldAppend", func(t *testing.T) { testHeldAppend(t, opts) })
 	t.Run("WriterChecks", func(t *testing.T) { testWriterChecks(t, opts) })
 	t.Run("NoRaise", func(t *testing.T) { testNoRaise(t, opts) })
+	t.Run("EntryNoRaise", func(t *testing.T) { testEntryNoRaise(t, opts) })
+	t.Run("RaiseFollowed", func(t *testing.T) { testRaiseFollowed(t, opts) })
 	t.Run("ReadLine", func(t *testing.T) { testReadLine(t, opts) })
 	t.Run("List", func(t *testing.T) { testList(t, opts) })
 	t.Run("Continue", func(t *testing.T) { testContinue(t, opts) })
@@ -295,6 +303,137 @@ func testNoRaise(t *testing.T, opts Options) {
 		if _, held := read.Header().Extra["redacted_from"]; !held {
 			t.Errorf("read back without redacted_from: %v", read.Header().Extra)
 		}
+	}
+}
+
+// testEntryNoRaise reads a session whose stored header names 0.12 and
+// one of whose entries holds redacted, which 0.12 does not define: the
+// store reads the entry as not redacted, by Read and by Follow, holds
+// the session at 0.12, and refuses an append, since the raise would
+// give the member a meaning it was not written with. The session is
+// left as it was.
+func testEntryNoRaise(t *testing.T, opts Options) {
+	if opts.Lower == nil {
+		t.Skip("the store cannot lower a stored header")
+	}
+	ctx := context.Background()
+	st := opts.New(t)
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	e := agentsession.NewItemEntry(openresponses.UserText("hi"))
+	if err := agentsession.SetRedacted(e, []agentsession.Span{{From: 1, To: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, id, e); err != nil {
+		t.Fatal(err)
+	}
+	const earlier = "agentsession/0.12"
+	st = opts.Lower(t, st, id, earlier)
+	check := func(what string, sess *agentsession.Session) {
+		t.Helper()
+		if sess.Len() != 1 {
+			t.Fatalf("%s: %d entries", what, sess.Len())
+		}
+		if spans, ok := agentsession.RedactedOf(sess.Entries()[0]); ok {
+			t.Errorf("%s: the entry reads as redacted %v under %s", what, spans, earlier)
+		}
+		if f := sess.Header().Format; f != earlier {
+			t.Errorf("%s: the session is at %s, want %s", what, f, earlier)
+		}
+		if err := sess.RaiseRefused(agentsession.Format); !errors.Is(err, agentsession.ErrNoRaise) {
+			t.Errorf("%s: RaiseRefused = %v, want ErrNoRaise", what, err)
+		}
+	}
+	r, isReader := st.(agentsession.Reader)
+	if isReader {
+		read, err := r.Read(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check("Read", read)
+	}
+	if f, ok := st.(agentsession.Follower); ok {
+		w := followtest.Start(t, f, id, "")
+		check("Follow", w.NextKind(agentsession.Snapshot).Session)
+		w.Stop()
+	}
+	if _, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("more"))); !errors.Is(err, agentsession.ErrUnsupportedFormat) {
+		t.Errorf("Append = %v, want ErrUnsupportedFormat", err)
+	}
+	if isReader {
+		read, err := r.Read(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check("Read after the refusal", read)
+	}
+}
+
+// testRaiseFollowed follows a 0.12 redacted session that a redactor
+// resumes: its first append raises the header to this package's format
+// and carries redacted, which 0.13 defines. A follower that began
+// before the raise reads the session again under the raised format, so
+// the entry reads as redacted and the follower's header is the store's,
+// and Read agrees.
+func testRaiseFollowed(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	f, ok := st.(agentsession.Follower)
+	if !ok {
+		t.Skip("the store does not implement agentsession.Follower")
+	}
+	s, err := st.Create(ctx, agentsession.Header{Format: "agentsession/0.12", Redacted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	w := followtest.Start(t, f, id, "")
+	defer w.Stop()
+	w.NextKind(agentsession.Snapshot)
+	e := agentsession.NewItemEntry(openresponses.UserText("[redacted]"))
+	if err := agentsession.SetRedacted(e, []agentsession.Span{{From: 5, To: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	eid, err := st.Append(ctx, id, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(what string, sess *agentsession.Session) {
+		t.Helper()
+		got, ok := sess.Entry(eid)
+		if !ok {
+			t.Fatalf("%s: the session lacks %s", what, eid)
+		}
+		if spans, ok := agentsession.RedactedOf(got); !ok || len(spans) != 1 || spans[0] != (agentsession.Span{From: 5, To: 5}) {
+			t.Errorf("%s: the entry reads as redacted %v %v, want [5]", what, spans, ok)
+		}
+		if f := sess.Header().Format; f != agentsession.Format {
+			t.Errorf("%s: the header is at %s, want %s", what, f, agentsession.Format)
+		}
+		if err := sess.RaiseRefused(agentsession.Format); err != nil {
+			t.Errorf("%s: RaiseRefused = %v", what, err)
+		}
+	}
+	for {
+		c := w.Next()
+		if c.Session == nil {
+			continue
+		}
+		if _, has := c.Session.Entry(eid); !has {
+			continue
+		}
+		check(fmt.Sprintf("the follower, at its %v change", c.Kind), c.Session)
+		break
+	}
+	if r, ok := st.(agentsession.Reader); ok {
+		read, err := r.Read(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check("Read", read)
 	}
 }
 

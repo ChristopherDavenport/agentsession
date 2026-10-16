@@ -135,6 +135,22 @@ func (m *MemoryStore) Follow(ctx context.Context, id string, from Cursor) iter.S
 				return
 			}
 			entries := live.Entries()
+			// Looked at after the entries: a store raises the header
+			// before it commits the entry the raise is for.
+			if live.Header().Format != sess.DeclaredFormat() {
+				// The header was raised since the follower read it,
+				// which changes how an entry reads: read it again
+				// under the raised format, as a Reset.
+				if sess, n, _, _, err = memoryStart(live, gen, ""); err != nil {
+					yield(Change{}, err)
+					return
+				}
+				if !yield(Change{Kind: Reset, Session: sess, Cursor: memoryCursor(gen, n)}, nil) {
+					return
+				}
+				poll.Reset()
+				continue
+			}
 			for ; n < len(entries); n++ {
 				if ctx.Err() != nil {
 					return

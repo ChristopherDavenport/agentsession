@@ -54,7 +54,38 @@ func TestConformance(t *testing.T) {
 			t.Cleanup(func() { st.Close() })
 			return st
 		},
+		Lower: func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store {
+			root := s.(*Store).Root()
+			if err := s.(*Store).Close(); err != nil {
+				t.Fatal(err)
+			}
+			lowerHeader(t, root, id, format)
+			st, err := Open(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		},
 	})
+}
+
+// lowerHeader rewrites the format the header of session id under a cas
+// root names, as a writer of that earlier minor would have left it.
+func lowerHeader(t *testing.T, root, id, format string) {
+	t.Helper()
+	path := filepath.Join(root, "sessions", id, "header")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur := `"format":"` + agentsession.Format + `"`
+	if !bytes.Contains(data, []byte(cur)) {
+		t.Fatalf("the header holds no %s: %s", cur, data)
+	}
+	if err := os.WriteFile(path, bytes.Replace(data, []byte(cur), []byte(`"format":"`+format+`"`), 1), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func mustAppend(t *testing.T, st *Store, id string, e agentsession.Entry) string {

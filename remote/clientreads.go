@@ -116,6 +116,14 @@ func (l *Log) state(header json.RawMessage, inc, mark string, reset bool) error 
 
 // PathEntry is one entry of a path read: its envelope always, its
 // content and the decoded entry when the read carried the content.
+//
+// Entry is decoded from its line alone, as [agentsession.UnmarshalEntry]
+// decodes one: a path read does not carry the session's header, so
+// Entry is read as this package writes it. In a session whose header
+// names a minor before 0.13, an entry's redacted member is one that
+// minor does not define; a caller that needs it read so takes the
+// format from [Client.Session] or a log read's header and applies
+// [agentsession.GateEntry].
 type PathEntry struct {
 	ID       string
 	Envelope json.RawMessage
