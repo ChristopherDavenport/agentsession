@@ -112,16 +112,71 @@ func TestRedactedOnlyRefusesAHoldingStore(t *testing.T) {
 	}
 }
 
-// TestRedactedOnlyPlacesNoOriginal: a session that gets past the early
-// checks is refused where every session is placed.
+// TestRedactedOnlyPlacesNoOriginal: a store opened before another
+// process set the store to hold only redacted sessions, its own flag not
+// set, refuses an original where every session is placed, and, in
+// admitNew, before any of its objects is written: the setting is read
+// again under the sweep's lock.
 func TestRedactedOnlyPlacesNoOriginal(t *testing.T) {
-	st, err := Open(t.TempDir(), WithRedactedOnly())
+	ctx := context.Background()
+	root := t.TempDir()
+	before, err := Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
-	if err := st.placeSession(filepath.Join(st.Root(), "sessions", "o"), agentsession.Header{ID: "o"}, nil, "", MarkRecord); !errors.Is(err, agentsession.ErrNotRedacted) {
+	defer before.Close()
+	setter, err := Open(root, WithRedactedOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	setter.Close()
+	if before.redactedOnly.Load() {
+		t.Fatal("the store opened before the setting already knows it")
+	}
+	if err := before.placeSession(filepath.Join(root, "sessions", "o"), agentsession.Header{ID: "o"}, nil, "", MarkRecord); !errors.Is(err, agentsession.ErrNotRedacted) {
 		t.Errorf("placeSession of an original: %v, want ErrNotRedacted", err)
+	}
+	s := agentsession.New(agentsession.Header{ID: "o2"})
+	id, err := s.Append(agentsession.NewItemEntry(openresponses.UserText("an original's secret")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, _ := before.sessionDir("o2")
+	if _, err := before.admitNew(ctx, dir, s.Header(), MarkRecord, s.Entries(), s.Entries(), nil, id); !errors.Is(err, agentsession.ErrNotRedacted) {
+		t.Errorf("admitNew of an original: %v, want ErrNotRedacted", err)
+	}
+	if held, err := before.HasObject(ctx, SpaceEntries, id); err != nil || held {
+		t.Errorf("the refused original's entry is in the store: %v, %v", held, err)
+	}
+}
+
+// TestLayoutNeverReplaced: an open that finds no layout file and writes
+// one does not write over one another process wrote meanwhile, so the
+// redacted-only setting that file holds stands, and the open obeys it.
+func TestLayoutNeverReplaced(t *testing.T) {
+	root := t.TempDir()
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	p := filepath.Join(root, layoutFile)
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	set := []byte(layout + "\n" + layoutRedactedOnly + "\n")
+	layoutWriting = func() { os.WriteFile(p, set, 0o600) }
+	defer func() { layoutWriting = nil }()
+	racer, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer racer.Close()
+	if got, _ := os.ReadFile(p); !bytes.Equal(got, set) {
+		t.Errorf("the layout file holds %q after the racing open, want %q", got, set)
+	}
+	if _, err := racer.Create(context.Background(), agentsession.Header{}); !errors.Is(err, agentsession.ErrNotRedacted) {
+		t.Errorf("Create through the racing open: %v, want ErrNotRedacted", err)
 	}
 }
 
@@ -152,6 +207,15 @@ func TestFetchRedacted(t *testing.T) {
 	}
 	if _, err := part.Fetch(ctx, full, "r"); !errors.Is(err, agentsession.ErrRedacted) {
 		t.Errorf("a fetch adding to a held redacted session: %v, want ErrRedacted", err)
+	}
+	// Nothing of the refused entry landed, its object included.
+	fs, err := full.Read(ctx, "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := fs.Entries()[fs.Len()-1].Base().ID
+	if held, err := part.HasObject(ctx, SpaceEntries, last); err != nil || held {
+		t.Errorf("the refused entry's object is in the store: %v, %v", held, err)
 	}
 	if s, err := part.Read(ctx, "r"); err != nil || s.Len() != 2 {
 		t.Errorf("after the refused fetch: %v", err)

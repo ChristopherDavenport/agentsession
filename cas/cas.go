@@ -288,14 +288,32 @@ func WithReadOnly() Option {
 // The setting is the store's, not the process's. A writing open given
 // the option records it in the store's layout file, durably, and from
 // then on every open of the store obeys it, with the option or without,
-// and every create, import and exchange checks the file again, so a
-// process that opened the store before it was set obeys it too. A
-// release that does not know the setting refuses to open the store at
-// all, with ErrLayout, rather than let an original in. The open that
-// sets it refuses with ErrNotRedacted, and sets nothing, when the store
-// already holds a session that is not redacted, and holds the sweep's
-// lock exclusive while it looks, so no create lands between the look
-// and the setting. Nothing unsets it.
+// and every create, import and exchange of this release checks the file
+// again, so a process of this release that opened the store before it
+// was set obeys it too. A release that does not know the setting
+// refuses to open the store at all, with ErrLayout, rather than let an
+// original in; a layout file is never written over one that is there,
+// so an open racing the setting cannot erase it. The open that sets it
+// refuses with ErrNotRedacted, and sets nothing, when the store already
+// holds a session that is not redacted, and holds the sweep's lock
+// exclusive while it looks, so no create lands between the look and the
+// setting. Nothing unsets it.
+//
+// A process of an earlier release that already has the store open read
+// the layout when it opened it and never reads it again, so it would go
+// on taking originals: stop every writer of an earlier release before
+// setting it, as a migration asks ([ErrMigrationBusy]). A release from
+// before the layout file reads none, and is kept out only by the old
+// journal's tombstone, a symbolic link; on a filesystem that makes none
+// there is no tombstone, and the sessions such a release writes into a
+// journal are migrated by the next writing open without this check.
+//
+// What is refused is refused before this store writes anything of it.
+// Over RFC 0003 that is the server's store, and a client's push uploads
+// the objects of the closure before it posts the push, so a refused
+// push leaves them in the server's store, named by no session, until a
+// sweep (#244); the remote package's WithRedactedOnly has a publisher's
+// client refuse an original before it sends anything.
 //
 // A read-only open given the option refuses as a store set this way
 // does, and records nothing.
@@ -455,6 +473,14 @@ func Open(root string, opts ...Option) (*Store, error) {
 		if err := s.markLayout(); err != nil {
 			return nil, err
 		}
+		// The layout file this open found missing may have been written
+		// by another meanwhile, the setting in it among what it says.
+		if redactedOnly, err = readLayout(root); err != nil {
+			return nil, err
+		}
+		if redactedOnly {
+			s.redactedOnly.Store(true)
+		}
 		if err := s.markTombstone(); err != nil {
 			return nil, err
 		}
@@ -492,8 +518,10 @@ var ErrLayout = errors.New("cas: the store's layout is not one this release read
 // layoutRedactedOnly is the line the layout file holds after the layout
 // in a store set to hold only redacted sessions. A release that reads
 // the layout file whole, as every release before this one does, refuses
-// the store, which is the point: a release that does not know the
-// setting cannot obey it.
+// the store at its open, which is the point: a release that does not
+// know the setting cannot obey it. One already running read the file
+// before it was set, which is why WithRedactedOnly asks that every
+// writer of an earlier release be stopped first.
 const layoutRedactedOnly = "redacted-only"
 
 // readLayout refuses a store whose layout file names another layout,
@@ -608,11 +636,23 @@ func (s *Store) markLayout() error {
 	if legacyJournal(s.root) {
 		return nil // a migration left part way; the next open finishes it
 	}
-	return s.writeLayout()
+	return s.writeLayout(false)
 }
 
 // writeLayout writes the layout file if the store has none.
-func (s *Store) writeLayout() error {
+//
+// It never writes over a layout file that is there. Every writing open
+// of a store without one writes it, and the file can hold the
+// redacted-only setting, which another process may write between this
+// open's look and its write; a write that replaced the file would erase
+// the setting without a word. So the file is written whole beside its
+// place and linked in, which fails if a file got there first, and that
+// file stands: the open reads the layout again after. Where the
+// filesystem makes no hard link, the file is written under the sweep's
+// lock held exclusive, which the setting is written under too, after a
+// second look; sweepHeld says the caller holds it already, as a
+// migration does.
+func (s *Store) writeLayout(sweepHeld bool) error {
 	p := filepath.Join(s.root, layoutFile)
 	if _, err := os.Stat(p); err == nil {
 		return nil
@@ -620,11 +660,41 @@ func (s *Store) writeLayout() error {
 	if err := s.objs.fsyncDir(filepath.Join(s.root, "objects")); err != nil {
 		return err
 	}
-	if err := s.objs.writeAtomic(p, []byte(layout+"\n")); err != nil {
+	if layoutWriting != nil {
+		layoutWriting()
+	}
+	data := []byte(layout + "\n")
+	_, err := writeFileWith(p, data, func(f *os.File) error { return s.objs.fsync(f.Name(), f, syncFile) }, false)
+	switch {
+	case err == nil:
+		return s.objs.fsyncDir(s.root)
+	case errors.Is(err, os.ErrExist):
+		return nil // another open wrote it first; it stands
+	case !errors.Is(err, errNoLink):
+		return fmt.Errorf("cas: layout: %w", err)
+	}
+	if !sweepHeld {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		lk, err := s.sweepLock(ctx)
+		if err != nil {
+			return fmt.Errorf("cas: layout: %w", err)
+		}
+		defer lk.release()
+	}
+	if _, err := os.Stat(p); err == nil {
+		return nil
+	}
+	if err := s.objs.writeAtomic(p, data); err != nil {
 		return fmt.Errorf("cas: layout: %w", err)
 	}
 	return nil
 }
+
+// layoutWriting, when set, runs after writeLayout has looked for the
+// layout file and found none, before it writes one: a test puts another
+// process's write there.
+var layoutWriting func()
 
 // IsStore reports whether dir looks like the root of a store: it holds
 // the sessions and objects directories.
@@ -1899,7 +1969,7 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 						return nil, fmt.Errorf("%w: the origin is %s, later than this writer's %s", agentsession.ErrUnsupportedFormat, oh.Format, agentsession.Format)
 					}
 					if h.Media != "" && mediaOf(h) != mediaOf(oh) {
-						return nil, errors.New("cas: a fork's media must equal its origin's")
+						return nil, fmt.Errorf("cas: %w", agentsession.ErrMediaDiffers)
 					}
 					h.Media = oh.Media
 					if h.Payload == "" {
@@ -1999,11 +2069,11 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 // of their own under tmp, which is then renamed to the session's place.
 // The caller holds the session's lock and has checked the place free.
 func (s *Store) placeSession(dir string, h agentsession.Header, recs []logRecord, head, mark string) error {
-	// Every session the store gains is placed here, under the sweep's
-	// lock held shared, so this is where a store holding only redacted
-	// sessions refuses an original whatever path it came by, and where
-	// the setting, which is written under that lock held exclusive, is
-	// read last.
+	// Every session the store gains, by create, import or exchange, is
+	// placed here, under the sweep's lock held shared, so this is where a
+	// store holding only redacted sessions refuses an original last, and
+	// where the setting, which is written under that lock held
+	// exclusive, is read last.
 	if err := s.refuseOriginal(h); err != nil {
 		return err
 	}
@@ -3326,7 +3396,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		return nil, err
 	}
 	if t := sess.Truncated(); t != nil {
-		return nil, fmt.Errorf("cas: import: line %d is cut short: %w", t.Line, t.Err)
+		return nil, fmt.Errorf("cas: import: %w", t)
 	}
 	h := sess.Header()
 	if err := s.refuseOriginal(h); err != nil {
@@ -3356,7 +3426,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		// null in a baseless session.
 		p := e.Base().Parent
 		if h.Base != "" && p != h.Base && (p == "" || sess.Prefix(p)) {
-			return nil, fmt.Errorf("cas: import: own entry %s hangs from %s, above the base", e.Base().ID, orNone(p))
+			return nil, agentsession.NewBaseRuleError(fmt.Sprintf("cas: import: own entry %s hangs from %s, above the base", e.Base().ID, orNone(p)))
 		}
 		own = append(own, e)
 	}
@@ -3364,7 +3434,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		if owner, _, err := s.holderOf(h.Base, h.ParentSession); err == nil && owner != "" {
 			if odir, err := s.sessionDir(owner); err == nil {
 				if oh, err := readHeader(odir); err == nil && mediaOf(oh) != mediaOf(h) {
-					return nil, errors.New("cas: import: media differs from the session holding the base")
+					return nil, fmt.Errorf("cas: import: %w", agentsession.ErrMediaDiffers)
 				}
 			}
 		}
@@ -3415,6 +3485,13 @@ func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header,
 	fail := func(err error) (*handle, error) {
 		lk.release()
 		return nil, err
+	}
+	// The setting is written under the sweep's lock held exclusive, so
+	// read here, under it held shared, it holds until the session is
+	// placed: an original another process's setting now refuses leaves
+	// no object behind. placeSession reads it again.
+	if err := s.refuseOriginal(h); err != nil {
+		return fail(err)
 	}
 	pend := newPendSet()
 	sizes, err := s.packEntries(stored, blobs, pend)

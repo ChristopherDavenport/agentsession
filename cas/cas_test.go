@@ -407,8 +407,9 @@ func TestRefusals(t *testing.T) {
 	other, _ := Open(t.TempDir())
 	defer other.Close()
 	torn := buf.String()[:buf.Len()-10]
-	if _, err := other.Import(ctx, strings.NewReader(torn), false); err == nil || !strings.Contains(err.Error(), "cut short") {
-		t.Errorf("import of a torn file = %v", err)
+	var cut *agentsession.TruncatedLine
+	if _, err := other.Import(ctx, strings.NewReader(torn), false); !errors.As(err, &cut) {
+		t.Errorf("import of a torn file = %v, want a *TruncatedLine", err)
 	}
 	// A fork file whose own entry hangs above the base.
 	fork, err := st.Create(ctx, agentsession.Header{ID: "f4", Base: a})

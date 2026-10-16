@@ -470,7 +470,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 			if owner, _, err := s.holderOf(b.header.Base, b.header.ParentSession); err == nil && owner != "" {
 				if odir, err := s.sessionDir(owner); err == nil {
 					if oh, err := readHeader(odir); err == nil && mediaOf(oh) != mediaOf(b.header) {
-						return Exchange{}, errors.New("cas: exchange: media differs from the session holding the base")
+						return Exchange{}, fmt.Errorf("cas: exchange: %w", agentsession.ErrMediaDiffers)
 					}
 				}
 			}
