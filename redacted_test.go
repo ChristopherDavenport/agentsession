@@ -641,3 +641,37 @@ func TestRedactedKeptThroughHelpers(t *testing.T) {
 		}
 	}
 }
+
+// TestContextHashLeavesRedacted: redacted is provenance, removed from
+// the context hash in whatever form it is held, as legacy_id and
+// normalised are, so entries with it and the same bodies without it
+// share every context hash.
+func TestContextHashLeavesRedacted(t *testing.T) {
+	msg := `"type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}`
+	cfg := `"type":"config","model":"m"`
+	plainIn, plain := hashedLines(t, Format, msg, cfg, msg)
+	for _, tt := range []struct{ name, format, a, b, c string }{
+		{"typed", Format, `,"redacted":[1]`, `,"redacted":[[2,3]]`, `,"redacted":[]`},
+		{"another form", Format, `,"redacted":["x"]`, `,"redacted":0`, `,"redacted":null`},
+		{"under 0.12", "agentsession/0.12", `,"redacted":[1]`, ``, `,"redacted":[4]`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			in, ids := hashedLines(t, tt.format, msg+tt.a, cfg+tt.b, msg+tt.c)
+			s, err := Read(strings.NewReader(in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := Read(strings.NewReader(plainIn))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range ids {
+				got, err1 := s.ContextHash(ids[i])
+				want, err2 := p.ContextHash(plain[i])
+				if err1 != nil || err2 != nil || got != want {
+					t.Errorf("entry %d: context hash %s (%v), without redacted %s (%v)", i, got, err1, want, err2)
+				}
+			}
+		})
+	}
+}
