@@ -171,6 +171,9 @@ func (c *Client) session(ctx context.Context, hd *holding) error {
 // lease the client holds from its first instant, and returned as the
 // client's own.
 func (c *Client) Create(ctx context.Context, h agentsession.Header) (*agentsession.Session, error) {
+	if c.redactedOnly && !h.Redacted {
+		return nil, fmt.Errorf("%w: create %s through a client that sends only redacted sessions", agentsession.ErrNotRedacted, h.ID)
+	}
 	body, err := json.Marshal(h)
 	if err != nil {
 		return nil, err

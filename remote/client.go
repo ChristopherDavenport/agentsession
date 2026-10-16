@@ -39,8 +39,10 @@ type Client struct {
 
 	holder   string
 	leaseTTL time.Duration
-	holdMu   sync.Mutex
-	holds    map[string]*holding
+	// redactedOnly says the client sends only redacted sessions.
+	redactedOnly bool
+	holdMu       sync.Mutex
+	holds        map[string]*holding
 
 	mu sync.Mutex
 	// last is each session's replica where its last follow stopped, so a
@@ -85,6 +87,15 @@ func WithLeaseTTL(d time.Duration) ClientOption {
 		}
 	}
 }
+
+// WithRedactedOnly makes the client send only redacted sessions, as a
+// publisher's client of a store that holds only redacted ones: Create
+// and [Push] refuse a session whose header does not carry redacted with
+// [agentsession.ErrNotRedacted] before anything is sent, a fork of a
+// redacted session among them. The server's store refuses one too when
+// it is set to hold only redacted sessions, answering not_redacted; the
+// option makes the client fail closed against a server that is not.
+func WithRedactedOnly() ClientOption { return func(c *Client) { c.redactedOnly = true } }
 
 // Dial returns a client of the server at baseURL, the URL the /v1
 // routes are under. It does not contact the server.
