@@ -73,6 +73,8 @@ func Run(t *testing.T, opts Options) {
 	t.Run("Follow", func(t *testing.T) { testFollow(t, opts) })
 	t.Run("Refs", func(t *testing.T) { testRefs(t, opts) })
 	t.Run("Import", func(t *testing.T) { testImport(t, opts) })
+	t.Run("ImportMedia", func(t *testing.T) { testImportMedia(t, opts) })
+	t.Run("ImportMarker", func(t *testing.T) { testImportMarker(t, opts) })
 	t.Run("Redacted", func(t *testing.T) { testRedacted(t, opts) })
 	if opts.Reopen != nil {
 		t.Run("Persistence", func(t *testing.T) { testPersistence(t, opts) })

@@ -25,6 +25,7 @@ func testRedacted(t *testing.T, opts Options) {
 	t.Run("AppendRefused", func(t *testing.T) { redactedAppend(t, opts) })
 	t.Run("Push", func(t *testing.T) { redactedPush(t, opts) })
 	t.Run("PushAddsRefused", func(t *testing.T) { redactedPushAdds(t, opts) })
+	t.Run("ContinueRefused", func(t *testing.T) { redactedContinue(t, opts) })
 	t.Run("RedactedOnly", func(t *testing.T) { redactedOnly(t, opts) })
 	t.Run("Original", func(t *testing.T) { redactedOriginal(t, opts) })
 	t.Run("Redactions", func(t *testing.T) { redactedRedactions(t, opts) })
@@ -481,4 +482,35 @@ func redactedRedactions(t *testing.T, opts Options) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Redactions of %s: %v, want %v", orig.ID(), got, want)
 	}
+}
+
+// redactedContinue: Continue and ContinueRef refuse a redacted session
+// before they create anything, since it takes no continued_in link, and
+// a ref naming it stays where it was.
+func redactedContinue(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	take := importer(opts, st)
+	hooks(t, take != nil)
+	red, file := redaction(t, original(t, "orig-continue"), "test.secret@1", true)
+	if err := take(t, st, file); err != nil {
+		t.Fatal(err)
+	}
+	before := countSessions(t, st)
+	_, err := agentsession.Continue(ctx, st, red.ID(), nil)
+	wantErr(t, "Continue of a redacted session", err, agentsession.ErrRedacted)
+	if rs, ok := st.(agentsession.RefStore); ok {
+		if err := rs.UpdateRef(ctx, "redacted/test", agentsession.RefTarget{}, agentsession.RefTarget{Session: red.ID()}, "test"); err != nil {
+			t.Fatal(err)
+		}
+		_, err := agentsession.ContinueRef(ctx, st, "redacted/test", nil)
+		wantErr(t, "ContinueRef of a redacted session", err, agentsession.ErrRedacted)
+		if got, err := rs.ResolveRef(ctx, "redacted/test"); err != nil || got.Session != red.ID() {
+			t.Errorf("after the refusal the ref names %+v (%v)", got, err)
+		}
+	}
+	if n := countSessions(t, st); n != before {
+		t.Errorf("the refusals left %d sessions, %d before", n, before)
+	}
+	sameRedacted(t, st, red)
 }
