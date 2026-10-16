@@ -13,7 +13,7 @@ import (
 )
 
 // Format is the session format version this package writes.
-const Format = "agentsession/0.12"
+const Format = "agentsession/0.13"
 
 // FormatMajor is the major version of the format this package reads.
 // Any minor version of it is accepted; files are migrated in memory.
@@ -232,8 +232,11 @@ func (h *Header) fill(now time.Time) {
 // relation and the target member of a link; its writer names an
 // instructions part out of force by its hash. 0.12 adds the peer link
 // relation, the task, context and url members of a link that names a
-// callee in another system, and its cancel member.
-const FormatMinor = 12
+// callee in another system, and its cancel member. 0.13 adds the
+// redacted_from header member and makes a redacted session one of its
+// own; a 0.12 file is a 0.13 file without the member, and one it holds
+// there is kept in Extra as written.
+const FormatMinor = 13
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.
 // A file below it is rehashed on read.
