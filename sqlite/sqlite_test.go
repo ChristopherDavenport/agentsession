@@ -58,6 +58,14 @@ func TestStoreSuite(t *testing.T) {
 			t.Cleanup(func() { st.Close() })
 			return st
 		},
+		RedactedOnly: func(t *testing.T) agentsession.Store {
+			st, err := sqlite.Open(filepath.Join(t.TempDir(), "sessions.db"), sqlite.WithRedactedOnly())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		},
 		Lower: func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store {
 			path := paths[s]
 			if err := s.(*sqlite.Store).Close(); err != nil {
@@ -487,5 +495,38 @@ func TestFailedOpenLetsHoldGo(t *testing.T) {
 	}
 	if h, err := st.LockHolder(ctx, id); err != nil || h != nil {
 		t.Errorf("after a failed Open the session is held by %+v (%v), want no one", h, err)
+	}
+}
+
+// TestRedactedOnlyRefusesAHoldingDatabase: a store is not set to hold
+// only redacted entries over a database that already holds an original,
+// nor one that holds a redacted session resumed with a native entry.
+func TestRedactedOnlyRefusesAHoldingDatabase(t *testing.T) {
+	ctx := context.Background()
+	for name, fill := range map[string]func(*sqlite.Store) error{
+		"an original": func(st *sqlite.Store) error {
+			_, err := st.Create(ctx, agentsession.Header{ID: "o"})
+			return err
+		},
+		"a native entry": func(st *sqlite.Store) error {
+			if _, err := st.Create(ctx, agentsession.Header{ID: "r", Redacted: true}); err != nil {
+				return err
+			}
+			_, err := st.Append(ctx, "r", agentsession.NewItemEntry(openresponses.UserText("native")))
+			return err
+		},
+	} {
+		path := filepath.Join(t.TempDir(), "sessions.db")
+		st, err := sqlite.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fill(st); err != nil {
+			t.Fatal(err)
+		}
+		st.Close()
+		if _, err := sqlite.Open(path, sqlite.WithRedactedOnly()); !errors.Is(err, agentsession.ErrNotRedacted) {
+			t.Errorf("%s: Open with WithRedactedOnly = %v, want ErrNotRedacted", name, err)
+		}
 	}
 }

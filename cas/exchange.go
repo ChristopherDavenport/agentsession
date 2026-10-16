@@ -175,6 +175,14 @@ func (s *Store) bundleOf(ctx context.Context, id string) (*bundle, error) {
 // handover. The two stores' mutexes are never held together. A session
 // the receiver has open is rebuilt from what it holds, so a caller
 // holding it there opens it again.
+//
+// A redacted session is pushed as any other is, grown since or not. A
+// receiver set with WithRedactedOnly refuses, with
+// [agentsession.ErrNotRedacted] and before it writes anything, a session
+// whose header does not carry redacted and one carrying any entry,
+// prefix included, without a redacted member, as a resumed redacted
+// session's native entries and a fork's own entries are. Fetch is held
+// to the same.
 func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions) (Exchange, error) {
 	if err := ctx.Err(); err != nil {
 		return Exchange{}, err
@@ -402,6 +410,20 @@ func descends(entries map[string]agentsession.Entry, head, anc string) bool {
 	return false
 }
 
+// gateBundle reads the bundle's prefix and own entries under its
+// header's format, as agentsession.GateEntry has it. It changes them in
+// place, which leaves their bytes, and so their hashes, as they were,
+// and changes nothing in an entry read under that header already, as a
+// bundle a store reads with agentsession.Read is.
+func gateBundle(b *bundle) {
+	for _, e := range b.prefix {
+		agentsession.GateEntry(b.header.Format, e)
+	}
+	for _, e := range b.own {
+		agentsession.GateEntry(b.header.Format, e)
+	}
+}
+
 // receive admits a bundle.
 func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Exchange, error) {
 	if err := s.writable(); err != nil {
@@ -412,6 +434,24 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	}
 	if laterFormat(b.header.Format, agentsession.Format) {
 		return Exchange{}, fmt.Errorf("%w: %s is later than this store's %s", agentsession.ErrUnsupportedFormat, b.header.Format, agentsession.Format)
+	}
+	// Every entry is read under the format the bundle's header names,
+	// as Read reads a file, before anything is checked: a closure its
+	// caller decoded line by line, as UnmarshalEntry does, would
+	// otherwise carry a redacted member from before 0.13 as a marker.
+	gateBundle(b)
+	// The header is held to the rules import holds a file's to: a
+	// redacted_from without redacted, or naming the session itself, is
+	// refused, whichever store sent it.
+	if err := b.header.Validate(); err != nil {
+		return Exchange{}, fmt.Errorf("cas: exchange: %w", err)
+	}
+	// A store holding only redacted entries receives no session whose
+	// header lacks redacted and no entry without it, prefix included,
+	// held or not; read again under the sweep's lock before any object
+	// is written.
+	if err := s.refuseUnredacted(b.header, append(append([]agentsession.Entry(nil), b.prefix...), b.own...)); err != nil {
+		return Exchange{}, err
 	}
 	id := b.header.ID
 	dir, err := s.sessionDir(id)
@@ -452,7 +492,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 			if owner, _, err := s.holderOf(b.header.Base, b.header.ParentSession); err == nil && owner != "" {
 				if odir, err := s.sessionDir(owner); err == nil {
 					if oh, err := readHeader(odir); err == nil && mediaOf(oh) != mediaOf(b.header) {
-						return Exchange{}, errors.New("cas: exchange: media differs from the session holding the base")
+						return Exchange{}, fmt.Errorf("cas: exchange: %w", agentsession.ErrMediaDiffers)
 					}
 				}
 			}
@@ -489,6 +529,12 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	// anything lands.
 	raised := hdr
 	if laterFormat(b.header.Format, hdr.Format) {
+		// Raise sees the header alone; the session says whether an
+		// entry it holds forbids the raise too, a redacted member read
+		// under a minor before 0.13.
+		if err := h.session.RaiseRefused(b.header.Format); err != nil {
+			return Exchange{}, fmt.Errorf("cas: %w", err)
+		}
 		if err := raised.Raise(b.header.Format); err != nil {
 			return Exchange{}, fmt.Errorf("cas: %w", err)
 		}
@@ -557,6 +603,9 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 		return Exchange{}, err
 	}
 	defer guard.release()
+	if err := s.refuseUnredacted(b.header, append(append([]agentsession.Entry(nil), b.prefix...), fresh...)); err != nil {
+		return Exchange{}, err
+	}
 	pend := newPendSet()
 	sizes, err := s.packEntries(append(append([]agentsession.Entry(nil), b.prefix...), fresh...), b.blobs, pend)
 	if err != nil {

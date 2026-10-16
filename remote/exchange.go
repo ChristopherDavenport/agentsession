@@ -375,6 +375,20 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, problem(CodeBadRequest, "mark is mirror or record", req.Mark))
 		return
 	}
+	// The header is held to the rules an import holds a file's to,
+	// before any object is looked for: a format the server does not read
+	// is format, and a header RFC 0001 calls malformed is bad_entry, as
+	// RFC 0003's row has it, with the reason redacted_from for that
+	// member's rule.
+	if err := req.Header.Validate(); err != nil {
+		p := problemOf(err)
+		if p.Code == CodeStoreFault {
+			p = problem(CodeBadEntry, "the header is malformed", err.Error())
+			p.Reason = "header"
+		}
+		h.fail(w, p)
+		return
+	}
 	who := h.principal(r)
 	if len(req.Refs) > 0 && !who.Has(ScopeRefs) {
 		writeProblem(w, problem(CodeScope, "a push's refs need the refs scope", string(ScopeRefs)))

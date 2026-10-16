@@ -103,6 +103,7 @@ const (
 	CodeBaseRule       = "base_rule"
 	CodeBadBase        = "bad_base"
 	CodeRefMoved       = "ref_moved"
+	CodeNotRedacted    = "not_redacted"
 
 	// Exchange's.
 	CodeNoObject      = "no_object"
@@ -207,6 +208,7 @@ var codes = map[string]struct {
 	CodeBaseRule:       {http.StatusUnprocessableEntity, agentsession.ErrBaseRule},
 	CodeBadBase:        {http.StatusUnprocessableEntity, agentsession.ErrNoEntry},
 	CodeRefMoved:       {http.StatusConflict, agentsession.ErrRefMoved},
+	CodeNotRedacted:    {http.StatusForbidden, agentsession.ErrNotRedacted},
 
 	CodeNoObject:      {http.StatusNotFound, cas.ErrNoObject},
 	CodeBadObject:     {http.StatusUnprocessableEntity, cas.ErrBadObject},
@@ -236,6 +238,12 @@ var reasons = map[string]error{
 	"reason_mismatch":       agentsession.ErrReasonMismatch,
 	"link_mismatch":         agentsession.ErrLinkMismatch,
 	"bad_normalisation":     agentsession.ErrBadNormalisation,
+	// A header's: a redacted_from without redacted, or naming the
+	// session itself, in a pushed header.
+	"redacted_from": agentsession.ErrRedactedFrom,
+	// A fork's: its media differs from that of the session holding its
+	// base, a bad_base.
+	"media_differs": agentsession.ErrMediaDiffers,
 }
 
 // Problem is an error that crossed the wire, as RFC 9457's problem
@@ -309,6 +317,12 @@ func problemOf(err error) *Problem {
 		return p
 	}
 	switch {
+	case errors.Is(err, agentsession.ErrMediaDiffers):
+		p := problem(CodeBadBase, "the fork's media differs from its origin's", err.Error())
+		p.Reason = "media_differs"
+		return p
+	case errors.Is(err, agentsession.ErrNotRedacted):
+		return problem(CodeNotRedacted, "the store holds only redacted entries", "")
 	case errors.Is(err, agentsession.ErrNoSession):
 		return problem(CodeNoSession, "no such session", "")
 	case errors.Is(err, agentsession.ErrBaseRule):

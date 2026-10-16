@@ -618,7 +618,7 @@ func (s *Store) migrate() error {
 	// The layout goes first, so the tombstone never points through a
 	// path that is not there yet; a store with its layout and a journal
 	// is migrated again by the next writing open.
-	if err := s.writeLayout(); err != nil {
+	if err := s.writeLayout(true); err != nil {
 		return err
 	}
 	if len(scan.damage) > 0 {

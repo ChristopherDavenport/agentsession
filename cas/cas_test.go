@@ -54,6 +54,17 @@ func TestConformance(t *testing.T) {
 			t.Cleanup(func() { st.Close() })
 			return st
 		},
+		Push: func(t *testing.T, s agentsession.Store, file []byte) error {
+			return pushFile(t, s.(*Store), file)
+		},
+		RedactedOnly: func(t *testing.T) agentsession.Store {
+			st, err := Open(t.TempDir(), WithRedactedOnly())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		},
 		Lower: func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store {
 			root := s.(*Store).Root()
 			if err := s.(*Store).Close(); err != nil {
@@ -68,6 +79,24 @@ func TestConformance(t *testing.T) {
 			return st
 		},
 	})
+}
+
+// pushFile pushes the session file holds to st from a store of its own
+// that imported the file as the record.
+func pushFile(t *testing.T, st *Store, file []byte) error {
+	t.Helper()
+	ctx := context.Background()
+	src, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	s, err := src.Import(ctx, bytes.NewReader(file), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = src.Push(ctx, st, s.ID(), PushOptions{})
+	return err
 }
 
 // lowerHeader rewrites the format the header of session id under a cas
@@ -262,10 +291,21 @@ func TestProjectAndImport(t *testing.T) {
 	if strings.Contains(buf.String(), `"synthetic"`) {
 		t.Error("a head on the last line projected with a marker")
 	}
-	// A redacted file is refused.
+	// A redacted file is held as any other by a store that lacks it, and
+	// is appended to as any other.
 	redacted := strings.Replace(buf.String(), `"cwd":"/w"`, `"cwd":"/w","redacted":true`, 1)
-	if _, err := other.Import(ctx, strings.NewReader(redacted), false); err == nil {
-		t.Error("a redacted projection was imported")
+	third, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer third.Close()
+	if rs, err := third.Import(ctx, strings.NewReader(redacted), true); err != nil {
+		t.Fatalf("a redacted projection: %v", err)
+	} else if !rs.Header().Redacted {
+		t.Error("the imported session is not redacted")
+	}
+	if _, err := third.Append(ctx, "p", agentsession.NewItemEntry(openresponses.UserText("more"))); err != nil {
+		t.Errorf("append to the imported redacted session: %v", err)
 	}
 }
 
@@ -398,8 +438,9 @@ func TestRefusals(t *testing.T) {
 	other, _ := Open(t.TempDir())
 	defer other.Close()
 	torn := buf.String()[:buf.Len()-10]
-	if _, err := other.Import(ctx, strings.NewReader(torn), false); err == nil || !strings.Contains(err.Error(), "cut short") {
-		t.Errorf("import of a torn file = %v", err)
+	var cut *agentsession.TruncatedLine
+	if _, err := other.Import(ctx, strings.NewReader(torn), false); !errors.As(err, &cut) {
+		t.Errorf("import of a torn file = %v, want a *TruncatedLine", err)
 	}
 	// A fork file whose own entry hangs above the base.
 	fork, err := st.Create(ctx, agentsession.Header{ID: "f4", Base: a})

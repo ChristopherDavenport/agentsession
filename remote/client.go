@@ -39,8 +39,10 @@ type Client struct {
 
 	holder   string
 	leaseTTL time.Duration
-	holdMu   sync.Mutex
-	holds    map[string]*holding
+	// redactedOnly says the client sends only redacted entries.
+	redactedOnly bool
+	holdMu       sync.Mutex
+	holds        map[string]*holding
 
 	mu sync.Mutex
 	// last is each session's replica where its last follow stopped, so a
@@ -85,6 +87,21 @@ func WithLeaseTTL(d time.Duration) ClientOption {
 		}
 	}
 }
+
+// WithRedactedOnly makes the client send only redacted entries, as a
+// publisher's client of a store that holds only redacted ones. Create
+// refuses a header that does not carry redacted; Append and Write
+// refuse an entry that carries no redacted member, and an entry to a
+// session whose header does not carry redacted; [Push] refuses a
+// session whose header does not carry redacted or that holds an entry,
+// prefix included, without it: each with [agentsession.ErrNotRedacted]
+// before the entry or the session is sent. A fork's own entries and a
+// resumed redacted session's native entries are refused alike. The
+// server's store refuses them too when it is set to hold only redacted
+// entries, answering not_redacted, though a push only once its objects
+// are uploaded (#244); the option makes the client fail closed against
+// a server that is not set so, and before it uploads anything.
+func WithRedactedOnly() ClientOption { return func(c *Client) { c.redactedOnly = true } }
 
 // Dial returns a client of the server at baseURL, the URL the /v1
 // routes are under. It does not contact the server.
