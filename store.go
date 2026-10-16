@@ -251,6 +251,13 @@ type MemoryOption func(*MemoryStore)
 // an Append, an Import, the prefix of a fork Create makes. A fork's own
 // entries and a resumed redacted session's native entries are refused
 // alike, since neither was redacted.
+//
+// That holds for what comes through the store. The store hands out its
+// own sessions, from Create, Open and Import, and an entry added through
+// one of them, by [Session.Append], Commit or Extend, never reaches the
+// store's checks, so such a store holds whatever its callers write that
+// way. A store that must fail closed against its callers is a cas store
+// set with its WithRedactedOnly.
 func MemoryRedactedOnly() MemoryOption {
 	return func(m *MemoryStore) { m.redactedOnly = true }
 }
@@ -268,6 +275,9 @@ func NewMemoryStore(opts ...MemoryOption) *MemoryStore {
 // Create implements Store. A header whose Base is set makes a fork of
 // the session holding the base, as [Fork] does; a redacted session is
 // created as any other is.
+// The session returned is the store's own, shared with it, so a write
+// through it, by [Session.Append], Commit or Extend, bypasses every rule
+// the store holds an append to, MemoryRedactedOnly's among them.
 func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
 	if err := CheckCreate(h, m.redactedOnly); err != nil {
 		return nil, err
@@ -306,6 +316,9 @@ func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
 // store set with MemoryRedactedOnly, a session whose header does not
 // carry redacted or that holds an entry without it.
 // The store keeps no record mark, so asRecord is not read.
+// The session returned is the store's own, shared with it, so a write
+// through it, by [Session.Append], Commit or Extend, bypasses every rule
+// the store holds an append to, MemoryRedactedOnly's among them.
 func (m *MemoryStore) Import(ctx context.Context, r io.Reader, asRecord bool) (*Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -381,6 +394,9 @@ func (m *MemoryStore) forkOrigin(named, base string) *Session {
 }
 
 // Open implements Store.
+// The session returned is the store's own, shared with it, so a write
+// through it, by [Session.Append], Commit or Extend, bypasses every rule
+// the store holds an append to, MemoryRedactedOnly's among them.
 func (m *MemoryStore) Open(_ context.Context, id string) (*Session, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

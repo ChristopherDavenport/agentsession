@@ -26,6 +26,9 @@ func TestCheckCreate(t *testing.T) {
 		{Header{RedactedFrom: &RedactedFrom{Session: "o"}}, false, ErrRedactedFrom},
 		{Header{Extra: map[string]json.RawMessage{"redacted_from": json.RawMessage(`{"session":"o"}`)}}, false, ErrRedactedFrom},
 		{Header{Format: "agentsession/0.12", Extra: map[string]json.RawMessage{"redacted_from": json.RawMessage(`"o"`)}}, false, nil},
+		{Header{ID: "r", Redacted: true, RedactedFrom: &RedactedFrom{Session: "r"}}, false, ErrRedactedFrom},
+		{Header{Redacted: true, RedactedFrom: &RedactedFrom{}}, false, ErrRedactedFrom},
+		{Header{Redacted: true, RedactedFrom: &RedactedFrom{Session: "o"}}, true, nil},
 	} {
 		if err := CheckCreate(tt.h, tt.only); !errors.Is(err, tt.want) || (tt.want == nil) != (err == nil) {
 			t.Errorf("CheckCreate(%+v, %v) = %v, want %v", tt.h, tt.only, err, tt.want)
@@ -54,4 +57,40 @@ func TestCheckRedacted(t *testing.T) {
 	if err := CheckRedacted(Header{ID: "o"}, nil); !errors.Is(err, ErrNotRedacted) {
 		t.Errorf("a header without redacted: %v, want ErrNotRedacted", err)
 	}
+	// A redacted member read under a minor before 0.13, and ones in a
+	// form no minor defines, are not markers.
+	gated, err := UnmarshalEntry([]byte(lineWithRedacted(t, `[1]`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	GateEntry("agentsession/0.12", gated)
+	if err := CheckRedacted(h, []Entry{gated}); !errors.Is(err, ErrNotRedacted) {
+		t.Errorf("a redacted member from before 0.13: %v, want ErrNotRedacted", err)
+	}
+	for _, form := range []string{`"x"`, `[0]`, `[[2,1]]`, `[3,2]`} {
+		e, err := UnmarshalEntry([]byte(lineWithRedacted(t, form)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckRedacted(h, []Entry{e}); !errors.Is(err, ErrNotRedacted) {
+			t.Errorf("redacted %s: %v, want ErrNotRedacted", form, err)
+		}
+	}
+}
+
+// lineWithRedacted is an entry line, its id its hash, whose redacted
+// member is written as form.
+func lineWithRedacted(t *testing.T, form string) string {
+	t.Helper()
+	s := New(Header{ID: "l"})
+	e := NewItemEntry(openresponses.UserText("x"))
+	e.Unknown = map[string]json.RawMessage{"redacted": json.RawMessage(form)}
+	if _, err := s.Commit(e); err != nil {
+		t.Fatal(err)
+	}
+	line, err := MarshalEntry(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(line)
 }
