@@ -94,6 +94,21 @@ func WithStaleLockReport(report func(LockInfo)) Option {
 	return func(s *Store) { s.staleReport = report }
 }
 
+// WithRedactedOnly sets the store to hold only redacted sessions, as
+// RFC 0002 lets a store be set: Create refuses every session, with
+// [agentsession.ErrNotRedacted] for a header that does not carry
+// redacted, a fork of a redacted session among them, and
+// [agentsession.ErrRedacted] for one that does, which no store creates.
+// This store has no import or exchange; a redacted session is in it
+// when a redactor has written its file under the root, by the layout
+// above, with [agentsession.Write]. The option is this store's and this
+// process's: a file written under the root, and a store opened on it
+// without the option, are outside what it can refuse, so a store that
+// must fail closed against every process is a cas store set this way.
+func WithRedactedOnly() Option {
+	return func(s *Store) { s.redactedOnly = true }
+}
+
 // Store is a file-backed [agentsession.Store]. It is safe for
 // concurrent use within one process. A store opened with
 // [WithReadOnly] takes no lock and refuses every write. Across
@@ -109,7 +124,9 @@ type Store struct {
 	policy      SyncPolicy
 	staleReport func(LockInfo)
 	readOnly    bool
-	followEvery time.Duration
+	// redactedOnly says the store holds only redacted sessions.
+	redactedOnly bool
+	followEvery  time.Duration
 	// hub rings the followers of a session this store appends to.
 	hub wake.Hub
 
@@ -230,13 +247,18 @@ func sessionPath(root string, h agentsession.Header) string {
 // Create implements agentsession.Store. The file is created with the
 // header line, and for a header with a base the prefix after it, and
 // synced before Create returns. The origin is read, not claimed: a fork
-// can be made from a session another process is writing.
+// can be made from a session another process is writing. A header that
+// carries redacted is refused with [agentsession.ErrRedacted], since a
+// redacted session is written whole.
 func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if s.readOnly {
 		return nil, agentsession.ErrReadOnly
+	}
+	if err := agentsession.CheckCreate(h, s.redactedOnly); err != nil {
+		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

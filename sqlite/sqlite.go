@@ -133,6 +133,19 @@ func WithStaleLockReport(report func(LockInfo)) Option {
 	return func(s *Store) { s.staleReport = report }
 }
 
+// WithRedactedOnly sets the store to hold only redacted sessions, as
+// RFC 0002 lets a store be set: Create refuses every session, with
+// [agentsession.ErrNotRedacted] for a header that does not carry
+// redacted, a fork of a redacted session among them, and
+// [agentsession.ErrRedacted] for one that does, which no store creates.
+// This store has no import or exchange, the paths a redacted session
+// enters a store by, so one set this way holds nothing; and the option
+// is this process's, not the database's, so a store that must fail
+// closed against every process is a cas store set this way.
+func WithRedactedOnly() Option {
+	return func(s *Store) { s.redactedOnly = true }
+}
+
 // ErrConcurrentWriter is returned by Append when another process
 // appended to the session since this store loaded it. The store has no
 // cross-process lock, so the conflict is found at the write: the
@@ -160,8 +173,10 @@ type Store struct {
 	w, r        *sql.DB
 	staleReport func(LockInfo)
 	readOnly    bool
-	pid         int
-	host        string
+	// redactedOnly says the store holds only redacted sessions.
+	redactedOnly bool
+	pid          int
+	host         string
 	// token identifies this Store among holders, since two stores in
 	// one process share a pid.
 	token string
@@ -412,10 +427,15 @@ func (s *Store) Close() error {
 	return err
 }
 
-// Create implements agentsession.Store.
+// Create implements agentsession.Store. A header that carries redacted
+// is refused with [agentsession.ErrRedacted], since a redacted session
+// is written whole.
 func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsession.Session, error) {
 	if s.readOnly {
 		return nil, agentsession.ErrReadOnly
+	}
+	if err := agentsession.CheckCreate(h, s.redactedOnly); err != nil {
+		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
