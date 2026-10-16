@@ -76,11 +76,13 @@ func TestRedactedFromRoundTrip(t *testing.T) {
 }
 
 // TestRedactedFromRefused: a 0.13 header carrying redacted_from on a
-// session that is not redacted is malformed, wherever it is read.
+// session that is not redacted, or naming the session itself as its
+// original, is malformed, wherever it is read.
 func TestRedactedFromRefused(t *testing.T) {
 	for name, redacted := range map[string]string{
 		"absent": `"redacted_from":{"entries":1,"session":"o"}`,
 		"false":  `"redacted":false,"redacted_from":{"entries":1,"session":"o"}`,
+		"itself": `"redacted":true,"redacted_from":{"entries":1,"session":"01995b2a-0000-7000-8000-0000000000aa"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			in := redactedHeader(Format, redacted)
@@ -95,6 +97,7 @@ func TestRedactedFromRefused(t *testing.T) {
 	for name, r := range map[string]*RedactedFrom{
 		"no session":     {Entries: 1},
 		"negative count": {Session: "o", Entries: -1},
+		"itself":         {Session: "x", Entries: 1},
 	} {
 		h := Header{Format: Format, ID: "x", Payload: Payload, Redacted: true, RedactedFrom: r}
 		h.fill(utcNow())

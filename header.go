@@ -141,8 +141,9 @@ type RedactedFrom struct {
 }
 
 // ErrRedactedFrom is returned for a header whose redacted_from the
-// format forbids: one on a session that is not redacted, or, built in
-// memory, one that names no original or a negative count.
+// format forbids: one on a session that is not redacted, one that names
+// the session itself as its original, or, built in memory, one that
+// names no original or a negative count.
 var ErrRedactedFrom = errors.New("agentsession: malformed redacted_from")
 
 // redactedFromMinor is the first minor that defines redacted_from.
@@ -269,8 +270,9 @@ func definesRedactedFrom(format string) bool {
 }
 
 // Validate checks the required header fields, that the format is one
-// this package reads, and that a redacted_from names an original and
-// is on a redacted session, as [ErrRedactedFrom] says.
+// this package reads, and that a redacted_from names an original other
+// than the session and is on a redacted session, as [ErrRedactedFrom]
+// says.
 func (h Header) Validate() error {
 	major, _, err := ParseFormat(h.Format)
 	if err != nil {
@@ -303,6 +305,8 @@ func (h Header) Validate() error {
 			return fmt.Errorf("%w: on a session that is not redacted", ErrRedactedFrom)
 		case r.Session == "":
 			return fmt.Errorf("%w: names no session", ErrRedactedFrom)
+		case r.Session == h.ID:
+			return fmt.Errorf("%w: names the session itself, %s", ErrRedactedFrom, h.ID)
 		case r.Entries < 0:
 			return fmt.Errorf("%w: entries %d", ErrRedactedFrom, r.Entries)
 		}
