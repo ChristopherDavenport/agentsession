@@ -341,7 +341,9 @@ verifies without the bodies, which is what lets a store hold or send
 history it does not hold in full, and a body is held once however many
 entries name it, which RFC 0002 builds on. Wherever this document has a
 member name an entry — `parent`, `parents`, `target`, `first_kept`,
-`from`, `queued_from` — it names it by `id`.
+`from`, `queued_from`, `omit`'s `items` in a `config` and in a
+compaction's checkpoint, `instructions_omitted`'s `of` — it names it by
+`id`.
 
 Two entries with the same type, content, parent, `parents` and `ts` are
 one entry. A writer that means two makes them differ, and sub-second
@@ -1761,24 +1763,42 @@ A redactor:
 - MUST recompute every content hash and `id` over what it wrote, and
   rewrite `parent` and every entry-naming member to the IDs assigned
   earlier in the file, as migration does — `parents` into this file,
-  `target`, `first_kept`, `from`, `queued_from`, `omit`'s `items` and
-  `instructions_omitted`'s `of` — and last the header's `base`, once the
-  prefix is hashed;
-- MUST recompute the `hash` of every instruction part whose text it
-  changed;
+  `target`, `first_kept`, `from`, `queued_from`, `omit`'s `items` in a
+  `config` and in a compaction's checkpoint, and `instructions_omitted`'s
+  `of` — and last the header's `base`, once the prefix is hashed;
+- MUST keep instructions whole: where it changes a part's text, the
+  later parts that name that text by `hash` name it by the hash of the
+  new text, and instructions that were the join of their parts stay the
+  join of the rewritten ones. A redactor that changes text across a
+  part boundary breaks the join and MUST NOT;
+- MUST treat a `normalised` record as holding the member it describes:
+  `was` is that member's original source text and `raw` its original
+  bytes, so what the redactor removes from the member it removes from
+  the record too, decoding `raw` to find it;
 - MUST keep media in its form: an inline item stays inline and a sidecar
   item stays sidecar. A sidecar blob it replaces is stored under the
   replacement's hash, and the item's `sidecar:` URL names that;
 - MUST leave a reference into another session as it was, since it names
   that session's original entries, unless it holds that session's
   redacted twin, made by the same redaction. Then it rewrites the
-  reference to the twin: `parent_session`, a `parents` entry, a `link`'s
-  `session` and the entry its `target` names there. A redaction of a
+  reference to the twin: `parent_session`, a `parents` entry into that
+  session and a `link`'s `session`. A link's `target` names an entry of
+  this session, so it is rewritten as the members above are. A redaction of a
   whole store holds a twin of every session in it, and so re-points every
   reference that stays inside the store;
+- MUST reach data the format keeps in member names: an `env` entry's
+  `files` are keyed by path, and a path can hold what is redacted. Two
+  keys a redaction makes one MUST NOT both be kept;
 - MAY keep a `request_hash`, which is then the original's, or remove it.
   It MUST NOT write one computed over the redacted session, which would
   claim the redacted request was the one sent.
+
+Some strings tie entries together: a `call_id` pairs a call with its
+output, dispatch and links, and a subsession's ID is derived from its
+parent's. A redactor that changes one changes every one in step, and
+across sessions redacted alongside, or the pairs no longer hold. Inline
+media is a data URL whose payload is base64, so text inside an image's
+bytes is reached only by decoding it.
 
 The redacted session then walks and verifies against itself. A
 `request_hash` it kept no longer matches the request it rebuilds. A
