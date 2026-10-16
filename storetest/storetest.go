@@ -46,6 +46,7 @@ func Run(t *testing.T, opts Options) {
 	t.Run("Append", func(t *testing.T) { testAppend(t, opts) })
 	t.Run("HeldAppend", func(t *testing.T) { testHeldAppend(t, opts) })
 	t.Run("WriterChecks", func(t *testing.T) { testWriterChecks(t, opts) })
+	t.Run("NoRaise", func(t *testing.T) { testNoRaise(t, opts) })
 	t.Run("ReadLine", func(t *testing.T) { testReadLine(t, opts) })
 	t.Run("List", func(t *testing.T) { testList(t, opts) })
 	t.Run("Continue", func(t *testing.T) { testContinue(t, opts) })
@@ -261,6 +262,42 @@ func testHeldAppend(t *testing.T, opts Options) {
 // Every store refuses both with [agentsession.ErrCalleeLink] and keeps
 // nothing of them, in memory or, after reopening, in what it stored,
 // and takes the valid link and notice.
+// testNoRaise appends to a session whose header names a minor before
+// 0.13 and holds redacted_from, which a writer may not raise and so
+// may not append to: the append is refused as a format this writer
+// cannot append under, [agentsession.ErrNoRaise] for a local store,
+// and the session and its header's format are left as they were.
+func testNoRaise(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	const earlier = "agentsession/0.12"
+	s, err := st.Create(ctx, agentsession.Header{Format: earlier, Extra: map[string]json.RawMessage{
+		"redacted_from": json.RawMessage(`{"entries":1,"session":"o"}`),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	if _, err := st.Append(ctx, id, agentsession.NewItemEntry(openresponses.UserText("hi"))); !errors.Is(err, agentsession.ErrUnsupportedFormat) {
+		t.Errorf("Append = %v, want ErrUnsupportedFormat", err)
+	}
+	if s.Len() != 0 || s.Header().Format != earlier {
+		t.Errorf("after the refusal the session holds %d entries under %s", s.Len(), s.Header().Format)
+	}
+	if r, ok := st.(agentsession.Reader); ok {
+		read, err := r.Read(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if read.Len() != 0 || read.Header().Format != earlier {
+			t.Errorf("read back: %d entries under %s", read.Len(), read.Header().Format)
+		}
+		if _, held := read.Header().Extra["redacted_from"]; !held {
+			t.Errorf("read back without redacted_from: %v", read.Header().Extra)
+		}
+	}
+}
+
 func testWriterChecks(t *testing.T, opts Options) {
 	ctx := context.Background()
 	st := opts.New(t)

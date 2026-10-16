@@ -265,8 +265,17 @@ func (s *Session) Append(e Entry) (string, error) {
 // [Session.Append] and [Session.Prepare] run it, Commit and Extend,
 // which read paths use, do not. A peer link names its call and a url
 // or a session, and a cancel notice names a subsession or peer link of
-// its call and relation on the path it is appended to.
+// its call and relation on the path it is appended to. A session whose
+// header may not be raised to this package's format takes no entry
+// ([ErrNoRaise]), since appending under the raised header is what a
+// writer does.
 func (s *Session) checkNew(e Entry) error {
+	s.mu.RLock()
+	err := s.header.raiseRefused(Format)
+	s.mu.RUnlock()
+	if err != nil {
+		return fmt.Errorf("agentsession: append to %s: %w", s.ID(), err)
+	}
 	l, ok := e.(*LinkEntry)
 	if !ok || !l.callee() {
 		return nil

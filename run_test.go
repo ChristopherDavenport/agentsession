@@ -644,6 +644,63 @@ func TestSubsessionID(t *testing.T) {
 	}
 }
 
+func TestRedactedSessionID(t *testing.T) {
+	const original = "01995b2a-0000-7000-8000-000000000001"
+	got := RedactedSessionID(original, 12, "example.redact-home@1")
+	if got != RedactedSessionID(original, 12, "example.redact-home@1") {
+		t.Fatal("not deterministic")
+	}
+	if len(got) != 36 || got[14] != '5' || !strings.ContainsRune("89ab", rune(got[19])) {
+		t.Errorf("not a UUIDv5: %s", got)
+	}
+	// The name is the canonical JSON array, which for ASCII without
+	// escapes is the compact encoding.
+	if name, want := string(redactedName(original, 12, "example.redact-home@1")), `["redacted","01995b2a-0000-7000-8000-000000000001",12,"example.redact-home@1"]`; name != want {
+		t.Errorf("name %s, want %s", name, want)
+	}
+	// Pinned so another implementation can check its derivation, each
+	// computed apart from this package as Python's
+	// uuid.uuid5(uuid.UUID(int=0), name) over the name's bytes. The
+	// second's name escapes a quote, a backslash, a newline and a
+	// control character, and keeps é, < and U+2028 as they are, as the
+	// canonical form does.
+	for _, tt := range []struct {
+		original, profile string
+		entries           int
+		want              string
+	}{
+		{original, "example.redact-home@1", 12, "8fd5911f-3145-50b1-bbec-f15747523944"},
+		{"o\u00e9\"\\\n<>\u2028", "p\u0001", 3, "fff82569-af17-52c2-8b39-85cb57729216"},
+	} {
+		if got := RedactedSessionID(tt.original, tt.entries, tt.profile); got != tt.want {
+			t.Errorf("RedactedSessionID(%q, %d, %q) = %s, want %s (name %s)", tt.original, tt.entries, tt.profile, got, tt.want, redactedName(tt.original, tt.entries, tt.profile))
+		}
+	}
+	for _, other := range []string{
+		RedactedSessionID(original, 13, "example.redact-home@1"),
+		RedactedSessionID(original, 12, "example.redact-home@2"),
+		RedactedSessionID("01995b2a-0000-7000-8000-000000000002", 12, "example.redact-home@1"),
+	} {
+		if other == got {
+			t.Errorf("another original, count or profile gives %s too", got)
+		}
+	}
+	// A slash-joined name read two ways; the array does not.
+	if a, b := RedactedSessionID("a/1", 2, "x"), RedactedSessionID("a", 1, "2/x"); a == b {
+		t.Errorf("(a/1, 2, x) and (a, 1, 2/x) share %s", a)
+	} else if a != "dde8d691-8337-50dd-8192-db7450a3d179" || b != "a945befe-e300-5b97-bad7-2870d2924b19" {
+		t.Errorf("(a/1, 2, x) = %s, (a, 1, 2/x) = %s", a, b)
+	}
+	// A subsession's name starts with a session ID, and a retry's is
+	// <parent>/<call_id>/<n>; neither is the array.
+	if sub := SubsessionID(original, "12/example.redact-home@1"); sub == got {
+		t.Errorf("RedactedSessionID collides with SubsessionID: %s", got)
+	}
+	if sub := SubsessionID("redacted", original+"/12/example.redact-home@1"); sub == got {
+		t.Errorf("RedactedSessionID is the slash-joined name's: %s", got)
+	}
+}
+
 func TestLifecycleValidation(t *testing.T) {
 	tests := []struct {
 		name string

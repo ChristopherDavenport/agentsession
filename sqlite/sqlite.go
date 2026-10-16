@@ -578,7 +578,9 @@ func raiseFormat(ctx context.Context, tx *sql.Tx, id string) error {
 	if !raises(h.Format) {
 		return nil // another process raised it first
 	}
-	h.Format = agentsession.Format
+	if err := h.Raise(agentsession.Format); err != nil {
+		return fmt.Errorf("sqlite: %w", err)
+	}
 	raised, err := h.MarshalJSON()
 	if err != nil {
 		return err

@@ -5,6 +5,44 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Changed: the format is 0.13.** A writer raises every file it appends
+  to, so a reader of 0.12 refuses those files until it is upgraded. A
+  0.5 to 0.12 file reads as it stands; no hash moves.
+- **Added: a redacted session names its original (RFC 0001 0.13,
+  Redaction).** `Header.RedactedFrom` is the header's `redacted_from`
+  member (`RedactedFrom`): the original's `Session`, how many `Entries`
+  it held when the redaction was made, the redaction's `Profile` and,
+  for a redaction that wrote one entry per entry in file order,
+  `Aligned`. Members it does not define, the namespaced ones a
+  redaction records about itself among them, and a profile or aligned
+  in another form, stay in its `Extra` and write back as read. A header
+  carrying it on a session that is not `Redacted`, or naming the
+  session itself as its original, is refused with `ErrRedactedFrom`, by
+  `Header.Validate` and so by `Read` and `Scan`. The member is defined
+  from 0.13: in a file that declares an earlier minor, which was free to
+  hold the name in any form, it stays in `Header.Extra` and is neither
+  decoded nor refused, as is one in a 0.13 file that does not decode as
+  the object.
+- **Added: a header holding `redacted_from` from before 0.13 is never
+  raised.** `Header.Raise` is the raise a writer makes before it appends
+  to a session of an earlier minor, and refuses that one with
+  `ErrNoRaise`, an `ErrUnsupportedFormat`, since the raise would give
+  the member a meaning it was not written with. `Read` holds such a
+  header at its own format in memory, so `Write` keeps it (a file
+  before 0.5 takes 0.12, since its entries are rehashed as 0.5's);
+  `Session.Append` and `Prepare` refuse an entry to its session; the
+  jsonl, cas and sqlite stores raise through `Raise`, and cas refuses an
+  exchange that would raise one before anything lands. The conformance
+  suite (`storetest`) gains the case, which every store runs.
+- **Added: `RedactedSessionID`,** the ID RFC 0001 recommends for a
+  redacted session whose redaction writes a profile: a UUIDv5 under the
+  nil namespace over the canonical JSON array
+  `["redacted","<original>",<entries>,"<profile>"]`, so the same
+  redaction of the same entries gives the same session, and an ID
+  holding a slash cannot make two names one.
+
 ## v0.0.26 - 2026-10-15
 
 - **Fixed: the jsonl store keeps every session file under its root.**
