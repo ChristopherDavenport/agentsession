@@ -3,34 +3,44 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/openresponses"
 )
+
+// redaction says how redactFixture redacts: unmarked writes no entry's
+// redacted, as a 0.12 redactor did; a block [from, to] replaces those
+// positions with one placeholder carrying [[from, to]].
+type redaction struct {
+	unmarked bool
+	block    [2]int
+}
 
 // redactFixture writes to path a redaction of the named fixture, made
 // as a redactor makes one with the exported helpers: every body string
 // through one Rewriter in file order, every reference re-pointed with
-// RemapRefs to the entries already written, each entry committed, its
-// ID cleared, to a session whose header carries redacted and
-// redacted_from, under the ID RedactedSessionID derives. The request
-// hashes are kept, so they are the original's. It returns the file as
-// read back.
-func redactFixture(t *testing.T, name, path, profile string, extra map[string]json.RawMessage, f func(string) string) *agentsession.Session {
+// RemapRefs to the entries already written, each entry marked with the
+// position it was made from by SetRedacted and committed, its ID
+// cleared, to a session whose header carries redacted and redacted_from
+// under the ID RedactedSessionID derives. The request hashes are kept,
+// so they are the original's. It returns the session as built, which a
+// test may grow, and writes its file.
+func redactFixture(t *testing.T, name, path, profile string, extra map[string]json.RawMessage, f func(string) string, how redaction) *agentsession.Session {
 	t.Helper()
 	orig := loadFixture(t, name)
 	oh := orig.Header()
 	if oh.Base != "" {
 		t.Fatalf("%s has a base; redactFixture does not re-point one", name)
 	}
-	order := agentsession.FileOrder(orig)
 	h := oh
-	h.ID = agentsession.RedactedSessionID(oh.ID, len(order), profile)
+	h.ID = agentsession.RedactedSessionID(oh.ID, profile)
 	h.Redacted = true
-	h.RedactedFrom = &agentsession.RedactedFrom{Session: oh.ID, Entries: len(order), Profile: profile, Aligned: true, Extra: extra}
+	h.RedactedFrom = &agentsession.RedactedFrom{Session: oh.ID, Profile: profile, Extra: extra}
 	red := agentsession.New(h)
 	ids := map[string]string{}
 	remap := agentsession.Remap{Entry: func(session, entry string) (string, bool) {
@@ -40,8 +50,33 @@ func redactFixture(t *testing.T, name, path, profile string, extra map[string]js
 		id, ok := ids[entry]
 		return id, ok
 	}}
+	commit := func(e agentsession.Entry, spans []agentsession.Span) string {
+		t.Helper()
+		e.Base().ID = ""
+		if !how.unmarked {
+			if err := agentsession.SetRedacted(e, spans); err != nil {
+				t.Fatal(err)
+			}
+		}
+		res, err := red.Commit(e)
+		if err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+		return res.ID
+	}
 	rw := agentsession.NewRewriter(f)
-	for _, e := range order {
+	placeholder := ""
+	for i, e := range agentsession.FileOrder(orig) {
+		pos := i + 1
+		if from, to := how.block[0], how.block[1]; from > 0 && pos >= from && pos <= to {
+			if pos == from {
+				ph := agentsession.NewItemEntry(openresponses.SystemText(fmt.Sprintf("[entries %d to %d redacted]", from, to)))
+				ph.Parent = ids[e.Base().Parent]
+				placeholder = commit(ph, []agentsession.Span{{From: from, To: to}})
+			}
+			ids[e.Base().ID] = placeholder
+			continue
+		}
 		body, err := rw.Rewrite(e)
 		if err != nil {
 			t.Fatalf("rewrite %s: %v", e.Base().ID, err)
@@ -50,22 +85,22 @@ func redactFixture(t *testing.T, name, path, profile string, extra map[string]js
 		if err != nil {
 			t.Fatalf("remap %s: %v", e.Base().ID, err)
 		}
-		n := r.Entry
-		n.Base().ID = ""
-		res, err := red.Commit(n)
-		if err != nil {
-			t.Fatalf("commit %s: %v", e.Base().ID, err)
-		}
-		ids[e.Base().ID] = res.ID
+		ids[e.Base().ID] = commit(r.Entry, []agentsession.Span{{From: pos, To: pos}})
 	}
+	writeSession(t, path, red)
+	return red
+}
+
+// writeSession writes s as its file at path.
+func writeSession(t *testing.T, path string, s *agentsession.Session) {
+	t.Helper()
 	var buf bytes.Buffer
-	if err := agentsession.Write(&buf, red); err != nil {
+	if err := agentsession.Write(&buf, s); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return readPath(t, path)
 }
 
 // redactFour replaces the function output "4" of the basic fixture, the
@@ -102,56 +137,111 @@ func withHeader(t *testing.T, src, dst string, edit func(map[string]json.RawMess
 	}
 }
 
+// responsesOf is the response entries of s in file order.
+func responsesOf(s *agentsession.Session) []*agentsession.ResponseEntry {
+	var out []*agentsession.ResponseEntry
+	for _, e := range s.Entries() {
+		if r, ok := e.(*agentsession.ResponseEntry); ok {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// verifyOut runs verify on args and returns its stdout and exit code.
+func verifyOut(t *testing.T, args ...string) (string, int) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := run(append([]string{"verify"}, args...), &stdout, &stderr)
+	return stdout.String(), code
+}
+
 // TestVerifyRedacted: verify of a redacted file says its ids verify it
-// and not its original, names the original from redacted_from, and
-// counts a request hash that no longer matches apart, as expected of a
-// redacted session, failing nothing over it (RFC 0001, Redaction). A
-// line whose id does not verify still fails, and a cas store holding
-// the session verifies it as clean. show prints the link, and export
+// and not its original, names the original from redacted_from, counts
+// the entries a redaction made and the native ones, and counts a
+// request hash a redacted entry kept that no longer matches apart, as
+// expected, failing nothing over it (RFC 0001, Redaction). A native
+// entry's request hash is held to the rule as in any session, so a
+// resumed redacted session whose native response does not match fails.
+// A line whose id does not verify still fails, and a cas store verifies
+// each session as its file does. show prints the link, and export
 // carries it into the document.
 func TestVerifyRedacted(t *testing.T) {
 	tmp := t.TempDir()
-	path := filepath.Join(tmp, "redacted.jsonl")
-	extra := map[string]json.RawMessage{"ex.tool": json.RawMessage(`"scrub/1"`)}
-	s := redactFixture(t, "basic", path, "test/v1", extra, redactFour)
-	var responses []*agentsession.ResponseEntry
-	for _, e := range s.Entries() {
-		if r, ok := e.(*agentsession.ResponseEntry); ok {
-			responses = append(responses, r)
-		}
-	}
-	if len(responses) != 2 {
-		t.Fatalf("%d responses in the redaction of basic, want 2", len(responses))
-	}
 	orig := loadFixture(t, "basic").Header().ID
-	want := strings.Join([]string{
-		"9 entries read, each id checked against its hash: the ids verify this redacted file, not its original",
-		"redacted_from session " + orig + ", 9 entries, profile test/v1, aligned, also ex.tool",
-		shortID(responses[0].ID) + "  ok",
-		shortID(responses[1].ID) + "  differs from recorded " + responses[1].RequestHash + ", as a redacted session's request_hash may",
-		"1 verified, 0 without hash, 1 differ as expected of a redacted session, 0 failed",
-	}, "\n") + "\n"
-	var stdout, stderr bytes.Buffer
-	if code := run([]string{"verify", path}, &stdout, &stderr); code != 0 {
-		t.Errorf("exit %d, want 0\nstderr:\n%s", code, stderr.String())
+	extra := map[string]json.RawMessage{"ex.tool": json.RawMessage(`"scrub/1"`)}
+
+	path := filepath.Join(tmp, "redacted.jsonl")
+	red := redactFixture(t, "basic", path, "test/v1", extra, redactFour, redaction{})
+	resp := responsesOf(red)
+	if len(resp) != 2 {
+		t.Fatalf("%d responses in the redaction of basic, want 2", len(resp))
 	}
-	if got := stdout.String(); got != want {
-		t.Errorf("verify of a redacted file:\n%s\nwant:\n%s", got, want)
+	head := []string{
+		"each id checked against its hash: the ids verify this redacted file, not its original",
+		"redacted_from session " + orig + ", profile test/v1, also ex.tool",
+	}
+	want := strings.Join([]string{
+		"9 entries read, " + head[0],
+		head[1],
+		"9 redacted entries, 0 native",
+		shortID(resp[0].ID) + "  ok",
+		shortID(resp[1].ID) + "  differs from recorded " + resp[1].RequestHash + ", as a redacted entry's request_hash may",
+		"1 verified, 0 without hash, 1 redacted differ as expected, 0 failed",
+	}, "\n") + "\n"
+	if got, code := verifyOut(t, path); got != want || code != 0 {
+		t.Errorf("verify of a redacted file: exit %d\n%s\nwant exit 0\n%s", code, got, want)
 	}
 
-	// A redacted file 0.12 wrote has no redacted_from, and one a later
-	// minor could not read the member of keeps it as written; neither
-	// names an original.
+	// Resumed: a writer appends natively, and its response's request
+	// hash, which is its own and not the original's, does not match.
+	resumed := filepath.Join(tmp, "resumed.jsonl")
+	if _, err := red.Append(agentsession.NewItemEntry(openresponses.UserText("and 3+3?"))); err != nil {
+		t.Fatal(err)
+	}
+	native := &agentsession.ResponseEntry{ResponseID: "resp_3", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted,
+		RequestHash: agentsession.HashPrefix + strings.Repeat("0", 64)}
+	if _, err := red.Append(native); err != nil {
+		t.Fatal(err)
+	}
+	writeSession(t, resumed, red)
+	want = strings.Join([]string{
+		"11 entries read, " + head[0],
+		head[1],
+		"9 redacted entries, 2 native",
+		shortID(resp[0].ID) + "  ok",
+		shortID(resp[1].ID) + "  differs from recorded " + resp[1].RequestHash + ", as a redacted entry's request_hash may",
+		shortID(native.ID) + "  MISMATCH recorded " + native.RequestHash,
+		"1 verified, 0 without hash, 1 redacted differ as expected, 1 failed",
+	}, "\n") + "\n"
+	if got, code := verifyOut(t, resumed); got != want || code != 1 {
+		t.Errorf("verify of a resumed redacted file: exit %d\n%s\nwant exit 1\n%s", code, got, want)
+	}
+
+	// A block of four entries, the first response among them, left out
+	// for one placeholder that names the run.
+	block := filepath.Join(tmp, "block.jsonl")
+	redactFixture(t, "basic", block, "test/block", nil, redactFour, redaction{block: [2]int{3, 6}})
+	if data, _ := os.ReadFile(block); !bytes.Contains(data, []byte(`"redacted":[[3,6]]`)) {
+		t.Errorf("the placeholder does not name the run:\n%s", data)
+	}
+
+	// A redacted file 0.12 wrote marks no entry and has no
+	// redacted_from, and one may hold a redacted_from of its own; every
+	// entry of either is the redaction's.
+	unmarked := filepath.Join(tmp, "unmarked.jsonl")
+	redactFixture(t, "basic", unmarked, "test/v1", nil, redactFour, redaction{unmarked: true})
 	v12 := filepath.Join(tmp, "v12.jsonl")
-	withHeader(t, path, v12, func(h map[string]json.RawMessage) {
+	withHeader(t, unmarked, v12, func(h map[string]json.RawMessage) {
 		h["format"] = json.RawMessage(`"agentsession/0.12"`)
 		delete(h, "redacted_from")
 	})
 	v12From := filepath.Join(tmp, "v12-from.jsonl")
-	withHeader(t, path, v12From, func(h map[string]json.RawMessage) {
+	withHeader(t, unmarked, v12From, func(h map[string]json.RawMessage) {
 		h["format"] = json.RawMessage(`"agentsession/0.12"`)
 		h["redacted_from"] = json.RawMessage(`"elsewhere"`)
 	})
+
 	// A body changed after the redaction was written: the line no
 	// longer hashes to its id, which is corruption in a redacted file
 	// as in any other.
@@ -166,9 +256,13 @@ func TestVerifyRedacted(t *testing.T) {
 	if err := os.WriteFile(broken, bytes.Replace(data, []byte(`"[n]"`), []byte(`"[m]"`), 1), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// A cas store holds the redacted session whole, by import.
+
+	// cas stores hold the redacted session and the resumed one, by
+	// import.
 	root := filepath.Join(tmp, "cas")
 	importFile(t, root, path, "")
+	resumedRoot := filepath.Join(tmp, "cas-resumed")
+	importFile(t, resumedRoot, resumed, "")
 
 	for _, tt := range []struct {
 		name   string
@@ -179,35 +273,46 @@ func TestVerifyRedacted(t *testing.T) {
 		stderr []string
 	}{
 		{
+			name: "a block placeholder", args: []string{"verify", block},
+			stdout: []string{head[0], "6 redacted entries, 0 native", "0 verified, 0 without hash, 1 redacted differ as expected, 0 failed"},
+			absent: []string{"MISMATCH"},
+		},
+		{
+			name: "unmarked at 0.13", args: []string{"verify", unmarked}, code: 1,
+			stdout: []string{"0 redacted entries, 9 native", "MISMATCH recorded", "1 verified, 0 without hash, 0 redacted differ as expected, 1 failed"},
+		},
+		{
 			name: "0.12 without redacted_from", args: []string{"verify", v12},
 			stdout: []string{
-				"the ids verify this redacted file, not its original",
+				head[0],
 				"redacted_from absent: this file names no original",
-				"1 differ as expected of a redacted session, 0 failed",
+				"9 redacted entries, 0 native: a redacted file before 0.13 marks no entry and took no appends, so every entry is the redaction's",
+				"1 verified, 0 without hash, 1 redacted differ as expected, 0 failed",
 			},
 			absent: []string{"MISMATCH"},
 		},
 		{
 			name: "0.12 with a redacted_from of its own", args: []string{"verify", v12From},
-			stdout: []string{`redacted_from "elsewhere", kept as written and not read as a link: this file names no original`},
+			stdout: []string{`redacted_from "elsewhere", kept as written and not read as a link: this file names no original`, "0 failed"},
 		},
 		{name: "a line that does not verify", args: []string{"verify", broken}, code: 1, stderr: []string{"does not match its hash"}},
 		{
 			name: "the store", args: []string{"verify", root},
 			stdout: []string{"1 sessions, 9 entries", " 0 problems", "1 sessions' hashes and records checked, 0 failed"},
-			absent: []string{"MISMATCH"},
+			absent: []string{"MISMATCH", "differs"},
 		},
 		{
-			name: "the session in the store", args: []string{"verify", root, s.ID()},
-			stdout: []string{
-				"the ids verify this redacted file, not its original",
-				"redacted_from session " + orig + ", 9 entries, profile test/v1, aligned, also ex.tool",
-				"1 verified, 0 without hash, 1 differ as expected of a redacted session, 0 failed",
-			},
+			name: "the session in the store", args: []string{"verify", root, red.ID()},
+			stdout: []string{head[0], head[1], "9 redacted entries, 0 native", "1 verified, 0 without hash, 1 redacted differ as expected, 0 failed"},
+		},
+		{
+			name: "the store holding the resumed session", args: []string{"verify", resumedRoot}, code: 1,
+			stdout: []string{red.ID() + ": " + shortID(native.ID) + "  MISMATCH recorded", "1 sessions' hashes and records checked, 1 failed"},
+			absent: []string{shortID(resp[1].ID)},
 		},
 		{
 			name: "show", args: []string{"show", path},
-			stdout: []string{"redacted from  session " + orig + ", 9 entries, profile test/v1, aligned, also ex.tool"},
+			stdout: []string{"redacted from  session " + orig + ", profile test/v1, also ex.tool"},
 		},
 		{
 			name: "show 0.12", args: []string{"show", v12},
@@ -242,8 +347,9 @@ func TestVerifyRedacted(t *testing.T) {
 		})
 	}
 
-	// The exported document links back to the original as the file does.
-	doc, err := os.ReadFile(filepath.Join(tmp, "out", s.ID()+".json"))
+	// The exported document links back to the original as the file does,
+	// and its steps carry the entries' redacted.
+	doc, err := os.ReadFile(filepath.Join(tmp, "out", red.ID()+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,11 +360,25 @@ func TestVerifyRedacted(t *testing.T) {
 				RedactedFrom map[string]json.RawMessage `json:"redacted_from"`
 			} `json:"agentsession"`
 		} `json:"extra"`
+		Steps []struct {
+			Extra struct {
+				AgentSession struct {
+					Redacted json.RawMessage `json:"redacted"`
+				} `json:"agentsession"`
+			} `json:"extra"`
+		} `json:"steps"`
 	}
 	if err := json.Unmarshal(doc, &d); err != nil {
 		t.Fatal(err)
 	}
 	if as := d.Extra.AgentSession; !as.Redacted || string(as.RedactedFrom["session"]) != `"`+orig+`"` || string(as.RedactedFrom["ex.tool"]) != `"scrub/1"` {
 		t.Errorf("exported extra.agentsession: redacted %v, redacted_from %s", as.Redacted, as.RedactedFrom)
+	}
+	var first bytes.Buffer
+	if len(d.Steps) > 0 {
+		_ = json.Compact(&first, d.Steps[0].Extra.AgentSession.Redacted)
+	}
+	if first.String() != "[2]" {
+		t.Errorf("the first step, from the user item at position 2, does not carry [2]:\n%s", doc)
 	}
 }
