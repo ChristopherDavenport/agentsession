@@ -142,6 +142,8 @@ func testImportMedia(t *testing.T, opts Options) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, err = st.Create(ctx, agentsession.Header{ID: "media-x", ParentSession: "media-o", Base: b, Media: agentsession.MediaSidecar})
+	wantErr(t, "a fork create in another media", err, agentsession.ErrMediaDiffers)
 	if _, err := st.Create(ctx, agentsession.Header{ID: "media-f1", ParentSession: "media-o", Base: b}); err != nil {
 		t.Fatal(err)
 	}
