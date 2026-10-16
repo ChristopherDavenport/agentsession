@@ -221,8 +221,8 @@ RFC 2119.
 | `base` | MAY | hash of the entry this session continues from, never a `leaf` label, since the base is a fork's first leaf; `parent_session` names a session holding it, as provenance. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
 | `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it, which is the `call_id` of the parent's `subsession` link naming this session. A session a `subsession` link names carries it and `parent_session` both, since the check `link` describes compares each; a subsession's header without one reads as disagreeing with the link |
 | `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
-| `redacted` | MAY | `true` for a redacted session: one made from another, its original, by changing what was written after it was written, as Redaction says. Its hashes verify it and not the original, and a writer MUST NOT append to it |
-| `redacted_from` | MAY | for a redacted session, the session it was made from: `{"session":"<original id>","entries":<n>,"profile":"…","aligned":true}`, n being how many of the original's entries, prefix included and in file order, it held when the redaction was made; `profile` names the redaction and `aligned` says it kept one entry per entry, as Redaction says. A redactor SHOULD write it, and it MUST NOT appear without `redacted` |
+| `redacted` | MAY | `true` for a redacted session: one that holds entries a redactor made from another session, its original, as Redaction says. Its hashes verify it and not the original. It may grow and be resumed; an entry appended natively is not redacted, and each redacted entry carries `redacted` |
+| `redacted_from` | MAY | for a redacted session, the session it was made from: `{"session":"<original id>","profile":"…"}`; `profile` names the redaction, as Redaction says. A redactor SHOULD write it, and it MUST NOT appear without `redacted` |
 
 Unknown header fields MUST be preserved by any tool that rewrites the
 file.
@@ -1733,24 +1733,63 @@ is predict that the provider's cache will hit.
 
 ## Redaction
 
-A redacted session is made from another session, its original, by
-changing what was written after it was written: a secret replaced, a
-home directory shortened, an image swapped for a placeholder, a tool
-output or a whole branch left out. It is a session of its own. Its
-header carries `redacted: true`, an `id` of its own and `redacted_from`,
-which names the original. The original is unchanged. It is usually
-absent wherever the redacted session travels, but a holder of it can
-resolve the link, and that is where what is learned about a published
-copy finds its way back to.
+A redacted entry is an entry a redactor made from entries of another
+session, its original, changing what was written after it was written:
+a secret replaced, a home directory shortened, an image swapped for a
+placeholder, a tool output or a whole run of entries left out. A
+redacted session is the session that holds them. Its header carries
+`redacted: true`, an `id` of its own and `redacted_from`, which names
+the original. The original is unchanged. It is usually absent wherever
+the redacted session travels, but a holder of it can resolve the link,
+and that is where what is learned about a published copy finds its way
+back to.
 
-This section fixes what makes a redacted session valid and linked, not
-how to redact. Which values are replaced and with what, whether entries
-or branches are left out, and what a redaction records about itself are
+A redacted session is a session like any other. It grows as the
+redactor redacts what its original appends, and it may be resumed: an
+entry a writer appends to it natively, as to any session, is not
+redacted. Every redacted entry says so in its `redacted` member and no
+other entry carries one, so a reader always knows which entries a
+redaction made and which it did not.
+
+This section fixes what makes redacted entries valid and linked, not
+how to redact. Which values are replaced and with what, which entries
+are left out or merged, and what a redaction records about itself are
 the redactor's, and redactions of different kinds may be made of one
-original. One kind, aligned redaction, is described below because it
-lets a holder of the original map entries back by position.
+original.
 
-### Every redacted session
+### Redacted entries
+
+`redacted` is a body member any entry may carry, as `legacy_id` is. It
+lists the entries of the original, by position in the original's file
+order, prefix included and counting from 1, that the entry was made
+from. Each element is a position `n` or an inclusive range
+`[from, to]` with `from` below `to`, in ascending order and not
+overlapping. A projection's synthetic leaf marker (RFC 0002) belongs to
+the projection, not the session, and is not counted. Sessions are
+append-only, so a position names one entry of the original for good,
+and it says nothing of that entry's content.
+
+- An entry made from one entry of the original carries `[n]`.
+- A placeholder for a run of entries the redaction left out carries the
+  run, `[[from, to]]`, and says in its own body, as the redactor
+  chooses, that a block was redacted. An entry merged from several
+  carries each of them.
+- An entry the redaction added, made from none, carries `[]`.
+- An entry of the original may be named by more than one redacted
+  entry, when a redaction split it.
+
+A writer MUST write `redacted` on every entry it makes by redaction and
+MUST NOT write it on any other. A holder of the original maps each
+redacted entry to the entries it was made from by its positions, and a
+redactor resuming its work finds what it has done in them. A position
+counts in the file order of the original named by the `redacted_from`
+of the session whose own entry it is: for a redacted session that is a
+fork, its prefix is another session's own entries, and their positions
+count in the original of the session `parent_session` names. A
+redactor MAY instead write a fork's redaction without a base, its
+prefix redacted into entries of its own.
+
+### Every redacted entry
 
 A redactor:
 
@@ -1760,14 +1799,14 @@ A redactor:
   kept in that entry's place, and a member that named it names that or
   is removed, so that no member names an entry of this file the file
   does not hold;
-- MUST recompute every content hash and `id` over what it wrote, and
-  rewrite `parent` and every entry-naming member to the IDs assigned
-  earlier in the file, as migration does — `parents` into this file,
-  `target`, `first_kept`, `from`, `queued_from`, `omit`'s `items` in a
-  `config` and in a compaction's checkpoint, and `instructions_omitted`'s
-  `of` where it is defined — and last the header's `base`, once the
-  prefix is hashed. A member of one of those names in a form or place
-  this document does not define there is body text, not a reference;
+- MUST compute every content hash and `id` over what it wrote, and
+  rewrite `parent` and every entry-naming member to the IDs of the
+  entries it wrote — `parents` into this file, `target`, `first_kept`,
+  `from`, `queued_from`, `omit`'s `items` in a `config` and in a
+  compaction's checkpoint, and `instructions_omitted`'s `of` where it
+  is defined — and the header's `base`. A member of one of those names
+  in a form or place this document does not define there is body text,
+  not a reference;
 - MUST keep instructions whole: where it changes a part's text, the
   later parts that name that text by `hash` name it by the hash of the
   new text, and instructions that were the join of their parts stay the
@@ -1782,12 +1821,12 @@ A redactor:
   replacement's hash, and the item's `sidecar:` URL names that;
 - MUST leave a reference into another session as it was, since it names
   that session's original entries, unless it holds that session's
-  redacted twin, made by the same redaction. Then it rewrites the
-  reference to the twin: `parent_session`, a `parents` entry into that
-  session and a `link`'s `session`. A link's `target` names an entry of
-  this session, so it is rewritten as the members above are. A redaction of a
-  whole store holds a twin of every session in it, and so re-points every
-  reference that stays inside the store;
+  redaction, made by the same redaction. Then it rewrites the reference
+  to it: `parent_session`, a `parents` entry into that session and a
+  `link`'s `session`. A link's `target` names an entry of this session,
+  so it is rewritten as the members above are. A redaction of a whole
+  store holds a redaction of every session in it, and so re-points
+  every reference that stays inside the store;
 - MUST reach data the format keeps in member names: an `env` entry's
   `files` are keyed by path, and a path can hold what is redacted. Two
   keys a redaction makes one MUST NOT both be kept;
@@ -1802,64 +1841,42 @@ across sessions redacted alongside, or the pairs no longer hold. Inline
 media is a data URL whose payload is base64, so text inside an image's
 bytes is reached only by decoding it.
 
-The redacted session then walks and verifies against itself. A
-`request_hash` it kept no longer matches the request it rebuilds. A
-reader MUST NOT report its hashes as verifying the original, and SHOULD
-NOT report a `request_hash` of a redacted session that does not match as
-a fault.
+A redacted session walks and verifies against itself. A `request_hash`
+a redacted entry kept no longer matches the request it rebuilds. A
+reader MUST NOT report the session's hashes as verifying the original,
+and SHOULD NOT report a redacted entry's `request_hash` that does not
+match as a fault. An entry appended natively is held to every rule an
+entry is, its `request_hash` among them.
 
-A redactor writes a redacted session whole, and a writer MUST NOT
-append to one afterwards, since an entry appended after the redaction
-was not redacted and `redacted` says every body was.
-Continuing from a redacted session is a fork: a session of its own,
-whose prefix is the redacted session's entries and whose header does not
-carry `redacted`.
+### The redacted session
 
 `redacted_from` names the original's `session`, a non-empty string
-other than the redacted session's own `id`, and the number of its
-`entries`, a non-negative integer counting the original's entries,
-prefix included and in file order, when the redaction was made. Sessions are append-only, so the count pins the
-version redacted, whatever of it the redaction kept. A projection's
-synthetic leaf marker (RFC 0002) belongs to the projection, not the
-session, and is not counted. `profile`, which a redactor SHOULD write,
-names the redaction: its kind and its rules, at a version, so that two
-redactions of one original are told apart; it is a non-empty string.
-`aligned` is `true` or absent, as aligned redaction says. A redaction
-records what else it wants to say about itself in namespaced members of
-`redacted_from`. A reader keeps as written a member of `redacted_from`
-it does not know, namespaced or not, and one of the four in another
-form, as it does any member it does not know; the refusal of
-`redacted_from` without `redacted` binds the object that carries
-`session` and `entries` in their forms.
+other than the redacted session's own `id`, and, as `profile`, which a
+redactor SHOULD write, the redaction: its kind and its rules, at a
+version, so that two redactions of one original are told apart; it is a
+non-empty string. A redaction records what else it wants to say about
+itself in namespaced members of `redacted_from`. A reader keeps as
+written a member of `redacted_from` it does not know, namespaced or
+not, and `session` or `profile` in another form, as it does any member
+it does not know; the refusal of `redacted_from` without `redacted`
+binds the object that carries `session` as a string.
 
 The redacted session's `id` is new, since its entries are not the
 original's and a store or dataset may hold both. A redactor that writes
 a `profile` SHOULD derive the ID as a UUIDv5 under the nil namespace
-over the name `["redacted","<original id>",<n>,"<profile>"]`, n being
-`redacted_from`'s `entries`, written in the canonical form the entry
-hash uses. An array cannot be read two ways, as a `/`-joined name can
-when an ID holds a `/`, and it is not a subsession's name, which starts
-with a session ID, unless a session's ID is itself such an array. The
-same redaction of the same entries then gives the same session, and
-repeating a redaction over a store adds only the sessions that grew.
-Two sets of rules under one profile give two different sessions one ID,
-which a store refuses; a profile names one set.
+over the name `["redacted","<original id>","<profile>"]`, written in
+the canonical form the entry hash uses. An array cannot be read two
+ways, as a `/`-joined name can when an ID holds a `/`, and it is not a
+subsession's name, which starts with a session ID, unless a session's
+ID is itself such an array. One original under one profile then has one
+redacted session, whose ID stays as it grows, and repeating a redaction
+over a store finds the session it made before and appends only what the
+original added since. Two sets of rules under one profile write into
+one session; a profile names one set.
 
-### Aligned redaction
-
-A redaction is aligned when it writes one entry for each of the
-original's `entries`, in file order, each made from the one in its
-place: none left out, merged, added or moved, each of the type it was,
-only bodies changed. The n-th entry of the redacted session is then the
-n-th entry of the original, and a holder of the original maps a
-redacted entry to the one it was made from by position, with nothing
-recorded per entry. An aligned redaction says so with `aligned: true`
-in `redacted_from`, and a redaction that is not aligned MUST NOT. An
-aligned redacted session holds exactly `entries` entries, prefix
-included, and a reader MUST refuse one that says `aligned` and holds
-another number, since its entries could not map back by position. A
-redaction that is not aligned and wants its entries mapped back records
-the mapping itself, in namespaced members.
+A fork of a redacted session is a session of its own. Its header carries
+`redacted` only when a redactor made it, and its prefix entries carry
+their `redacted` as they did.
 
 ### What a kept hash reveals
 
@@ -1868,11 +1885,10 @@ reference into a session not redacted alongside it — lets anyone who can
 guess a redacted value confirm the guess, by putting it back and
 recomputing the hash. That matters for a value with few possibilities:
 a username, a home directory, an email address. It does not matter for
-a random key. `redacted_from` carries a count rather than the hash of
-the original's last entry for this reason, and a redactor that removes
-every `request_hash` and redacts the sessions a session references
-alongside it keeps none. Redaction alone does not hide a value that can
-be guessed.
+a random key. `redacted` names entries by position rather than by hash
+for this reason, and a redactor that removes every `request_hash` and
+redacts the sessions a session references alongside it keeps none.
+Redaction alone does not hide a value that can be guessed.
 
 ## Projections
 
@@ -1882,7 +1898,10 @@ One ATIF document per root-to-leaf path. `session_id` is the header ID;
 `trajectory_id` is the leaf entry ID. A document from a redacted session carries
 `redacted: true` and `redacted_from`, as the header holds it, under
 `agentsession` in its top-level `extra`, so a published document names
-its original as the session file does. The mapping is given in the
+its original as the session file does, and a step made from a redacted
+entry carries that entry's `redacted` under `agentsession` in the
+step's `extra`, so a reader tells redacted steps from steps appended
+natively. The mapping is given in the
 accompanying session plan and is normative for the Open Responses
 profile: user and system items to steps, one `response` with its items
 to one agent step with `tool_calls`, `reasoning_content` and `metrics`,
@@ -2104,50 +2123,57 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.12
 
-One header member and the rules for a redacted session, which were the
-`redacted` row's. A 0.12 file is a 0.13 file that holds no
-`redacted_from`. No hash changes.
+A body member, a header member, and the rules for redaction, which
+were the `redacted` row's. A 0.12 file is a 0.13 file that holds
+neither member. No hash changes.
 
-- A redacted session is a session of its own (Redaction): an `id` of its
-  own and `redacted_from`, naming its original, how many of the
-  original's entries it held when the redaction was made, and, as
-  `profile`, which redaction it was. A 0.12 redacted file kept the
-  original's `id` under different entry IDs, so a store or dataset
-  holding both held two sessions under one ID, and nothing linked the
-  copy to what it was made from.
-- The rules fix what makes a redacted session valid, not how to redact.
-  A redaction may leave entries or branches out and may remove
-  `request_hash`; the 0.12 row allowed only bodies to change. An
-  aligned redaction, one entry for each of the original's in file
-  order, says so with `aligned`, and its entries map back by position.
-- A redactor that holds the redacted twin of a session another
-  references rewrites the reference to the twin. Left as it was, the
-  reference named entries a set redacted together does not hold, by
-  hashes that confirm a guessed value.
-- A writer MUST NOT append to a redacted session.
-- A redacted session's ID SHOULD be derived from its original's, the
-  count and the profile, so a redaction repeated over a store is a
-  no-op for what did not change.
+- A redacted entry carries `redacted`, the positions of the original's
+  entries it was made from (Redaction). A redaction may replace a run
+  of entries with one placeholder that names the run, merge entries,
+  split them or add some; the 0.12 row allowed only bodies to change.
+  Positions name the original's entries without a hash that confirms a
+  guessed value.
+- A redacted session is a session of its own: an `id` of its own and
+  `redacted_from`, naming its original and, as `profile`, the
+  redaction. A 0.12 redacted file kept the original's `id` under
+  different entry IDs, so a store or dataset holding both held two
+  sessions under one ID, and nothing linked the copy to what it was made
+  from.
+- A redacted session grows and may be resumed. The redactor appends
+  what it redacts as the original grows, and an entry another writer
+  appends is not redacted and carries no `redacted`, so the two are
+  told apart entry by entry.
+- A redacted session's ID SHOULD be derived from its original's and the
+  profile, so one original under one profile has one redacted session
+  and a redaction repeated over a store appends only what is new.
+- A redactor that holds the redaction of a session another references
+  rewrites the reference to it. Left as it was, the reference named
+  entries a set redacted together does not hold, by hashes that confirm
+  a guessed value.
 - The members a redactor rewrites include `omit`'s `items` and
-  `instructions_omitted`'s `of`, and an instruction part's `hash` is
-  recomputed when its text changes. Both followed from "every
-  entry-naming member" and from the part hash's definition; the 0.12 row
-  listed neither.
-- What an original hash kept in a redacted session lets a reader confirm
-  is stated, and is why `redacted_from` carries a count.
+  `instructions_omitted`'s `of`, an instruction part's `hash` follows
+  its text, `normalised` records are redacted with their members, and
+  data in `env` files' keys is reached. Each followed from the 0.12
+  row's "every entry-naming member" or from a member's definition; the
+  row listed none of them.
+- What an original hash kept in a redacted session lets a reader
+  confirm is stated.
 
 A writer of 0.13 raises every file it appends to, as Versioning says, so
 every reader of 0.12 refuses those files until it is upgraded. A 0.12
 redacted file is read as it stands: a redacted session without
-`redacted_from`, whose `id` may be its original's.
+`redacted_from` whose entries carry no `redacted`, and whose `id` may be
+its original's.
 
-In a file whose header names a minor before 0.13, `redacted_from` is a
-member the reader does not know, whatever its form. The rule that comes
-with it is a refusal, and reading the member by its form would refuse a
-0.12 file that was valid when written. This is the one 0.13 rule that
-turns on the header rather than on the member. For the same reason a
-writer MUST NOT raise to 0.13 or later a header that holds
-`redacted_from`, and refuses to append to such a file, since the raise
+In a file whose header names a minor before 0.13, `redacted_from` in
+the header and `redacted` on an entry are members the reader does not
+know, whatever their form. The rule that comes with `redacted_from` is
+a refusal, and reading either member by its form would refuse a 0.12
+file that was valid when written, or read an entry as redacted that was
+not. These are the 0.13 rules that turn on the header rather than on
+the member. For the same reason a writer MUST NOT raise to 0.13 or
+later a header that holds `redacted_from`, or a file an entry of which
+holds `redacted`, and refuses to append to such a file, since the raise
 would give the member a meaning it was not written with.
 
 ## Changes since 0.11
