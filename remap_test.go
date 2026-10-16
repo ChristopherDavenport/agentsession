@@ -115,7 +115,7 @@ func TestRemapRefsEveryMember(t *testing.T) {
 	}{
 		{
 			"item: parent, parents with an extra, queued_from",
-			`{"type":"item","id":"x","parent":"o-p",` + tsLine + `,"parents":[{"entry":"o-a"},{"entry":"o-b","session":"s-1","x:note":"o-keep"}],"item":` + msg + `,"response":"o-resp","queued_from":"o-q","x:ref":"o-unknown"}`,
+			`{"type":"item","id":"x","parent":"o-p",` + tsLine + `,"parents":[{"entry":"o-a"},{"entry":"o-b","session":"s-1","x:note":"o-keep"}],"item":` + msg + `,"response":"o-resp","queued_from":"o-q","x:ref":"o-unknown","redacted":[1,[3,4]]}`,
 			map[string]string{"/parent": "n-p", "/parents/0/entry": "n-a", "/parents/1/entry": "n-b", "/parents/1/session": "t-1", "/queued_from": "n-q"},
 			false,
 		},
@@ -144,8 +144,8 @@ func TestRemapRefsEveryMember(t *testing.T) {
 			false,
 		},
 		{
-			"label: target",
-			`{"type":"label","id":"x","parent":"o-p",` + tsLine + `,"target":"o-t","label":"o-label"}`,
+			"label: target, and a redacted in another form names nothing",
+			`{"type":"label","id":"x","parent":"o-p",` + tsLine + `,"target":"o-t","label":"o-label","redacted":["o-r",{"entry":"o-e"}]}`,
 			map[string]string{"/parent": "n-p", "/target": "n-t"},
 			false,
 		},
@@ -199,7 +199,7 @@ func TestRemapRefsEveryMember(t *testing.T) {
 		},
 		{
 			"extension entry: its envelope alone",
-			`{"type":"x:thing","id":"x","parent":"o-p",` + tsLine + `,"parents":[{"entry":"o-a","session":"s-1"}],"x:ref":"o-inside"}`,
+			`{"type":"x:thing","id":"x","parent":"o-p",` + tsLine + `,"parents":[{"entry":"o-a","session":"s-1"}],"x:ref":"o-inside","redacted":[2]}`,
 			map[string]string{"/parent": "n-p", "/parents/0/entry": "n-a", "/parents/0/session": "t-1"},
 			true,
 		},
@@ -226,6 +226,13 @@ func TestRemapRefsEveryMember(t *testing.T) {
 			}
 			if b := r.Entry.Base(); b.ID != e.Base().ID || !b.Timestamp.Equal(e.Base().Timestamp) || b.ContentHash() != "" {
 				t.Errorf("envelope: id %q ts %v content %q", b.ID, b.Timestamp, b.ContentHash())
+			}
+			// redacted names entries of the original by position: it is
+			// no reference, and keeps its standing.
+			in, inOK := RedactedOf(e)
+			out, outOK := RedactedOf(r.Entry)
+			if inOK != outOK || !slices.Equal(in, out) {
+				t.Errorf("redacted %v %v, input %v %v", out, outOK, in, inOK)
 			}
 		})
 	}

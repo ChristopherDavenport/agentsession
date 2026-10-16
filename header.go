@@ -68,12 +68,15 @@ type Header struct {
 	// own entry hangs from the base. A base is never a leaf label.
 	Base  string `json:"base,omitempty"`
 	Media string `json:"media,omitempty"`
-	// Redacted marks a redacted session: one a redactor made from
-	// another, its original, by changing what was written after it was
-	// written. It is a session of its own, with an ID of its own, whose
-	// hashes and references the redactor recomputed over what it wrote,
-	// so the file walks and verifies against itself and not against the
-	// original. It is written whole and never appended to.
+	// Redacted marks a redacted session: one that holds entries a
+	// redactor made from entries of another session, its original, by
+	// changing what was written after it was written. It is a session of
+	// its own, with an ID of its own, whose hashes and references the
+	// redactor computed over what it wrote, so the file walks and
+	// verifies against itself and not against the original. It grows as
+	// the redactor redacts what the original appends, and may be
+	// resumed: each redacted entry carries its redacted member
+	// ([RedactedOf]), and an entry appended natively carries none.
 	Redacted bool `json:"redacted,omitempty"`
 	// RedactedFrom, on a redacted session, names its original: see
 	// [RedactedFrom]. It is defined from format 0.13 and is refused
@@ -83,7 +86,9 @@ type Header struct {
 	// the object, is kept in Extra as written and RedactedFrom is nil.
 	// A header naming an earlier minor that holds one is never raised
 	// to 0.13 or later, by Read in memory or by a writer before an
-	// append, which is refused: see [Header.Raise].
+	// append, which is refused: see [Header.Raise]. Nor is a file one of
+	// whose entries holds redacted under such a header: see
+	// [ErrNoRaise].
 	RedactedFrom *RedactedFrom `json:"-"`
 
 	// Extra holds header fields this package does not define.
@@ -143,7 +148,8 @@ type RedactedFrom struct {
 // names no original.
 var ErrRedactedFrom = errors.New("agentsession: malformed redacted_from")
 
-// redactedFromMinor is the first minor that defines redacted_from.
+// redactedFromMinor is the first minor that defines redacted_from and
+// an entry's redacted.
 const redactedFromMinor = 13
 
 // MarshalJSON emits the object with Extra flattened into it. A member
@@ -355,9 +361,10 @@ func (h *Header) fill(now time.Time) {
 // instructions part out of force by its hash. 0.12 adds the peer link
 // relation, the task, context and url members of a link that names a
 // callee in another system, and its cancel member. 0.13 adds the
-// redacted_from header member and makes a redacted session one of its
-// own; a 0.12 file is a 0.13 file without the member, and one it holds
-// there is kept in Extra as written, and its header is not raised.
+// redacted_from header member and the redacted entry member, and makes
+// a redacted session one of its own; a 0.12 file is a 0.13 file without
+// either, and one it holds there is kept as written, as a member this
+// package does not know, and the file is not raised.
 const FormatMinor = 13
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.
@@ -385,28 +392,36 @@ func migrate(h *Header) error {
 	if h.Raise(Format) == nil {
 		return nil
 	}
-	// A header holding redacted_from from before 0.13 is not raised
-	// there, so a session read from it writes back under its own
-	// format, and an append to it is refused. One before 0.5 still
-	// takes the last minor that does not define the member, since its
-	// entries are rehashed as 0.5's.
-	if minor < hashedMinor {
-		h.Format = lastBeforeRedactedFrom
-	}
+	h.Format = heldFormat(h.Format)
 	return nil
 }
 
+// heldFormat is the format a session read from a file that declared
+// format holds in memory when the file may not be raised past 0.12: a
+// header holding redacted_from from before 0.13, or an entry holding
+// redacted under one. It writes back under its own format, and an
+// append to it is refused. A file before 0.5 still takes the last minor
+// that does not define either member, since its entries are rehashed as
+// 0.5's.
+func heldFormat(format string) string {
+	if _, minor, _ := ParseFormat(format); minor < hashedMinor {
+		return lastBeforeRedactedFrom
+	}
+	return format
+}
+
 // lastBeforeRedactedFrom is the last format that does not define
-// redacted_from.
+// redacted_from or an entry's redacted.
 var lastBeforeRedactedFrom = fmt.Sprintf("agentsession/%d.%d", FormatMajor, redactedFromMinor-1)
 
-// ErrNoRaise is returned for a header a writer may not raise to the
-// format it writes, and so for an append to its session: one that
-// names a minor before 0.13 and holds a redacted_from member, in any
-// form, which the raise would give a meaning it was not written with.
-// It is an [ErrUnsupportedFormat], since this writer cannot append
+// ErrNoRaise is returned for a file a writer may not raise to the
+// format it writes, and so for an append to its session: one whose
+// header names a minor before 0.13 and holds a redacted_from member, or
+// one an entry of which holds a redacted member under such a header, in
+// any form, which the raise would give a meaning it was not written
+// with. It is an [ErrUnsupportedFormat], since this writer cannot append
 // under the header's own format either.
-var ErrNoRaise = fmt.Errorf("%w: the header holds redacted_from from before 0.13 and is not raised", ErrUnsupportedFormat)
+var ErrNoRaise = fmt.Errorf("%w: the file holds redacted_from or redacted from before 0.13 and is not raised", ErrUnsupportedFormat)
 
 // Raise sets the header's format to format, as a writer does to the
 // header of a session whose header names an earlier minor before it
@@ -416,6 +431,13 @@ var ErrNoRaise = fmt.Errorf("%w: the header holds redacted_from from before 0.13
 // names an earlier minor and holds redacted_from, typed or in Extra.
 // Raise does not compare the two formats: the caller raises only to a
 // later one.
+//
+// Raise sees the header alone, and so not an entry holding redacted
+// under it, which also forbids the raise. [Session.Append] and
+// [Session.Prepare] refuse an entry to such a session with
+// [ErrNoRaise], and a store prepares every entry on its session before
+// it raises the stored header, so a raise that reaches Raise has
+// already passed the entries' check.
 func (h *Header) Raise(format string) error {
 	if err := h.raiseRefused(format); err != nil {
 		return err

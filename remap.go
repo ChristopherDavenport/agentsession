@@ -24,8 +24,8 @@ import (
 type memberRole uint8
 
 const (
-	// roleFixed is the envelope and legacy_id: the whole value, at any
-	// depth, is neither rewritten nor re-pointed.
+	// roleFixed is the envelope, legacy_id and redacted: the whole
+	// value, at any depth, is neither rewritten nor re-pointed.
 	roleFixed memberRole = iota + 1
 	// roleEntry is a string naming an entry by its id.
 	roleEntry
@@ -83,15 +83,20 @@ func keepOf(el map[string]any) bool {
 // memberPath is a path, for the table.
 func memberPath(steps ...string) []string { return steps }
 
-// envelopeMembers are the members every entry carries that are not its
-// body: the envelope, and legacy_id, the name an entry had before its
-// file was migrated, which is kept as that name. parents is fixed whole,
-// extras included; its entry and session members are references.
+// envelopeMembers are the members any entry may carry that are not
+// body text: the envelope; legacy_id, the name an entry had before its
+// file was migrated, which is kept as that name; and redacted, the
+// positions in the original of the entries a redacted entry was made
+// from, which name entries of another file by place, not by id, so
+// neither a rewrite nor a remap touches them, in whatever form the
+// member is held. parents is fixed whole, extras included; its entry
+// and session members are references.
 var envelopeMembers = []special{
 	{path: memberPath("type"), role: roleFixed},
 	{path: memberPath("id"), role: roleFixed},
 	{path: memberPath("ts"), role: roleFixed},
 	{path: memberPath("legacy_id"), role: roleFixed},
+	{path: memberPath("redacted"), role: roleFixed},
 	{path: memberPath("parent"), role: roleEntry},
 	{path: memberPath("parents"), role: roleFixed},
 	{path: memberPath("parents", "[]", "entry"), role: roleEntry, session: "session"},
@@ -230,7 +235,8 @@ type Remapped struct {
 // those names in a form or place the format does not define it in, kept
 // as written by the decoder, such as an of beside an id, names nothing
 // and is left alone, as is an item's response, which is a provider's ID
-// and not an entry's.
+// and not an entry's, and a redacted member, which names entries of the
+// original by position and not by id.
 //
 // Every other member, kept extras and members the format does not
 // define among them, comes through unchanged, and so does the order of
@@ -474,7 +480,8 @@ func entryJSON(e Entry) (map[string]any, error) {
 // what the new entry keeps as written is what root holds and no line
 // read with e can be written for it. The timestamp keeps e's spelling,
 // which is how a session tells an entry it read from one a caller
-// built.
+// built, and a redacted member e did not hold typed, one read under a
+// minor before 0.13 among them, stays unknown.
 func entryFromJSON(e Entry, root map[string]any) (Entry, error) {
 	data, err := jsonx.MarshalNoEscape(root)
 	if err != nil {
@@ -493,6 +500,7 @@ func entryFromJSON(e Entry, root map[string]any) (Entry, error) {
 		return nil, fmt.Errorf("agentsession: entry %s (%s): %w", e.Base().ID, e.EntryType(), err)
 	}
 	d.Base().tsRaw = e.Base().tsRaw
+	keepRedactedForm(e, d)
 	return d, nil
 }
 

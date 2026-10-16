@@ -53,6 +53,10 @@ type Session struct {
 	// declared is the format the file's header named when Read met it,
 	// before the header was brought up to this package's.
 	declared string
+	// heldRedacted is set when an entry read under a declared format
+	// before 0.13 holds a redacted member, which that minor does not
+	// define, so the file may not be raised: see [ErrNoRaise].
+	heldRedacted bool
 	// read is the state Extend keeps of Read's leaf rule, so each entry
 	// it adds places the leaf without a pass over the whole session.
 	read *readLeaf
@@ -266,12 +270,16 @@ func (s *Session) Append(e Entry) (string, error) {
 // which read paths use, do not. A peer link names its call and a url
 // or a session, and a cancel notice names a subsession or peer link of
 // its call and relation on the path it is appended to. A session whose
-// header may not be raised to this package's format takes no entry
+// file may not be raised to this package's format takes no entry
 // ([ErrNoRaise]), since appending under the raised header is what a
-// writer does.
+// writer does: one whose header holds redacted_from from before 0.13,
+// or one an entry of which holds redacted under such a header. A store
+// raises the stored header only after its session's Prepare has run
+// this check, so the store's raise, which sees the header alone, never
+// raises a file whose entries forbid it.
 func (s *Session) checkNew(e Entry) error {
 	s.mu.RLock()
-	err := s.header.raiseRefused(Format)
+	err := s.raiseRefused(Format)
 	s.mu.RUnlock()
 	if err != nil {
 		return fmt.Errorf("agentsession: append to %s: %w", s.ID(), err)
@@ -298,6 +306,32 @@ func (s *Session) checkNew(e Entry) error {
 		}
 		return nil
 	})
+}
+
+// raiseRefused is [ErrNoRaise] when the session's file may not be
+// raised to format: its header holds redacted_from from before 0.13, or
+// an entry read under such a header holds redacted. The caller holds
+// s.mu.
+func (s *Session) raiseRefused(format string) error {
+	if err := s.header.raiseRefused(format); err != nil {
+		return err
+	}
+	if s.heldRedacted && !definesRedactedFrom(s.header.Format) && definesRedactedFrom(format) {
+		return fmt.Errorf("%w: %s to %s: an entry holds redacted", ErrNoRaise, s.header.Format, format)
+	}
+	return nil
+}
+
+// holdRedacted records that e, an entry read from a file that declared
+// a format before 0.13, holds a redacted member, which the gate has left
+// unknown: the file may not be raised, so a header Read raised in memory
+// goes back to the format it holds, as [heldFormat] says. The caller
+// holds s.mu or owns s.
+func (s *Session) holdRedacted() {
+	s.heldRedacted = true
+	if definesRedactedFrom(s.header.Format) {
+		s.header.Format = heldFormat(s.declared)
+	}
 }
 
 // Outcome is what an append did, which the format has a store report.
@@ -400,15 +434,26 @@ func (s *Session) Commit(e Entry) (Result, error) {
 // leaf to follow, so the two differ after a writer's
 // [Session.Branch]. A follower of a store whose sessions [Read] builds
 // keeps its session up to date with Extend.
+//
+// Extend reads e under the format the session's file declared
+// ([Session.DeclaredFormat]), as Read reads each line: before 0.13 an
+// entry's redacted member is one this package does not know, so a
+// typed one goes back to Unknown as written and e is not redacted
+// ([RedactedOf]), and the session then holds a file a writer may not
+// raise ([ErrNoRaise]).
 func (s *Session) Extend(e Entry) (Result, error) {
 	if err := validateEntry(e); err != nil {
 		return Result{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	held := gateRedacted(e, s.declared)
 	r, err := s.prepare(e)
 	if err != nil || r.Outcome == Held {
 		return r, err
+	}
+	if held {
+		s.holdRedacted()
 	}
 	if s.read == nil || s.read.n != len(s.entries) {
 		s.read = s.readLeafState()

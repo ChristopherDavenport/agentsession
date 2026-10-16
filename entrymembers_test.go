@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -30,6 +31,8 @@ import (
 // UnmarshalEntry decodes, so a new type is covered without being listed,
 // and a field decoded by hand under json:"-" is found by its member tag.
 // It needs no discipline from whoever adds the next member or type.
+// Every entry also carries redacted, the body member any entry may
+// carry that EntryBase holds unexported, as a position and a range.
 func TestEveryEntryMemberSurvivesARoundTrip(t *testing.T) {
 	names := make([]string, 0, len(coreEntries))
 	for name := range coreEntries {
@@ -50,6 +53,10 @@ func TestEveryEntryMemberSurvivesARoundTrip(t *testing.T) {
 				base.Timestamp = fixedTime
 				base.Unknown = nil
 				variant.set(entry)
+				spans := []Span{{1, 1}, {3, 5}}
+				if err := SetRedacted(entry, spans); err != nil {
+					t.Fatal(err)
+				}
 
 				// The wire form is built from the struct rather than
 				// taken from MarshalEntry, so that it carries every
@@ -92,6 +99,9 @@ func TestEveryEntryMemberSurvivesARoundTrip(t *testing.T) {
 				}
 				if !back.Base().Timestamp.Equal(fixedTime) {
 					t.Errorf("%s: ts changed on the round trip: %v", variant.name, back.Base().Timestamp)
+				}
+				if got, ok := RedactedOf(back); !ok || !slices.Equal(got, spans) {
+					t.Errorf("%s: redacted read back as %v %v, want %v", variant.name, got, ok, spans)
 				}
 				if u := back.Base().Unknown; len(u) > 0 {
 					t.Errorf("%s: declared members parked in Unknown: %v", variant.name, u)
@@ -168,6 +178,9 @@ func wireForm(t *testing.T, entry Entry) []byte {
 			continue
 		}
 		obj[name] = mustJSON(t, v.Field(i).Interface())
+	}
+	if spans, ok := RedactedOf(entry); ok {
+		obj["redacted"] = mustJSON(t, spans)
 	}
 	return mustJSON(t, obj)
 }
