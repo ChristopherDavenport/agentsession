@@ -1876,7 +1876,10 @@ be guessed.
 ### ATIF
 
 One ATIF document per root-to-leaf path. `session_id` is the header ID;
-`trajectory_id` is the leaf entry ID. The mapping is given in the
+`trajectory_id` is the leaf entry ID. A document from a redacted session carries
+`redacted: true` and `redacted_from`, as the header holds it, under
+`agentsession` in its top-level `extra`, so a published document names
+its original as the session file does. The mapping is given in the
 accompanying session plan and is normative for the Open Responses
 profile: user and system items to steps, one `response` with its items
 to one agent step with `tool_calls`, `reasoning_content` and `metrics`,
