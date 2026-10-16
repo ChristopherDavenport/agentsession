@@ -14,7 +14,7 @@
 //	  locks/<session id>                  the lock of the process holding the session
 //	  tmp/                                sessions being created, renamed into place whole
 //	  trash/                              sessions a delete renamed away, being removed
-//	  layout                              the layout the store is in, which an open checks
+//	  layout                              the layout the store is in, which an open checks, and whether it holds only redacted sessions
 //	  journal                             the old journal's tombstone: a link to layout/journal, nothing writable
 //	  sweep.lock                          held shared by writers, exclusive by a sweep's last step
 //	  sweep.lock.want                     held shared by writers waiting for sweep.lock
@@ -277,6 +277,32 @@ func WithReadOnly() Option {
 	return func(s *Store) { s.readOnly = true }
 }
 
+// WithRedactedOnly sets the store to hold only redacted sessions, as
+// RFC 0002 lets a store be set: the store a publisher pushes to, which
+// fails closed. Create, Import and the receiving side of an exchange
+// refuse a session whose header does not carry redacted, a fork of a
+// redacted session among them, since a fork's own entries were not
+// redacted, with [agentsession.ErrNotRedacted]; a redacted session
+// still enters only whole, by import or push.
+//
+// The setting is the store's, not the process's. A writing open given
+// the option records it in the store's layout file, durably, and from
+// then on every open of the store obeys it, with the option or without,
+// and every create, import and exchange checks the file again, so a
+// process that opened the store before it was set obeys it too. A
+// release that does not know the setting refuses to open the store at
+// all, with ErrLayout, rather than let an original in. The open that
+// sets it refuses with ErrNotRedacted, and sets nothing, when the store
+// already holds a session that is not redacted, and holds the sweep's
+// lock exclusive while it looks, so no create lands between the look
+// and the setting. Nothing unsets it.
+//
+// A read-only open given the option refuses as a store set this way
+// does, and records nothing.
+func WithRedactedOnly() Option {
+	return func(s *Store) { s.wantRedactedOnly = true }
+}
+
 // WithFollowInterval sets how often a follower looks at a session's
 // log that no writer in this process rang for: the shortest wait, which
 // it keeps while the log keeps growing and doubles while it does not,
@@ -299,6 +325,11 @@ type Store struct {
 	readOnly bool
 	policy   SyncPolicy
 	objs     *objects
+	// wantRedactedOnly is WithRedactedOnly's; redactedOnly is set once
+	// this store is known to hold only redacted sessions, which the
+	// layout file says, and is never cleared.
+	wantRedactedOnly bool
+	redactedOnly     atomic.Bool
 
 	// mu guards open, faulty and appends, and is held only to read or
 	// change them: never while waiting on a session, and never across a
@@ -390,8 +421,12 @@ func Open(root string, opts ...Option) (*Store, error) {
 	}
 	// A layout this release does not read is refused before anything is
 	// written.
-	if err := checkLayout(root); err != nil {
+	redactedOnly, err := readLayout(root)
+	if err != nil {
 		return nil, err
+	}
+	if redactedOnly || s.wantRedactedOnly && s.readOnly {
+		s.redactedOnly.Store(true)
 	}
 	dirs := []string{filepath.Join(root, "objects", "contents"), filepath.Join(root, "objects", "entries"), filepath.Join(root, "sessions"), filepath.Join(root, "locks")}
 	if s.readOnly {
@@ -423,6 +458,11 @@ func Open(root string, opts ...Option) (*Store, error) {
 		if err := s.markTombstone(); err != nil {
 			return nil, err
 		}
+		if s.wantRedactedOnly && !redactedOnly {
+			if err := s.markRedactedOnly(); err != nil {
+				return nil, err
+			}
+		}
 	}
 	// Nothing else store-wide is read here: each session recovers when
 	// it is opened, and the index of which session holds what is built
@@ -449,17 +489,114 @@ const layout = "cas 2"
 // layout this release does not read: one a later release wrote.
 var ErrLayout = errors.New("cas: the store's layout is not one this release reads")
 
-// checkLayout refuses a store whose layout file names another layout.
-func checkLayout(root string) error {
+// layoutRedactedOnly is the line the layout file holds after the layout
+// in a store set to hold only redacted sessions. A release that reads
+// the layout file whole, as every release before this one does, refuses
+// the store, which is the point: a release that does not know the
+// setting cannot obey it.
+const layoutRedactedOnly = "redacted-only"
+
+// readLayout refuses a store whose layout file names another layout,
+// or a setting this release does not know, and reports whether the
+// store holds only redacted sessions.
+func readLayout(root string) (redactedOnly bool, err error) {
 	data, err := os.ReadFile(filepath.Join(root, layoutFile))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return false, nil
 	}
+	if err != nil {
+		return false, fmt.Errorf("cas: %w", err)
+	}
+	all := strings.TrimSpace(string(data))
+	lines := strings.Split(all, "\n")
+	if got := strings.TrimSpace(lines[0]); got != layout {
+		return false, fmt.Errorf("%w: %q, where this release reads %q", ErrLayout, all, layout)
+	}
+	for _, l := range lines[1:] {
+		switch l = strings.TrimSpace(l); l {
+		case layoutRedactedOnly:
+			redactedOnly = true
+		case "":
+		default:
+			return false, fmt.Errorf("%w: %q sets %q, which this release does not know", ErrLayout, all, l)
+		}
+	}
+	return redactedOnly, nil
+}
+
+// markRedactedOnly sets the store to hold only redacted sessions, in its
+// layout file, as WithRedactedOnly says: with the sweep's lock held
+// exclusive, which every writer holds shared from before it places a
+// session until it is placed, it looks at every session the store holds
+// and refuses if one is not redacted, then writes the setting durably.
+func (s *Store) markRedactedOnly() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	lk, err := s.sweepLock(ctx)
+	if err != nil {
+		return fmt.Errorf("cas: setting the store to hold only redacted sessions: %w", err)
+	}
+	defer lk.release()
+	if only, err := readLayout(s.root); err != nil || only {
+		s.redactedOnly.Store(only)
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(s.root, layoutFile)); err != nil {
+		return fmt.Errorf("cas: a store whose migration is not finished is not set to hold only redacted sessions: %w", err)
+	}
+	dirs, err := os.ReadDir(filepath.Join(s.root, "sessions"))
 	if err != nil {
 		return fmt.Errorf("cas: %w", err)
 	}
-	if got := strings.TrimSpace(string(data)); got != layout {
-		return fmt.Errorf("%w: %q, where this release reads %q", ErrLayout, got, layout)
+	for _, d := range dirs {
+		if !d.IsDir() || !validSessionID(d.Name()) {
+			continue
+		}
+		hdr, err := readHeader(filepath.Join(s.root, "sessions", d.Name()))
+		if err != nil {
+			return fmt.Errorf("cas: setting the store to hold only redacted sessions: session %s: %w", d.Name(), err)
+		}
+		if !hdr.Redacted {
+			return fmt.Errorf("%w: the store holds %s, so it is not set to hold only redacted sessions", agentsession.ErrNotRedacted, d.Name())
+		}
+	}
+	if err := s.objs.writeAtomic(filepath.Join(s.root, layoutFile), []byte(layout+"\n"+layoutRedactedOnly+"\n")); err != nil {
+		return fmt.Errorf("cas: layout: %w", err)
+	}
+	s.redactedOnly.Store(true)
+	return nil
+}
+
+// onlyRedacted reports whether the store holds only redacted sessions:
+// set here, or by any process since, which the layout file says. It is
+// read again at each call until it is set, so a process that opened the
+// store before another set it obeys it from then on.
+func (s *Store) onlyRedacted() (bool, error) {
+	if s.redactedOnly.Load() {
+		return true, nil
+	}
+	only, err := readLayout(s.root)
+	if err != nil {
+		return false, err
+	}
+	if only {
+		s.redactedOnly.Store(true)
+	}
+	return only, nil
+}
+
+// refuseOriginal refuses a session whose header does not carry redacted
+// when the store holds only redacted sessions.
+func (s *Store) refuseOriginal(h agentsession.Header) error {
+	if h.Redacted {
+		return nil
+	}
+	only, err := s.onlyRedacted()
+	if err != nil {
+		return err
+	}
+	if only {
+		return fmt.Errorf("%w: %s, and the store holds only redacted sessions", agentsession.ErrNotRedacted, h.ID)
 	}
 	return nil
 }
@@ -1720,6 +1857,13 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	if err := s.writable(); err != nil {
 		return nil, err
 	}
+	only, err := s.onlyRedacted()
+	if err != nil {
+		return nil, err
+	}
+	if err := agentsession.CheckCreate(h, only); err != nil {
+		return nil, err
+	}
 	return s.createLocked(ctx, h, MarkRecord)
 }
 
@@ -1855,6 +1999,14 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 // of their own under tmp, which is then renamed to the session's place.
 // The caller holds the session's lock and has checked the place free.
 func (s *Store) placeSession(dir string, h agentsession.Header, recs []logRecord, head, mark string) error {
+	// Every session the store gains is placed here, under the sweep's
+	// lock held shared, so this is where a store holding only redacted
+	// sessions refuses an original whatever path it came by, and where
+	// the setting, which is written under that lock held exclusive, is
+	// read last.
+	if err := s.refuseOriginal(h); err != nil {
+		return err
+	}
 	stageRoot := filepath.Join(s.root, "tmp")
 	if err := os.MkdirAll(stageRoot, 0o755); err != nil {
 		return fmt.Errorf("cas: %w", err)
@@ -2476,6 +2628,11 @@ func (s *Store) startPack(due bool) {
 
 // writeHeld is Write on a session whose handle's lock the caller holds.
 func (s *Store) writeHeld(ctx context.Context, h *handle, sessionID string, e agentsession.Entry) (agentsession.Result, error) {
+	// Prepare refuses an append to a redacted session too; it is said
+	// first so that a redacted mirror is refused for what it is.
+	if h.session.Header().Redacted {
+		return agentsession.Result{}, fmt.Errorf("%w: append to %s", agentsession.ErrRedacted, sessionID)
+	}
 	if h.mark != MarkRecord {
 		return agentsession.Result{}, fmt.Errorf("%w: %s", ErrMirror, sessionID)
 	}
@@ -3145,9 +3302,13 @@ func project(w io.Writer, sess *agentsession.Session, head string) error {
 // Import reads an RFC 0001 file into the store as a mirror of the
 // session it holds, unless asRecord says this file is the only copy. It
 // is held to a push's checks: every line verifies, a truncated last
-// line is refused, a redacted header is refused, every own entry hangs
-// from the base or another own entry, and the media matches that of a
-// held session whose own entries include the base. A trailing synthetic
+// line is refused, every own entry hangs from the base or another own
+// entry, and the media matches that of a held session whose own entries
+// include the base. A redacted session is imported as any other is: it
+// is a session of its own, whose lines verify against themselves, and
+// import is how one enters a store whole; it then takes no append. A
+// store set with WithRedactedOnly refuses a file whose header does not
+// carry redacted with [agentsession.ErrNotRedacted]. A trailing synthetic
 // marker names the head and is discarded; prefix entries become objects
 // and join no log; own entries join the log in file order. The objects
 // arrive as one pack and the records as one commit. A session the store
@@ -3168,8 +3329,8 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		return nil, fmt.Errorf("cas: import: line %d is cut short: %w", t.Line, t.Err)
 	}
 	h := sess.Header()
-	if h.Redacted {
-		return nil, errors.New("cas: a redacted projection is a record to read, not one to hold")
+	if err := s.refuseOriginal(h); err != nil {
+		return nil, err
 	}
 	if migrated, unresolved := sess.Migrated(); migrated && len(unresolved) > 0 {
 		return nil, agentsession.ErrUnresolvedMigration

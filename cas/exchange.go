@@ -175,6 +175,13 @@ func (s *Store) bundleOf(ctx context.Context, id string) (*bundle, error) {
 // handover. The two stores' mutexes are never held together. A session
 // the receiver has open is rebuilt from what it holds, so a caller
 // holding it there opens it again.
+//
+// A redacted session is pushed whole: a receiver that lacks it takes
+// it, and one that holds it refuses, with [agentsession.ErrRedacted], a
+// push that would add entries to it, landing nothing. A receiver set
+// with WithRedactedOnly refuses a session whose header does not carry
+// redacted with [agentsession.ErrNotRedacted]. Fetch is held to both
+// alike.
 func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions) (Exchange, error) {
 	if err := ctx.Err(); err != nil {
 		return Exchange{}, err
@@ -413,6 +420,11 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if laterFormat(b.header.Format, agentsession.Format) {
 		return Exchange{}, fmt.Errorf("%w: %s is later than this store's %s", agentsession.ErrUnsupportedFormat, b.header.Format, agentsession.Format)
 	}
+	// A store holding only redacted sessions receives no other, held or
+	// not; placeSession refuses one again under the sweep's lock.
+	if err := s.refuseOriginal(b.header); err != nil {
+		return Exchange{}, err
+	}
 	id := b.header.ID
 	dir, err := s.sessionDir(id)
 	if err != nil {
@@ -520,6 +532,12 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 		}
 		held[eid] = true
 		fresh = append(fresh, e)
+	}
+	// A redacted session is written whole: an exchange that would add to
+	// a held one is refused before anything lands, and one that adds
+	// nothing, a repeat of the push that delivered it, is not.
+	if hdr.Redacted && len(fresh) > 0 {
+		return Exchange{}, fmt.Errorf("%w: exchange: %d entries for %s, which this store holds whole", agentsession.ErrRedacted, len(fresh), id)
 	}
 	if err := callIDsMeet(h.session.Entries(), b, fresh); err != nil {
 		return Exchange{}, err

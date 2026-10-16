@@ -194,7 +194,9 @@ type ReceiveOptions struct {
 // with ErrHeadMoved, before anything lands for a session this store
 // lacked and after the entries land for one it holds, with the Exchange
 // saying what landed. With o.Fetch it admits c as Fetch admits a
-// session, as ReceiveOptions says.
+// session, as ReceiveOptions says. Either way it is held to Push's
+// rules for a redacted session and for a store set with
+// WithRedactedOnly.
 func (s *Store) Receive(ctx context.Context, c Closure, o ReceiveOptions) (Exchange, error) {
 	if err := ctx.Err(); err != nil {
 		return Exchange{}, err

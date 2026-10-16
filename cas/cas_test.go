@@ -231,10 +231,21 @@ func TestProjectAndImport(t *testing.T) {
 	if strings.Contains(buf.String(), `"synthetic"`) {
 		t.Error("a head on the last line projected with a marker")
 	}
-	// A redacted file is refused.
+	// A redacted file is held as any other by a store that lacks it, and
+	// takes no append.
 	redacted := strings.Replace(buf.String(), `"cwd":"/w"`, `"cwd":"/w","redacted":true`, 1)
-	if _, err := other.Import(ctx, strings.NewReader(redacted), false); err == nil {
-		t.Error("a redacted projection was imported")
+	third, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer third.Close()
+	if rs, err := third.Import(ctx, strings.NewReader(redacted), true); err != nil {
+		t.Fatalf("a redacted projection: %v", err)
+	} else if !rs.Header().Redacted {
+		t.Error("the imported session is not redacted")
+	}
+	if _, err := third.Append(ctx, "p", agentsession.NewItemEntry(openresponses.UserText("more"))); !errors.Is(err, agentsession.ErrRedacted) {
+		t.Errorf("append to the imported redacted session: %v, want ErrRedacted", err)
 	}
 }
 
