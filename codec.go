@@ -160,7 +160,7 @@ type migration struct {
 func (s *Session) link(e Entry, m *migration, data, c []byte, rule *baseRule) error {
 	// The line is read under the format the header declared: before
 	// 0.13 a redacted member is unknown whatever its form.
-	held := gateRedacted(e, s.declared)
+	gateRedacted(e, s.declared)
 	if m != nil {
 		var err error
 		if e, err = m.rewrite(e, s); err != nil {
@@ -195,9 +195,6 @@ func (s *Session) link(e Entry, m *migration, data, c []byte, rule *baseRule) er
 	}
 	if err := s.checkParents(b); err != nil {
 		return err
-	}
-	if held {
-		s.holdRedacted()
 	}
 	s.add(e)
 	return nil
