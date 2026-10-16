@@ -111,7 +111,34 @@ versions may break the API.
   that delivers one the receiver lacks is taken. An exchange that would
   add entries to a held redacted session is refused with `ErrRedacted`
   before anything lands; a repeat that adds nothing is not.
-  `CheckCreate` is the create refusal, for a store elsewhere.
+  `CheckCreate` is the create refusal, for a store elsewhere; it also
+  refuses a header carrying `redacted_from` without `redacted`
+  (`ErrRedactedFrom`), typed or held in `Extra` as a header decoded
+  without a format holds it, which the store would have written as a
+  file `Read` refuses.
+- **Added: an import for every store (`Importer`).** A redacted session
+  enters a store whole, so the memory, jsonl and sqlite stores gain
+  `Import(ctx, r, asRecord)`, cas's signature, and the root package
+  names it as an optional interface. Each follows RFC 0002's import:
+  every line verifies, a cut last line and a session ID the store holds
+  (`ErrSessionExists`) are refused, as are a `redacted_from` without
+  `redacted` or naming the session itself (`ErrRedactedFrom`), an own
+  entry above the base, a fork whose media differs from that of a held
+  session whose own entries include the base, and an original in a
+  store set to hold only redacted sessions; what it imports is committed
+  before it returns. Those three keep a session's head only in its
+  entries and no record mark: they refuse a file whose head only a
+  projection's synthetic leaf marker names (`ErrSyntheticMarker`),
+  where cas discards the marker and keeps the head, and do not read
+  `asRecord`. `ReadForImport` and `CheckImportMedia` are the checks, for
+  a store elsewhere.
+- **Changed: a header that arrives by push or fetch is validated.** cas
+  runs `Header.Validate` on it as import does, so a `redacted_from`
+  without `redacted`, or naming the session itself, is refused before
+  anything lands. remote validates a pushed header before it looks for
+  any object: a malformed `redacted_from` is `bad_entry` with the reason
+  `redacted_from`, which matches `ErrRedactedFrom` on the client, and a
+  header missing what every header carries is `bad_request`.
 - **Added: a store set to hold only redacted sessions.** The store a
   publisher pushes to, which fails closed: it refuses to create, import
   or receive by push or fetch a session whose header does not carry
@@ -124,8 +151,8 @@ versions may break the API.
   refuses a store that already holds an original, and nothing unsets
   it. `jsonl.WithRedactedOnly`, `sqlite.WithRedactedOnly` and
   `MemoryRedactedOnly`, which `NewMemoryStore` now takes as a
-  `MemoryOption`, set the process's store only; those stores have no
-  import or exchange, so they refuse every create. A remote client
+  `MemoryOption`, set the process's store only, and refuse every create
+  and the import of an original. A remote client
   given `remote.WithRedactedOnly` refuses to create or push an original
   before it sends anything.
 - **Added: `Original` and `Redactions`.** `Original(ctx, store, s)`
@@ -143,13 +170,15 @@ versions may break the API.
   `not_redacted` (403).** Both match `ErrRedacted` and `ErrNotRedacted`
   on the client (`CodeRedacted`, `CodeNotRedacted`). The server has no
   import; a redacted session reaches it by push.
-- **Added: `storetest` runs the redacted cases on every store:** create
-  refused, a redacted file held whole and verifying, appends refused, a
-  push taken and a push adding entries refused, a redacted-only store
-  refusing an original and a fork by every path it has, `Original`
-  aligned and not, and `Redactions`. A store gives the suite its paths
-  with the new `Options.Import`, `Place` (a file written into its
-  storage, as under a jsonl store's root), `Push` and `RedactedOnly`.
+- **Added: `storetest` runs import and the redacted cases on every
+  store:** an import held in file order, a fork included, and its
+  refusals; create refused, a redacted file held whole and verifying,
+  appends refused, a push taken and a push adding entries refused, a
+  redacted-only store refusing an original and a fork by every path it
+  has, `Original` aligned and not, and `Redactions`. The suite imports
+  through a store's `Importer`; `Options.Import` is for a store whose
+  import is not one, a remote client over a store that has one, and
+  `Options.Push` and `RedactedOnly` give it the other paths.
 
 ## v0.0.26 - 2026-10-15
 
