@@ -644,6 +644,40 @@ func TestSubsessionID(t *testing.T) {
 	}
 }
 
+func TestRedactedSessionID(t *testing.T) {
+	const original = "01995b2a-0000-7000-8000-000000000001"
+	got := RedactedSessionID(original, 12, "example.redact-home@1")
+	if got != RedactedSessionID(original, 12, "example.redact-home@1") {
+		t.Fatal("not deterministic")
+	}
+	if len(got) != 36 || got[14] != '5' || !strings.ContainsRune("89ab", rune(got[19])) {
+		t.Errorf("not a UUIDv5: %s", got)
+	}
+	// Pinned so another implementation can check its derivation: the
+	// UUIDv5 under the nil namespace of
+	// "redacted/01995b2a-0000-7000-8000-000000000001/12/example.redact-home@1".
+	if want := "b85c1e80-fad0-5186-bb5d-b64878435f0d"; got != want {
+		t.Errorf("RedactedSessionID = %s, want %s", got, want)
+	}
+	for _, other := range []string{
+		RedactedSessionID(original, 13, "example.redact-home@1"),
+		RedactedSessionID(original, 12, "example.redact-home@2"),
+		RedactedSessionID("01995b2a-0000-7000-8000-000000000002", 12, "example.redact-home@1"),
+	} {
+		if other == got {
+			t.Errorf("another original, count or profile gives %s too", got)
+		}
+	}
+	// Without the leading "redacted" the name would be a subsession
+	// retry's, <parent>/<call_id>/<n>, or a call whose ID holds a slash.
+	if sub := SubsessionID(original, "12/example.redact-home@1"); sub == got {
+		t.Errorf("RedactedSessionID collides with SubsessionID: %s", got)
+	}
+	if bare := uuidv5(original + "/12/example.redact-home@1"); bare == got {
+		t.Errorf("the prefix changes nothing: %s", got)
+	}
+}
+
 func TestLifecycleValidation(t *testing.T) {
 	tests := []struct {
 		name string

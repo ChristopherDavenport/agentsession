@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -60,10 +61,28 @@ func newUniqueEntryID(taken func(string) bool) string {
 // the child exists. A second child for the same call appends a new
 // root to the existing child session rather than minting a second ID.
 func SubsessionID(parentSessionID, callID string) string {
+	return uuidv5(parentSessionID + "/" + callID)
+}
+
+// RedactedSessionID derives the session ID the format recommends for a
+// redacted session whose redacted_from writes a profile: a UUIDv5
+// under the nil namespace over "redacted/<original>/<entries>/<profile>",
+// original being the original's session ID and entries the count its
+// [RedactedFrom] carries. The same redaction of the same entries then
+// gives the same session, so repeating one over a store adds only the
+// sessions that grew; the leading "redacted" keeps the name apart from
+// a subsession's, which starts with a session ID. A profile names one
+// set of rules, since two under one name give two sessions one ID.
+func RedactedSessionID(original string, entries int, profile string) string {
+	return uuidv5("redacted/" + original + "/" + strconv.Itoa(entries) + "/" + profile)
+}
+
+// uuidv5 returns the UUIDv5 of name under the nil namespace.
+func uuidv5(name string) string {
 	h := sha1.New()
 	var ns [16]byte // the nil namespace
 	h.Write(ns[:])
-	h.Write([]byte(parentSessionID + "/" + callID))
+	h.Write([]byte(name))
 	var b [16]byte
 	copy(b[:], h.Sum(nil))
 	b[6] = 0x50 | b[6]&0x0f
