@@ -169,12 +169,6 @@ func fileOf(t *testing.T, s *agentsession.Session) []byte {
 	return buf.Bytes()
 }
 
-// cut is a file holding the header and the first n entry lines of file.
-func cut(file []byte, n int) []byte {
-	lines := strings.SplitAfter(string(file), "\n")
-	return []byte(strings.Join(lines[:n+1], ""))
-}
-
 // readBack reads a session the store holds, without a hold where it can.
 func readBack(t *testing.T, st agentsession.Store, id string) *agentsession.Session {
 	t.Helper()
