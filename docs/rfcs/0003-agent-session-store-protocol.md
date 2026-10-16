@@ -841,13 +841,15 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | `header_differs` | 409 | the receiver holds another session under this ID |
 | `call_id_repeated` | 409 | an append or exchange that would repeat a `call_id` |
 | `synthetic` | 422 | a `leaf` label carrying `synthetic` |
-| `bad_entry` | 422 | malformed: `id` differs, reserved member, `ts` form, not I-JSON, unknown prefix |
+| `bad_entry` | 422 | malformed: `id` differs, reserved member, `ts` form, not I-JSON, unknown prefix; also a pushed or created header RFC 0001 calls malformed, such as `redacted_from` without `redacted` |
 | `base_rule` | 422 | a parent that is not the base, an own entry, or null; a null parent in a session with a base |
 | `bad_base` | 422 | a fork whose base is a `leaf` label, or whose `media` differs from the origin's |
 | `bad_object` | 422 | bytes that do not hash to the name |
 | `missing_object` | 409 | a push names objects the server cannot find; body has the hashes |
 | `bad_ref_target` | 422 | a pushed ref whose `next` is not the pushed session |
-| `format` | 422 | a format the server does not read, or earlier than the session's |
+| `format` | 422 | a format the server does not read, or earlier than the session's; also an append or push that would raise a header RFC 0001 forbids raising, one before 0.13 holding `redacted_from` |
+| `redacted` | 409 | a create of a session whose header carries `redacted`, or an append or push that adds entries to a held redacted session; a redacted session arrives whole, by push |
+| `not_redacted` | 403 | a create, push or fetch that would bring a session whose header does not carry `redacted` into a store that holds only redacted sessions |
 | `read_only` | 403 | a write to a store open read-only |
 | `unsupported` | 501 | a feature the store lacks (marks, exchange, commit, committed view, refs, objects) |
 | `store_fault` | 500/503 | a store failure the client cannot fix: corrupt object, stopped store, layout, a session modified outside the store |
