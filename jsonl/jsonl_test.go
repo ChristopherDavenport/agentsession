@@ -994,3 +994,36 @@ func TestNoRaiseForARedactedEntry(t *testing.T) {
 		t.Errorf("the refused append changed the file:\n%s", got)
 	}
 }
+
+// TestRedactedOnlyRefusesAHoldingRoot: a store is not set to hold only
+// redacted entries over a root that already holds an original, nor one
+// that holds a redacted session resumed with a native entry.
+func TestRedactedOnlyRefusesAHoldingRoot(t *testing.T) {
+	ctx := context.Background()
+	for name, fill := range map[string]func(*jsonl.Store) error{
+		"an original": func(st *jsonl.Store) error {
+			_, err := st.Create(ctx, agentsession.Header{ID: "o"})
+			return err
+		},
+		"a native entry": func(st *jsonl.Store) error {
+			if _, err := st.Create(ctx, agentsession.Header{ID: "r", Redacted: true}); err != nil {
+				return err
+			}
+			_, err := st.Append(ctx, "r", agentsession.NewItemEntry(openresponses.UserText("native")))
+			return err
+		},
+	} {
+		root := t.TempDir()
+		st, err := jsonl.Open(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fill(st); err != nil {
+			t.Fatal(err)
+		}
+		st.Close()
+		if _, err := jsonl.Open(root, jsonl.WithRedactedOnly()); !errors.Is(err, agentsession.ErrNotRedacted) {
+			t.Errorf("%s: Open with WithRedactedOnly = %v, want ErrNotRedacted", name, err)
+		}
+	}
+}

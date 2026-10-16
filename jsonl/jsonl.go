@@ -101,7 +101,10 @@ func WithStaleLockReport(report func(LockInfo)) Option {
 // redacted member, however it arrives: an Append, an Import, the prefix
 // of a fork Create makes. A fork's own entries and a resumed redacted
 // session's native entries are refused alike, since neither was
-// redacted. The option is this process's: a file written under
+// redacted. Open with the option reads every session under the root and
+// refuses, with ErrNotRedacted, a root that already holds one whose
+// header lacks redacted or an entry without it. The option is this
+// process's: a file written under
 // the root by hand, and a store opened on it without the option, are
 // outside what it can refuse, so a store that must fail closed against
 // every process is a cas store set this way.
@@ -157,6 +160,11 @@ func Open(root string, opts ...Option) (*Store, error) {
 	if !s.readOnly {
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			return nil, fmt.Errorf("jsonl: create root: %w", err)
+		}
+	}
+	if s.redactedOnly {
+		if err := agentsession.CheckHoldsRedacted(context.Background(), s); err != nil {
+			return nil, fmt.Errorf("jsonl: not set to hold only redacted entries: %w", err)
 		}
 	}
 	return s, nil
@@ -322,6 +330,12 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	return s.place(sess)
 }
 
+// placeFault, when set, runs once place has made the project directory
+// and before it writes anything there, and a non-nil error it returns
+// refuses the create: a test's way to refuse a create after the
+// directory is made.
+var placeFault func() error
+
 // place writes a new session's file, its header and every entry the
 // session holds, beside its place and links it into place once synced,
 // and holds it open for append. The caller holds s.mu.
@@ -354,9 +368,28 @@ func (s *Store) place(sess *agentsession.Session) (*agentsession.Session, error)
 			os.Remove(dir) // fails, harmlessly, if it is not empty
 		}
 	}
-	if err := acquireLock(path, s.staleReport); err != nil {
+	// Another process's refused create may remove the directory between
+	// this one's making it and writing in it, when it made it first: it
+	// is made again, a few times, rather than fail.
+	again := func(err error) bool {
+		if !errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+		return os.MkdirAll(dir, 0o755) == nil
+	}
+	if placeFault != nil {
+		if err := placeFault(); err != nil {
+			unmake()
+			return nil, err
+		}
+	}
+	lockErr := acquireLock(path, s.staleReport)
+	for try := 0; try < 3 && again(lockErr); try++ {
+		lockErr = acquireLock(path, s.staleReport)
+	}
+	if lockErr != nil {
 		unmake()
-		return nil, err
+		return nil, lockErr
 	}
 	// The header and any prefix are written beside the file and linked
 	// into place once synced, so a crash never leaves a session file
@@ -372,6 +405,9 @@ func (s *Store) place(sess *agentsession.Session) (*agentsession.Session, error)
 		return nil, err
 	}
 	t, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	for try := 0; try < 3 && again(err); try++ {
+		t, err = os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	}
 	if err != nil {
 		return fail(fmt.Errorf("jsonl: create session file: %w", err))
 	}
