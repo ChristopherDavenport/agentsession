@@ -49,6 +49,12 @@ type Options struct {
 // Root extra members the exporter writes.
 const (
 	ExtraOpenResponses = "openresponses"
+	// ExtraAgentSession carries, in the root extra, the session's facts:
+	// its format and the trajectory's leaf, and when present its cwd,
+	// parent_session, spawned_by, records, name, labels, main, and for
+	// a redacted session redacted and redacted_from, the latter the
+	// header's object with every member it holds. In a step's extra it
+	// carries the entry_id the step was built from.
 	ExtraAgentSession  = "agentsession"
 	ExtraEnvironment   = "environment"
 	ExtraOutcome       = "outcome"
@@ -943,6 +949,12 @@ func (b *builder) finish() {
 	if len(b.t.Header.Records) > 0 {
 		as["records"] = b.t.Header.Records
 	}
+	if b.t.Header.Redacted {
+		as["redacted"] = true
+	}
+	if from := b.t.Header.RedactedFrom; from != nil {
+		as["redacted_from"] = redactedFrom(from)
+	}
 	if b.t.Name != "" {
 		as["name"] = b.t.Name
 	}
@@ -998,6 +1010,28 @@ func (b *builder) finish() {
 		}
 		b.doc.Notes = note
 	}
+}
+
+// redactedFrom is a redacted session's redacted_from as the root
+// extra carries it: the object the header holds, with the members a
+// redaction recorded about itself as written, so a document published
+// from a redacted session links back to its original as the session
+// file does. A typed member wins over an Extra one of the same name,
+// which the header could not have written either.
+func redactedFrom(from *agentsession.RedactedFrom) map[string]any {
+	out := make(map[string]any, len(from.Extra)+4)
+	for k, v := range from.Extra {
+		out[k] = v
+	}
+	out["session"] = from.Session
+	out["entries"] = from.Entries
+	if from.Profile != "" {
+		out["profile"] = from.Profile
+	}
+	if from.Aligned {
+		out["aligned"] = true
+	}
+	return out
 }
 
 // pathTotals replaces the totals accumulated from the steps with the

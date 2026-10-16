@@ -107,7 +107,8 @@ func withHeader(t *testing.T, src, dst string, edit func(map[string]json.RawMess
 // counts a request hash that no longer matches apart, as expected of a
 // redacted session, failing nothing over it (RFC 0001, Redaction). A
 // line whose id does not verify still fails, and a cas store holding
-// the session verifies it as clean.
+// the session verifies it as clean. show prints the link, and export
+// carries it into the document.
 func TestVerifyRedacted(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "redacted.jsonl")
@@ -212,6 +213,7 @@ func TestVerifyRedacted(t *testing.T) {
 			name: "show 0.12", args: []string{"show", v12},
 			stdout: []string{"redacted from  absent: this file names no original"},
 		},
+		{name: "export", args: []string{"export", path, "-out", filepath.Join(tmp, "out")}},
 		{
 			name: "show a session not redacted", args: []string{"show", filepath.Join(fixtures, "basic.jsonl")},
 			absent: []string{"redacted"},
@@ -238,5 +240,25 @@ func TestVerifyRedacted(t *testing.T) {
 				}
 			}
 		})
+	}
+
+	// The exported document links back to the original as the file does.
+	doc, err := os.ReadFile(filepath.Join(tmp, "out", s.ID()+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d struct {
+		Extra struct {
+			AgentSession struct {
+				Redacted     bool                       `json:"redacted"`
+				RedactedFrom map[string]json.RawMessage `json:"redacted_from"`
+			} `json:"agentsession"`
+		} `json:"extra"`
+	}
+	if err := json.Unmarshal(doc, &d); err != nil {
+		t.Fatal(err)
+	}
+	if as := d.Extra.AgentSession; !as.Redacted || string(as.RedactedFrom["session"]) != `"`+orig+`"` || string(as.RedactedFrom["ex.tool"]) != `"scrub/1"` {
+		t.Errorf("exported extra.agentsession: redacted %v, redacted_from %s", as.Redacted, as.RedactedFrom)
 	}
 }
