@@ -176,12 +176,13 @@ func (s *Store) bundleOf(ctx context.Context, id string) (*bundle, error) {
 // the receiver has open is rebuilt from what it holds, so a caller
 // holding it there opens it again.
 //
-// A redacted session is pushed whole: a receiver that lacks it takes
-// it, and one that holds it refuses, with [agentsession.ErrRedacted], a
-// push that would add entries to it, landing nothing. A receiver set
-// with WithRedactedOnly refuses a session whose header does not carry
-// redacted with [agentsession.ErrNotRedacted]. Fetch is held to both
-// alike.
+// A redacted session is pushed as any other is, grown since or not. A
+// receiver set with WithRedactedOnly refuses, with
+// [agentsession.ErrNotRedacted] and before it writes anything, a session
+// whose header does not carry redacted and one carrying any entry,
+// prefix included, without a redacted member, as a resumed redacted
+// session's native entries and a fork's own entries are. Fetch is held
+// to the same.
 func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions) (Exchange, error) {
 	if err := ctx.Err(); err != nil {
 		return Exchange{}, err
@@ -426,9 +427,11 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	if err := b.header.Validate(); err != nil {
 		return Exchange{}, fmt.Errorf("cas: exchange: %w", err)
 	}
-	// A store holding only redacted sessions receives no other, held or
-	// not; placeSession refuses one again under the sweep's lock.
-	if err := s.refuseOriginal(b.header); err != nil {
+	// A store holding only redacted entries receives no session whose
+	// header lacks redacted and no entry without it, prefix included,
+	// held or not; read again under the sweep's lock before any object
+	// is written.
+	if err := s.refuseUnredacted(b.header, append(append([]agentsession.Entry(nil), b.prefix...), b.own...)); err != nil {
 		return Exchange{}, err
 	}
 	id := b.header.ID
@@ -507,6 +510,12 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	// anything lands.
 	raised := hdr
 	if laterFormat(b.header.Format, hdr.Format) {
+		// Raise sees the header alone; the session says whether an
+		// entry it holds forbids the raise too, a redacted member read
+		// under a minor before 0.13.
+		if err := h.session.RaiseRefused(b.header.Format); err != nil {
+			return Exchange{}, fmt.Errorf("cas: %w", err)
+		}
 		if err := raised.Raise(b.header.Format); err != nil {
 			return Exchange{}, fmt.Errorf("cas: %w", err)
 		}
@@ -538,12 +547,6 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 		}
 		held[eid] = true
 		fresh = append(fresh, e)
-	}
-	// A redacted session is written whole: an exchange that would add to
-	// a held one is refused before anything lands, and one that adds
-	// nothing, a repeat of the push that delivered it, is not.
-	if hdr.Redacted && len(fresh) > 0 {
-		return Exchange{}, fmt.Errorf("%w: exchange: %d entries for %s, which this store holds whole", agentsession.ErrRedacted, len(fresh), id)
 	}
 	if err := callIDsMeet(h.session.Entries(), b, fresh); err != nil {
 		return Exchange{}, err
@@ -581,6 +584,9 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 		return Exchange{}, err
 	}
 	defer guard.release()
+	if err := s.refuseUnredacted(b.header, append(append([]agentsession.Entry(nil), b.prefix...), fresh...)); err != nil {
+		return Exchange{}, err
+	}
 	pend := newPendSet()
 	sizes, err := s.packEntries(append(append([]agentsession.Entry(nil), b.prefix...), fresh...), b.blobs, pend)
 	if err != nil {

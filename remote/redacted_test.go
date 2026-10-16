@@ -15,35 +15,33 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 )
 
-// TestRedactedCodes: the two refusals travel as RFC 0003's redacted
-// (409) and not_redacted (403), and match the library's sentinels on
-// the client.
+// TestRedactedCodes: a redacted-only store's refusal travels as RFC
+// 0003's not_redacted (403), and matches the library's sentinel on the
+// client, for a create and for a native append.
 func TestRedactedCodes(t *testing.T) {
 	ctx := context.Background()
-	for _, tt := range []struct {
-		name   string
-		st     agentsession.Store
-		h      agentsession.Header
-		code   string
-		status int
-		want   error
-	}{
-		{"redacted", agentsession.NewMemoryStore(), agentsession.Header{Redacted: true}, remote.CodeRedacted, http.StatusConflict, agentsession.ErrRedacted},
-		{"not_redacted", agentsession.NewMemoryStore(agentsession.MemoryRedactedOnly()), agentsession.Header{}, remote.CodeNotRedacted, http.StatusForbidden, agentsession.ErrNotRedacted},
-	} {
-		c := serve(t, tt.st, nil)
-		_, err := c.Create(ctx, tt.h)
+	c := serve(t, agentsession.NewMemoryStore(agentsession.MemoryRedactedOnly()), nil)
+	check := func(what string, err error) {
+		t.Helper()
 		var p *remote.Problem
-		if !errors.As(err, &p) || p.Code != tt.code || p.Status != tt.status || !errors.Is(err, tt.want) {
-			t.Errorf("%s: %v, want %s %d matching %v", tt.name, err, tt.code, tt.status, tt.want)
+		if !errors.As(err, &p) || p.Code != remote.CodeNotRedacted || p.Status != http.StatusForbidden || !errors.Is(err, agentsession.ErrNotRedacted) {
+			t.Errorf("%s: %v, want not_redacted 403 matching ErrNotRedacted", what, err)
 		}
 	}
+	_, err := c.Create(ctx, agentsession.Header{})
+	check("create of an original", err)
+	if _, err := c.Create(ctx, agentsession.Header{ID: "r", Redacted: true}); err != nil {
+		t.Fatalf("create of a redacted session: %v", err)
+	}
+	_, err = c.Append(ctx, "r", agentsession.NewItemEntry(openresponses.UserText("native")))
+	check("a native append", err)
 }
 
-// TestClientRedactedOnly: a client set to send only redacted sessions
-// refuses to create or push any other before it sends anything, so it
-// fails closed against a server whose store is not so set. Its server
-// fails the test on any request.
+// TestClientRedactedOnly: a client set to send only redacted entries
+// refuses, before it sends anything, to create a session whose header
+// lacks redacted, to append or write an entry without it, and to push a
+// session holding either, so it fails closed against a server whose
+// store is not so set. Its server fails the test on any request.
 func TestClientRedactedOnly(t *testing.T) {
 	ctx := context.Background()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +70,30 @@ func TestClientRedactedOnly(t *testing.T) {
 	}
 	if _, err := remote.Push(ctx, local, c, "o", cas.PushOptions{}); !errors.Is(err, agentsession.ErrNotRedacted) {
 		t.Errorf("Push of an original: %v, want ErrNotRedacted", err)
+	}
+	// A native entry: refused by Append and Write, and a redacted session
+	// resumed with one is refused by Push.
+	if _, err := c.Append(ctx, "r", agentsession.NewItemEntry(openresponses.UserText("native"))); !errors.Is(err, agentsession.ErrNotRedacted) {
+		t.Errorf("Append of a native entry: %v, want ErrNotRedacted", err)
+	}
+	if _, err := c.Write(ctx, "r", agentsession.NewItemEntry(openresponses.UserText("native"))); !errors.Is(err, agentsession.ErrNotRedacted) {
+		t.Errorf("Write of a native entry: %v, want ErrNotRedacted", err)
+	}
+	if _, err := local.Create(ctx, agentsession.Header{ID: "r", Redacted: true}); err != nil {
+		t.Fatal(err)
+	}
+	marked := agentsession.NewItemEntry(openresponses.UserText("marked"))
+	if err := agentsession.SetRedacted(marked, []agentsession.Span{{From: 1, To: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.Append(ctx, "r", marked); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.Append(ctx, "r", agentsession.NewItemEntry(openresponses.UserText("resumed"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remote.Push(ctx, local, c, "r", cas.PushOptions{}); !errors.Is(err, agentsession.ErrNotRedacted) {
+		t.Errorf("Push of a session resumed natively: %v, want ErrNotRedacted", err)
 	}
 }
 
@@ -113,7 +135,7 @@ func TestPushValidatesHeader(t *testing.T) {
 	}
 	w := serve(t, backing, backing.Close)
 	h := agentsession.New(agentsession.Header{ID: "x"}).Header()
-	h.RedactedFrom = &agentsession.RedactedFrom{Session: "o", Entries: 0}
+	h.RedactedFrom = &agentsession.RedactedFrom{Session: "o"}
 	hdr, err := json.Marshal(h)
 	if err != nil {
 		t.Fatal(err)

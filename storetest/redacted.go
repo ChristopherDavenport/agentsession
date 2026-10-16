@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,22 +14,24 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 )
 
-// testRedacted exercises RFC 0002's redacted sessions: no store creates
-// one or appends to one; a store that takes a session whole, by import
-// or by push, holds one and verifies it, and refuses a push that would
-// add to one it holds; a store set to hold only redacted sessions
-// refuses every other by every path it has; and [agentsession.Original]
-// and [agentsession.Redactions] find what was made from what.
+// testRedacted exercises RFC 0002's redacted sessions, which a store
+// treats as any other: created, appended to with redacted entries as
+// the original grows, resumed with native entries, imported and pushed
+// again grown; a store set to hold only redacted entries refuses a
+// header without redacted and every entry without it, by every path it
+// has; [agentsession.Original] maps redacted entries back by position,
+// and [agentsession.Redactions] finds what was made from what. A fork
+// whose prefix holds a redacted member from before 0.13 is refused, as
+// the fork would give it a meaning it was not written with.
 func testRedacted(t *testing.T, opts Options) {
-	t.Run("CreateRefused", func(t *testing.T) { redactedCreate(t, opts) })
+	t.Run("CreateAndGrow", func(t *testing.T) { redactedGrow(t, opts) })
 	t.Run("Import", func(t *testing.T) { redactedImport(t, opts) })
-	t.Run("AppendRefused", func(t *testing.T) { redactedAppend(t, opts) })
-	t.Run("Push", func(t *testing.T) { redactedPush(t, opts) })
-	t.Run("PushAddsRefused", func(t *testing.T) { redactedPushAdds(t, opts) })
-	t.Run("ContinueRefused", func(t *testing.T) { redactedContinue(t, opts) })
+	t.Run("PushGrown", func(t *testing.T) { redactedPushGrown(t, opts) })
 	t.Run("RedactedOnly", func(t *testing.T) { redactedOnly(t, opts) })
 	t.Run("Original", func(t *testing.T) { redactedOriginal(t, opts) })
+	t.Run("OriginalOfAFork", func(t *testing.T) { redactedOriginalFork(t, opts) })
 	t.Run("Redactions", func(t *testing.T) { redactedRedactions(t, opts) })
+	t.Run("ForkOverAnOldRedacted", func(t *testing.T) { redactedForkRaise(t, opts) })
 }
 
 // secret is what the redactions here take out.
@@ -61,72 +64,99 @@ func original(t *testing.T, id string) *agentsession.Session {
 	return s
 }
 
-// redaction makes a redaction of orig with the exported writer helpers,
-// as a redactor does: every body string through one Rewriter in file
-// order, every reference into the session re-pointed with RemapRefs to
-// the entries already written, each entry committed, its ID cleared, to
-// a session whose header carries redacted and redacted_from under the ID
-// RedactedSessionID derives, and last a fork's base. It returns the
-// session as a reader of its file has it, and the file.
-func redaction(t *testing.T, orig *agentsession.Session, profile string, aligned bool) (*agentsession.Session, []byte) {
-	t.Helper()
+// redactor redacts an original into a session of its own, in memory,
+// with the exported writer helpers, as a redactor does: each entry the
+// original holds past those it has done, in file order, through one
+// Rewriter, its references re-pointed with RemapRefs to the entries
+// already written, marked with SetRedacted with its position, its ID
+// cleared, and committed. Called again as the original grows, it
+// appends the rest, so the redacted session grows with it.
+type redactor struct {
+	orig string
+	red  *agentsession.Session
+	rw   *agentsession.Rewriter
+	ids  map[string]string
+	done int
+}
+
+func newRedactor(orig *agentsession.Session, profile string, h agentsession.Header) *redactor {
 	oh := orig.Header()
-	order := agentsession.FileOrder(orig)
-	h := oh
-	h.ID = agentsession.RedactedSessionID(oh.ID, len(order), profile)
-	h.Base = ""
-	h.Redacted = true
-	h.RedactedFrom = &agentsession.RedactedFrom{Session: oh.ID, Entries: len(order), Profile: profile, Aligned: aligned}
-	red := agentsession.New(h)
-	ids := map[string]string{}
+	if h.ID == "" {
+		h.ID = agentsession.RedactedSessionID(oh.ID, profile)
+	}
+	h.CWD, h.Redacted = oh.CWD, true
+	h.RedactedFrom = &agentsession.RedactedFrom{Session: oh.ID, Profile: profile}
+	return &redactor{orig: oh.ID, red: agentsession.New(h), rw: agentsession.NewRewriter(hide), ids: map[string]string{}}
+}
+
+// redact redacts what orig holds past what was done and returns the
+// entries it wrote, IDs set.
+func (r *redactor) redact(t *testing.T, orig *agentsession.Session) []agentsession.Entry {
+	t.Helper()
 	remap := agentsession.Remap{Entry: func(session, entry string) (string, bool) {
-		if session != "" && session != oh.ID {
+		if session != "" && session != r.orig {
 			return "", false
 		}
-		id, ok := ids[entry]
+		id, ok := r.ids[entry]
 		return id, ok
 	}}
-	rw := agentsession.NewRewriter(hide)
-	for _, e := range order {
-		body, err := rw.Rewrite(e)
+	order := agentsession.FileOrder(orig)
+	var out []agentsession.Entry
+	for i := r.done; i < len(order); i++ {
+		e := order[i]
+		body, err := r.rw.Rewrite(e)
 		if err != nil {
 			t.Fatalf("rewrite %s: %v", e.Base().ID, err)
 		}
-		r, err := agentsession.RemapRefs(body, remap)
+		rr, err := agentsession.RemapRefs(body, remap)
 		if err != nil {
 			t.Fatalf("remap %s: %v", e.Base().ID, err)
 		}
-		n := r.Entry
+		n := rr.Entry
 		n.Base().ID = ""
-		res, err := red.Commit(n)
+		if err := agentsession.SetRedacted(n, []agentsession.Span{{From: i + 1, To: i + 1}}); err != nil {
+			t.Fatal(err)
+		}
+		res, err := r.red.Commit(n)
 		if err != nil {
 			t.Fatalf("commit %s: %v", e.Base().ID, err)
 		}
-		ids[e.Base().ID] = res.ID
+		r.ids[e.Base().ID] = res.ID
+		out = append(out, n)
 	}
-	if oh.Base != "" {
-		h.Base = oh.Base
-		var unmapped []agentsession.Reference
-		if h, unmapped = agentsession.RemapHeaderRefs(h, agentsession.Remap{Entry: remap.Entry}); len(unmapped) > 0 {
-			t.Fatalf("the base is not mapped: %v", unmapped)
-		}
+	r.done = len(order)
+	return out
+}
+
+// redaction is a whole redaction of orig under profile, and its file.
+func redaction(t *testing.T, orig *agentsession.Session, profile string) (*agentsession.Session, []byte) {
+	t.Helper()
+	r := newRedactor(orig, profile, agentsession.Header{})
+	r.redact(t, orig)
+	file := fileOf(t, r.red)
+	if strings.Contains(string(file), secret) {
+		t.Fatalf("the redaction kept the secret:\n%s", file)
 	}
-	var head, body bytes.Buffer
-	if err := agentsession.Write(&head, agentsession.New(h)); err != nil {
-		t.Fatal(err)
-	}
-	if err := agentsession.Write(&body, red); err != nil {
-		t.Fatal(err)
-	}
-	file := head.String() + strings.SplitAfterN(body.String(), "\n", 2)[1]
-	s, err := agentsession.Read(strings.NewReader(file))
+	s, err := agentsession.Read(bytes.NewReader(file))
 	if err != nil {
 		t.Fatalf("the redacted file does not read: %v\n%s", err, file)
 	}
-	if strings.Contains(file, secret) {
-		t.Fatalf("the redaction kept the secret:\n%s", file)
+	return s, file
+}
+
+// clone is a copy of an entry, its ID and parent set, as a store is
+// given one.
+func clone(t *testing.T, e agentsession.Entry) agentsession.Entry {
+	t.Helper()
+	b, err := agentsession.MarshalEntry(e)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return s, []byte(file)
+	c, err := agentsession.UnmarshalEntry(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
 
 // fileOf writes a session as its file.
@@ -163,9 +193,9 @@ func readBack(t *testing.T, st agentsession.Store, id string) *agentsession.Sess
 	return s
 }
 
-// sameRedacted checks that the store holds want whole: redacted, linked
-// to its original, its entries in file order, and verifying when its
-// file is read again.
+// sameRedacted checks that the store holds want: redacted, linked to its
+// original, its entries in file order, each redacted where want's is,
+// and verifying when its file is read again.
 func sameRedacted(t *testing.T, st agentsession.Store, want *agentsession.Session) {
 	t.Helper()
 	got := readBack(t, st, want.ID())
@@ -175,6 +205,16 @@ func sameRedacted(t *testing.T, st agentsession.Store, want *agentsession.Sessio
 	}
 	if g, w := entryIDs(got), entryIDs(want); !reflect.DeepEqual(g, w) {
 		t.Errorf("held entries %v, want %v", g, w)
+	}
+	for _, e := range want.Entries() {
+		ws, wok := agentsession.RedactedOf(e)
+		g, _ := got.Entry(e.Base().ID)
+		if g == nil {
+			continue
+		}
+		if gs, gok := agentsession.RedactedOf(g); gok != wok || !reflect.DeepEqual(gs, ws) {
+			t.Errorf("held entry %s redacted %v %v, want %v %v", e.Base().ID, gs, gok, ws, wok)
+		}
 	}
 	if _, err := agentsession.Read(bytes.NewReader(fileOf(t, got))); err != nil {
 		t.Errorf("the held session does not verify: %v", err)
@@ -214,167 +254,183 @@ func wantErr(t *testing.T, what string, err, want error) {
 	}
 }
 
-// redactedCreate: no store creates a session whose header carries
-// redacted, linked or not, or one carrying redacted_from without it,
-// and nothing is left of the attempt.
-func redactedCreate(t *testing.T, opts Options) {
-	ctx := context.Background()
-	st := opts.New(t)
-	for _, h := range []agentsession.Header{
-		{ID: "r-linked", Redacted: true, RedactedFrom: &agentsession.RedactedFrom{Session: "o", Entries: 1, Profile: "test@1", Aligned: true}},
-		{ID: "r-bare", Redacted: true},
-		{Redacted: true},
-	} {
-		_, err := st.Create(ctx, h)
-		wantErr(t, "Create of a redacted header "+h.ID, err, agentsession.ErrRedacted)
-	}
-	_, err := st.Create(ctx, agentsession.Header{ID: "r-unmarked", RedactedFrom: &agentsession.RedactedFrom{Session: "o", Entries: 1}})
-	wantErr(t, "Create of a redacted_from without redacted", err, agentsession.ErrRedactedFrom)
-	_, err = st.Create(ctx, agentsession.Header{ID: "r-unmarked-extra", Extra: map[string]json.RawMessage{"redacted_from": json.RawMessage(`{"entries":1,"session":"o"}`)}})
-	wantErr(t, "Create of a redacted_from without redacted, held in Extra", err, agentsession.ErrRedactedFrom)
-	if n := countSessions(t, st); n != 0 {
-		t.Errorf("the store holds %d sessions after the refusals", n)
+// appendAll appends entries to the session id in st, as given.
+func appendAll(t *testing.T, st agentsession.Store, id string, entries []agentsession.Entry) {
+	t.Helper()
+	for _, e := range entries {
+		if _, err := st.Append(context.Background(), id, clone(t, e)); err != nil {
+			t.Fatalf("append %s: %v", e.Base().ID, err)
+		}
 	}
 }
 
-// redactedImport: a redacted file taken whole is held as written and
-// verifies, beside the original.
+// redactedGrow: a redacted session is created as any other, takes the
+// redacted entries its redactor appends as the original grows, and is
+// resumed by a writer whose entry is native, which it takes too.
+func redactedGrow(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	orig := original(t, "orig-grow")
+	r := newRedactor(orig, "test.secret@1", agentsession.Header{})
+	if _, err := st.Create(ctx, r.red.Header()); err != nil {
+		t.Fatalf("Create of a redacted session: %v", err)
+	}
+	appendAll(t, st, r.red.ID(), r.redact(t, orig))
+	if _, err := orig.Append(user("later, " + secret)); err != nil {
+		t.Fatal(err)
+	}
+	appendAll(t, st, r.red.ID(), r.redact(t, orig))
+	sameRedacted(t, st, r.red)
+
+	native := user("resumed here")
+	id, err := st.Append(ctx, r.red.ID(), native)
+	if err != nil {
+		t.Fatalf("a native entry on a redacted session: %v", err)
+	}
+	got := readBack(t, st, r.red.ID())
+	e, ok := got.Entry(id)
+	if !ok || got.Len() != r.red.Len()+1 {
+		t.Fatalf("after the native append the session holds %d entries", got.Len())
+	}
+	if _, redacted := agentsession.RedactedOf(e); redacted {
+		t.Error("the native entry reads back redacted")
+	}
+	if opts.Reopen != nil {
+		if got := readBack(t, opts.Reopen(t, st), r.red.ID()); got.Len() != r.red.Len()+1 {
+			t.Errorf("after a reopen the session holds %d entries", got.Len())
+		}
+	}
+}
+
+// redactedImport: a redacted file is held as written and verifies,
+// beside the original, and grows by append afterwards, redacted and
+// native.
 func redactedImport(t *testing.T, opts Options) {
+	ctx := context.Background()
 	st := opts.New(t)
 	take := importer(opts, st)
 	hooks(t, take != nil)
 	orig := original(t, "orig-import")
-	red, file := redaction(t, orig, "test.secret@1", true)
+	r := newRedactor(orig, "test.secret@1", agentsession.Header{})
+	r.redact(t, orig)
 	if err := take(t, st, fileOf(t, orig)); err != nil {
 		t.Fatalf("import the original: %v", err)
 	}
-	if err := take(t, st, file); err != nil {
+	if err := take(t, st, fileOf(t, r.red)); err != nil {
 		t.Fatalf("import the redaction: %v", err)
 	}
-	sameRedacted(t, st, red)
-}
-
-// redactedAppend: a held redacted session takes no append, an entry or
-// a leaf label, and is as it was, read again and after a reopen.
-func redactedAppend(t *testing.T, opts Options) {
-	ctx := context.Background()
-	st := opts.New(t)
-	take := importer(opts, st)
-	hooks(t, take != nil)
-	red, file := redaction(t, original(t, "orig-append"), "test.secret@1", true)
-	if err := take(t, st, file); err != nil {
+	sameRedacted(t, st, r.red)
+	if _, err := orig.Append(user("more, " + secret)); err != nil {
 		t.Fatal(err)
 	}
-	s, err := st.Open(ctx, red.ID())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = st.Append(ctx, red.ID(), user("more"))
-	wantErr(t, "Append to a redacted session", err, agentsession.ErrRedacted)
-	_, err = st.Append(ctx, red.ID(), agentsession.NewLabelEntry(red.Leaf(), agentsession.LeafLabel))
-	wantErr(t, "a leaf label on a redacted session", err, agentsession.ErrRedacted)
-	if w, ok := st.(agentsession.Writer); ok {
-		_, err := w.Write(ctx, red.ID(), user("more"))
-		wantErr(t, "Write to a redacted session", err, agentsession.ErrRedacted)
-	}
-	if s.Len() != red.Len() {
-		t.Errorf("the session holds %d entries after the refusals, want %d", s.Len(), red.Len())
-	}
-	sameRedacted(t, st, red)
-	if opts.Reopen != nil {
-		sameRedacted(t, opts.Reopen(t, st), red)
+	appendAll(t, st, r.red.ID(), r.redact(t, orig))
+	sameRedacted(t, st, r.red)
+	if _, err := st.Append(ctx, r.red.ID(), user("native")); err != nil {
+		t.Errorf("a native entry on an imported redacted session: %v", err)
 	}
 }
 
-// redactedPush: a store that lacks a redacted session takes it whole by
-// push, and a repeat of the push, which adds nothing, is taken too.
-func redactedPush(t *testing.T, opts Options) {
+// redactedPushGrown: a redacted session pushed, then pushed again once
+// it has grown, lands what it added, as any session's push does.
+func redactedPushGrown(t *testing.T, opts Options) {
 	hooks(t, opts.Push != nil)
 	st := opts.New(t)
-	red, file := redaction(t, original(t, "orig-push"), "test.secret@1", true)
-	if err := opts.Push(t, st, file); err != nil {
+	orig := original(t, "orig-push")
+	r := newRedactor(orig, "test.secret@1", agentsession.Header{})
+	r.redact(t, orig)
+	if err := opts.Push(t, st, fileOf(t, r.red)); err != nil {
 		t.Fatalf("push of a redacted session: %v", err)
 	}
-	sameRedacted(t, st, red)
-	if err := opts.Push(t, st, file); err != nil {
-		t.Errorf("a repeat of the push: %v", err)
-	}
-	sameRedacted(t, st, red)
-}
-
-// redactedPushAdds: a push that would add entries to a held redacted
-// session is refused, and lands nothing.
-func redactedPushAdds(t *testing.T, opts Options) {
-	hooks(t, opts.Push != nil)
-	st := opts.New(t)
-	red, file := redaction(t, original(t, "orig-adds"), "test.secret@1", true)
-	part := cut(file, 2)
-	held, err := agentsession.Read(bytes.NewReader(part))
-	if err != nil {
+	sameRedacted(t, st, r.red)
+	if _, err := orig.Append(user("more, " + secret)); err != nil {
 		t.Fatal(err)
 	}
-	if err := opts.Push(t, st, part); err != nil {
-		t.Fatalf("push of a redacted session: %v", err)
+	r.redact(t, orig)
+	if err := opts.Push(t, st, fileOf(t, r.red)); err != nil {
+		t.Fatalf("push of the grown redacted session: %v", err)
 	}
-	wantErr(t, "a push adding to a held redacted session", opts.Push(t, st, file), agentsession.ErrRedacted)
-	if got := readBack(t, st, red.ID()); got.Len() != held.Len() {
-		t.Errorf("the refused push left %d entries, want %d", got.Len(), held.Len())
-	}
+	sameRedacted(t, st, r.red)
 }
 
-// redactedOnly: a store set to hold only redacted sessions refuses an
-// original and a fork of a redacted session by every path it has, a
-// create, an import and a push, and takes a redacted session by the
-// paths that take one.
+// redactedOnly: a store set to hold only redacted entries refuses a
+// header without redacted and every entry without it, by create,
+// append, import and push: an original, a fork, and a redacted session
+// resumed with a native entry. It takes a redacted session created,
+// grown, imported and pushed, as long as every entry is redacted.
 func redactedOnly(t *testing.T, opts Options) {
 	hooks(t, opts.RedactedOnly != nil)
 	ctx := context.Background()
 	st := opts.RedactedOnly(t)
 	orig := original(t, "orig-only")
-	red, file := redaction(t, orig, "test.secret@1", true)
-	origFile := fileOf(t, orig)
 
 	_, err := st.Create(ctx, agentsession.Header{})
 	wantErr(t, "Create of an original", err, agentsession.ErrNotRedacted)
-	_, err = st.Create(ctx, agentsession.Header{Redacted: true})
-	wantErr(t, "Create of a redacted header", err, agentsession.ErrRedacted)
+	r := newRedactor(orig, "test.created@1", agentsession.Header{})
+	if _, err := st.Create(ctx, r.red.Header()); err != nil {
+		t.Fatalf("Create of a redacted session: %v", err)
+	}
+	appendAll(t, st, r.red.ID(), r.redact(t, orig))
+	_, err = st.Append(ctx, r.red.ID(), user("native"))
+	wantErr(t, "a native append", err, agentsession.ErrNotRedacted)
+	_, err = st.Append(ctx, r.red.ID(), agentsession.NewLabelEntry(r.red.Leaf(), agentsession.LeafLabel))
+	wantErr(t, "a native leaf label", err, agentsession.ErrNotRedacted)
+	sameRedacted(t, st, r.red)
+	// A fork of it: not redacted, refused; redacted, its prefix all
+	// redacted, taken, and refused a native entry.
+	_, err = st.Create(ctx, agentsession.Header{Base: r.red.Leaf(), ParentSession: r.red.ID()})
+	wantErr(t, "Create of a fork without redacted", err, agentsession.ErrNotRedacted)
+	rf, err := st.Create(ctx, agentsession.Header{ID: "fork-redacted", Base: r.red.Leaf(), ParentSession: r.red.ID(), Redacted: true,
+		RedactedFrom: &agentsession.RedactedFrom{Session: "orig-only-fork", Profile: "test.fork@1"}})
+	if err != nil {
+		t.Fatalf("Create of a redacted fork whose prefix is redacted: %v", err)
+	}
+	_, err = st.Append(ctx, rf.ID(), user("native on the fork"))
+	wantErr(t, "a native append to the fork", err, agentsession.ErrNotRedacted)
 
-	held := false
-	take := importer(opts, st)
-	if take != nil {
-		wantErr(t, "import of an original", take(t, st, origFile), agentsession.ErrNotRedacted)
-		if err := take(t, st, file); err != nil {
+	resumed := newRedactor(orig, "test.resumed@1", agentsession.Header{})
+	resumed.redact(t, orig)
+	if _, err := resumed.red.Append(user("resumed natively")); err != nil {
+		t.Fatal(err)
+	}
+	fork, err := agentsession.Fork(r.red, r.red.Leaf(), agentsession.Header{ID: "fork-of-redacted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fork.Append(user("unredacted " + secret)); err != nil {
+		t.Fatal(err)
+	}
+	if take := importer(opts, st); take != nil {
+		wantErr(t, "import of an original", take(t, st, fileOf(t, orig)), agentsession.ErrNotRedacted)
+		wantErr(t, "import of a resumed redacted session", take(t, st, fileOf(t, resumed.red)), agentsession.ErrNotRedacted)
+		wantErr(t, "import of a fork of a redacted session", take(t, st, fileOf(t, fork)), agentsession.ErrNotRedacted)
+		imported := newRedactor(orig, "test.imported@1", agentsession.Header{})
+		imported.redact(t, orig)
+		if err := take(t, st, fileOf(t, imported.red)); err != nil {
 			t.Fatalf("import of a redacted session: %v", err)
 		}
-		held = true
+		sameRedacted(t, st, imported.red)
 	}
 	if opts.Push != nil {
-		wantErr(t, "push of an original", opts.Push(t, st, origFile), agentsession.ErrNotRedacted)
-		if err := opts.Push(t, st, file); err != nil {
+		wantErr(t, "push of an original", opts.Push(t, st, fileOf(t, orig)), agentsession.ErrNotRedacted)
+		wantErr(t, "push of a resumed redacted session", opts.Push(t, st, fileOf(t, resumed.red)), agentsession.ErrNotRedacted)
+		wantErr(t, "push of a fork of a redacted session", opts.Push(t, st, fileOf(t, fork)), agentsession.ErrNotRedacted)
+		pushed := newRedactor(orig, "test.pushed@1", agentsession.Header{})
+		pushed.redact(t, orig)
+		if err := opts.Push(t, st, fileOf(t, pushed.red)); err != nil {
 			t.Fatalf("push of a redacted session: %v", err)
 		}
-		held = true
-	}
-	if held {
-		sameRedacted(t, st, red)
-		// A fork of the redacted session is not redacted: refused by
-		// create, by import and by push.
-		_, err := st.Create(ctx, agentsession.Header{Base: red.Leaf(), ParentSession: red.ID()})
-		wantErr(t, "Create of a fork of a redacted session", err, agentsession.ErrNotRedacted)
-		fork, err := agentsession.Fork(red, red.Leaf(), agentsession.Header{ID: "fork-of-redacted"})
-		if err != nil {
+		if _, err := orig.Append(user("more, " + secret)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := fork.Append(user("unredacted " + secret)); err != nil {
+		pushed.redact(t, orig)
+		if err := opts.Push(t, st, fileOf(t, pushed.red)); err != nil {
+			t.Fatalf("push of the grown redacted session: %v", err)
+		}
+		sameRedacted(t, st, pushed.red)
+		if _, err := pushed.red.Append(user("resumed natively")); err != nil {
 			t.Fatal(err)
 		}
-		forkFile := fileOf(t, fork)
-		if take != nil {
-			wantErr(t, "import of a fork of a redacted session", take(t, st, forkFile), agentsession.ErrNotRedacted)
-		}
-		if opts.Push != nil {
-			wantErr(t, "push of a fork of a redacted session", opts.Push(t, st, forkFile), agentsession.ErrNotRedacted)
-		}
+		wantErr(t, "push of the session resumed natively", opts.Push(t, st, fileOf(t, pushed.red)), agentsession.ErrNotRedacted)
 	}
 	for sum, err := range st.List(ctx, agentsession.ListFilter{}) {
 		if err != nil {
@@ -382,16 +438,23 @@ func redactedOnly(t *testing.T, opts Options) {
 		}
 		if !sum.Header.Redacted {
 			t.Errorf("the store holds %s, which is not redacted", sum.Header.ID)
+			continue
+		}
+		for _, e := range readBack(t, st, sum.Header.ID).Entries() {
+			if _, ok := agentsession.RedactedOf(e); !ok {
+				t.Errorf("the store holds %s in %s, which is not redacted", e.Base().ID, sum.Header.ID)
+			}
 		}
 	}
 }
 
 // redactedOriginal: Original finds a redacted session's original in the
-// store, with the entries mapped by position in file order, the prefix
-// included, over the entries the original held when it was redacted,
-// however it has grown since; a redaction that is not aligned gets no
-// mapping; and an original the store lacks, or a session that is not
-// redacted, is refused.
+// store and maps each redacted entry to the entries its positions name,
+// prefix included, ranges expanded, however the original has grown
+// since; a native entry and an added one map to nothing; a position
+// past the original the store holds is ErrStaleOriginal; and an
+// original the store lacks, or a session that is not redacted, is
+// refused.
 func redactedOriginal(t *testing.T, opts Options) {
 	ctx := context.Background()
 	st := opts.New(t)
@@ -418,35 +481,150 @@ func redactedOriginal(t *testing.T, opts Options) {
 	if len(order) != 4 || !orig.Prefix(order[0].Base().ID) || orig.Prefix(order[3].Base().ID) {
 		t.Fatalf("the original in file order: %d entries", len(order))
 	}
-	red, _ := redaction(t, orig, "test.secret@1", true)
+	// A redaction written without a base: the original's prefix is
+	// redacted into entries of its own, whose positions count in it.
+	r := newRedactor(orig, "test.secret@1", agentsession.Header{})
+	r.redact(t, orig)
+	// A placeholder for the last two, an added entry and a native one.
+	block := agentsession.NewItemEntry(openresponses.AssistantText("[two entries redacted]"))
+	if err := agentsession.SetRedacted(block, []agentsession.Span{{From: 3, To: 4}}); err != nil {
+		t.Fatal(err)
+	}
+	added := agentsession.NewItemEntry(openresponses.AssistantText("[note]"))
+	if err := agentsession.SetRedacted(added, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []agentsession.Entry{block, added} {
+		if _, err := r.red.Commit(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	native, err := r.red.Append(user("native"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.Append(ctx, "orig", user("after the redaction")); err != nil {
 		t.Fatal(err)
 	}
-	got, m, err := agentsession.Original(ctx, st, red)
+	got, m, err := agentsession.Original(ctx, st, r.red)
 	if err != nil {
 		t.Fatalf("Original: %v", err)
 	}
 	if got.ID() != "orig" {
 		t.Errorf("Original is %s, want orig", got.ID())
 	}
-	want := map[string]string{}
-	for i, e := range agentsession.FileOrder(red) {
-		want[e.Base().ID] = order[i].Base().ID
+	want := map[string][]string{}
+	for i, e := range agentsession.FileOrder(r.red)[:4] {
+		want[e.Base().ID] = []string{order[i].Base().ID}
 	}
+	want[block.Base().ID] = []string{order[2].Base().ID, order[3].Base().ID}
 	if !reflect.DeepEqual(m, want) {
 		t.Errorf("the mapping %v, want %v", m, want)
 	}
-
-	loose, _ := redaction(t, orig, "test.loose@1", false)
-	if got, m, err := agentsession.Original(ctx, st, loose); err != nil || got.ID() != "orig" || m != nil {
-		t.Errorf("Original of a redaction that is not aligned: %v, mapping %v", err, m)
+	if _, in := m[added.Base().ID]; in {
+		t.Error("an added entry is mapped")
+	}
+	if _, in := m[native]; in {
+		t.Error("a native entry is mapped")
 	}
 
-	gone, _ := redaction(t, original(t, "not-held"), "test.secret@1", true)
+	beyond := newRedactor(orig, "test.beyond@1", agentsession.Header{})
+	far := user("[far]")
+	if err := agentsession.SetRedacted(far, []agentsession.Span{{From: 9, To: 9}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := beyond.red.Commit(far); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = agentsession.Original(ctx, st, beyond.red)
+	wantErr(t, "a position past the original held", err, agentsession.ErrStaleOriginal)
+
+	gone, _ := redaction(t, original(t, "not-held"), "test.secret@1")
 	_, _, err = agentsession.Original(ctx, st, gone)
 	wantErr(t, "Original whose original the store lacks", err, agentsession.ErrNoSession)
 	_, _, err = agentsession.Original(ctx, st, orig)
 	wantErr(t, "Original of a session that is not redacted", err, agentsession.ErrNotRedacted)
+}
+
+// redactedOriginalFork: a redacted session that is a fork of another
+// redacted session shares its prefix, whose positions count in the
+// original of the session parent_session names: Original maps the
+// fork's own entries in its own original and the prefix in that one,
+// through the redacted session the store holds. O is an original and RO
+// its redaction; F is a fork of O, and RF its redaction, made as a fork
+// of RO.
+func redactedOriginalFork(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	take := importer(opts, st)
+	hooks(t, take != nil)
+	o := original(t, "fo-o")
+	ro := newRedactor(o, "test.secret@1", agentsession.Header{})
+	ro.redact(t, o)
+	base := o.Entries()[1].Base().ID // the assistant's reply
+	f, err := agentsession.Fork(o, base, agentsession.Header{ID: "fo-f"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"forked " + secret, "on"} {
+		if _, err := f.Append(user(text)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, s := range []*agentsession.Session{o, ro.red, f} {
+		if err := take(t, st, fileOf(t, s)); err != nil {
+			t.Fatalf("import %s: %v", s.ID(), err)
+		}
+	}
+	roBase := ro.ids[base]
+	rf, err := agentsession.Fork(ro.red, roBase, agentsession.Header{ID: "fo-rf", ParentSession: ro.red.ID(), Redacted: true,
+		RedactedFrom: &agentsession.RedactedFrom{Session: "fo-f", Profile: "test.secret@1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forder := agentsession.FileOrder(f)
+	var own []string
+	for i, e := range forder {
+		if f.Prefix(e.Base().ID) {
+			continue
+		}
+		n := user(fmt.Sprintf("[redacted %d]", i+1))
+		if err := agentsession.SetRedacted(n, []agentsession.Span{{From: i + 1, To: i + 1}}); err != nil {
+			t.Fatal(err)
+		}
+		res, err := rf.Commit(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		own = append(own, res.ID)
+	}
+	if err := take(t, st, fileOf(t, rf)); err != nil {
+		t.Fatalf("import the redacted fork: %v", err)
+	}
+	held := readBack(t, st, "fo-rf")
+	got, m, err := agentsession.Original(ctx, st, held)
+	if err != nil {
+		t.Fatalf("Original: %v", err)
+	}
+	if got.ID() != "fo-f" {
+		t.Errorf("Original is %s, want fo-f", got.ID())
+	}
+	want := map[string][]string{}
+	oOrder := agentsession.FileOrder(o)
+	for _, e := range agentsession.FileOrder(held) {
+		if !held.Prefix(e.Base().ID) {
+			continue
+		}
+		spans, _ := agentsession.RedactedOf(e)
+		want[e.Base().ID] = []string{oOrder[spans[0].From-1].Base().ID}
+	}
+	prefixLen := len(want)
+	for i, id := range own {
+		want[id] = []string{forder[prefixLen+i].Base().ID}
+	}
+	if !reflect.DeepEqual(m, want) {
+		t.Errorf("the mapping %v, want %v", m, want)
+	}
 }
 
 // redactedRedactions: Redactions lists the redacted sessions the store
@@ -462,13 +640,13 @@ func redactedRedactions(t *testing.T, opts Options) {
 	}
 	want := map[string]bool{}
 	for _, profile := range []string{"test.secret@1", "test.secret@2"} {
-		red, file := redaction(t, orig, profile, true)
+		red, file := redaction(t, orig, profile)
 		if err := take(t, st, file); err != nil {
 			t.Fatal(err)
 		}
 		want[red.ID()] = true
 	}
-	_, file := redaction(t, other, "test.secret@1", true)
+	_, file := redaction(t, other, "test.secret@1")
 	if err := take(t, st, file); err != nil {
 		t.Fatal(err)
 	}
@@ -484,33 +662,32 @@ func redactedRedactions(t *testing.T, opts Options) {
 	}
 }
 
-// redactedContinue: Continue and ContinueRef refuse a redacted session
-// before they create anything, since it takes no continued_in link, and
-// a ref naming it stays where it was.
-func redactedContinue(t *testing.T, opts Options) {
+// redactedForkRaise: a fork is written at this package's format, so one
+// whose prefix holds a redacted member from before 0.13, which that
+// minor would give a meaning it was not written with, is refused, as
+// RFC 0001's no-raise rule has it; a fork above it is not.
+func redactedForkRaise(t *testing.T, opts Options) {
 	ctx := context.Background()
 	st := opts.New(t)
 	take := importer(opts, st)
 	hooks(t, take != nil)
-	red, file := redaction(t, original(t, "orig-continue"), "test.secret@1", true)
-	if err := take(t, st, file); err != nil {
+	old := agentsession.New(agentsession.Header{ID: "old-redacted", Format: "agentsession/0.12"})
+	first, err := old.Commit(user("before"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	before := countSessions(t, st)
-	_, err := agentsession.Continue(ctx, st, red.ID(), nil)
-	wantErr(t, "Continue of a redacted session", err, agentsession.ErrRedacted)
-	if rs, ok := st.(agentsession.RefStore); ok {
-		if err := rs.UpdateRef(ctx, "redacted/test", agentsession.RefTarget{}, agentsession.RefTarget{Session: red.ID()}, "test"); err != nil {
-			t.Fatal(err)
-		}
-		_, err := agentsession.ContinueRef(ctx, st, "redacted/test", nil)
-		wantErr(t, "ContinueRef of a redacted session", err, agentsession.ErrRedacted)
-		if got, err := rs.ResolveRef(ctx, "redacted/test"); err != nil || got.Session != red.ID() {
-			t.Errorf("after the refusal the ref names %+v (%v)", got, err)
-		}
+	marked := agentsession.NewItemEntry(openresponses.UserText("an old redacted member"))
+	marked.Unknown = map[string]json.RawMessage{"redacted": json.RawMessage(`[1]`)}
+	gated, err := old.Commit(marked)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if n := countSessions(t, st); n != before {
-		t.Errorf("the refusals left %d sessions, %d before", n, before)
+	if err := take(t, st, fileOf(t, old)); err != nil {
+		t.Fatalf("import of a 0.12 session holding a redacted member: %v", err)
 	}
-	sameRedacted(t, st, red)
+	_, err = st.Create(ctx, agentsession.Header{Base: gated.ID, ParentSession: "old-redacted"})
+	wantErr(t, "a fork whose prefix holds a redacted member from before 0.13", err, agentsession.ErrUnsupportedFormat)
+	if _, err := st.Create(ctx, agentsession.Header{ID: "above-it", Base: first.ID, ParentSession: "old-redacted"}); err != nil {
+		t.Errorf("a fork above the old member: %v", err)
+	}
 }

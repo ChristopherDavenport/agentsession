@@ -10,15 +10,16 @@ import (
 
 // Importer is implemented by a store that takes a session in whole from
 // an RFC 0001 file, as RFC 0002's projection section has a store import
-// a projection. It is how a redacted session enters a store, since no
-// store creates one. Import verifies every line and refuses a file one
-// of whose lines fails, a last line cut short, a header carrying
+// a projection, a redacted session among them. Import verifies every
+// line and refuses a file one of whose lines fails, a last line cut
+// short, a header carrying
 // redacted_from without redacted ([ErrRedactedFrom]), a session ID the
 // store holds ([ErrSessionExists]), an own entry that does not hang
 // from the base or another own entry, and a fork whose media differs
 // from that of a held session whose own entries include the base; a
-// store set to hold only redacted sessions refuses a file whose header
-// does not carry redacted ([ErrNotRedacted]). What it imports is
+// store set to hold only redacted entries refuses a file whose header
+// does not carry redacted or that holds an entry without it, prefix
+// included ([ErrNotRedacted]). What it imports is
 // committed before it returns, and the session comes back as the store
 // holds it.
 //

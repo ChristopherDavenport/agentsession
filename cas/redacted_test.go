@@ -3,6 +3,7 @@ package cas
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,14 +14,17 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 )
 
-// redactedFile is a redacted session file of n entries, made from an
-// original by changing its header alone: the header is not hashed, so
-// the entries verify as they are.
+// redactedFile is a redacted session file of n entries, each marked
+// redacted from the original's entry in its place.
 func redactedFile(t *testing.T, id string, n int) []byte {
 	t.Helper()
-	s := agentsession.New(agentsession.Header{ID: id, Redacted: true, RedactedFrom: &agentsession.RedactedFrom{Session: "orig", Entries: n}})
+	s := agentsession.New(agentsession.Header{ID: id, Redacted: true, RedactedFrom: &agentsession.RedactedFrom{Session: "orig"}})
 	for i := range n {
-		if _, err := s.Commit(agentsession.NewItemEntry(openresponses.UserText(strings.Repeat("x", i+1)))); err != nil {
+		e := agentsession.NewItemEntry(openresponses.UserText(strings.Repeat("x", i+1)))
+		if err := agentsession.SetRedacted(e, []agentsession.Span{{From: i + 1, To: i + 1}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Commit(e); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -106,6 +110,22 @@ func TestRedactedOnlyRefusesAHoldingStore(t *testing.T) {
 	st.Close()
 	if _, err := Open(root, WithRedactedOnly()); !errors.Is(err, agentsession.ErrNotRedacted) || !strings.Contains(err.Error(), "holds o,") {
 		t.Errorf("setting a store holding an original: %v, want ErrNotRedacted naming o", err)
+	}
+	// One whose redacted session was resumed natively holds an entry
+	// that is not redacted.
+	resumed := t.TempDir()
+	st, err = Open(resumed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	importFile(t, st, redactedFile(t, "r", 1))
+	native, err := st.Append(context.Background(), "r", agentsession.NewItemEntry(openresponses.UserText("native")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	if _, err := Open(resumed, WithRedactedOnly()); !errors.Is(err, agentsession.ErrNotRedacted) || !strings.Contains(err.Error(), native) {
+		t.Errorf("setting a store holding a native entry: %v, want ErrNotRedacted naming %s", err, native)
 	}
 	if data, _ := os.ReadFile(filepath.Join(root, layoutFile)); strings.TrimSpace(string(data)) != layout {
 		t.Errorf("the refused setting left the layout %q", data)
@@ -205,19 +225,27 @@ func TestFetchRedacted(t *testing.T) {
 	if x, err := pub.Fetch(ctx, full, "r"); err != nil || x.Admitted != 0 {
 		t.Errorf("a repeat of the fetch: %+v, %v", x, err)
 	}
-	if _, err := part.Fetch(ctx, full, "r"); !errors.Is(err, agentsession.ErrRedacted) {
-		t.Errorf("a fetch adding to a held redacted session: %v, want ErrRedacted", err)
+	// A redacted session grows by exchange, as any session does.
+	if x, err := part.Fetch(ctx, full, "r"); err != nil || x.Admitted != 1 {
+		t.Errorf("a fetch adding to a held redacted session: %+v, %v", x, err)
 	}
-	// Nothing of the refused entry landed, its object included.
-	fs, err := full.Read(ctx, "r")
+	// Resumed natively, it brings the redacted-only store an entry that
+	// is not redacted: refused, and nothing of it lands, its object
+	// included.
+	native, err := full.Append(ctx, "r", agentsession.NewItemEntry(openresponses.UserText("native")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	last := fs.Entries()[fs.Len()-1].Base().ID
-	if held, err := part.HasObject(ctx, SpaceEntries, last); err != nil || held {
+	if _, err := pub.Fetch(ctx, full, "r"); !errors.Is(err, agentsession.ErrNotRedacted) {
+		t.Errorf("a fetch of a native entry into a redacted-only store: %v, want ErrNotRedacted", err)
+	}
+	if _, err := full.Push(ctx, pub, "r", PushOptions{}); !errors.Is(err, agentsession.ErrNotRedacted) {
+		t.Errorf("a push of a native entry into a redacted-only store: %v, want ErrNotRedacted", err)
+	}
+	if held, err := pub.HasObject(ctx, SpaceEntries, native); err != nil || held {
 		t.Errorf("the refused entry's object is in the store: %v, %v", held, err)
 	}
-	if s, err := part.Read(ctx, "r"); err != nil || s.Len() != 2 {
+	if s, err := pub.Read(ctx, "r"); err != nil || s.Len() != 3 {
 		t.Errorf("after the refused fetch: %v", err)
 	}
 	if _, err := full.Create(ctx, agentsession.Header{ID: "o"}); err != nil {
@@ -249,13 +277,13 @@ func TestExchangeValidatesHeader(t *testing.T) {
 	for name, h := range map[string]agentsession.Header{
 		"redacted_from without redacted": func() agentsession.Header {
 			h := s.Header()
-			h.RedactedFrom = &agentsession.RedactedFrom{Session: "o", Entries: 1}
+			h.RedactedFrom = &agentsession.RedactedFrom{Session: "o"}
 			return h
 		}(),
 		"redacted_from naming itself": func() agentsession.Header {
 			h := s.Header()
 			h.Redacted = true
-			h.RedactedFrom = &agentsession.RedactedFrom{Session: "x", Entries: 1}
+			h.RedactedFrom = &agentsession.RedactedFrom{Session: "x"}
 			return h
 		}(),
 	} {
@@ -268,5 +296,97 @@ func TestExchangeValidatesHeader(t *testing.T) {
 	}
 	if _, err := st.Read(ctx, "x"); !errors.Is(err, agentsession.ErrNoSession) {
 		t.Errorf("a refused exchange left the session: %v", err)
+	}
+}
+
+// TestRedactedOnlyAppend: a store set to hold only redacted entries
+// takes an append of a redacted entry to a redacted session and refuses
+// a native one, in a process that opened the store before the setting
+// too, leaving no object of it.
+func TestRedactedOnlyAppend(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	before, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer before.Close()
+	importFile(t, before, redactedFile(t, "r", 1))
+	setter, err := Open(root, WithRedactedOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	setter.Close()
+	marked := agentsession.NewItemEntry(openresponses.UserText("marked"))
+	if err := agentsession.SetRedacted(marked, []agentsession.Span{{From: 2, To: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := before.Append(ctx, "r", marked); err != nil {
+		t.Errorf("a redacted append: %v", err)
+	}
+	native := agentsession.NewItemEntry(openresponses.UserText("native"))
+	if _, err := before.Append(ctx, "r", native); !errors.Is(err, agentsession.ErrNotRedacted) {
+		t.Errorf("a native append: %v, want ErrNotRedacted", err)
+	}
+	if s, err := before.Read(ctx, "r"); err != nil || s.Len() != 2 {
+		t.Errorf("after the refused append: %v", err)
+	}
+}
+
+// TestExchangeRaiseRefused: an exchange carrying a later format than the
+// held header raises it, unless the session holds a redacted member
+// read under a minor before 0.13, which Header.Raise cannot see: the
+// session's RaiseRefused refuses it, and nothing lands. The receiver
+// holds a 0.12 session with entries a and g, g holding redacted; the
+// sender holds a, appended natively under this package's format, and
+// pushes.
+func TestExchangeRaiseRefused(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	old := agentsession.New(agentsession.Header{ID: "old", Format: "agentsession/0.12"})
+	a, err := old.Commit(agentsession.NewItemEntry(openresponses.UserText("a")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := agentsession.NewItemEntry(openresponses.UserText("an old redacted member"))
+	g.Unknown = map[string]json.RawMessage{"redacted": json.RawMessage(`[1]`)}
+	if _, err := old.Commit(g); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := agentsession.Write(&buf, old); err != nil {
+		t.Fatal(err)
+	}
+	held, err := st.Import(ctx, &buf, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := held.Header()
+	h.Format = agentsession.Format
+	sender := agentsession.New(h)
+	ae, _ := held.Entry(a.ID)
+	if _, err := sender.Commit(ae); err != nil {
+		t.Fatal(err)
+	}
+	n := agentsession.NewItemEntry(openresponses.UserText("native"))
+	n.Parent = a.ID
+	if _, err := sender.Commit(n); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []ReceiveOptions{{}, {Fetch: true}} {
+		if _, err := st.Receive(ctx, Closure{Header: h, Own: sender.Entries(), Head: sender.Leaf()}, o); !errors.Is(err, agentsession.ErrNoRaise) {
+			t.Errorf("an exchange raising a session holding an old redacted member (fetch %v): %v, want ErrNoRaise", o.Fetch, err)
+		}
+	}
+	dir, _ := st.sessionDir("old")
+	if hdr, err := readHeader(dir); err != nil || hdr.Format != "agentsession/0.12" {
+		t.Errorf("the header is %s after the refusal (%v)", hdr.Format, err)
+	}
+	if ok, err := st.HasObject(ctx, SpaceEntries, n.Base().ID); err != nil || ok {
+		t.Errorf("the refused entry's object is in the store: %v, %v", ok, err)
 	}
 }

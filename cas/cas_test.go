@@ -261,7 +261,7 @@ func TestProjectAndImport(t *testing.T) {
 		t.Error("a head on the last line projected with a marker")
 	}
 	// A redacted file is held as any other by a store that lacks it, and
-	// takes no append.
+	// is appended to as any other.
 	redacted := strings.Replace(buf.String(), `"cwd":"/w"`, `"cwd":"/w","redacted":true`, 1)
 	third, err := Open(t.TempDir())
 	if err != nil {
@@ -273,8 +273,8 @@ func TestProjectAndImport(t *testing.T) {
 	} else if !rs.Header().Redacted {
 		t.Error("the imported session is not redacted")
 	}
-	if _, err := third.Append(ctx, "p", agentsession.NewItemEntry(openresponses.UserText("more"))); !errors.Is(err, agentsession.ErrRedacted) {
-		t.Errorf("append to the imported redacted session: %v, want ErrRedacted", err)
+	if _, err := third.Append(ctx, "p", agentsession.NewItemEntry(openresponses.UserText("more"))); err != nil {
+		t.Errorf("append to the imported redacted session: %v", err)
 	}
 }
 

@@ -94,13 +94,14 @@ func WithStaleLockReport(report func(LockInfo)) Option {
 	return func(s *Store) { s.staleReport = report }
 }
 
-// WithRedactedOnly sets the store to hold only redacted sessions, as
-// RFC 0002 lets a store be set: Import refuses a session whose header
-// does not carry redacted, a fork of a redacted session among them,
-// with [agentsession.ErrNotRedacted], and Create refuses every session,
-// with ErrNotRedacted or, for a redacted header, which no store
-// creates, [agentsession.ErrRedacted]. A redacted session enters it
-// whole, by Import. The option is this process's: a file written under
+// WithRedactedOnly sets the store to hold only redacted entries, as
+// RFC 0002 lets a store be set: it refuses, with
+// [agentsession.ErrNotRedacted], a session whose header does not carry
+// redacted, at Create or Import, and every entry that carries no
+// redacted member, however it arrives: an Append, an Import, the prefix
+// of a fork Create makes. A fork's own entries and a resumed redacted
+// session's native entries are refused alike, since neither was
+// redacted. The option is this process's: a file written under
 // the root by hand, and a store opened on it without the option, are
 // outside what it can refuse, so a store that must fail closed against
 // every process is a cas store set this way.
@@ -123,7 +124,7 @@ type Store struct {
 	policy      SyncPolicy
 	staleReport func(LockInfo)
 	readOnly    bool
-	// redactedOnly says the store holds only redacted sessions.
+	// redactedOnly says the store holds only redacted entries.
 	redactedOnly bool
 	followEvery  time.Duration
 	// hub rings the followers of a session this store appends to.
@@ -246,9 +247,8 @@ func sessionPath(root string, h agentsession.Header) string {
 // Create implements agentsession.Store. The file is created with the
 // header line, and for a header with a base the prefix after it, and
 // synced before Create returns. The origin is read, not claimed: a fork
-// can be made from a session another process is writing. A header that
-// carries redacted is refused with [agentsession.ErrRedacted], since a
-// redacted session is written whole.
+// can be made from a session another process is writing. A redacted
+// session is created as any other is.
 func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -270,6 +270,11 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 		if sess, err = agentsession.Fork(origin, h.Base, h); err != nil {
 			return nil, err
 		}
+		if s.redactedOnly {
+			if err := agentsession.CheckRedacted(sess.Header(), sess.Entries()); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return s.place(sess)
 }
@@ -281,7 +286,8 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 // is then held open as Create holds it. A session the store holds is
 // refused, as is a fork whose media differs from that of a held session
 // whose own entries include the base, and, in a store set with
-// [WithRedactedOnly], a session whose header does not carry redacted.
+// [WithRedactedOnly], a session whose header does not carry redacted or
+// that holds an entry without it.
 // This store keeps a session's head only in its lines, so a file whose
 // head only a projection's synthetic leaf marker names is refused. It
 // keeps no record mark, so asRecord is not read.
@@ -297,8 +303,10 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		return nil, err
 	}
 	h := sess.Header()
-	if s.redactedOnly && !h.Redacted {
-		return nil, fmt.Errorf("%w: import %s in a store that holds only redacted sessions", agentsession.ErrNotRedacted, h.ID)
+	if s.redactedOnly {
+		if err := agentsession.CheckRedacted(h, sess.Entries()); err != nil {
+			return nil, err
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -633,6 +641,11 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	if err != nil {
 		return "", err
 	}
+	if s.redactedOnly {
+		if err := agentsession.CheckRedacted(h.session.Header(), []agentsession.Entry{e}); err != nil {
+			return "", err
+		}
+	}
 	// Followers look again however the append ends: a rewrite for the
 	// format may have landed before a write that failed.
 	defer s.hub.Notify(sessionID)
@@ -691,6 +704,12 @@ func raises(format string) bool {
 // beside it, which is synced and renamed over it, and appends continue
 // on the new file. A crash before the rename leaves the file as it was.
 // The caller holds the session's lock.
+//
+// Raise sees the header alone. An entry holding redacted under a
+// header before 0.13 also forbids the raise, and that is the
+// session's Prepare to refuse, by Session.RaiseRefused, with
+// agentsession.ErrNoRaise: every append prepares its entry on the
+// session before it reaches here.
 func (s *Store) raiseFormat(id string, h *handle) error {
 	fail := func(err error) error {
 		return fmt.Errorf("jsonl: raise the header's format of %s: %w", h.path, err)
