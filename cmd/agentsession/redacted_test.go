@@ -14,10 +14,13 @@ import (
 )
 
 // redaction says how redactFixture redacts: unmarked writes no entry's
-// redacted, as a 0.12 redactor did; a block [from, to] replaces those
-// positions with one placeholder carrying [[from, to]].
+// redacted and keeps each request_hash, the original's, as a 0.12
+// redactor did; keep marks every entry but keeps each request_hash, as
+// 0.13 first allowed and no longer does; a block [from, to] replaces
+// those positions with one placeholder carrying [[from, to]].
 type redaction struct {
 	unmarked bool
+	keep     bool
 	block    [2]int
 }
 
@@ -25,11 +28,13 @@ type redaction struct {
 // as a redactor makes one with the exported helpers: every body string
 // through one Rewriter in file order, every reference re-pointed with
 // RemapRefs to the entries already written, each entry marked with the
-// position it was made from by SetRedacted and committed, its ID
-// cleared, to a session whose header carries redacted and redacted_from
-// under the ID RedactedSessionID derives. The request hashes are kept,
-// so they are the original's. It returns the session as built, which a
-// test may grow, and writes its file.
+// position it was made from by SetRedacted, each response given the
+// request_hash of its request in the redacted session by
+// SetRequestHash, and committed, its ID cleared, to a session whose
+// header carries redacted and redacted_from under the ID
+// RedactedSessionID derives. Unmarked and keep leave each response the
+// original's request_hash instead. It returns the session as built,
+// which a test may grow, and writes its file.
 func redactFixture(t *testing.T, name, path, profile string, extra map[string]json.RawMessage, f func(string) string, how redaction) *agentsession.Session {
 	t.Helper()
 	orig := loadFixture(t, name)
@@ -55,6 +60,11 @@ func redactFixture(t *testing.T, name, path, profile string, extra map[string]js
 		e.Base().ID = ""
 		if !how.unmarked {
 			if err := agentsession.SetRedacted(e, spans); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if r, ok := e.(*agentsession.ResponseEntry); ok && !how.unmarked && !how.keep {
+			if err := red.SetRequestHash(r); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -104,9 +114,8 @@ func writeSession(t *testing.T, path string, s *agentsession.Session) {
 }
 
 // redactFour replaces the function output "4" of the basic fixture, the
-// one string the second request holds and the first does not, so the
-// redacted file keeps one request hash that matches and one that does
-// not.
+// one string the second request holds and the first does not, so a
+// redaction moves the second request's hash and leaves the first's.
 func redactFour(s string) string {
 	if s == "4" {
 		return "[n]"
@@ -158,49 +167,59 @@ func verifyOut(t *testing.T, args ...string) (string, int) {
 
 // TestVerifyRedacted: verify of a redacted file says its ids verify it
 // and not its original, names the original from redacted_from, counts
-// the entries a redaction made and the native ones, and counts a
-// request hash a redacted entry kept that no longer matches apart, as
-// expected, failing nothing over it (RFC 0001, Redaction). A native
-// entry's request hash is held to the rule as in any session, so a
-// resumed redacted session whose native response does not match fails.
-// A line whose id does not verify still fails, and a cas store verifies
-// each session as its file does. show prints the link, and export
-// carries it into the document.
+// the entries a redaction made and the native ones, and holds every
+// request_hash to the rule, a redacted entry's as a native one's (RFC
+// 0001, Redaction): a redaction that recomputed its hashes verifies
+// whole, resumed natively too, and one that kept the original's, as
+// 0.13 first allowed, fails, as does a native response that does not
+// match. Only a redacted file before 0.13, whose every entry is the
+// redaction's, counts a request hash that no longer matches apart, as
+// expected, failing nothing over it. A line whose id does not verify
+// still fails, and a cas store verifies each session as its file does.
+// show prints the link, and export carries it into the document.
 func TestVerifyRedacted(t *testing.T) {
 	tmp := t.TempDir()
-	orig := loadFixture(t, "basic").Header().ID
+	orig := loadFixture(t, "basic")
 	extra := map[string]json.RawMessage{"ex.tool": json.RawMessage(`"scrub/1"`)}
 
 	path := filepath.Join(tmp, "redacted.jsonl")
 	red := redactFixture(t, "basic", path, "test/v1", extra, redactFour, redaction{})
 	resp := responsesOf(red)
-	if len(resp) != 2 {
-		t.Fatalf("%d responses in the redaction of basic, want 2", len(resp))
+	origResp := responsesOf(orig)
+	if len(resp) != 2 || len(origResp) != 2 {
+		t.Fatalf("%d responses in the redaction of basic, %d in basic, want 2", len(resp), len(origResp))
+	}
+	if resp[0].RequestHash != origResp[0].RequestHash || resp[1].RequestHash == origResp[1].RequestHash {
+		t.Fatalf("the redaction's request hashes %s, %s; the original's %s, %s: want the first the same and the second moved",
+			resp[0].RequestHash, resp[1].RequestHash, origResp[0].RequestHash, origResp[1].RequestHash)
 	}
 	head := []string{
 		"each id checked against its hash: the ids verify this redacted file, not its original",
-		"redacted_from session " + orig + ", profile test/v1, also ex.tool",
+		"redacted_from session " + orig.Header().ID + ", profile test/v1, also ex.tool",
 	}
 	want := strings.Join([]string{
 		"9 entries read, " + head[0],
 		head[1],
 		"9 redacted entries, 0 native",
 		shortID(resp[0].ID) + "  ok",
-		shortID(resp[1].ID) + "  differs from recorded " + resp[1].RequestHash + ", as a redacted entry's request_hash may",
-		"1 verified, 0 without hash, 1 redacted differ as expected, 0 failed",
+		shortID(resp[1].ID) + "  ok",
+		"2 verified, 0 without hash, 0 failed",
 	}, "\n") + "\n"
 	if got, code := verifyOut(t, path); got != want || code != 0 {
 		t.Errorf("verify of a redacted file: exit %d\n%s\nwant exit 0\n%s", code, got, want)
 	}
 
 	// Resumed: a writer appends natively, and its response's request
-	// hash, which is its own and not the original's, does not match.
+	// hash is computed over the redacted session as the redaction's
+	// were, so the whole session verifies.
 	resumed := filepath.Join(tmp, "resumed.jsonl")
 	if _, err := red.Append(agentsession.NewItemEntry(openresponses.UserText("and 3+3?"))); err != nil {
 		t.Fatal(err)
 	}
-	native := &agentsession.ResponseEntry{ResponseID: "resp_3", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted,
-		RequestHash: agentsession.HashPrefix + strings.Repeat("0", 64)}
+	native := &agentsession.ResponseEntry{ResponseID: "resp_3", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: "sha256:to-compute"}
+	if err := red.SetRequestHash(native); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := red.Append(native); err != nil {
 		t.Fatal(err)
 	}
@@ -210,12 +229,43 @@ func TestVerifyRedacted(t *testing.T) {
 		head[1],
 		"9 redacted entries, 2 native",
 		shortID(resp[0].ID) + "  ok",
-		shortID(resp[1].ID) + "  differs from recorded " + resp[1].RequestHash + ", as a redacted entry's request_hash may",
-		shortID(native.ID) + "  MISMATCH recorded " + native.RequestHash,
-		"1 verified, 0 without hash, 1 redacted differ as expected, 1 failed",
+		shortID(resp[1].ID) + "  ok",
+		shortID(native.ID) + "  ok",
+		"3 verified, 0 without hash, 0 failed",
 	}, "\n") + "\n"
-	if got, code := verifyOut(t, resumed); got != want || code != 1 {
-		t.Errorf("verify of a resumed redacted file: exit %d\n%s\nwant exit 1\n%s", code, got, want)
+	if got, code := verifyOut(t, resumed); got != want || code != 0 {
+		t.Errorf("verify of a resumed redacted file: exit %d\n%s\nwant exit 0\n%s", code, got, want)
+	}
+
+	// A native response whose request hash does not match fails, as in
+	// any session.
+	brokenNative := filepath.Join(tmp, "broken-native.jsonl")
+	if _, err := red.Append(agentsession.NewItemEntry(openresponses.UserText("and 4+4?"))); err != nil {
+		t.Fatal(err)
+	}
+	wrong := &agentsession.ResponseEntry{ResponseID: "resp_4", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted,
+		RequestHash: agentsession.HashPrefix + strings.Repeat("0", 64)}
+	if _, err := red.Append(wrong); err != nil {
+		t.Fatal(err)
+	}
+	writeSession(t, brokenNative, red)
+
+	// A 0.13 redaction that kept the original's request hashes, as 0.13
+	// first allowed: the second no longer matches its request, which is
+	// a fault in a redacted entry as in any other.
+	kept := filepath.Join(tmp, "kept.jsonl")
+	keptRed := redactFixture(t, "basic", kept, "test/kept", nil, redactFour, redaction{keep: true})
+	keptResp := responsesOf(keptRed)
+	want = strings.Join([]string{
+		"9 entries read, " + head[0],
+		"redacted_from session " + orig.Header().ID + ", profile test/kept",
+		"9 redacted entries, 0 native",
+		shortID(keptResp[0].ID) + "  ok",
+		shortID(keptResp[1].ID) + "  MISMATCH recorded " + origResp[1].RequestHash,
+		"1 verified, 0 without hash, 1 failed",
+	}, "\n") + "\n"
+	if got, code := verifyOut(t, kept); got != want || code != 1 {
+		t.Errorf("verify of a redaction that kept the original's request hashes: exit %d\n%s\nwant exit 1\n%s", code, got, want)
 	}
 
 	// A block of four entries, the first response among them, left out
@@ -257,12 +307,14 @@ func TestVerifyRedacted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// cas stores hold the redacted session and the resumed one, by
-	// import.
+	// cas stores hold the redacted session, the resumed one and the one
+	// that kept the original's hashes, by import.
 	root := filepath.Join(tmp, "cas")
 	importFile(t, root, path, "")
 	resumedRoot := filepath.Join(tmp, "cas-resumed")
 	importFile(t, resumedRoot, resumed, "")
+	keptRoot := filepath.Join(tmp, "cas-kept")
+	importFile(t, keptRoot, kept, "")
 
 	for _, tt := range []struct {
 		name   string
@@ -274,12 +326,17 @@ func TestVerifyRedacted(t *testing.T) {
 	}{
 		{
 			name: "a block placeholder", args: []string{"verify", block},
-			stdout: []string{head[0], "6 redacted entries, 0 native", "0 verified, 0 without hash, 1 redacted differ as expected, 0 failed"},
-			absent: []string{"MISMATCH"},
+			stdout: []string{head[0], "6 redacted entries, 0 native", "1 verified, 0 without hash, 0 failed"},
+			absent: []string{"MISMATCH", "differ"},
+		},
+		{
+			name: "a native response that does not match", args: []string{"verify", brokenNative}, code: 1,
+			stdout: []string{"9 redacted entries, 4 native", shortID(wrong.ID) + "  MISMATCH recorded " + wrong.RequestHash, "3 verified, 0 without hash, 1 failed"},
 		},
 		{
 			name: "unmarked at 0.13", args: []string{"verify", unmarked}, code: 1,
-			stdout: []string{"0 redacted entries, 9 native", "MISMATCH recorded", "1 verified, 0 without hash, 0 redacted differ as expected, 1 failed"},
+			stdout: []string{"0 redacted entries, 9 native", "MISMATCH recorded", "1 verified, 0 without hash, 1 failed"},
+			absent: []string{"differ"},
 		},
 		{
 			name: "0.12 without redacted_from", args: []string{"verify", v12},
@@ -287,7 +344,8 @@ func TestVerifyRedacted(t *testing.T) {
 				head[0],
 				"redacted_from absent: this file names no original",
 				"9 redacted entries, 0 native: a redacted file before 0.13 marks no entry and took no appends, so every entry is the redaction's",
-				"1 verified, 0 without hash, 1 redacted differ as expected, 0 failed",
+				"  differs from recorded " + origResp[1].RequestHash + ", as a request_hash in a redacted file before 0.13 may",
+				"1 verified, 0 without hash, 1 redacted before 0.13 differ as expected, 0 failed",
 			},
 			absent: []string{"MISMATCH"},
 		},
@@ -303,16 +361,21 @@ func TestVerifyRedacted(t *testing.T) {
 		},
 		{
 			name: "the session in the store", args: []string{"verify", root, red.ID()},
-			stdout: []string{head[0], head[1], "9 redacted entries, 0 native", "1 verified, 0 without hash, 1 redacted differ as expected, 0 failed"},
+			stdout: []string{head[0], head[1], "9 redacted entries, 0 native", "2 verified, 0 without hash, 0 failed"},
 		},
 		{
-			name: "the store holding the resumed session", args: []string{"verify", resumedRoot}, code: 1,
-			stdout: []string{red.ID() + ": " + shortID(native.ID) + "  MISMATCH recorded", "1 sessions' hashes and records checked, 1 failed"},
-			absent: []string{shortID(resp[1].ID)},
+			name: "the store holding the resumed session", args: []string{"verify", resumedRoot},
+			stdout: []string{"1 sessions, 11 entries", "1 sessions' hashes and records checked, 0 failed"},
+			absent: []string{"MISMATCH", "differs"},
+		},
+		{
+			name: "the store holding a redaction that kept the original's hashes", args: []string{"verify", keptRoot}, code: 1,
+			stdout: []string{keptRed.ID() + ": " + shortID(keptResp[1].ID) + "  MISMATCH recorded " + origResp[1].RequestHash, "1 sessions' hashes and records checked, 1 failed"},
+			absent: []string{shortID(keptResp[0].ID)},
 		},
 		{
 			name: "show", args: []string{"show", path},
-			stdout: []string{"redacted from  session " + orig + ", profile test/v1, also ex.tool"},
+			stdout: []string{"redacted from  session " + orig.Header().ID + ", profile test/v1, also ex.tool"},
 		},
 		{
 			name: "show 0.12", args: []string{"show", v12},
@@ -371,7 +434,7 @@ func TestVerifyRedacted(t *testing.T) {
 	if err := json.Unmarshal(doc, &d); err != nil {
 		t.Fatal(err)
 	}
-	if as := d.Extra.AgentSession; !as.Redacted || string(as.RedactedFrom["session"]) != `"`+orig+`"` || string(as.RedactedFrom["ex.tool"]) != `"scrub/1"` {
+	if as := d.Extra.AgentSession; !as.Redacted || string(as.RedactedFrom["session"]) != `"`+orig.Header().ID+`"` || string(as.RedactedFrom["ex.tool"]) != `"scrub/1"` {
 		t.Errorf("exported extra.agentsession: redacted %v, redacted_from %s", as.Redacted, as.RedactedFrom)
 	}
 	var first bytes.Buffer

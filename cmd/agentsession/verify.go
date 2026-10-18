@@ -108,7 +108,8 @@ func describeRedactedFrom(h agentsession.Header) string {
 // legacyRedacted reports whether s is a redacted file of a minor before
 // 0.13, as its header declared: such a file marks no entry redacted,
 // since the member is not defined there, and its writer could not
-// append to it, so every entry it holds is the redaction's.
+// append to it, so every entry it holds is the redaction's, and a
+// request_hash in it may be the original's, which 0.12 allowed.
 func legacyRedacted(s *agentsession.Session, declared string) bool {
 	major, minor, err := agentsession.ParseFormat(declared)
 	return s.Header().Redacted && err == nil && major == 0 && minor < 13
@@ -116,7 +117,7 @@ func legacyRedacted(s *agentsession.Session, declared string) bool {
 
 // isRedacted reports whether e is an entry a redaction made: one that
 // carries redacted, or any entry of a redacted file before 0.13; see
-// legacyRedacted. A request hash it kept is the original's.
+// legacyRedacted.
 func isRedacted(e agentsession.Entry, legacy bool) bool {
 	_, ok := agentsession.RedactedOf(e)
 	return ok || legacy
@@ -165,15 +166,16 @@ const earlierNote = "note: this file declares a minor before 0.9, which did not 
 // omitted list by an of the path cannot resolve fails nothing, since
 // the format keeps such an element as written and the list reaches no
 // request, but it names the entry, so its note is printed under prefix
-// rather than returned. A request hash a redacted entry kept that does
-// not match fails nothing: it is the original's, as the format allows,
-// and it is counted apart, as expected. A native entry's is held to the
-// rule in a redacted session as in any other.
+// rather than returned. A redacted session is held to the rule as any
+// other: a 0.13 redactor gives each response the request_hash of the
+// request the redacted session rebuilds, so a mismatch on a redacted
+// entry is a fault as on a native one (RFC 0001, Redaction). Only a
+// redacted file before 0.13, whose request hashes may be the
+// original's, has a mismatch that fails nothing: it is counted apart,
+// as expected.
 func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Writer, all bool) (problem bool, notes []string) {
 	var checked, unhashed, differ, failed int
 	legacy := legacyRedacted(s, declared)
-	redacted, _ := countRedacted(s, declared)
-	marked := s.Header().Redacted || redacted > 0
 	for _, e := range s.Entries() {
 		r, ok := e.(*agentsession.ResponseEntry)
 		if !ok {
@@ -182,13 +184,14 @@ func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Wr
 		id := prefix + shortID(r.ID)
 		err := s.Verify(r.ID)
 		switch {
-		case isRedacted(r, legacy) && (errors.Is(err, agentsession.ErrHashMismatch) || errors.Is(err, agentsession.ErrOmitDivergence)):
-			// A redacted entry's request_hash is its original's, so it
-			// need not match the request the redacted bodies rebuild,
-			// and the format says not to call that a fault.
+		case legacy && (errors.Is(err, agentsession.ErrHashMismatch) || errors.Is(err, agentsession.ErrOmitDivergence)):
+			// A redacted file before 0.13 may hold the original's
+			// request_hash, which need not match the request the
+			// redacted bodies rebuild, and the format reads such a
+			// file as it stands.
 			differ++
 			if all {
-				fmt.Fprintf(stdout, "%s  differs from recorded %s, as a redacted entry's request_hash may\n", id, r.RequestHash)
+				fmt.Fprintf(stdout, "%s  differs from recorded %s, as a request_hash in a redacted file before 0.13 may\n", id, r.RequestHash)
 			}
 		case errors.Is(err, agentsession.ErrNoHash):
 			unhashed++
@@ -212,8 +215,8 @@ func checkSession(s *agentsession.Session, declared, prefix string, stdout io.Wr
 		}
 	}
 	if all {
-		if marked {
-			fmt.Fprintf(stdout, "%d verified, %d without hash, %d redacted differ as expected, %d failed\n", checked, unhashed, differ, failed)
+		if legacy {
+			fmt.Fprintf(stdout, "%d verified, %d without hash, %d redacted before 0.13 differ as expected, %d failed\n", checked, unhashed, differ, failed)
 		} else {
 			fmt.Fprintf(stdout, "%d verified, %d without hash, %d failed\n", checked, unhashed, failed)
 		}
