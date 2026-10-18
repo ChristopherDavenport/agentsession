@@ -41,9 +41,15 @@ scanning, review and publishing belong to agentredact.
   method, and a redaction names itself in `redacted_from.profile`.
 - **Positions, not hashes.** A position names an entry of the original
   for good, since sessions are append-only, and says nothing of its
-  content, so it cannot confirm a guessed value. `request_hash` stays
-  the original's on a redacted entry, or is removed; the confirmation
-  risk of kept hashes is stated in the RFC and SECURITY.md.
+  content, so it cannot confirm a guessed value.
+- **A redacted session hashes independently.** Every hash in it,
+  `request_hash` included, is computed over what it holds: a redactor
+  recomputes each redacted response's `request_hash` over the request
+  the redacted session rebuilds. Readers then verify and replay it like
+  any session, with no exception for redacted entries. 0.13 first
+  shipped (v0.0.27) letting a redactor keep the original's hash; that
+  was changed in v0.0.28, before any redactor existed, and RFC 0001
+  records it under "Changed after writers of 0.13 were released".
 - **A redacted session grows and may be resumed.** The redactor appends
   what it redacts as the original grows; another writer may resume the
   session, and its entries carry no `redacted`. There is no sealing, no
