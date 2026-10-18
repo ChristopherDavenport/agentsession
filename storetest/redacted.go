@@ -86,8 +86,9 @@ func original(t *testing.T, id string) *agentsession.Session {
 // Rewriter, its references re-pointed with RemapRefs to the entries
 // already written, marked with SetRedacted with its position, a
 // response given the request_hash of its request in the redacted
-// session with SetRequestHash, its ID cleared, and committed. Called again as the original grows, it
-// appends the rest, so the redacted session grows with it.
+// session with SetRequestHash, its ID cleared, and committed. Called
+// again as the original grows, it appends the rest, so the redacted
+// session grows with it.
 type redactor struct {
 	orig string
 	red  *agentsession.Session
