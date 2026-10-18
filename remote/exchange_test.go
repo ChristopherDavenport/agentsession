@@ -273,7 +273,7 @@ func TestAnObjectIsCheckedAgainstItsHash(t *testing.T) {
 	local := casStore(t)
 	mustCreate(t, local, agentsession.Header{ID: "o"})
 	id := mustAppend(t, local, "o", user("one"))
-	body := `{"header":{"type":"session","id":"o","format":"` + agentsession.Format + `"},"entries":["` + id + `"],"prefix":[],"head":{"expected":null,"to":"` + id + `"},"mark":"mirror"}`
+	body := `{"header":{"type":"session","id":"o","format":"` + agentsession.Format + `","created_at":"2026-10-16T00:00:00Z","payload":"` + agentsession.Payload + `"},"entries":["` + id + `"],"prefix":[],"head":{"expected":null,"to":"` + id + `"},"mark":"mirror"}`
 	resp := send(t, http.MethodPost, url+"/v1/sessions/o/push", nil, body)
 	p2 := problemOf(t, resp)
 	if p2.Code != remote.CodeMissingObject || p2.Missing == nil || !slices.Contains(p2.Missing.Entries, id) {

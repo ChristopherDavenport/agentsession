@@ -171,6 +171,9 @@ func (c *Client) session(ctx context.Context, hd *holding) error {
 // lease the client holds from its first instant, and returned as the
 // client's own.
 func (c *Client) Create(ctx context.Context, h agentsession.Header) (*agentsession.Session, error) {
+	if c.redactedOnly && !h.Redacted {
+		return nil, fmt.Errorf("%w: create %s through a client that sends only redacted entries", agentsession.ErrNotRedacted, h.ID)
+	}
 	body, err := json.Marshal(h)
 	if err != nil {
 		return nil, err
@@ -244,6 +247,11 @@ func (c *Client) Append(ctx context.Context, sessionID string, e agentsession.En
 // two differ, so the append lands where the writer's session says; and
 // the client's session takes the entry once the server has.
 func (c *Client) Write(ctx context.Context, sessionID string, e agentsession.Entry) (agentsession.Result, error) {
+	if c.redactedOnly {
+		if _, ok := agentsession.RedactedOf(e); !ok {
+			return agentsession.Result{}, fmt.Errorf("%w: an entry without redacted, to %s, through a client that sends only redacted entries", agentsession.ErrNotRedacted, sessionID)
+		}
+	}
 	hd, err := c.hold(ctx, sessionID)
 	if err != nil {
 		return agentsession.Result{}, err
@@ -251,6 +259,9 @@ func (c *Client) Write(ctx context.Context, sessionID string, e agentsession.Ent
 	defer hd.mu.Unlock()
 	if err := c.session(ctx, hd); err != nil {
 		return agentsession.Result{}, err
+	}
+	if c.redactedOnly && !hd.sess.Header().Redacted {
+		return agentsession.Result{}, fmt.Errorf("%w: an entry to %s, whose header does not carry redacted, through a client that sends only redacted entries", agentsession.ErrNotRedacted, sessionID)
 	}
 	pre, err := hd.sess.Prepare(e)
 	if err != nil {

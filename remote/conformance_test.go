@@ -2,9 +2,11 @@ package remote_test
 
 import (
 	"bytes"
+	"context"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -22,6 +24,7 @@ import (
 type wire struct {
 	*remote.Client
 	backing agentsession.Store
+	url     string
 	once    sync.Once
 	down    func()
 }
@@ -41,7 +44,7 @@ func serve(t *testing.T, st agentsession.Store, closer func() error, opts ...rem
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &wire{Client: c, backing: st}
+	w := &wire{Client: c, backing: st, url: srv.URL}
 	w.down = func() {
 		c.Close()
 		srv.CloseClientConnections()
@@ -75,7 +78,19 @@ func lowerHeaderFile(t *testing.T, path, format string) {
 
 func TestConformanceOverMemory(t *testing.T) {
 	storetest.Run(t, storetest.Options{
-		New: func(t *testing.T) agentsession.Store { return serve(t, agentsession.NewMemoryStore(), nil) },
+		New:    func(t *testing.T) agentsession.Store { return serve(t, agentsession.NewMemoryStore(), nil) },
+		Import: importBehind,
+		RedactedOnly: func(t *testing.T) agentsession.Store {
+			return serve(t, agentsession.NewMemoryStore(agentsession.MemoryRedactedOnly()), nil)
+		},
+		// A memory store's storage is the store: the session is lowered
+		// into a store of its own, behind a server of its own.
+		Lower: func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store {
+			w := s.(*wire)
+			lowered := lowerMemory(t, w.backing.(*agentsession.MemoryStore), id, format)
+			w.Close()
+			return serve(t, lowered, nil)
+		},
 	})
 }
 
@@ -97,6 +112,10 @@ func TestConformanceOverJSONL(t *testing.T) {
 		Second: func(t *testing.T, s agentsession.Store) agentsession.Store { return open(t, root(s)) },
 		ReadOnly: func(t *testing.T, s agentsession.Store) agentsession.Store {
 			return open(t, root(s), jsonl.WithReadOnly())
+		},
+		Import: importBehind,
+		RedactedOnly: func(t *testing.T) agentsession.Store {
+			return open(t, t.TempDir(), jsonl.WithRedactedOnly())
 		},
 		Lower: func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store {
 			path, err := s.(*wire).backing.(*jsonl.Store).Path(id)
@@ -129,10 +148,69 @@ func TestConformanceOverCAS(t *testing.T) {
 		ReadOnly: func(t *testing.T, s agentsession.Store) agentsession.Store {
 			return open(t, root(s), cas.WithReadOnly())
 		},
+		Import: importBehind,
+		Push: func(t *testing.T, s agentsession.Store, file []byte) error {
+			return pushFile(t, s.(*wire).Client, file)
+		},
+		RedactedOnly: func(t *testing.T) agentsession.Store {
+			return open(t, t.TempDir(), cas.WithRedactedOnly())
+		},
 		Lower: func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store {
 			s.(*wire).Close()
 			lowerHeaderFile(t, filepath.Join(root(s), "sessions", id, "header"), format)
 			return open(t, root(s))
 		},
 	})
+}
+
+// importBehind imports a session file into the store behind the
+// server, as the record: the server has no import, so a session file
+// reaches it over the wire only by push.
+func importBehind(t *testing.T, s agentsession.Store, file []byte) error {
+	_, err := s.(*wire).backing.(agentsession.Importer).Import(context.Background(), bytes.NewReader(file), true)
+	return err
+}
+
+// pushFile pushes the session file holds to the server c reaches, from
+// a local store that imported the file as the record.
+func pushFile(t *testing.T, c *remote.Client, file []byte) error {
+	t.Helper()
+	ctx := context.Background()
+	local, err := cas.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	s, err := local.Import(ctx, bytes.NewReader(file), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = remote.Push(ctx, local, c, s.ID(), cas.PushOptions{})
+	return err
+}
+
+// lowerMemory is a memory store holding the session id of old, its
+// header naming format, as a writer of that earlier minor would have
+// left it: the session's file, its format rewritten, imported into a
+// store of its own.
+func lowerMemory(t *testing.T, old *agentsession.MemoryStore, id, format string) *agentsession.MemoryStore {
+	t.Helper()
+	ctx := context.Background()
+	s, err := old.Read(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := agentsession.Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	cur := `"format":"` + agentsession.Format + `"`
+	if !strings.Contains(buf.String(), cur) {
+		t.Fatalf("the header holds no %s", cur)
+	}
+	st := agentsession.NewMemoryStore()
+	if _, err := st.Import(ctx, strings.NewReader(strings.Replace(buf.String(), cur, `"format":"`+format+`"`, 1)), true); err != nil {
+		t.Fatal(err)
+	}
+	return st
 }

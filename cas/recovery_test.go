@@ -1622,8 +1622,10 @@ func TestNoHardLinks(t *testing.T) {
 	old := linkFile
 	defer func() { linkFile = old }()
 	links := 0
-	linkFile = func(string, string) error {
-		links++
+	linkFile = func(_, to string) error {
+		if filepath.Base(to) != layoutFile { // the layout's is counted elsewhere
+			links++
+		}
 		return &os.LinkError{Op: "link", Err: errors.ErrUnsupported}
 	}
 	root := t.TempDir()

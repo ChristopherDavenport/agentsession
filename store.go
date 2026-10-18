@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"sort"
 	"sync"
@@ -236,17 +237,51 @@ type MemoryStore struct {
 	gens map[string]uint64
 	hub  wake.Hub
 	refs refState
+	// redactedOnly says the store holds only redacted entries.
+	redactedOnly bool
+}
+
+// MemoryOption configures a [MemoryStore].
+type MemoryOption func(*MemoryStore)
+
+// MemoryRedactedOnly sets the store to hold only redacted entries, as
+// RFC 0002 lets a store be set: it refuses, with [ErrNotRedacted], a
+// session whose header does not carry redacted, at Create or Import,
+// and every entry that carries no redacted member, however it arrives:
+// an Append, an Import, the prefix of a fork Create makes. A fork's own
+// entries and a resumed redacted session's native entries are refused
+// alike, since neither was redacted.
+//
+// That holds for what comes through the store. The store hands out its
+// own sessions, from Create, Open and Import, and an entry added through
+// one of them, by [Session.Append], Commit or Extend, never reaches the
+// store's checks, so such a store holds whatever its callers write that
+// way. A store that must fail closed against its callers is a cas store
+// set with its WithRedactedOnly.
+func MemoryRedactedOnly() MemoryOption {
+	return func(m *MemoryStore) { m.redactedOnly = true }
 }
 
 // NewMemoryStore returns an empty store.
-func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{},
+func NewMemoryStore(opts ...MemoryOption) *MemoryStore {
+	m := &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{},
 		refs: refState{refs: map[string]RefTarget{}, idents: map[string]string{}, logs: map[string][]RefUpdate{}}}
+	for _, o := range opts {
+		o(m)
+	}
+	return m
 }
 
 // Create implements Store. A header whose Base is set makes a fork of
-// the session holding the base, as [Fork] does.
+// the session holding the base, as [Fork] does; a redacted session is
+// created as any other is.
+// The session returned is the store's own, shared with it, so a write
+// through it, by [Session.Append], Commit or Extend, bypasses every rule
+// the store holds an append to, MemoryRedactedOnly's among them.
 func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
+	if err := CheckCreate(h, m.redactedOnly); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := New(h)
@@ -259,6 +294,11 @@ func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
 		if s, err = Fork(origin, h.Base, h); err != nil {
 			return nil, err
 		}
+		if m.redactedOnly {
+			if err := CheckRedacted(s.Header(), s.Entries()); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if _, exists := m.sessions[s.ID()]; exists {
 		return nil, fmt.Errorf("%w: %s", ErrSessionExists, s.ID())
@@ -268,15 +308,69 @@ func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
 	return s, nil
 }
 
+// Import implements [Importer]: the file is read with [ReadForImport],
+// and the session it holds is kept as read, its leaf the resume rule's,
+// and returned as the store holds it, as Create returns one. A session
+// this store holds is refused, as is a fork whose media differs from
+// that of a held session whose own entries include the base, and, in a
+// store set with MemoryRedactedOnly, a session whose header does not
+// carry redacted or that holds an entry without it.
+// The store keeps no record mark, so asRecord is not read.
+// The session returned is the store's own, shared with it, so a write
+// through it, by [Session.Append], Commit or Extend, bypasses every rule
+// the store holds an append to, MemoryRedactedOnly's among them.
+func (m *MemoryStore) Import(ctx context.Context, r io.Reader, asRecord bool) (*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s, err := ReadForImport(r)
+	if err != nil {
+		return nil, err
+	}
+	h := s.Header()
+	if m.redactedOnly {
+		if err := CheckRedacted(h, s.Entries()); err != nil {
+			return nil, err
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.sessions[h.ID]; exists {
+		return nil, fmt.Errorf("%w: %s", ErrSessionExists, h.ID)
+	}
+	if h.Base != "" {
+		if err := CheckImportMedia(h, m.forkOrigin(h.ParentSession, h.Base)); err != nil {
+			return nil, err
+		}
+	}
+	m.sessions[h.ID] = s
+	m.gens[h.ID] = memoryGen.Add(1)
+	m.hub.Notify(h.ID)
+	return s, nil
+}
+
 // forkOrigin returns the session a fork at base continues from: named, when
-// the named session holds base, else one whose own entries include it,
+// the named session's own entries include base, or the session up its
+// parent_session line that owns it when named holds it on its prefix,
+// else one whose own entries include it,
 // else one that holds it on its prefix, the first by ID when several
 // do. The caller holds m.mu.
 func (m *MemoryStore) forkOrigin(named, base string) *Session {
-	if s, ok := m.sessions[named]; ok {
-		if _, ok := s.Entry(base); ok {
+	// Named on its prefix, the base is its own origin's: parent_session
+	// is followed up to the session whose own entries include it, as
+	// cas finds it, since an import holds a fork to that one's media.
+	for seen := 0; named != "" && seen < 64; seen++ {
+		s, ok := m.sessions[named]
+		if !ok {
+			break
+		}
+		if _, ok := s.Entry(base); !ok {
+			break
+		}
+		if !s.Prefix(base) || s.Header().ParentSession == "" {
 			return s
 		}
+		named = s.Header().ParentSession
 	}
 	ids := make([]string, 0, len(m.sessions))
 	for id := range m.sessions {
@@ -300,6 +394,9 @@ func (m *MemoryStore) forkOrigin(named, base string) *Session {
 }
 
 // Open implements Store.
+// The session returned is the store's own, shared with it, so a write
+// through it, by [Session.Append], Commit or Extend, bypasses every rule
+// the store holds an append to, MemoryRedactedOnly's among them.
 func (m *MemoryStore) Open(_ context.Context, id string) (*Session, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -331,6 +428,11 @@ func (m *MemoryStore) Append(ctx context.Context, sessionID string, e Entry) (st
 	s, err := m.Open(ctx, sessionID)
 	if err != nil {
 		return "", err
+	}
+	if m.redactedOnly {
+		if err := CheckRedacted(s.Header(), []Entry{e}); err != nil {
+			return "", err
+		}
 	}
 	// The store keeps an entry of its own. Prepare fills the caller's
 	// entry, its parent, time and ID, as Append does; the session then
@@ -409,4 +511,5 @@ var (
 	_ Store    = (*MemoryStore)(nil)
 	_ Reader   = (*MemoryStore)(nil)
 	_ Follower = (*MemoryStore)(nil)
+	_ Importer = (*MemoryStore)(nil)
 )

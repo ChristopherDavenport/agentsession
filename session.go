@@ -1573,6 +1573,12 @@ func utcNow() time.Time { return time.Now().UTC().Round(0) }
 //
 // A store's Create does the same for a header whose Base is set, so
 // Fork is the in-memory form and a store's Create the persistent one.
+// The memory, jsonl and sqlite stores fork through it. cas reads the
+// prefix under the new header, so it asks Fork of the session that
+// holds the base, owner or prefix holder, read under its own header,
+// when that session's header or the fork's names a minor before 0.13,
+// and refuses when it cannot read it: every store refuses the same
+// forks over a redacted member written under another minor.
 func Fork(origin *Session, at string, h Header) (*Session, error) {
 	origin.mu.RLock()
 	defer origin.mu.RUnlock()
@@ -1587,7 +1593,7 @@ func Fork(origin *Session, at string, h Header) (*Session, error) {
 		return nil, err
 	}
 	if h.Media != "" && mediaForm(h.Media) != mediaForm(origin.header.Media) {
-		return nil, fmt.Errorf("agentsession: a fork's media %q differs from its origin's %q", h.Media, mediaForm(origin.header.Media))
+		return nil, fmt.Errorf("%w: the fork's %q, its origin's %q", ErrMediaDiffers, h.Media, mediaForm(origin.header.Media))
 	}
 	h.Base = at
 	if h.ParentSession == "" {
