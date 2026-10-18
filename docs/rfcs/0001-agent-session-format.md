@@ -1830,9 +1830,14 @@ A redactor:
 - MUST reach data the format keeps in member names: an `env` entry's
   `files` are keyed by path, and a path can hold what is redacted. Two
   keys a redaction makes one MUST NOT both be kept;
-- MAY keep a `request_hash`, which is then the original's, or remove it.
-  It MUST NOT write one computed over the redacted session, which would
-  claim the redacted request was the one sent.
+- MUST give each `response` it writes either no `request_hash` or the
+  one the redacted session rebuilds for it, computed as Request hash
+  says, and never another: a redacted session hashes independently, and
+  a hash kept from the original would neither verify nor hide what was
+  redacted from it. It SHOULD give one to a response made from entries
+  that carried one, and MUST NOT give one to a response made from an
+  entry whose `request_hash` did not verify in the original, so that a
+  redaction never certifies a request the original could not.
 
 Some strings tie entries together: a `call_id` pairs a call with its
 output, dispatch and links, and a subsession's ID is derived from its
@@ -1841,12 +1846,12 @@ across sessions redacted alongside, or the pairs no longer hold. Inline
 media is a data URL whose payload is base64, so text inside an image's
 bytes is reached only by decoding it.
 
-A redacted session walks and verifies against itself. A `request_hash`
-a redacted entry kept no longer matches the request it rebuilds. A
-reader MUST NOT report the session's hashes as verifying the original,
-and SHOULD NOT report a redacted entry's `request_hash` that does not
-match as a fault. An entry appended natively is held to every rule an
-entry is, its `request_hash` among them.
+A redacted session walks and verifies against itself as any session
+does: its IDs and every `request_hash` are its own. A reader MUST NOT
+report its hashes as verifying the original, and holds a redacted entry
+to every rule it holds any entry to, its `request_hash` among them, so
+a `request_hash` that does not match is a fault in a redacted session as
+in any other.
 
 ### The redacted session
 
@@ -1880,15 +1885,16 @@ their `redacted` as they did.
 
 ### What a kept hash reveals
 
-Each original hash a redacted session keeps — a `request_hash`, a
-reference into a session not redacted alongside it — lets anyone who can
-guess a redacted value confirm the guess, by putting it back and
-recomputing the hash. That matters for a value with few possibilities:
-a username, a home directory, an email address. It does not matter for
-a random key. `redacted` names entries by position rather than by hash
-for this reason, and a redactor that removes every `request_hash` and
-redacts the sessions a session references alongside it keeps none.
-Redaction alone does not hide a value that can be guessed.
+An original hash a redacted session keeps lets anyone who can guess a
+redacted value confirm the guess, by putting it back and recomputing
+the hash. That matters for a value with few possibilities: a username,
+a home directory, an email address. It does not matter for a random
+key. A redacted session's own hashes are computed over what it holds,
+its `request_hash` values among them, and `redacted` names entries by
+position rather than by hash, so the one original hash it can keep is a
+reference into a session not redacted alongside it; a redactor that
+redacts those sessions too keeps none. Redaction alone does not hide a
+value that can be guessed.
 
 ## Projections
 
@@ -2183,6 +2189,18 @@ holds `redacted`, and refuses to append to such a file, since the raise
 would give the member a meaning it was not written with. A writer MUST
 NOT create a session at 0.13 or later whose prefix holds such an entry,
 a fork of such a file among them, for the same reason.
+
+### Changed after writers of 0.13 were released
+
+0.13 as first released let a redactor keep a redacted `response`'s
+`request_hash`, the original's, which no longer matched the request the
+redacted session rebuilds, and asked readers not to report it. It now
+requires the hash recomputed over the redacted session, which then
+verifies like any other, and readers hold a redacted entry's
+`request_hash` to the usual rule. No writer of 0.13 that redacts had
+been released when it changed, so no 0.13 file holds a kept hash, and a
+reader of 0.13 applies the rule to every 0.13 file. A 0.12 redacted
+file is read as it stands, as above.
 
 ## Changes since 0.11
 

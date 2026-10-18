@@ -27,11 +27,11 @@ store's root directory through a session ID or path, or make redaction
 miss data it was asked to remove is in scope. Session files are written
 with owner-only permissions. Redaction never changes a session: it
 writes a new, redacted session beside it, and covers only what its
-redactors are told to look for. A redacted session keeps some hashes of
-its original — each `request_hash`, and references into sessions not
-redacted alongside it — and anyone who can guess a redacted value can
-confirm the guess against them, so redaction alone does not hide a
-value with few possibilities, such as a username or a home directory
-(RFC 0001, Redaction). An entry appended to a redacted session natively, as
+redactors are told to look for. A redacted session's hashes are its own,
+computed over what it holds, but a reference into a session not
+redacted alongside it keeps that session's original hash, and anyone
+who can guess a redacted value can confirm the guess against such a
+hash, so redaction alone does not hide a value with few possibilities,
+such as a username or a home directory (RFC 0001, Redaction). An entry appended to a redacted session natively, as
 when it is resumed, is not redacted and carries no `redacted` member; a
 store set to hold only redacted entries refuses it.

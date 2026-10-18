@@ -41,8 +41,10 @@ const secret = "hunter2"
 func hide(s string) string { return strings.ReplaceAll(s, secret, "[redacted]") }
 
 // original builds, in memory, a session holding the secret on more
-// than one branch, with a label naming an entry, so that a redaction
-// rewrites bodies and re-points parents and targets.
+// than one branch, with a label naming an entry and a response whose
+// request holds the secret, so that a redaction rewrites bodies,
+// re-points parents and targets, and gives the response the
+// request_hash of the request it rebuilds.
 func original(t *testing.T, id string) *agentsession.Session {
 	t.Helper()
 	s := agentsession.New(agentsession.Header{ID: id, CWD: "/w"})
@@ -50,8 +52,21 @@ func original(t *testing.T, id string) *agentsession.Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Append(agentsession.NewItemEntry(openresponses.AssistantText("noted: " + secret))); err != nil {
+	reply := agentsession.NewItemEntry(openresponses.AssistantText("noted: " + secret))
+	reply.ResponseID = "resp-1"
+	if _, err := s.Append(reply); err != nil {
 		t.Fatal(err)
+	}
+	resp := &agentsession.ResponseEntry{ResponseID: "resp-1", Status: openresponses.ResponseStatusCompleted, RequestHash: "sha256:to-compute"}
+	if err := s.SetRequestHash(resp); err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.Append(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Verify(r); err != nil {
+		t.Fatalf("the original's response does not verify: %v", err)
 	}
 	other := agentsession.NewItemEntry(openresponses.UserText("forget " + secret))
 	other.Parent = root
@@ -69,9 +84,11 @@ func original(t *testing.T, id string) *agentsession.Session {
 // with the exported writer helpers, as a redactor does: each entry the
 // original holds past those it has done, in file order, through one
 // Rewriter, its references re-pointed with RemapRefs to the entries
-// already written, marked with SetRedacted with its position, its ID
-// cleared, and committed. Called again as the original grows, it
-// appends the rest, so the redacted session grows with it.
+// already written, marked with SetRedacted with its position, a
+// response given the request_hash of its request in the redacted
+// session with SetRequestHash, its ID cleared, and committed. Called
+// again as the original grows, it appends the rest, so the redacted
+// session grows with it.
 type redactor struct {
 	orig string
 	red  *agentsession.Session
@@ -118,6 +135,11 @@ func (r *redactor) redact(t *testing.T, orig *agentsession.Session) []agentsessi
 		if err := agentsession.SetRedacted(n, []agentsession.Span{{From: i + 1, To: i + 1}}); err != nil {
 			t.Fatal(err)
 		}
+		if resp, ok := n.(*agentsession.ResponseEntry); ok {
+			if err := r.red.SetRequestHash(resp); err != nil {
+				t.Fatalf("request hash of %s: %v", e.Base().ID, err)
+			}
+		}
 		res, err := r.red.Commit(n)
 		if err != nil {
 			t.Fatalf("commit %s: %v", e.Base().ID, err)
@@ -142,7 +164,29 @@ func redaction(t *testing.T, orig *agentsession.Session, profile string) (*agent
 	if err != nil {
 		t.Fatalf("the redacted file does not read: %v\n%s", err, file)
 	}
+	if responsesVerify(t, s) == 0 {
+		t.Fatal("the redaction holds no response with a request_hash; the case proves nothing")
+	}
 	return s, file
+}
+
+// responsesVerify checks that every response of s that carries a
+// request_hash verifies, as in any session: a redacted session's hashes
+// are its own (RFC 0001, Redaction). It returns how many it checked.
+func responsesVerify(t *testing.T, s *agentsession.Session) int {
+	t.Helper()
+	n := 0
+	for _, e := range s.Entries() {
+		r, ok := e.(*agentsession.ResponseEntry)
+		if !ok || r.RequestHash == "" {
+			continue
+		}
+		n++
+		if err := s.Verify(r.ID); err != nil {
+			t.Errorf("response %s of %s does not verify: %v", r.ID, s.ID(), err)
+		}
+	}
+	return n
 }
 
 // clone is a copy of an entry, its ID and parent set, as a store is
@@ -190,7 +234,8 @@ func readBack(t *testing.T, st agentsession.Store, id string) *agentsession.Sess
 
 // sameRedacted checks that the store holds want: redacted, linked to its
 // original, its entries in file order, each redacted where want's is,
-// and verifying when its file is read again.
+// and verifying when its file is read again, every response's
+// request_hash among it.
 func sameRedacted(t *testing.T, st agentsession.Store, want *agentsession.Session) {
 	t.Helper()
 	got := readBack(t, st, want.ID())
@@ -211,9 +256,12 @@ func sameRedacted(t *testing.T, st agentsession.Store, want *agentsession.Sessio
 			t.Errorf("held entry %s redacted %v %v, want %v %v", e.Base().ID, gs, gok, ws, wok)
 		}
 	}
-	if _, err := agentsession.Read(bytes.NewReader(fileOf(t, got))); err != nil {
+	back, err := agentsession.Read(bytes.NewReader(fileOf(t, got)))
+	if err != nil {
 		t.Errorf("the held session does not verify: %v", err)
+		return
 	}
+	responsesVerify(t, back)
 }
 
 // importer is how a case takes a session file into st whole: the

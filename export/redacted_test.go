@@ -3,6 +3,7 @@ package export
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,10 +20,11 @@ import (
 // one with the exported helpers: every body string through one Rewriter
 // in file order, every reference re-pointed with RemapRefs to the
 // entries already written, each entry marked with the position it was
-// made from by SetRedacted and committed, its ID cleared, to a session
-// whose header carries redacted and redacted_from, under the ID
-// RedactedSessionID derives. The request hashes are kept, so they are
-// the original's. It returns the session in memory, for a test to grow.
+// made from by SetRedacted, a response given the request_hash of its
+// request in the redacted session by SetRequestHash, and committed, its
+// ID cleared, to a session whose header carries redacted and
+// redacted_from, under the ID RedactedSessionID derives. It returns the
+// session in memory, for a test to grow.
 func redaction(t *testing.T, name, profile string, extra map[string]json.RawMessage, f func(string) string) *agentsession.Session {
 	t.Helper()
 	orig := loadFixture(t, name)
@@ -58,6 +60,11 @@ func redaction(t *testing.T, name, profile string, extra map[string]json.RawMess
 		if err := agentsession.SetRedacted(n, []agentsession.Span{{From: i + 1, To: i + 1}}); err != nil {
 			t.Fatal(err)
 		}
+		if resp, ok := n.(*agentsession.ResponseEntry); ok {
+			if err := red.SetRequestHash(resp); err != nil {
+				t.Fatalf("request hash of %s: %v", e.Base().ID, err)
+			}
+		}
 		res, err := red.Commit(n)
 		if err != nil {
 			t.Fatalf("commit %s: %v", e.Base().ID, err)
@@ -67,9 +74,11 @@ func redaction(t *testing.T, name, profile string, extra map[string]json.RawMess
 	return red
 }
 
-// TestExportRedacted: a redacted session exports like any other, though
-// a request hash a redacted entry kept no longer matches, since nothing
-// in export checks one. The document's root extra.agentsession carries
+// TestExportRedacted: a redacted session exports like any other, and
+// verifies like any other: each redacted response's request_hash is
+// the one its redacted request rebuilds to, the second's moved by the
+// redaction, and the native response records none. The document's root
+// extra.agentsession carries
 // redacted and redacted_from, the header's object with every member it
 // holds, so a published document links back to its original as the
 // session file does. Each step made from a redacted entry carries that
@@ -107,8 +116,20 @@ func TestExportRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the redacted file does not read: %v", err)
 	}
-	if err := s.Verify(lid(t, s, "r0000002")); err == nil {
-		t.Fatal("the redaction left the second request hash matching; the case needs one that does not")
+	orig := loadFixture(t, "basic")
+	for _, name := range []string{"r0000001", "r0000002"} {
+		if err := s.Verify(lid(t, s, name)); err != nil {
+			t.Errorf("redacted response %s does not verify: %v", name, err)
+		}
+	}
+	if r1, r2 := responseOf(t, s, "r0000001"), responseOf(t, orig, "r0000001"); r1.RequestHash != r2.RequestHash {
+		t.Errorf("the first request, which the redaction left alone, hashes %s, the original's %s", r1.RequestHash, r2.RequestHash)
+	}
+	if r1, r2 := responseOf(t, s, "r0000002"), responseOf(t, orig, "r0000002"); r1.RequestHash == r2.RequestHash {
+		t.Error("the second request_hash is the original's; the redaction changed its request")
+	}
+	if err := s.Verify(native.ID); !errors.Is(err, agentsession.ErrNoHash) {
+		t.Errorf("the native response: %v, want ErrNoHash", err)
 	}
 	wantFrom, err := json.Marshal(s.Header().RedactedFrom)
 	if err != nil {
@@ -259,4 +280,15 @@ func TestExportRedacted(t *testing.T) {
 			t.Errorf("a step of a session that is not redacted carries redacted_entries: %v", m)
 		}
 	}
+}
+
+// responseOf is the response entry of s whose legacy_id is name.
+func responseOf(t *testing.T, s *agentsession.Session, name string) *agentsession.ResponseEntry {
+	t.Helper()
+	e, _ := s.Entry(lid(t, s, name))
+	r, ok := e.(*agentsession.ResponseEntry)
+	if !ok {
+		t.Fatalf("%s is not a response", name)
+	}
+	return r
 }

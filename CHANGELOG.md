@@ -5,6 +5,49 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Changed: a redacted session hashes independently (RFC 0001 0.13,
+  Redaction).** A redactor gives each redacted `response` the
+  `request_hash` of the request the redacted session rebuilds for it,
+  when the entry it was made from carried one, and none when it did
+  not. It never keeps the original's. A redacted session then verifies
+  like any other, and readers hold a redacted entry's `request_hash` to
+  the usual rule. 0.13 as released in v0.0.27 let a redactor keep the
+  original's `request_hash`; v0.0.28 no longer allows it. No released
+  redactor had written one, so no 0.13 file holds a kept hash, and RFC
+  0001 records the change under "Changed after writers of 0.13 were
+  released". The format stays 0.13 and no hash of an existing file
+  moves.
+- **Changed: `agentsession verify` fails a `request_hash` mismatch in a
+  0.13 redacted session.** v0.0.27 counted a mismatch on a response
+  carrying `redacted` apart, as one "a redacted entry's request_hash
+  may", and failed nothing over it. It is now a MISMATCH and fails, in a
+  file and in a store's verify, as on a native entry, and a redacted
+  session made under the new rule, resumed natively or not, verifies
+  whole. Only a redacted file whose header declares a minor before
+  0.13, every entry of which is the redaction's, keeps the exemption;
+  its summary now reads "N redacted before 0.13 differ as expected".
+  The lines saying the ids verify the redacted file and not its
+  original, the `redacted_from` line and the redacted and native counts
+  are unchanged.
+- **Added: `Session.RequestHashFor` and `Session.SetRequestHash`.**
+  `RequestHashFor(parent, r)` computes the `request_hash` the response
+  `r` verifies with when appended under `parent`, the leaf when it is
+  empty, through the code `Verify` rebuilds and hashes a request with,
+  so the two cannot disagree; a parent the session lacks is
+  `ErrNoEntry`. `SetRequestHash(r)` sets it under `r`'s own parent when
+  `r` carries a `request_hash` and leaves a response that recorded none
+  without one. A redactor calls it on each response it has rewritten
+  and remapped, just before committing it. `RewriteStrings` still never
+  gives `f` a `request_hash`; its docs, `SetRedacted`'s and `Verify`'s
+  now point at `SetRequestHash`.
+- **Changed: `storetest` holds redacted sessions to their request
+  hashes.** The original its redacted cases build holds a response
+  whose request holds the secret, the redactor recomputes its hash, and
+  every response of each redacted session, as built and as the store
+  holds it, must verify.
+
 ## v0.0.27 - 2026-10-17
 
 - **Changed: the format is 0.13.** A writer raises every file it appends

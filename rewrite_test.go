@@ -312,11 +312,14 @@ type redaction struct {
 // redact makes a redaction of orig with the exported API alone, as a
 // redactor outside the package would make one: every entry in file
 // order through one Rewriter for the file and RemapRefs, marked with
-// SetRedacted as made from the entry at its position, its id cleared
-// and committed to a new session whose header carries redacted and
-// redacted_from and, last, the remapped base. The file it writes must
-// read, which verifies every hash, and every entry reads back redacted
-// from its position.
+// SetRedacted as made from the entry at its position, a response given
+// the request_hash of its request in the redacted session with
+// SetRequestHash, its id cleared and committed to a new session whose
+// header carries redacted and redacted_from and, last, the remapped
+// base. The file it writes must read, which verifies every hash, every
+// entry reads back redacted from its position, and every response
+// whose original recorded a request_hash verifies with Verify, while
+// one whose original recorded none still has none.
 func redact(t *testing.T, orig *Session, f func(string) string, profile string) redaction {
 	t.Helper()
 	oh := orig.Header()
@@ -354,6 +357,11 @@ func redact(t *testing.T, orig *Session, f func(string) string, profile string) 
 		n := r.Entry
 		if err := SetRedacted(n, []Span{{i + 1, i + 1}}); err != nil {
 			t.Fatalf("mark %s: %v", old, err)
+		}
+		if resp, ok := n.(*ResponseEntry); ok {
+			if err := red.SetRequestHash(resp); err != nil {
+				t.Fatalf("request hash of %s: %v", old, err)
+			}
 		}
 		n.Base().ID = ""
 		res, err := red.Commit(n)
@@ -394,6 +402,23 @@ func redact(t *testing.T, orig *Session, f func(string) string, profile string) 
 	for i, e := range back.Entries() {
 		if spans, ok := RedactedOf(e); !ok || len(spans) != 1 || spans[0] != (Span{i + 1, i + 1}) {
 			t.Errorf("entry %d reads back redacted %v %v, want [%d]", i, ok, spans, i+1)
+		}
+	}
+	origEntries := orig.Entries()
+	for i, e := range back.Entries() {
+		r, ok := e.(*ResponseEntry)
+		if !ok {
+			continue
+		}
+		err := back.Verify(r.ID)
+		if origEntries[i].(*ResponseEntry).RequestHash == "" {
+			if !errors.Is(err, ErrNoHash) {
+				t.Errorf("response %d, whose original recorded no request_hash: %v, want ErrNoHash", i, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("response %d of the redaction does not verify: %v", i, err)
 		}
 	}
 	out := redaction{back: back, entries: strings.Split(strings.TrimSuffix(entries, "\n"), "\n"), byOrig: map[string]string{}}
