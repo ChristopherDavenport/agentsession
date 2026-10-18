@@ -40,6 +40,13 @@ func (t *TruncatedLine) Unwrap() error { return t.Err }
 // an error.
 // The leaf is the last entry in the file unless a [LeafLabel] is in
 // force, in which case it is the entry that label names.
+//
+// Each line is read under the format the header declares, and the
+// header is brought up to this package's format in memory unless the
+// file may not be raised ([ErrNoRaise]): then it keeps its own, or for
+// a file before 0.5, whose entries are rehashed as 0.5's, 0.12. Before
+// 0.13 an entry's redacted member is unknown whatever its form
+// ([RedactedOf]).
 func Read(r io.Reader) (*Session, error) {
 	br := bufio.NewReader(r)
 	var (
@@ -151,6 +158,9 @@ type migration struct {
 // id is the same entry, kept once and reported. rule, for a file with a
 // base, holds the line to the base rule, as Scan holds it.
 func (s *Session) link(e Entry, m *migration, data, c []byte, rule *baseRule) error {
+	// The line is read under the format the header declared: before
+	// 0.13 a redacted member is unknown whatever its form.
+	gateRedacted(e, s.declared)
 	if m != nil {
 		var err error
 		if e, err = m.rewrite(e, s); err != nil {

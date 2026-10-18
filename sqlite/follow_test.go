@@ -76,7 +76,9 @@ func TestFollowResetOnRebuild(t *testing.T) {
 
 // TestFollowAcrossRaisedFormat: the first append of this writer to a
 // session an earlier minor wrote raises the stored header, which changes
-// nothing the follower holds, so it goes on without a reset.
+// how an entry reads (redacted is defined from 0.13), so the follower
+// reads the session again under the raised format, as a reset holding
+// the append.
 func TestFollowAcrossRaisedFormat(t *testing.T) {
 	ctx := context.Background()
 	path, st, _ := followDB(t)
@@ -105,8 +107,12 @@ func TestFollowAcrossRaisedFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := w.NextKind(agentsession.Appended); c.ID != id || c.Session.Len() != 4 {
-		t.Errorf("appended %s into %d entries, want %s into 4", c.ID, c.Session.Len(), id)
+	c := w.NextKind(agentsession.Reset)
+	if _, ok := c.Session.Entry(id); !ok || c.Session.Len() != 4 {
+		t.Errorf("the reset holds %d entries, %s among them %v; want 4 with it", c.Session.Len(), id, ok)
+	}
+	if f := c.Session.DeclaredFormat(); f != agentsession.Format {
+		t.Errorf("the reset declares %s, want %s", f, agentsession.Format)
 	}
 	w.Quiet()
 }

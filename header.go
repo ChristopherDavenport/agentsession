@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -69,12 +68,15 @@ type Header struct {
 	// own entry hangs from the base. A base is never a leaf label.
 	Base  string `json:"base,omitempty"`
 	Media string `json:"media,omitempty"`
-	// Redacted marks a redacted session: one a redactor made from
-	// another, its original, by changing what was written after it was
-	// written. It is a session of its own, with an ID of its own, whose
-	// hashes and references the redactor recomputed over what it wrote,
-	// so the file walks and verifies against itself and not against the
-	// original. It is written whole and never appended to.
+	// Redacted marks a redacted session: one that holds entries a
+	// redactor made from entries of another session, its original, by
+	// changing what was written after it was written. It is a session of
+	// its own, with an ID of its own, whose hashes and references the
+	// redactor computed over what it wrote, so the file walks and
+	// verifies against itself and not against the original. It grows as
+	// the redactor redacts what the original appends, and may be
+	// resumed: each redacted entry carries its redacted member
+	// ([RedactedOf]), and an entry appended natively carries none.
 	Redacted bool `json:"redacted,omitempty"`
 	// RedactedFrom, on a redacted session, names its original: see
 	// [RedactedFrom]. It is defined from format 0.13 and is refused
@@ -84,7 +86,9 @@ type Header struct {
 	// the object, is kept in Extra as written and RedactedFrom is nil.
 	// A header naming an earlier minor that holds one is never raised
 	// to 0.13 or later, by Read in memory or by a writer before an
-	// append, which is refused: see [Header.Raise].
+	// append, which is refused: see [Header.Raise]. Nor is a file one of
+	// whose entries holds redacted under such a header: see
+	// [ErrNoRaise].
 	RedactedFrom *RedactedFrom `json:"-"`
 
 	// Extra holds header fields this package does not define.
@@ -118,26 +122,21 @@ type Harness struct {
 }
 
 // RedactedFrom is a redacted session's link to its original, the
-// header's redacted_from member. Session is the original's ID and
-// Entries how many entries the original held, prefix included and in
-// file order, when the redaction was made: sessions are append-only, so
-// the count pins the version redacted, whatever of it the redaction
-// kept, and unlike the hash of its last entry it confirms no guessed
-// value. Profile names the redaction, its kind and its rules at a
-// version, so two redactions of one original are told apart; a
-// redaction that writes one derives the session's ID with
-// [RedactedSessionID]. Aligned says the redaction wrote one entry for
-// each of the original's, in file order, each made from the one in its
-// place with only its body changed, so the n-th entry maps back to the
-// original's n-th by position. Extra holds the members this package
-// does not define, the namespaced ones a redaction records about itself
-// among them, and a profile that is not a non-empty string or an
-// aligned that is not true, each kept as written.
+// header's redacted_from member. Session is the original's ID. Profile
+// names the redaction, its kind and its rules at a version, so two
+// redactions of one original are told apart; a redaction that writes
+// one derives the session's ID with [RedactedSessionID]. Which entries
+// of the original each redacted entry was made from is the entry's own
+// redacted member ([RedactedOf]), so the object pins no version: the
+// session grows as the original does. Extra holds the members this
+// package does not define, the namespaced ones a redaction records
+// about itself among them, and a profile that is not a non-empty
+// string, each kept as written. The entries and aligned members of an
+// earlier draft of the format are members this package does not define,
+// and are kept there too.
 type RedactedFrom struct {
 	Session string `json:"session"`
-	Entries int    `json:"entries"`
 	Profile string `json:"profile,omitempty"`
-	Aligned bool   `json:"aligned,omitempty"`
 
 	// Extra holds redacted_from members this package does not define.
 	Extra map[string]json.RawMessage `json:"-"`
@@ -146,10 +145,11 @@ type RedactedFrom struct {
 // ErrRedactedFrom is returned for a header whose redacted_from the
 // format forbids: one on a session that is not redacted, one that names
 // the session itself as its original, or, built in memory, one that
-// names no original or a negative count.
+// names no original.
 var ErrRedactedFrom = errors.New("agentsession: malformed redacted_from")
 
-// redactedFromMinor is the first minor that defines redacted_from.
+// redactedFromMinor is the first minor that defines redacted_from and
+// an entry's redacted.
 const redactedFromMinor = 13
 
 // MarshalJSON emits the object with Extra flattened into it. A member
@@ -157,7 +157,7 @@ const redactedFromMinor = 13
 // would hold it twice.
 func (r RedactedFrom) MarshalJSON() ([]byte, error) {
 	for k := range r.Extra {
-		if k == "session" || k == "entries" || k == "profile" && r.Profile != "" || k == "aligned" && r.Aligned {
+		if k == "session" || k == "profile" && r.Profile != "" {
 			return nil, fmt.Errorf("%w: %s both typed and in Extra", ErrRedactedFrom, k)
 		}
 	}
@@ -166,9 +166,8 @@ func (r RedactedFrom) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON decodes the object, matching members by their exact
-// names. It is refused unless session is a non-empty string and entries
-// a count written as digits; a profile that is not a non-empty string
-// and an aligned that is not true stay in Extra with the members this
+// names. It is refused unless session is a non-empty string; a profile
+// that is not a non-empty string stays in Extra with the members this
 // package does not define, so the object writes back as it was read.
 func (r *RedactedFrom) UnmarshalJSON(data []byte) error {
 	var all map[string]json.RawMessage
@@ -182,21 +181,11 @@ func (r *RedactedFrom) UnmarshalJSON(data []byte) error {
 	if json.Unmarshal(all["session"], &v.Session) != nil || v.Session == "" {
 		return fmt.Errorf("%w: session is not a session id", ErrRedactedFrom)
 	}
-	n, err := strconv.ParseUint(string(all["entries"]), 10, 0)
-	if err != nil || n > math.MaxInt {
-		return fmt.Errorf("%w: entries is not a count", ErrRedactedFrom)
-	}
-	v.Entries = int(n)
 	delete(all, "session")
-	delete(all, "entries")
 	if raw, ok := all["profile"]; ok && json.Unmarshal(raw, &v.Profile) == nil && v.Profile != "" {
 		delete(all, "profile")
 	} else {
 		v.Profile = ""
-	}
-	if string(all["aligned"]) == "true" {
-		v.Aligned = true
-		delete(all, "aligned")
 	}
 	if len(all) > 0 {
 		v.Extra = all
@@ -310,8 +299,6 @@ func (h Header) Validate() error {
 			return fmt.Errorf("%w: names no session", ErrRedactedFrom)
 		case r.Session == h.ID:
 			return fmt.Errorf("%w: names the session itself, %s", ErrRedactedFrom, h.ID)
-		case r.Entries < 0:
-			return fmt.Errorf("%w: entries %d", ErrRedactedFrom, r.Entries)
 		}
 	}
 	return nil
@@ -374,9 +361,10 @@ func (h *Header) fill(now time.Time) {
 // instructions part out of force by its hash. 0.12 adds the peer link
 // relation, the task, context and url members of a link that names a
 // callee in another system, and its cancel member. 0.13 adds the
-// redacted_from header member and makes a redacted session one of its
-// own; a 0.12 file is a 0.13 file without the member, and one it holds
-// there is kept in Extra as written, and its header is not raised.
+// redacted_from header member and the redacted entry member, and makes
+// a redacted session one of its own; a 0.12 file is a 0.13 file without
+// either, and one it holds there is kept as written, as a member this
+// package does not know, and the file is not raised.
 const FormatMinor = 13
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.
@@ -404,28 +392,36 @@ func migrate(h *Header) error {
 	if h.Raise(Format) == nil {
 		return nil
 	}
-	// A header holding redacted_from from before 0.13 is not raised
-	// there, so a session read from it writes back under its own
-	// format, and an append to it is refused. One before 0.5 still
-	// takes the last minor that does not define the member, since its
-	// entries are rehashed as 0.5's.
-	if minor < hashedMinor {
-		h.Format = lastBeforeRedactedFrom
-	}
+	h.Format = heldFormat(h.Format)
 	return nil
 }
 
+// heldFormat is the format a session read from a file that declared
+// format holds in memory when the file may not be raised past 0.12: a
+// header holding redacted_from from before 0.13, or an entry holding
+// redacted under one. It writes back under its own format, and an
+// append to it is refused. A file before 0.5 still takes the last minor
+// that does not define either member, since its entries are rehashed as
+// 0.5's.
+func heldFormat(format string) string {
+	if _, minor, _ := ParseFormat(format); minor < hashedMinor {
+		return lastBeforeRedactedFrom
+	}
+	return format
+}
+
 // lastBeforeRedactedFrom is the last format that does not define
-// redacted_from.
+// redacted_from or an entry's redacted.
 var lastBeforeRedactedFrom = fmt.Sprintf("agentsession/%d.%d", FormatMajor, redactedFromMinor-1)
 
-// ErrNoRaise is returned for a header a writer may not raise to the
-// format it writes, and so for an append to its session: one that
-// names a minor before 0.13 and holds a redacted_from member, in any
-// form, which the raise would give a meaning it was not written with.
-// It is an [ErrUnsupportedFormat], since this writer cannot append
+// ErrNoRaise is returned for a file a writer may not raise to the
+// format it writes, and so for an append to its session: one whose
+// header names a minor before 0.13 and holds a redacted_from member, or
+// one an entry of which holds a redacted member under such a header, in
+// any form, which the raise would give a meaning it was not written
+// with. It is an [ErrUnsupportedFormat], since this writer cannot append
 // under the header's own format either.
-var ErrNoRaise = fmt.Errorf("%w: the header holds redacted_from from before 0.13 and is not raised", ErrUnsupportedFormat)
+var ErrNoRaise = fmt.Errorf("%w: the file holds redacted_from or redacted from before 0.13 and is not raised", ErrUnsupportedFormat)
 
 // Raise sets the header's format to format, as a writer does to the
 // header of a session whose header names an earlier minor before it
@@ -435,6 +431,14 @@ var ErrNoRaise = fmt.Errorf("%w: the header holds redacted_from from before 0.13
 // names an earlier minor and holds redacted_from, typed or in Extra.
 // Raise does not compare the two formats: the caller raises only to a
 // later one.
+//
+// Raise sees the header alone, and so not an entry holding redacted
+// under it, which also forbids the raise. [Session.RaiseRefused] is the
+// whole rule, header and entries. [Session.Append] and
+// [Session.Prepare] apply it, and a store prepares every entry on its
+// session before it raises the stored header on an append; a store that
+// raises one outside an append, as an exchange or a fork's create does,
+// calls RaiseRefused first.
 func (h *Header) Raise(format string) error {
 	if err := h.raiseRefused(format); err != nil {
 		return err

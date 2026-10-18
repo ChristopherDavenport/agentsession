@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -105,7 +106,8 @@ func TestRewriteStringsNormalised(t *testing.T) {
 
 // protectedEntries hold, in every member that is not body text, a value
 // beginning P- or a hash, and in body text values beginning B-: the
-// envelope, legacy_id, every reference, every hash, every call_id where
+// envelope, legacy_id, redacted in any form, every reference, every
+// hash, every call_id where
 // the format defines one, a sidecar URL, a member name, a normalised
 // record's at and a record of a member that is not body text. An env
 // entry's file paths are data in member names, and body; so are a
@@ -133,6 +135,10 @@ var protectedEntries = []string{
 	`{"type":"compaction","id":"P-id","parent":"P-parent",` + tsLine + `,"first_kept":"P-first","summary":{"type":"message","role":"user","content":[]},"pinned":[{"type":"function_call","call_id":"P-call","name":"B-name","arguments":"B-args"}],"config":{"instructions_omitted":[{"id":"B-part","reason":"B-reason","of":"B-of-beside-an-id"}],"omit":{"items":["P-omit"]}}}`,
 	`{"type":"config","id":"P-id","parent":"P-parent",` + tsLine + `,"instructions_omitted":[{"id":"B-part","reason":"B-reason","of":"B-of-beside-an-id"},{"keep":2,"of":"P-of"},{"keep":0,"of":"B-of-no-keep"}]}`,
 	`{"type":"x:note","id":"P-id","parent":"P-parent",` + tsLine + `,"parents":[{"entry":"P-entry"}],"legacy_id":"P-legacy","text":"B-text","P-name":"` + sidecarURL + `","call_id":"B-ext-call"}`,
+	`{"type":"label","id":"P-id","parent":"P-parent",` + tsLine + `,"target":"P-target","label":"B-label","redacted":["P-red",{"P-key":"P-red2"}]}`,
+	`{"type":"item","id":"P-id","parent":"P-parent",` + tsLine + `,"item":{"type":"message","role":"user","content":[{"type":"input_text","text":"B-text"}]},"redacted":[1,[3,4]]}`,
+	`{"type":"x:note","id":"P-id","parent":"P-parent",` + tsLine + `,"text":"B-text","redacted":["P-red"]}`,
+	`{"type":"x:note","id":"P-id","parent":"P-parent",` + tsLine + `,"text":"B-text","redacted":[[1,2],5]}`,
 }
 
 // TestRewriteStringsNeverSeesProtected: f is handed every body string
@@ -167,6 +173,11 @@ func TestRewriteStringsNeverSeesProtected(t *testing.T) {
 			before, after := canonicalEntry(t, e), canonicalEntry(t, got)
 			if want := strings.ReplaceAll(before, "B-", "R-B-"); after != want {
 				t.Errorf("a member other than body text changed:\n got %s\nwant %s", after, want)
+			}
+			in, inOK := RedactedOf(e)
+			out, outOK := RedactedOf(got)
+			if inOK != outOK || !slices.Equal(in, out) {
+				t.Errorf("redacted %v %v, input %v %v", out, outOK, in, inOK)
 			}
 		})
 	}
@@ -283,27 +294,29 @@ func TestRewriteStringsWritesNoReadLine(t *testing.T) {
 	}
 }
 
-// redactableFixtures are fixtures an aligned redaction is made of in
-// TestAlignedRedactionVerifies: between them they hold every core type,
+// redactableFixtures are fixtures a redaction is made of in
+// TestRedactionVerifies: between them they hold every core type,
 // an extension, kept extras, instruction parts named by hash, omitted
 // parts, omit, a fork's prefix and base, convergence, normalised records,
 // callee links and judges.
 var redactableFixtures = []string{"basic", "branch", "compaction", "converge", "extensions", "fork", "handback", "instructions", "interleaved", "judged", "normalised", "omit", "omitted", "parts", "peer", "pinned", "queued", "replay", "resume", "runs"}
 
-// redaction is an aligned redaction of a session, read back from the
-// file it writes.
+// redaction is a redaction of a session that makes one entry of each of
+// its entries, read back from the file it writes.
 type redaction struct {
 	back    *Session
 	entries []string          // the redacted file's entry lines
 	byOrig  map[string]string // each original entry's id to its redacted line
 }
 
-// redact makes an aligned redaction of orig with the exported API alone,
-// as a redactor outside the package would make one: every entry in file
-// order through one Rewriter for the file and RemapRefs, its id cleared
+// redact makes a redaction of orig with the exported API alone, as a
+// redactor outside the package would make one: every entry in file
+// order through one Rewriter for the file and RemapRefs, marked with
+// SetRedacted as made from the entry at its position, its id cleared
 // and committed to a new session whose header carries redacted and
 // redacted_from and, last, the remapped base. The file it writes must
-// read, which verifies every hash.
+// read, which verifies every hash, and every entry reads back redacted
+// from its position.
 func redact(t *testing.T, orig *Session, f func(string) string, profile string) redaction {
 	t.Helper()
 	oh := orig.Header()
@@ -316,14 +329,14 @@ func redact(t *testing.T, orig *Session, f func(string) string, profile string) 
 		return id, ok
 	}}
 	h := oh
-	h.ID = RedactedSessionID(oh.ID, orig.Len(), profile)
+	h.ID = RedactedSessionID(oh.ID, profile)
 	h.Base = ""
 	h.Redacted = true
-	h.RedactedFrom = &RedactedFrom{Session: oh.ID, Entries: orig.Len(), Profile: profile, Aligned: true}
+	h.RedactedFrom = &RedactedFrom{Session: oh.ID, Profile: profile}
 	red := New(h)
 	rw := NewRewriter(f)
 	var order []string
-	for _, e := range orig.Entries() {
+	for i, e := range orig.Entries() {
 		old := e.Base().ID
 		body, err := rw.Rewrite(e)
 		if err != nil {
@@ -339,6 +352,9 @@ func redact(t *testing.T, orig *Session, f func(string) string, profile string) 
 			}
 		}
 		n := r.Entry
+		if err := SetRedacted(n, []Span{{i + 1, i + 1}}); err != nil {
+			t.Fatalf("mark %s: %v", old, err)
+		}
 		n.Base().ID = ""
 		res, err := red.Commit(n)
 		if err != nil {
@@ -372,8 +388,13 @@ func redact(t *testing.T, orig *Session, f func(string) string, profile string) 
 	if back.Len() != orig.Len() {
 		t.Errorf("%d entries, original %d", back.Len(), orig.Len())
 	}
-	if bh := back.Header(); !bh.Redacted || bh.RedactedFrom == nil || bh.RedactedFrom.Session != oh.ID || bh.Base != h.Base {
+	if bh := back.Header(); !bh.Redacted || bh.RedactedFrom == nil || bh.RedactedFrom.Session != oh.ID || bh.RedactedFrom.Profile != profile || bh.Base != h.Base {
 		t.Errorf("header %+v", bh)
+	}
+	for i, e := range back.Entries() {
+		if spans, ok := RedactedOf(e); !ok || len(spans) != 1 || spans[0] != (Span{i + 1, i + 1}) {
+			t.Errorf("entry %d reads back redacted %v %v, want [%d]", i, ok, spans, i+1)
+		}
 	}
 	out := redaction{back: back, entries: strings.Split(strings.TrimSuffix(entries, "\n"), "\n"), byOrig: map[string]string{}}
 	for i, old := range order {
@@ -382,12 +403,12 @@ func redact(t *testing.T, orig *Session, f func(string) string, profile string) 
 	return out
 }
 
-// TestAlignedRedactionVerifies makes an aligned redaction of each fixture
-// with redact. The file holds one entry for each of the original's,
-// every string the rewrite was to change is changed, a normalised raw's
-// decoded bytes among them, and the instructions every path rebuilds are
-// the rewritten ones.
-func TestAlignedRedactionVerifies(t *testing.T) {
+// TestRedactionVerifies makes a redaction of each fixture with redact.
+// The file holds one entry for each of the original's, each marked as
+// made from the one in its place, every string the rewrite was to
+// change is changed, a normalised raw's decoded bytes among them, and
+// the instructions every path rebuilds are the rewritten ones.
+func TestRedactionVerifies(t *testing.T) {
 	// No closed value of the format or the payload holds a space, and
 	// no ID, hash or call_id does, so every space a redacted line holds,
 	// or the bytes a raw record decodes to, would be one the rewrite

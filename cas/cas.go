@@ -1686,6 +1686,12 @@ func writeHeader(o *objects, dir string, h agentsession.Header) error {
 // header names an earlier minor, as RFC 0002 requires, so a reader of
 // that earlier minor refuses the session rather than reading entries it
 // cannot represent. Nothing hashed changes: the header is not an entry.
+//
+// Raise sees the header alone. An entry holding redacted under a
+// header before 0.13 also forbids the raise, and that is the
+// session's Prepare to refuse, by Session.RaiseRefused, with
+// agentsession.ErrNoRaise: every append prepares its entry on the
+// session before it reaches here.
 func (s *Store) raiseFormat(h *handle) error {
 	_, minor, err := agentsession.ParseFormat(h.diskFormat)
 	if err == nil && minor >= agentsession.FormatMinor {

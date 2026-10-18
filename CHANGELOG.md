@@ -12,36 +12,81 @@ versions may break the API.
   0.5 to 0.12 file reads as it stands; no hash moves.
 - **Added: a redacted session names its original (RFC 0001 0.13,
   Redaction).** `Header.RedactedFrom` is the header's `redacted_from`
-  member (`RedactedFrom`): the original's `Session`, how many `Entries`
-  it held when the redaction was made, the redaction's `Profile` and,
-  for a redaction that wrote one entry per entry in file order,
-  `Aligned`. Members it does not define, the namespaced ones a
-  redaction records about itself among them, and a profile or aligned
-  in another form, stay in its `Extra` and write back as read. A header
-  carrying it on a session that is not `Redacted`, or naming the
-  session itself as its original, is refused with `ErrRedactedFrom`, by
+  member (`RedactedFrom`): the original's `Session` and the redaction's
+  `Profile`. Members it does not define, the namespaced ones a
+  redaction records about itself among them, a profile in another form,
+  and an `entries` or `aligned` member, stay in its `Extra` and write
+  back as read. A header carrying it, with `session` a non-empty
+  string, on a session that is not `Redacted`, or naming the session
+  itself as its original, is refused with `ErrRedactedFrom`, by
   `Header.Validate` and so by `Read` and `Scan`. The member is defined
   from 0.13: in a file that declares an earlier minor, which was free to
   hold the name in any form, it stays in `Header.Extra` and is neither
   decoded nor refused, as is one in a 0.13 file that does not decode as
   the object.
-- **Added: a header holding `redacted_from` from before 0.13 is never
-  raised.** `Header.Raise` is the raise a writer makes before it appends
-  to a session of an earlier minor, and refuses that one with
-  `ErrNoRaise`, an `ErrUnsupportedFormat`, since the raise would give
-  the member a meaning it was not written with. `Read` holds such a
-  header at its own format in memory, so `Write` keeps it (a file
-  before 0.5 takes 0.12, since its entries are rehashed as 0.5's);
-  `Session.Append` and `Prepare` refuse an entry to its session; the
-  jsonl, cas and sqlite stores raise through `Raise`, and cas refuses an
-  exchange that would raise one before anything lands. The conformance
-  suite (`storetest`) gains the case, which every store runs.
+- **Added: a redacted entry says what it was made from (RFC 0001 0.13,
+  Redacted entries).** The body member `redacted`, which any entry may
+  carry, as `legacy_id` is, lists the positions in the original's file
+  order of the entries the entry was made from: each element a position
+  `n` or an inclusive range `[from, to]`, ascending and not
+  overlapping, and `[]` for an entry the redaction added. `RedactedOf`
+  reports whether an entry is redacted and returns its `Span`s, a
+  single position having `From == To`; `SetRedacted` marks an entry,
+  refusing spans not in that form with `ErrBadRedacted`, and writes a
+  position as `n` and a range as `[from, to]`; `ClearRedacted` takes
+  the member off. The member round-trips byte for byte through `Read`
+  and `Write` and is hashed as body content. A value in another form is
+  kept as written in `Unknown`, and the entry is not redacted. In a file
+  that declares a minor before 0.13 the member is unknown whatever its
+  form, and kept as written: `Read`, `RawEntry.Decode` and
+  `Session.Extend` read each entry under the minor its file declared;
+  `UnmarshalEntry`, given a line alone, reads it as this package writes
+  it, and `GateEntry(format, e)` applies a header's minor to an entry
+  so decoded. The cas store's log read (`ReadLog`) and the followers of
+  the cas and sqlite stores apply it by the stored header, and every
+  follower (memory, jsonl, cas, sqlite, and so remote) reads the session
+  again, as a `Reset`, when the store raises the header, so an entry
+  appended after the raise is read under the raised format. The remote
+  client's path read (`Client.Path`) carries no header and decodes as
+  `UnmarshalEntry` does; a caller gates it with the session's format.
+  `RewriteStrings` and `RemapRefs` keep a member read that way unknown.
+- **Added: a file holding `redacted_from` or `redacted` from before
+  0.13 is never raised, and no 0.13 session is made over one.**
+  `Session.RaiseRefused(format)` is the rule: it refuses with
+  `ErrNoRaise`, an `ErrUnsupportedFormat`, to write a session at 0.13
+  or later whose header holds `redacted_from` from before 0.13, or one
+  of whose entries holds a `redacted` member read under such a header,
+  since the format would give the member a meaning it was not written
+  with. `Header.Raise`, the raise a writer makes before it appends to a
+  session of an earlier minor, applies the header's half. `Read` holds
+  such a file at its own format in memory, so `Write` keeps it (a file
+  before 0.5 takes 0.12, since its entries are rehashed as 0.5's), and
+  `Session.Extend` does the same for an entry it adds; `Session.Append`
+  and `Prepare` refuse an entry to its session, and refuse an entry so
+  read to any session until the writer clears it (`ClearRedacted`) or
+  marks it (`SetRedacted`). `Fork` refuses a fork at 0.13 or later whose
+  prefix holds such an entry, and a fork written under a minor before
+  0.13 whose prefix holds a redacted entry. The memory, jsonl, cas and
+  sqlite stores raise the header on an append after their session's
+  `Prepare`, so an entry's member stops an append's raise too; the
+  memory store now raises at all. cas refuses an exchange that would
+  raise a header holding `redacted_from` before anything lands. A store
+  that raises a header outside an append, as an exchange or a fork's
+  create does, is to call `RaiseRefused` on the session it holds. The
+  conformance suite
+  (`storetest`) gains the header case, an entry case (with the new
+  `Options.Lower`, which a store that can rewrite a stored header's
+  format provides) and a follow across a raise, which every store runs.
+- **Changed: the context hash leaves `redacted` out,** in whatever form,
+  as it leaves `legacy_id` and `normalised`, since RFC 0002 counts it as
+  provenance. No context hash of a session without the member moves.
 - **Added: `RedactedSessionID`,** the ID RFC 0001 recommends for a
   redacted session whose redaction writes a profile: a UUIDv5 under the
   nil namespace over the canonical JSON array
-  `["redacted","<original>",<entries>,"<profile>"]`, so the same
-  redaction of the same entries gives the same session, and an ID
-  holding a slash cannot make two names one.
+  `["redacted","<original>","<profile>"]`, so one original under one
+  profile has one redacted session, whose ID stays as it grows and
+  which a redaction repeated over a store finds again, and an ID holding
+  a slash cannot make two names one.
 - **Added: `RemapRefs` and `RemapHeaderRefs`, for a writer that
   re-points a session's references (#236).** `RemapRefs` re-points every
   member of an entry that names an entry or a session through a `Remap`
@@ -60,8 +105,9 @@ versions may break the API.
   parents are sorted as a writer writes them, an extension entry's as a
   core entry's, and an entry whose fields did not write its line back
   is written as that line with the references changed.
-  `RemapHeaderRefs` re-points base and parent_session, and leaves
-  redacted_from.
+  An entry's `redacted` names entries of the original by position, not
+  by id, and is left as it was. `RemapHeaderRefs` re-points base and
+  parent_session, and leaves redacted_from.
 - **Added: `RewriteStrings` and `Rewriter`, for a writer that rewrites
   a session's bodies (#236).** `RewriteStrings` applies a deterministic
   function to every string of an entry's body: typed members, Unknown,
@@ -73,7 +119,7 @@ versions may break the API.
   by, the one place the format keeps data in member names, two paths
   made one being refused with `ErrKeyCollision`. Never another member
   name (a tool name, an extra key, a key inside custom data), the
-  envelope, legacy_id, a reference, a hash (`request_hash`, an
+  envelope, legacy_id, `redacted` in any form, a reference, a hash (`request_hash`, an
   instruction part's `hash`, an env entry's file hashes), a sidecar
   URL, or a `call_id` where the format defines one (an item, a
   dispatch, a decision, a link, a custom entry, a run end's pending

@@ -1,7 +1,10 @@
 package remote_test
 
 import (
+	"bytes"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -52,6 +55,24 @@ func serve(t *testing.T, st agentsession.Store, closer func() error, opts ...rem
 	return w
 }
 
+// lowerHeaderFile rewrites the format the header line at the start of
+// the file at path names, as a writer of that earlier minor would have
+// left it.
+func lowerHeaderFile(t *testing.T, path, format string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur := `"format":"` + agentsession.Format + `"`
+	if !bytes.Contains(data, []byte(cur)) {
+		t.Fatalf("%s holds no %s", path, cur)
+	}
+	if err := os.WriteFile(path, bytes.Replace(data, []byte(cur), []byte(`"format":"`+format+`"`), 1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestConformanceOverMemory(t *testing.T) {
 	storetest.Run(t, storetest.Options{
 		New: func(t *testing.T) agentsession.Store { return serve(t, agentsession.NewMemoryStore(), nil) },
@@ -77,6 +98,15 @@ func TestConformanceOverJSONL(t *testing.T) {
 		ReadOnly: func(t *testing.T, s agentsession.Store) agentsession.Store {
 			return open(t, root(s), jsonl.WithReadOnly())
 		},
+		Lower: func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store {
+			path, err := s.(*wire).backing.(*jsonl.Store).Path(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.(*wire).Close()
+			lowerHeaderFile(t, path, format)
+			return open(t, root(s))
+		},
 	})
 }
 
@@ -98,6 +128,11 @@ func TestConformanceOverCAS(t *testing.T) {
 		Second: func(t *testing.T, s agentsession.Store) agentsession.Store { return open(t, root(s)) },
 		ReadOnly: func(t *testing.T, s agentsession.Store) agentsession.Store {
 			return open(t, root(s), cas.WithReadOnly())
+		},
+		Lower: func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store {
+			s.(*wire).Close()
+			lowerHeaderFile(t, filepath.Join(root(s), "sessions", id, "header"), format)
+			return open(t, root(s))
 		},
 	})
 }

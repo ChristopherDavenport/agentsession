@@ -27,11 +27,20 @@ var ErrStale = errors.New("follow: the log was replaced")
 // store accepted, a head record naming Leaf when Entry is nil, or, when
 // Skip is set, a record that changes nothing a follower sees, which
 // only moves the cursor past it.
+//
+// Format is the format the session's stored header named when the
+// Source read the item, empty when the Source does not say. A store
+// raises the header's format on a newer writer's first append, which
+// changes how an entry reads (an entry's redacted member is defined
+// from 0.13), so when it differs from the format the follower's session
+// was read under, the follower reads the session again and yields a
+// Reset, and every entry is read under the format its file names.
 type Item struct {
 	Entry  agentsession.Entry
 	Leaf   string
 	Skip   bool
 	Cursor agentsession.Cursor
+	Format string
 }
 
 // Source is a store's side of a follow on one session.
@@ -115,6 +124,14 @@ func Run(ctx context.Context, src Source, from agentsession.Cursor) iter.Seq2[ag
 				if ctx.Err() != nil {
 					return
 				}
+				if it.Format != "" && it.Format != sess.DeclaredFormat() {
+					// The store raised the header since the session was
+					// read: read it again under the format it names.
+					if !reload(agentsession.Reset) {
+						return
+					}
+					continue next
+				}
 				c, err := apply(sess, it, fileLeaf)
 				if err != nil {
 					// What the log holds does not extend the session
@@ -169,9 +186,14 @@ func apply(sess *agentsession.Session, it Item, fileLeaf bool) ([]agentsession.C
 		}
 		return []agentsession.Change{{Kind: agentsession.Head, Session: sess, Leaf: it.Leaf, Cursor: it.Cursor}}, nil
 	}
+	// The entry was decoded from its line alone. Extend reads it under
+	// the format the session's file declared; for Commit the gate is
+	// applied here, by the same format, which Run keeps the store's.
 	commit := sess.Commit
 	if fileLeaf {
 		commit = sess.Extend
+	} else {
+		agentsession.GateEntry(sess.DeclaredFormat(), it.Entry)
 	}
 	r, err := commit(it.Entry)
 	if err != nil {
