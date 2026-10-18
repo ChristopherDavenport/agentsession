@@ -264,6 +264,33 @@ versions may break the API.
   `RedactedOnly` give it the other paths. Every store here gives
   `Options.Lower`, the memory store by importing the session, its
   header lowered, into a store of its own.
+- **Fixed: `agentsession verify` of a redacted file (#234).** It
+  reported every `request_hash` as a MISMATCH and said each id was
+  checked as if against the original. Now it says the ids verify the
+  redacted file and not its original, prints `redacted_from` (the
+  original's session, the profile, and the names of its other members),
+  or that a 0.12 redacted file names no original, and counts the
+  entries a redaction made and those appended natively ("9 redacted
+  entries, 2 native"). A `request_hash` that no longer matches on a
+  response carrying `redacted` is counted apart, as expected, and fails
+  nothing, in a store's verify too; on a native response it fails, as
+  in any session. A redacted file before 0.13 marks no entry and took
+  no appends, so every entry of one counts as redacted. A line whose id
+  does not verify still fails. `show` prints the link in a `redacted
+  from` row.
+- **Added: ATIF from a redacted session says what the redaction made
+  (#235).** The root `extra.agentsession` of a document `ToATIF` builds
+  from a redacted session carries `redacted: true` and `redacted_from`,
+  the header's object with every member it holds, extras included. A
+  step made from a redacted entry carries that entry's `redacted` under
+  `extra.agentsession.redacted`, as the entry writes it; a step made
+  from several entries, an agent step from its items, its response and
+  the outputs observed in it, also carries `redacted_entries`, an
+  object from each redacted entry's ID to its `redacted`. A step from
+  native entries carries neither. Nothing in `export` checks a
+  `request_hash`, so a redacted session exports, through
+  `Trajectories`, `ToATIF`, `Items` and the CLI's `export`, like any
+  other.
 
 ## v0.0.26 - 2026-10-15
 
