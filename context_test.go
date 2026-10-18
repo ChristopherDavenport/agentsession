@@ -181,6 +181,92 @@ func TestVerifyFixtureHashes(t *testing.T) {
 	}
 }
 
+// TestRequestHashFor: for every response of the fixtures redact runs
+// over, RequestHashFor under the response's parent, given a copy that
+// carries nothing but its response_id, is the hash Verify rebuilds, so
+// a response that verifies has its recorded value and one that does not
+// has another. A redaction that changes nothing, each response's hash
+// recomputed with SetRequestHash in the session being built, keeps
+// every hash that verified; one that changes the requests moves them.
+// An empty parent is the leaf, a parent the session lacks is
+// ErrNoEntry, and a response that recorded no hash is left without one.
+func TestRequestHashFor(t *testing.T) {
+	moved := 0
+	for _, name := range redactableFixtures {
+		t.Run(name, func(t *testing.T) {
+			s := loadFixture(t, name)
+			for _, e := range s.Entries() {
+				r, ok := e.(*ResponseEntry)
+				if !ok {
+					continue
+				}
+				got, err := s.RequestHashFor(r.Parent, &ResponseEntry{ResponseID: r.ResponseID})
+				if err != nil {
+					t.Fatalf("%s: %v", r.ID, err)
+				}
+				ctx, err := s.RequestContext(r.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req, err := ctx.Request()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if want, _ := RequestHash(req); got != want {
+					t.Errorf("%s: RequestHashFor %s, Verify rebuilds %s", r.ID, got, want)
+				}
+				if r.RequestHash != "" && (s.Verify(r.ID) == nil) != (got == r.RequestHash) {
+					t.Errorf("%s: Verify says %v, RequestHashFor %s, recorded %s", r.ID, s.Verify(r.ID), got, r.RequestHash)
+				}
+			}
+			same := redact(t, s, func(v string) string { return v }, "test.same@1")
+			for i, e := range s.Entries() {
+				if r, ok := e.(*ResponseEntry); ok && s.Verify(r.ID) == nil {
+					if got := same.back.Entries()[i].(*ResponseEntry).RequestHash; got != r.RequestHash {
+						t.Errorf("%s: a redaction that changes nothing recomputed %s, recorded %s", r.ID, got, r.RequestHash)
+					}
+				}
+			}
+			spaces := redact(t, s, func(v string) string { return strings.ReplaceAll(v, " ", "_") }, "test.spaces@1")
+			for i, e := range s.Entries() {
+				if r, ok := e.(*ResponseEntry); ok && r.RequestHash != "" && spaces.back.Entries()[i].(*ResponseEntry).RequestHash != r.RequestHash {
+					moved++
+				}
+			}
+		})
+	}
+	if moved == 0 {
+		t.Error("no redaction moved a request_hash; the test proves nothing")
+	}
+
+	s := loadFixture(t, "basic")
+	r2, _ := s.Entry(lid(t, s, "r0000002"))
+	resp := r2.(*ResponseEntry)
+	if err := s.Branch(resp.Parent); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.RequestHashFor("", &ResponseEntry{ResponseID: resp.ResponseID}); err != nil || got != resp.RequestHash {
+		t.Errorf("RequestHashFor at the leaf = %s, %v; want %s", got, err, resp.RequestHash)
+	}
+	if _, err := s.RequestHashFor("sha256:nope", &ResponseEntry{}); !errors.Is(err, ErrNoEntry) {
+		t.Errorf("RequestHashFor under a parent the session lacks: %v, want ErrNoEntry", err)
+	}
+	none := &ResponseEntry{ResponseID: "resp_9", Status: openresponses.ResponseStatusCompleted}
+	if err := s.SetRequestHash(none); err != nil || none.RequestHash != "" {
+		t.Errorf("SetRequestHash of a response that recorded none: %q, %v", none.RequestHash, err)
+	}
+	kept := &ResponseEntry{ResponseID: resp.ResponseID, Status: openresponses.ResponseStatusCompleted, RequestHash: HashPrefix + strings.Repeat("0", 64)}
+	kept.Parent = resp.Parent
+	if err := s.SetRequestHash(kept); err != nil || kept.RequestHash != resp.RequestHash {
+		t.Errorf("SetRequestHash = %q, %v; want %s", kept.RequestHash, err, resp.RequestHash)
+	}
+	gone := &ResponseEntry{ResponseID: "x", RequestHash: "sha256:kept"}
+	gone.Parent = "sha256:nope"
+	if err := s.SetRequestHash(gone); !errors.Is(err, ErrNoEntry) || gone.RequestHash != "sha256:kept" {
+		t.Errorf("SetRequestHash under a parent the session lacks: %q, %v", gone.RequestHash, err)
+	}
+}
+
 func TestRequestContext(t *testing.T) {
 	s := loadFixture(t, "basic")
 	ctx, err := s.RequestContext(lid(t, s, "r0000001"))

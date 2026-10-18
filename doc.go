@@ -44,6 +44,9 @@
 // defines (RFC 8785 canonical JSON, SHA-256). [Session.Verify] checks a
 // stored response's hash against the rebuilt request, and reports
 // [ErrNoHash] rather than nil when the response recorded none.
+// [Session.RequestHashFor] computes, by the same code, the hash a
+// response not yet appended would verify with, which a redactor gives
+// each redacted response ([Session.SetRequestHash]).
 //
 // # Stores
 //

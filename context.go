@@ -1223,7 +1223,17 @@ func (s *Session) requestContext(id string, omit bool) (Context, error) {
 		return Context{}, fmt.Errorf("agentsession: entry %s is a %s, not a response", id, e.EntryType())
 	}
 	path := s.Path(id)
-	path = path[:len(path)-1] // drop the response entry itself
+	return requestContextAt(path[:len(path)-1], resp, omit) // drop the response entry itself
+}
+
+// requestContextAt rebuilds the context of the request that produced
+// resp, a response whose parent is the last entry of path: path with
+// the response's own output items removed, as [OutputEntries] finds
+// them, and the omit setting applied when omit is set. resp need not
+// be in the session: [Session.RequestHashFor] rebuilds the request of
+// one about to be appended through it, and [Session.Verify] the request
+// of one the session holds, so the two cannot disagree.
+func requestContextAt(path []Entry, resp *ResponseEntry, omit bool) (Context, error) {
 	output := OutputEntries(path, resp)
 	if len(output) == 0 {
 		return buildContext(path, omit)
@@ -1267,7 +1277,11 @@ var ErrNoHash = errors.New("agentsession: no request hash recorded")
 
 // Verify rebuilds the request for the response entry id and checks that
 // it hashes to the entry's RequestHash. A response that recorded no
-// hash returns [ErrNoHash]: nil means the request was checked.
+// hash returns [ErrNoHash]: nil means the request was checked. A
+// redacted session is held to it as any other: its responses' hashes
+// are its own, which a redactor sets with [Session.SetRequestHash], so
+// a mismatch on a redacted entry is one like any other (RFC 0001,
+// Redaction).
 func (s *Session) Verify(id string) error {
 	ctx, err := s.RequestContext(id)
 	if err != nil {
@@ -1278,11 +1292,7 @@ func (s *Session) Verify(id string) error {
 	if resp.RequestHash == "" {
 		return fmt.Errorf("%w: response %s", ErrNoHash, id)
 	}
-	req, err := ctx.Request()
-	if err != nil {
-		return err
-	}
-	got, err := RequestHash(req)
+	got, err := contextHash(ctx)
 	if err != nil {
 		return err
 	}
@@ -1292,15 +1302,89 @@ func (s *Session) Verify(id string) error {
 			// is the request with them in says the writer disagreed with
 			// the rule it wrote down.
 			if bare, err := s.requestContext(id, false); err == nil {
-				if req, err := bare.Request(); err == nil {
-					if h, err := RequestHash(req); err == nil && h == resp.RequestHash {
-						return fmt.Errorf("%w: response %s recorded %s, the request with %d item(s) the omit setting leaves out: %w", ErrHashMismatch, id, resp.RequestHash, len(ctx.OmittedItems), ErrOmitDivergence)
-					}
+				if h, err := contextHash(bare); err == nil && h == resp.RequestHash {
+					return fmt.Errorf("%w: response %s recorded %s, the request with %d item(s) the omit setting leaves out: %w", ErrHashMismatch, id, resp.RequestHash, len(ctx.OmittedItems), ErrOmitDivergence)
 				}
 			}
 		}
 		return fmt.Errorf("%w: response %s recorded %s, rebuilt %s", ErrHashMismatch, id, resp.RequestHash, got)
 	}
+	return nil
+}
+
+// contextHash is the request hash of the request ctx builds, as
+// [Session.Verify] and [Session.RequestHashFor] both compute it.
+func contextHash(ctx Context) (string, error) {
+	req, err := ctx.Request()
+	if err != nil {
+		return "", err
+	}
+	return RequestHash(req)
+}
+
+// RequestHashFor computes the request_hash r would verify with were it
+// appended under parent: the hash of the request the session rebuilds
+// for it, the path to parent with r's own output items removed, as
+// [Session.Verify] rebuilds and hashes it, through the same code, so a
+// response that carries the value verifies. r's output items are the
+// items on that path that name its ResponseID, which a writer appends
+// before r. An empty parent is the session's leaf, where [Session.Append]
+// and [Session.Commit] put an entry whose Parent is empty. A parent the
+// session does not hold is [ErrNoEntry]. r is not changed, and its own
+// RequestHash plays no part.
+//
+// It is how a redactor gives a redacted response its request_hash (RFC
+// 0001, Redaction): a redacted session hashes independently, so the
+// value is the one its own request rebuilds to, never the original's,
+// which no longer matches once anything on the path was redacted.
+// Commit the entries the response's path holds first, in the session
+// the response will be committed to. A redacted response gets a
+// request_hash only when the entry it was made from carried one; one
+// whose original recorded none gets none, since nothing vouches that
+// the request was sent as recorded. [Session.SetRequestHash] applies
+// that rule.
+func (s *Session) RequestHashFor(parent string, r *ResponseEntry) (string, error) {
+	if r == nil {
+		return "", fmt.Errorf("agentsession: nil response")
+	}
+	s.mu.RLock()
+	if parent == "" {
+		parent = s.leaf
+	}
+	var path []Entry
+	if parent != "" {
+		if path = s.path(parent); path == nil {
+			s.mu.RUnlock()
+			return "", fmt.Errorf("agentsession: %w: %s", ErrNoEntry, parent)
+		}
+	}
+	s.mu.RUnlock()
+	ctx, err := requestContextAt(path, r, true)
+	if err != nil {
+		return "", err
+	}
+	return contextHash(ctx)
+}
+
+// SetRequestHash sets r's RequestHash to [Session.RequestHashFor] under
+// r's Parent, empty meaning the leaf, as Commit fills it, when r carries
+// one, and leaves r without one when it carries none. A redactor calls
+// it on each response it has rewritten and remapped, which still holds
+// the original's request_hash or none, just before committing it: the
+// original's is replaced, and a response whose original recorded none
+// gets none (RFC 0001, Redaction). On an error r is not changed.
+func (s *Session) SetRequestHash(r *ResponseEntry) error {
+	if r == nil {
+		return fmt.Errorf("agentsession: nil response")
+	}
+	if r.RequestHash == "" {
+		return nil
+	}
+	h, err := s.RequestHashFor(r.Base().Parent, r)
+	if err != nil {
+		return err
+	}
+	r.RequestHash = h
 	return nil
 }
 

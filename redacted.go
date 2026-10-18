@@ -180,7 +180,9 @@ func RedactedOf(e Entry) ([]Span, bool) {
 // replaces any redacted member e held, in whatever form, and refuses
 // spans not in the form with ErrBadRedacted, leaving e as it was. It
 // changes e, so it is for an entry not yet appended, whose hashes the
-// session computes when it commits it.
+// session computes when it commits it. A redacted response also takes
+// the request_hash of its request in the redacted session, not the
+// original's, which [Session.SetRequestHash] sets.
 func SetRedacted(e Entry, spans []Span) error {
 	if e == nil {
 		return errors.New("agentsession: nil entry")

@@ -147,6 +147,12 @@ func NewRewriter(f func(string) string) *Rewriter {
 // written is what the rewritten JSON holds: it never writes e's line.
 // Its hashes are a session's to compute, by [Session.Commit] once the
 // writer has cleared the ID, and its content hash is empty until then.
+// A response's request_hash is the session's to compute too, over the
+// request the session it is committed to rebuilds for it, which no
+// rewrite of one entry can see: the result still holds the original's,
+// or none, and a redactor sets it with [Session.SetRequestHash] just
+// before the commit. A redacted session hashes independently, so the
+// original's is never kept (RFC 0001, Redaction).
 func RewriteStrings(e Entry, f func(string) string) (Entry, error) {
 	return NewRewriter(f).Rewrite(e)
 }
