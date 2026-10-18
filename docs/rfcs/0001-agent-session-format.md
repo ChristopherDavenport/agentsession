@@ -1830,12 +1830,14 @@ A redactor:
 - MUST reach data the format keeps in member names: an `env` entry's
   `files` are keyed by path, and a path can hold what is redacted. Two
   keys a redaction makes one MUST NOT both be kept;
-- MUST give each `response` it writes the `request_hash` of the request
-  the redacted session rebuilds for it, computed as Request hash says,
-  when the entry it was made from carried one, and none when it did not.
-  It MUST NOT keep the original's: a redacted session hashes
-  independently, and a kept hash would neither verify nor hide what was
-  redacted from it.
+- MUST give each `response` it writes either no `request_hash` or the
+  one the redacted session rebuilds for it, computed as Request hash
+  says, and never another: a redacted session hashes independently, and
+  a hash kept from the original would neither verify nor hide what was
+  redacted from it. It SHOULD give one to a response made from entries
+  that carried one, and MUST NOT give one to a response made from an
+  entry whose `request_hash` did not verify in the original, so that a
+  redaction never certifies a request the original could not.
 
 Some strings tie entries together: a `call_id` pairs a call with its
 output, dispatch and links, and a subsession's ID is derived from its

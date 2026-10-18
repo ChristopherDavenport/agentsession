@@ -1372,7 +1372,11 @@ func (s *Session) RequestHashFor(parent string, r *ResponseEntry) (string, error
 // it on each response it has rewritten and remapped, which still holds
 // the original's request_hash or none, just before committing it: the
 // original's is replaced, and a response whose original recorded none
-// gets none (RFC 0001, Redaction). On an error r is not changed.
+// gets none (RFC 0001, Redaction). A response made from one whose
+// request_hash did not verify in the original must get none, so a
+// redaction never certifies a request the original could not: the
+// redactor clears RequestHash on such a response before calling, since
+// only it has the original. On an error r is not changed.
 func (s *Session) SetRequestHash(r *ResponseEntry) error {
 	if r == nil {
 		return fmt.Errorf("agentsession: nil response")
