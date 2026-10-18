@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.27 - 2026-10-17
 
 - **Changed: the format is 0.13.** A writer raises every file it appends
   to, so a reader of 0.12 refuses those files until it is upgraded. A
