@@ -88,7 +88,8 @@ func NewRewriter(f func(string) string) *Rewriter {
 // details, which may hold a task or a test name, are names a writer
 // chose and stay as written, though the same string elsewhere, a tool's
 // name in a config entry or a function call, is rewritten. Nor is f
-// given the envelope (type, id, parent, parents, ts) or legacy_id; a
+// given the envelope (type, id, parent, parents, ts), legacy_id or
+// redacted, which is kept as it was in whatever form it is held; a
 // member naming an entry or a session, which [RemapRefs] re-points; a
 // member holding a hash (request_hash, an instruction part's hash, an
 // env entry's file hashes); or a sidecar media URL, sidecar:sha256: and
@@ -314,6 +315,7 @@ func (r *Rewriter) rewriteUnknown(u *UnknownEntry) (Entry, error) {
 		return nil, err
 	}
 	cp.tsRaw = u.tsRaw
+	keepRedactedForm(u, &cp)
 	return &cp, nil
 }
 

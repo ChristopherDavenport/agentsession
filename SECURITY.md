@@ -32,4 +32,6 @@ its original — each `request_hash`, and references into sessions not
 redacted alongside it — and anyone who can guess a redacted value can
 confirm the guess against them, so redaction alone does not hide a
 value with few possibilities, such as a username or a home directory
-(RFC 0001, Redaction).
+(RFC 0001, Redaction). An entry appended to a redacted session natively, as
+when it is resumed, is not redacted and carries no `redacted` member; a
+store set to hold only redacted entries refuses it.

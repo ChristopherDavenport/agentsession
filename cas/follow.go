@@ -76,6 +76,10 @@ type pos struct {
 	dir   string // the session directory's identity, or "-"
 	ident string // hash of the header without its format
 	tail  string // crc and length of the last line consumed, "0.0" for none
+	// format is the header's format when identity read it. It is not
+	// part of the cursor: a raise changes it, and the follower reads the
+	// session again then, by the Items' Format.
+	format string
 }
 
 func (p pos) cursor() agentsession.Cursor {
@@ -91,7 +95,7 @@ func parsePos(c agentsession.Cursor) (pos, bool) {
 	if err != nil || off < 0 {
 		return pos{}, false
 	}
-	return pos{off, f[1], f[2], f[3], f[4]}, true
+	return pos{off: off, log: f[1], dir: f[2], ident: f[3], tail: f[4]}, true
 }
 
 func (src *source) gone() error {
@@ -122,6 +126,7 @@ func (src *source) identity() (pos, os.FileInfo, error) {
 	if p.ident, err = agentsession.HeaderIdent(hdr); err != nil {
 		return p, nil, err
 	}
+	p.format = hdr.Format
 	fi, err := os.Stat(filepath.Join(src.dir, logName))
 	if errors.Is(err, os.ErrNotExist) {
 		p.log = "-"
@@ -279,6 +284,7 @@ func (src *source) Tail(ctx context.Context, cur agentsession.Cursor) ([]follow.
 			case r.rec.Op == opHead:
 				it = follow.Item{Leaf: r.rec.Head, Cursor: l.cursor}
 			}
+			it.Format = l.format
 			items = append(items, it)
 		}
 	}
@@ -291,6 +297,7 @@ func (src *source) Tail(ctx context.Context, cur agentsession.Cursor) ([]follow.
 type tailLine struct {
 	recs   []lineRecord
 	cursor agentsession.Cursor
+	format string // the header's format when the line was read
 }
 
 type lineRecord struct {
@@ -350,6 +357,12 @@ func (src *source) lines(cur agentsession.Cursor, entries bool) ([]tailLine, err
 	}
 	buf = buf[:n]
 	end := bytes.LastIndexByte(buf, '\n') + 1 // a record without its newline waits
+	// The header's format is looked at again after the log: a raise
+	// writes the header before the append it is for, so an entry read
+	// here is never labelled with the format from before its raise.
+	if hdr, err := readHeader(src.dir); err == nil {
+		now.format = hdr.Format
+	}
 	var out []tailLine
 	off := p.off
 	for _, line := range bytes.SplitAfter(buf[:end], []byte{'\n'}) {
@@ -367,7 +380,7 @@ func (src *source) lines(cur agentsession.Cursor, entries bool) ([]tailLine, err
 		q := p
 		q.off = off
 		q.tail = fmt.Sprintf("%x.%x", crc32.Checksum(line, crcTable), len(line))
-		l := tailLine{cursor: q.cursor()}
+		l := tailLine{cursor: q.cursor(), format: now.format}
 		for _, r := range recs {
 			lr := lineRecord{rec: r}
 			if entries && r.Op == opAppend && r.Entry != "" {

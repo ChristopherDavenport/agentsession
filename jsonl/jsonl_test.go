@@ -1,6 +1,7 @@
 package jsonl_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -57,8 +58,42 @@ func TestStoreSuite(t *testing.T) {
 					t.Cleanup(func() { st.Close() })
 					return st
 				},
+				Lower: func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store {
+					old := s.(*jsonl.Store)
+					lowerFile(t, old, id, format)
+					st, err := jsonl.Open(old.Root(), jsonl.WithSync(policy))
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { st.Close() })
+					return st
+				},
 			})
 		})
+	}
+}
+
+// lowerFile closes st and rewrites the format the header of session id
+// names, as a writer of that earlier minor would have left it.
+func lowerFile(t *testing.T, st *jsonl.Store, id, format string) {
+	t.Helper()
+	path, err := st.Path(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur := `"format":"` + agentsession.Format + `"`
+	if !bytes.Contains(data, []byte(cur)) {
+		t.Fatalf("the header holds no %s", cur)
+	}
+	if err := os.WriteFile(path, bytes.Replace(data, []byte(cur), []byte(`"format":"`+format+`"`), 1), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -904,5 +939,50 @@ func TestRaiseFrom09(t *testing.T) {
 	defer st.Close()
 	if s, err := st.Open(ctx, "s"); err != nil || s.DeclaredFormat() != agentsession.Format {
 		t.Errorf("read again: %v, declared %s", err, s.DeclaredFormat())
+	}
+}
+
+// TestNoRaiseForARedactedEntry: a 0.12 file an entry of which holds
+// redacted, which 0.12 does not define, is not raised: the store's raise
+// sees the header alone, and the session's Prepare refuses the append
+// with ErrNoRaise before it, leaving the file as it was.
+func TestNoRaiseForARedactedEntry(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, err := jsonl.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	e := agentsession.NewItemEntry(openresponses.UserText("hello"))
+	if err := agentsession.SetRedacted(e, []agentsession.Span{{From: 1, To: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, "s", e); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := st.Path("s")
+	st.Close()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := `"format":"` + agentsession.Format + `"`
+	old := []byte(strings.Replace(string(data), current, `"format":"agentsession/0.12"`, 1))
+	if err := os.WriteFile(path, old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err = jsonl.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Append(ctx, "s", agentsession.NewItemEntry(openresponses.UserText("again"))); !errors.Is(err, agentsession.ErrNoRaise) {
+		t.Errorf("Append = %v, want ErrNoRaise", err)
+	}
+	if got, _ := os.ReadFile(path); !bytes.Equal(got, old) {
+		t.Errorf("the refused append changed the file:\n%s", got)
 	}
 }

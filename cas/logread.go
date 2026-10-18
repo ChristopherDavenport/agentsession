@@ -189,6 +189,10 @@ func (s *Store) ReadLog(ctx context.Context, id string, after agentsession.Curso
 					// them, and the read ends before the line.
 					return out, nil
 				}
+				// Read under the format the header names, as Read
+				// reads a file: before 0.13 a redacted member is
+				// unknown.
+				agentsession.GateEntry(hdr.Format, e)
 				res, err := sess.Commit(e)
 				if err != nil {
 					return Log{}, fmt.Errorf("cas: session %s: %w", id, err)

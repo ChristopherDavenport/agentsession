@@ -566,6 +566,12 @@ func raises(format string) bool {
 // reader of that earlier minor refuses the session rather than reading
 // entries it cannot represent. Nothing hashed changes: the header is
 // not an entry.
+//
+// Raise sees the header alone. An entry holding redacted under a
+// header before 0.13 also forbids the raise, and that is the
+// session's Prepare to refuse, by Session.RaiseRefused, with
+// agentsession.ErrNoRaise: every append prepares its entry on the
+// session before it reaches here.
 func raiseFormat(ctx context.Context, tx *sql.Tx, id string) error {
 	var line string
 	if err := tx.QueryRowContext(ctx, `SELECT header FROM sessions WHERE id = ?`, id).Scan(&line); err != nil {
