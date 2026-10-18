@@ -1,7 +1,7 @@
 {
   "schema_version": "ATIF-v1.8",
   "session_id": "13180cc1-b6f4-5a32-92d2-8d996f95c305",
-  "trajectory_id": "sha256:f0b1984d4a689464d2664bbc4bb8267bd93eb58a8b03126b708455759f839be9",
+  "trajectory_id": "sha256:08044d1f94662b07c714d9566fec2bc79fc3d7503f16c0e9d4dce1a22bdd87be",
   "agent": {
     "name": "fixture",
     "version": "1",
@@ -194,12 +194,12 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:326495427ba43d56525c1ee7d0f322a3fa3705d87a0f628c53da2a28168ef860",
+          "entry_id": "sha256:22bbed70ed5d6453e07c4c5fbd62388c97cb58400f5bc855c3b797a95305dbcb",
           "redacted": [
             8
           ],
           "redacted_entries": {
-            "sha256:326495427ba43d56525c1ee7d0f322a3fa3705d87a0f628c53da2a28168ef860": [
+            "sha256:22bbed70ed5d6453e07c4c5fbd62388c97cb58400f5bc855c3b797a95305dbcb": [
               8
             ],
             "sha256:ccef1b74716261c11c9bdbc07e81b25dd21d7723e8aa467c689a115b58457122": [
@@ -229,14 +229,14 @@
             }
           ],
           "response": {
-            "entry_id": "sha256:326495427ba43d56525c1ee7d0f322a3fa3705d87a0f628c53da2a28168ef860",
+            "entry_id": "sha256:22bbed70ed5d6453e07c4c5fbd62388c97cb58400f5bc855c3b797a95305dbcb",
             "latency_ms": 300,
             "legacy_id": "r0000002",
             "model": "gpt-5",
             "redacted": [
               8
             ],
-            "request_hash": "sha256:00c0227db7d8043eb3dfc141045f339e3869b8ff3c09fbcd70627f1e8f6d9fb5",
+            "request_hash": "sha256:c9002ebfd59a10e4d5ef0b12cb77abb36cf05860c15c30d99dff5b68cc3e8ddf",
             "response_id": "resp_2",
             "status": "completed",
             "ts": "2026-09-17T12:00:04Z",
@@ -255,11 +255,11 @@
         },
         "outcome": [
           {
-            "entry_id": "sha256:376e5fe95a6a7400331ec50af53213cd17ab2a56b9cbfe3a2bfe83c68a324f2e",
+            "entry_id": "sha256:1bee2b136e9cfde9316d43d07c09e822b14118db88898ba9edc914310473792a",
             "kind": "feedback",
             "label": "thumbs_up",
             "score": 1,
-            "target": "sha256:326495427ba43d56525c1ee7d0f322a3fa3705d87a0f628c53da2a28168ef860"
+            "target": "sha256:22bbed70ed5d6453e07c4c5fbd62388c97cb58400f5bc855c3b797a95305dbcb"
           }
         ],
         "phases": [
@@ -274,7 +274,7 @@
       "message": "and 3+3?",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:ca87e30820ff0f5c903452b0ccc2e69248db99fe433d883a5154067d9391dffc"
+          "entry_id": "sha256:e68ebd968c45b51047fa4a0453d43507cd41216ce12ef9b7fc24504b4549575c"
         },
         "openresponses": {
           "item": {
@@ -300,12 +300,12 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:f0b1984d4a689464d2664bbc4bb8267bd93eb58a8b03126b708455759f839be9"
+          "entry_id": "sha256:08044d1f94662b07c714d9566fec2bc79fc3d7503f16c0e9d4dce1a22bdd87be"
         },
         "openresponses": {
           "items": [],
           "response": {
-            "entry_id": "sha256:f0b1984d4a689464d2664bbc4bb8267bd93eb58a8b03126b708455759f839be9",
+            "entry_id": "sha256:08044d1f94662b07c714d9566fec2bc79fc3d7503f16c0e9d4dce1a22bdd87be",
             "model": "gpt-5",
             "response_id": "resp_3",
             "status": "completed",
@@ -324,11 +324,11 @@
     "extra": {
       "outcome": [
         {
-          "entry_id": "sha256:376e5fe95a6a7400331ec50af53213cd17ab2a56b9cbfe3a2bfe83c68a324f2e",
+          "entry_id": "sha256:1bee2b136e9cfde9316d43d07c09e822b14118db88898ba9edc914310473792a",
           "kind": "feedback",
           "label": "thumbs_up",
           "score": 1,
-          "target": "sha256:326495427ba43d56525c1ee7d0f322a3fa3705d87a0f628c53da2a28168ef860"
+          "target": "sha256:22bbed70ed5d6453e07c4c5fbd62388c97cb58400f5bc855c3b797a95305dbcb"
         }
       ]
     }
@@ -337,7 +337,7 @@
     "agentsession": {
       "cwd": "/home/u/proj",
       "format": "agentsession/0.13",
-      "leaf": "sha256:f0b1984d4a689464d2664bbc4bb8267bd93eb58a8b03126b708455759f839be9",
+      "leaf": "sha256:08044d1f94662b07c714d9566fec2bc79fc3d7503f16c0e9d4dce1a22bdd87be",
       "main": true,
       "redacted": true,
       "redacted_from": {
