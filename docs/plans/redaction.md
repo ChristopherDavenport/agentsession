@@ -95,10 +95,16 @@ scanning, review and publishing belong to agentredact.
 4. **verify and export** (#243): verify labels kept `request_hash`
    mismatches on redacted entries as expected and holds native entries
    to every rule; ATIF carries `redacted` per step.
+5. **Independent hashes** (v0.0.28): `Session.RequestHashFor` and
+   `SetRequestHash` compute a response's `request_hash` in the session
+   it is committed to, through the code `Verify` uses; every test
+   redactor recomputes with them and asserts each response verifies;
+   verify holds a redacted entry's `request_hash` to the rule and keeps
+   step 4's exemption only for a redacted file before 0.13.
 
 Main is not released between the first model and this one. One
-release carries all of it. Siblings move to 0.13 through the usual
-bump.
+release carries all of it, v0.0.27; step 5 follows in v0.0.28.
+Siblings move to 0.13 through the usual bump.
 
 ## Open questions
 
