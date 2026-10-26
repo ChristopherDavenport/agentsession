@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.30 - 2026-10-26
 
 - **Added: `remote.WithChallenge`.** A `Handler` sends the value as the
   `WWW-Authenticate` header on every 401 it writes: its authenticator's
