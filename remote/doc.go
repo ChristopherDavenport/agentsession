@@ -34,8 +34,10 @@
 // The package ships no authentication: [WithAuthenticator] takes the
 // program's [Authenticator], which resolves a request to a [Principal]
 // and its scopes, and without one, or [WithInsecureNoAuth], the handler
-// refuses every request. A client's credentials are the program's too,
-// added by the HTTP client [WithHTTPClient] gives it.
+// refuses every request. Its 401s carry the WWW-Authenticate challenge
+// the program names with [WithChallenge], and none without it. A
+// client's credentials are the program's too, added by the HTTP client
+// [WithHTTPClient] gives it.
 //
 // Every write to a session carries its lease's fencing token, and one
 // whose lease is not the session's current one is refused, so a writer

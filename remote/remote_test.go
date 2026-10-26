@@ -616,3 +616,63 @@ func TestAReadRightAfterAnAppendSeesIt(t *testing.T) {
 		}
 	}
 }
+
+// Every 401 carries the challenge WithChallenge names, as RFC 9110
+// §15.5.2 requires: the authenticator's refusal, no authenticator, and
+// a store's own 401 passed through. No other answer carries it, and
+// without the option none does.
+func TestChallenge(t *testing.T) {
+	const challenge = `Bearer realm="test"`
+	st, s, _ := seeded(t, 1)
+	auth := remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{
+		"reader": {Name: "r", Scopes: []remote.Scope{remote.ScopeRead}},
+		"nobody": {Name: "n"},
+	}))
+	// upstream refuses every request, so a handler serving a client of
+	// it as its store answers the store's 401.
+	upstream := server(t, st)
+	for _, sv := range []struct {
+		name      string
+		challenge string
+		opts      []remote.Option
+	}{
+		{"with the option", challenge, []remote.Option{remote.WithChallenge(challenge)}},
+		{"without the option", "", nil},
+	} {
+		t.Run(sv.name, func(t *testing.T) {
+			tests := []struct {
+				name, url, token string
+				status           int
+			}{
+				{"no authenticator", server(t, st, sv.opts...) + "/v1/", "", http.StatusUnauthorized},
+				{"no token", server(t, st, append(sv.opts, auth)...) + "/v1/sessions/" + s.ID(), "", http.StatusUnauthorized},
+				{"wrong token", server(t, st, append(sv.opts, auth)...) + "/v1/sessions/" + s.ID(), "guess", http.StatusUnauthorized},
+				{"wrong token, follow", server(t, st, append(sv.opts, auth)...) + "/v1/sessions/" + s.ID() + "/follow", "guess", http.StatusUnauthorized},
+				{"wrong token, unserved route", server(t, st, append(sv.opts, auth)...) + "/v1/nothing", "guess", http.StatusUnauthorized},
+				{"the store's 401", server(t, dial(t, upstream), append(sv.opts, remote.WithInsecureNoAuth())...) + "/v1/sessions/" + s.ID(), "", http.StatusUnauthorized},
+				{"no scope", server(t, st, append(sv.opts, auth)...) + "/v1/sessions/" + s.ID(), "nobody", http.StatusForbidden},
+				{"not found", server(t, st, append(sv.opts, auth)...) + "/v1/sessions/none", "reader", http.StatusNotFound},
+				{"read", server(t, st, append(sv.opts, auth)...) + "/v1/sessions/" + s.ID(), "reader", http.StatusOK},
+			}
+			for _, tc := range tests {
+				t.Run(tc.name, func(t *testing.T) {
+					h := map[string]string{}
+					if tc.token != "" {
+						h["Authorization"] = "Bearer " + tc.token
+					}
+					resp := get(t, tc.url, h)
+					if resp.StatusCode != tc.status {
+						t.Fatalf("status %d, want %d", resp.StatusCode, tc.status)
+					}
+					want := ""
+					if tc.status == http.StatusUnauthorized {
+						want = sv.challenge
+					}
+					if got := resp.Header.Get("WWW-Authenticate"); got != want {
+						t.Errorf("WWW-Authenticate %q, want %q", got, want)
+					}
+				})
+			}
+		})
+	}
+}
