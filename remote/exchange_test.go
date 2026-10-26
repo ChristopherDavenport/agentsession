@@ -384,7 +384,7 @@ func TestAHandoverToTheClientMakesTheServerAMirror(t *testing.T) {
 func TestExchangeNeedsItsScopes(t *testing.T) {
 	ctx := context.Background()
 	local, served := casStore(t), casStore(t)
-	auth := remote.BearerTokens(map[string]remote.Principal{
+	auth := tokenAuth(map[string]remote.Principal{
 		"reader":   {Name: "reader", Scopes: []remote.Scope{remote.ScopeRead}},
 		"exchange": {Name: "exchange", Scopes: []remote.Scope{remote.ScopeExchange}},
 		"both":     {Name: "both", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeExchange}},
@@ -396,7 +396,7 @@ func TestExchangeNeedsItsScopes(t *testing.T) {
 	if err := local.UpdateRef(ctx, "main", agentsession.RefTarget{}, agentsession.RefTarget{Session: "o"}, "test"); err != nil {
 		t.Fatal(err)
 	}
-	as := func(token string) *remote.Client { return dial(t, url, remote.WithBearerToken(token)) }
+	as := func(token string) *remote.Client { return dial(t, url, withToken(token, nil)) }
 	scoped := func(what string, err error) {
 		t.Helper()
 		if !errors.Is(err, remote.ErrForbidden) {
@@ -427,14 +427,14 @@ func TestExchangeNeedsItsScopes(t *testing.T) {
 func TestAnObjectIsServedOnlyToWhomItIsReachable(t *testing.T) {
 	ctx := context.Background()
 	local, served := casStore(t), casStore(t)
-	auth := remote.BearerTokens(map[string]remote.Principal{
+	auth := tokenAuth(map[string]remote.Principal{
 		"a": {Name: "a", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeExchange}},
 		"b": {Name: "b", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeExchange}},
 	})
 	url := server(t, served, remote.WithAuthenticator(auth))
 	tr := &counting{}
-	a := dial(t, url, remote.WithBearerToken("a"), remote.WithHTTPClient(&http.Client{Transport: tr}))
-	b := dial(t, url, remote.WithBearerToken("b"))
+	a := dial(t, url, withToken("a", tr))
+	b := dial(t, url, withToken("b", nil))
 
 	loose := []byte(`{"text":"uploaded, pushed nowhere"}`)
 	hash := agentsession.HashBytes(loose)

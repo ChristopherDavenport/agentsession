@@ -33,9 +33,8 @@ import (
 // append moves the server's head with it, by RFC 0003's compare-and-swap,
 // so the record's head is the writer's leaf.
 type Client struct {
-	base  *url.URL
-	hc    *http.Client
-	token string
+	base *url.URL
+	hc   *http.Client
 
 	holder   string
 	leaseTTL time.Duration
@@ -68,11 +67,11 @@ var (
 // ClientOption configures [Dial].
 type ClientOption func(*Client)
 
-// WithHTTPClient sets the HTTP client requests go through.
+// WithHTTPClient sets the HTTP client requests go through. The client
+// sends no credentials of its own: a program whose server authenticates
+// its requests adds them here, in hc's Transport, as the server's
+// [Authenticator] expects them.
 func WithHTTPClient(hc *http.Client) ClientOption { return func(c *Client) { c.hc = hc } }
-
-// WithBearerToken sends token as every request's bearer token.
-func WithBearerToken(token string) ClientOption { return func(c *Client) { c.token = token } }
 
 // WithHolder labels the leases the client takes, which a refused
 // acquire shows another writer. It is a label, not an identity.
@@ -147,9 +146,6 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, head
 	}
 	for k, v := range header {
 		req.Header[k] = v
-	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {

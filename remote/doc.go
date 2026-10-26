@@ -30,6 +30,13 @@
 //	POST   /v1/sessions/{id}/record         declare this server the record
 //	POST   /v1/sessions/{id}/handover       hand the session to a client store
 //
+// Every route needs a [Scope], and a request's principal must hold it.
+// The package ships no authentication: [WithAuthenticator] takes the
+// program's [Authenticator], which resolves a request to a [Principal]
+// and its scopes, and without one, or [WithInsecureNoAuth], the handler
+// refuses every request. A client's credentials are the program's too,
+// added by the HTTP client [WithHTTPClient] gives it.
+//
 // Every write to a session carries its lease's fencing token, and one
 // whose lease is not the session's current one is refused, so a writer
 // that lost its lease cannot write after the next holder. A push is not

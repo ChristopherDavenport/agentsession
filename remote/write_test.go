@@ -224,7 +224,7 @@ func TestARefUpdateThatLosesIsRefMoved(t *testing.T) {
 func TestWritesNeedTheirScopes(t *testing.T) {
 	st := agentsession.NewMemoryStore()
 	s, _ := st.Create(context.Background(), agentsession.Header{})
-	url := server(t, st, remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
+	url := server(t, st, remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{
 		"reader": {Name: "r", Scopes: []remote.Scope{remote.ScopeRead}},
 		"writer": {Name: "w", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite}},
 	})))

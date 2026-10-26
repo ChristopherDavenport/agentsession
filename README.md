@@ -206,14 +206,15 @@ store the library offers, and a client that is the library's `Store`,
 `Writer`, `Reader`, `Follower` and `RefStore` through it.
 
 ```go
-h := remote.NewHandler(store, remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
-    viewer: {Name: "viewer", Scopes: []remote.Scope{remote.ScopeRead}},
-    agent:  {Name: "agent", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeRefs}},
-})))
+// principalOf is the program's func(*http.Request) (remote.Principal, error):
+// its tokens, a client certificate, a proxy's word.
+h := remote.NewHandler(store, remote.WithAuthenticator(principalOf))
 defer h.Close()
 go http.ListenAndServe(addr, h) // over TLS where anyone else can reach it
 
-c, _ := remote.Dial("https://"+addr, remote.WithBearerToken(agent))
+c, _ := remote.Dial("https://"+addr, remote.WithHTTPClient(&http.Client{
+    Transport: credentials, // the program's RoundTripper, adding what principalOf reads
+}))
 defer c.Close() // lets its leases go
 s, _ := c.Create(ctx, agentsession.Header{})        // leased from its first instant
 c.Append(ctx, s.ID(), agentsession.NewItemEntry(item)) // under the lease's fencing token
@@ -221,6 +222,12 @@ for ch, err := range c.Follow(ctx, s.ID(), "") {
     // a Snapshot, then each change, every entry verified by its hash
 }
 ```
+
+The package ships no authentication. It names the scope each route
+needs (`read`, `write`, `refs`, `exchange`, `admin`) and refuses a
+principal without it; the program resolves who a request is from, a
+`remote.Principal` and its scopes, and with no authenticator the handler
+refuses every request. The client sends what its HTTP client adds.
 
 A writer holds a session by a lease, which the client renews until it
 lets it go: another writer is refused the session while it holds, and

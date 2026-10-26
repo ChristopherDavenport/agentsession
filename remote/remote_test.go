@@ -109,7 +109,7 @@ func TestAuth(t *testing.T) {
 	if p := problemOf(t, get(t, open+"/v1/", nil)); p.Code != remote.CodeAuth {
 		t.Errorf("no authenticator: %s, want auth", p.Code)
 	}
-	url := server(t, st, remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
+	url := server(t, st, remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{
 		"reader": {Name: "r", Scopes: []remote.Scope{remote.ScopeRead}},
 		"nobody": {Name: "n"},
 	})))
@@ -143,13 +143,13 @@ func TestAuth(t *testing.T) {
 		})
 	}
 	// The client's errors match the sentinels.
-	if _, err := dial(t, url, remote.WithBearerToken("nobody")).Read(context.Background(), s.ID()); !errors.Is(err, remote.ErrForbidden) {
+	if _, err := dial(t, url, withToken("nobody", nil)).Read(context.Background(), s.ID()); !errors.Is(err, remote.ErrForbidden) {
 		t.Errorf("Read without the scope: %v, want ErrForbidden", err)
 	}
 	if _, err := dial(t, url).Capabilities(context.Background()); !errors.Is(err, remote.ErrUnauthenticated) {
 		t.Errorf("Capabilities without a token: %v, want ErrUnauthenticated", err)
 	}
-	if _, err := dial(t, url, remote.WithBearerToken("reader")).Read(context.Background(), s.ID()); err != nil {
+	if _, err := dial(t, url, withToken("reader", nil)).Read(context.Background(), s.ID()); err != nil {
 		t.Errorf("Read with the scope: %v", err)
 	}
 }
