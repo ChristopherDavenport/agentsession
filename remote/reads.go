@@ -58,7 +58,7 @@ func storeCursor(s string) agentsession.Cursor {
 
 func (h *Handler) log(w http.ResponseWriter, r *http.Request) {
 	if h.lr == nil {
-		writeProblem(w, problem(CodeUnsupported, "the store keeps no log of records to read", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no log of records to read", ""))
 		return
 	}
 	durable := false
@@ -67,7 +67,7 @@ func (h *Handler) log(w http.ResponseWriter, r *http.Request) {
 	case "true":
 		durable = true
 	default:
-		writeProblem(w, problem(CodeBadRequest, "durable is true or false", ""))
+		h.writeProblem(w, problem(CodeBadRequest, "durable is true or false", ""))
 		return
 	}
 	id := r.PathValue("id")
@@ -157,7 +157,7 @@ func logLines(lg cas.Log) []logLine {
 // elsewhere.
 func (h *Handler) followDurable(w http.ResponseWriter, r *http.Request, flusher http.Flusher, resume agentsession.Cursor) {
 	if h.lr == nil {
-		writeProblem(w, problem(CodeUnsupported, "the store has no committed view", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store has no committed view", ""))
 		return
 	}
 	id := r.PathValue("id")
@@ -185,7 +185,7 @@ func (h *Handler) followDurable(w http.ResponseWriter, r *http.Request, flusher 
 			return
 		}
 		if cut != nil {
-			writeProblem(w, cut)
+			h.writeProblem(w, cut)
 			return
 		}
 		ev.id = wireCursor(lg.Cursor)
@@ -360,7 +360,7 @@ type refState struct {
 func (h *Handler) followRef(w http.ResponseWriter, r *http.Request, name string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeProblem(w, problem(CodeStoreFault, "the connection cannot stream", ""))
+		h.writeProblem(w, problem(CodeStoreFault, "the connection cannot stream", ""))
 		return
 	}
 	ctx := r.Context()

@@ -5,6 +5,16 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Added: `remote.WithChallenge`.** A `Handler` sends the value as the
+  `WWW-Authenticate` header on every 401 it writes: its authenticator's
+  refusal, the refusal with no authenticator configured, and a store's
+  own 401. RFC 9110 §15.5.2 requires the challenge on a 401; the package
+  ships no authentication, so the program names its scheme, for example
+  ``WithChallenge(`Bearer realm="dax"`)``. Without the option no
+  challenge is sent, as before.
+
 ## v0.0.29 - 2026-10-25
 
 - **Changed: `remote` ships no authentication (breaking).** The package

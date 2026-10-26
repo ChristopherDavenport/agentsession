@@ -199,12 +199,12 @@ func (h *Handler) principal(r *http.Request) Principal {
 // reachable by; HEAD answers the same without the body.
 func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
 	if h.ex == nil {
-		writeProblem(w, problem(CodeUnsupported, "the store keeps no objects", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no objects", ""))
 		return
 	}
 	k := objKey{r.PathValue("space"), r.PathValue("hash")}
 	if !validSpace(k.space) || !agentsession.ValidHash(k.hash) {
-		writeProblem(w, problem(CodeNoObject, "no such object", ""))
+		h.writeProblem(w, problem(CodeNoObject, "no such object", ""))
 		return
 	}
 	ok, err := h.reachable(r.Context(), h.principal(r).Name, []objKey{k})
@@ -213,7 +213,7 @@ func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok[k] {
-		writeProblem(w, problem(CodeNoObject, "no such object", ""))
+		h.writeProblem(w, problem(CodeNoObject, "no such object", ""))
 		return
 	}
 	data, err := h.ex.Object(r.Context(), k.space, k.hash)
@@ -234,12 +234,12 @@ func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
 // of it.
 func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
 	if h.ex == nil {
-		writeProblem(w, problem(CodeUnsupported, "the store keeps no objects", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no objects", ""))
 		return
 	}
 	k := objKey{r.PathValue("space"), r.PathValue("hash")}
 	if !validSpace(k.space) {
-		writeProblem(w, problem(CodeBadRequest, "no such object space", k.space))
+		h.writeProblem(w, problem(CodeBadRequest, "no such object space", k.space))
 		return
 	}
 	data, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
@@ -263,7 +263,7 @@ func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
 // RFC 0002's negotiation, per caller.
 func (h *Handler) missing(w http.ResponseWriter, r *http.Request) {
 	if h.ex == nil {
-		writeProblem(w, problem(CodeUnsupported, "the store keeps no objects", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no objects", ""))
 		return
 	}
 	var req Objects
@@ -358,7 +358,7 @@ func resultOf(x cas.Exchange, mark string) *PushResult {
 // token.
 func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 	if h.ex == nil {
-		writeProblem(w, problem(CodeUnsupported, "the store does not exchange", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store does not exchange", ""))
 		return
 	}
 	id := r.PathValue("id")
@@ -391,7 +391,7 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 	}
 	who := h.principal(r)
 	if len(req.Refs) > 0 && !who.Has(ScopeRefs) {
-		writeProblem(w, problem(CodeScope, "a push's refs need the refs scope", string(ScopeRefs)))
+		h.writeProblem(w, problem(CodeScope, "a push's refs need the refs scope", string(ScopeRefs)))
 		return
 	}
 	for _, ref := range req.Refs {
@@ -405,7 +405,7 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if h.refs == nil && len(req.Refs) > 0 {
-		writeProblem(w, problem(CodeUnsupported, "the store keeps no refs", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no refs", ""))
 		return
 	}
 	st := h.state(id)
@@ -661,7 +661,7 @@ type markResponse struct {
 // no token; it takes the per-session lock.
 func (h *Handler) record(w http.ResponseWriter, r *http.Request) {
 	if h.ex == nil {
-		writeProblem(w, problem(CodeUnsupported, "the store keeps no record mark", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no record mark", ""))
 		return
 	}
 	var req recordRequest
@@ -712,7 +712,7 @@ type handoverRequest struct {
 // a mirror cannot be leased.
 func (h *Handler) handover(w http.ResponseWriter, r *http.Request) {
 	if h.ex == nil {
-		writeProblem(w, problem(CodeUnsupported, "the store keeps no record mark", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no record mark", ""))
 		return
 	}
 	var req handoverRequest

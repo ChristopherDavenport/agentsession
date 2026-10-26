@@ -208,7 +208,10 @@ store the library offers, and a client that is the library's `Store`,
 ```go
 // principalOf is the program's func(*http.Request) (remote.Principal, error):
 // its tokens, a client certificate, a proxy's word.
-h := remote.NewHandler(store, remote.WithAuthenticator(principalOf))
+h := remote.NewHandler(store,
+    remote.WithAuthenticator(principalOf),
+    remote.WithChallenge(`Bearer realm="sessions"`), // sent on every 401
+)
 defer h.Close()
 go http.ListenAndServe(addr, h) // over TLS where anyone else can reach it
 
@@ -227,7 +230,9 @@ The package ships no authentication. It names the scope each route
 needs (`read`, `write`, `refs`, `exchange`, `admin`) and refuses a
 principal without it; the program resolves who a request is from, a
 `remote.Principal` and its scopes, and with no authenticator the handler
-refuses every request. The client sends what its HTTP client adds.
+refuses every request. The program names the `WWW-Authenticate`
+challenge a 401 carries with `remote.WithChallenge`; without it none is
+sent. The client sends what its HTTP client adds.
 
 A writer holds a session by a lease, which the client renews until it
 lets it go: another writer is refused the session while it holds, and

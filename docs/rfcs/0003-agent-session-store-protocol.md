@@ -919,7 +919,8 @@ root must not take. It ships no authentication scheme: its server
 checks each route's scope against the principal a hook the program
 supplies resolves the request to, and refuses every request without
 that hook, and its client sends whatever credentials the program's HTTP
-client adds.
+client adds. A 401 carries the `WWW-Authenticate` challenge the program
+names, as RFC 9110 requires, since the scheme is the program's.
 
 It is built in slices. The first is the read side: capabilities, the
 session listing and state, the path (`contents` `all` and `none`),

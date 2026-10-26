@@ -26,6 +26,7 @@ type Handler struct {
 	refs     agentsession.RefStore
 
 	auth      Authenticator
+	challenge string
 	insecure  bool
 	buffer    int
 	replay    int
@@ -72,6 +73,14 @@ type Option func(*Handler)
 // WithAuthenticator sets how a request's principal is resolved. Without
 // it, or [WithInsecureNoAuth], the handler refuses every request.
 func WithAuthenticator(a Authenticator) Option { return func(h *Handler) { h.auth = a } }
+
+// WithChallenge sets the WWW-Authenticate challenge sent on every 401
+// the handler writes, whether its authenticator refused the request, no
+// authenticator is configured or a store's error is the 401. RFC 9110
+// §15.5.2 requires a 401 to carry one; the package ships no
+// authentication, so the scheme is the program's to name, for example
+// WithChallenge(`Bearer realm="dax"`). Without it no challenge is sent.
+func WithChallenge(value string) Option { return func(h *Handler) { h.challenge = value } }
 
 // WithInsecureNoAuth serves every request as a principal with every
 // scope, for tests and for a socket only the host's user can reach.
@@ -231,7 +240,7 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 	mux.HandleFunc("POST /v1/sessions/{id}/record", h.guard(ScopeExchange, h.record))
 	mux.HandleFunc("POST /v1/sessions/{id}/handover", h.guard(ScopeWrite, h.handover))
 	mux.HandleFunc("/v1/", h.guard("", func(w http.ResponseWriter, r *http.Request) {
-		writeProblem(w, problem(CodeUnsupported, "not served", r.Method+" "+r.URL.Path+" is not in what this server serves"))
+		h.writeProblem(w, problem(CodeUnsupported, "not served", r.Method+" "+r.URL.Path+" is not in what this server serves"))
 	}))
 	h.mux = mux
 	return h
@@ -302,25 +311,29 @@ func (h *Handler) guard(scope Scope, next http.HandlerFunc) http.HandlerFunc {
 		case h.insecure:
 			p = Principal{Name: "insecure", Scopes: AllScopes}
 		case h.auth == nil:
-			writeProblem(w, problem(CodeAuth, "no authenticator is configured", ""))
+			h.writeProblem(w, problem(CodeAuth, "no authenticator is configured", ""))
 			return
 		default:
 			var err error
 			if p, err = h.auth(r); err != nil {
-				writeProblem(w, problem(CodeAuth, "unauthenticated", ""))
+				h.writeProblem(w, problem(CodeAuth, "unauthenticated", ""))
 				return
 			}
 		}
 		if scope != "" && !p.Has(scope) {
-			writeProblem(w, problem(CodeScope, "the principal lacks the scope this needs", string(scope)))
+			h.writeProblem(w, problem(CodeScope, "the principal lacks the scope this needs", string(scope)))
 			return
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
 	}
 }
 
-func writeProblem(w http.ResponseWriter, p *Problem) {
+// writeProblem answers p, with the challenge on a 401.
+func (h *Handler) writeProblem(w http.ResponseWriter, p *Problem) {
 	w.Header().Set("Content-Type", "application/problem+json")
+	if p.Status == http.StatusUnauthorized && h.challenge != "" {
+		w.Header().Set("WWW-Authenticate", h.challenge)
+	}
 	if p.Incarnation != "" {
 		w.Header().Set("Incarnation", p.Incarnation)
 	}
@@ -339,7 +352,7 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 	if p.Code == CodeStoreFault {
 		h.logError(err)
 	}
-	writeProblem(w, p)
+	h.writeProblem(w, p)
 }
 
 func (h *Handler) capabilities(w http.ResponseWriter, _ *http.Request) {
@@ -406,7 +419,7 @@ type summaryLine struct {
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	f, err := filterOf(r)
 	if err != nil {
-		writeProblem(w, problem(CodeBadRequest, "bad filter", err.Error()))
+		h.writeProblem(w, problem(CodeBadRequest, "bad filter", err.Error()))
 		return
 	}
 	next, stop := iter.Pull2(h.store.List(r.Context(), f))
@@ -496,7 +509,7 @@ func splitExtra(x string) (name, val string, ok bool) {
 // answers the request and returns nil.
 func (h *Handler) following(w http.ResponseWriter, r *http.Request) *hub {
 	if h.reader == nil || h.follower == nil {
-		writeProblem(w, problem(CodeUnsupported, "the store cannot be read without a hold", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store cannot be read without a hold", ""))
 		return nil
 	}
 	hb := h.acquire(r.PathValue("id"))
@@ -514,7 +527,7 @@ func (h *Handler) following(w http.ResponseWriter, r *http.Request) *hub {
 // follower.
 func (h *Handler) current(w http.ResponseWriter, r *http.Request) *hub {
 	if h.reader == nil || h.follower == nil {
-		writeProblem(w, problem(CodeUnsupported, "the store cannot be read without a hold", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store cannot be read without a hold", ""))
 		return nil
 	}
 	held, err := h.reader.Read(r.Context(), r.PathValue("id"))
@@ -609,7 +622,7 @@ func (h *Handler) path(w http.ResponseWriter, r *http.Request) {
 		contents = "all"
 	case "all", "none", "since-fold":
 	default:
-		writeProblem(w, problem(CodeBadRequest, "contents is all, since-fold or none", ""))
+		h.writeProblem(w, problem(CodeBadRequest, "contents is all, since-fold or none", ""))
 		return
 	}
 	hb := h.current(w, r)
@@ -754,7 +767,7 @@ func (h *Handler) follow(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeProblem(w, problem(CodeStoreFault, "the connection cannot stream", ""))
+		h.writeProblem(w, problem(CodeStoreFault, "the connection cannot stream", ""))
 		return
 	}
 	switch r.URL.Query().Get("durable") {
@@ -763,7 +776,7 @@ func (h *Handler) follow(w http.ResponseWriter, r *http.Request) {
 		h.followDurable(w, r, flusher, resume)
 		return
 	default:
-		writeProblem(w, problem(CodeBadRequest, "durable is true or false", ""))
+		h.writeProblem(w, problem(CodeBadRequest, "durable is true or false", ""))
 		return
 	}
 	// A fresh follow starts from what the store holds now; a resume
@@ -967,13 +980,13 @@ type refUpdateLine struct {
 
 func (h *Handler) listRefs(w http.ResponseWriter, r *http.Request) {
 	if h.refs == nil {
-		writeProblem(w, problem(CodeUnsupported, "the store keeps no refs", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no refs", ""))
 		return
 	}
 	prefix := r.URL.Query().Get("prefix")
 	if prefix != "" {
 		if err := agentsession.ValidRefPrefix(prefix); err != nil {
-			writeProblem(w, problem(CodeRefName, "invalid ref prefix", err.Error()))
+			h.writeProblem(w, problem(CodeRefName, "invalid ref prefix", err.Error()))
 			return
 		}
 	}
@@ -984,12 +997,12 @@ func (h *Handler) listRefs(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ref(w http.ResponseWriter, r *http.Request) {
 	if h.refs == nil {
-		writeProblem(w, problem(CodeUnsupported, "the store keeps no refs", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no refs", ""))
 		return
 	}
 	name := r.PathValue("name")
 	if err := agentsession.ValidRefName(name); err != nil {
-		writeProblem(w, problem(CodeRefName, "invalid ref name", err.Error()))
+		h.writeProblem(w, problem(CodeRefName, "invalid ref name", err.Error()))
 		return
 	}
 	switch r.URL.Query().Get("view") {
@@ -1001,7 +1014,7 @@ func (h *Handler) ref(w http.ResponseWriter, r *http.Request) {
 		case !t.IsZero() && errors.Is(err, agentsession.ErrNoSession):
 			p := problem(CodeRefDangling, "the ref's session is gone", "")
 			p.Target = targetOut(t)
-			writeProblem(w, p)
+			h.writeProblem(w, p)
 		default:
 			h.fail(w, err)
 		}
@@ -1012,7 +1025,7 @@ func (h *Handler) ref(w http.ResponseWriter, r *http.Request) {
 	case "follow":
 		h.followRef(w, r, name)
 	default:
-		writeProblem(w, problem(CodeBadRequest, "view is log or follow", ""))
+		h.writeProblem(w, problem(CodeBadRequest, "view is log or follow", ""))
 	}
 }
 

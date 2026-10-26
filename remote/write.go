@@ -598,12 +598,12 @@ type refUpdate struct {
 
 func (h *Handler) updateRef(w http.ResponseWriter, r *http.Request) {
 	if h.refs == nil {
-		writeProblem(w, problem(CodeUnsupported, "the store keeps no refs", ""))
+		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no refs", ""))
 		return
 	}
 	name := r.PathValue("name")
 	if err := agentsession.ValidRefName(name); err != nil {
-		writeProblem(w, problem(CodeRefName, "invalid ref name", err.Error()))
+		h.writeProblem(w, problem(CodeRefName, "invalid ref name", err.Error()))
 		return
 	}
 	var req refUpdate
