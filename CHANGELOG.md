@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.29 - 2026-10-25
 
 - **Changed: `remote` ships no authentication (breaking).** The package
   says what a request may do, and the program decides who it is from:
