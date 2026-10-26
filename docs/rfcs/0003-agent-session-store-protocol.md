@@ -915,7 +915,11 @@ Not carried, because they are a local operator's or a file's:
 `agentsession/remote`, a package of the root module: it needs the
 standard library alone, which the root module's dependency rule
 allows, and the repository's nested modules exist for dependencies the
-root must not take.
+root must not take. It ships no authentication scheme: its server
+checks each route's scope against the principal a hook the program
+supplies resolves the request to, and refuses every request without
+that hook, and its client sends whatever credentials the program's HTTP
+client adds.
 
 It is built in slices. The first is the read side: capabilities, the
 session listing and state, the path (`contents` `all` and `none`),

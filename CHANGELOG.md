@@ -5,6 +5,23 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Changed: `remote` ships no authentication (breaking).** The package
+  says what a request may do, and the program decides who it is from:
+  each route's scope, `Principal`, the `Authenticator` hook and
+  `WithAuthenticator`, `PrincipalFrom`, `ErrUnauthenticated` and
+  `ErrForbidden` with their `auth` and `scope` codes, and the refusal of
+  every request with no authenticator (or `WithInsecureNoAuth`) are
+  unchanged. Removed: `BearerTokens`, the static bearer-token
+  authenticator, which a program replaces with an `Authenticator` of
+  its own over the credentials it issues, returning
+  `ErrUnauthenticated` for one it does not accept; and the client's
+  `WithBearerToken`, which a program replaces with `WithHTTPClient` and
+  a `RoundTripper` that adds its Authorization header. RFC 0003 is
+  unchanged; its reference implementation section says the scheme is
+  the program's.
+
 ## v0.0.28 - 2026-10-18
 
 - **Changed: a redacted session hashes independently (RFC 0001 0.13,
