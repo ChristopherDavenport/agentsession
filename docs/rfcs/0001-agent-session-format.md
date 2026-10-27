@@ -1424,6 +1424,13 @@ a store does not check, as it does not check an `outcome`'s; it is
 defined for it and for a cancel notice, below, alone. A `judged_by` link's `call_id` means nothing, and the
 checks below are the `subsession` link's alone.
 
+`continued_in` is written into a session its writer has rolled over
+into a successor, and names the successor; the successor's header
+names this session in `parent_session`. A session holds at most one: a
+writer MUST NOT continue a session that holds one, and continues the
+session at the end of the chain instead (RFC 0002, Refs and
+continuation).
+
 A call's callee may run in another system, reached over a protocol
 such as A2A, rather than as a session this store holds. Which relation
 links it follows the callee's lifetime, not where it runs or whether it

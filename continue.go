@@ -22,10 +22,19 @@ import (
 // session's display name is carried over; and the old session gets a
 // continued_in link naming the successor, which is what a store reads
 // to mark it superseded. It returns the successor.
+//
+// A session continues once (RFC 0002, Refs and continuation): one that
+// already holds a continued_in link is refused with [ErrSuperseded],
+// since a second successor would fork the chain. A caller continuing a
+// named conversation uses [ContinueRef], which continues the session at
+// the end of the chain.
 func Continue(ctx context.Context, store Store, id string, summary openresponses.Item) (*Session, error) {
 	old, err := store.Open(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if next := old.SupersededBy(); next != "" {
+		return nil, fmt.Errorf("%w: %s was continued in %s", ErrSuperseded, id, next)
 	}
 	cx, err := old.Context()
 	if err != nil {
@@ -81,9 +90,9 @@ func Continue(ctx context.Context, store Store, id string, summary openresponses
 	return next, nil
 }
 
-// ErrSuperseded is returned by a store that refuses to append to a
-// session a continued_in link has retired. No store in this module
-// refuses; the error is here for one that wants to.
+// ErrSuperseded is returned by [Continue] for a session a continued_in
+// link has already retired, and by a store that refuses to append to
+// such a session. No store in this module refuses the append.
 var ErrSuperseded = errors.New("agentsession: session was continued in a successor")
 
 // SupersededBy returns the successor named by the last continued_in

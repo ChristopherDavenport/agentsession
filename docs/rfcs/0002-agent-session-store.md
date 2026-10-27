@@ -445,10 +445,15 @@ projection to a file carries none.
   MAY resolve and list.
 - **Refs and continuation.** A session retired by a `continued_in` link
   is replaced by its successor, and a ref does not follow that link by
-  itself: a store MUST NOT move a ref except by an update. The writer
-  that continues a named session moves its ref by compare-and-swap from
-  the old session to the new, and a crash between the two steps leaves
-  the ref on the retired session. A caller that wants the current
+  itself: a store MUST NOT move a ref except by an update. A session
+  holds at most one `continued_in` link; a writer MUST NOT continue a
+  session that holds one, since a second successor would fork the
+  chain. The writer that continues a named session moves its ref by
+  compare-and-swap from the old session to the new, and a crash between
+  the two steps leaves the ref on the retired session. A writer
+  continuing the session a ref names therefore continues the session at
+  the end of its chain, and moves the ref by compare-and-swap from the
+  ref's literal target, which catches a ref left behind up. A caller that wants the current
   session of a name, and not the one the ref says, follows
   `continued_in` links from the target to the end of the chain, and
   SHOULD report that it did so, which tells it the ref is behind. The

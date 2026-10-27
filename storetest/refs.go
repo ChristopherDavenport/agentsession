@@ -734,9 +734,29 @@ func refsContinue(t *testing.T, opts Options) {
 	if err != nil || !moved || id != third.ID() {
 		t.Errorf("ResolveCurrent = %s, %v, %v; want %s, true", id, moved, err, third.ID())
 	}
+	// A session continues once: a second successor would fork the
+	// chain (RFC 0002, Refs and continuation).
+	if _, err := agentsession.Continue(ctx, st, next.ID(), nil); !errors.Is(err, agentsession.ErrSuperseded) {
+		t.Errorf("Continue of a continued session: %v, want ErrSuperseded", err)
+	}
+	// ContinueRef on a ref that is behind continues the end of the
+	// chain, and moves the ref from its literal target.
+	fourth, err := agentsession.ContinueRef(ctx, st, "talk", nil)
+	if err != nil {
+		t.Fatalf("ContinueRef on a ref behind its chain: %v", err)
+	}
+	if fourth.Header().ParentSession != third.ID() {
+		t.Errorf("ContinueRef continued %s, want the end of the chain %s", fourth.Header().ParentSession, third.ID())
+	}
+	if got, _ := rs.ResolveRef(ctx, "talk"); got != tgt(fourth.ID()) {
+		t.Errorf("ref after ContinueRef = %v, want %s", got, fourth.ID())
+	}
+	if log := refLog(t, rs, "talk"); len(log) != 3 || log[0].Old != tgt(next.ID()) || log[0].New != tgt(fourth.ID()) {
+		t.Errorf("log after ContinueRef on a ref behind: %+v", log)
+	}
 	// ContinueRef fails and reports it when the ref moved under it.
 	other := newSession(t, st)
-	if err := rs.UpdateRef(ctx, "talk", tgt(next.ID()), tgt(other), "steal"); err != nil {
+	if err := rs.UpdateRef(ctx, "talk", tgt(fourth.ID()), tgt(other), "steal"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := agentsession.ResolveCurrent(ctx, st, "missing"); !errors.Is(err, agentsession.ErrNoRef) {

@@ -7,6 +7,16 @@ versions may break the API.
 
 ## Unreleased
 
+- **A session continues once, and continuing a named session follows
+  its chain (RFC 0002, Refs and continuation; RFC 0001, `link`).** A
+  session holds at most one `continued_in` link, and a writer continues
+  the session at the end of the chain from a ref's target, moving the
+  ref by compare-and-swap from its literal target. **Changed:**
+  `Continue` refuses a session that already holds a `continued_in` link
+  with `ErrSuperseded`, and `ContinueRef` continues the session
+  `ResolveCurrent` finds rather than the ref's target, which forked the
+  chain when the ref was behind. (#222)
+
 - **Every store offers the head compare-and-swap, durable on request
   (RFC 0002, Head; RFC 0003, Writing).** RFC 0002 asked it of every
   store while RFC 0003 let a store without a durable head refuse
