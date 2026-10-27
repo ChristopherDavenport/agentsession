@@ -1059,6 +1059,39 @@ func (s *Session) commitHead(expected, to string) (*LabelEntry, error) {
 	return label, nil
 }
 
+// LeafMarkNeeded returns the leaf label a store that keeps the session
+// as RFC 0001 lines appends after an append, so that a reader of those
+// lines resolves the head the session has, or nil when they already
+// do. A reader takes the newest entry under the leaf label in force, or
+// the last line, so a branch, an entry appended away from the head,
+// would read back as the head, which RFC 0002 says does not move; the
+// label keeps it where it is. A session with no leaf needs none, since
+// a label cannot say "no head". The label hangs from the leaf, as
+// [Session.MarkLeaf]'s does.
+func (s *Session) LeafMarkNeeded() *LabelEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.leaf == "" || len(s.entries) == 0 {
+		return nil
+	}
+	if s.read == nil || s.read.n > len(s.entries) {
+		s.read = s.readLeafState()
+	}
+	for i := s.read.n; i < len(s.entries); i++ {
+		s.read.extend(s, i)
+	}
+	resolved := s.read.tip
+	if s.read.marked == "" {
+		resolved = s.entries[len(s.entries)-1].Base().ID
+	}
+	if s.notOnLabel(resolved) == s.leaf {
+		return nil
+	}
+	label := NewLabelEntry(s.leaf, LeafLabel)
+	label.Parent = s.leaf
+	return label
+}
+
 // durableLeafAt returns the entry the last leaf label in force names
 // and the index of that label, or ("", -1) when none is in force: a
 // later leaf label replaces an earlier one, and a null label on the

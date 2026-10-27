@@ -19,6 +19,48 @@ import (
 func testHead(t *testing.T, opts Options) {
 	t.Run("CompareAndSwap", func(t *testing.T) { headSwap(t, opts) })
 	t.Run("Root", func(t *testing.T) { headRoot(t, opts) })
+	if opts.Reopen != nil {
+		t.Run("BranchKeepsHead", func(t *testing.T) { headBranchKept(t, opts) })
+	}
+}
+
+// headBranchKept: a branch leaves the head where it is, and a store that
+// persists keeps it there across a reopen, a root among the branches.
+func headBranchKept(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	var ids []string
+	for _, text := range []string{"a", "b", "c"} {
+		e, err := st.Append(ctx, id, user(text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, e)
+	}
+	head := ids[2]
+	side := user("a branch off a")
+	side.Base().Parent = ids[0]
+	if _, err := st.Append(ctx, id, side); err != nil {
+		t.Fatal(err)
+	}
+	root := agentsession.NewItemEntry(openresponses.UserText("a root"))
+	if _, err := agentsession.New(agentsession.Header{}).Prepare(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, id, root); err != nil {
+		t.Fatal(err)
+	}
+	if got := headOf(t, st, id); got != head {
+		t.Errorf("head after two branches = %s, want %s", got, head)
+	}
+	if got := headOf(t, opts.Reopen(t, st), id); got != head {
+		t.Errorf("head after two branches and a reopen = %s, want %s", got, head)
+	}
 }
 
 func headStore(t *testing.T, st agentsession.Store) agentsession.HeadStore {

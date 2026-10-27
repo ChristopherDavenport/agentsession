@@ -7,6 +7,16 @@ versions may break the API.
 
 ## Unreleased
 
+- **A branch leaves the head in place across a reopen in `jsonl` and
+  `sqlite` (RFC 0002, Head).** Both keep a session's head only in its
+  lines, which a reader resolves to the newest line under the `leaf`
+  label in force or the last line, so a branch, a root among them, read
+  back as the head. After such an append they now append a `leaf` label
+  for the head, synced when the entry is. **Added:
+  `Session.LeafMarkNeeded`**, the label a store of lines appends, or nil.
+  A follower of such a store sees the label after the branch.
+  (#201, #256)
+
 - **Added: `Releaser`**, the root interface for a store that holds the
   sessions it opens, implemented by `jsonl.Store`, `cas.Store`,
   `sqlite.Store` and `remote.Client`; the remote server lets a store's

@@ -243,7 +243,7 @@ func sameRedacted(t *testing.T, st agentsession.Store, want *agentsession.Sessio
 	if !h.Redacted || !reflect.DeepEqual(h.RedactedFrom, want.Header().RedactedFrom) {
 		t.Errorf("held header: redacted %v, redacted_from %+v; want %+v", h.Redacted, h.RedactedFrom, want.Header().RedactedFrom)
 	}
-	if g, w := entryIDs(got), entryIDs(want); !reflect.DeepEqual(g, w) {
+	if g, w := entryIDs(withoutKeptHeads(got, want)), entryIDs(want); !reflect.DeepEqual(g, w) {
 		t.Errorf("held entries %v, want %v", g, w)
 	}
 	for _, e := range want.Entries() {
@@ -297,6 +297,22 @@ func wantErr(t *testing.T, what string, err, want error) {
 	}
 }
 
+// withoutKeptHeads is got without the leaf labels the store appended to
+// keep its head where a branch left it (RFC 0002, Head), those want
+// does not hold: a session of the entries a writer appended.
+func withoutKeptHeads(got, want *agentsession.Session) *agentsession.Session {
+	out := agentsession.New(got.Header())
+	for _, e := range got.Entries() {
+		if l, ok := e.(*agentsession.LabelEntry); ok && l.Label != nil && *l.Label == agentsession.LeafLabel {
+			if _, held := want.Entry(e.Base().ID); !held {
+				continue
+			}
+		}
+		_, _ = out.Extend(e)
+	}
+	return out
+}
+
 // appendAll appends entries to the session id in st, as given.
 func appendAll(t *testing.T, st agentsession.Store, id string, entries []agentsession.Entry) {
 	t.Helper()
@@ -332,14 +348,14 @@ func redactedGrow(t *testing.T, opts Options) {
 	}
 	got := readBack(t, st, r.red.ID())
 	e, ok := got.Entry(id)
-	if !ok || got.Len() != r.red.Len()+1 {
-		t.Fatalf("after the native append the session holds %d entries", got.Len())
+	if n := len(withoutKeptHeads(got, r.red).Entries()); !ok || n != r.red.Len()+1 {
+		t.Fatalf("after the native append the session holds %d entries", n)
 	}
 	if _, redacted := agentsession.RedactedOf(e); redacted {
 		t.Error("the native entry reads back redacted")
 	}
 	if opts.Reopen != nil {
-		if got := readBack(t, opts.Reopen(t, st), r.red.ID()); got.Len() != r.red.Len()+1 {
+		if got := readBack(t, opts.Reopen(t, st), r.red.ID()); len(withoutKeptHeads(got, r.red).Entries()) != r.red.Len()+1 {
 			t.Errorf("after a reopen the session holds %d entries", got.Len())
 		}
 	}

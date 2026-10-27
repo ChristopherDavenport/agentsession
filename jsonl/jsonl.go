@@ -691,7 +691,32 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	// Followers look again however the append ends: a rewrite for the
 	// format may have landed before a write that failed.
 	defer s.hub.Notify(sessionID)
-	return s.appendLocked(h, sessionID, e, false)
+	id, err := s.appendLocked(h, sessionID, e, false)
+	if err != nil {
+		return id, err
+	}
+	return id, s.keepHead(h, sessionID, s.shouldSync(h.session.Header(), e))
+}
+
+// keepHead appends the leaf label that keeps the file's head where the
+// session's is, when the append before it would otherwise read back as
+// the head: a branch, which RFC 0002 says leaves the head in place. It
+// is synced when the entry before it was, so a crash cannot keep the
+// entry and lose the label. The caller holds s.mu.
+func (s *Store) keepHead(h *handle, sessionID string, sync bool) error {
+	mark := h.session.LeafMarkNeeded()
+	if mark == nil {
+		return nil
+	}
+	if s.redactedOnly {
+		// The label carries no redacted, which the store refuses; a
+		// redacted session's head is its writer's labels to keep.
+		return nil
+	}
+	if _, err := s.appendLocked(h, sessionID, mark, sync); err != nil {
+		return fmt.Errorf("jsonl: keep the head of %s: %w", sessionID, err)
+	}
+	return nil
 }
 
 // appendLocked appends e to the open session h, and syncs it when sync

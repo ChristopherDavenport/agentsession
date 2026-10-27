@@ -87,13 +87,9 @@ func followLeafAsRead(t *testing.T, opts Options) {
 				t.Fatalf("%s: change %v %s, want the append %s", what, c.Kind, c.ID, id)
 			}
 			// A store that records a head after the entry yields it
-			// next; compare once the follower is quiet.
-			if next, ok := w.Poll(); ok {
-				if next.Kind != agentsession.Head {
-					t.Fatalf("%s: change %v after the append, want a head or nothing", what, next.Kind)
-				}
-				c = next
-			}
+			// next, as a store that keeps its head in its lines does the
+			// label that keeps it; compare once the follower is quiet.
+			c = keptHead(t, w, c, what)
 			sameLeafAsRead(t, st, s.ID(), c, what)
 			return id
 		}
@@ -212,6 +208,7 @@ func followBranch(t *testing.T, opts Options) {
 	if c.ID != sid || c.Entry.Base().Parent != ids[0] {
 		t.Errorf("branch entry %s under %s, want %s under %s", c.ID, c.Entry.Base().Parent, sid, ids[0])
 	}
+	c = keptHead(t, w, c, "after a branch")
 	sameLeafAsRead(t, st, s.ID(), c, "after a branch")
 	if p := c.Session.Path(sid); len(p) != 2 {
 		t.Errorf("path to the branch has %d entries, want 2", len(p))
@@ -570,6 +567,28 @@ func followBurst(t *testing.T, opts Options) {
 		t.Errorf("follower saw %v, want %v", got, want)
 	}
 	w.Quiet()
+}
+
+// keptHead takes what may follow an append: the leaf label a store that
+// keeps its head in its lines appends so that a branch does not read
+// back as the head (RFC 0002, Head), and a head a store records. It
+// returns the last change it took, c when there is none.
+func keptHead(t *testing.T, w *followtest.Tail, c agentsession.Change, what string) agentsession.Change {
+	t.Helper()
+	for {
+		next, ok := w.Poll()
+		if !ok {
+			return c
+		}
+		l, label := next.Entry.(*agentsession.LabelEntry)
+		switch {
+		case next.Kind == agentsession.Head:
+		case next.Kind == agentsession.Appended && label && l.Label != nil && *l.Label == agentsession.LeafLabel:
+		default:
+			t.Fatalf("%s: change %v %s after the append, want the head kept, a head or nothing", what, next.Kind, next.ID)
+		}
+		c = next
+	}
 }
 
 // labelAndHead takes the two changes a recorded head makes, in the

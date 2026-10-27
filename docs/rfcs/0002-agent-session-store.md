@@ -311,7 +311,12 @@ The head is a session's resume point, and it is a ref.
   head only in its entries, performs the move by appending a `leaf`
   label for the target under the session's lock, after the compare and
   before anything else is appended; the move is durable when the label
-  is. A store set to hold only redacted entries cannot append that
+  is. Such a store also keeps the head where an append leaves it: after
+  an append its lines would read back as having moved the head, a
+  branch, since a reader of a file takes the newest line under the
+  `leaf` label in force or the last line, it appends a `leaf` label for
+  the head under the same lock, made durable when the entry is, so the
+  head is the same after a reopen. A store set to hold only redacted entries cannot append that
   label, which carries no `redacted`, and refuses the move as it
   refuses any such entry (Redacted sessions); its head moves only by
   the redacted `leaf` labels its writer appends.

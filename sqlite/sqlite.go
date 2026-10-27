@@ -852,7 +852,28 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 		}
 	}
 	defer s.hub.Notify(sessionID)
-	return s.appendLocked(ctx, sess, sessionID, e)
+	id, err := s.appendLocked(ctx, sess, sessionID, e)
+	if err != nil {
+		return id, err
+	}
+	return id, s.keepHead(ctx, sess, sessionID)
+}
+
+// keepHead appends the leaf label that keeps the stored head where the
+// session's is, when the append before it would otherwise read back as
+// the head: a branch, which RFC 0002 says leaves the head in place. The
+// store keeps its head only in its entries. The caller holds s.mu.
+func (s *Store) keepHead(ctx context.Context, sess *agentsession.Session, sessionID string) error {
+	mark := sess.LeafMarkNeeded()
+	if mark == nil || s.redactedOnly {
+		// A redacted-only store refuses the label, which carries no
+		// redacted; a redacted session's head is its writer's to keep.
+		return nil
+	}
+	if _, err := s.appendLocked(ctx, sess, sessionID, mark); err != nil {
+		return fmt.Errorf("sqlite: keep the head of %s: %w", sessionID, err)
+	}
+	return nil
 }
 
 // appendLocked appends e to sess, the store's open session, in one
