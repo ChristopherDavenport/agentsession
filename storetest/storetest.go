@@ -74,6 +74,7 @@ func Run(t *testing.T, opts Options) {
 	t.Run("ReadLine", func(t *testing.T) { testReadLine(t, opts) })
 	t.Run("List", func(t *testing.T) { testList(t, opts) })
 	t.Run("Continue", func(t *testing.T) { testContinue(t, opts) })
+	t.Run("ContinueOnce", func(t *testing.T) { testContinueOnce(t, opts) })
 	t.Run("Delete", func(t *testing.T) { testDelete(t, opts) })
 	t.Run("Fork", func(t *testing.T) { testFork(t, opts) })
 	t.Run("ForkPrefix", func(t *testing.T) { testForkPrefix(t, opts) })

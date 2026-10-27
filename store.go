@@ -278,6 +278,9 @@ type MemoryStore struct {
 	gens map[string]uint64
 	hub  wake.Hub
 	refs refState
+	// wmu makes each append, and each head move, one step: the rules a
+	// writer is held to are checked and the entry added under it.
+	wmu sync.Mutex
 	// redactedOnly says the store holds only redacted entries.
 	redactedOnly bool
 }
@@ -466,6 +469,8 @@ func (m *MemoryStore) Read(ctx context.Context, id string) (*Session, error) {
 
 // Append implements Store.
 func (m *MemoryStore) Append(ctx context.Context, sessionID string, e Entry) (string, error) {
+	m.wmu.Lock()
+	defer m.wmu.Unlock()
 	s, err := m.Open(ctx, sessionID)
 	if err != nil {
 		return "", err
@@ -518,6 +523,8 @@ func (m *MemoryStore) SetHead(ctx context.Context, sessionID, expected, to strin
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	m.wmu.Lock()
+	defer m.wmu.Unlock()
 	s, err := m.Open(ctx, sessionID)
 	if err != nil {
 		return err

@@ -448,7 +448,11 @@ projection to a file carries none.
   itself: a store MUST NOT move a ref except by an update. A session
   holds at most one `continued_in` link; a writer MUST NOT continue a
   session that holds one, since a second successor would fork the
-  chain. The writer that continues a named session moves its ref by
+  chain. A store MUST refuse an append of a `continued_in` link naming
+  another successor to a session that holds one, deciding it with the
+  append, under the same lock or transaction, so that of two writers
+  continuing a session at once one lands its link and the other is
+  refused and discards its successor. The writer that continues a named session moves its ref by
   compare-and-swap from the old session to the new, and a crash between
   the two steps leaves the ref on the retired session. A writer
   continuing the session a ref names therefore continues the session at

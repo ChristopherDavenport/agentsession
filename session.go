@@ -277,7 +277,9 @@ func (s *Session) Append(e Entry) (string, error) {
 // file may not be raised to this package's format takes no entry
 // ([ErrNoRaise]), since appending under the raised header is what a
 // writer does: [Session.RaiseRefused] decides it, for the header's
-// redacted_from and every entry's redacted. A store raises the stored
+// redacted_from and every entry's redacted. A continued_in link goes
+// only into a session that holds none, or one naming the same
+// successor ([ErrSuperseded]). A store raises the stored
 // header only after its session's Prepare has run this check, so the
 // store's raise, which sees the header alone, never raises a file whose
 // entries forbid it. Nor does an entry that holds a redacted member read
@@ -298,6 +300,16 @@ func (s *Session) checkNew(e Entry) error {
 		return fmt.Errorf("agentsession: append to %s: %w: the entry holds a redacted member read under a minor before 0.13; ClearRedacted or SetRedacted it first", s.ID(), ErrNoRaise)
 	}
 	l, ok := e.(*LinkEntry)
+	if ok && l.Rel == RelContinuedIn {
+		// A session continues once: a second successor would fork the
+		// chain (RFC 0002, Refs and continuation). Checked here, under
+		// the lock a store appends under, two writers continuing at once
+		// cannot both land a link. The same successor again is a retry.
+		if next := s.SupersededBy(); next != "" && next != l.Session {
+			return fmt.Errorf("%w: %s was continued in %s", ErrSuperseded, s.ID(), next)
+		}
+		return nil
+	}
 	if !ok || !l.callee() {
 		return nil
 	}

@@ -25,7 +25,10 @@ import (
 //
 // A session continues once (RFC 0002, Refs and continuation): one that
 // already holds a continued_in link is refused with [ErrSuperseded],
-// since a second successor would fork the chain. A caller continuing a
+// since a second successor would fork the chain. The store refuses the
+// link itself under the lock it appends under, so of two writers
+// continuing at once one lands its link and the other is refused, its
+// successor deleted. A caller continuing a
 // named conversation uses [ContinueRef], which continues the session at
 // the end of the chain.
 func Continue(ctx context.Context, store Store, id string, summary openresponses.Item) (*Session, error) {
@@ -85,6 +88,11 @@ func Continue(ctx context.Context, store Store, id string, summary openresponses
 		}
 	}
 	if _, err := store.Append(ctx, id, NewLinkEntry(RelContinuedIn, nextID)); err != nil {
+		if errors.Is(err, ErrSuperseded) {
+			// Another writer continued the session first, and its link
+			// is the one the chain follows: this successor is no one's.
+			_ = store.Delete(ctx, nextID)
+		}
 		return nil, fmt.Errorf("agentsession: continue %s: link: %w", id, err)
 	}
 	return next, nil

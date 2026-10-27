@@ -34,7 +34,12 @@ versions may break the API.
   the session at the end of the chain from a ref's target, moving the
   ref by compare-and-swap from its literal target. **Changed:**
   `Continue` refuses a session that already holds a `continued_in` link
-  with `ErrSuperseded`, and `ContinueRef` continues the session
+  with `ErrSuperseded`, and every store refuses a second `continued_in`
+  link naming another successor with it, checked in `Session.Prepare`
+  under the lock the store appends under, so two concurrent `Continue`
+  calls land one link and the loser deletes its successor;
+  `MemoryStore` now serialises its appends to make that one step. And
+  `ContinueRef` continues the session
   `ResolveCurrent` finds rather than the ref's target, which forked the
   chain when the ref was behind. (#222)
 
