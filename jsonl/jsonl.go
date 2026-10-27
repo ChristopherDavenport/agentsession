@@ -717,20 +717,36 @@ func (s *Store) appendLocked(h *handle, sessionID string, e agentsession.Entry, 
 			return "", err
 		}
 	}
+	// The label that keeps the head goes ahead of the entry when it can,
+	// so a crash that tears the tail of the write loses the entry, never
+	// the label: it targets the head there already.
+	var buf bytes.Buffer
+	keep := func(mark *agentsession.LabelEntry) error {
+		if _, err := h.session.Append(mark); err != nil {
+			return fmt.Errorf("jsonl: keep the head of %s: %w", sessionID, err)
+		}
+		if err := writeLine(&buf, mark); err != nil {
+			return fmt.Errorf("jsonl: keep the head of %s: %w", sessionID, err)
+		}
+		return nil
+	}
+	if mark := h.session.LeafMarkBefore(e); mark != nil {
+		if err := keep(mark); err != nil {
+			return "", err
+		}
+	}
 	id, err := h.session.Append(e)
 	if err != nil {
 		return "", err
 	}
-	var buf bytes.Buffer
 	if err := writeLine(&buf, e); err != nil {
 		return "", fmt.Errorf("jsonl: write entry %s: %w", id, err)
 	}
 	if mark := h.session.LeafMarkNeeded(); mark != nil {
-		if _, err := h.session.Append(mark); err != nil {
-			return "", fmt.Errorf("jsonl: keep the head of %s: %w", sessionID, err)
-		}
-		if err := writeLine(&buf, mark); err != nil {
-			return "", fmt.Errorf("jsonl: keep the head of %s: %w", sessionID, err)
+		// An entry under the head, which a label ahead of it cannot
+		// keep from reading as the head.
+		if err := keep(mark); err != nil {
+			return "", err
 		}
 	}
 	if _, err := h.file.Write(buf.Bytes()); err != nil {

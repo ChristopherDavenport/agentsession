@@ -316,7 +316,10 @@ The head is a session's resume point, and it is a ref.
   branch, since a reader of a file takes the newest line under the
   `leaf` label in force or the last line, it appends a `leaf` label for
   the head under the same lock, made durable when the entry is, so the
-  head is the same after a reopen. A store set to hold only redacted
+  head is the same after a reopen. It writes the label ahead of the
+  entry, so a crash that tears the end of the write loses the entry
+  and not the label, except for an entry that descends from the head,
+  which only a label after it keeps from reading as the head. A store set to hold only redacted
   entries offers the move and keeps the head as every store does, since
   the label carries no content (Redacted sessions).
 - Resume reads the head. There is no inference from log order and no

@@ -83,3 +83,61 @@ func TestKeptHeadLandsWithItsBranch(t *testing.T) {
 		t.Errorf("syncs saw %v lines, want one sync of 5", lines)
 	}
 }
+
+// TestATornBranchKeepsTheHead: the label that keeps the head is written
+// before the branch it keeps it from, so a crash that tears the tail of
+// the write loses the branch, never the label, and the reopened head is
+// the one the branch left in place.
+func TestATornBranchKeepsTheHead(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, name := range []string{"a", "b", "c"} {
+		id, err := st.Append(ctx, "s", &agentsession.InfoEntry{Name: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	side := &agentsession.InfoEntry{Name: "side"}
+	side.Parent = ids[0]
+	if _, err := st.Append(ctx, "s", side); err != nil {
+		t.Fatal(err)
+	}
+	path, err := st.Path("s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.TrimRight(data, "\n")
+	last := bytes.LastIndexByte(body, '\n') + 1
+	torn := data[:last+(len(body)-last)/2]
+	if err := os.WriteFile(path, torn, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Open(dir, WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	s, err := again.Read(ctx, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Leaf() != ids[2] {
+		t.Errorf("head after a torn branch = %s, want %s", s.Leaf(), ids[2])
+	}
+}

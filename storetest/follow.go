@@ -77,10 +77,12 @@ func followLeafAsRead(t *testing.T, opts Options) {
 		}
 		for {
 			c := w.Next()
-			if c.Kind == agentsession.Head {
+			if c.Kind == agentsession.Head || c.Kind == agentsession.Appended && c.ID != id && isLeafLabel(c.Entry) {
 				// A head the store logged before the entry, as cas
-				// logs a writer's Branch; Read already has the entry,
-				// so the leaves are compared after it.
+				// logs a writer's Branch, or the label a store of
+				// lines writes ahead of a branch to keep its head;
+				// Read already has the entry, so the leaves are
+				// compared after it.
 				continue
 			}
 			if c.Kind != agentsession.Appended || c.ID != id {
@@ -205,6 +207,9 @@ func followBranch(t *testing.T, opts Options) {
 		t.Fatal(err)
 	}
 	c := w.NextKind(agentsession.Appended)
+	for c.ID != sid && isLeafLabel(c.Entry) {
+		c = w.NextKind(agentsession.Appended) // the label a store of lines writes ahead
+	}
 	if c.ID != sid || c.Entry.Base().Parent != ids[0] {
 		t.Errorf("branch entry %s under %s, want %s under %s", c.ID, c.Entry.Base().Parent, sid, ids[0])
 	}
@@ -569,6 +574,12 @@ func followBurst(t *testing.T, opts Options) {
 	w.Quiet()
 }
 
+// isLeafLabel reports whether e is a leaf label.
+func isLeafLabel(e agentsession.Entry) bool {
+	l, ok := e.(*agentsession.LabelEntry)
+	return ok && l.Label != nil && *l.Label == agentsession.LeafLabel
+}
+
 // keptHead takes what may follow an append: the leaf label a store that
 // keeps its head in its lines appends so that a branch does not read
 // back as the head (RFC 0002, Head), and a head a store records. It
@@ -580,10 +591,9 @@ func keptHead(t *testing.T, w *followtest.Tail, c agentsession.Change, what stri
 		if !ok {
 			return c
 		}
-		l, label := next.Entry.(*agentsession.LabelEntry)
 		switch {
 		case next.Kind == agentsession.Head:
-		case next.Kind == agentsession.Appended && label && l.Label != nil && *l.Label == agentsession.LeafLabel:
+		case next.Kind == agentsession.Appended && isLeafLabel(next.Entry):
 		default:
 			t.Fatalf("%s: change %v %s after the append, want the head kept, a head or nothing", what, next.Kind, next.ID)
 		}

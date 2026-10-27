@@ -1074,12 +1074,7 @@ func (s *Session) LeafMarkNeeded() *LabelEntry {
 	if s.leaf == "" || len(s.entries) == 0 {
 		return nil
 	}
-	if s.read == nil || s.read.n > len(s.entries) {
-		s.read = s.readLeafState()
-	}
-	for i := s.read.n; i < len(s.entries); i++ {
-		s.read.extend(s, i)
-	}
+	s.readCaughtUp()
 	resolved := s.read.tip
 	if s.read.marked == "" {
 		resolved = s.entries[len(s.entries)-1].Base().ID
@@ -1087,6 +1082,61 @@ func (s *Session) LeafMarkNeeded() *LabelEntry {
 	if s.notOnLabel(resolved) == s.leaf {
 		return nil
 	}
+	return s.leafMark()
+}
+
+// LeafMarkBefore is [Session.LeafMarkNeeded] decided before e, an entry
+// [Session.Prepare] has filled, is appended: the label that, appended
+// first, keeps a reader of the lines on the session's head once e
+// follows it, or nil when e needs none before it. A store of lines
+// writes the label ahead of e, so a crash that tears e off the end of
+// the file leaves the label, never e without it. An entry that descends
+// from the head is the one case a label ahead cannot cover, since a
+// reader takes the newest line under the label after it; the store asks
+// [Session.LeafMarkNeeded] after such an entry.
+func (s *Session) LeafMarkBefore(e Entry) *LabelEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b := e.Base()
+	if s.leaf == "" || b.Parent == s.leaf {
+		return nil
+	}
+	if l, ok := e.(*LabelEntry); ok && l.Label != nil && *l.Label == LeafLabel {
+		return nil
+	}
+	for p := b.Parent; p != ""; {
+		if p == s.leaf {
+			return nil // under the head: a label ahead would pick e
+		}
+		pe, ok := s.byID[p]
+		if !ok {
+			break
+		}
+		p = pe.Base().Parent
+	}
+	if len(s.entries) > 0 {
+		s.readCaughtUp()
+		if s.read.marked != "" && !s.read.under[b.Parent] && s.notOnLabel(s.read.tip) == s.leaf {
+			return nil // e is off the marked branch, which still reads as the head
+		}
+	}
+	return s.leafMark()
+}
+
+// readCaughtUp brings Read's leaf state up to the session's entries.
+// The caller holds s.mu.
+func (s *Session) readCaughtUp() {
+	if s.read == nil || s.read.n > len(s.entries) {
+		s.read = s.readLeafState()
+	}
+	for i := s.read.n; i < len(s.entries); i++ {
+		s.read.extend(s, i)
+	}
+}
+
+// leafMark is the leaf label on the leaf, hung from it. The caller holds
+// s.mu.
+func (s *Session) leafMark() *LabelEntry {
 	label := NewLabelEntry(s.leaf, LeafLabel)
 	label.Parent = s.leaf
 	return label
