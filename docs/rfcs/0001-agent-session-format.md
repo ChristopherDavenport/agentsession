@@ -384,9 +384,9 @@ preserved by any tool that rewrites the file and MUST be ignored by a
 reader that does not know it. That is where a harness keeps detail
 richer than a core member allows. The rule holds at every depth: a
 member this document does not define inside an object it does, such as
-a `host` inside `workspace`, is preserved the same way, and like every
-member it is hashed as the line holds it. A reader MUST NOT compute an
-entry's hashes from its own model of the entry when that model cannot
+one beside `kind` and `host` inside `workspace`, is preserved the same
+way, and like every member it is hashed as the line holds it. A reader
+MUST NOT compute an entry's hashes from its own model of the entry when that model cannot
 hold everything the line does.
 
 A record entry named in the header's `records` is written whenever its
@@ -1289,22 +1289,41 @@ they saw.
  "cwd":"…","vcs":{"system":"git","revision":"…","dirty":true},
  "files":{"read":{"path":"sha256:…"},"written":{"path":"sha256:…"}},
  "tools":{"name":"version"},
- "workspace":{"kind":"local|container|remote","ref":"…"}}
+ "workspace":{"kind":"local|container|remote","ref":"…","host":"…","instance":"…"}}
 ```
 
-`workspace` says which file system `cwd` is a path in: `kind` is
-closed, and `ref` is one string the harness can resolve to that file
-system (an image digest, a host, an instance ID). A local run MAY omit
-it. A container's `ref` SHOULD be a digest rather than a tag, because a
-tag moves. A container on a remote host is `container`, with the
-digest as `ref` and the host in a member of `workspace` this document
-does not define. Anything else that tells one file system from
-another, a container's instance above all, since a restart from the
-same image is another file system with the same digest, goes in such
-members of `workspace` too, and not beside it in the entry: the
-substitution rule below compares `workspace` alone. The envelope
-section says a rewriter preserves them. An `env` entry applies from its
+`workspace` says which file system `cwd` is a path in. `kind` is
+closed. `ref` names what the file system was made from or is reached
+by: a container's image digest, which SHOULD be a digest rather than a
+tag, because a tag moves, or a remote runtime's endpoint. It is absent
+for `local`. Since 0.14, `host` names the machine the file system is
+on, as the harness names it (a hostname, a node name), and `instance`
+names the file system among those that `kind`, `ref` and `host`
+describe: a container's or a sandbox's ID, since a restart or a
+reschedule from the same image is another file system with the same
+digest. `ref`, `host` and `instance` are each a string, opaque to a
+reader. A writer SHOULD write `host` whenever another machine could
+hold a file system with the same `kind` and `ref`, every `local`
+workspace among them, and SHOULD write `instance` whenever a restart
+gives a new file system. A
+local run MAY omit `workspace`, but a writer that records `env` for a
+session that may be resumed elsewhere writes it for a local run too
+(`kind: local` and `host`). Anything else that tells one file system
+from another goes in a member of `workspace` this document does not
+define, and not beside it in the entry: the substitution rule below
+compares `workspace` alone, every member of it. The envelope section
+says a rewriter preserves such members. An `env` entry applies from its
 position on the path until the next one.
+
+A file of a minor before 0.14 was free to name the host in `ref`, or
+in a member of `workspace` of its own choosing. A reader reads such a
+`ref` as written, and reads `host` or `instance` holding a string as
+this section defines them, as the conformance fixtures of 0.7 to 0.13
+already write them; one holding another form is a member the reader
+does not know, and is preserved as one. Neither reading changes what the
+substitution rule compares, so no earlier file reads differently. A
+path whose later `env` entry moves the host from `ref` to `host`
+records a substitution, as any change of spelling does.
 
 `vcs` names a revision and whether the tree differs from it, so two
 different dirty trees on one revision compare equal. A harness that
@@ -2129,6 +2148,25 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.13
+
+These are the changes 0.14 makes. The document's status, the header's
+`format` and the sections above that name the current minor move to
+0.14 with the rest of its changes.
+
+- `env` defines two members of `workspace`, `host`, the machine the
+  file system is on, and `instance`, the file system among those its
+  `kind`, `ref` and `host` describe, both opaque strings, and says that
+  `ref` is absent for `local`. A writer SHOULD write `host` whenever
+  another machine could hold a file system with the same `kind` and
+  `ref`, every `local` workspace among them, and `instance` whenever a
+  restart gives a new file system. 0.13 told a writer to put the host
+  and the instance in members of `workspace` it did not name, so two
+  writers could spell them differently and a resume across them read as
+  a substitution. The substitution rule already compared every member
+  of `workspace`, so no earlier file reads differently, and a 0.13 file
+  that names the host in `ref` stays valid.
 
 ## Changes since 0.12
 

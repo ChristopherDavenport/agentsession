@@ -5,6 +5,21 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **RFC 0001 defines `host` and `instance` in `env`'s `workspace`
+  (0.14, unreleased).** `host` names the machine the file system is on,
+  `instance` which file system among those the rest of `workspace`
+  describes, as a container's ID; both are opaque strings, and `ref` is
+  absent for `local`. A writer SHOULD write `host` whenever another
+  machine could hold the same `kind` and `ref`, every `local` workspace
+  among them, and `instance`
+  whenever a restart gives a new file system. The substitution rule
+  already compared every member, so no file reads differently. The
+  library is unchanged: `Workspace.SetMember` still writes both, and
+  the format stays 0.13 until the rest of 0.14 lands.
+  (ChristopherDavenport/agentworkspace#3)
+
 ## v0.0.30 - 2026-10-26
 
 - **Added: `remote.WithChallenge`.** A `Handler` sends the value as the

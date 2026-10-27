@@ -379,24 +379,25 @@ func (e *QueuedEntry) Drain() *ItemEntry {
 }
 
 // Workspace says which file system an env entry's cwd is a path in.
-// Ref is one string the harness can resolve to it: an image digest, a
-// host, an instance ID. A container's Ref should be a digest rather
-// than a tag, because a tag moves. Anything else that tells one file
-// system from another, the host a container runs on or its instance,
-// goes in Unknown, inside workspace and not beside it, since the
-// format's substitution rule compares workspace alone: see
-// [SameWorkspace].
+// Ref is one string the harness can resolve to it, an image digest or
+// an endpoint, and is empty for a local workspace. A container's Ref
+// should be a digest rather than a tag, because a tag moves. The host
+// the file system is on and its instance, which the format defines
+// since 0.14, go in Unknown as the strings "host" and "instance", as
+// does anything else that tells one file system from another: inside
+// workspace and not beside it, since the format's substitution rule
+// compares workspace alone: see [SameWorkspace].
 type Workspace struct {
 	Kind string `json:"kind,omitempty"`
 	Ref  string `json:"ref,omitempty"`
-	// Unknown holds the members of workspace the format does not
-	// define, such as host or instance, encoded inline beside kind and
-	// ref. It is nil when there are none.
+	// Unknown holds the members of workspace other than kind and ref,
+	// host and instance among them, encoded inline beside kind and ref.
+	// It is nil when there are none.
 	Unknown map[string]json.RawMessage `json:"-"`
 }
 
-// SetMember sets a member of the workspace the format does not
-// define, such as the host a container runs on or its instance.
+// SetMember sets a member of the workspace other than kind and ref,
+// such as host, the machine the file system is on, or instance.
 func (w *Workspace) SetMember(key string, v any) error {
 	if key == "kind" || key == "ref" {
 		return fmt.Errorf("agentsession: workspace member %q is defined; set the field", key)
