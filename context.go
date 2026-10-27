@@ -821,16 +821,18 @@ func (s Settings) InstructionsDelta(parts []InstructionPart) *ConfigEntry {
 	return &ConfigEntry{InstructionsParts: out}
 }
 
-// Request builds the canonical request for these settings over items:
-// store false and no previous_response_id, as the context algorithm
-// requires. An Extra member the request type declares, such as
-// temperature, fills its field, since openresponses never takes a
-// declared member from Request.Extra; every other member rides in
-// Request.Extra, number literals as written. A member the settings
-// set by name wins over an Extra member of the same name.
-func (s Settings) Request(items openresponses.Items) (openresponses.Request, error) {
+// RequestJSON builds the canonical request for these settings over
+// items as the JSON object the request hash is taken over: store false
+// and no previous_response_id, as the context algorithm requires, the
+// named settings, and every Extra member exactly as recorded, a member
+// the settings set by name winning over an Extra member of the same
+// name. It is what [Session.Verify] hashes, and it holds what
+// [Settings.Request] cannot: a declared member recorded empty, such as
+// "stream":false or "include":[], or with a value its typed field
+// cannot hold, such as "metadata":{"n":1}.
+func (s Settings) RequestJSON(items openresponses.Items) ([]byte, error) {
 	store := false
-	req := openresponses.Request{
+	data, err := json.Marshal(openresponses.Request{
 		Model:        s.Model,
 		Instructions: s.Instructions,
 		Reasoning:    s.Reasoning,
@@ -838,33 +840,55 @@ func (s Settings) Request(items openresponses.Items) (openresponses.Request, err
 		Tools:        s.Tools,
 		Input:        items,
 		Store:        &store,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("agentsession: encode request: %w", err)
 	}
 	if len(s.Extra) == 0 {
-		return req, nil
-	}
-	data, err := json.Marshal(req)
-	if err != nil {
-		return openresponses.Request{}, fmt.Errorf("agentsession: encode request: %w", err)
+		return data, nil
 	}
 	var merged map[string]json.RawMessage
 	if err := json.Unmarshal(data, &merged); err != nil {
-		return openresponses.Request{}, fmt.Errorf("agentsession: decode request: %w", err)
+		return nil, fmt.Errorf("agentsession: decode request: %w", err)
 	}
 	for k, raw := range s.Extra {
-		if _, set := merged[k]; set {
-			continue
+		if _, set := merged[k]; !set {
+			merged[k] = raw
 		}
-		if requestMembers[k] {
+	}
+	if data, err = json.Marshal(merged); err != nil {
+		return nil, fmt.Errorf("agentsession: settings extra: %w", err)
+	}
+	return data, nil
+}
+
+// Request is [Settings.RequestJSON] as an openresponses.Request, the
+// form a harness sends. An Extra member the request type declares, such
+// as temperature, fills its field, since openresponses never takes a
+// declared member from Request.Extra, and every other member rides in
+// Request.Extra, number literals as written. The struct is lossier than
+// the JSON: a declared member recorded empty is dropped on encode, and
+// one whose value its field cannot hold is an error, so the request
+// hash and a continuation are taken from RequestJSON, never from this.
+func (s Settings) Request(items openresponses.Items) (openresponses.Request, error) {
+	data, err := s.RequestJSON(items)
+	if err != nil {
+		return openresponses.Request{}, err
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return openresponses.Request{}, fmt.Errorf("agentsession: decode request: %w", err)
+	}
+	for k, raw := range all {
+		if requestMembers[k] && !settingsKeys[k] && k != "input" {
 			// A typed field takes the value's canonical spelling, so an
-			// integer written 1e2 still decodes; the request hash is
-			// over canonical JSON, so nothing it covers moves.
-			if raw, err = jcs.Transform(raw); err != nil {
+			// integer written 1e2 still decodes.
+			if all[k], err = jcs.Transform(raw); err != nil {
 				return openresponses.Request{}, fmt.Errorf("agentsession: settings extra %q: %w", k, err)
 			}
 		}
-		merged[k] = raw
 	}
-	if data, err = json.Marshal(merged); err != nil {
+	if data, err = json.Marshal(all); err != nil {
 		return openresponses.Request{}, fmt.Errorf("agentsession: encode request: %w", err)
 	}
 	var out openresponses.Request
@@ -997,6 +1021,13 @@ type OmittedItem struct {
 // live request it compares with, through [CanonicalRequest] first.
 func (c Context) Request() (openresponses.Request, error) {
 	return c.Settings.Request(c.Items)
+}
+
+// RequestJSON returns the canonical request for the context as the JSON
+// its request hash is taken over, every recorded setting exactly as
+// recorded; see [Settings.RequestJSON].
+func (c Context) RequestJSON() ([]byte, error) {
+	return c.Settings.RequestJSON(c.Items)
 }
 
 // InstructionsOmitted returns the parts left out of the instructions
@@ -1353,11 +1384,11 @@ func (s *Session) Verify(id string) error {
 // contextHash is the request hash of the request ctx builds, as
 // [Session.Verify] and [Session.RequestHashFor] both compute it.
 func contextHash(ctx Context) (string, error) {
-	req, err := ctx.Request()
+	data, err := ctx.RequestJSON()
 	if err != nil {
 		return "", err
 	}
-	return RequestHash(req)
+	return HashRequestJSON(data)
 }
 
 // RequestHashFor computes the request_hash r would verify with were it

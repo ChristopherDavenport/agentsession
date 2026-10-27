@@ -101,6 +101,40 @@ var settingsKeys = map[string]bool{
 	"tools":        true,
 }
 
+// configFromSettings is the full config entry for the settings in force,
+// as [ConfigFromRequest] builds one for a request, with every recorded
+// member exactly as recorded: nothing goes through openresponses.Request,
+// which drops a declared member recorded empty and cannot hold some
+// values, so the entry rebuilds the request the settings hash.
+func configFromSettings(s Settings) *ConfigEntry {
+	cfg := &ConfigEntry{Model: s.Model, Replace: true}
+	if s.Instructions != "" {
+		instructions := s.Instructions
+		cfg.Instructions = &instructions
+	}
+	if !s.Reasoning.IsZero() {
+		reasoning := s.Reasoning
+		cfg.Reasoning = &reasoning
+	}
+	if !s.Text.IsZero() {
+		text := s.Text
+		cfg.Text = &text
+	}
+	if len(s.Tools) > 0 {
+		cfg.ToolsAdded = append(openresponses.Tools(nil), s.Tools...)
+	}
+	for k, raw := range s.Extra {
+		if requestOnlyKeys[k] || settingsKeys[k] {
+			continue
+		}
+		if cfg.Extra == nil {
+			cfg.Extra = map[string]json.RawMessage{}
+		}
+		cfg.Extra[k] = append(json.RawMessage(nil), raw...)
+	}
+	return cfg
+}
+
 // ConfigFromRequest builds the full config entry for the settings a
 // request was sent with: its model, instructions, reasoning, text and
 // tools, with every other request member that is not about the one

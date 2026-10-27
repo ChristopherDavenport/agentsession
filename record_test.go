@@ -208,3 +208,78 @@ func TestConfigFromRequestRoundTrip(t *testing.T) {
 		t.Errorf("empty config = %+v", empty)
 	}
 }
+
+// A recorded setting is hashed and replayed exactly as recorded: a
+// member the request type declares but the struct would drop when it is
+// empty, or could not hold at all, still verifies the response that
+// recorded it, and Continue carries it to the successor as written,
+// but for a member about the one call.
+func TestRecordedSettingsHashAsRecorded(t *testing.T) {
+	for _, tc := range []struct{ k, v string }{
+		{"include", `[]`},
+		{"metadata", `{}`},
+		{"stream", `false`},
+		{"background", `false`},
+		{"truncation", `""`},
+		{"metadata", `{"n":1}`},
+		{"max_output_tokens", `1e19`},
+		{"temperature", `0.50`},
+		{"acme:k", `1.0`},
+	} {
+		t.Run(tc.k+"="+tc.v, func(t *testing.T) {
+			input := openresponses.Items{openresponses.UserText("hi")}
+			store := false
+			data, err := json.Marshal(openresponses.Request{Model: "m", Input: input, Store: &store})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var m map[string]json.RawMessage
+			if err := json.Unmarshal(data, &m); err != nil {
+				t.Fatal(err)
+			}
+			m[tc.k] = json.RawMessage(tc.v)
+			if data, err = json.Marshal(m); err != nil {
+				t.Fatal(err)
+			}
+			want, err := HashRequestJSON(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st := NewMemoryStore()
+			s, err := st.Create(context.Background(), Header{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range []Entry{
+				&ConfigEntry{Model: "m", Replace: true, Extra: map[string]json.RawMessage{tc.k: json.RawMessage(tc.v)}},
+				NewItemEntry(input[0]),
+			} {
+				if _, err := st.Append(context.Background(), s.ID(), e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			id, err := st.Append(context.Background(), s.ID(), &ResponseEntry{ResponseID: "r", Status: openresponses.ResponseStatusCompleted, RequestHash: want})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Verify(id); err != nil {
+				t.Errorf("Verify: %v", err)
+			}
+			next, err := Continue(context.Background(), st, s.ID(), nil)
+			if err != nil {
+				t.Fatalf("Continue: %v", err)
+			}
+			cx, err := next.Context()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want = tc.v
+			if requestOnlyKeys[tc.k] {
+				want = "" // about the one call, so not carried, as ConfigFromRequest has it
+			}
+			if got := string(cx.Settings.Extra[tc.k]); got != want {
+				t.Errorf("the successor carries %s as %q, want %q", tc.k, got, want)
+			}
+		})
+	}
+}

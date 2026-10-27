@@ -43,14 +43,7 @@ func Continue(ctx context.Context, store Store, id string, summary openresponses
 	if err != nil {
 		return nil, fmt.Errorf("agentsession: continue %s: %w", id, err)
 	}
-	req, err := cx.Settings.Request(nil)
-	if err != nil {
-		return nil, fmt.Errorf("agentsession: continue %s: %w", id, err)
-	}
-	cfg, err := ConfigFromRequest(req)
-	if err != nil {
-		return nil, err
-	}
+	cfg := configFromSettings(cx.Settings)
 	// The parts left out stay in force across the rollover, as they do
 	// across a compaction.
 	cfg.InstructionsOmitted = cloneOmitted(cx.Settings.InstructionsOmitted)
