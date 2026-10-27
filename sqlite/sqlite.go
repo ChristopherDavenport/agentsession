@@ -834,6 +834,8 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 // insert fails the cached session is dropped so the next Open reloads
 // the database's view. The first append to a session whose header names
 // an earlier minor raises the header's format in the same transaction.
+// As with the jsonl store, the session holds e itself once Append
+// returns, so the caller does not change it afterwards.
 func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Entry) (string, error) {
 	if s.readOnly {
 		return "", agentsession.ErrReadOnly

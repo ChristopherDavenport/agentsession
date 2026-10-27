@@ -16,6 +16,8 @@ versions may break the API.
   server over SQLite never let a session's hold go when a lease ended.
   `sqlite.Store` now asserts `agentsession.Follower`, which it
   implemented. (#257)
+- `jsonl.Store.Append` and `sqlite.Store.Append` say that the session
+  holds the caller's entry itself once they return. (#255)
 
 - **Fixed: a member the format does not define inside a `parents`
   element survives a commit.** `EntryRef` keeps such members and writes

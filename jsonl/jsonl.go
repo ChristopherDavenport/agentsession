@@ -664,6 +664,12 @@ func loadHandle(path, id string, readOnly bool) (*handle, error) {
 // tree, then its line is written and synced according to the policy.
 // The first append to a session whose header names an earlier minor
 // raises the header's format first.
+//
+// The entry is the store's once Append returns, as [agentsession.Session.Append]
+// has it: the session the store shares holds e itself, not a copy, so a
+// caller that changes e afterwards changes what that session and its
+// followers read, and not what the file holds. [agentsession.MemoryStore]
+// keeps a copy instead.
 func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Entry) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
