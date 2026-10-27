@@ -865,9 +865,7 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 // store keeps its head only in its entries. The caller holds s.mu.
 func (s *Store) keepHead(ctx context.Context, sess *agentsession.Session, sessionID string) error {
 	mark := sess.LeafMarkNeeded()
-	if mark == nil || s.redactedOnly {
-		// A redacted-only store refuses the label, which carries no
-		// redacted; a redacted session's head is its writer's to keep.
+	if mark == nil {
 		return nil
 	}
 	if _, err := s.appendLocked(ctx, sess, sessionID, mark); err != nil {
@@ -960,9 +958,8 @@ func (s *Store) appendLocked(ctx context.Context, sess *agentsession.Session, se
 // to, appended under the store's lock after the compare
 // ([agentsession.Session.HeadLabel]) in a transaction of its own, which
 // is committed when SetHead returns. The session Open returned sees it
-// as that label's append. A store set with [WithRedactedOnly] refuses
-// the move with [agentsession.ErrNotRedacted], since the label carries
-// no redacted.
+// as that label's append. A store set with [WithRedactedOnly] takes the
+// label too: it carries no content to have been redacted.
 func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -975,9 +972,6 @@ func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) err
 	sess, err := s.openLocked(ctx, sessionID)
 	if err != nil {
 		return err
-	}
-	if s.redactedOnly {
-		return fmt.Errorf("%w: a head move in %s is a leaf label, which carries no redacted", agentsession.ErrNotRedacted, sessionID)
 	}
 	label, err := sess.HeadLabel(expected, to)
 	if err != nil {

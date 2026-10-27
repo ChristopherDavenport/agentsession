@@ -708,11 +708,6 @@ func (s *Store) keepHead(h *handle, sessionID string, sync bool) error {
 	if mark == nil {
 		return nil
 	}
-	if s.redactedOnly {
-		// The label carries no redacted, which the store refuses; a
-		// redacted session's head is its writer's labels to keep.
-		return nil
-	}
 	if _, err := s.appendLocked(h, sessionID, mark, sync); err != nil {
 		return fmt.Errorf("jsonl: keep the head of %s: %w", sessionID, err)
 	}
@@ -759,8 +754,8 @@ func (s *Store) appendLocked(h *handle, sessionID string, e agentsession.Entry, 
 // ([agentsession.Session.HeadLabel]) and synced before SetHead returns
 // whatever the sync policy, as RFC 0002 asks of a durable head move.
 // The session Open returned sees it as that label's append. A store
-// set with [WithRedactedOnly] refuses the move with
-// [agentsession.ErrNotRedacted], since the label carries no redacted.
+// set with [WithRedactedOnly] takes the label too: it carries no
+// content to have been redacted.
 func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -773,9 +768,6 @@ func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) err
 	h, err := s.openLocked(sessionID)
 	if err != nil {
 		return err
-	}
-	if s.redactedOnly {
-		return fmt.Errorf("%w: a head move in %s is a leaf label, which carries no redacted", agentsession.ErrNotRedacted, sessionID)
 	}
 	label, err := h.session.HeadLabel(expected, to)
 	if err != nil {

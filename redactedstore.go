@@ -53,6 +53,16 @@ func CheckCreate(h Header, redactedOnly bool) error {
 	return nil
 }
 
+// HeadMove reports whether e is a leaf label and nothing more: the
+// record of a head move (RFC 0002, Head), which carries no content to
+// have been redacted. A store set to hold only redacted entries takes
+// it, since its check is of what was run over an entry's content
+// (RFC 0002, Redacted sessions); [CheckRedacted] passes it.
+func HeadMove(e Entry) bool {
+	l, ok := e.(*LabelEntry)
+	return ok && l.Label != nil && *l.Label == LeafLabel && len(l.Unknown) == 0
+}
+
 // CheckRedacted is the refusal a store that holds only redacted entries
 // makes, with [ErrNotRedacted], of a session that would bring it
 // anything not redacted: a header that does not carry redacted, or an
@@ -64,6 +74,9 @@ func CheckRedacted(h Header, entries []Entry) error {
 		return fmt.Errorf("%w: session %s in a store that holds only redacted entries", ErrNotRedacted, h.ID)
 	}
 	for _, e := range entries {
+		if HeadMove(e) {
+			continue
+		}
 		if _, ok := RedactedOf(e); !ok {
 			return fmt.Errorf("%w: entry %s of %s carries no redacted, in a store that holds only redacted entries", ErrNotRedacted, e.Base().ID, h.ID)
 		}

@@ -316,10 +316,9 @@ The head is a session's resume point, and it is a ref.
   branch, since a reader of a file takes the newest line under the
   `leaf` label in force or the last line, it appends a `leaf` label for
   the head under the same lock, made durable when the entry is, so the
-  head is the same after a reopen. A store set to hold only redacted entries cannot append that
-  label, which carries no `redacted`, and refuses the move as it
-  refuses any such entry (Redacted sessions); its head moves only by
-  the redacted `leaf` labels its writer appends.
+  head is the same after a reopen. A store set to hold only redacted
+  entries offers the move and keeps the head as every store does, since
+  the label carries no content (Redacted sessions).
 - Resume reads the head. There is no inference from log order and no
   marker to find. The head is what RFC 0001's leaf label was standing in
   for. The label exists only because an append-only file with a
@@ -751,9 +750,13 @@ blobs the redaction kept, which are the same blobs.
 
 - A store MAY be set to hold only redacted entries. Such a store MUST
   refuse to create, import or receive by push or fetch a session whose
-  header does not carry `redacted`, and MUST refuse every entry,
-  however it arrives — append, import, push or fetch, prefix included —
-  that carries no `redacted`. A fork of a redacted session and an entry
+  header does not carry `redacted`, and MUST refuse every entry that
+  carries content, however it arrives — append, import, push or fetch,
+  prefix included — and carries no `redacted`. Redaction is a property
+  of what was run over an entry's content, so the check does not apply
+  to a `leaf` label holding nothing beyond its target, which records a
+  head move (Head) and carries no content to have been redacted; such a
+  store accepts it, the one a head move writes included. A fork of a redacted session and an entry
   a writer appended to one natively are refused alike, since neither
   was redacted. It is the store a publisher pushes to, and it fails
   closed: an original, or an unredacted entry, sent to it by mistake is

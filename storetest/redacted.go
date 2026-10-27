@@ -412,7 +412,7 @@ func redactedPushGrown(t *testing.T, opts Options) {
 }
 
 // redactedOnly: a store set to hold only redacted entries refuses a
-// header without redacted and every entry without it, by create,
+// header without redacted and every entry with content without it, by create,
 // append, import and push: an original, a fork, and a redacted session
 // resumed with a native entry. It takes a redacted session created,
 // grown, imported and pushed, as long as every entry is redacted.
@@ -431,8 +431,11 @@ func redactedOnly(t *testing.T, opts Options) {
 	appendAll(t, st, r.red.ID(), r.redact(t, orig))
 	_, err = st.Append(ctx, r.red.ID(), user("native"))
 	wantErr(t, "a native append", err, agentsession.ErrNotRedacted)
-	_, err = st.Append(ctx, r.red.ID(), agentsession.NewLabelEntry(r.red.Leaf(), agentsession.LeafLabel))
-	wantErr(t, "a native leaf label", err, agentsession.ErrNotRedacted)
+	// A leaf label records a head move and carries no content to have
+	// been redacted, so the store takes it (RFC 0002, Redacted sessions).
+	if _, err = st.Append(ctx, r.red.ID(), agentsession.NewLabelEntry(r.red.Leaf(), agentsession.LeafLabel)); err != nil {
+		t.Errorf("a native leaf label: %v, want it taken", err)
+	}
 	sameRedacted(t, st, r.red)
 	// A fork of it: not redacted, refused; redacted, its prefix all
 	// redacted, taken, and refused a native entry.
@@ -524,7 +527,7 @@ func redactedOnly(t *testing.T, opts Options) {
 			continue
 		}
 		for _, e := range readBack(t, st, sum.Header.ID).Entries() {
-			if _, ok := agentsession.RedactedOf(e); !ok {
+			if _, ok := agentsession.RedactedOf(e); !ok && !agentsession.HeadMove(e) {
 				t.Errorf("the store holds %s in %s, which is not redacted", e.Base().ID, sum.Header.ID)
 			}
 		}

@@ -135,6 +135,8 @@ type Releaser interface {
 // move as an append. A store with a head of its own (the cas store)
 // records the head. Either way a writer that appended a root to a
 // session with a head, which is a branch, moves the head onto it here.
+// A store set to hold only redacted entries offers it too: the label a
+// head move writes carries no content to have been redacted.
 type HeadStore interface {
 	SetHead(ctx context.Context, sessionID, expected, to string) error
 }
@@ -517,8 +519,8 @@ func (m *MemoryStore) Append(ctx context.Context, sessionID string, e Entry) (st
 // SetHead implements [HeadStore]: the compare and the leaf label that
 // records the move are one step on the store's session, so no append
 // comes between them, and [MemoryStore.Read] and a follower see the
-// move as that label. A store set with MemoryRedactedOnly refuses the
-// move with [ErrNotRedacted], since the label carries no redacted.
+// move as that label. A store set with MemoryRedactedOnly takes it too:
+// the label carries no content to have been redacted.
 func (m *MemoryStore) SetHead(ctx context.Context, sessionID, expected, to string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -528,9 +530,6 @@ func (m *MemoryStore) SetHead(ctx context.Context, sessionID, expected, to strin
 	s, err := m.Open(ctx, sessionID)
 	if err != nil {
 		return err
-	}
-	if m.redactedOnly {
-		return fmt.Errorf("%w: a head move in %s is a leaf label, which carries no redacted", ErrNotRedacted, sessionID)
 	}
 	// The header is raised, as for an append, only for a move the
 	// compare would let through; commitHead compares again under the

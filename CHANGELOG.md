@@ -63,10 +63,13 @@ versions may break the API.
   and `ErrHeadTarget`, implemented by `MemoryStore`, `jsonl.Store`,
   `sqlite.Store`, `cas.Store` and `remote.Client`, and
   `Session.HeadLabel`, the compare and the label a file store appends.
-  A store set to hold only redacted entries refuses the move with
-  `ErrNotRedacted` unless it keeps a head of its own, as `cas` does,
-  since the label carries no `redacted`. The store suite gains a `Head`
-  case. **Changed:** `cas.ErrHeadMoved`, `cas.ErrHeadTarget`,
+  A store set to hold only redacted entries offers it too: redaction is
+  a property of what was run over an entry's content, and RFC 0002's
+  Redacted sessions now applies a redacted-only store's check to
+  entries carrying content, not to a `leaf` label holding nothing beyond
+  its target. **Added: `HeadMove`**, which `CheckRedacted` passes; a
+  redacted-only store now takes such a label by `Append` too. The store
+  suite gains a `Head` case. **Changed:** `cas.ErrHeadMoved`, `cas.ErrHeadTarget`,
   `remote.ErrHeadMoved` and `remote.ErrHeadTarget` are the root's
   sentinels, so one `errors.Is` matches every store; `cas.SetHead`
   refuses a leaf label with `ErrHeadTarget`. A remote `PUT …/head`

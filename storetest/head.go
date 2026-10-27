@@ -22,6 +22,41 @@ func testHead(t *testing.T, opts Options) {
 	if opts.Reopen != nil {
 		t.Run("BranchKeepsHead", func(t *testing.T) { headBranchKept(t, opts) })
 	}
+	if opts.RedactedOnly != nil {
+		t.Run("RedactedOnly", func(t *testing.T) { headRedactedOnly(t, opts) })
+	}
+}
+
+// headRedactedOnly: a store set to hold only redacted entries offers the
+// compare-and-swap as every store does. Redaction is a property of what
+// was run over an entry's content, and the leaf label a head move writes
+// carries none, so the store takes it, and still holds only redacted
+// entries by its own check.
+func headRedactedOnly(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.RedactedOnly(t)
+	hs := headStore(t, st)
+	orig := original(t, "orig-head")
+	r := newRedactor(orig, "test.secret@1", agentsession.Header{})
+	if _, err := st.Create(ctx, r.red.Header()); err != nil {
+		t.Fatal(err)
+	}
+	appendAll(t, st, r.red.ID(), r.redact(t, orig))
+	id := r.red.ID()
+	head := headOf(t, st, id)
+	root := r.red.Roots()[0]
+	if head == root {
+		t.Fatalf("the redacted session's head is its root %s", root)
+	}
+	if err := hs.SetHead(ctx, id, head, root); err != nil {
+		t.Fatalf("SetHead in a store that holds only redacted entries: %v", err)
+	}
+	if got := headOf(t, st, id); got != root {
+		t.Errorf("head after SetHead = %s, want %s", got, root)
+	}
+	if err := agentsession.CheckHoldsRedacted(ctx, st); err != nil {
+		t.Errorf("the store holds a head move it calls unredacted: %v", err)
+	}
 }
 
 // headBranchKept: a branch leaves the head where it is, and a store that
