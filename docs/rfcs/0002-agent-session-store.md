@@ -453,8 +453,8 @@ projection to a file carries none.
   the two steps leaves the ref on the retired session. A writer
   continuing the session a ref names therefore continues the session at
   the end of its chain, and moves the ref by compare-and-swap from the
-  ref's literal target, which catches a ref left behind up. A caller that wants the current
-  session of a name, and not the one the ref says, follows
+  ref's literal target, which catches a ref left behind up. A caller
+  that wants the current session of a name, and not the one the ref says, follows
   `continued_in` links from the target to the end of the chain, and
   SHOULD report that it did so, which tells it the ref is behind. The
   chain walk is the caller's, not the store's, and a reader MUST stop

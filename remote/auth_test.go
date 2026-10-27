@@ -151,6 +151,23 @@ func TestAuthorizeEveryRequest(t *testing.T) {
 		t.Errorf("bob's lease: %s, want no_session", p.Code)
 	}
 
+	// Nor can bob fork alice's session at her entry, named or not.
+	for _, hdr := range []string{
+		`{"type":"session","base":"` + entry + `"}`,
+		`{"type":"session","base":"` + entry + `","parent_session":"` + mine.ID() + `"}`,
+	} {
+		req, _ := http.NewRequest(http.MethodPost, url+"/v1/sessions", strings.NewReader(hdr))
+		req.Header.Set("Authorization", "Bearer bob")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if p := problemOf(t, resp); p.Code != remote.CodeNoEntry && p.Code != remote.CodeNoSession {
+			t.Errorf("bob's fork %s: %+v, want no_entry or no_session", hdr, p)
+		}
+	}
+
 	// The listing leaves alice's session out of bob's.
 	var listed []string
 	for sum, err := range dial(t, url, withToken("bob", nil)).List(ctx, agentsession.ListFilter{}) {

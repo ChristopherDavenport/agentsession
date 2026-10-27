@@ -2103,8 +2103,8 @@ UTF-8 replaced with its `raw`, 2^60 written as its canonical rendering
 1152921504606847000 and read back, a forked fixture whose `base` is
 found in its origin, an extension entry and a core entry each with a
 `parents` element carrying members this document does not define,
-committed and read back under the `id` its line holds, an instructions delta naming runs of parts by
-`keep` beside the parts it rebuilds, a `response` with `attempts`, an
+committed and read back under the `id` its line holds, an
+instructions delta naming runs of parts by `keep` beside the parts it rebuilds, a `response` with `attempts`, an
 `env` whose `workspace` holds a host and an instance and a later one
 that substitutes another instance, a call dispatched twice under one
 `idempotency_key` beside a call answered after a crash, a list of

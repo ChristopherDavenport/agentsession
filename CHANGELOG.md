@@ -79,10 +79,12 @@ versions may break the API.
   so a program that authorized sessions in a store wrapper served any
   reader who held another principal's event ID. **Added:
   `remote.WithAuthorize`** and its `Authorizer`, asked on every route
-  under `/v1/sessions/{id}`, on a create (and a fork's origin), on a ref
-  update or pushed ref for the session it moves to, for each session in
-  a listing, and for each session an object is reached through. Without
-  it a scope still covers every session, as before. (#221)
+  under `/v1/sessions/{id}`, on a create (and a fork's origin, and its
+  base, which must be reachable through a session the caller may read),
+  on a ref update or pushed ref for the session it moves to, for each
+  session in a listing, and for each session an object is reached
+  through. Without it a scope still covers every session, as before.
+  (#221)
 
 - **Dependencies:** `openresponses` v0.0.17, from v0.0.13, in the root
   and the `sqlite` and `otel` modules. It never takes a member the

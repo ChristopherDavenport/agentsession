@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/cas"
 )
 
 // maxBody bounds a write's request body.
@@ -144,6 +145,21 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		// as a read.
 		h.fail(w, noSession())
 		return
+	}
+	if hdr.Base != "" && h.authorize != nil && h.reader != nil {
+		// The store takes the prefix from whichever session holds the
+		// base, so the base itself must be one the caller reaches
+		// through a session it may read; the path to it is the same
+		// from any of them, being named by hash.
+		ok, err := h.reachable(r.Context(), h.principal(r).Name, []objKey{{cas.SpaceEntries, hdr.Base}})
+		if err != nil {
+			h.fail(w, err)
+			return
+		}
+		if !ok[objKey{cas.SpaceEntries, hdr.Base}] {
+			h.fail(w, problem(CodeNoEntry, "no such entry", ""))
+			return
+		}
 	}
 	st := h.state(hdr.ID)
 	st.mu.Lock()

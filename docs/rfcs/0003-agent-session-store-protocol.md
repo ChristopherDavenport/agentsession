@@ -432,9 +432,9 @@ the reference stores, so a server MAY rate-limit resumes.
   against the session before it sends an event, as it does a fresh
   follow, and refuses it as `no_session` when the caller may not read
   the session. An event ID says where a follow was; it does not say
-  who may follow (Security considerations). A cursor the server can no longer resume from, because the log
-  was replaced, or one that is no cursor of this server's, gets a
-  `reset`, never a silent skip.
+  who may follow (Security considerations). A cursor the server can no
+  longer resume from, because the log was replaced, or one that is no
+  cursor of this server's, gets a `reset`, never a silent skip.
 - A `reset` is also what answers a resume cursor from a session that was
   deleted and created again under the same ID: the client gets the new
   session read afresh, as another session, and drops what it derived
@@ -596,8 +596,8 @@ later one, as RFC 0002's Sessions say.
     otherwise a branch that leaves the head where it is (RFC 0002,
     Append). A writer that wants the head on the root moves it by the
     compare-and-swap below once the root is appended. A line whose `id`
-    is missing or empty is incomplete, and the
-    server fills it as a store fills an entry it is handed: the time now
+    is missing or empty is incomplete, and the server fills it as a
+    store fills an entry it is handed: the time now
     for a missing or zero `ts`, the session's head for a missing or null
     `parent`, and the ID the line then hashes to. Only a complete line
     can say its parent is null.
@@ -639,9 +639,8 @@ later one, as RFC 0002's Sessions say.
   later append records. A store that keeps its head in its entries
   performs a durable move by appending a `leaf` label, which followers
   see as an `appended` with outcome `leaf_moved` rather than a `head`.
-  It is `head_moved` with the
-  current head on a mismatch, `no_entry` for a target that is not the
-  base or an own entry, and `head_target` for a `leaf` label. The
+  It is `head_moved` with the current head on a mismatch, `no_entry`
+  for a target that is not the base or an own entry, and `head_target` for a `leaf` label. The
   response says whether the move was committed, and `durable: true`
   commits it before it answers, as RFC 0002 asks (Durability and
   recovery).
@@ -902,8 +901,9 @@ Not carried, because they are a local operator's or a file's:
   over some sessions and not others checks each request, read or
   write, lease and push among them, against the session in its path; a
   create against the session it creates and, for a fork, the session
-  the fork is of; and a ref update against the session it moves the ref
-  to. A refused session is answered `no_session`, as one the server
+  it names as its origin and its `base`, which the caller reaches only
+  through a session it may read (a refused base is `no_entry`); and a
+  ref update against the session it moves the ref to. A refused session is answered `no_session`, as one the server
   does not hold, so a refusal does not confirm that the session exists.
   A listing leaves out the sessions the caller may not read, and an
   object is reachable only through a session the caller may read.
@@ -958,16 +958,16 @@ The second is the writer: create, delete, leases (acquire, renew,
 release, break), append with `Idempotency-Key`, commit and the head
 compare-and-swap (the `cas` store's `Sync`, and every store's
 `SetHead`, the library's `HeadStore`, which a file store performs by
-appending a `leaf` label), and ref updates, under the scopes `write`, `refs` and
-`admin`. Its client is the library's `Store` and `Writer`: `Create` and
+appending a `leaf` label), and ref updates, under the scopes `write`,
+`refs` and `admin`. Its client is the library's `Store` and `Writer`: `Create` and
 `Open` take a lease and renew it until `Release`, `Delete` or `Close`;
 an append is prepared on the client's session and sent as a complete
 line, and when the writer moved its session's leaf the client first
 moves the server's head there by compare-and-swap, and after a root
 the writer's session continues, its leaf reset, it moves the head onto
 the root, so the record's head is the writer's leaf. Its `SetHead` is
-the durable compare-and-swap. The library's store suite runs through it over
-the memory, JSONL and `cas` stores. Two things in it are the reference
+the durable compare-and-swap. The library's store suite runs through
+it over the memory, JSONL and `cas` stores. Two things in it are the reference
 server's and not the protocol's:
 - **Tokens.** The reference stores keep no lease state, so the server
   keeps its lease table in memory beside the store's hold, which a lease
