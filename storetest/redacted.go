@@ -526,8 +526,9 @@ func redactedOnly(t *testing.T, opts Options) {
 			t.Errorf("the store holds %s, which is not redacted", sum.Header.ID)
 			continue
 		}
-		for _, e := range readBack(t, st, sum.Header.ID).Entries() {
-			if _, ok := agentsession.RedactedOf(e); !ok && !agentsession.HeadMove(e) {
+		held := readBack(t, st, sum.Header.ID)
+		for _, e := range held.Entries() {
+			if _, ok := agentsession.RedactedOf(e); !ok && !agentsession.HeadMove(e, func(id string) bool { _, ok := held.Entry(id); return ok }) {
 				t.Errorf("the store holds %s in %s, which is not redacted", e.Base().ID, sum.Header.ID)
 			}
 		}

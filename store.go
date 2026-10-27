@@ -478,7 +478,7 @@ func (m *MemoryStore) Append(ctx context.Context, sessionID string, e Entry) (st
 		return "", err
 	}
 	if m.redactedOnly {
-		if err := CheckRedacted(s.Header(), []Entry{e}); err != nil {
+		if err := CheckRedactedIn(s, []Entry{e}); err != nil {
 			return "", err
 		}
 	}

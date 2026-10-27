@@ -754,9 +754,14 @@ blobs the redaction kept, which are the same blobs.
   carries content, however it arrives — append, import, push or fetch,
   prefix included — and carries no `redacted`. Redaction is a property
   of what was run over an entry's content, so the check does not apply
-  to a `leaf` label holding nothing beyond its target, which records a
-  head move (Head) and carries no content to have been redacted; such a
-  store accepts it, the one a head move writes included. A fork of a redacted session and an entry
+  to the record of a head move (Head): a `leaf` label whose `target`
+  names an entry of the session and which carries no other member at
+  any depth, no `parents`, `legacy_id`, `normalised` or member this
+  document does not define. It carries no content to have been
+  redacted, and such a store accepts it, the one a head move writes
+  included. A `leaf` label whose target is any other text, or that
+  carries any other member, is content, and is refused without
+  `redacted`. A fork of a redacted session and an entry
   a writer appended to one natively are refused alike, since neither
   was redacted. It is the store a publisher pushes to, and it fails
   closed: an original, or an unredacted entry, sent to it by mistake is

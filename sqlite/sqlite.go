@@ -847,7 +847,7 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 		return "", err
 	}
 	if s.redactedOnly {
-		if err := agentsession.CheckRedacted(sess.Header(), []agentsession.Entry{e}); err != nil {
+		if err := agentsession.CheckRedactedIn(sess, []agentsession.Entry{e}); err != nil {
 			return "", err
 		}
 	}

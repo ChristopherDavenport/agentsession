@@ -53,14 +53,20 @@ func CheckCreate(h Header, redactedOnly bool) error {
 	return nil
 }
 
-// HeadMove reports whether e is a leaf label and nothing more: the
-// record of a head move (RFC 0002, Head), which carries no content to
-// have been redacted. A store set to hold only redacted entries takes
-// it, since its check is of what was run over an entry's content
-// (RFC 0002, Redacted sessions); [CheckRedacted] passes it.
-func HeadMove(e Entry) bool {
+// HeadMove reports whether e is the record of a head move and nothing
+// more (RFC 0002, Head): a leaf label whose target names an entry holds
+// reports, and which carries no other member at any depth, no parents,
+// legacy_id, normalised or member of its own. It carries no content to
+// have been redacted, so a store set to hold only redacted entries
+// takes it, its check being of what was run over an entry's content
+// (RFC 0002, Redacted sessions); [CheckRedacted] passes it. A target of
+// free text is content, and so is a member beside it.
+func HeadMove(e Entry, holds func(id string) bool) bool {
 	l, ok := e.(*LabelEntry)
-	return ok && l.Label != nil && *l.Label == LeafLabel && len(l.Unknown) == 0
+	if !ok || l.Label == nil || *l.Label != LeafLabel || holds == nil || !ValidHash(l.Target) || !holds(l.Target) {
+		return false
+	}
+	return len(l.Unknown) == 0 && len(l.Parents) == 0 && l.LegacyID == "" && len(l.Normalised) == 0
 }
 
 // CheckRedacted is the refusal a store that holds only redacted entries
@@ -70,11 +76,37 @@ func HeadMove(e Entry) bool {
 // store calls it on what an import, a push or a fetch delivers, and,
 // with the session's header and the one entry, on an append.
 func CheckRedacted(h Header, entries []Entry) error {
+	return checkRedacted(h, entries, nil)
+}
+
+// CheckRedactedIn is [CheckRedacted] for entries about to join s, whose
+// own entries a head move's target may name.
+func CheckRedactedIn(s *Session, entries []Entry) error {
+	return checkRedacted(s.Header(), entries, s)
+}
+
+func checkRedacted(h Header, entries []Entry, s *Session) error {
+	ids := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if id := e.Base().ID; id != "" {
+			ids[id] = true
+		}
+	}
+	holds := func(id string) bool {
+		if ids[id] {
+			return true
+		}
+		if s == nil {
+			return false
+		}
+		_, ok := s.Entry(id)
+		return ok
+	}
 	if !h.Redacted {
 		return fmt.Errorf("%w: session %s in a store that holds only redacted entries", ErrNotRedacted, h.ID)
 	}
 	for _, e := range entries {
-		if HeadMove(e) {
+		if HeadMove(e, holds) {
 			continue
 		}
 		if _, ok := RedactedOf(e); !ok {

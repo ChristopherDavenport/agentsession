@@ -67,8 +67,10 @@ versions may break the API.
   a property of what was run over an entry's content, and RFC 0002's
   Redacted sessions now applies a redacted-only store's check to
   entries carrying content, not to a `leaf` label holding nothing beyond
-  its target. **Added: `HeadMove`**, which `CheckRedacted` passes; a
-  redacted-only store now takes such a label by `Append` too. The store
+  its target, which must name an entry of the session. **Added:
+  `HeadMove`**, which `CheckRedacted` passes, and `CheckRedactedIn`,
+  which checks an entry against the session it joins; a redacted-only
+  store now takes such a label by `Append` too. The store
   suite gains a `Head` case. **Changed:** `cas.ErrHeadMoved`, `cas.ErrHeadTarget`,
   `remote.ErrHeadMoved` and `remote.ErrHeadTarget` are the root's
   sentinels, so one `errors.Is` matches every store; `cas.SetHead`

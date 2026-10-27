@@ -650,6 +650,16 @@ func (s *Store) refuseUnredacted(h agentsession.Header, entries []agentsession.E
 	return agentsession.CheckRedacted(h, entries)
 }
 
+// refuseUnredactedIn is refuseUnredacted for entries about to join
+// sess, whose own entries a head move's target may name.
+func (s *Store) refuseUnredactedIn(sess *agentsession.Session, entries []agentsession.Entry) error {
+	only, err := s.onlyRedacted()
+	if err != nil || !only {
+		return err
+	}
+	return agentsession.CheckRedactedIn(sess, entries)
+}
+
 // markLayout writes the layout file of a store that has none and no
 // journal left to migrate, durably, with the store's own directories:
 // the open that made them did not sync them.
@@ -2831,7 +2841,7 @@ func (s *Store) startPack(due bool) {
 func (s *Store) writeHeld(ctx context.Context, h *handle, sessionID string, e agentsession.Entry) (agentsession.Result, error) {
 	// A store holding only redacted entries takes no other, read before
 	// anything is written and again under the sweep's lock below.
-	if err := s.refuseUnredacted(h.session.Header(), []agentsession.Entry{e}); err != nil {
+	if err := s.refuseUnredactedIn(h.session, []agentsession.Entry{e}); err != nil {
 		return agentsession.Result{}, err
 	}
 	if h.mark != MarkRecord {
@@ -2865,7 +2875,7 @@ func (s *Store) writeHeld(ctx context.Context, h *handle, sessionID string, e ag
 	if err != nil {
 		return agentsession.Result{}, err
 	}
-	if err := s.refuseUnredacted(h.session.Header(), []agentsession.Entry{e}); err != nil {
+	if err := s.refuseUnredactedIn(h.session, []agentsession.Entry{e}); err != nil {
 		guard.release()
 		return agentsession.Result{}, err
 	}

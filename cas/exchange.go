@@ -604,7 +604,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 		return Exchange{}, err
 	}
 	defer guard.release()
-	if err := s.refuseUnredacted(b.header, append(append([]agentsession.Entry(nil), b.prefix...), fresh...)); err != nil {
+	if err := s.refuseUnredactedIn(h.session, append(append([]agentsession.Entry(nil), b.prefix...), fresh...)); err != nil {
 		return Exchange{}, err
 	}
 	pend := newPendSet()
