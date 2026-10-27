@@ -12,7 +12,9 @@ versions may break the API.
   lines, which a reader resolves to the newest line under the `leaf`
   label in force or the last line, so a branch, a root among them, read
   back as the head. After such an append they now append a `leaf` label
-  for the head, synced when the entry is. **Added:
+  for the head, in the entry's write and sync (jsonl, the label ahead of
+  the entry, so a torn tail loses the entry and not the label) or its
+  transaction (sqlite). **Added:
   `Session.LeafMarkNeeded`**, the label a store of lines appends, or nil.
   A follower of such a store sees the label after the branch.
   (#201, #256)

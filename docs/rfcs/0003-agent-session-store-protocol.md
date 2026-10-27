@@ -898,24 +898,28 @@ Not carried, because they are a local operator's or a file's:
   response, is readable by anyone with read scope. A deployment MUST
   authenticate and authorize every request, over TLS, and SHOULD
   separate read, write (lease), refs, exchange and admin scopes.
-- A server MUST authorize every request against the session it names,
-  a follow resumed from an event ID or `after` included: an event ID,
-  like a hash, is not a capability. A deployment that grants a scope
-  over some sessions and not others checks each request, read or
-  write, lease and push among them, against the session in its path; a
-  create against the session it creates and, for a fork, the session
-  it names as its origin and its `base`, which the caller reaches only
-  through a session it may read (a refused base is `no_entry`); and a
-  ref update or a pushed ref against the session it moves the ref to,
-  the session the ref names now and the one its `expected` names, a
-  ref the caller may not move being answered `no_ref` and a refusal
-  never naming a target the caller may not read. A ref reaches the
-  session it names, so reading one is authorized against that session
-  too: a resolve, a log or a follow of a ref whose target the caller may
-  not read is answered `no_ref`, as for a ref the server does not hold;
-  a listing leaves such refs out, a log leaves out a record naming such
-  a session, and a follow that sees the ref move onto one sends a
-  `target` event with a null target, as for a move to none. A refused session is answered `no_session`, as one the server
+- A server MUST authorize every request against the session it names, a
+  follow resumed from an event ID or `after` included: an event ID, like
+  a hash, is not a capability. A deployment that grants a scope over
+  some sessions and not others checks each request, read or write, lease
+  and push among them, against the session in its path; a create against
+  the session it creates and, for a fork, the session it names as its
+  origin and its `base`, which the caller reaches only through a session
+  it may read (a refused base is `no_entry`); and a ref update or a
+  pushed ref against the session it moves the ref to, the session the
+  ref names now and the one its `expected` names, a ref the caller may
+  not move being answered `no_ref` and a refusal never naming a target
+  the caller may not read. A ref reaches the session it names, so
+  reading one is authorized against that session too: a resolve, a log
+  or a follow of a ref whose target the caller may not read is answered
+  `no_ref`, as for a ref the server does not hold; a listing leaves such
+  refs out, a log leaves out a record naming such a session, and a
+  follow that sees the ref move onto one sends a `target` event with a
+  null target, as for a move to none. What this protects is a ref's
+  target, not its name: ref names are visible to any principal with refs
+  scope, since an update with `expected` null answered `no_ref` where
+  the same update would create a free name tells the caller the name is
+  held. A refused session is answered `no_session`, as one the server
   does not hold, so a refusal does not confirm that the session exists.
   A listing leaves out the sessions the caller may not read, and an
   object is reachable only through a session the caller may read.
