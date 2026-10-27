@@ -81,8 +81,9 @@ versions may break the API.
   `remote.WithAuthorize`** and its `Authorizer`, asked on every route
   under `/v1/sessions/{id}`, on a create (and a fork's origin, and its
   base, which must be reachable through a session the caller may read),
-  on a ref update or pushed ref for the session it moves to, for each
-  session in a listing, and for each session an object is reached
+  on a ref update or pushed ref for the session it moves to, on a ref's
+  resolve, log, follow and listing for the session its target names (a
+  refused ref is `no_ref`), for each session in a listing, and for each session an object is reached
   through. Without it a scope still covers every session, as before.
   (#221)
 

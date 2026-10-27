@@ -903,7 +903,13 @@ Not carried, because they are a local operator's or a file's:
   create against the session it creates and, for a fork, the session
   it names as its origin and its `base`, which the caller reaches only
   through a session it may read (a refused base is `no_entry`); and a
-  ref update against the session it moves the ref to. A refused session is answered `no_session`, as one the server
+  ref update against the session it moves the ref to. A ref reaches the
+  session it names, so reading one is authorized against that session
+  too: a resolve, a log or a follow of a ref whose target the caller may
+  not read is answered `no_ref`, as for a ref the server does not hold;
+  a listing leaves such refs out, a log leaves out a record naming such
+  a session, and a follow that sees the ref move onto one sends a
+  `target` event with a null target, as for a move to none. A refused session is answered `no_session`, as one the server
   does not hold, so a refusal does not confirm that the session exists.
   A listing leaves out the sessions the caller may not read, and an
   object is reachable only through a session the caller may read.

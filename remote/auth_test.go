@@ -1,6 +1,7 @@
 package remote_test
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"net/http"
@@ -190,5 +191,82 @@ func TestAuthorizeEveryRequest(t *testing.T) {
 	// Alice still reads her own, fresh and resumed.
 	if evs := rawFollow(t, sess+"/follow", map[string]string{"Authorization": "Bearer alice", "Last-Event-ID": eventID}, 0); evs != nil {
 		t.Errorf("alice's resume: %+v", evs)
+	}
+}
+
+// A ref reaches the session it names, so reading it is authorized
+// against that session as every other read is: a ref to a session the
+// caller may not read is no ref of theirs, in a resolve, a follow, a
+// log and a listing, and a ref moved onto such a session reads, to a
+// follower, as moved to none.
+func TestAuthorizeRefReads(t *testing.T) {
+	ctx := context.Background()
+	st := agentsession.NewMemoryStore()
+	mine, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateRef(ctx, "alice/talk", agentsession.RefTarget{}, agentsession.RefTarget{Session: mine.ID()}, "created"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateRef(ctx, "bob/talk", agentsession.RefTarget{}, agentsession.RefTarget{Session: theirs.ID()}, "created"); err != nil {
+		t.Fatal(err)
+	}
+	read := []remote.Scope{remote.ScopeRead}
+	url := server(t, st,
+		remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{
+			"alice": {Name: "alice", Scopes: read},
+			"bob":   {Name: "bob", Scopes: read},
+		})),
+		remote.WithAuthorize(owners(map[string]string{mine.ID(): "alice", theirs.ID(): "bob"})),
+		remote.WithRefPoll(10*time.Millisecond),
+	)
+	bob := map[string]string{"Authorization": "Bearer bob"}
+	for _, path := range []string{"/v1/refs/alice/talk", "/v1/refs/alice/talk?view=log", "/v1/refs/alice/talk?view=follow"} {
+		if p := problemOf(t, get(t, url+path, bob)); p.Code != remote.CodeNoRef {
+			t.Errorf("bob reads %s: %s, want no_ref", path, p.Code)
+		}
+	}
+	var names []string
+	for ref, err := range dial(t, url, withToken("bob", nil)).ListRefs(ctx, "") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, ref.Name)
+	}
+	if len(names) != 1 || names[0] != "bob/talk" {
+		t.Errorf("bob lists refs %v, want only bob/talk", names)
+	}
+	// Bob follows his ref; alice's session is not his to see, so a move
+	// of it there reads as a move to none.
+	fctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(fctx, http.MethodGet, url+"/v1/refs/bob/talk?view=follow", nil)
+	req.Header.Set("Authorization", "Bearer bob")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	sc := bufio.NewScanner(resp.Body)
+	var datas []string
+	moved := false
+	for sc.Scan() && len(datas) < 2 {
+		if d, ok := strings.CutPrefix(sc.Text(), "data: "); ok {
+			datas = append(datas, d)
+			if !moved {
+				moved = true
+				if err := st.UpdateRef(ctx, "bob/talk", agentsession.RefTarget{Session: theirs.ID()}, agentsession.RefTarget{Session: mine.ID()}, "moved"); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	if len(datas) != 2 || !strings.Contains(datas[0], theirs.ID()) || strings.Contains(datas[1], mine.ID()) || !strings.Contains(datas[1], `"target":null`) {
+		t.Errorf("bob's follow: %q, want his session and then no target", datas)
 	}
 }

@@ -72,7 +72,9 @@ func PrincipalFrom(ctx context.Context) (Principal, bool) {
 // session it names as its origin, and its base, which must be reachable
 // through a session the principal may read (a base that is not is
 // `no_entry`); a ref update and a pushed ref, for the session the ref
-// is moved to. A listing leaves out the sessions the principal may not
+// is moved to; and a ref's resolve, log and follow, for the session its
+// target names, a ref the principal may not read being answered
+// `no_ref` and a follow's move onto one reading as a move to none. A listing leaves out the sessions the principal may not
 // read, and an object is reachable only through a session it may read.
 // An event ID, like a hash, is not a capability.
 // The package decides nothing here: the program says whose sessions

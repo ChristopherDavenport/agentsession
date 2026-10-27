@@ -1024,10 +1024,32 @@ func (h *Handler) listRefs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	streamNDJSON(h, w, h.refs.ListRefs(r.Context(), prefix), func(ref agentsession.Ref) any {
+	refs := func(yield func(agentsession.Ref, error) bool) {
+		for ref, err := range h.refs.ListRefs(r.Context(), prefix) {
+			if err == nil && !h.mayRead(r.Context(), ref.Target) {
+				continue
+			}
+			if !yield(ref, err) {
+				return
+			}
+		}
+	}
+	streamNDJSON(h, w, refs, func(ref agentsession.Ref) any {
 		return refLine{Name: ref.Name, Target: targetOut(ref.Target)}
 	})
 }
+
+// mayRead reports whether the principal on ctx may read the session a
+// ref target names. A ref reaches its session, so a ref to one the
+// principal may not read is, to it, no ref (RFC 0003, Security
+// considerations). A target that names none is anyone's.
+func (h *Handler) mayRead(ctx context.Context, t agentsession.RefTarget) bool {
+	return t.Session == "" || h.may(ctx, ScopeRead, t.Session)
+}
+
+// noRef is the refusal of a ref whose session the principal may not
+// read, the same as for a ref the store does not hold.
+func noRef() *Problem { return problem(CodeNoRef, "no such ref", "") }
 
 func (h *Handler) ref(w http.ResponseWriter, r *http.Request) {
 	if h.refs == nil {
@@ -1039,7 +1061,17 @@ func (h *Handler) ref(w http.ResponseWriter, r *http.Request) {
 		h.writeProblem(w, problem(CodeRefName, "invalid ref name", err.Error()))
 		return
 	}
-	switch r.URL.Query().Get("view") {
+	view := r.URL.Query().Get("view")
+	if view != "follow" {
+		// The ref's current target decides whether the caller may read
+		// it; a follow decides at each resolve.
+		t, err := h.refs.ResolveRef(r.Context(), name)
+		if (err == nil || !t.IsZero()) && !h.mayRead(r.Context(), t) {
+			h.writeProblem(w, noRef())
+			return
+		}
+	}
+	switch view {
 	case "":
 		t, err := h.refs.ResolveRef(r.Context(), name)
 		switch {
@@ -1053,7 +1085,19 @@ func (h *Handler) ref(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, err)
 		}
 	case "log":
-		streamNDJSON(h, w, h.refs.RefLog(r.Context(), name), func(u agentsession.RefUpdate) any {
+		// A record that names a session the caller may not read is left
+		// out, as that session is.
+		log := func(yield func(agentsession.RefUpdate, error) bool) {
+			for u, err := range h.refs.RefLog(r.Context(), name) {
+				if err == nil && (!h.mayRead(r.Context(), u.Old) || !h.mayRead(r.Context(), u.New)) {
+					continue
+				}
+				if !yield(u, err) {
+					return
+				}
+			}
+		}
+		streamNDJSON(h, w, log, func(u agentsession.RefUpdate) any {
 			return refUpdateLine{Name: u.Name, Old: targetOut(u.Old), New: targetOut(u.New), Time: u.Time, Reason: u.Reason}
 		})
 	case "follow":
