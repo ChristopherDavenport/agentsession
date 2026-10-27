@@ -184,8 +184,10 @@ const (
 var ErrMirror = errors.New("cas: session is a mirror here; only the record may advance it")
 
 // ErrHeadMoved is returned by SetHead when the head is not the expected
-// entry, which is how a writer learns that another moved it.
-var ErrHeadMoved = errors.New("cas: head is not the expected entry")
+// entry, which is how a writer learns that another moved it. It is
+// [agentsession.ErrHeadMoved], which every [agentsession.HeadStore]
+// returns.
+var ErrHeadMoved = agentsession.ErrHeadMoved
 
 // ErrBadName is returned for a session ID or a hash that cannot be used
 // as a path: a session ID is letters, digits, '.', '_' and '-' and is
@@ -3063,7 +3065,7 @@ func (s *Store) mayRestOn(sess *agentsession.Session, id string) error {
 		return fmt.Errorf("%w: %s is on the prefix above the base", agentsession.ErrNoEntry, id)
 	}
 	if l, ok := e.(*agentsession.LabelEntry); ok && l.Label != nil && *l.Label == agentsession.LeafLabel {
-		return errors.New("cas: the head never rests on a leaf label")
+		return fmt.Errorf("%w: %s", ErrHeadTarget, id)
 	}
 	return nil
 }
@@ -3663,8 +3665,9 @@ func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header,
 }
 
 var (
-	_ agentsession.Writer   = (*Store)(nil)
-	_ agentsession.Store    = (*Store)(nil)
-	_ agentsession.Reader   = (*Store)(nil)
-	_ agentsession.Importer = (*Store)(nil)
+	_ agentsession.Writer    = (*Store)(nil)
+	_ agentsession.Store     = (*Store)(nil)
+	_ agentsession.Reader    = (*Store)(nil)
+	_ agentsession.Importer  = (*Store)(nil)
+	_ agentsession.HeadStore = (*Store)(nil)
 )

@@ -240,7 +240,10 @@ func (s *Session) ResetLeaf() {
 // Append adds e to the tree. Its ID is the hash of its envelope over the
 // hash of its body, as the format defines, and is computed here; an ID
 // the caller set must match or the append is refused. An empty Parent
-// is set to the current leaf, so an explicit Parent branches in place;
+// is set to the current leaf, so an explicit Parent branches in place,
+// unless the caller set the ID: an entry whose ID is set and whose
+// Parent is empty is a root, which continues a session with no leaf
+// and is otherwise a branch, as RFC 0002's Append has it;
 // a zero Timestamp is set to now, and any timestamp is taken to UTC,
 // the one spelling the format admits. In a session with a base, the
 // parent must be the base or an own entry.
@@ -590,7 +593,9 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 			return Result{}, fmt.Errorf("%w: %s", ErrReservedMember, k)
 		}
 	}
-	if b.Parent == "" {
+	if b.Parent == "" && b.ID == "" {
+		// An entry the caller left incomplete hangs from the leaf; one
+		// whose ID is set says its parent is null, so it is a root.
 		b.Parent = s.leaf
 	}
 	if err := s.checkParentRule(b.Parent); err != nil {
@@ -983,6 +988,63 @@ func (s *Session) MarkLeaf() (*LabelEntry, error) {
 		return nil, errors.New("agentsession: no leaf to mark")
 	}
 	return NewLabelEntry(leaf, LeafLabel), nil
+}
+
+// HeadLabel is the compare of a head compare-and-swap ([HeadStore]) for
+// a store that moves a session's head by appending a leaf label: it
+// checks that the leaf is expected and that the head may rest on to,
+// and returns the label whose append moves the leaf there, hung from to
+// as [Session.MarkLeaf]'s is. A leaf that is not expected is
+// [ErrHeadMoved]; a target the session does not hold, or holds on the
+// prefix above its base, is [ErrNoEntry]; and a leaf label is
+// [ErrHeadTarget]. The store appends the label under the same lock it
+// read the leaf under, so nothing moves the leaf between the two.
+func (s *Session) HeadLabel(expected, to string) (*LabelEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.headLabel(expected, to)
+}
+
+// headLabel is HeadLabel with s.mu held.
+func (s *Session) headLabel(expected, to string) (*LabelEntry, error) {
+	if s.leaf != expected {
+		leaf := s.leaf
+		if leaf == "" {
+			leaf = "none"
+		}
+		return nil, fmt.Errorf("%w: head is %s", ErrHeadMoved, leaf)
+	}
+	e, ok := s.byID[to]
+	if !ok || (s.header.Base != "" && to != s.header.Base && s.prefix[to]) {
+		return nil, fmt.Errorf("%w: the head may rest on the base or an own entry, not %s", ErrNoEntry, to)
+	}
+	if l, ok := e.(*LabelEntry); ok && l.Label != nil && *l.Label == LeafLabel {
+		return nil, fmt.Errorf("%w: %s", ErrHeadTarget, to)
+	}
+	label := NewLabelEntry(to, LeafLabel)
+	label.Parent = to
+	return label, nil
+}
+
+// commitHead is the whole compare-and-swap on a session in memory: the
+// compare and the leaf label's append under one hold of s.mu, so no
+// append comes between them.
+func (s *Session) commitHead(expected, to string) (*LabelEntry, error) {
+	if err := s.checkNew(nil); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	label, err := s.headLabel(expected, to)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.prepare(label); err != nil {
+		return nil, err
+	}
+	s.add(label)
+	s.moveLeafFor(label)
+	return label, nil
 }
 
 // durableLeafAt returns the entry the last leaf label in force names

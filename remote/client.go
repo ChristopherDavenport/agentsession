@@ -57,11 +57,12 @@ type resumable struct {
 }
 
 var (
-	_ agentsession.Store    = (*Client)(nil)
-	_ agentsession.Writer   = (*Client)(nil)
-	_ agentsession.Reader   = (*Client)(nil)
-	_ agentsession.Follower = (*Client)(nil)
-	_ agentsession.RefStore = (*Client)(nil)
+	_ agentsession.Store     = (*Client)(nil)
+	_ agentsession.Writer    = (*Client)(nil)
+	_ agentsession.Reader    = (*Client)(nil)
+	_ agentsession.Follower  = (*Client)(nil)
+	_ agentsession.RefStore  = (*Client)(nil)
+	_ agentsession.HeadStore = (*Client)(nil)
 )
 
 // ClientOption configures [Dial].

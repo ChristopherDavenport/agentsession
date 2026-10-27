@@ -592,9 +592,11 @@ later one, as RFC 0002's Sessions say.
     first line is refused is answered with that line's problem, as a
     single append's refusal, with nothing applied.
   - A complete line is taken as written, its parent included: a null
-    parent is a root, and the server puts the session's head to none
-    before appending it, as a writer appending a root has reset its
-    leaf. A line whose `id` is missing or empty is incomplete, and the
+    parent is a root, which continues a session with no head and is
+    otherwise a branch that leaves the head where it is (RFC 0002,
+    Append). A writer that wants the head on the root moves it by the
+    compare-and-swap below once the root is appended. A line whose `id`
+    is missing or empty is incomplete, and the
     server fills it as a store fills an entry it is handed: the time now
     for a missing or zero `ts`, the session's head for a missing or null
     `parent`, and the ID the line then hashes to. Only a complete line
@@ -631,9 +633,13 @@ later one, as RFC 0002's Sessions say.
   the entries did not land, and followers get a `reset`.
 - **Head** is the compare-and-swap: `{"expected": e|null, "to": t,
   "durable": bool}`, `null` meaning no head; `to` names an entry, and a
-  head is not moved to none. A store with no durable head of its own
-  moves its live head, which a later append records, and refuses
-  `durable: true` as `unsupported`. It is `head_moved` with the
+  head is not moved to none. Every store offers it, durable on request
+  (RFC 0002, Head), so `durable: true` is never `unsupported`; a move
+  with `durable: false` MAY be made on the live head alone, which a
+  later append records. A store that keeps its head in its entries
+  performs a durable move by appending a `leaf` label, which followers
+  see as an `appended` with outcome `leaf_moved` rather than a `head`.
+  It is `head_moved` with the
   current head on a mismatch, `no_entry` for a target that is not the
   base or an own entry, and `head_target` for a `leaf` label. The
   response says whether the move was committed, and `durable: true`
@@ -950,14 +956,17 @@ allows.
 
 The second is the writer: create, delete, leases (acquire, renew,
 release, break), append with `Idempotency-Key`, commit and the head
-compare-and-swap where the store has them (the `cas` store's `Sync` and
-`SetHead`), and ref updates, under the scopes `write`, `refs` and
+compare-and-swap (the `cas` store's `Sync`, and every store's
+`SetHead`, the library's `HeadStore`, which a file store performs by
+appending a `leaf` label), and ref updates, under the scopes `write`, `refs` and
 `admin`. Its client is the library's `Store` and `Writer`: `Create` and
 `Open` take a lease and renew it until `Release`, `Delete` or `Close`;
 an append is prepared on the client's session and sent as a complete
 line, and when the writer moved its session's leaf the client first
-moves the server's head there by compare-and-swap, so the record's head
-is the writer's leaf. The library's store suite runs through it over
+moves the server's head there by compare-and-swap, and after a root
+the writer's session continues, its leaf reset, it moves the head onto
+the root, so the record's head is the writer's leaf. Its `SetHead` is
+the durable compare-and-swap. The library's store suite runs through it over
 the memory, JSONL and `cas` stores. Two things in it are the reference
 server's and not the protocol's:
 - **Tokens.** The reference stores keep no lease state, so the server

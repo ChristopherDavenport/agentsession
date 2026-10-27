@@ -273,9 +273,11 @@ Append is the one write that adds to a session, and it is atomic.
   for the `leaf` label the head section describes. The append succeeded
   and created a branch. The store MUST tell the appender which
   happened.
-- An entry with `parent` null continues when the session has no head and
-  is otherwise a branch. A session with a base MUST refuse it, since
-  every own entry hangs from the base.
+- An entry with `parent` null is a root. It continues when the session
+  has no head; otherwise it is a branch, and the head does not move. A
+  writer that wants the head on the new root moves it by the
+  compare-and-swap (Head) once the root is appended. A session with a
+  base MUST refuse it, since every own entry hangs from the base.
 - A store MAY hold a session for one writer at a time and refuse or
   wait for another, provided an append it accepted is never re-parented
   and the log and head rules hold. The rules above are what let a store
@@ -303,7 +305,16 @@ The head is a session's resume point, and it is a ref.
   an expected entry to a given entry, or fail if the head is not the
   expected entry. "No head" is a valid expected value. The target MUST
   be the base or one of the session's own entries other than a `leaf`
-  label, since the head never rests on one.
+  label, since the head never rests on one. Every store offers it, and
+  offers it durable on request (Durability and recovery).
+- A store that keeps sessions as RFC 0001 files, or keeps a session's
+  head only in its entries, performs the move by appending a `leaf`
+  label for the target under the session's lock, after the compare and
+  before anything else is appended; the move is durable when the label
+  is. A store set to hold only redacted entries cannot append that
+  label, which carries no `redacted`, and refuses the move as it
+  refuses any such entry (Redacted sessions); its head moves only by
+  the redacted `leaf` labels its writer appends.
 - Resume reads the head. There is no inference from log order and no
   marker to find. The head is what RFC 0001's leaf label was standing in
   for. The label exists only because an append-only file with a

@@ -685,6 +685,12 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	// Followers look again however the append ends: a rewrite for the
 	// format may have landed before a write that failed.
 	defer s.hub.Notify(sessionID)
+	return s.appendLocked(h, sessionID, e, false)
+}
+
+// appendLocked appends e to the open session h, and syncs it when sync
+// is set or the policy asks. The caller holds s.mu.
+func (s *Store) appendLocked(h *handle, sessionID string, e agentsession.Entry, sync bool) (string, error) {
 	// The entry is prepared first, so that one the session refuses or
 	// already holds leaves the file as it was: a second append of an
 	// entry the session holds is a no-op, as RFC 0002 has it, and writing
@@ -708,12 +714,45 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	if err := writeLine(h.file, e); err != nil {
 		return "", fmt.Errorf("jsonl: write entry %s: %w", id, err)
 	}
-	if s.shouldSync(h.session.Header(), e) {
+	if sync || s.shouldSync(h.session.Header(), e) {
 		if err := syncEntry(h.file); err != nil {
 			return "", fmt.Errorf("jsonl: sync entry %s: %w", id, err)
 		}
 	}
 	return id, nil
+}
+
+// SetHead implements [agentsession.HeadStore]. The file has no head of
+// its own, only the leaf its lines resolve to, so the move is a leaf
+// label for to, appended under the session's lock after the compare
+// ([agentsession.Session.HeadLabel]) and synced before SetHead returns
+// whatever the sync policy, as RFC 0002 asks of a durable head move.
+// The session Open returned sees it as that label's append. A store
+// set with [WithRedactedOnly] refuses the move with
+// [agentsession.ErrNotRedacted], since the label carries no redacted.
+func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.readOnly {
+		return agentsession.ErrReadOnly
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.openLocked(sessionID)
+	if err != nil {
+		return err
+	}
+	if s.redactedOnly {
+		return fmt.Errorf("%w: a head move in %s is a leaf label, which carries no redacted", agentsession.ErrNotRedacted, sessionID)
+	}
+	label, err := h.session.HeadLabel(expected, to)
+	if err != nil {
+		return err
+	}
+	defer s.hub.Notify(sessionID)
+	_, err = s.appendLocked(h, sessionID, label, true)
+	return err
 }
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.
@@ -1071,9 +1110,10 @@ func writeLine(w io.Writer, v any) error {
 }
 
 var (
-	_ agentsession.Store    = (*Store)(nil)
-	_ agentsession.Reader   = (*Store)(nil)
-	_ agentsession.Importer = (*Store)(nil)
+	_ agentsession.Store     = (*Store)(nil)
+	_ agentsession.Reader    = (*Store)(nil)
+	_ agentsession.Importer  = (*Store)(nil)
+	_ agentsession.HeadStore = (*Store)(nil)
 )
 
 // syncEntry fsyncs a session's file after an append the policy makes

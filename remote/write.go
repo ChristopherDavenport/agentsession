@@ -24,12 +24,6 @@ type syncer interface {
 	Sync(ctx context.Context) error
 }
 
-// headSetter is a store that keeps a durable head and moves it by
-// compare-and-swap: the cas store's SetHead.
-type headSetter interface {
-	SetHead(ctx context.Context, sessionID, expected, to string) error
-}
-
 // leaseRequest is an acquire's body.
 type leaseRequest struct {
 	Holder string `json:"holder"`
@@ -411,8 +405,9 @@ func (h *Handler) appendEntries(w http.ResponseWriter, r *http.Request) {
 
 // appendLine applies one entry line under st's lease. A complete line,
 // its ID set, is taken as written, parent included: a null parent is a
-// root, and the session's head is put to none first, as a writer that
-// appends a root has reset its leaf.
+// root, which continues a session with no head and is otherwise a
+// branch that leaves the head where it is (RFC 0002, Append); a writer
+// that wants the head on it moves it by the compare-and-swap.
 func (h *Handler) appendLine(ctx context.Context, st *held, line []byte) (appended, error) {
 	line, err := fillLine(line, st.sess.Leaf())
 	if err != nil {
@@ -426,16 +421,8 @@ func (h *Handler) appendLine(ctx context.Context, st *held, line []byte) (append
 		p.Reason = "parse"
 		return appended{}, p
 	}
-	b := e.Base()
-	before := st.sess.Leaf()
-	if b.ID != "" && b.Parent == "" && before != "" {
-		st.sess.ResetLeaf()
-	}
 	res, err := h.write(ctx, st, e)
 	if err != nil {
-		if before != "" && st.sess.Leaf() != before {
-			_ = st.sess.Branch(before)
-		}
 		return appended{}, err
 	}
 	out := appended{ID: res.ID, Outcome: outcomes[res.Outcome], Durable: res.Durable, Unresolved: res.Unresolved}
@@ -554,11 +541,17 @@ func (h *Handler) setHead(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, problem(CodeHeadTarget, "a head move names its target", ""))
 		return
 	}
-	hs, durable := h.store.(headSetter)
-	if req.Durable && !durable {
-		h.fail(w, problem(CodeUnsupported, "the store has no commit of its own", ""))
+	// A durable move is the store's compare-and-swap, which every store
+	// of this module offers (RFC 0002, Head); one from elsewhere without
+	// it is refused one. Any other move is made in the held session, the
+	// live head, which the next append records: a store that keeps its
+	// head in its entries would otherwise write a leaf label for each.
+	hs, ok := h.store.(agentsession.HeadStore)
+	if req.Durable && !ok {
+		h.fail(w, problem(CodeUnsupported, "the store has no head compare-and-swap", ""))
 		return
 	}
+	durable := req.Durable
 	st := h.state(r.PathValue("id"))
 	st.mu.Lock()
 	defer st.mu.Unlock()

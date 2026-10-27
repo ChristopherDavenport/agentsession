@@ -844,6 +844,12 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 		}
 	}
 	defer s.hub.Notify(sessionID)
+	return s.appendLocked(ctx, sess, sessionID, e)
+}
+
+// appendLocked appends e to sess, the store's open session, in one
+// transaction. The caller holds s.mu.
+func (s *Store) appendLocked(ctx context.Context, sess *agentsession.Session, sessionID string, e agentsession.Entry) (string, error) {
 	// Prepare holds the entry to the rules a writer is held to, which
 	// Commit, a read path's, does not apply.
 	if _, err := sess.Prepare(e); err != nil {
@@ -918,6 +924,39 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 		delete(s.stale, sessionID)
 	}
 	return id, nil
+}
+
+// SetHead implements [agentsession.HeadStore]. The store keeps a
+// session's head only in its entries, so the move is a leaf label for
+// to, appended under the store's lock after the compare
+// ([agentsession.Session.HeadLabel]) in a transaction of its own, which
+// is committed when SetHead returns. The session Open returned sees it
+// as that label's append. A store set with [WithRedactedOnly] refuses
+// the move with [agentsession.ErrNotRedacted], since the label carries
+// no redacted.
+func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.readOnly {
+		return agentsession.ErrReadOnly
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.openLocked(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if s.redactedOnly {
+		return fmt.Errorf("%w: a head move in %s is a leaf label, which carries no redacted", agentsession.ErrNotRedacted, sessionID)
+	}
+	label, err := sess.HeadLabel(expected, to)
+	if err != nil {
+		return err
+	}
+	defer s.hub.Notify(sessionID)
+	_, err = s.appendLocked(ctx, sess, sessionID, label)
+	return err
 }
 
 // isSeqConflict reports whether an insert failed on the entries
@@ -1155,8 +1194,9 @@ func isConstraint(err error) bool {
 }
 
 var (
-	_ agentsession.Store    = (*Store)(nil)
-	_ agentsession.Reader   = (*Store)(nil)
-	_ agentsession.RefStore = (*Store)(nil)
-	_ agentsession.Importer = (*Store)(nil)
+	_ agentsession.Store     = (*Store)(nil)
+	_ agentsession.Reader    = (*Store)(nil)
+	_ agentsession.RefStore  = (*Store)(nil)
+	_ agentsession.Importer  = (*Store)(nil)
+	_ agentsession.HeadStore = (*Store)(nil)
 )

@@ -7,6 +7,38 @@ versions may break the API.
 
 ## Unreleased
 
+- **Every store offers the head compare-and-swap, durable on request
+  (RFC 0002, Head; RFC 0003, Writing).** RFC 0002 asked it of every
+  store while RFC 0003 let a store without a durable head refuse
+  `durable: true` as `unsupported`; that carve-out is gone. A store that
+  keeps sessions as RFC 0001 files, or its head only in its entries,
+  moves the head by appending a `leaf` label for the target under its
+  lock after the compare. **Added: `HeadStore`**, with `ErrHeadMoved`
+  and `ErrHeadTarget`, implemented by `MemoryStore`, `jsonl.Store`,
+  `sqlite.Store`, `cas.Store` and `remote.Client`, and
+  `Session.HeadLabel`, the compare and the label a file store appends.
+  A store set to hold only redacted entries refuses the move with
+  `ErrNotRedacted` unless it keeps a head of its own, as `cas` does,
+  since the label carries no `redacted`. The store suite gains a `Head`
+  case. **Changed:** `cas.ErrHeadMoved`, `cas.ErrHeadTarget`,
+  `remote.ErrHeadMoved` and `remote.ErrHeadTarget` are the root's
+  sentinels, so one `errors.Is` matches every store; `cas.SetHead`
+  refuses a leaf label with `ErrHeadTarget`. A remote `PUT …/head`
+  without `durable` moves the live head only, as RFC 0003 allows, over
+  every store; over `cas` it was durable whatever was asked, and the
+  client's own head moves before an append ask for none. (#201, #202)
+- **A root appended to a session with a head is a branch, and the head
+  does not move (RFC 0002, Append; RFC 0003, Writing).** RFC 0003 had
+  the server put the head to none first, so the root continued, against
+  RFC 0002. A writer that wants the head on the root moves it by the
+  compare-and-swap. **Changed:** an entry whose ID the caller set and
+  whose parent is empty is a root: `Session.Append`, `Prepare` and every
+  store no longer fill its parent from the leaf, which refused it as
+  `ErrBadID`; an entry without an ID is still filled from the leaf. The
+  remote server no longer resets its head before a root, and the remote
+  client, whose writer continued a root by resetting its leaf, moves the
+  server's head onto it after the append. (#256)
+
 - **Security: every request to the store protocol is authorized against
   the session it names, a resumed follow included.** RFC 0003 says so
   under Following and Security considerations: an event ID, like a

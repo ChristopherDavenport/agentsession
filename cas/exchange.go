@@ -17,8 +17,9 @@ import (
 // for the session: RFC 0002 lets only the record initiate a push.
 var ErrNotRecord = errors.New("cas: only the record may push a session")
 
-// ErrHeadTarget is a head an exchange would rest on a leaf label.
-var ErrHeadTarget = errors.New("cas: the head never rests on a leaf label")
+// ErrHeadTarget is a head an exchange or SetHead would rest on a leaf
+// label. It is [agentsession.ErrHeadTarget].
+var ErrHeadTarget = agentsession.ErrHeadTarget
 
 // ErrHeaderDiffers is returned when an exchange names a session the
 // receiver holds under a different header: two sessions alike only in
