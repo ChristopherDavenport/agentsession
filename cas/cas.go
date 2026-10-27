@@ -3670,4 +3670,5 @@ var (
 	_ agentsession.Reader    = (*Store)(nil)
 	_ agentsession.Importer  = (*Store)(nil)
 	_ agentsession.HeadStore = (*Store)(nil)
+	_ agentsession.Releaser  = (*Store)(nil)
 )

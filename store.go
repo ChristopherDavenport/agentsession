@@ -107,6 +107,17 @@ type Writer interface {
 	Write(ctx context.Context, sessionID string, e Entry) (Result, error)
 }
 
+// Releaser is implemented by a store that holds the sessions it opens,
+// as [Store.Open] describes: Release lets the hold on the session go,
+// for every caller that opened it, and forgets the session, so the next
+// Open reads it again. An error says the hold could not be let go; the
+// session is forgotten all the same. Releasing a session the store does
+// not hold is not an error. A program that serves a store, as RFC 0003's
+// server does, releases a session through it when a lease ends.
+type Releaser interface {
+	Release(id string) error
+}
+
 // HeadStore is implemented by a store that moves a session's head by
 // compare-and-swap, which RFC 0002 (Head) asks of every store and every
 // store this module offers implements. SetHead moves the head of the

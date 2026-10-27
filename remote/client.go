@@ -63,6 +63,7 @@ var (
 	_ agentsession.Follower  = (*Client)(nil)
 	_ agentsession.RefStore  = (*Client)(nil)
 	_ agentsession.HeadStore = (*Client)(nil)
+	_ agentsession.Releaser  = (*Client)(nil)
 )
 
 // ClientOption configures [Dial].

@@ -416,17 +416,23 @@ func infoName(line string) string {
 	return probe.Name
 }
 
-// Close runs PRAGMA optimize and closes both pools.
+// Close lets every hold go, runs PRAGMA optimize and closes both pools.
+// The first error is returned.
 func (s *Store) Close() error {
 	s.mu.Lock()
+	var err error
 	for id := range s.open {
-		s.releaseLocked(id)
+		if rerr := s.releaseLocked(id); err == nil {
+			err = rerr
+		}
 	}
 	s.mu.Unlock()
 	if !s.readOnly {
 		_, _ = s.w.Exec("PRAGMA optimize")
 	}
-	err := s.w.Close()
+	if werr := s.w.Close(); err == nil {
+		err = werr
+	}
 	if rerr := s.r.Close(); err == nil {
 		err = rerr
 	}
@@ -1074,19 +1080,27 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 // this store has the session loaded again at its next append, or is
 // refused with ErrSessionLocked if another process took it meanwhile,
 // and the Session it was handed no longer follows the store.
-func (s *Store) Release(id string) {
+//
+// An error says the hold could not be deleted: the session is
+// forgotten here all the same, and the hold stays until its holder's
+// process is found gone or BreakLock clears it.
+func (s *Store) Release(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.releaseLocked(id)
+	return s.releaseLocked(id)
 }
 
-func (s *Store) releaseLocked(id string) {
+func (s *Store) releaseLocked(id string) error {
+	var err error
 	if _, ok := s.open[id]; ok && !s.readOnly {
-		_, _ = s.w.Exec(`DELETE FROM holders WHERE session_id = ? AND token = ?`, id, s.token)
+		if _, err = s.w.Exec(`DELETE FROM holders WHERE session_id = ? AND token = ?`, id, s.token); err != nil {
+			err = fmt.Errorf("sqlite: release %s: %w", id, err)
+		}
 	}
 	delete(s.open, id)
 	delete(s.refused, id)
 	delete(s.stale, id)
+	return err
 }
 
 // LockHolder reports who holds a session, or nil when it is free. A
@@ -1199,4 +1213,6 @@ var (
 	_ agentsession.RefStore  = (*Store)(nil)
 	_ agentsession.Importer  = (*Store)(nil)
 	_ agentsession.HeadStore = (*Store)(nil)
+	_ agentsession.Follower  = (*Store)(nil)
+	_ agentsession.Releaser  = (*Store)(nil)
 )

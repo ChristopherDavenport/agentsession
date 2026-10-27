@@ -7,6 +7,16 @@ versions may break the API.
 
 ## Unreleased
 
+- **Added: `Releaser`**, the root interface for a store that holds the
+  sessions it opens, implemented by `jsonl.Store`, `cas.Store`,
+  `sqlite.Store` and `remote.Client`; the remote server lets a store's
+  hold go through it when a lease ends. **Changed: `sqlite.Store.Release`
+  returns an error (breaking)**, the failure to delete the hold, which
+  it dropped; its old signature missed the server's assertion, so a
+  server over SQLite never let a session's hold go when a lease ended.
+  `sqlite.Store` now asserts `agentsession.Follower`, which it
+  implemented. (#257)
+
 - **Fixed: a member the format does not define inside a `parents`
   element survives a commit.** `EntryRef` keeps such members and writes
   them back, as RFC 0001 requires of every object it defines, so an
