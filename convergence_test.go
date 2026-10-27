@@ -350,3 +350,73 @@ func TestItemReferenceIsNotWritten(t *testing.T) {
 		t.Errorf("round trip changed the entry")
 	}
 }
+
+// A member the format does not define inside a parents element is
+// preserved and hashed as the line holds it (RFC 0001, Entry envelope):
+// the parents-extra fixture's extension entry and core entry each carry
+// one, and committing either line, or appending it with its id left
+// for the session to compute, gives the id the line holds and writes
+// the member back.
+func TestParentsElementKeepsItsExtraMembers(t *testing.T) {
+	path := filepath.Join("testdata", "sessions", "parents-extra.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	for _, legacy := range []string{"x0000001", "i0000003"} {
+		t.Run(legacy, func(t *testing.T) {
+			at := -1
+			for i, l := range lines {
+				if strings.Contains(l, `"legacy_id":"`+legacy+`"`) {
+					at = i
+				}
+			}
+			if at < 0 {
+				t.Fatalf("no line with legacy id %s", legacy)
+			}
+			line := lines[at]
+			if !strings.Contains(line, `"acme:why"`) {
+				t.Fatalf("the generated line lost its parents element's member: %s", line)
+			}
+			want, _, err := EntryHashes([]byte(line))
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := strings.Join(lines[:at], "\n") + "\n"
+			for _, how := range []string{"commit", "append"} {
+				s, err := Read(strings.NewReader(before))
+				if err != nil {
+					t.Fatal(err)
+				}
+				e, err := UnmarshalEntry([]byte(line))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got string
+				if how == "commit" {
+					r, err := s.Commit(e)
+					if err != nil {
+						t.Fatalf("%s: %v", how, err)
+					}
+					got = r.ID
+				} else {
+					e.Base().ID = ""
+					if got, err = s.Append(e); err != nil {
+						t.Fatalf("%s: %v", how, err)
+					}
+				}
+				if got != want {
+					t.Errorf("%s: id %s, want the line's %s", how, got, want)
+				}
+				out, err := MarshalEntry(e)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(out), `"acme:why"`) {
+					t.Errorf("%s: written without the parents element's member: %s", how, out)
+				}
+			}
+		})
+	}
+}

@@ -220,6 +220,26 @@ type EntryRef struct {
 	Session string `json:"session,omitempty"`
 	// Entry is the ID of the entry referred to.
 	Entry string `json:"entry"`
+	// extra holds the members of the reference the format does not
+	// define, as one JSON object, so a rewrite keeps them and the entry
+	// keeps the hash its line has: a member inside an object the format
+	// defines is preserved and hashed as written (RFC 0001, Entry
+	// envelope). A string keeps the reference comparable.
+	extra string
+}
+
+// MarshalJSON writes the reference with the members it was read with
+// that the format does not define.
+func (r EntryRef) MarshalJSON() ([]byte, error) {
+	type plain struct {
+		Session string `json:"session,omitempty"`
+		Entry   string `json:"entry"`
+	}
+	head, err := jsonx.MarshalNoEscape(plain{Session: r.Session, Entry: r.Entry})
+	if err != nil || r.extra == "" {
+		return head, err
+	}
+	return jsonx.JoinObjects(head, []byte(r.extra), nil), nil
 }
 
 // UnmarshalJSON decodes a reference by its members' exact names, as the
@@ -236,6 +256,11 @@ func (r *EntryRef) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(raw, &r.Session); err != nil {
 			return fmt.Errorf("session: %w", err)
 		}
+	}
+	delete(all, "entry")
+	delete(all, "session")
+	if len(all) > 0 {
+		r.extra = string(jsonx.JoinObjects([]byte("{}"), []byte("{}"), all))
 	}
 	return nil
 }

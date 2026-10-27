@@ -7,6 +7,15 @@ versions may break the API.
 
 ## Unreleased
 
+- **Fixed: a member the format does not define inside a `parents`
+  element survives a commit.** `EntryRef` keeps such members and writes
+  them back, as RFC 0001 requires of every object it defines, so an
+  extension entry whose `parents` element carried one no longer lost it
+  on `Commit`, `Append` or a migration, which changed its `id`. The
+  conformance fixture `parents-extra` holds an extension entry and a
+  core entry with one, and RFC 0001's Conformance list names the case.
+  (#239)
+
 - **A session continues once, and continuing a named session follows
   its chain (RFC 0002, Refs and continuation; RFC 0001, `link`).** A
   session holds at most one `continued_in` link, and a writer continues
