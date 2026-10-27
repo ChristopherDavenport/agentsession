@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ChristopherDavenport/agentsession"
 )
 
 // keepSet is what the store holds, as a set of object names per space.
@@ -181,21 +183,26 @@ func (s *Store) keepAll() (keepSet, logMarks, error) {
 // session's base is kept: RFC 0002's retention keeps what a ref pins
 // though no session holds it any longer. A ref that pins no entry
 // keeps nothing of its own.
+//
+// A ref that cannot be read does not stop the sweep: what it last named,
+// as far as its file and its log read, is kept, and Verify reports it.
 func (s *Store) keepRefs(k keepSet) error {
-	names, err := s.refNames()
+	refs, err := s.refNames()
 	if err != nil {
 		return err
 	}
-	for _, n := range names {
-		t, _, err := s.effectiveRef(n)
-		if err != nil {
-			return fmt.Errorf("cas: sweep: %w", err)
+	for _, r := range refs {
+		targets := []agentsession.RefTarget{r.Val.RefTarget}
+		if r.Err != nil {
+			targets = s.lastNamed(r.Name)
 		}
-		if t.Entry == "" {
-			continue
-		}
-		if err := s.keepPin(k, t.Entry); err != nil {
-			return fmt.Errorf("cas: sweep: ref %s: %w", n, err)
+		for _, t := range targets {
+			if t.Entry == "" {
+				continue
+			}
+			if err := s.keepPin(k, t.Entry); err != nil {
+				return fmt.Errorf("cas: sweep: ref %s: %w", r.Name, err)
+			}
 		}
 	}
 	return nil
@@ -907,6 +914,10 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 // delete renamed into trash and did not finish removing. Neither is
 // read; each goes once older than young, so a create still staging is
 // left to finish.
+//
+// A ref's temporary file, refs/%tmp-*, a crash left between its write
+// and its rename, goes the same way: an update in flight holds its own
+// for a few fsyncs, which the grace covers.
 func (s *Store) cleanStaging(young time.Time) {
 	for _, dir := range []string{"tmp", "trash"} {
 		ents, _ := os.ReadDir(filepath.Join(s.root, dir))
@@ -915,6 +926,11 @@ func (s *Store) cleanStaging(young time.Time) {
 			if info, err := os.Stat(p); err == nil && info.ModTime().Before(young) {
 				os.RemoveAll(p)
 			}
+		}
+	}
+	for _, p := range s.refDebris() {
+		if info, err := os.Stat(p); err == nil && info.ModTime().Before(young) {
+			os.Remove(p)
 		}
 	}
 }

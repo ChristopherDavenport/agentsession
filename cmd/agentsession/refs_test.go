@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -204,5 +206,34 @@ func TestRefsJSONL(t *testing.T) {
 	}
 	if code, out, _ := runCmd("ref", root, "chat/x", "-log"); code != 0 || !strings.Contains(out, "made") {
 		t.Errorf("ref -log of a jsonl store (exit %d):\n%s", code, out)
+	}
+}
+
+// TestRepairRef is #218's way out: verify names a ref whose log's last
+// record is damaged, and repair -ref restarts its log from the ref's
+// target, after which the ref moves again.
+func TestRepairRef(t *testing.T) {
+	root, _, b, _ := refsStore(t)
+	logPath := filepath.Join(root, "logs", "refs", "chat%one")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := bytes.LastIndex(data, []byte(`"reason":"continued"`)) + len(`"reason":"`)
+	data[at] ^= 1
+	if err := os.WriteFile(logPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := runCmd("verify", root); code != 1 || !strings.Contains(out, "ref chat/one") {
+		t.Errorf("verify of a damaged ref log: exit %d:\n%s", code, out)
+	}
+	if code, out, errOut := runCmd("repair", root, "-ref", "chat/one"); code != 0 || !strings.Contains(out, "target   "+b) {
+		t.Fatalf("repair -ref: exit %d:\n%s%s", code, out, errOut)
+	}
+	if code, out, errOut := runCmd("ref", root, "chat/one"); code != 0 || !strings.Contains(out, b) {
+		t.Errorf("ref after the repair: exit %d:\n%s%s", code, out, errOut)
+	}
+	if code, _, errOut := runCmd("repair", root, "-ref", "chat/one"); code != 1 || !strings.Contains(errOut, "nothing to repair") {
+		t.Errorf("a second repair -ref: exit %d: %s", code, errOut)
 	}
 }

@@ -876,3 +876,163 @@ func TestRefPinLost(t *testing.T) {
 		t.Errorf("a sweep with no grace: %v", err)
 	}
 }
+
+// TestRefDamageIsolated is #218: one damaged record at the end of one
+// ref's log stops that ref alone. Another ref resolves, is created and
+// lists, the listing names the damaged ref with its error and goes on,
+// a sweep keeps what the damaged ref last named, Verify names it, and
+// RepairRef restarts its log from the ref's target.
+func TestRefDamageIsolated(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	x, y := newRefSession(t, st), newRefSession(t, st)
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := mustAppend(t, st, s.ID(), item("pinned"))
+	pinned := agentsession.RefTarget{Session: s.ID(), Entry: pin}
+	for _, step := range [][2]agentsession.RefTarget{{{}, refTarget(x)}, {refTarget(x), refTarget(y)}, {refTarget(y), pinned}} {
+		if err := st.UpdateRef(ctx, "chat/a", step[0], step[1], "move"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.UpdateRef(ctx, "chat/b", agentsession.RefTarget{}, refTarget(x), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Delete(ctx, s.ID()); err != nil {
+		t.Fatal(err)
+	}
+	// One byte of chat/a's last record's new_session.
+	data, _ := os.ReadFile(st.refLogPath("chat/a"))
+	at := bytes.LastIndex(data, []byte(`"new_session":"`)) + len(`"new_session":"`)
+	data[at] ^= 1
+	if err := os.WriteFile(st.refLogPath("chat/a"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := st.ResolveRef(ctx, "chat/a"); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("ResolveRef chat/a: %v, want ErrCorrupt", err)
+	}
+	if got, err := st.ResolveRef(ctx, "chat/b"); err != nil || got != refTarget(x) {
+		t.Errorf("ResolveRef chat/b: %v %v", got, err)
+	}
+	if err := st.UpdateRef(ctx, "chat/c", agentsession.RefTarget{}, refTarget(y), ""); err != nil {
+		t.Errorf("creating chat/c beside a damaged ref: %v", err)
+	}
+	var listed []string
+	for r, err := range st.ListRefs(ctx, "chat/") {
+		switch {
+		case r.Name == "chat/a" && errors.Is(err, ErrCorrupt):
+			listed = append(listed, "chat/a!")
+		case err != nil:
+			t.Errorf("ListRefs: %s: %v", r.Name, err)
+		default:
+			listed = append(listed, r.Name)
+		}
+	}
+	if fmt.Sprint(listed) != "[chat/a! chat/b chat/c]" {
+		t.Errorf("ListRefs: %v, want chat/a with its error, then chat/b and chat/c", listed)
+	}
+	if _, err := st.Sweep(ctx, 0); err != nil {
+		t.Fatalf("a sweep past a damaged ref: %v", err)
+	}
+	if ok, _ := st.present(pin); !ok {
+		t.Error("the sweep took the entry the damaged ref last pinned")
+	}
+	refProblems := func() []string {
+		t.Helper()
+		rep, err := st.Verify(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, p := range rep.Problems {
+			if p.Kind == KindRef {
+				out = append(out, p.Ref)
+			}
+		}
+		return out
+	}
+	if got := refProblems(); fmt.Sprint(got) != "[chat/a]" {
+		t.Errorf("Verify names %v, want chat/a", got)
+	}
+
+	if _, err := st.RepairRef(ctx, "chat/b"); !errors.Is(err, ErrRefNotDamaged) {
+		t.Errorf("RepairRef of a whole ref: %v", err)
+	}
+	rep, err := st.RepairRef(ctx, "chat/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Target != pinned || len(rep.Damage) != 1 || rep.DamagedLog == "" {
+		t.Errorf("RepairRef: %+v", rep)
+	}
+	if got, err := st.ResolveRef(ctx, "chat/a"); got != pinned || !errors.Is(err, agentsession.ErrNoSession) {
+		t.Errorf("after repair, ResolveRef chat/a: %v %v; want the pin, dangling", got, err)
+	}
+	if err := st.UpdateRef(ctx, "chat/a", pinned, refTarget(y), "after repair"); err != nil {
+		t.Errorf("after repair, UpdateRef chat/a: %v", err)
+	}
+	if got := logOf(t, st, "chat/a"); len(got) != 2 || got[1].New != pinned || !strings.HasPrefix(got[1].Reason, "recovered") {
+		t.Errorf("after repair, the log: %+v", got)
+	}
+	// The kept log is reported until someone removes it.
+	if got := refProblems(); fmt.Sprint(got) != "[chat/a]" {
+		t.Errorf("after repair, Verify names %v, want the kept log of chat/a", got)
+	}
+	os.Remove(rep.DamagedLog)
+	if got := refProblems(); len(got) != 0 {
+		t.Errorf("after the kept log is removed, Verify names %v", got)
+	}
+}
+
+// TestRefDebrisSwept is #219: a ref's temporary file a crash left
+// before its rename is a leftover to Verify and goes in a sweep once
+// older than the grace; a young one, an update's in flight, stays.
+func TestRefDebrisSwept(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.UpdateRef(ctx, "r", agentsession.RefTarget{}, refTarget(newRefSession(t, st)), ""); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(st.root, refsDir, refTmp+"old")
+	young := filepath.Join(st.root, refLogsDir, refTmp+"young")
+	for _, p := range []string{old, young} {
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-2 * time.Hour)
+	os.Chtimes(old, past, past)
+	rep, err := st.Verify(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leftovers := 0
+	for _, p := range rep.Problems {
+		if p.Kind == KindLeftover && strings.Contains(p.Err.Error(), refTmp) {
+			leftovers++
+		}
+	}
+	if leftovers != 2 || !rep.OK() {
+		t.Errorf("Verify: %d ref leftovers, OK %v: %v", leftovers, rep.OK(), rep.Problems)
+	}
+	if _, err := st.Sweep(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("an old temporary file survived a sweep: %v", err)
+	}
+	if _, err := os.Stat(young); err != nil {
+		t.Errorf("a young temporary file did not survive a sweep: %v", err)
+	}
+}

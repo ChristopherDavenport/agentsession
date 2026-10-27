@@ -10,6 +10,7 @@
 //	agentsession refs <root> [prefix]
 //	agentsession ref <root> <name> [-log]
 //	agentsession repair <cas-root> <id> [-dry-run]
+//	agentsession repair <cas-root> -ref <name> [-dry-run]
 //	agentsession migrate <cas-root>
 //
 // show -f prints the session and then each entry as the store accepts
@@ -47,6 +48,9 @@
 // session's directory, which verify reports until it is removed. It
 // takes the session's lock, so it fails on a session a harness holds.
 // With -dry-run it opens the store read-only and writes nothing.
+// repair -ref <name> restarts a ref's damaged log from the ref's
+// target, keeping the damaged log beside it, which verify reports until
+// it is removed.
 //
 // migrate opens a cas store for writing and closes it, which is what
 // migrates a store v0.0.15 or earlier wrote; a read-only open, as every
@@ -81,6 +85,7 @@ commands:
   refs    <root> [prefix]            list the refs of a jsonl or cas store: names that point to sessions
   ref     <root> <name> [-log]       print one ref, and with -log every update that moved it
   repair  <cas-root> <id>            rewrite a damaged cas session log from what still reads
+  repair  <cas-root> -ref <name>     restart a damaged cas ref log from the ref's target
   migrate <cas-root>                 migrate a cas store v0.0.15 or earlier wrote
 
 A <session> is a session file, or a cas store's root and a session id:

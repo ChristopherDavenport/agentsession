@@ -439,7 +439,12 @@ projection to a file carries none.
   name begins with a given string, in the byte order of the name, and
   the prefix need not end at a segment boundary. A listing that cannot
   be completed, such as one that finds a ref it cannot read, reports
-  the error rather than a short list.
+  the error rather than a short list. One unreadable ref MUST NOT stop
+  resolving, updating or retaining by another ref: a listing reports
+  the unreadable ref by name, in its place, and goes on, a creation
+  counts its name as held for the rules about names, and retention
+  keeps what an unreadable ref last named, as far as anything of it
+  reads.
 - **The ref log records every accepted update**, in the order the
   store accepted them: the name, the old and the new target (either may
   be none), the time, and an optional reason. It is what says where a
@@ -678,6 +683,10 @@ one session's log, when the session is opened, so what a store pays to
 recover a session is proportional to that session's log, however large
 the store has grown. A session's log is deleted with the session and
 holds nothing of any other, so there is nothing store-wide to compact.
+A write a crash interrupts can leave debris no record names, such as a
+temporary file not yet renamed into place; a sweep removes the debris
+of a crashed write older than its grace, and a write in flight keeps
+its own younger than that.
 
 A store built on a database that has its own write-ahead log gets
 atomicity and recovery from the database. Durability it must still ask
@@ -1001,6 +1010,15 @@ entries or on its prefix. Because the hash covers the whole path,
 agreement on that hash is agreement on every byte of the prefix. RFC
 0001's conformance suite asks for a forked fixture whose base is found
 in its origin; this is that check, and it is one lookup.
+
+A store's own verification, as git's fsck, covers its refs and their
+logs as well as its sessions: it reads every ref and every record of
+every ref log, and names a ref whose target or log does not read. A
+store offers a repair that restarts a damaged ref log from the ref's
+current target, the target the ref held until the damage: the new log
+begins with one record that sets the ref to that target and says it
+was recovered, and the damaged log is kept, and reported, until an
+operator removes it, since it is the ref's only history.
 
 `request_hash` is unchanged; RFC 0001 says how the two hashes divide
 the work.

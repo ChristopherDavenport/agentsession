@@ -7,6 +7,22 @@ versions may break the API.
 
 ## Unreleased
 
+- **One damaged ref stops only itself in `cas` (RFC 0002, Refs,
+  Verification and "A log per session").** A ref whose file or log's
+  last record does not read failed `ListRefs` for every ref, every
+  `Sweep`, and every creation of a ref, while `Verify` said nothing.
+  Now `ListRefs` yields the damaged ref by name with its error and goes
+  on, a creation counts its name as held, and a sweep keeps what it
+  last named. `Verify` reads every ref and every record of its log and
+  reports a damaged one as **`KindRef`**, naming it in the new
+  **`Problem.Ref`**. **Added: `Store.RepairRef`** (and
+  `agentsession repair <cas-root> -ref <name>`), which keeps the
+  damaged log as `logs/refs/%damaged-<ref>-<time>`, reported by
+  `Verify` until removed, and restarts the log from the ref's target.
+  `Sweep` removes the `%tmp-*` files a crash leaves in `refs/` and
+  `logs/refs/` once older than its grace, and `Verify` reports them as
+  leftovers. (#218, #219)
+
 - **A ref never pins working state (RFC 0002, Refs and Durability).**
   `cas` and `jsonl` commit the session holding an entry a ref update
   pins before the ref is written: `cas` commits the append, a held

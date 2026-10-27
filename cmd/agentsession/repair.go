@@ -11,13 +11,25 @@ import (
 // repair rewrites a cas session's damaged log from the records that
 // still read, as cas.Store.Repair does, and reports what it kept and
 // dropped. It is the one command that writes; with -dry-run it opens
-// the store read-only and writes nothing.
+// the store read-only and writes nothing. With -ref <name> in place of
+// a session id it repairs that ref instead, as cas.Store.RepairRef
+// does: its damaged log is set aside and restarted from the ref's
+// target. (An id of the form ref:<name> names the session a ref points
+// to, as in every other command.)
 func repair(args []string, stdout, stderr io.Writer) error {
-	fs := newFlags("repair", "<cas-root> <id> [-dry-run]", stderr)
+	fs := newFlags("repair", "<cas-root> <id> | <cas-root> -ref <name> [-dry-run]", stderr)
 	dry := fs.Bool("dry-run", false, "report what a repair would keep and drop, writing nothing")
+	ref := fs.String("ref", "", "repair this ref's damaged log instead of a session's")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
+	}
+	if *ref != "" {
+		if len(positional) != 1 || !cas.IsStore(positional[0]) {
+			fs.Usage()
+			return fmt.Errorf("%w: expected a cas store's root and -ref <name>", errUsage)
+		}
+		return repairRef(positional[0], *ref, *dry, stdout)
 	}
 	if len(positional) != 2 || !cas.IsStore(positional[0]) {
 		fs.Usage()
@@ -65,6 +77,45 @@ func repair(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 	fmt.Fprintf(stdout, "repaired; the damaged log is kept as %s until you remove it\n", rep.DamagedLog)
+	return nil
+}
+
+// repairRef restarts a damaged ref's log, or with dry set reports the
+// damage and writes nothing.
+func repairRef(root, name string, dry bool, stdout io.Writer) error {
+	var opts []cas.Option
+	if dry {
+		opts = append(opts, cas.WithReadOnly())
+	}
+	st, err := cas.Open(root, opts...)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	if dry {
+		rep, err := st.Verify(context.Background())
+		if err != nil {
+			return err
+		}
+		for _, p := range rep.Problems {
+			if p.Kind == cas.KindRef && p.Ref == name {
+				fmt.Fprintf(stdout, "damaged  %v\n", p.Err)
+			}
+		}
+		fmt.Fprintln(stdout, "dry run: nothing written")
+		return nil
+	}
+	rep, err := st.RepairRef(context.Background(), name)
+	for _, d := range rep.Damage {
+		fmt.Fprintf(stdout, "damaged  %v\n", d)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "target   %s\n", orNone(rep.Target.String()))
+	if rep.DamagedLog != "" {
+		fmt.Fprintf(stdout, "repaired; the damaged log is kept as %s until you remove it\n", rep.DamagedLog)
+	}
 	return nil
 }
 
