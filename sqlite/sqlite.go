@@ -852,30 +852,38 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 		}
 	}
 	defer s.hub.Notify(sessionID)
-	id, err := s.appendLocked(ctx, sess, sessionID, e)
-	if err != nil {
-		return id, err
-	}
-	return id, s.keepHead(ctx, sess, sessionID)
+	return s.appendLocked(ctx, sess, sessionID, e)
 }
 
-// keepHead appends the leaf label that keeps the stored head where the
-// session's is, when the append before it would otherwise read back as
-// the head: a branch, which RFC 0002 says leaves the head in place. The
-// store keeps its head only in its entries. The caller holds s.mu.
-func (s *Store) keepHead(ctx context.Context, sess *agentsession.Session, sessionID string) error {
-	mark := sess.LeafMarkNeeded()
-	if mark == nil {
-		return nil
+// row is one entry's row in the entries table.
+type row struct {
+	seq    int
+	id     string
+	parent any
+	typ    string
+	line   string
+}
+
+// rowOf is e's row at seq.
+func rowOf(e agentsession.Entry, seq int) (row, error) {
+	line, err := agentsession.MarshalEntry(e)
+	if err != nil {
+		return row{}, err
 	}
-	if _, err := s.appendLocked(ctx, sess, sessionID, mark); err != nil {
-		return fmt.Errorf("sqlite: keep the head of %s: %w", sessionID, err)
+	b := e.Base()
+	var parent any
+	if b.Parent != "" {
+		parent = b.Parent
 	}
-	return nil
+	return row{seq: seq, id: b.ID, parent: parent, typ: e.EntryType(), line: string(line)}, nil
 }
 
 // appendLocked appends e to sess, the store's open session, in one
-// transaction. The caller holds s.mu.
+// transaction. When e would read back as the head, a branch, which RFC
+// 0002 says leaves the head in place, the leaf label that keeps the
+// head ([agentsession.Session.LeafMarkNeeded]) goes in the same
+// transaction, since the store keeps its head only in its entries. The
+// caller holds s.mu.
 func (s *Store) appendLocked(ctx context.Context, sess *agentsession.Session, sessionID string, e agentsession.Entry) (string, error) {
 	// Prepare holds the entry to the rules a writer is held to, which
 	// Commit, a read path's, does not apply.
@@ -892,15 +900,23 @@ func (s *Store) appendLocked(ctx context.Context, sess *agentsession.Session, se
 		return r.ID, nil
 	}
 	id := r.ID
-	line, err := agentsession.MarshalEntry(e)
+	first, err := rowOf(e, sess.Len())
 	if err != nil {
 		delete(s.open, sessionID)
 		return "", err
 	}
-	b := e.Base()
-	var parent any
-	if b.Parent != "" {
-		parent = b.Parent
+	rows := []row{first}
+	if mark := sess.LeafMarkNeeded(); mark != nil {
+		if _, err := sess.Commit(mark); err != nil {
+			delete(s.open, sessionID)
+			return "", fmt.Errorf("sqlite: keep the head of %s: %w", sessionID, err)
+		}
+		kept, err := rowOf(mark, sess.Len())
+		if err != nil {
+			delete(s.open, sessionID)
+			return "", err
+		}
+		rows = append(rows, kept)
 	}
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
@@ -922,10 +938,12 @@ func (s *Store) appendLocked(ctx context.Context, sess *agentsession.Session, se
 	if raised {
 		err = raiseFormat(ctx, tx, sessionID)
 	}
-	if err == nil {
-		_, err = tx.ExecContext(ctx,
-			`INSERT INTO entries (session_id, seq, id, parent, type, line) VALUES (?, ?, ?, ?, ?, ?)`,
-			sessionID, sess.Len(), id, parent, e.EntryType(), string(line))
+	for _, rw := range rows {
+		if err == nil {
+			_, err = tx.ExecContext(ctx,
+				`INSERT INTO entries (session_id, seq, id, parent, type, line) VALUES (?, ?, ?, ?, ?, ?)`,
+				sessionID, rw.seq, rw.id, rw.parent, rw.typ, rw.line)
+		}
 	}
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at = ? WHERE id = ?`, stamp(time.Now()), sessionID)
@@ -942,7 +960,7 @@ func (s *Store) appendLocked(ctx context.Context, sess *agentsession.Session, se
 	if err != nil {
 		delete(s.open, sessionID)
 		if isSeqConflict(err) {
-			s.refused[sessionID] = fmt.Errorf("%w: entry %s at seq %d", ErrConcurrentWriter, id, sess.Len())
+			s.refused[sessionID] = fmt.Errorf("%w: entry %s at seq %d", ErrConcurrentWriter, id, first.seq)
 			return "", s.refused[sessionID]
 		}
 		return "", fmt.Errorf("sqlite: insert entry %s: %w", id, err)

@@ -582,3 +582,48 @@ func TestReleaseThroughReleaser(t *testing.T) {
 		t.Errorf("Open after the lease ended: %v; the server kept the store's hold", err)
 	}
 }
+
+// The leaf label that keeps the head where a branch leaves it lands in
+// the branch's transaction: when the label cannot be written, nor is the
+// branch, so the database never holds a branch that reads back as the
+// head (RFC 0002, Head).
+func TestKeptHeadSharesTheBranchTransaction(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	st, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := st.Append(ctx, s.ID(), agentsession.NewItemEntry(openresponses.UserText("a")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, s.ID(), agentsession.NewItemEntry(openresponses.UserText("b"))); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TRIGGER no_labels BEFORE INSERT ON entries WHEN NEW.type = 'label' BEGIN SELECT RAISE(ABORT, 'no labels'); END`); err != nil {
+		t.Fatal(err)
+	}
+	branch := agentsession.NewItemEntry(openresponses.UserText("a branch off a"))
+	branch.Parent = a
+	if _, err := st.Append(ctx, s.ID(), branch); err == nil {
+		t.Fatal("the branch landed without the label that keeps the head")
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM entries WHERE session_id = ?`, s.ID()).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("the database holds %d entries, want the 2 before the refused branch", n)
+	}
+}

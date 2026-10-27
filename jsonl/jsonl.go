@@ -691,31 +691,15 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	// Followers look again however the append ends: a rewrite for the
 	// format may have landed before a write that failed.
 	defer s.hub.Notify(sessionID)
-	id, err := s.appendLocked(h, sessionID, e, false)
-	if err != nil {
-		return id, err
-	}
-	return id, s.keepHead(h, sessionID, s.shouldSync(h.session.Header(), e))
-}
-
-// keepHead appends the leaf label that keeps the file's head where the
-// session's is, when the append before it would otherwise read back as
-// the head: a branch, which RFC 0002 says leaves the head in place. It
-// is synced when the entry before it was, so a crash cannot keep the
-// entry and lose the label. The caller holds s.mu.
-func (s *Store) keepHead(h *handle, sessionID string, sync bool) error {
-	mark := h.session.LeafMarkNeeded()
-	if mark == nil {
-		return nil
-	}
-	if _, err := s.appendLocked(h, sessionID, mark, sync); err != nil {
-		return fmt.Errorf("jsonl: keep the head of %s: %w", sessionID, err)
-	}
-	return nil
+	return s.appendLocked(h, sessionID, e, false)
 }
 
 // appendLocked appends e to the open session h, and syncs it when sync
-// is set or the policy asks. The caller holds s.mu.
+// is set or the policy asks. When e would read back as the head, a
+// branch, which RFC 0002 says leaves the head in place, the leaf label
+// that keeps the head goes with it ([agentsession.Session.LeafMarkNeeded]),
+// in the same write and under the same sync, so a crash cannot keep the
+// entry and lose the label. The caller holds s.mu.
 func (s *Store) appendLocked(h *handle, sessionID string, e agentsession.Entry, sync bool) (string, error) {
 	// The entry is prepared first, so that one the session refuses or
 	// already holds leaves the file as it was: a second append of an
@@ -737,7 +721,19 @@ func (s *Store) appendLocked(h *handle, sessionID string, e agentsession.Entry, 
 	if err != nil {
 		return "", err
 	}
-	if err := writeLine(h.file, e); err != nil {
+	var buf bytes.Buffer
+	if err := writeLine(&buf, e); err != nil {
+		return "", fmt.Errorf("jsonl: write entry %s: %w", id, err)
+	}
+	if mark := h.session.LeafMarkNeeded(); mark != nil {
+		if _, err := h.session.Append(mark); err != nil {
+			return "", fmt.Errorf("jsonl: keep the head of %s: %w", sessionID, err)
+		}
+		if err := writeLine(&buf, mark); err != nil {
+			return "", fmt.Errorf("jsonl: keep the head of %s: %w", sessionID, err)
+		}
+	}
+	if _, err := h.file.Write(buf.Bytes()); err != nil {
 		return "", fmt.Errorf("jsonl: write entry %s: %w", id, err)
 	}
 	if sync || s.shouldSync(h.session.Header(), e) {
