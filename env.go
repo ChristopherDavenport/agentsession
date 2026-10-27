@@ -108,12 +108,13 @@ func (e *EnvEntry) AddWritten(path, hash string) {
 
 // SetWorkspace records which file system CWD is a path in: kind is
 // [WorkspaceLocal], [WorkspaceContainer] or [WorkspaceRemote], and ref
-// is what the harness resolves to it (an image digest, a host, an
-// instance ID). A container on a remote host is a container, with the
-// host a member of the workspace: set it, and anything else that tells
-// one file system from another, with [Workspace.SetMember] on the
-// result, and not as an unknown member of the entry, which the
-// substitution rule does not compare.
+// is what the harness resolves to it (an image digest, an endpoint),
+// empty for a local workspace. The machine goes in the workspace's
+// host member and a restarted file system's identity in its instance
+// member, which the format defines since 0.14: set them, and anything
+// else that tells one file system from another, with
+// [Workspace.SetMember] on the result, and not as an unknown member of
+// the entry, which the substitution rule does not compare.
 func (e *EnvEntry) SetWorkspace(kind, ref string) *Workspace {
 	e.Workspace = &Workspace{Kind: kind, Ref: ref}
 	return e.Workspace
