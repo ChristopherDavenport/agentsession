@@ -26,6 +26,7 @@ type Handler struct {
 	refs     agentsession.RefStore
 
 	auth      Authenticator
+	authorize Authorizer
 	challenge string
 	insecure  bool
 	buffer    int
@@ -73,6 +74,11 @@ type Option func(*Handler)
 // WithAuthenticator sets how a request's principal is resolved. Without
 // it, or [WithInsecureNoAuth], the handler refuses every request.
 func WithAuthenticator(a Authenticator) Option { return func(h *Handler) { h.auth = a } }
+
+// WithAuthorize sets how a request is authorized against the session it
+// names, beyond the scope its route needs; see [Authorizer]. Without it
+// a principal with a scope holds it over every session of the store.
+func WithAuthorize(a Authorizer) Option { return func(h *Handler) { h.authorize = a } }
 
 // WithChallenge sets the WWW-Authenticate challenge sent on every 401
 // the handler writes, whether its authenticator refused the request, no
@@ -303,7 +309,8 @@ func (h *Handler) logError(err error) {
 }
 
 // guard authenticates r, checks the principal holds scope (none for the
-// empty scope) and puts the principal on the request's context.
+// empty scope), authorizes a route that names a session against it,
+// and puts the principal on the request's context.
 func (h *Handler) guard(scope Scope, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var p Principal
@@ -324,8 +331,31 @@ func (h *Handler) guard(scope Scope, next http.HandlerFunc) http.HandlerFunc {
 			h.writeProblem(w, problem(CodeScope, "the principal lacks the scope this needs", string(scope)))
 			return
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
+		r = r.WithContext(context.WithValue(r.Context(), principalKey{}, p))
+		if id := r.PathValue("id"); id != "" && !h.may(r.Context(), scope, id) {
+			// Every request that names a session, a follow resumed from
+			// an event ID among them: the ID is not a capability.
+			h.writeProblem(w, noSession())
+			return
+		}
+		next(w, r)
 	}
+}
+
+// may reports whether the principal on ctx may act with scope on the
+// session id: always, without an [Authorizer].
+func (h *Handler) may(ctx context.Context, scope Scope, id string) bool {
+	if h.authorize == nil {
+		return true
+	}
+	p, _ := PrincipalFrom(ctx)
+	return h.authorize(ctx, p, scope, id) == nil
+}
+
+// noSession is the refusal of a session the principal may not reach,
+// the same as for one the store does not hold.
+func noSession() *Problem {
+	return problem(CodeNoSession, "no such session", "")
 }
 
 // writeProblem answers p, with the challenge on a 401.
@@ -434,6 +464,10 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			out.fail(h, err)
 			return
+		}
+		if !h.may(r.Context(), ScopeRead, sum.Header.ID) {
+			sum, err, ok = next()
+			continue
 		}
 		l := summaryLine{Header: sum.Header, Incarnation: incarnation(sum.Header), Name: sum.Name, SupersededBy: sum.SupersededBy, Size: sum.Size}
 		if !sum.Modified.IsZero() {

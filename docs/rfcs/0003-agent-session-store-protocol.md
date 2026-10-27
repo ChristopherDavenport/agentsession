@@ -428,7 +428,11 @@ the reference stores, so a server MAY rate-limit resumes.
   its index among the events of that cursor (`<cursor>.<n>`). A client
   resumes with `Last-Event-ID` (or `after`, with `Last-Event-ID`
   winning when both are sent), and the server resumes after exactly that
-  event. A cursor the server can no longer resume from, because the log
+  event. A resume is a request like any other: the server authorizes it
+  against the session before it sends an event, as it does a fresh
+  follow, and refuses it as `no_session` when the caller may not read
+  the session. An event ID says where a follow was; it does not say
+  who may follow (Security considerations). A cursor the server can no longer resume from, because the log
   was replaced, or one that is no cursor of this server's, gets a
   `reset`, never a silent skip.
 - A `reset` is also what answers a resume cursor from a session that was
@@ -823,7 +827,7 @@ carry. A request refused for authentication or scope is 401 `auth` or
 
 | Code | Status | Meaning |
 |---|---|---|
-| `no_session` | 404 | no such session (also: a live follow whose session was deleted; a ref `next` naming a missing session) |
+| `no_session` | 404 | no such session (also: a session the caller may not reach; a live follow whose session was deleted; a ref `next` naming a missing session) |
 | `session_exists` | 409 | Create of an ID held under another header |
 | `session_replaced` | 409 | the incarnation differs from `If-Incarnation` |
 | `no_entry` | 404 | a parent, base, head target, ref pin or `leaf` the session (or the caller) does not hold |
@@ -886,6 +890,17 @@ Not carried, because they are a local operator's or a file's:
   response, is readable by anyone with read scope. A deployment MUST
   authenticate and authorize every request, over TLS, and SHOULD
   separate read, write (lease), refs, exchange and admin scopes.
+- A server MUST authorize every request against the session it names,
+  a follow resumed from an event ID or `after` included: an event ID,
+  like a hash, is not a capability. A deployment that grants a scope
+  over some sessions and not others checks each request, read or
+  write, lease and push among them, against the session in its path; a
+  create against the session it creates and, for a fork, the session
+  the fork is of; and a ref update against the session it moves the ref
+  to. A refused session is answered `no_session`, as one the server
+  does not hold, so a refusal does not confirm that the session exists.
+  A listing leaves out the sessions the caller may not read, and an
+  object is reachable only through a session the caller may read.
 - Objects are named by hash. Knowing a hash is not authorization to
   read it, and the protocol makes sure naming one is not either: the
   server reports an object held only to a caller who may read a session
@@ -918,7 +933,9 @@ allows, and the repository's nested modules exist for dependencies the
 root must not take. It ships no authentication scheme: its server
 checks each route's scope against the principal a hook the program
 supplies resolves the request to, and refuses every request without
-that hook, and its client sends whatever credentials the program's HTTP
+that hook; a second hook the program supplies, `WithAuthorize`, is
+asked about the session each request names, a resumed follow's
+included, and its client sends whatever credentials the program's HTTP
 client adds. A 401 carries the `WWW-Authenticate` challenge the program
 names, as RFC 9110 requires, since the scheme is the program's.
 
@@ -974,8 +991,10 @@ by hash. Three things in it are the reference server's:
   collects them as any unreferenced object, and the server keeps in
   memory which principal uploaded each, for `upload_grace_ms`. An
   operator sweeps with at least that grace.
-- **Read scope reads every session**, so an object a session holds is
-  reachable by every reader; per-session authorization would narrow it.
+- **Read scope reads every session** unless the program authorizes per
+  session (`WithAuthorize`), so an object a session holds is reachable
+  by every reader; with the hook, only through a session the caller may
+  read.
 
 The fourth is the remaining reads. The log read and `durable=true`
 (log and follow) are served over a store that reads its log record by
@@ -1012,7 +1031,8 @@ leaves, each the reference server's choice and not the protocol's:
   `Session`, which would claim the whole session.
 - **The principal of a push or an append** is not recorded (Open
   questions), reach is computed by reading the store's sessions rather
-  than from an index, and read scope reads every session.
+  than from an index, and read scope reads every session unless the
+  program authorizes per session.
 
 The whole implementation is:
 - **A server** that wraps a store the reference library offers, with

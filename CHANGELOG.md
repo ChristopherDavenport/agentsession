@@ -7,6 +7,20 @@ versions may break the API.
 
 ## Unreleased
 
+- **Security: every request to the store protocol is authorized against
+  the session it names, a resumed follow included.** RFC 0003 says so
+  under Following and Security considerations: an event ID, like a
+  hash, is not a capability, and a refused session is answered
+  `no_session`. A follow resumed from `Last-Event-ID` or `after` went
+  straight to the session's shared follower without reading the store,
+  so a program that authorized sessions in a store wrapper served any
+  reader who held another principal's event ID. **Added:
+  `remote.WithAuthorize`** and its `Authorizer`, asked on every route
+  under `/v1/sessions/{id}`, on a create (and a fork's origin), on a ref
+  update or pushed ref for the session it moves to, for each session in
+  a listing, and for each session an object is reached through. Without
+  it a scope still covers every session, as before. (#221)
+
 - **Dependencies:** `openresponses` v0.0.17, from v0.0.13, in the root
   and the `sqlite` and `otel` modules. It never takes a member the
   request type declares from `Request.Extra`, so `Settings.Request` now

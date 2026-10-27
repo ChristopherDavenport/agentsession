@@ -145,6 +145,12 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if hdr.ID == "" {
 		hdr.ID = agentsession.NewSessionID()
 	}
+	if !h.may(r.Context(), ScopeWrite, hdr.ID) || (hdr.Base != "" && hdr.ParentSession != "" && !h.may(r.Context(), ScopeRead, hdr.ParentSession)) {
+		// A fork reads its origin's prefix, so the origin is authorized
+		// as a read.
+		h.fail(w, noSession())
+		return
+	}
 	st := h.state(hdr.ID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -612,6 +618,10 @@ func (h *Handler) updateRef(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := req.Next.lib()
+	if next.Session != "" && !h.may(r.Context(), ScopeRefs, next.Session) {
+		h.fail(w, noSession())
+		return
+	}
 	err := h.refs.UpdateRef(r.Context(), name, req.Expected.lib(), next, req.Reason)
 	switch {
 	case err == nil:
