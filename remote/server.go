@@ -1047,6 +1047,12 @@ func (h *Handler) mayRead(ctx context.Context, t agentsession.RefTarget) bool {
 	return t.Session == "" || h.may(ctx, ScopeRead, t.Session)
 }
 
+// mayMove reports whether the principal on ctx may move a ref that
+// names t: read the session and update refs to it.
+func (h *Handler) mayMove(ctx context.Context, t agentsession.RefTarget) bool {
+	return h.mayRead(ctx, t) && (t.Session == "" || h.may(ctx, ScopeRefs, t.Session))
+}
+
 // noRef is the refusal of a ref whose session the principal may not
 // read, the same as for a ref the store does not hold.
 func noRef() *Problem { return problem(CodeNoRef, "no such ref", "") }

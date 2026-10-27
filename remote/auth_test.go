@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -268,5 +269,47 @@ func TestAuthorizeRefReads(t *testing.T) {
 	}
 	if len(datas) != 2 || !strings.Contains(datas[0], theirs.ID()) || strings.Contains(datas[1], mine.ID()) || !strings.Contains(datas[1], `"target":null`) {
 		t.Errorf("bob's follow: %q, want his session and then no target", datas)
+	}
+}
+
+// A ref write reaches the session the ref names now as well as the one
+// it moves to: a principal that may not read the ref's target gets
+// no_ref, never the target in a refusal, and cannot move the ref away
+// with a target it learnt elsewhere.
+func TestAuthorizeRefWrites(t *testing.T) {
+	ctx := context.Background()
+	st := agentsession.NewMemoryStore()
+	alices, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobs, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateRef(ctx, "team/talk", agentsession.RefTarget{}, agentsession.RefTarget{Session: alices.ID()}, "created"); err != nil {
+		t.Fatal(err)
+	}
+	url := server(t, st,
+		remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{
+			"bob": {Name: "bob", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeRefs}},
+		})),
+		remote.WithAuthorize(owners(map[string]string{alices.ID(): "alice", bobs.ID(): "bob"})),
+	)
+	for _, expected := range []string{`null`, `{"session":"` + alices.ID() + `"}`} {
+		req, _ := http.NewRequest(http.MethodPut, url+"/v1/refs/team/talk", strings.NewReader(`{"expected":`+expected+`,"next":{"session":"`+bobs.ID()+`"}}`))
+		req.Header.Set("Authorization", "Bearer bob")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound || !strings.Contains(string(body), remote.CodeNoRef) || strings.Contains(string(body), alices.ID()) {
+			t.Errorf("bob's update from %s: %d %s, want no_ref naming nothing of alice's", expected, resp.StatusCode, body)
+		}
+	}
+	if got, err := st.ResolveRef(ctx, "team/talk"); err != nil || got.Session != alices.ID() {
+		t.Errorf("alice's ref is at %v, %v; want still %s", got, err, alices.ID())
 	}
 }

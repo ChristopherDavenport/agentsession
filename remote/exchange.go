@@ -475,16 +475,31 @@ func (h *Handler) pushRef(ctx context.Context, ref PushRef) (PushRefResult, erro
 		out.Why = "no such session"
 		return out, nil
 	}
+	// As for a ref update: the ref's current target and the expected one
+	// must be the caller's to move, and a refusal names neither.
+	if !h.mayMove(ctx, ref.Expected.lib()) {
+		out.Why = "no such ref"
+		return out, nil
+	}
+	if t, err := h.refs.ResolveRef(ctx, ref.Name); (err == nil || !t.IsZero()) && !h.mayMove(ctx, t) {
+		out.Why = "no such ref"
+		return out, nil
+	}
 	err := h.refs.UpdateRef(ctx, ref.Name, ref.Expected.lib(), ref.Next.lib(), "exchange: push")
 	var moved *agentsession.RefMovedError
 	switch {
 	case err == nil:
 		out.Moved = true
+	case errors.As(err, &moved) && !h.mayMove(ctx, moved.Current):
+		out.Why = "no such ref"
 	case errors.As(err, &moved):
 		out.Current = targetOut(moved.Current)
 		out.Why = fmt.Sprintf("the server's ref holds %s, not the expected %s", orNone(moved.Current.String()), orNone(ref.Expected.lib().String()))
 	case errors.Is(err, agentsession.ErrRefMoved):
 		out.Why = err.Error()
+		if t, rerr := h.refs.ResolveRef(ctx, ref.Name); (rerr == nil || !t.IsZero()) && !h.mayMove(ctx, t) {
+			out.Why = "no such ref" // its text names the target
+		}
 	case errors.Is(err, agentsession.ErrRefName), errors.Is(err, agentsession.ErrNoEntry), errors.Is(err, agentsession.ErrNoSession):
 		out.Why = err.Error()
 	default:

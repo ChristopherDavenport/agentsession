@@ -631,17 +631,41 @@ func (h *Handler) updateRef(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, noSession())
 		return
 	}
-	err := h.refs.UpdateRef(r.Context(), name, req.Expected.lib(), next, req.Reason)
+	// The ref reaches the session it names now as well as the one it
+	// moves to: a ref whose target the caller may not move is no ref of
+	// its, and an expected value naming such a session is refused alike,
+	// so the compare cannot succeed on a target the caller learnt
+	// elsewhere and no refusal names one.
+	expected := req.Expected.lib()
+	if !h.mayMove(r.Context(), expected) {
+		h.fail(w, noRef())
+		return
+	}
+	if t, rerr := h.refs.ResolveRef(r.Context(), name); (rerr == nil || !t.IsZero()) && !h.mayMove(r.Context(), t) {
+		h.fail(w, noRef())
+		return
+	}
+	err := h.refs.UpdateRef(r.Context(), name, expected, next, req.Reason)
 	switch {
 	case err == nil:
 		writeJSON(w, refLine{Name: name, Target: targetOut(next)})
 	case errors.Is(err, agentsession.ErrRefMoved):
 		p := problem(CodeRefMoved, "the ref is not at the expected target", "")
 		var moved *agentsession.RefMovedError
+		cur, known := agentsession.RefTarget{}, false
 		if errors.As(err, &moved) {
-			p.Target = targetOut(moved.Current)
+			cur, known = moved.Current, true
 		} else if t, rerr := h.refs.ResolveRef(r.Context(), name); rerr == nil || !t.IsZero() {
-			p.Target = targetOut(t)
+			cur, known = t, true
+		}
+		if known && !h.mayMove(r.Context(), cur) {
+			// Moved, since the check, onto a session the caller may not
+			// reach.
+			h.fail(w, noRef())
+			return
+		}
+		if known {
+			p.Target = targetOut(cur)
 		}
 		h.fail(w, p)
 	case errors.Is(err, agentsession.ErrNoSession):

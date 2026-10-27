@@ -903,7 +903,10 @@ Not carried, because they are a local operator's or a file's:
   create against the session it creates and, for a fork, the session
   it names as its origin and its `base`, which the caller reaches only
   through a session it may read (a refused base is `no_entry`); and a
-  ref update against the session it moves the ref to. A ref reaches the
+  ref update or a pushed ref against the session it moves the ref to,
+  the session the ref names now and the one its `expected` names, a
+  ref the caller may not move being answered `no_ref` and a refusal
+  never naming a target the caller may not read. A ref reaches the
   session it names, so reading one is authorized against that session
   too: a resolve, a log or a follow of a ref whose target the caller may
   not read is answered `no_ref`, as for a ref the server does not hold;
