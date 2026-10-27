@@ -634,7 +634,9 @@ later one, as RFC 0002's Sessions say.
 - **Head** is the compare-and-swap: `{"expected": e|null, "to": t,
   "durable": bool}`, `null` meaning no head; `to` names an entry, and a
   head is not moved to none. Every store offers it, durable on request
-  (RFC 0002, Head), so `durable: true` is never `unsupported`; a move
+  (RFC 0002, Head), so `durable: true` is never `unsupported` from a
+  store that conforms to RFC 0002 (a server over a store that does not,
+  as the reference server can be given one, refuses it so); a move
   with `durable: false` MAY be made on the live head alone, which a
   later append records. A store that keeps its head in its entries
   performs a durable move by appending a `leaf` label, which followers
@@ -849,6 +851,7 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | `not_record` | 409 | a push from a store that is not the record |
 | `header_differs` | 409 | the receiver holds another session under this ID |
 | `call_id_repeated` | 409 | an append or exchange that would repeat a `call_id` |
+| `superseded` | 409 | an append of a `continued_in` link to a session that holds one naming another successor |
 | `synthetic` | 422 | a `leaf` label carrying `synthetic` |
 | `bad_entry` | 422 | malformed: `id` differs, reserved member, `ts` form, not I-JSON, unknown prefix; also a pushed or created header RFC 0001 calls malformed, such as `redacted_from` without `redacted` |
 | `base_rule` | 422 | a parent that is not the base, an own entry, or null; a null parent in a session with a base |

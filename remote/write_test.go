@@ -408,3 +408,34 @@ func TestCommitOverCAS(t *testing.T) {
 		t.Errorf("the head after the move: %s, %v; want %s", info.Head, err, first)
 	}
 }
+
+// A second continued_in link naming another successor is refused with a
+// code of its own, superseded, so a client tells "another writer
+// continued this session" from a store fault.
+func TestASecondContinuationIsSuperseded(t *testing.T) {
+	ctx := context.Background()
+	st := agentsession.NewMemoryStore()
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, s.ID(), agentsession.NewLinkEntry(agentsession.RelContinuedIn, "first-successor")); err != nil {
+		t.Fatal(err)
+	}
+	url := server(t, st, remote.WithInsecureNoAuth())
+	b, err := agentsession.MarshalEntry(agentsession.NewLinkEntry(agentsession.RelContinuedIn, "second-successor"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := leaseOn(t, url, s.ID(), "w", time.Minute)
+	resp := send(t, http.MethodPost, url+"/v1/sessions/"+s.ID()+"/entries", map[string]string{"Lease-Token": l.Token}, string(b)+"\n")
+	if p := problemOf(t, resp); p.Code != remote.CodeSuperseded || p.Status != http.StatusConflict {
+		t.Errorf("a second continuation: %+v, want 409 superseded", p)
+	}
+	if resp := send(t, http.MethodDelete, url+"/v1/sessions/"+s.ID()+"/lease", map[string]string{"Lease-Id": l.LeaseID}, ""); resp.StatusCode/100 != 2 {
+		t.Fatalf("release: %d", resp.StatusCode)
+	}
+	if _, err := dial(t, url).Append(ctx, s.ID(), agentsession.NewLinkEntry(agentsession.RelContinuedIn, "third-successor")); !errors.Is(err, agentsession.ErrSuperseded) {
+		t.Errorf("through the client: %v, want ErrSuperseded", err)
+	}
+}

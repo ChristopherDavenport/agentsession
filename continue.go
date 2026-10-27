@@ -92,8 +92,11 @@ func Continue(ctx context.Context, store Store, id string, summary openresponses
 }
 
 // ErrSuperseded is returned by [Continue] for a session a continued_in
-// link has already retired, and by a store that refuses to append to
-// such a session. No store in this module refuses the append.
+// link has already retired, and by every store of this module for an
+// append of a second continued_in link naming another successor, which
+// would fork the chain (RFC 0002, Refs and continuation). A store may
+// also refuse any append to such a session with it; none of this
+// module's does.
 var ErrSuperseded = errors.New("agentsession: session was continued in a successor")
 
 // SupersededBy returns the successor named by the last continued_in

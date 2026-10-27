@@ -98,6 +98,7 @@ const (
 	CodeLeaseLost      = "lease_lost"
 	CodeMirror         = "mirror"
 	CodeCallIDRepeated = "call_id_repeated"
+	CodeSuperseded     = "superseded"
 	CodeSynthetic      = "synthetic"
 	CodeBadEntry       = "bad_entry"
 	CodeBaseRule       = "base_rule"
@@ -204,6 +205,7 @@ var codes = map[string]struct {
 	CodeLeaseLost:      {http.StatusConflict, ErrLeaseLost},
 	CodeMirror:         {http.StatusConflict, ErrMirror},
 	CodeCallIDRepeated: {http.StatusConflict, agentsession.ErrCallIDRepeated},
+	CodeSuperseded:     {http.StatusConflict, agentsession.ErrSuperseded},
 	CodeSynthetic:      {http.StatusUnprocessableEntity, ErrSynthetic},
 	CodeBadEntry:       {http.StatusUnprocessableEntity, ErrBadEntry},
 	CodeBaseRule:       {http.StatusUnprocessableEntity, agentsession.ErrBaseRule},
@@ -352,6 +354,8 @@ func problemOf(err error) *Problem {
 		return problem(CodeRefMoved, "the ref is not at the expected target", "")
 	case errors.Is(err, agentsession.ErrCallIDRepeated):
 		return problem(CodeCallIDRepeated, "the entry repeats a call_id", err.Error())
+	case errors.Is(err, agentsession.ErrSuperseded):
+		return problem(CodeSuperseded, "the session was continued in another successor", "")
 	case errors.Is(err, cas.ErrHeadMoved):
 		return problem(CodeHeadMoved, "the head is not the expected entry", "")
 	case errors.Is(err, cas.ErrMirror):
