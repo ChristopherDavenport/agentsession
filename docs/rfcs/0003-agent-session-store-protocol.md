@@ -315,8 +315,8 @@ GET /v1/sessions/{id}/path?leaf={entry}&contents={all|since-fold|none}
   - Only a store with a committed view offers this; the capability
     `committed_view` says so, and otherwise `durable=true` is 501
     `unsupported`.
-- **The path** is the entries from the root to `leaf` (the head by
-  default), with the root first, as NDJSON ending with `end`. Each line
+- **The path** is the entries from the first entry to `leaf` (the head
+  by default), the first entry first, as NDJSON ending with `end`. Each line
   is `{"entry": hash, "envelope": {…}, "content": {…}|null}`: the
   envelope inline, so the chain verifies from the response alone, and
   the content according to `contents`. The first line also carries the
@@ -333,7 +333,7 @@ GET /v1/sessions/{id}/path?leaf={entry}&contents={all|since-fold|none}
     is not an `item`:
     - Let the newest `compaction` on the path to `leaf` be the one
       nearest `leaf`. The path is the single chain of `parent` links
-      from `leaf` to a root, across the base into the prefix, so the
+      from `leaf` up to the universal root, across the base into the prefix, so the
       newest compaction is well defined for a given `leaf`, and
       differs between leaves on different branches.
     - Contents come for the compaction itself (its checkpoint, summary
@@ -592,10 +592,11 @@ later one, as RFC 0002's Sessions say.
     first line is refused is answered with that line's problem, as a
     single append's refusal, with nothing applied.
   - A complete line is taken as written, its parent included: a null
-    parent is a root, which continues a session with no head and is
-    otherwise a branch that leaves the head where it is (RFC 0002,
-    Append). A writer that wants the head on the root moves it by the
-    compare-and-swap below once the root is appended. A line whose `id`
+    parent is the universal root, and the line an ordinary append
+    there, which continues when the head is the root and is otherwise a
+    branch that leaves the head where it is (RFC 0002, Append). A writer
+    that wants the head on the entry moves it by the compare-and-swap
+    below once it is appended. A line whose `id`
     is missing or empty is incomplete, and the server fills it as a
     store fills an entry it is handed: the time now
     for a missing or zero `ts`, the session's head for a missing or null
@@ -631,21 +632,24 @@ later one, as RFC 0002's Sessions say.
   that fails after the append was accepted cuts the entries back out of
   the log (RFC 0002, Following a log), and the response is an error:
   the entries did not land, and followers get a `reset`.
-- **Head** is the compare-and-swap: `{"expected": e|null, "to": t,
-  "durable": bool}`, `null` meaning no head; `to` names an entry, and a
-  head is not moved to none. Every store offers it, durable on request
-  (RFC 0002, Head), so `durable: true` is never `unsupported` from a
-  store that conforms to RFC 0002 (a server over a store that does not,
-  as the reference server can be given one, refuses it so); a move
-  with `durable: false` MAY be made on the live head alone, which a
+- **Head** is the compare-and-swap: `{"expected": e|null, "to": t|null,
+  "durable": bool}`, `null` being the universal root (RFC 0002, Head),
+  the empty context, in `expected` and in `to`; `to` MUST be present,
+  and a request without it is `head_target`. A session with a base is
+  refused the root as `no_entry`. Wherever this document gives a head as
+  `h|null`, `null` is the root. Every store offers it, durable on
+  request (RFC 0002, Head), so `durable: true` is never `unsupported`
+  from a store that conforms to RFC 0002 (a server over a store that
+  does not, as the reference server can be given one, refuses it so); a
+  move with `durable: false` MAY be made on the live head alone, which a
   later append records. A store that keeps its head in its entries
   performs a durable move by appending a `leaf` label, which followers
   see as an `appended` with outcome `leaf_moved` rather than a `head`.
-  It is `head_moved` with the current head on a mismatch, `no_entry`
-  for a target that is not the base or an own entry, and `head_target` for a `leaf` label. The
-  response says whether the move was committed, and `durable: true`
-  commits it before it answers, as RFC 0002 asks (Durability and
-  recovery).
+  It is `head_moved` with the current head on a mismatch, `no_entry` for
+  a target that is not the root, the base or an own entry, and
+  `head_target` for a `leaf` label. The response says whether the move
+  was committed, and `durable: true` commits it before it answers, as
+  RFC 0002 asks (Durability and recovery).
 - **Record** is RFC 0002's declare-record: `POST /v1/sessions/{id}/record`
   makes this server the record for a session it holds as a mirror. RFC
   0002 permits it when the record has deleted the session without
@@ -763,7 +767,7 @@ A push is RFC 0002's, over the wire.
    session the sender may read holds is uploaded even when another
    tenant's session holds it.
 2. It posts `{"header": …, "entries": [own entry hashes in log order],
-   "prefix": [prefix entry hashes, root first], "head": {"expected": e,
+   "prefix": [prefix entry hashes, first entry first], "head": {"expected": e,
    "to": t, "force": bool}, "mark": "mirror"|"record", "refs": [{"name",
    "expected", "next"}]}`. `mark` is the **receiver's resulting mark**:
    `mirror` (the usual push) or `record` (a handover to the receiver).
@@ -810,7 +814,7 @@ A **fetch** needs nothing new. The fetcher reads the log with
 `durable=true`, which carries the session's header, incarnation, mark
 and head from one committed view, and reads the **closure**: the
 session's own entries from the log, and its prefix from `path` (the
-entries from the root to the base, root first, which `header.base`
+entries from the first entry to the base, first entry first, which `header.base`
 marks), with their contents, and the media the contents name. It
 admits them in its own store, and moves its head and refs under RFC
 0002's fetch rules (Exchange), which hold the head for a record. The
@@ -844,7 +848,7 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | `ref_moved` | 409 | the ref is not at `expected`; body has the current target |
 | `ref_name` | 400 | a name or prefix that breaks RFC 0002's name rules, or conflicts with a held ref |
 | `head_moved` | 409 | the head is not `expected` (also a handover whose head did not move) |
-| `head_target` | 422 | a head target that is a `leaf` label, or not the base or an own entry |
+| `head_target` | 422 | a head move with no `to`, or one whose target is a `leaf` label |
 | `session_locked` | 409 | the session is leased or held locally |
 | `lease_lost` | 409 | the token is not the current, unexpired lease |
 | `mirror` | 409 | a local append, head move or mark change on a mirror |
@@ -979,9 +983,9 @@ appending a `leaf` label), and ref updates, under the scopes `write`,
 `Open` take a lease and renew it until `Release`, `Delete` or `Close`;
 an append is prepared on the client's session and sent as a complete
 line, and when the writer moved its session's leaf the client first
-moves the server's head there by compare-and-swap, and after a root
-the writer's session continues, its leaf reset, it moves the head onto
-the root, so the record's head is the writer's leaf. Its `SetHead` is
+moves the server's head there by compare-and-swap, and after a first
+entry the writer's session continues, its leaf reset to the root, it
+moves the head onto that entry, so the record's head is the writer's leaf. Its `SetHead` is
 the durable compare-and-swap. The library's store suite runs through
 it over the memory, JSONL and `cas` stores. Two things in it are the reference
 server's and not the protocol's:

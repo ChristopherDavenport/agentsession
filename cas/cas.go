@@ -3010,10 +3010,11 @@ func (s *Store) syncHead(h *handle, sessionID string) error {
 	return nil
 }
 
-// SetHead moves a session's head from expected to the entry to, or
-// returns ErrHeadMoved when the head is not expected. "" is a valid
-// expected value for a session with no head. The target must be the
-// base or an own entry and not a leaf label; a mirror is refused. The
+// SetHead moves a session's head from expected to to, or returns
+// ErrHeadMoved when the head is not expected. Either may be "", the
+// universal root, the empty context. The target must be the root in a
+// session with no base, or the base or an own entry and not a leaf
+// label; a mirror is refused. The
 // log record is committed, durably, before the head moves anywhere.
 func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) error {
 	if err := ctx.Err(); err != nil {
@@ -3050,7 +3051,9 @@ func (s *Store) moveHead(h *handle, sessionID, to string) error {
 	h.lazy = false
 	_ = writeHead(h.dir, to) // an index; the log has it
 	h.head = to
-	if err := h.session.Branch(to); err != nil {
+	if to == "" {
+		h.session.ResetLeaf()
+	} else if err := h.session.Branch(to); err != nil {
 		// Committed; the session is rebuilt on the next Open.
 		s.dropHandle(sessionID, h)
 	}
@@ -3064,9 +3067,18 @@ func orNone(s string) string {
 	return s
 }
 
-// mayRestOn holds a head target to the rule: the base or an own entry,
-// and not a leaf label.
+// mayRestOn holds a head target to the rule: the universal root ("") in
+// a session with no base, or the base or an own entry and not a leaf
+// label.
 func (s *Store) mayRestOn(sess *agentsession.Session, id string) error {
+	if id == "" {
+		// The universal root, the empty context, which a session with
+		// a base never rests on.
+		if sess.Header().Base != "" {
+			return fmt.Errorf("%w: the head of a session with a base is not the root", agentsession.ErrNoEntry)
+		}
+		return nil
+	}
 	e, ok := sess.Entry(id)
 	if !ok {
 		return fmt.Errorf("%w: %s", agentsession.ErrNoEntry, id)

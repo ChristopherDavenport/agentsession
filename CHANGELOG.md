@@ -7,6 +7,20 @@ versions may break the API.
 
 ## Unreleased
 
+- **The universal root (RFC 0001 Terminology; RFC 0002 Sessions,
+  Append, Head; RFC 0003 Writing).** Every session hangs from one root,
+  shared by all, which `parent: null` spells on the wire; a session is
+  one tree, an entry with a null parent is a first entry, and what was a
+  second root is a branch at the root. The head may rest on the root,
+  the empty context, which replaces "no head": `HeadStore.SetHead`
+  takes `""` for the root as expected and as target in every store and
+  the remote client, a session with a base excepted (`ErrNoEntry`), and
+  the next append with no parent continues from it. A file store records
+  it as a `leaf` label whose `target` is `null`, which a reader honours
+  (RFC 0001 0.14); `LabelEntry` writes an empty `Target` as `null`. Over
+  the wire `null` is the root in a head move's `expected` and `to`; a
+  move with no `to` is still `head_target`. No line and no hash moves.
+
 - **A branch leaves the head in place across a reopen in `jsonl` and
   `sqlite` (RFC 0002, Head).** Both keep a session's head only in its
   lines, which a reader resolves to the newest line under the `leaf`

@@ -320,10 +320,10 @@ func (c *Client) Write(ctx context.Context, sessionID string, e agentsession.Ent
 		return res, nil
 	}
 	if leaf := hd.sess.Leaf(); leaf == got.ID && hd.head != leaf && e.Base().Parent == "" {
-		// A root the writer's session continues, its leaf reset, which
-		// the server's session took as a branch since it has a head: the
-		// writer moves the head onto it, as RFC 0002's Append has a
-		// writer do.
+		// A first entry the writer's session continues, its leaf reset to
+		// the root, which the server's session took as a branch at the
+		// root since its head is elsewhere: the writer moves the head
+		// onto it, as RFC 0002's Append has a writer do.
 		header.Del("Content-Type")
 		if err := c.moveHead(ctx, hd, header, leaf); err != nil {
 			return res, fmt.Errorf("remote: the root %s landed in %s; moving the head onto it: %w", got.ID, sessionID, err)
@@ -365,14 +365,17 @@ func (c *Client) SetHead(ctx context.Context, sessionID, expected, to string) er
 	if err != nil {
 		return err
 	}
-	body, _ := json.Marshal(headRequest{Expected: headOut(expected), To: &to, Durable: true})
+	// to is always sent, null for the root.
+	body, _ := json.Marshal(headRequest{Expected: headOut(expected), To: headOut(to), Durable: true})
 	resp, err := c.do(ctx, http.MethodPut, "/sessions/"+url.PathEscape(sessionID)+"/head", nil, header, body)
 	if err != nil {
 		return err
 	}
 	resp.Body.Close()
 	hd.head = to
-	if err := hd.sess.Branch(to); err != nil {
+	if to == "" {
+		hd.sess.ResetLeaf()
+	} else if err := hd.sess.Branch(to); err != nil {
 		// The server holds an entry this session does not: the next
 		// use reads it again.
 		hd.sess = nil

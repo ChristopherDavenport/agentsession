@@ -114,7 +114,9 @@ func (s *Session) Header() Header {
 func (s *Session) ID() string { return s.Header().ID }
 
 // Leaf returns the ID of the entry the next append will name as its
-// parent, or "" when the next append starts a new root.
+// parent, or "" when the head is the universal root, the empty context
+// every session's first entries hang from, and the next append is a
+// first entry.
 func (s *Session) Leaf() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -176,7 +178,9 @@ func (s *Session) Children(id string) []string {
 	return append([]string(nil), s.children[id]...)
 }
 
-// Roots returns the IDs of the root entries in file order.
+// Roots returns the IDs of the first entries, those that hang from the
+// universal root, in file order. A session with a base has one; one
+// without may branch at the root.
 func (s *Session) Roots() []string { return s.Children("") }
 
 // Leaves returns the IDs of the entries that have no children, in file
@@ -193,8 +197,9 @@ func (s *Session) Leaves() []string {
 	return out
 }
 
-// Path returns the entries from the root to id, root first, or nil when
-// id is not in the session.
+// Path returns the entries from the first entry to id, the first entry
+// first, or nil when id is not in the session. The path ends, above its
+// first entry, at the universal root.
 func (s *Session) Path(id string) []Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -230,7 +235,8 @@ func (s *Session) Branch(id string) error {
 	return nil
 }
 
-// ResetLeaf clears the leaf, so the next append starts a new root.
+// ResetLeaf moves the leaf to the universal root, so the next append is
+// a first entry.
 func (s *Session) ResetLeaf() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -242,8 +248,8 @@ func (s *Session) ResetLeaf() {
 // the caller set must match or the append is refused. An empty Parent
 // is set to the current leaf, so an explicit Parent branches in place,
 // unless the caller set the ID: an entry whose ID is set and whose
-// Parent is empty is a root, which continues a session with no leaf
-// and is otherwise a branch, as RFC 0002's Append has it;
+// Parent is empty hangs from the universal root, a branch there that
+// continues only when the leaf is the root, as RFC 0002's Append has it;
 // a zero Timestamp is set to now, and any timestamp is taken to UTC,
 // the one spelling the format admits. In a session with a base, the
 // parent must be the base or an own entry.
@@ -507,9 +513,29 @@ func (s *Session) Extend(e Entry) (Result, error) {
 	if s.read.marked == "" {
 		s.leaf = s.notOnLabel(e.Base().ID)
 	} else {
-		s.leaf = s.notOnLabel(s.read.tip)
+		s.leaf = s.notOnLabel(unmark(s.read.tip))
 	}
 	return r, nil
+}
+
+// rootMark is a leaf mark on the universal root, which "" spells
+// everywhere but here, where "" is no mark at all.
+const rootMark = "\x00root"
+
+// markOf is the mark a leaf label's target puts in force.
+func markOf(target string) string {
+	if target == "" {
+		return rootMark
+	}
+	return target
+}
+
+// unmark is the entry, or "" for the root, a mark or a tip names.
+func unmark(m string) string {
+	if m == rootMark {
+		return ""
+	}
+	return m
 }
 
 // readLeafState computes resolveLeaf's state over the session's entries.
@@ -530,6 +556,9 @@ func (st *readLeaf) mark(s *Session, target string, at int) {
 		return
 	}
 	st.under = map[string]bool{target: true}
+	if target == rootMark {
+		st.under[""] = true // every first entry hangs from the root
+	}
 	for i, e := range s.entries {
 		b := e.Base()
 		if st.under[b.Parent] {
@@ -550,11 +579,11 @@ func (st *readLeaf) extend(s *Session, i int) {
 		switch {
 		case l.Label != nil && *l.Label == LeafLabel:
 			if s.mayRestOn(l.Target) {
-				st.mark(s, l.Target, i)
+				st.mark(s, markOf(l.Target), i)
 				st.n = i + 1
 				return
 			}
-		case l.Label == nil && l.Target == st.marked && st.marked != "":
+		case l.Label == nil && st.marked != "" && l.Target == unmark(st.marked):
 			st.mark(s, "", -1)
 			st.n = i + 1
 			return
@@ -607,7 +636,7 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 	}
 	if b.Parent == "" && b.ID == "" {
 		// An entry the caller left incomplete hangs from the leaf; one
-		// whose ID is set says its parent is null, so it is a root.
+		// whose ID is set says its parent is null, the universal root.
 		b.Parent = s.leaf
 	}
 	if err := s.checkParentRule(b.Parent); err != nil {
@@ -857,7 +886,7 @@ func checkOwnParent(base, parent string, onPrefix func(string) bool) error {
 
 // baseRule holds the lines of a file with a base to the base rule in
 // file order, as Read and Scan meet them: the lines up to the base are
-// the path to it, so the first is a root and each later one the child
+// the path to it, so the first is a first entry and each later one the child
 // of the line before it, and the lines after it hang from the base or
 // from one another. Append holds the entry it is given to the same rule
 // through checkParentRule, so the three cannot differ on it. A nil
@@ -940,9 +969,13 @@ func (s *Session) moveLeafFor(e Entry) {
 	}
 }
 
-// mayRestOn reports whether the leaf may rest on id: it exists, it is
-// the base or an own entry, and it is not a leaf label.
+// mayRestOn reports whether the leaf may rest on id: the universal root
+// ("") in a session with no base, or an entry that is the base or an
+// own entry and is not a leaf label.
 func (s *Session) mayRestOn(id string) bool {
+	if id == "" {
+		return s.header.Base == ""
+	}
 	e, ok := s.byID[id]
 	if !ok {
 		return false
@@ -1006,10 +1039,11 @@ func (s *Session) MarkLeaf() (*LabelEntry, error) {
 // a store that moves a session's head by appending a leaf label: it
 // checks that the leaf is expected and that the head may rest on to,
 // and returns the label whose append moves the leaf there, hung from to
-// as [Session.MarkLeaf]'s is. A leaf that is not expected is
-// [ErrHeadMoved]; a target the session does not hold, or holds on the
-// prefix above its base, is [ErrNoEntry]; and a leaf label is
-// [ErrHeadTarget]. The store appends the label under the same lock it
+// as [Session.MarkLeaf]'s is. Either may be "", the universal root, the
+// empty context: a label to the root has a null target. A leaf that is
+// not expected is [ErrHeadMoved]; a target the session does not hold,
+// holds on the prefix above its base, or the root in a session with a
+// base, is [ErrNoEntry]; and a leaf label is [ErrHeadTarget]. The store appends the label under the same lock it
 // read the leaf under, so nothing moves the leaf between the two.
 func (s *Session) HeadLabel(expected, to string) (*LabelEntry, error) {
 	s.mu.RLock()
@@ -1026,9 +1060,15 @@ func (s *Session) headLabel(expected, to string) (*LabelEntry, error) {
 		}
 		return nil, fmt.Errorf("%w: head is %s", ErrHeadMoved, leaf)
 	}
+	if to == "" {
+		if s.header.Base != "" {
+			return nil, fmt.Errorf("%w: the head of a session with a base rests on the base or an own entry, not the root", ErrNoEntry)
+		}
+		return NewLabelEntry("", LeafLabel), nil
+	}
 	e, ok := s.byID[to]
 	if !ok || (s.header.Base != "" && to != s.header.Base && s.prefix[to]) {
-		return nil, fmt.Errorf("%w: the head may rest on the base or an own entry, not %s", ErrNoEntry, to)
+		return nil, fmt.Errorf("%w: the head may rest on the root, the base or an own entry, not %s", ErrNoEntry, to)
 	}
 	if l, ok := e.(*LabelEntry); ok && l.Label != nil && *l.Label == LeafLabel {
 		return nil, fmt.Errorf("%w: %s", ErrHeadTarget, to)
@@ -1065,17 +1105,17 @@ func (s *Session) commitHead(expected, to string) (*LabelEntry, error) {
 // do. A reader takes the newest entry under the leaf label in force, or
 // the last line, so a branch, an entry appended away from the head,
 // would read back as the head, which RFC 0002 says does not move; the
-// label keeps it where it is. A session with no leaf needs none, since
-// a label cannot say "no head". The label hangs from the leaf, as
-// [Session.MarkLeaf]'s does.
+// label keeps it where it is, the universal root among the places it may
+// be, which a label with a null target names. The label hangs from the
+// leaf, as [Session.MarkLeaf]'s does.
 func (s *Session) LeafMarkNeeded() *LabelEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.leaf == "" || len(s.entries) == 0 {
+	if len(s.entries) == 0 || !s.mayRestOn(s.leaf) {
 		return nil
 	}
 	s.readCaughtUp()
-	resolved := s.read.tip
+	resolved := unmark(s.read.tip)
 	if s.read.marked == "" {
 		resolved = s.entries[len(s.entries)-1].Base().ID
 	}
@@ -1098,7 +1138,9 @@ func (s *Session) LeafMarkBefore(e Entry) *LabelEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b := e.Base()
-	if s.leaf == "" || b.Parent == s.leaf {
+	if b.Parent == s.leaf || s.leaf == "" {
+		// Under the head, or every entry is, the head being the root: a
+		// label ahead would pick e, so none goes ahead of it.
 		return nil
 	}
 	if l, ok := e.(*LabelEntry); ok && l.Label != nil && *l.Label == LeafLabel {
@@ -1116,7 +1158,7 @@ func (s *Session) LeafMarkBefore(e Entry) *LabelEntry {
 	}
 	if len(s.entries) > 0 {
 		s.readCaughtUp()
-		if s.read.marked != "" && !s.read.under[b.Parent] && s.notOnLabel(s.read.tip) == s.leaf {
+		if s.read.marked != "" && !s.read.under[b.Parent] && s.notOnLabel(unmark(s.read.tip)) == s.leaf {
 			return nil // e is off the marked branch, which still reads as the head
 		}
 	}
@@ -1160,9 +1202,9 @@ func (s *Session) durableLeafAt() (string, int) {
 			// not itself a leaf label. Otherwise the label moved
 			// nothing when it was appended, and moves nothing now.
 			if s.mayRestOn(l.Target) {
-				marked, at = l.Target, i
+				marked, at = markOf(l.Target), i
 			}
-		case l.Label == nil && l.Target == marked:
+		case l.Label == nil && marked != "" && l.Target == unmark(marked):
 			marked, at = "", -1
 		}
 	}
@@ -1197,6 +1239,9 @@ func (s *Session) resolveLeaf() string {
 	// A parent always precedes its children in the file, so descent is a
 	// single forward pass and needs no walk back up any path.
 	under := map[string]bool{marked: true}
+	if marked == rootMark {
+		under[""] = true // every first entry hangs from the root
+	}
 	leaf := marked
 	for i, e := range s.entries {
 		b := e.Base()
@@ -1207,7 +1252,7 @@ func (s *Session) resolveLeaf() string {
 			}
 		}
 	}
-	return s.notOnLabel(leaf)
+	return s.notOnLabel(unmark(leaf))
 }
 
 // notOnLabel walks up from id while it is a leaf label, since the leaf

@@ -121,20 +121,22 @@ type Releaser interface {
 // HeadStore is implemented by a store that moves a session's head by
 // compare-and-swap, which RFC 0002 (Head) asks of every store and every
 // store this module offers implements. SetHead moves the head of the
-// session from expected to the entry to, and returns once the move is
-// durable, as RFC 0002's Durability asks of a durable head move. ""
-// is a valid expected value, for a session with no head; to names an
-// entry, since a head is not moved to none. A head that is not
-// expected is [ErrHeadMoved]; a target that is not the base or one of
-// the session's own entries is [ErrNoEntry], and one that is a leaf
-// label [ErrHeadTarget].
+// session from expected to to, and returns once the move is durable,
+// as RFC 0002's Durability asks of a durable head move. Either may be
+// "", the universal root every session's first entries hang from: the
+// head there is the empty context, and the next append with no parent
+// continues from it. A head that is not expected is [ErrHeadMoved]; a
+// target that is not the root, the base or one of the session's own
+// entries is [ErrNoEntry], as is the root in a session with a base,
+// and one that is a leaf label [ErrHeadTarget].
 //
 // A store that keeps sessions as RFC 0001 files, or as their lines,
 // moves the head by appending a leaf label for to under its lock, after
 // the compare; the session the store shares with its callers sees the
 // move as an append. A store with a head of its own (the cas store)
-// records the head. Either way a writer that appended a root to a
-// session with a head, which is a branch, moves the head onto it here.
+// records the head. Either way a writer that appended a first entry to
+// a session whose head is not the root, which is a branch at the root,
+// moves the head onto it here.
 // A store set to hold only redacted entries offers it too: the label a
 // head move writes carries no content to have been redacted.
 type HeadStore interface {

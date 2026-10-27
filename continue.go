@@ -16,7 +16,7 @@ import (
 // wants them: the successor is created with parent_session naming id
 // and the old header's harness, working directory, records and media
 // mode; its first entry is a full config carrying the settings in
-// force at the old leaf, so the first request on the new root rebuilds
+// force at the old leaf, so the first request on its first entry rebuilds
 // and a recorder finds a config on the path; summary, when not nil, is
 // appended as the item that carries the conversation across; the old
 // session's display name is carried over; and the old session gets a

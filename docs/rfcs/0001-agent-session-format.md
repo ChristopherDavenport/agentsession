@@ -118,14 +118,21 @@ RFC 2119.
   appended under it. A file is its projection; a file written directly
   is a session whose store is the file.
 - **Entry**: one JSON object on one line after the header.
-- **Path**: the sequence of entries from an entry to a root, reversed,
-  following `parent` alone.
+- **Universal root**: the one point every session's entries hang from,
+  shared by every session and holding nothing. It is no entry and has
+  no ID; `parent: null` is its spelling on the wire, naming an edge to
+  it. An entry whose parent is the root is a **first entry**. A session
+  is one tree, under the root; several first entries are branches at
+  the root, not several trees.
+- **Path**: the sequence of entries from an entry up to the universal
+  root, reversed, following `parent` alone; its first entry is a first
+  entry.
 - **Leaf**: the entry the next append will name as its parent. In a
   store this is the session's head; in a file it is what the file's
   rules give.
 - **Base**: the entry, in another session, that this session continues
-  from, named by the header. The entries from the root to the base are
-  the file's **prefix**; the entries after it are the session's own.
+  from, named by the header. The entries from the first entry to the
+  base are the file's **prefix**; the entries after it are the session's own.
 - **Convergence**: an entry naming predecessors in `parents` beyond its
   `parent`, recording that their work was merged into this entry's
   payload.
@@ -173,8 +180,13 @@ RFC 2119.
   file order that descends from the entry the last `leaf` label in force
   names and was written after that label, the label itself excepted;
   that entry itself when nothing follows it; and the last entry of the
-  file when no such label is in force. A `leaf` label is not in force
+  file when no such label is in force. A `leaf` label whose `target` is
+  `null` names the universal root, in a file with no `base`: every
+  entry descends from it, so the leaf is the newest entry written after
+  the label, and the root itself, the empty context, when nothing
+  follows it. A `leaf` label is not in force
   when its target is not in the file, is on the prefix above the base,
+  is the root in a file with a `base`,
   or is itself a `leaf` label, since the leaf may rest on none of those;
   a leaf so found that is itself a `leaf` label resolves to its nearest
   ancestor that is not one. The label marks the branch that is live, not
@@ -183,7 +195,7 @@ RFC 2119.
   this rule is how a projection carries a head that is not the last
   line.
 - A file whose header names a `base` opens with the prefix: every entry
-  from the root to the base, in path order, before any entry the
+  from the first entry to the base, in path order, before any entry the
   session appended itself. The prefix is another session's record,
   carried here so the file stands alone; the header's `records` promise
   and the rules that rest on it apply to the entries after the base.
@@ -237,14 +249,15 @@ file.
 |---|---|---|
 | `type` | MUST | entry type; core types below, or namespaced `ns:type` |
 | `id` | MUST | the entry's envelope hash, defined below; unique everywhere, not only in the file |
-| `parent` | MUST | hash of the parent entry, or `null` for a root |
+| `parent` | MUST | hash of the parent entry, or `null` for the universal root, which makes the entry a first entry |
 | `parents` | MAY | further predecessors this entry converges; provenance only, never walked when building a context |
 | `ts` | MUST | RFC 3339 in one form, since it is hashed as a string: UTC, uppercase `T` and `Z`, seconds `00` to `59`, a fractional part only when non-zero, with no trailing zeros and at most nine digits, as in `2026-09-17T12:00:02.5Z`. Mainstream time types hold neither a tenth digit nor a second `60`; a writer truncates the fraction to nine digits and writes a second `60` as `59` with the same fraction. A reader MUST report any other spelling as it reports a hash that fails |
 
-A parent MUST appear earlier in the file than any child. Multiple roots
-are permitted in a file with no `base`; a file with one has one prefix
+A parent MUST appear earlier in the file than any child. A file with no
+`base` may branch at the universal root, holding several first entries;
+a file with one has one prefix
 and every own entry descends from the base: the lines before the base
-are the path to it, one root and each the child of the line before, and
+are the path to it, one first entry and each the child of the line before, and
 every line after it names as `parent` the base or a line after it, never
 `null` and never a prefix entry above the base. A reader MUST refuse a
 file that breaks this, as it refuses a parent not in the file, since a
@@ -323,7 +336,7 @@ envelope table admits one spelling of it.
   outside the envelope is in it, those this document does not define
   included, so that nothing a tool preserves can change unnoticed.
 - `id` is `sha256:` followed by the SHA-256 of the canonical bytes of
-  the **envelope object**: `type`; `parent`, `null` for a root;
+  the **envelope object**: `type`; `parent`, `null` for the root;
   `parents` only when present and non-empty, and a writer MUST omit an
   empty one; `ts`; and `content` holding the content hash. `content` is
   computed, not written: a line carries the body inline, and a reader
@@ -527,8 +540,8 @@ The envelope of one model call, written after its output items.
 
 ### `config`
 
-A delta to request settings. The first entry on any root SHOULD be a
-`config` carrying full settings.
+A delta to request settings. Every first entry SHOULD be a `config`
+carrying full settings.
 
 ```json
 {"type":"config","id":"…","parent":"…","ts":"…",
@@ -799,7 +812,7 @@ it. A `config` entry MAY carry it and no setting. Its members:
   that holds a `reasoning` item, carries a `response`, and was written
   while a model other than the request's was in force. The model in
   force at an entry is the `model` the settings hold there, the path from
-  its root to it replayed as the context algorithm replays it, a
+  its first entry to it replayed as the context algorithm replays it, a
   compaction's checkpoint standing for the entries it folded; the model
   in force for a request is the one the settings hold at the end of its
   path. A `response` entry's own `model` is not read: it is the
@@ -1274,7 +1287,9 @@ sent rather than the model or the loop may carry it.
 Not in context. A `label` with `label: null` clears. The value `leaf`
 is reserved: a `label` carrying it marks the branch its `target` is on
 as the one a reader resumes on, as the file section says, and a later
-`label: null` naming the same target clears it. A `label` carrying
+`label: null` naming the same target clears it. A `leaf` label's
+`target` may be `null`, naming the universal root: the head at the
+empty context. No other label names the root. A `label` carrying
 `synthetic: true` was written by a projection to record a store's head,
 not by the session; a reader honours it as any other, and a store
 importing the file discards it, as RFC 0002 says.
@@ -1621,7 +1636,9 @@ a rule for writers, which is where the choice is made.
 Given a leaf, a reader MUST produce the request settings and the item
 list as follows.
 
-1. Walk `parent` links from the leaf to a root; reverse to root-first.
+1. Walk `parent` links from the leaf up to the universal root, where the
+   path ends; reverse to root-first. A leaf at the root gives an empty
+   path, the empty context.
    `parents` is provenance and MUST NOT be walked.
 2. Replay `config` entries along the path in order to produce settings,
    honouring `replace`. A `config` that carries `instructions_parts`
@@ -1926,7 +1943,7 @@ value that can be guessed.
 
 ### ATIF
 
-One ATIF document per root-to-leaf path. `session_id` is the header ID;
+One ATIF document per path from a first entry to a leaf. `session_id` is the header ID;
 `trajectory_id` is the leaf entry ID. A document from a redacted session carries
 `redacted: true` and `redacted_from`, as the header holds it, under
 `agentsession` in its top-level `extra`, so a published document names
@@ -2128,7 +2145,7 @@ or one before a compaction's checkpoint, kept as written and noted by a
 tool that checks a file, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
-second root, an own entry hung from the prefix above the base, or a line
+second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
 before the base that is not on the path to it, a `dispatch` that follows a
 `reject`, an `answer` or the call's output, a decision that follows a
 `reject`, a `reject` that follows a `dispatch` or an output, a `target`
@@ -2163,6 +2180,16 @@ dispatches and decisions, environment, outcome and cross-session links.
 These are the changes 0.14 makes. The document's status, the header's
 `format` and the sections above that name the current minor move to
 0.14 with the rest of its changes.
+
+- The universal root is defined: the one point every session's entries
+  hang from, shared by every session, which `parent: null` names on the
+  wire. A session is one tree under it, and what earlier drafts called a
+  second root is a branch at the root; an entry with a null parent is a
+  first entry. No line changes and no hash moves. A `leaf` label whose
+  `target` is `null` names the root in a file with no `base`, so a
+  writer can record a head at the empty context; a 0.13 reader holds such
+  a label not in force, as it holds any label on a target the file does
+  not hold.
 
 - `env` defines two members of `workspace`, `host`, the machine the
   file system is on, and `instance`, the file system among those its
@@ -2576,16 +2603,16 @@ durable leaf marker stops being a resume mechanism: a store's head is,
 and the marker survives as the projection's way of saying where the
 head was when the head is not the last line. The ordering open
 question closes: a store's log is the order, always. And the fork rule
-this version would otherwise have needed, a root's `parents` naming the
+this version would otherwise have needed, a first entry's `parents` naming the
 point another session was copied from together with every rule that
 let a reader tell copy from original inside one file, is not written,
 because `base` says it in one member and the hash proves it in one
 comparison.
 
 A retry of a subsession's call is its own session, derived with an
-attempt counter, where 0.4 appended a second root to the existing
-child; a session with a base has one prefix, so a second root has no
-place in it.
+attempt counter, where 0.4 appended a second first entry, a branch at
+the root, to the existing child; a session with a base has one prefix,
+so a branch at the root has no place in it.
 
 `ts` has one spelling, since it is hashed as a string, and every hashed
 member is I-JSON. Nothing changes in the context algorithm, in
@@ -2715,7 +2742,7 @@ reader preserves every new entry and rebuilds the same context.
   over the header.
 - Header: `records`, the record types whose absence a reader may read
   as the event not having happened; `spawned_by`; derived subsession
-  IDs, with a retried call appending a root to the existing child
+  IDs, with a retried call appending a branch at the root to the existing child
   session; `link` written at dispatch.
 - Entry envelope: members of a core entry this document does not
   define are preserved.
