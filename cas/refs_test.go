@@ -771,3 +771,108 @@ func TestRefRecordedAdoptionIsSeen(t *testing.T) {
 		t.Errorf("log %+v, want set, adopt, move once each", log)
 	}
 }
+
+// TestRefPinCommitsEntry is #217: a ref is durable once set, so a pin of
+// an entry its session holds only as working state commits the session
+// first, and a crash cannot leave the ref pinning an entry it lost.
+func TestRefPinCommitsEntry(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, st, "s", item("kept"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pin := mustAppend(t, st, "s", item("lazy"))
+	if err := st.UpdateRef(ctx, "pin/p", agentsession.RefTarget{}, agentsession.RefTarget{Session: "s", Entry: pin}, "pin"); err != nil {
+		t.Fatal(err)
+	}
+	lines, _ := journalLines(t, root, "s")
+	synced := false
+	for _, l := range lines {
+		switch {
+		case strings.Contains(l, pin):
+			synced = false
+		case strings.Contains(l, `"op":"sync"`):
+			synced = true
+		}
+	}
+	if !synced {
+		t.Errorf("the ref was set and the pinned append is still working state:\n%s", strings.Join(lines, ""))
+	}
+	ep, _ := st.objs.loosePath(spaceEntries, pin)
+	st.objs.mu.Lock()
+	pending := st.objs.pendFiles[ep]
+	st.objs.mu.Unlock()
+	if pending {
+		t.Error("the ref was set and its pinned entry's envelope waits on a flush")
+	}
+}
+
+// TestRefPinLost is #217's other half: a ref left pinning an entry a
+// crash took, as a store before the fix could leave one, resolves to
+// its target with ErrNoEntry, before recovery and after, and neither a
+// sweep nor a verify takes the lost objects for damage.
+func TestRefPinLost(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, st, "s", item("kept"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lost := mustAppend(t, st, "s", item("lost"))
+	ident, _ := st.incarnation("s")
+	want := agentsession.RefTarget{Session: "s", Entry: lost}
+	// The ref as a store that did not commit first wrote it.
+	for _, d := range []string{refsDir, refLogsDir} {
+		os.MkdirAll(filepath.Join(root, d), 0o755)
+	}
+	rec := newRefRecord("pin/p", agentsession.RefTarget{}, want, time.Now(), "pin")
+	rec.NewIdent = ident
+	if err := st.appendRefRecord("pin/p", refTail{}, rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.placeRef("pin/p", refVal{want, ident}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := st.contentOf(lost)
+	crash(st)
+	// A power cut empties the lazy append's objects.
+	for sp, h := range map[space]string{spaceEntries: lost, spaceContents: c} {
+		p, _ := st.objs.loosePath(sp, h)
+		os.WriteFile(p, nil, 0o600)
+	}
+	w, _ := Open(root)
+	defer w.Close()
+	check := func(when string, verify bool) {
+		t.Helper()
+		got, err := w.ResolveRef(ctx, "pin/p")
+		if !errors.Is(err, agentsession.ErrNoEntry) || got != want {
+			t.Errorf("%s: ResolveRef = %v, %v; want %v with ErrNoEntry", when, got, err, want)
+		}
+		if _, err := w.Sweep(ctx, time.Hour); err != nil {
+			t.Errorf("%s: a sweep: %v", when, err)
+		}
+		// Before recovery the torn append is still in the log, and Verify
+		// reports its objects whether or not a ref pins it.
+		if !verify {
+			return
+		}
+		rep, err := w.Verify(ctx)
+		if err != nil || !rep.OK() {
+			t.Errorf("%s: Verify: %v %v", when, err, rep.Problems)
+		}
+	}
+	check("before recovery", false)
+	if s, err := w.Open(ctx, "s"); err != nil || s.Len() != 1 {
+		t.Fatalf("recovery: %v", err)
+	}
+	check("after recovery", true)
+	if _, err := w.Sweep(ctx, 0); err != nil {
+		t.Errorf("a sweep with no grace: %v", err)
+	}
+}

@@ -7,6 +7,17 @@ versions may break the API.
 
 ## Unreleased
 
+- **A ref never pins working state (RFC 0002, Refs and Durability).**
+  `cas` and `jsonl` commit the session holding an entry a ref update
+  pins before the ref is written: `cas` commits the append, a held
+  session's working state or another process's lazy objects and log,
+  and refuses when it cannot; `jsonl` fsyncs the session's file. A ref
+  whose pinned entry the session no longer holds, as one written before
+  this could be left after a power cut, now resolves to its target with
+  `ErrNoEntry`, in `cas` and `jsonl`, where it returned the lost entry
+  with no error, and a `cas` sweep keeps nothing for it where it failed
+  on every run. (#217)
+
 - **A branch leaves the head in place across a reopen in `jsonl` and
   `sqlite` (RFC 0002, Head).** Both keep a session's head only in its
   lines, which a reader resolves to the newest line under the `leaf`

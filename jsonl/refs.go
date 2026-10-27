@@ -217,7 +217,39 @@ func (s *Store) ResolveRef(ctx context.Context, name string) (agentsession.RefTa
 	if t.Ident != "" && ident != t.Ident {
 		return t.get(), fmt.Errorf("%w: %s was created again after ref %s was set", agentsession.ErrNoSession, t.Session, name)
 	}
+	if t.Entry != "" {
+		sess, err := s.Read(ctx, t.Session)
+		if err != nil {
+			return t.get(), err
+		}
+		if _, ok := sess.Entry(t.Entry); !ok {
+			return t.get(), fmt.Errorf("%w: %s, which ref %s pins, is no longer in session %s", agentsession.ErrNoEntry, t.Entry, name, t.Session)
+		}
+	}
 	return t.get(), nil
+}
+
+// syncSessionFile fsyncs a session's file, through this store's handle
+// when it holds the session and through a handle of its own when not:
+// an fsync writes the file's pages whoever wrote them.
+func (s *Store) syncSessionFile(id string) error {
+	s.mu.Lock()
+	h, ok := s.open[id]
+	if ok {
+		defer s.mu.Unlock()
+		return syncEntry(h.file)
+	}
+	s.mu.Unlock()
+	path, err := s.find(id)
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return syncEntry(f)
 }
 
 // ListRefs implements [agentsession.RefStore].
@@ -354,6 +386,13 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 				}
 				if _, ok := sess.Entry(next.Entry); !ok {
 					return fmt.Errorf("%w: %s in session %s", agentsession.ErrNoEntry, next.Entry, next.Session)
+				}
+				// The ref is durable once written, so the file holding
+				// the entry it pins is made durable first: under a lazy
+				// sync policy a crash could otherwise take the entry
+				// and leave the ref.
+				if err := s.syncSessionFile(next.Session); err != nil {
+					return fmt.Errorf("jsonl: ref %s pins %s, whose session could not be made durable: %w", name, next.Entry, err)
 				}
 			}
 		}

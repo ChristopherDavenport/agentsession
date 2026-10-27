@@ -405,7 +405,11 @@ projection to a file carries none.
   `no such session`, and one whose entry the session does not hold
   with `no such entry`. An update whose expected and next targets are
   equal changes nothing, and a store MUST NOT log it; it still fails if
-  the held target is not the expected one.
+  the held target is not the expected one. A store MUST NOT commit a
+  ref update that pins an entry before that entry's append is
+  committed: it commits the session first, or refuses. A ref is
+  durable once set, and a pin of working state would otherwise outlive
+  the entry a crash takes.
 - **A ref outlives its session's deletion.** Deleting a session does
   not delete its refs, and a store need not know of them. A ref whose
   session is gone is dangling: resolving it reports that the session
@@ -426,7 +430,11 @@ projection to a file carries none.
   with `no such session`: a ref is re-adopted by deleting it and
   setting it again, two updates, each logged, and moving a dangling ref
   to a different target is allowed. Setting a live ref to the target it
-  holds changes nothing.
+  holds changes nothing. A ref whose pinned entry the session no longer
+  holds, such as one a store wrote before the rule above or one whose
+  pin the medium took, dangles too: resolving it reports `no such
+  entry` and still reports the target, as for a dangling session, and
+  a store MUST NOT return such a target without that error.
 - **Listing is by prefix, in name order.** A store MUST list refs whose
   name begins with a given string, in the byte order of the name, and
   the prefix need not end at a segment boundary. A listing that cannot
@@ -474,7 +482,9 @@ projection to a file carries none.
   session holds MUST treat the entry a ref pins, and the path above it,
   as it treats a session's base: reachable. A ref that pins nothing
   keeps no object of its own, since the session it names keeps its own
-  while it is held.
+  while it is held. A pin whose entry is gone is satisfied with nothing
+  kept, not taken for corruption: the ref dangles, and retention does
+  not stop at it.
 - **Exchange moves refs** as the exchange section says.
 
 These are store rules. RFC 0001 does not change, and a projection
@@ -565,6 +575,9 @@ the store promises them as one.
   committed, and MUST say which it did. A store MUST also offer a
   commit of a session on its own, so a writer that needs what it has
   appended durable need not append again to get it.
+- A ref update that pins an entry commits that entry's append first,
+  as the refs section says, so a ref never makes working state durable
+  by naming it.
 - A head move by compare-and-swap is accepted and committed as an
   append is, and a store MUST offer a durable one and say which it
   performed. A record mark is committed before it is acknowledged.

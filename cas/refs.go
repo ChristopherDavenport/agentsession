@@ -325,7 +325,55 @@ func (s *Store) ResolveRef(ctx context.Context, name string) (agentsession.RefTa
 	if v.Ident != "" && ident != v.Ident {
 		return t, fmt.Errorf("%w: %s was created again after ref %s was set", agentsession.ErrNoSession, t.Session, name)
 	}
+	if t.Entry != "" {
+		held, err := s.holdsPin(ctx, t)
+		if err != nil {
+			return t, err
+		}
+		if !held {
+			return t, fmt.Errorf("%w: %s, which ref %s pins, is no longer in session %s", agentsession.ErrNoEntry, t.Entry, name, t.Session)
+		}
+	}
 	return t, nil
+}
+
+// holdsPin reports whether the session a target names still holds the
+// entry it pins. A ref written before the store committed pins first,
+// or one whose pin a crash took with the session's working state, can
+// name an entry recovery dropped: the ref then dangles as a ref to a
+// deleted session does. The session's log answers without building the
+// session when it records the entry's append as committed, or the
+// entry is on its prefix; anything else is decided by a read.
+func (s *Store) holdsPin(ctx context.Context, t agentsession.RefTarget) (bool, error) {
+	if dir, err := s.sessionDir(t.Session); err == nil {
+		if l, err := readSessionLog(dir, 0); err == nil && !l.legacy {
+			synced, lostAt := -1, -1
+			for i, r := range l.recs {
+				switch {
+				case r.Op == opSync:
+					synced = i
+				case r.Op == opLost && r.Entry == t.Entry:
+					lostAt = i
+				}
+			}
+			for i, r := range l.recs {
+				if r.Op == opAppend && r.Entry == t.Entry && lostAt < i && (!r.Lazy || i < synced) {
+					return true, nil
+				}
+			}
+			if hdr, err := readHeader(dir); err == nil && hdr.Base != "" {
+				if on, err := s.onPath(t.Entry, hdr.Base); err == nil && on {
+					return true, nil
+				}
+			}
+		}
+	}
+	sess, err := s.Read(ctx, t.Session)
+	if err != nil {
+		return false, err
+	}
+	_, ok := sess.Entry(t.Entry)
+	return ok, nil
 }
 
 // incarnation is the identity of the session now under id, and false
@@ -490,6 +538,14 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 	}
 	defer lk.release()
 	if next.Entry != "" {
+		// A ref is durable once placed, so the append of the entry it
+		// pins is committed first: a crash cannot then leave the ref
+		// pinning an entry its session no longer holds. That is done
+		// before the sweep's lock is taken, as a fork commits its
+		// base's origin.
+		if err := s.commitPin(next); err != nil {
+			return err
+		}
 		// A sweep's last step does not run between the check that the
 		// session holds the entry and the record that names it.
 		g, err := s.writeGuard(ctx)
@@ -559,6 +615,20 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 			return fmt.Errorf("cas: ref %s: %w; and cutting its record back: %v", name, err, terr)
 		}
 		return err
+	}
+	return nil
+}
+
+// commitPin commits the session whose log holds the entry a target
+// pins, through that entry, or fails. An entry no session holds is
+// left to the check that follows, which refuses it.
+func (s *Store) commitPin(t agentsession.RefTarget) error {
+	owner, held, err := s.holderOf(t.Entry, t.Session)
+	if err != nil || !held {
+		return err
+	}
+	if err := s.commitOrigin(owner, t.Entry); err != nil {
+		return fmt.Errorf("cas: ref pins %s, whose append could not be committed: %w", t.Entry, err)
 	}
 	return nil
 }

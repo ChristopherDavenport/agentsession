@@ -194,11 +194,32 @@ func (s *Store) keepRefs(k keepSet) error {
 		if t.Entry == "" {
 			continue
 		}
-		if err := s.keepPath(k, t.Entry); err != nil {
+		if err := s.keepPin(k, t.Entry); err != nil {
 			return fmt.Errorf("cas: sweep: ref %s: %w", n, err)
 		}
 	}
 	return nil
+}
+
+// keepPin keeps the entry a ref pins and the path above it. A pin whose
+// entry no longer reads, such as one a crash took with its session's
+// working state, is satisfied with nothing kept, as an append recovery
+// recorded lost is: the ref dangles, and resolving it says so.
+func (s *Store) keepPin(k keepSet, entry string) error {
+	if k.entries[entry] {
+		return nil
+	}
+	if err := s.keepEntry(k, entry, keepLost); err != nil || !k.entries[entry] {
+		return err
+	}
+	parent, err := s.parentOf(entry)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return s.keepPath(k, parent)
 }
 
 // keepLogs adds what each session's log names beyond the mark it has in
