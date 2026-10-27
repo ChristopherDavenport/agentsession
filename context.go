@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 
+	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -821,8 +823,11 @@ func (s Settings) InstructionsDelta(parts []InstructionPart) *ConfigEntry {
 
 // Request builds the canonical request for these settings over items:
 // store false and no previous_response_id, as the context algorithm
-// requires. Extra members ride in Request.Extra and are flattened on
-// encode.
+// requires. An Extra member the request type declares, such as
+// temperature, fills its field, since openresponses never takes a
+// declared member from Request.Extra; every other member rides in
+// Request.Extra, number literals as written. A member the settings
+// set by name wins over an Extra member of the same name.
 func (s Settings) Request(items openresponses.Items) (openresponses.Request, error) {
 	store := false
 	req := openresponses.Request{
@@ -834,20 +839,53 @@ func (s Settings) Request(items openresponses.Items) (openresponses.Request, err
 		Input:        items,
 		Store:        &store,
 	}
-	if len(s.Extra) > 0 {
-		req.Extra = make(map[string]any, len(s.Extra))
-		for k, raw := range s.Extra {
-			dec := json.NewDecoder(bytes.NewReader(raw))
-			dec.UseNumber()
-			var v any
-			if err := dec.Decode(&v); err != nil {
+	if len(s.Extra) == 0 {
+		return req, nil
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		return openresponses.Request{}, fmt.Errorf("agentsession: encode request: %w", err)
+	}
+	var merged map[string]json.RawMessage
+	if err := json.Unmarshal(data, &merged); err != nil {
+		return openresponses.Request{}, fmt.Errorf("agentsession: decode request: %w", err)
+	}
+	for k, raw := range s.Extra {
+		if _, set := merged[k]; set {
+			continue
+		}
+		if requestMembers[k] {
+			// A typed field takes the value's canonical spelling, so an
+			// integer written 1e2 still decodes; the request hash is
+			// over canonical JSON, so nothing it covers moves.
+			if raw, err = jcs.Transform(raw); err != nil {
 				return openresponses.Request{}, fmt.Errorf("agentsession: settings extra %q: %w", k, err)
 			}
-			req.Extra[k] = v
+		}
+		merged[k] = raw
+	}
+	if data, err = json.Marshal(merged); err != nil {
+		return openresponses.Request{}, fmt.Errorf("agentsession: encode request: %w", err)
+	}
+	var out openresponses.Request
+	if err := json.Unmarshal(data, &out); err != nil {
+		return openresponses.Request{}, fmt.Errorf("agentsession: settings extra: %w", err)
+	}
+	return out, nil
+}
+
+// requestMembers are the members openresponses.Request declares.
+var requestMembers = func() map[string]bool {
+	out := map[string]bool{}
+	t := reflect.TypeFor[openresponses.Request]()
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			out[name] = true
 		}
 	}
-	return req, nil
-}
+	return out
+}()
 
 // ToolName returns the name of a tool: the function name for a function
 // tool, the "name" member of an extension tool when it has one, else "".

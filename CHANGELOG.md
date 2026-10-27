@@ -7,6 +7,15 @@ versions may break the API.
 
 ## Unreleased
 
+- **Dependencies:** `openresponses` v0.0.17, from v0.0.13, in the root
+  and the `sqlite` and `otel` modules. It never takes a member the
+  request type declares from `Request.Extra`, so `Settings.Request` now
+  decodes a passthrough member such as `temperature` or `top_p` into its
+  field rather than leaving it in `Extra`, where the encoder dropped it
+  and the rebuilt request hashed differently from the one sent. A
+  member the type does not declare stays in `Extra` with its number
+  literal as written. No request hash and no fixture moves.
+
 - **RFC 0001 defines `host` and `instance` in `env`'s `workspace`
   (0.14, unreleased).** `host` names the machine the file system is on,
   `instance` which file system among those the rest of `workspace`
