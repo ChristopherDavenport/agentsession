@@ -761,6 +761,16 @@ once only as that content is. An item names a sidecar blob as RFC 0001
 says, by a `sidecar:` URL carrying the blob's hash, so a push's closure
 over media is computable: the blobs the pushed entries' items name.
 
+A store that holds a sidecar session MUST accept a blob by its bytes
+and store it under its hash after verifying them, so that a writer
+appending a sidecar item, a redactor replacing a blob and an import can
+each put the blob where the session's items find it. A store that
+cannot MUST refuse to create or import a session whose `media` is
+`sidecar`, rather than hold items that name blobs it can never serve.
+An append naming a blob the store lacks is accepted, and the blob is
+reported unresolved, as RFC 0003's Writing says; a session with an
+unresolved blob cannot be pushed or projected until the blob arrives.
+
 ## Redacted sessions
 
 A store holds a redacted session (RFC 0001) beside its original, as a
@@ -855,7 +865,15 @@ MUST refuse a file in which one fails. A file whose header carries
 of its own, under an ID of its own, and RFC 0001 requires its lines to
 verify against themselves. An
 importer MUST refuse a header carrying `redacted_from` without
-`redacted`, which RFC 0001 calls malformed. Earlier drafts refused every
+`redacted`, which RFC 0001 calls malformed.
+
+An import of a session whose `media` is `sidecar` takes the session's
+directory with the file, as projection writes it beside the file. It
+verifies each blob the items name against its name, refuses the import
+when one fails, as it does a line that fails its hash, and stores each
+as an object. A blob an item names that the directory lacks and the
+store does not hold is reported unresolved, as an append reports one,
+and the session cannot be pushed or projected until the blob arrives. Earlier drafts refused every
 redacted file, from when redaction left a file that did not verify.
 
 ## Exchange between stores

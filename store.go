@@ -285,6 +285,8 @@ type MemoryStore struct {
 	wmu sync.Mutex
 	// redactedOnly says the store holds only redacted entries.
 	redactedOnly bool
+	// blobs are the sidecar media blobs the store holds, by hash.
+	blobs map[string][]byte
 }
 
 // MemoryOption configures a [MemoryStore].
@@ -310,12 +312,41 @@ func MemoryRedactedOnly() MemoryOption {
 
 // NewMemoryStore returns an empty store.
 func NewMemoryStore(opts ...MemoryOption) *MemoryStore {
-	m := &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{},
+	m := &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{}, blobs: map[string][]byte{},
 		refs: refState{refs: map[string]RefTarget{}, idents: map[string]string{}, logs: map[string][]RefUpdate{}}}
 	for _, o := range opts {
 		o(m)
 	}
 	return m
+}
+
+// PutBlob implements [BlobWriter]: it keeps a copy of the blob under
+// its hash.
+func (m *MemoryStore) PutBlob(ctx context.Context, data []byte) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	h := HashBytes(data)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.blobs[h]; !ok {
+		m.blobs[h] = bytes.Clone(data)
+	}
+	return h, nil
+}
+
+// Blob implements [BlobReader]. The bytes returned are the caller's.
+func (m *MemoryStore) Blob(ctx context.Context, hash string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	b, ok := m.blobs[hash]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNoBlob, hash)
+	}
+	return bytes.Clone(b), nil
 }
 
 // Create implements Store. A header whose Base is set makes a fork of
@@ -585,9 +616,11 @@ func (m *MemoryStore) Delete(_ context.Context, id string) error {
 }
 
 var (
-	_ Store     = (*MemoryStore)(nil)
-	_ Reader    = (*MemoryStore)(nil)
-	_ Follower  = (*MemoryStore)(nil)
-	_ Importer  = (*MemoryStore)(nil)
-	_ HeadStore = (*MemoryStore)(nil)
+	_ Store      = (*MemoryStore)(nil)
+	_ Reader     = (*MemoryStore)(nil)
+	_ Follower   = (*MemoryStore)(nil)
+	_ Importer   = (*MemoryStore)(nil)
+	_ HeadStore  = (*MemoryStore)(nil)
+	_ BlobWriter = (*MemoryStore)(nil)
+	_ BlobReader = (*MemoryStore)(nil)
 )

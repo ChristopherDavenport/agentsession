@@ -155,6 +155,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"iter"
 	"os"
 	"path/filepath"
@@ -1394,12 +1395,16 @@ func (s *Store) PutBlob(ctx context.Context, data []byte) (string, error) {
 	return hash, nil
 }
 
-// Blob returns a media blob by its hash.
+// Blob returns a media blob by its hash, [agentsession.BlobReader]'s:
+// one the store does not hold is [agentsession.ErrNoBlob].
 func (s *Store) Blob(ctx context.Context, hash string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	data, err := s.objs.read(spaceContents, hash)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("cas: blob %s: %w: %w", hash, agentsession.ErrNoBlob, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("cas: blob %s: %w", hash, err)
 	}
@@ -3529,17 +3534,66 @@ func project(w io.Writer, sess *agentsession.Session, head string) error {
 // arrive as one pack and the records as one commit. A session the store
 // already holds is refused; one store takes a session from another by
 // exchange, [Store.Fetch] and [Store.Push].
+//
+// A session whose media is sidecar is imported with no blobs, each its
+// items name and the store lacks then unresolved until [Store.PutBlob]
+// stores it; [Store.ImportMedia] takes the blobs with the file.
 func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agentsession.Session, error) {
+	sess, _, err := s.ImportMedia(ctx, r, nil, asRecord)
+	return sess, err
+}
+
+// ImportMedia implements [agentsession.MediaImporter]: it imports an
+// RFC 0001 file as Import does, and for a session whose media is
+// sidecar takes the session's blobs from media, its sidecar directory,
+// each named by its hex digest. Each blob the items name is verified
+// against its name, and one that fails refuses the import with
+// [agentsession.ErrBlobMismatch]; the blobs arrive in the import's pack,
+// so the session and its blobs are committed together. A blob media
+// lacks that the store does not hold is returned unresolved, and the
+// session is imported without it: a projection of it fails until
+// [Store.PutBlob] stores it. media may be nil, which supplies nothing.
+func (s *Store) ImportMedia(ctx context.Context, r io.Reader, media fs.FS, asRecord bool) (*agentsession.Session, []string, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := s.writable(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sess, err := agentsession.Read(r)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	blobs := map[string][]byte{}
+	var unresolved []string
+	if mediaOf(sess.Header()) == agentsession.MediaSidecar {
+		hashes, err := agentsession.SessionBlobs(sess)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, h := range hashes {
+			data, err := agentsession.ReadSidecarBlob(media, h)
+			switch {
+			case err == nil:
+				blobs[h] = data
+			case errors.Is(err, fs.ErrNotExist):
+				if ok, _ := s.HasObject(ctx, SpaceMedia, h); !ok {
+					unresolved = append(unresolved, h)
+				}
+			default:
+				return nil, nil, fmt.Errorf("cas: import: %w", err)
+			}
+		}
+	}
+	out, err := s.importRead(ctx, sess, blobs, asRecord)
+	if err != nil {
+		return nil, nil, err
+	}
+	return out, unresolved, nil
+}
+
+// importRead imports a session read from a file, with the blobs given.
+func (s *Store) importRead(ctx context.Context, sess *agentsession.Session, blobs map[string][]byte, asRecord bool) (*agentsession.Session, error) {
 	if t := sess.Truncated(); t != nil {
 		return nil, fmt.Errorf("cas: import: %w", t)
 	}
@@ -3593,7 +3647,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		slot.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
-	hd, err := s.admitNew(ctx, dir, h, mark, stored, own, nil, sess.Leaf())
+	hd, err := s.admitNew(ctx, dir, h, mark, stored, own, blobs, sess.Leaf())
 	if err != nil {
 		s.abandon(h.ID, slot)
 		return nil, err
@@ -3681,4 +3735,8 @@ var (
 	_ agentsession.Importer  = (*Store)(nil)
 	_ agentsession.HeadStore = (*Store)(nil)
 	_ agentsession.Releaser  = (*Store)(nil)
+
+	_ agentsession.BlobWriter    = (*Store)(nil)
+	_ agentsession.BlobReader    = (*Store)(nil)
+	_ agentsession.MediaImporter = (*Store)(nil)
 )

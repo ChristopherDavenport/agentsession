@@ -208,13 +208,14 @@ func (h *Handler) principal(r *http.Request) Principal {
 }
 
 // objectGet serves an object's canonical bytes, to a caller it is
-// reachable by; HEAD answers the same without the body.
+// reachable by; HEAD answers the same without the body. A server over a
+// store that keeps no objects but holds sidecar blobs serves media.
 func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
-	if h.ex == nil {
+	k := objKey{r.PathValue("space"), r.PathValue("hash")}
+	if h.ex == nil && (k.space != cas.SpaceMedia || h.blobReader == nil) {
 		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no objects", ""))
 		return
 	}
-	k := objKey{r.PathValue("space"), r.PathValue("hash")}
 	if !validSpace(k.space) || !agentsession.ValidHash(k.hash) {
 		h.writeProblem(w, problem(CodeNoObject, "no such object", ""))
 		return
@@ -228,7 +229,12 @@ func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
 		h.writeProblem(w, problem(CodeNoObject, "no such object", ""))
 		return
 	}
-	data, err := h.ex.Object(r.Context(), k.space, k.hash)
+	var data []byte
+	if h.ex != nil {
+		data, err = h.ex.Object(r.Context(), k.space, k.hash)
+	} else {
+		data, err = h.blobReader.Blob(r.Context(), k.hash)
+	}
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -241,15 +247,27 @@ func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// objectPut takes an object a push will name, checked against its hash.
-// One the store holds already is a write that succeeds and says nothing
-// of it.
+// holdsMedia reports whether the store holds sidecar blobs: a store that
+// exchanges, whose objects include media, or one that writes blobs.
+func (h *Handler) holdsMedia() bool { return h.ex != nil || h.blobs != nil }
+
+// objectPut takes an object a push, an import or an append will name,
+// checked against its hash. One the store holds already is a write that
+// succeeds and says nothing of it. Exchange scope uploads any object;
+// write scope uploads media, which a writer's sidecar items name (RFC
+// 0003, Objects). A server over a store that keeps no objects but holds
+// sidecar blobs takes media alone.
 func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
-	if h.ex == nil {
+	k := objKey{r.PathValue("space"), r.PathValue("hash")}
+	who := h.principal(r)
+	if !who.Has(ScopeExchange) && (k.space != cas.SpaceMedia || !who.Has(ScopeWrite)) {
+		h.writeProblem(w, problem(CodeScope, "the principal lacks the scope this needs", string(ScopeExchange)))
+		return
+	}
+	if h.ex == nil && (k.space != cas.SpaceMedia || h.blobs == nil) {
 		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no objects", ""))
 		return
 	}
-	k := objKey{r.PathValue("space"), r.PathValue("hash")}
 	if !validSpace(k.space) {
 		h.writeProblem(w, problem(CodeBadRequest, "no such object space", k.space))
 		return
@@ -263,11 +281,18 @@ func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, problem(CodeBadRequest, "the object is larger than the server takes", ""))
 		return
 	}
-	if err := h.ex.PutObject(r.Context(), k.space, k.hash, data); err != nil {
+	if h.ex != nil {
+		err = h.ex.PutObject(r.Context(), k.space, k.hash, data)
+	} else if agentsession.HashBytes(data) != k.hash {
+		err = problem(CodeBadObject, "the bytes do not hash to the name", k.hash)
+	} else {
+		_, err = h.blobs.PutBlob(r.Context(), data)
+	}
+	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	h.uploads.put(h.principal(r).Name, k)
+	h.uploads.put(who.Name, k)
 	w.WriteHeader(http.StatusNoContent)
 }
 

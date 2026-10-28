@@ -49,6 +49,10 @@ type Features struct {
 	// them: its follow is a store's follower, which does not say; a
 	// client that needs committed records follows with durable=true.
 	DurableMarks bool `json:"durable_marks"`
+	// Media is set when the server's store holds sidecar blobs, so it
+	// takes sidecar sessions and a media object's PUT; one that does not
+	// refuses a sidecar session with unsupported (RFC 0002, Media).
+	Media bool `json:"media"`
 }
 
 // Limits are the server's bounds a client can plan around.
@@ -370,8 +374,14 @@ func problemOf(err error) *Problem {
 		return problem(CodeHeaderDiffers, "the server holds another session under this ID", "")
 	case errors.Is(err, cas.ErrNotRecord):
 		return problem(CodeNotRecord, "only the record may push a session", "")
-	case errors.Is(err, cas.ErrSynthetic):
+	case errors.Is(err, cas.ErrSynthetic), errors.Is(err, agentsession.ErrSyntheticMarker):
 		return problem(CodeSynthetic, "a synthetic leaf label is a projection's", "")
+	case errors.Is(err, agentsession.ErrNoBlobWriter):
+		return problem(CodeUnsupported, "the store holds no sidecar media", "")
+	case errors.Is(err, agentsession.ErrBlobMismatch):
+		return problem(CodeBadObject, "the bytes do not hash to the name", "")
+	case errors.Is(err, agentsession.ErrNoBlob):
+		return problem(CodeNoObject, "no such object", "")
 	}
 	for reason, sentinel := range reasons {
 		if errors.Is(err, sentinel) {

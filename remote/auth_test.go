@@ -313,3 +313,48 @@ func TestAuthorizeRefWrites(t *testing.T) {
 		t.Errorf("alice's ref is at %v, %v; want still %s", got, err, alices.ID())
 	}
 }
+
+// TestWriteScopeUploadsMedia is #254 over the wire: a writer, with write
+// scope and no exchange scope, uploads the sidecar blob its item names,
+// to a server over a store that keeps no objects but holds blobs; it
+// may not upload any other object; and a server over a store that holds
+// no blobs refuses a sidecar session.
+func TestWriteScopeUploadsMedia(t *testing.T) {
+	ctx := context.Background()
+	st := agentsession.NewMemoryStore()
+	url := server(t, st, remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{
+		"w": {Name: "w", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite}},
+	})))
+	c, err := remote.Dial(url, withToken("w", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := c.PutBlob(ctx, []byte("image bytes"))
+	if err != nil {
+		t.Fatalf("a writer's media upload: %v", err)
+	}
+	if data, err := st.Blob(ctx, h); err != nil || string(data) != "image bytes" {
+		t.Errorf("the store's blob: %q, %v", data, err)
+	}
+	if err := c.PutObject(ctx, cas.SpaceContents, h, []byte("image bytes")); !errors.Is(err, remote.ErrForbidden) {
+		t.Errorf("a writer's content upload: %v, want ErrForbidden", err)
+	}
+	if _, err := c.Create(ctx, agentsession.Header{ID: "side", Media: agentsession.MediaSidecar}); err != nil {
+		t.Errorf("a sidecar session over a store that holds blobs: %v", err)
+	}
+
+	bare := server(t, noBlobs{agentsession.NewMemoryStore()}, remote.WithInsecureNoAuth())
+	bc, err := remote.Dial(bare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bc.Create(ctx, agentsession.Header{ID: "side", Media: agentsession.MediaSidecar}); !errors.Is(err, remote.ErrUnsupported) {
+		t.Errorf("a sidecar session over a store that holds no blobs: %v, want ErrUnsupported", err)
+	}
+	if _, err := bc.PutBlob(ctx, []byte("x")); !errors.Is(err, remote.ErrUnsupported) {
+		t.Errorf("a media upload to a store that holds no blobs: %v, want ErrUnsupported", err)
+	}
+}
+
+// noBlobs is a store with nothing but the Store interface: no blobs.
+type noBlobs struct{ agentsession.Store }

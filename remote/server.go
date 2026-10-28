@@ -56,6 +56,8 @@ type Handler struct {
 	// objects each principal uploaded for a push and how long they are
 	// kept for it, and which objects the store's sessions reach.
 	ex          exchanger
+	blobs       agentsession.BlobWriter
+	blobReader  agentsession.BlobReader
 	uploads     uploads
 	uploadGrace time.Duration
 	reach       reach
@@ -216,6 +218,8 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 	h.reader, _ = store.(agentsession.Reader)
 	h.follower, _ = store.(agentsession.Follower)
 	h.refs, _ = store.(agentsession.RefStore)
+	h.blobs, _ = store.(agentsession.BlobWriter)
+	h.blobReader, _ = store.(agentsession.BlobReader)
 	for _, o := range opts {
 		o(h)
 	}
@@ -240,7 +244,10 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 	mux.HandleFunc("PUT /v1/sessions/{id}/head", h.guard(ScopeWrite, h.setHead))
 	mux.HandleFunc("PUT /v1/refs/{name...}", h.guard(ScopeRefs, h.updateRef))
 	mux.HandleFunc("GET /v1/objects/{space}/{hash}", h.guard(ScopeRead, h.objectGet))
-	mux.HandleFunc("PUT /v1/objects/{space}/{hash}", h.guard(ScopeExchange, h.objectPut))
+	// A media blob is uploaded with write scope too, so a writer can
+	// upload what the sidecar items it appends name; the scope is
+	// checked per space.
+	mux.HandleFunc("PUT /v1/objects/{space}/{hash}", h.guard("", h.objectPut))
 	mux.HandleFunc("POST /v1/objects/missing", h.guard(ScopeExchange, h.missing))
 	mux.HandleFunc("POST /v1/sessions/{id}/push", h.guard(ScopeExchange, h.push))
 	mux.HandleFunc("POST /v1/sessions/{id}/record", h.guard(ScopeExchange, h.record))
@@ -293,6 +300,7 @@ func (h *Handler) Capabilities() Capabilities {
 			Shallow:       reads,
 			Log:           h.lr != nil,
 			CommittedView: h.lr != nil,
+			Media:         h.holdsMedia(),
 		},
 		Limits: Limits{FollowBuffer: h.buffer, FollowReplay: h.replay, SnapshotBytes: h.snapshotLimit},
 	}

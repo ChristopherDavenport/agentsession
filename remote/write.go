@@ -161,6 +161,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if hdr.Media == agentsession.MediaSidecar && !h.holdsMedia() {
+		h.fail(w, fmt.Errorf("%w: %s", agentsession.ErrNoBlobWriter, hdr.ID))
+		return
+	}
 	st := h.state(hdr.ID)
 	st.mu.Lock()
 	defer st.mu.Unlock()

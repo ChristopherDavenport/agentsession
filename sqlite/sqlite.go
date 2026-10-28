@@ -82,6 +82,10 @@ CREATE TABLE IF NOT EXISTS ref_log (
 	reason      TEXT NOT NULL DEFAULT ''
 ) STRICT;
 CREATE INDEX IF NOT EXISTS ref_log_name ON ref_log(name, id);
+CREATE TABLE IF NOT EXISTS blobs (
+	hash TEXT PRIMARY KEY,
+	data BLOB NOT NULL
+) STRICT;
 `
 
 // ErrSessionLocked is returned by Create, Open and Append when another

@@ -118,6 +118,7 @@ from RFC 0001 and RFC 0002 keep their meanings.
   `committed_view` (which `durable=true` needs), `log` (the log read,
   which needs a store that keeps a log of records with a cursor after
   each), `refs`, `ref_follow`, `durable_marks` (Following), `leases`,
+  `media` (a store that holds sidecar blobs, Objects),
   plus its limits, `snapshot_bytes` among them (Following). A request
   for a feature the store lacks is 501 `unsupported`. A server over a
   store that keeps no commit or mark (the reference memory, JSONL and
@@ -195,14 +196,22 @@ Media).
   as held, only objects reachable by the caller. A hash is a name, not a
   capability. Where the server's store shares one lookup table between
   contents and media (RFC 0002, Entries), the check is still per space.
-- A `PUT` (exchange scope) uploads an object. The server MUST verify
+- A `PUT` (exchange scope, or write scope for a `media` object) uploads
+  an object. Write scope uploads media so that a writer appending a
+  sidecar item can upload the blob it names, as RFC 0002's Media
+  requires of a store that holds sidecar sessions. A server whose store
+  holds sidecar media and no other objects serves `media` alone, and
+  says so with the `media` capability; one whose store holds no sidecar
+  media refuses a `media` upload with `unsupported` and refuses to
+  create or import a session whose `media` is `sidecar` with
+  `unsupported`. The server MUST verify
   that the bytes hash to the name and refuse them with `bad_object`
   otherwise. Uploading an object it holds is a no-op that succeeds, and
   the response does not say whether it was held. An uploaded object is
   reachable from nothing but its uploader until a push names it: the
-  uploader may name it in a push, and is told it holds it (`missing`,
-  `GET`, `HEAD`), so a retried push uploads nothing twice; no other
-  caller is. It is collected as RFC 0002's sweep collects any
+  uploader may name it in a push, an import or an append, and is told
+  it holds it (`missing`, `GET`, `HEAD`), so a retried push uploads
+  nothing twice; no other caller is. It is collected as RFC 0002's sweep collects any
   unreferenced object (Deletion and retention), and the grace period
   that spares it is the server's, published in the capabilities as
   `upload_grace_ms`. An object swept before its push is
@@ -856,13 +865,13 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | `bad_entry` | 422 | malformed: `id` differs, reserved member, `ts` form, not I-JSON, unknown prefix; also a pushed or created header RFC 0001 calls malformed, such as `redacted_from` without `redacted` |
 | `base_rule` | 422 | a parent that is not the base, an own entry, or null; a null parent in a session with a base |
 | `bad_base` | 422 | a fork whose base is a `leaf` label, or whose `media` differs from the origin's |
-| `bad_object` | 422 | bytes that do not hash to the name |
+| `bad_object` | 422 | bytes that do not hash to the name, an uploaded object's or an imported sidecar blob's |
 | `missing_object` | 409 | a push names objects the server cannot find; body has the hashes |
 | `bad_ref_target` | 422 | a pushed ref whose `next` is not the pushed session |
 | `format` | 422 | a format the server does not read, or earlier than the session's; also an append or push that would raise a header RFC 0001 forbids raising, one before 0.13 holding `redacted_from`, or whose entries hold `redacted` |
 | `not_redacted` | 403 | a create, append, push or fetch that would bring a session whose header does not carry `redacted`, or an entry that carries no `redacted`, into a store that holds only redacted entries |
 | `read_only` | 403 | a write to a store open read-only |
-| `unsupported` | 501 | a feature the store lacks (marks, exchange, commit, committed view, refs, objects) |
+| `unsupported` | 501 | a feature the store lacks (marks, exchange, commit, committed view, refs, objects); also a sidecar session or a media upload to a store that holds no sidecar media |
 | `store_fault` | 500/503 | a store failure the client cannot fix: corrupt object, stopped store, layout, a session modified outside the store |
 | `overflow` | 503 | a follow the server cut because the client fell behind; resume after the last event read |
 | `too_large` | 413 | a snapshot or reset past the server's `snapshot_bytes` from a server that serves no objects; read the session another way |

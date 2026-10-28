@@ -85,6 +85,34 @@ func (c *Client) PutObject(ctx context.Context, space, hash string, data []byte)
 	return nil
 }
 
+// PutBlob implements [agentsession.BlobWriter]: it uploads a sidecar
+// blob as a media object, which write scope may do, so a writer can
+// upload what the sidecar items it appends name. A server whose store
+// holds no sidecar media refuses it with [ErrUnsupported].
+func (c *Client) PutBlob(ctx context.Context, data []byte) (string, error) {
+	hash := agentsession.HashBytes(data)
+	if err := c.PutObject(ctx, cas.SpaceMedia, hash, data); err != nil {
+		return "", err
+	}
+	return hash, nil
+}
+
+// Blob implements [agentsession.BlobReader]: a media object the caller
+// may read, checked against its hash. One the server does not hold, or
+// the caller may not read, is [agentsession.ErrNoBlob].
+func (c *Client) Blob(ctx context.Context, hash string) ([]byte, error) {
+	data, err := c.Object(ctx, cas.SpaceMedia, hash)
+	if errors.Is(err, cas.ErrNoObject) {
+		return nil, fmt.Errorf("%w: %w", agentsession.ErrNoBlob, err)
+	}
+	return data, err
+}
+
+var (
+	_ agentsession.BlobWriter = (*Client)(nil)
+	_ agentsession.BlobReader = (*Client)(nil)
+)
+
 // DeclareRecord makes the server the record for a session it holds as a
 // mirror, RFC 0002's declare-record, when its head is head, the one the
 // caller fetched; basis is "record_deleted" or "sole_copy". It is how a

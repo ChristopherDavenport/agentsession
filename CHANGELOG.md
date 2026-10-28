@@ -7,6 +7,26 @@ versions may break the API.
 
 ## Unreleased
 
+- **Every store holds sidecar blobs, and an import takes them (RFC 0002,
+  Media and Projection to JSONL; RFC 0003, Objects).** **Added: the
+  root `BlobWriter` (`PutBlob`) and `BlobReader` (`Blob`, `ErrNoBlob`)**,
+  implemented by `MemoryStore`, `jsonl.Store` (a `media/` directory
+  under the root, one file per blob named by its hex digest),
+  `sqlite.Store` (a `blobs` table), `cas.Store` and `remote.Client`
+  (over `PUT /v1/objects/media/{hash}`). **Added: `MediaImporter`,
+  `ImportMedia`, `SidecarBlobs`, `SessionBlobs`, `ReadSidecarBlob`,
+  `ErrBlobMismatch` and `ErrNoBlobWriter`.** `ImportMedia` imports a
+  file with its sidecar directory as an `fs.FS`: each blob the items
+  name is verified and stored, one the directory lacks is returned
+  unresolved, and one that fails its name refuses the import.
+  `cas.Store.ImportMedia` packs the blobs with the session; `Import` of
+  a sidecar session took no blobs. The remote server takes a media
+  upload with write scope as well as exchange scope, serves media over
+  a store that holds blobs and keeps no other objects, publishes a
+  `media` capability, and refuses a sidecar session with `unsupported`
+  over a store that holds no blobs. `cas.Store.Blob` of a blob the store
+  lacks matches `ErrNoBlob`. (#254, #245)
+
 - **One damaged ref stops only itself in `cas` (RFC 0002, Refs,
   Verification and "A log per session").** A ref whose file or log's
   last record does not read failed `ListRefs` for every ref, every
