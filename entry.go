@@ -675,7 +675,9 @@ func (*BranchSummaryEntry) EntryType() string { return TypeBranchSummary }
 const LeafLabel = "leaf"
 
 // LabelEntry bookmarks another entry. A nil Label clears an earlier
-// label on the same target.
+// label on the same target. An empty Target, null on the wire, names
+// the universal root, which only a leaf label marks: the head at the
+// empty context.
 type LabelEntry struct {
 	EntryBase `json:"-"`
 	Target    string  `json:"target"`
@@ -2068,8 +2070,16 @@ func (e *BranchSummaryEntry) decodeMembers(data []byte, all map[string]json.RawM
 	return nil
 }
 
-// MarshalJSON emits the entry as one JSON object.
+// MarshalJSON emits the entry as one JSON object. An empty Target is
+// written null: a leaf label on the universal root.
 func (e *LabelEntry) MarshalJSON() ([]byte, error) {
+	if e.Target == "" {
+		body := struct {
+			Target *string `json:"target"`
+			Label  *string `json:"label"`
+		}{nil, e.Label}
+		return marshalEntry(TypeLabel, &e.EntryBase, &body)
+	}
 	type plain LabelEntry
 	return marshalEntry(TypeLabel, &e.EntryBase, (*plain)(e))
 }

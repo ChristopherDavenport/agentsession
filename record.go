@@ -142,7 +142,7 @@ func configFromSettings(s Settings) *ConfigEntry {
 // and so on) in Extra under its wire name. Replay of the result over
 // empty settings followed by Settings.Request over the same input
 // hashes to the same value as the request, which is what the first
-// entry on a root should establish. Replace is set so the entry stands
+// first entry should establish. Replace is set so the entry stands
 // alone wherever it is placed.
 func ConfigFromRequest(req openresponses.Request) (*ConfigEntry, error) {
 	data, err := json.Marshal(req)

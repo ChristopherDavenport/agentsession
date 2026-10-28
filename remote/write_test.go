@@ -439,3 +439,30 @@ func TestASecondContinuationIsSuperseded(t *testing.T) {
 		t.Errorf("through the client: %v, want ErrSuperseded", err)
 	}
 }
+
+// On the wire null is the universal root: a head move to null rests the
+// head on the empty context, and one that names no target is refused.
+func TestAHeadMoveToNullIsTheRoot(t *testing.T) {
+	ctx := context.Background()
+	st, s, ids := seeded(t, 2)
+	url := server(t, st, remote.WithInsecureNoAuth())
+	l := leaseOn(t, url, s.ID(), "w", time.Minute)
+	head := url + "/v1/sessions/" + s.ID() + "/head"
+	lt := map[string]string{"Lease-Token": l.Token}
+	if p := problemOf(t, send(t, http.MethodPut, head, lt, `{"expected":"`+ids[1]+`","durable":true}`)); p.Code != remote.CodeHeadTarget {
+		t.Errorf("a move with no target: %s, want head_target", p.Code)
+	}
+	resp := send(t, http.MethodPut, head, lt, `{"expected":"`+ids[1]+`","to":null,"durable":true}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("a move to null: %d %+v", resp.StatusCode, problemOf(t, resp))
+	}
+	var out struct {
+		Head *string `json:"head"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.Head != nil {
+		t.Errorf("a move to null answered head %v, %v; want null", out.Head, err)
+	}
+	if got, err := st.Read(ctx, s.ID()); err != nil || got.Leaf() != "" {
+		t.Errorf("the store's head after a move to null: %v, %v; want the root", got.Leaf(), err)
+	}
+}

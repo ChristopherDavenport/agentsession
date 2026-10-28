@@ -208,8 +208,9 @@ type lineEnvelope struct {
 // readers check it before they look at any other entry: the envelope's
 // members have their types and ts its one spelling, the body carries
 // none of the envelope's names, legacy_id and normalised have their
-// types, and the id is the hash of the line. A root's parent is null;
-// the empty string names no entry, so it is refused, not read as a root.
+// types, and the id is the hash of the line. A first entry's parent is
+// null, the universal root; the empty string names no entry, so it is
+// refused, not read as the root.
 func verifyLine(c []byte) (lineEnvelope, error) {
 	members, ok := canonicalMembers(c)
 	if !ok {

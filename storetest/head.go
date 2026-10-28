@@ -19,6 +19,7 @@ import (
 func testHead(t *testing.T, opts Options) {
 	t.Run("CompareAndSwap", func(t *testing.T) { headSwap(t, opts) })
 	t.Run("Root", func(t *testing.T) { headRoot(t, opts) })
+	t.Run("AtTheRoot", func(t *testing.T) { headAtTheRoot(t, opts) })
 	if opts.Reopen != nil {
 		t.Run("BranchKeepsHead", func(t *testing.T) { headBranchKept(t, opts) })
 	}
@@ -264,5 +265,82 @@ func headRoot(t *testing.T, opts Options) {
 	}
 	if e, ok := live.Entry(next); !ok || e.Base().Parent != want {
 		t.Errorf("the append after the move hangs from %v, want the root", e)
+	}
+}
+
+// headAtTheRoot: the head may rest on the universal root, the empty
+// context, "" in Go and null on the wire. The compare-and-swap moves it
+// there and back, an append with a null parent then continues, a read
+// and a reopen see the head where it was moved, and a session with a
+// base has no head at the root.
+func headAtTheRoot(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	hs := headStore(t, st)
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	a, err := st.Append(ctx, id, user("a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := st.Append(ctx, id, user("b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hs.SetHead(ctx, id, b, ""); err != nil {
+		t.Fatalf("SetHead to the root: %v", err)
+	}
+	if got := headOf(t, st, id); got != "" {
+		t.Errorf("head after a move to the root = %s, want the root", got)
+	}
+	if opts.Reopen != nil {
+		st = opts.Reopen(t, st)
+		hs = headStore(t, st)
+		if got := headOf(t, st, id); got != "" {
+			t.Errorf("head at the root after a reopen = %s", got)
+		}
+	}
+	if err := hs.SetHead(ctx, id, b, a); !errors.Is(err, agentsession.ErrHeadMoved) {
+		t.Errorf("SetHead from b with the head at the root: %v, want ErrHeadMoved", err)
+	}
+	// A null parent continues from the root.
+	c, err := st.Append(ctx, id, user("c, at the root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := st.Open(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := live.Entry(c); !ok || e.Base().Parent != "" || live.Leaf() != c {
+		t.Errorf("the append after the move: %v, leaf %s; want a first entry that is the head", e, live.Leaf())
+	}
+	if err := hs.SetHead(ctx, id, c, ""); err != nil {
+		t.Fatalf("SetHead to the root again: %v", err)
+	}
+	if err := hs.SetHead(ctx, id, "", b); err != nil {
+		t.Fatalf("SetHead from the root: %v", err)
+	}
+	if got := headOf(t, st, id); got != b {
+		t.Errorf("head after a move from the root = %s, want %s", got, b)
+	}
+	if opts.Reopen != nil {
+		st = opts.Reopen(t, st)
+		hs = headStore(t, st)
+		if got := headOf(t, st, id); got != b {
+			t.Errorf("head after a move from the root and a reopen = %s, want %s", got, b)
+		}
+	}
+	// A fork's entries all hang from its base, so its head never rests
+	// on the root.
+	fork, err := st.Create(ctx, agentsession.Header{Base: b, ParentSession: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hs.SetHead(ctx, fork.ID(), headOf(t, st, fork.ID()), ""); !errors.Is(err, agentsession.ErrNoEntry) {
+		t.Errorf("SetHead to the root in a fork: %v, want ErrNoEntry", err)
 	}
 }
