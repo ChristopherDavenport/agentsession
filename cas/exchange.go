@@ -17,8 +17,9 @@ import (
 // for the session: RFC 0002 lets only the record initiate a push.
 var ErrNotRecord = errors.New("cas: only the record may push a session")
 
-// ErrHeadTarget is a head an exchange would rest on a leaf label.
-var ErrHeadTarget = errors.New("cas: the head never rests on a leaf label")
+// ErrHeadTarget is a head an exchange or SetHead would rest on a leaf
+// label. It is [agentsession.ErrHeadTarget].
+var ErrHeadTarget = agentsession.ErrHeadTarget
 
 // ErrHeaderDiffers is returned when an exchange names a session the
 // receiver holds under a different header: two sessions alike only in
@@ -79,7 +80,7 @@ type RefResult struct {
 type PushOptions struct {
 	// Expected is the receiver's head as the sender last saw it: ""
 	// when the sender believes the receiver lacks the session or holds
-	// it with no head, or the base, which is the head a fork the
+	// it with its head at the universal root, or the base, which is the head a fork the
 	// receiver lacked starts with. A push whose expected value is wrong
 	// lands its entries as a branch and leaves the head, which is what
 	// reveals two stores that each believed they were the record.
@@ -603,7 +604,7 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 		return Exchange{}, err
 	}
 	defer guard.release()
-	if err := s.refuseUnredacted(b.header, append(append([]agentsession.Entry(nil), b.prefix...), fresh...)); err != nil {
+	if err := s.refuseUnredactedIn(h.session, append(append([]agentsession.Entry(nil), b.prefix...), fresh...)); err != nil {
 		return Exchange{}, err
 	}
 	pend := newPendSet()

@@ -664,6 +664,12 @@ func loadHandle(path, id string, readOnly bool) (*handle, error) {
 // tree, then its line is written and synced according to the policy.
 // The first append to a session whose header names an earlier minor
 // raises the header's format first.
+//
+// The entry is the store's once Append returns, as [agentsession.Session.Append]
+// has it: the session the store shares holds e itself, not a copy, so a
+// caller that changes e afterwards changes what that session and its
+// followers read, and not what the file holds. [agentsession.MemoryStore]
+// keeps a copy instead.
 func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Entry) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -678,13 +684,23 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 		return "", err
 	}
 	if s.redactedOnly {
-		if err := agentsession.CheckRedacted(h.session.Header(), []agentsession.Entry{e}); err != nil {
+		if err := agentsession.CheckRedactedIn(h.session, []agentsession.Entry{e}); err != nil {
 			return "", err
 		}
 	}
 	// Followers look again however the append ends: a rewrite for the
 	// format may have landed before a write that failed.
 	defer s.hub.Notify(sessionID)
+	return s.appendLocked(h, sessionID, e, false)
+}
+
+// appendLocked appends e to the open session h, and syncs it when sync
+// is set or the policy asks. When e would read back as the head, a
+// branch, which RFC 0002 says leaves the head in place, the leaf label
+// that keeps the head goes with it ([agentsession.Session.LeafMarkNeeded]),
+// in the same write and under the same sync, so a crash cannot keep the
+// entry and lose the label. The caller holds s.mu.
+func (s *Store) appendLocked(h *handle, sessionID string, e agentsession.Entry, sync bool) (string, error) {
 	// The entry is prepared first, so that one the session refuses or
 	// already holds leaves the file as it was: a second append of an
 	// entry the session holds is a no-op, as RFC 0002 has it, and writing
@@ -701,19 +717,77 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 			return "", err
 		}
 	}
+	// The label that keeps the head goes ahead of the entry when it can,
+	// so a crash that tears the tail of the write loses the entry, never
+	// the label: it targets the head there already.
+	var buf bytes.Buffer
+	keep := func(mark *agentsession.LabelEntry) error {
+		if _, err := h.session.Append(mark); err != nil {
+			return fmt.Errorf("jsonl: keep the head of %s: %w", sessionID, err)
+		}
+		if err := writeLine(&buf, mark); err != nil {
+			return fmt.Errorf("jsonl: keep the head of %s: %w", sessionID, err)
+		}
+		return nil
+	}
+	if mark := h.session.LeafMarkBefore(e); mark != nil {
+		if err := keep(mark); err != nil {
+			return "", err
+		}
+	}
 	id, err := h.session.Append(e)
 	if err != nil {
 		return "", err
 	}
-	if err := writeLine(h.file, e); err != nil {
+	if err := writeLine(&buf, e); err != nil {
 		return "", fmt.Errorf("jsonl: write entry %s: %w", id, err)
 	}
-	if s.shouldSync(h.session.Header(), e) {
+	if mark := h.session.LeafMarkNeeded(); mark != nil {
+		// An entry under the head, which a label ahead of it cannot
+		// keep from reading as the head.
+		if err := keep(mark); err != nil {
+			return "", err
+		}
+	}
+	if _, err := h.file.Write(buf.Bytes()); err != nil {
+		return "", fmt.Errorf("jsonl: write entry %s: %w", id, err)
+	}
+	if sync || s.shouldSync(h.session.Header(), e) {
 		if err := syncEntry(h.file); err != nil {
 			return "", fmt.Errorf("jsonl: sync entry %s: %w", id, err)
 		}
 	}
 	return id, nil
+}
+
+// SetHead implements [agentsession.HeadStore]. The file has no head of
+// its own, only the leaf its lines resolve to, so the move is a leaf
+// label for to, appended under the session's lock after the compare
+// ([agentsession.Session.HeadLabel]) and synced before SetHead returns
+// whatever the sync policy, as RFC 0002 asks of a durable head move.
+// The session Open returned sees it as that label's append. A store
+// set with [WithRedactedOnly] takes the label too: it carries no
+// content to have been redacted.
+func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.readOnly {
+		return agentsession.ErrReadOnly
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h, err := s.openLocked(sessionID)
+	if err != nil {
+		return err
+	}
+	label, err := h.session.HeadLabel(expected, to)
+	if err != nil {
+		return err
+	}
+	defer s.hub.Notify(sessionID)
+	_, err = s.appendLocked(h, sessionID, label, true)
+	return err
 }
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.
@@ -1071,9 +1145,11 @@ func writeLine(w io.Writer, v any) error {
 }
 
 var (
-	_ agentsession.Store    = (*Store)(nil)
-	_ agentsession.Reader   = (*Store)(nil)
-	_ agentsession.Importer = (*Store)(nil)
+	_ agentsession.Store     = (*Store)(nil)
+	_ agentsession.Reader    = (*Store)(nil)
+	_ agentsession.Importer  = (*Store)(nil)
+	_ agentsession.HeadStore = (*Store)(nil)
+	_ agentsession.Releaser  = (*Store)(nil)
 )
 
 // syncEntry fsyncs a session's file after an append the policy makes

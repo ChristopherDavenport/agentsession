@@ -59,3 +59,25 @@ func PrincipalFrom(ctx context.Context) (Principal, bool) {
 	p, ok := ctx.Value(principalKey{}).(Principal)
 	return p, ok
 }
+
+// Authorizer decides whether the principal p may act with scope on the
+// session whose ID is session. A nil error allows it; any error refuses
+// it, answered as `no_session` so a refusal does not tell the caller
+// the session exists. Its text is not sent.
+//
+// A [Handler] with one asks it on every request that names a session:
+// each route under /v1/sessions/{id}, a follow resumed from an event ID
+// or `after` as much as a fresh one, an append, a lease, a push and a
+// handover; a create, for the session it creates and, for a fork, the
+// session it names as its origin, and its base, which must be reachable
+// through a session the principal may read (a base that is not is
+// `no_entry`); a ref update and a pushed ref, for the session the ref
+// is moved to and the sessions its current and expected targets name,
+// refused as `no_ref` without naming them; and a ref's resolve, log and follow, for the session its
+// target names, a ref the principal may not read being answered
+// `no_ref` and a follow's move onto one reading as a move to none. A listing leaves out the sessions the principal may not
+// read, and an object is reachable only through a session it may read.
+// An event ID, like a hash, is not a capability.
+// The package decides nothing here: the program says whose sessions
+// are whose, as it says who a request is from.
+type Authorizer func(ctx context.Context, p Principal, scope Scope, session string) error

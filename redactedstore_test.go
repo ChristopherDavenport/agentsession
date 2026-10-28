@@ -1,8 +1,10 @@
 package agentsession
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ChristopherDavenport/openresponses"
@@ -93,4 +95,50 @@ func lineWithRedacted(t *testing.T, form string) string {
 		t.Fatal(err)
 	}
 	return string(line)
+}
+
+// A store that holds only redacted entries takes a leaf label as the
+// record of a head move only when it is that and nothing more: its
+// target names an entry of the session and it carries no other member
+// at any depth. A target of free text, or text inside a parents
+// element, is content, and is refused as any unredacted entry is.
+func TestRedactedOnlyTakesOnlyABareHeadMove(t *testing.T) {
+	ctx := context.Background()
+	st := NewMemoryStore(MemoryRedactedOnly())
+	s, err := st.Create(ctx, Header{Redacted: true, RedactedFrom: &RedactedFrom{Session: "orig", Profile: "p"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := NewItemEntry(openresponses.UserText("[redacted]"))
+	if err := SetRedacted(first, nil); err != nil {
+		t.Fatal(err)
+	}
+	firstID, err := st.Append(ctx, s.ID(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := func(body string) Entry {
+		t.Helper()
+		id, _, err := EntryHashes([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, err := UnmarshalEntry([]byte(`{"id":"` + id + `",` + body[1:]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	for name, body := range map[string]string{
+		"a target of free text": `{"type":"label","ts":"2026-01-01T00:00:00Z","parent":"FIRST","label":"leaf","target":"my password is hunter2"}`,
+		"text in parents":       `{"type":"label","ts":"2026-01-01T00:00:00Z","parent":null,"label":"leaf","target":"FIRST","parents":[{"entry":"FIRST","note":"my password is hunter2"}]}`,
+		"a member of its own":   `{"type":"label","ts":"2026-01-01T00:00:00Z","parent":"FIRST","label":"leaf","target":"FIRST","note":"my password is hunter2"}`,
+	} {
+		if _, err := st.Append(ctx, s.ID(), line(strings.ReplaceAll(body, "FIRST", firstID))); !errors.Is(err, ErrNotRedacted) {
+			t.Errorf("%s: %v, want ErrNotRedacted", name, err)
+		}
+	}
+	if _, err := st.Append(ctx, s.ID(), NewLabelEntry(firstID, LeafLabel)); err != nil {
+		t.Errorf("a bare leaf label on an entry of the session: %v, want it taken", err)
+	}
 }

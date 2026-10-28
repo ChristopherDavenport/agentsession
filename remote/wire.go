@@ -98,6 +98,7 @@ const (
 	CodeLeaseLost      = "lease_lost"
 	CodeMirror         = "mirror"
 	CodeCallIDRepeated = "call_id_repeated"
+	CodeSuperseded     = "superseded"
 	CodeSynthetic      = "synthetic"
 	CodeBadEntry       = "bad_entry"
 	CodeBaseRule       = "base_rule"
@@ -148,11 +149,12 @@ var (
 	// the log to learn whether its last write landed, and resumes.
 	ErrLeaseLost = errors.New("remote: the lease is not the session's current one")
 	// ErrHeadMoved is a head compare-and-swap whose expected head is not
-	// the session's.
-	ErrHeadMoved = errors.New("remote: the head is not the expected entry")
-	// ErrHeadTarget is a head move to an entry the head may not rest on:
-	// a leaf label, or one that is not the base or an own entry.
-	ErrHeadTarget = errors.New("remote: the head may not rest there")
+	// the session's: [agentsession.ErrHeadMoved], as a local store
+	// reports it.
+	ErrHeadMoved = agentsession.ErrHeadMoved
+	// ErrHeadTarget is a head move to a leaf label:
+	// [agentsession.ErrHeadTarget], as a local store reports it.
+	ErrHeadTarget = agentsession.ErrHeadTarget
 	// ErrMirror is a write to a session the server holds as a mirror.
 	ErrMirror = errors.New("remote: the session is a mirror on this server")
 	// ErrSynthetic is a leaf label carrying synthetic.
@@ -203,6 +205,7 @@ var codes = map[string]struct {
 	CodeLeaseLost:      {http.StatusConflict, ErrLeaseLost},
 	CodeMirror:         {http.StatusConflict, ErrMirror},
 	CodeCallIDRepeated: {http.StatusConflict, agentsession.ErrCallIDRepeated},
+	CodeSuperseded:     {http.StatusConflict, agentsession.ErrSuperseded},
 	CodeSynthetic:      {http.StatusUnprocessableEntity, ErrSynthetic},
 	CodeBadEntry:       {http.StatusUnprocessableEntity, ErrBadEntry},
 	CodeBaseRule:       {http.StatusUnprocessableEntity, agentsession.ErrBaseRule},
@@ -351,6 +354,8 @@ func problemOf(err error) *Problem {
 		return problem(CodeRefMoved, "the ref is not at the expected target", "")
 	case errors.Is(err, agentsession.ErrCallIDRepeated):
 		return problem(CodeCallIDRepeated, "the entry repeats a call_id", err.Error())
+	case errors.Is(err, agentsession.ErrSuperseded):
+		return problem(CodeSuperseded, "the session was continued in another successor", "")
 	case errors.Is(err, cas.ErrHeadMoved):
 		return problem(CodeHeadMoved, "the head is not the expected entry", "")
 	case errors.Is(err, cas.ErrMirror):

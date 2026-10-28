@@ -233,7 +233,8 @@ func (r *Rewriter) record(e Entry) {
 }
 
 // settingsAt returns the settings in force after the entry id, and
-// whether the Rewriter met it: a root's parent has none in force.
+// whether the Rewriter met it: the universal root, a first entry's
+// parent, has none in force.
 func (r *Rewriter) settingsAt(id string) (Settings, bool) {
 	if id == "" {
 		return Settings{}, true

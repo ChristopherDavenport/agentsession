@@ -26,7 +26,7 @@ import (
 
 // fixtureNames are the sources that read cleanly and regenerate as
 // valid 0.5 files.
-var fixtureNames = []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge", "bad-first-kept", "bad-records"}
+var fixtureNames = []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge", "parents-extra", "bad-first-kept", "bad-records"}
 
 // nestedFixtures are the fixtures a nested module's tests read, copied
 // under that module's own testdata so its tests run from the published

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/remote"
 	"github.com/ChristopherDavenport/agentsession/sqlite"
 	"github.com/ChristopherDavenport/agentsession/storetest"
 	"github.com/ChristopherDavenport/openresponses"
@@ -138,7 +140,9 @@ func TestPragmasAndRows(t *testing.T) {
 		t.Errorf("config row: seq %d type %s parent %q", seq, typ, parent)
 	}
 	// Release drops the cache; the reload agrees with the rows.
-	st.Release("s1")
+	if err := st.Release("s1"); err != nil {
+		t.Fatal(err)
+	}
 	again, err := st.Open(ctx, "s1")
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +185,9 @@ func TestCorruptRow(t *testing.T) {
 	if _, err := db.Exec(`UPDATE entries SET line = '{"type":"info","id":"x","parent":"ghost","ts":"2026-09-17T12:00:00Z"}' WHERE session_id = 's1'`); err != nil {
 		t.Fatal(err)
 	}
-	st.Release("s1")
+	if err := st.Release("s1"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.Open(ctx, "s1"); !errors.Is(err, agentsession.ErrNoEntry) && !errors.Is(err, agentsession.ErrBadID) {
 		t.Errorf("Open(corrupt) = %v, want ErrNoEntry", err)
 	}
@@ -481,7 +487,9 @@ func TestFailedOpenLetsHoldGo(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	st.Release(id)
+	if err := st.Release(id); err != nil {
+		t.Fatal(err)
+	}
 	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
@@ -528,5 +536,94 @@ func TestRedactedOnlyRefusesAHoldingDatabase(t *testing.T) {
 		if _, err := sqlite.Open(path, sqlite.WithRedactedOnly()); !errors.Is(err, agentsession.ErrNotRedacted) {
 			t.Errorf("%s: Open with WithRedactedOnly = %v, want ErrNotRedacted", name, err)
 		}
+	}
+}
+
+// A program that serves the store releases a session through the root's
+// Releaser when a lease ends, as RFC 0003's server does: the hold goes,
+// and another process opens the session. Release did not return an
+// error, so the server's assertion missed it and the hold stayed.
+func TestReleaseThroughReleaser(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	st, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	h := remote.NewHandler(st, remote.WithInsecureNoAuth())
+	srv := httptest.NewServer(h)
+	t.Cleanup(func() {
+		srv.CloseClientConnections()
+		srv.Close()
+		h.Close()
+	})
+	c, err := remote.Dial(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	s, err := c.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { other.Close() })
+	if _, err := other.Open(ctx, s.ID()); !errors.Is(err, agentsession.ErrSessionLocked) {
+		t.Fatalf("Open while the server's lease holds the session: %v, want ErrSessionLocked", err)
+	}
+	if err := c.Release(s.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Open(ctx, s.ID()); err != nil {
+		t.Errorf("Open after the lease ended: %v; the server kept the store's hold", err)
+	}
+}
+
+// The leaf label that keeps the head where a branch leaves it lands in
+// the branch's transaction: when the label cannot be written, nor is the
+// branch, so the database never holds a branch that reads back as the
+// head (RFC 0002, Head).
+func TestKeptHeadSharesTheBranchTransaction(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	st, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := st.Append(ctx, s.ID(), agentsession.NewItemEntry(openresponses.UserText("a")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, s.ID(), agentsession.NewItemEntry(openresponses.UserText("b"))); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TRIGGER no_labels BEFORE INSERT ON entries WHEN NEW.type = 'label' BEGIN SELECT RAISE(ABORT, 'no labels'); END`); err != nil {
+		t.Fatal(err)
+	}
+	branch := agentsession.NewItemEntry(openresponses.UserText("a branch off a"))
+	branch.Parent = a
+	if _, err := st.Append(ctx, s.ID(), branch); err == nil {
+		t.Fatal("the branch landed without the label that keeps the head")
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM entries WHERE session_id = ?`, s.ID()).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("the database holds %d entries, want the 2 before the refused branch", n)
 	}
 }

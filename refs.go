@@ -309,11 +309,15 @@ func SessionFor(ctx context.Context, st Store, name string, h Header) (s *Sessio
 	}
 }
 
-// ContinueRef continues the session ref name points to, as [Continue]
-// does, and moves the ref from the old session to the successor by
-// compare-and-swap, so a named conversation that rolls over keeps its
-// name. The ref's pinned entry, which names an entry of the old
-// session, is not carried.
+// ContinueRef continues the session that is current for ref name, as
+// [Continue] does, and moves the ref from its target to the successor
+// by compare-and-swap, so a named conversation that rolls over keeps
+// its name. The session continued is the end of the continued_in chain
+// from the ref's target, as [ResolveCurrent] finds it, so a ref left
+// behind by a writer that continued its session and stopped before it
+// moved the ref is caught up rather than forking the chain; the
+// compare is against the ref's literal target. The ref's pinned entry,
+// which names an entry of the old session, is not carried.
 //
 // When the ref moved while the continuation ran, the error is
 // [ErrRefMoved] and the successor is returned with it: it exists, the
@@ -327,7 +331,11 @@ func ContinueRef(ctx context.Context, st Store, name string, summary openrespons
 	if err != nil {
 		return nil, err
 	}
-	next, err := Continue(ctx, st, cur.Session, summary)
+	end, _, err := chainEnd(ctx, st, name, cur.Session)
+	if err != nil {
+		return nil, err
+	}
+	next, err := Continue(ctx, st, end, summary)
 	if err != nil {
 		return nil, err
 	}
@@ -355,8 +363,14 @@ func ResolveCurrent(ctx context.Context, st Store, name string) (id string, move
 	if err != nil {
 		return "", false, err
 	}
+	return chainEnd(ctx, st, name, cur.Session)
+}
+
+// chainEnd follows continued_in links from the session id, the target
+// of ref name, to the end of the chain; moved reports that it followed
+// one. It stops at a cycle with an error.
+func chainEnd(ctx context.Context, st Store, name, id string) (end string, moved bool, err error) {
 	seen := map[string]bool{}
-	id = cur.Session
 	for {
 		if seen[id] {
 			return "", moved, fmt.Errorf("agentsession: ref %s: continued_in cycle at %s", name, id)

@@ -107,6 +107,51 @@ type Writer interface {
 	Write(ctx context.Context, sessionID string, e Entry) (Result, error)
 }
 
+// Releaser is implemented by a store that holds the sessions it opens,
+// as [Store.Open] describes: Release lets the hold on the session go,
+// for every caller that opened it, and forgets the session, so the next
+// Open reads it again. An error says the hold could not be let go; the
+// session is forgotten all the same. Releasing a session the store does
+// not hold is not an error. A program that serves a store, as RFC 0003's
+// server does, releases a session through it when a lease ends.
+type Releaser interface {
+	Release(id string) error
+}
+
+// HeadStore is implemented by a store that moves a session's head by
+// compare-and-swap, which RFC 0002 (Head) asks of every store and every
+// store this module offers implements. SetHead moves the head of the
+// session from expected to to, and returns once the move is durable,
+// as RFC 0002's Durability asks of a durable head move. Either may be
+// "", the universal root every session's first entries hang from: the
+// head there is the empty context, and the next append with no parent
+// continues from it. A head that is not expected is [ErrHeadMoved]; a
+// target that is not the root, the base or one of the session's own
+// entries is [ErrNoEntry], as is the root in a session with a base,
+// and one that is a leaf label [ErrHeadTarget].
+//
+// A store that keeps sessions as RFC 0001 files, or as their lines,
+// moves the head by appending a leaf label for to under its lock, after
+// the compare; the session the store shares with its callers sees the
+// move as an append. A store with a head of its own (the cas store)
+// records the head. Either way a writer that appended a first entry to
+// a session whose head is not the root, which is a branch at the root,
+// moves the head onto it here.
+// A store set to hold only redacted entries offers it too: the label a
+// head move writes carries no content to have been redacted.
+type HeadStore interface {
+	SetHead(ctx context.Context, sessionID, expected, to string) error
+}
+
+// ErrHeadMoved is returned by [HeadStore.SetHead] when the session's
+// head is not the expected entry, which is how a writer learns that
+// another moved it.
+var ErrHeadMoved = errors.New("agentsession: head is not the expected entry")
+
+// ErrHeadTarget is returned by [HeadStore.SetHead] for a target the
+// head never rests on: a leaf label.
+var ErrHeadTarget = errors.New("agentsession: the head never rests on a leaf label")
+
 // ListFilter narrows a List. Zero fields do not filter, so the zero
 // filter lists every session. The header fields cost no scan: every
 // store reads the header to list a session, and Matches decides on it
@@ -237,6 +282,9 @@ type MemoryStore struct {
 	gens map[string]uint64
 	hub  wake.Hub
 	refs refState
+	// wmu makes each append, and each head move, one step: the rules a
+	// writer is held to are checked and the entry added under it.
+	wmu sync.Mutex
 	// redactedOnly says the store holds only redacted entries.
 	redactedOnly bool
 }
@@ -425,12 +473,14 @@ func (m *MemoryStore) Read(ctx context.Context, id string) (*Session, error) {
 
 // Append implements Store.
 func (m *MemoryStore) Append(ctx context.Context, sessionID string, e Entry) (string, error) {
+	m.wmu.Lock()
+	defer m.wmu.Unlock()
 	s, err := m.Open(ctx, sessionID)
 	if err != nil {
 		return "", err
 	}
 	if m.redactedOnly {
-		if err := CheckRedacted(s.Header(), []Entry{e}); err != nil {
+		if err := CheckRedactedIn(s, []Entry{e}); err != nil {
 			return "", err
 		}
 	}
@@ -466,6 +516,35 @@ func (m *MemoryStore) Append(ctx context.Context, sessionID string, e Entry) (st
 		return "", err
 	}
 	return r.ID, nil
+}
+
+// SetHead implements [HeadStore]: the compare and the leaf label that
+// records the move are one step on the store's session, so no append
+// comes between them, and [MemoryStore.Read] and a follower see the
+// move as that label. A store set with MemoryRedactedOnly takes it too:
+// the label carries no content to have been redacted.
+func (m *MemoryStore) SetHead(ctx context.Context, sessionID, expected, to string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.wmu.Lock()
+	defer m.wmu.Unlock()
+	s, err := m.Open(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	// The header is raised, as for an append, only for a move the
+	// compare would let through; commitHead compares again under the
+	// session's lock.
+	if _, err := s.HeadLabel(expected, to); err != nil {
+		return err
+	}
+	if err := s.raiseHeader(Format); err != nil {
+		return err
+	}
+	_, err = s.commitHead(expected, to)
+	m.hub.Notify(sessionID)
+	return err
 }
 
 // List implements Store.
@@ -508,8 +587,9 @@ func (m *MemoryStore) Delete(_ context.Context, id string) error {
 }
 
 var (
-	_ Store    = (*MemoryStore)(nil)
-	_ Reader   = (*MemoryStore)(nil)
-	_ Follower = (*MemoryStore)(nil)
-	_ Importer = (*MemoryStore)(nil)
+	_ Store     = (*MemoryStore)(nil)
+	_ Reader    = (*MemoryStore)(nil)
+	_ Follower  = (*MemoryStore)(nil)
+	_ Importer  = (*MemoryStore)(nil)
+	_ HeadStore = (*MemoryStore)(nil)
 )

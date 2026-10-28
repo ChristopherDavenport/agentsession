@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/cas"
 )
 
 // maxBody bounds a write's request body.
@@ -22,12 +23,6 @@ const maxBody = 64 << 20
 // store's Sync.
 type syncer interface {
 	Sync(ctx context.Context) error
-}
-
-// headSetter is a store that keeps a durable head and moves it by
-// compare-and-swap: the cas store's SetHead.
-type headSetter interface {
-	SetHead(ctx context.Context, sessionID, expected, to string) error
 }
 
 // leaseRequest is an acquire's body.
@@ -144,6 +139,27 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	complete := hdr.ID != "" && !hdr.CreatedAt.IsZero()
 	if hdr.ID == "" {
 		hdr.ID = agentsession.NewSessionID()
+	}
+	if !h.may(r.Context(), ScopeWrite, hdr.ID) || (hdr.Base != "" && hdr.ParentSession != "" && !h.may(r.Context(), ScopeRead, hdr.ParentSession)) {
+		// A fork reads its origin's prefix, so the origin is authorized
+		// as a read.
+		h.fail(w, noSession())
+		return
+	}
+	if hdr.Base != "" && h.authorize != nil && h.reader != nil {
+		// The store takes the prefix from whichever session holds the
+		// base, so the base itself must be one the caller reaches
+		// through a session it may read; the path to it is the same
+		// from any of them, being named by hash.
+		ok, err := h.reachable(r.Context(), h.principal(r).Name, []objKey{{cas.SpaceEntries, hdr.Base}})
+		if err != nil {
+			h.fail(w, err)
+			return
+		}
+		if !ok[objKey{cas.SpaceEntries, hdr.Base}] {
+			h.fail(w, problem(CodeNoEntry, "no such entry", ""))
+			return
+		}
 	}
 	st := h.state(hdr.ID)
 	st.mu.Lock()
@@ -404,9 +420,11 @@ func (h *Handler) appendEntries(w http.ResponseWriter, r *http.Request) {
 }
 
 // appendLine applies one entry line under st's lease. A complete line,
-// its ID set, is taken as written, parent included: a null parent is a
-// root, and the session's head is put to none first, as a writer that
-// appends a root has reset its leaf.
+// its ID set, is taken as written, parent included: a null parent is the
+// universal root, and the entry a branch there, which continues only
+// when the head is the root and otherwise leaves the head where it is
+// (RFC 0002, Append); a writer that wants the head on it moves it by
+// the compare-and-swap.
 func (h *Handler) appendLine(ctx context.Context, st *held, line []byte) (appended, error) {
 	line, err := fillLine(line, st.sess.Leaf())
 	if err != nil {
@@ -420,16 +438,8 @@ func (h *Handler) appendLine(ctx context.Context, st *held, line []byte) (append
 		p.Reason = "parse"
 		return appended{}, p
 	}
-	b := e.Base()
-	before := st.sess.Leaf()
-	if b.ID != "" && b.Parent == "" && before != "" {
-		st.sess.ResetLeaf()
-	}
 	res, err := h.write(ctx, st, e)
 	if err != nil {
-		if before != "" && st.sess.Leaf() != before {
-			_ = st.sess.Branch(before)
-		}
 		return appended{}, err
 	}
 	out := appended{ID: res.ID, Outcome: outcomes[res.Outcome], Durable: res.Durable, Unresolved: res.Unresolved}
@@ -443,7 +453,7 @@ func (h *Handler) appendLine(ctx context.Context, st *held, line []byte) (append
 // empty, as a store fills an entry it is handed (Session.Prepare): the
 // time now for a missing or zero ts, the session's head for a missing
 // or null parent, and the ID the line then hashes to. Only a complete
-// line says a null parent is a root. A complete line is returned as it
+// line says its parent is null, the root. A complete line is returned as it
 // is.
 func fillLine(line []byte, head string) ([]byte, error) {
 	var all map[string]json.RawMessage
@@ -531,7 +541,8 @@ func (h *Handler) commit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-// headRequest is a head compare-and-swap.
+// headRequest is a head compare-and-swap, as a client sends it: null
+// for the universal root, in expected and in to.
 type headRequest struct {
 	Expected *string `json:"expected"`
 	To       *string `json:"to"`
@@ -539,20 +550,33 @@ type headRequest struct {
 }
 
 func (h *Handler) setHead(w http.ResponseWriter, r *http.Request) {
-	var req headRequest
+	// to is null for the universal root, so it is read raw: a move
+	// that leaves it out names no target, which is not the root.
+	var req struct {
+		Expected *string         `json:"expected"`
+		To       json.RawMessage `json:"to"`
+		Durable  bool            `json:"durable"`
+	}
 	if err := readJSON(r, &req); err != nil {
 		h.fail(w, err)
 		return
 	}
-	if req.To == nil || *req.To == "" {
-		h.fail(w, problem(CodeHeadTarget, "a head move names its target", ""))
+	var target *string
+	if len(req.To) == 0 || json.Unmarshal(req.To, &target) != nil || target != nil && *target == "" {
+		h.fail(w, problem(CodeHeadTarget, "a head move names its target, an entry or null for the root", ""))
 		return
 	}
-	hs, durable := h.store.(headSetter)
-	if req.Durable && !durable {
-		h.fail(w, problem(CodeUnsupported, "the store has no commit of its own", ""))
+	// A durable move is the store's compare-and-swap, which every store
+	// of this module offers (RFC 0002, Head); one from elsewhere without
+	// it is refused one. Any other move is made in the held session, the
+	// live head, which the next append records: a store that keeps its
+	// head in its entries would otherwise write a leaf label for each.
+	hs, ok := h.store.(agentsession.HeadStore)
+	if req.Durable && !ok {
+		h.fail(w, problem(CodeUnsupported, "the store has no head compare-and-swap", ""))
 		return
 	}
+	durable := req.Durable
 	st := h.state(r.PathValue("id"))
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -560,7 +584,7 @@ func (h *Handler) setHead(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	cur, exp, to := st.sess.Leaf(), headIn(req.Expected), *req.To
+	cur, exp, to := st.sess.Leaf(), headIn(req.Expected), headIn(target)
 	if cur != exp {
 		p := problem(CodeHeadMoved, "the head is not the expected entry", "")
 		p.Head = headOut(cur)
@@ -568,8 +592,15 @@ func (h *Handler) setHead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e, ok := st.sess.Entry(to)
-	if base := st.sess.Header().Base; !ok || base != "" && to != base && st.sess.Prefix(to) {
-		h.fail(w, problem(CodeNoEntry, "the head may rest on the base or an own entry", to))
+	base := st.sess.Header().Base
+	switch {
+	case to == "" && base != "":
+		h.fail(w, problem(CodeNoEntry, "the head of a session with a base is not the root", ""))
+		return
+	case to == "":
+		// The universal root, the empty context.
+	case !ok || base != "" && to != base && st.sess.Prefix(to):
+		h.fail(w, problem(CodeNoEntry, "the head may rest on the root, the base or an own entry", to))
 		return
 	}
 	if l, isLabel := e.(*agentsession.LabelEntry); isLabel && l.Label != nil && *l.Label == agentsession.LeafLabel {
@@ -577,16 +608,19 @@ func (h *Handler) setHead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var err error
-	if durable {
+	switch {
+	case durable:
 		err = hs.SetHead(r.Context(), st.id, exp, to)
-	} else {
+	case to == "":
+		st.sess.ResetLeaf()
+	default:
 		err = st.sess.Branch(to)
 	}
 	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"head": to, "durable": durable})
+	writeJSON(w, map[string]any{"head": headOut(to), "durable": durable})
 }
 
 // refUpdate is a ref compare-and-swap.
@@ -612,17 +646,45 @@ func (h *Handler) updateRef(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := req.Next.lib()
-	err := h.refs.UpdateRef(r.Context(), name, req.Expected.lib(), next, req.Reason)
+	if next.Session != "" && !h.may(r.Context(), ScopeRefs, next.Session) {
+		h.fail(w, noSession())
+		return
+	}
+	// The ref reaches the session it names now as well as the one it
+	// moves to: a ref whose target the caller may not move is no ref of
+	// its, and an expected value naming such a session is refused alike,
+	// so the compare cannot succeed on a target the caller learnt
+	// elsewhere and no refusal names one.
+	expected := req.Expected.lib()
+	if !h.mayMove(r.Context(), expected) {
+		h.fail(w, noRef())
+		return
+	}
+	if t, rerr := h.refs.ResolveRef(r.Context(), name); (rerr == nil || !t.IsZero()) && !h.mayMove(r.Context(), t) {
+		h.fail(w, noRef())
+		return
+	}
+	err := h.refs.UpdateRef(r.Context(), name, expected, next, req.Reason)
 	switch {
 	case err == nil:
 		writeJSON(w, refLine{Name: name, Target: targetOut(next)})
 	case errors.Is(err, agentsession.ErrRefMoved):
 		p := problem(CodeRefMoved, "the ref is not at the expected target", "")
 		var moved *agentsession.RefMovedError
+		cur, known := agentsession.RefTarget{}, false
 		if errors.As(err, &moved) {
-			p.Target = targetOut(moved.Current)
+			cur, known = moved.Current, true
 		} else if t, rerr := h.refs.ResolveRef(r.Context(), name); rerr == nil || !t.IsZero() {
-			p.Target = targetOut(t)
+			cur, known = t, true
+		}
+		if known && !h.mayMove(r.Context(), cur) {
+			// Moved, since the check, onto a session the caller may not
+			// reach.
+			h.fail(w, noRef())
+			return
+		}
+		if known {
+			p.Target = targetOut(cur)
 		}
 		h.fail(w, p)
 	case errors.Is(err, agentsession.ErrNoSession):

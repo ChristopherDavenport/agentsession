@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -107,21 +106,27 @@ func (u *uploads) has(who string, k objKey, grace time.Duration) bool {
 	return ok
 }
 
-// reach is which objects the store's sessions hold: an own or prefix
-// entry's envelope, the content it names, and the media blobs that
-// content names. It is rebuilt when the store's listing changes, which
-// an append, a create, a push or a delete does.
+// reach is which objects each of the store's sessions holds: an own or
+// prefix entry's envelope, the content it names, and the media blobs
+// that content names. A session's set is rebuilt when its size or
+// modified time in the listing changes, which an append, a push or a
+// re-creation does.
 type reach struct {
-	mu  sync.Mutex
+	mu   sync.Mutex
+	sets map[string]reachOf
+}
+
+type reachOf struct {
 	fp  string
 	set map[objKey]bool
 }
 
 // reachable reports which of keys some session the caller may read
-// holds, or the caller uploaded for a push. Read scope reads every
-// session of the store, so a reachable object is one any session
-// holds. The answer is built by reading the store's sessions, which a
-// server for many sessions would keep an index for instead.
+// holds, or the caller uploaded for a push. Without an [Authorizer]
+// read scope reads every session of the store, so a reachable object is
+// one any session holds. The answer is built by reading the store's
+// sessions, which a server for many sessions would keep an index for
+// instead.
 func (h *Handler) reachable(ctx context.Context, who string, keys []objKey) (map[objKey]bool, error) {
 	out := map[objKey]bool{}
 	var rest []objKey
@@ -135,38 +140,43 @@ func (h *Handler) reachable(ctx context.Context, who string, keys []objKey) (map
 	if len(rest) == 0 {
 		return out, nil
 	}
-	set, err := h.reachSet(ctx)
+	sets, err := h.reachSets(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for _, k := range rest {
-		if set[k] {
-			out[k] = true
+	for id, set := range sets {
+		if !h.may(ctx, ScopeRead, id) {
+			continue
+		}
+		for _, k := range rest {
+			if set[k] {
+				out[k] = true
+			}
 		}
 	}
 	return out, nil
 }
 
-// reachSet is the objects the store's sessions hold, rebuilt when the
-// listing's IDs, sizes or modified times have changed.
-func (h *Handler) reachSet(ctx context.Context) (map[objKey]bool, error) {
-	var b strings.Builder
-	var ids []string
+// reachSets is the objects each of the store's sessions holds, by
+// session ID, each rebuilt when the listing's size or modified time for
+// it has changed.
+func (h *Handler) reachSets(ctx context.Context) (map[string]map[objKey]bool, error) {
+	fps := map[string]string{}
 	for s, err := range h.store.List(ctx, agentsession.ListFilter{}) {
 		if err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(&b, "%s %d %d\n", s.Header.ID, s.Size, s.Modified.UnixNano())
-		ids = append(ids, s.Header.ID)
+		fps[s.Header.ID] = fmt.Sprintf("%d %d", s.Size, s.Modified.UnixNano())
 	}
-	fp := b.String()
 	h.reach.mu.Lock()
 	defer h.reach.mu.Unlock()
-	if h.reach.set != nil && h.reach.fp == fp {
-		return h.reach.set, nil
-	}
-	set := map[objKey]bool{}
-	for _, id := range ids {
+	next := make(map[string]reachOf, len(fps))
+	out := make(map[string]map[objKey]bool, len(fps))
+	for id, fp := range fps {
+		if had, ok := h.reach.sets[id]; ok && had.fp == fp {
+			next[id], out[id] = had, had.set
+			continue
+		}
 		sess, err := h.reader.Read(ctx, id)
 		if errors.Is(err, agentsession.ErrNoSession) {
 			continue // deleted since the listing
@@ -174,6 +184,7 @@ func (h *Handler) reachSet(ctx context.Context) (map[objKey]bool, error) {
 		if err != nil {
 			return nil, err
 		}
+		set := map[objKey]bool{}
 		for _, e := range sess.Entries() {
 			set[objKey{cas.SpaceEntries, e.Base().ID}] = true
 			set[objKey{cas.SpaceContents, e.Base().ContentHash()}] = true
@@ -185,9 +196,10 @@ func (h *Handler) reachSet(ctx context.Context) (map[objKey]bool, error) {
 				set[objKey{cas.SpaceMedia, m}] = true
 			}
 		}
+		next[id], out[id] = reachOf{fp, set}, set
 	}
-	h.reach.fp, h.reach.set = fp, set
-	return set, nil
+	h.reach.sets = next
+	return out, nil
 }
 
 func (h *Handler) principal(r *http.Request) Principal {
@@ -459,16 +471,35 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 // fault is an error.
 func (h *Handler) pushRef(ctx context.Context, ref PushRef) (PushRefResult, error) {
 	out := PushRefResult{Name: ref.Name}
+	if next := ref.Next.lib(); next.Session != "" && !h.may(ctx, ScopeRefs, next.Session) {
+		out.Why = "no such session"
+		return out, nil
+	}
+	// As for a ref update: the ref's current target and the expected one
+	// must be the caller's to move, and a refusal names neither.
+	if !h.mayMove(ctx, ref.Expected.lib()) {
+		out.Why = "no such ref"
+		return out, nil
+	}
+	if t, err := h.refs.ResolveRef(ctx, ref.Name); (err == nil || !t.IsZero()) && !h.mayMove(ctx, t) {
+		out.Why = "no such ref"
+		return out, nil
+	}
 	err := h.refs.UpdateRef(ctx, ref.Name, ref.Expected.lib(), ref.Next.lib(), "exchange: push")
 	var moved *agentsession.RefMovedError
 	switch {
 	case err == nil:
 		out.Moved = true
+	case errors.As(err, &moved) && !h.mayMove(ctx, moved.Current):
+		out.Why = "no such ref"
 	case errors.As(err, &moved):
 		out.Current = targetOut(moved.Current)
 		out.Why = fmt.Sprintf("the server's ref holds %s, not the expected %s", orNone(moved.Current.String()), orNone(ref.Expected.lib().String()))
 	case errors.Is(err, agentsession.ErrRefMoved):
 		out.Why = err.Error()
+		if t, rerr := h.refs.ResolveRef(ctx, ref.Name); (rerr == nil || !t.IsZero()) && !h.mayMove(ctx, t) {
+			out.Why = "no such ref" // its text names the target
+		}
 	case errors.Is(err, agentsession.ErrRefName), errors.Is(err, agentsession.ErrNoEntry), errors.Is(err, agentsession.ErrNoSession):
 		out.Why = err.Error()
 	default:

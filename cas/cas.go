@@ -184,8 +184,10 @@ const (
 var ErrMirror = errors.New("cas: session is a mirror here; only the record may advance it")
 
 // ErrHeadMoved is returned by SetHead when the head is not the expected
-// entry, which is how a writer learns that another moved it.
-var ErrHeadMoved = errors.New("cas: head is not the expected entry")
+// entry, which is how a writer learns that another moved it. It is
+// [agentsession.ErrHeadMoved], which every [agentsession.HeadStore]
+// returns.
+var ErrHeadMoved = agentsession.ErrHeadMoved
 
 // ErrBadName is returned for a session ID or a hash that cannot be used
 // as a path: a session ID is letters, digits, '.', '_' and '-' and is
@@ -646,6 +648,16 @@ func (s *Store) refuseUnredacted(h agentsession.Header, entries []agentsession.E
 		return err
 	}
 	return agentsession.CheckRedacted(h, entries)
+}
+
+// refuseUnredactedIn is refuseUnredacted for entries about to join
+// sess, whose own entries a head move's target may name.
+func (s *Store) refuseUnredactedIn(sess *agentsession.Session, entries []agentsession.Entry) error {
+	only, err := s.onlyRedacted()
+	if err != nil || !only {
+		return err
+	}
+	return agentsession.CheckRedactedIn(sess, entries)
 }
 
 // markLayout writes the layout file of a store that has none and no
@@ -2829,7 +2841,7 @@ func (s *Store) startPack(due bool) {
 func (s *Store) writeHeld(ctx context.Context, h *handle, sessionID string, e agentsession.Entry) (agentsession.Result, error) {
 	// A store holding only redacted entries takes no other, read before
 	// anything is written and again under the sweep's lock below.
-	if err := s.refuseUnredacted(h.session.Header(), []agentsession.Entry{e}); err != nil {
+	if err := s.refuseUnredactedIn(h.session, []agentsession.Entry{e}); err != nil {
 		return agentsession.Result{}, err
 	}
 	if h.mark != MarkRecord {
@@ -2863,7 +2875,7 @@ func (s *Store) writeHeld(ctx context.Context, h *handle, sessionID string, e ag
 	if err != nil {
 		return agentsession.Result{}, err
 	}
-	if err := s.refuseUnredacted(h.session.Header(), []agentsession.Entry{e}); err != nil {
+	if err := s.refuseUnredactedIn(h.session, []agentsession.Entry{e}); err != nil {
 		guard.release()
 		return agentsession.Result{}, err
 	}
@@ -2998,10 +3010,11 @@ func (s *Store) syncHead(h *handle, sessionID string) error {
 	return nil
 }
 
-// SetHead moves a session's head from expected to the entry to, or
-// returns ErrHeadMoved when the head is not expected. "" is a valid
-// expected value for a session with no head. The target must be the
-// base or an own entry and not a leaf label; a mirror is refused. The
+// SetHead moves a session's head from expected to to, or returns
+// ErrHeadMoved when the head is not expected. Either may be "", the
+// universal root, the empty context. The target must be the root in a
+// session with no base, or the base or an own entry and not a leaf
+// label; a mirror is refused. The
 // log record is committed, durably, before the head moves anywhere.
 func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) error {
 	if err := ctx.Err(); err != nil {
@@ -3038,7 +3051,9 @@ func (s *Store) moveHead(h *handle, sessionID, to string) error {
 	h.lazy = false
 	_ = writeHead(h.dir, to) // an index; the log has it
 	h.head = to
-	if err := h.session.Branch(to); err != nil {
+	if to == "" {
+		h.session.ResetLeaf()
+	} else if err := h.session.Branch(to); err != nil {
 		// Committed; the session is rebuilt on the next Open.
 		s.dropHandle(sessionID, h)
 	}
@@ -3052,9 +3067,18 @@ func orNone(s string) string {
 	return s
 }
 
-// mayRestOn holds a head target to the rule: the base or an own entry,
-// and not a leaf label.
+// mayRestOn holds a head target to the rule: the universal root ("") in
+// a session with no base, or the base or an own entry and not a leaf
+// label.
 func (s *Store) mayRestOn(sess *agentsession.Session, id string) error {
+	if id == "" {
+		// The universal root, the empty context, which a session with
+		// a base never rests on.
+		if sess.Header().Base != "" {
+			return fmt.Errorf("%w: the head of a session with a base is not the root", agentsession.ErrNoEntry)
+		}
+		return nil
+	}
 	e, ok := sess.Entry(id)
 	if !ok {
 		return fmt.Errorf("%w: %s", agentsession.ErrNoEntry, id)
@@ -3063,7 +3087,7 @@ func (s *Store) mayRestOn(sess *agentsession.Session, id string) error {
 		return fmt.Errorf("%w: %s is on the prefix above the base", agentsession.ErrNoEntry, id)
 	}
 	if l, ok := e.(*agentsession.LabelEntry); ok && l.Label != nil && *l.Label == agentsession.LeafLabel {
-		return errors.New("cas: the head never rests on a leaf label")
+		return fmt.Errorf("%w: %s", ErrHeadTarget, id)
 	}
 	return nil
 }
@@ -3663,8 +3687,10 @@ func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header,
 }
 
 var (
-	_ agentsession.Writer   = (*Store)(nil)
-	_ agentsession.Store    = (*Store)(nil)
-	_ agentsession.Reader   = (*Store)(nil)
-	_ agentsession.Importer = (*Store)(nil)
+	_ agentsession.Writer    = (*Store)(nil)
+	_ agentsession.Store     = (*Store)(nil)
+	_ agentsession.Reader    = (*Store)(nil)
+	_ agentsession.Importer  = (*Store)(nil)
+	_ agentsession.HeadStore = (*Store)(nil)
+	_ agentsession.Releaser  = (*Store)(nil)
 )
