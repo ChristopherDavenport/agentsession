@@ -58,6 +58,25 @@ func headRedactedOnly(t *testing.T, opts Options) {
 	if err := agentsession.CheckHoldsRedacted(ctx, st); err != nil {
 		t.Errorf("the store holds a head move it calls unredacted: %v", err)
 	}
+	// And to the universal root, a leaf label with a null target, which
+	// carries no content either: the store holds it by its own check,
+	// and another store that holds only redacted entries takes the
+	// session with it.
+	if err := hs.SetHead(ctx, id, root, ""); err != nil {
+		t.Fatalf("SetHead to the root in a store that holds only redacted entries: %v", err)
+	}
+	if got := headOf(t, st, id); got != "" {
+		t.Errorf("head after SetHead to the root = %s, want the root", got)
+	}
+	if err := agentsession.CheckHoldsRedacted(ctx, st); err != nil {
+		t.Errorf("the store holds a head move to the root it calls unredacted: %v", err)
+	}
+	other := opts.RedactedOnly(t)
+	if take := importer(opts, other); take != nil {
+		if err := take(t, other, fileOf(t, readBack(t, st, id))); err != nil {
+			t.Errorf("import into another store that holds only redacted entries: %v", err)
+		}
+	}
 }
 
 // headBranchKept: a branch leaves the head where it is, and a store that

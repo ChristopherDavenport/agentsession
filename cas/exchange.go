@@ -80,7 +80,7 @@ type RefResult struct {
 type PushOptions struct {
 	// Expected is the receiver's head as the sender last saw it: ""
 	// when the sender believes the receiver lacks the session or holds
-	// it with no head, or the base, which is the head a fork the
+	// it with its head at the universal root, or the base, which is the head a fork the
 	// receiver lacked starts with. A push whose expected value is wrong
 	// lands its entries as a branch and leaves the head, which is what
 	// reveals two stores that each believed they were the record.

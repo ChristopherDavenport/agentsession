@@ -767,8 +767,8 @@ blobs the redaction kept, which are the same blobs.
   prefix included — and carries no `redacted`. Redaction is a property
   of what was run over an entry's content, so the check does not apply
   to the record of a head move (Head): a `leaf` label whose `target`
-  names an entry of the session and which carries no other member at
-  any depth, no `parents`, `legacy_id`, `normalised` or member this
+  names an entry of the session or the root, and which carries no
+  other member at any depth, no `parents`, `legacy_id`, `normalised` or member this
   document does not define. It carries no content to have been
   redacted, and such a store accepts it, the one a head move writes
   included. A `leaf` label whose target is any other text, or that
