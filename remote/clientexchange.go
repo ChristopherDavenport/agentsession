@@ -171,10 +171,15 @@ func (c *Client) HandOver(ctx context.Context, id, head string) error {
 // committed its mark; a failure between the two leaves two records,
 // never none. A server whose store holds only redacted entries refuses
 // a push of a session whose header does not carry redacted or that
-// carries an entry without it (agentsession.ErrNotRedacted). It refuses
-// at the post, after the objects were uploaded, which stay in its
-// store, named by no session, until a sweep (#244); [WithRedactedOnly]
-// has the client refuse before it sends anything.
+// carries an entry without it (agentsession.ErrNotRedacted).
+//
+// Push asks first, by the push's pre-flight ([Client.CheckPush]), so a
+// refusal that needs no object, a header without redacted at such a
+// server among them, comes before any object is uploaded. One that needs
+// the objects, an entry without redacted under a redacted header, comes
+// at the post, after the objects were uploaded, which stay in the
+// server's store, named by no session, until a sweep;
+// [WithRedactedOnly] has the client refuse before it sends anything.
 func Push(ctx context.Context, local *cas.Store, c *Client, id string, opts cas.PushOptions) (cas.Exchange, error) {
 	targets := make([]agentsession.RefTarget, len(opts.Refs))
 	for i, r := range opts.Refs {
@@ -234,6 +239,9 @@ func Push(ctx context.Context, local *cas.Store, c *Client, id string, opts cas.
 	}
 	for i, r := range opts.Refs {
 		req.Refs = append(req.Refs, PushRef{Name: r.Name, Expected: targetOut(r.Expected), Next: targetOut(targets[i])})
+	}
+	if err := c.CheckPush(ctx, cl.Header, req.Entries, req.Prefix); err != nil {
+		return cas.Exchange{}, err
 	}
 	lacks, err := c.Missing(ctx, all)
 	if err != nil {

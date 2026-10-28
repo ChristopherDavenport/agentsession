@@ -318,10 +318,13 @@ func WithReadOnly() Option {
 // journal are migrated by the next writing open without this check.
 //
 // What is refused is refused before this store writes anything of it.
-// Over RFC 0003 that is the server's store, and a client's push uploads
-// the objects of the closure before it posts the push, so a refused
-// push leaves them in the server's store, named by no session, until a
-// sweep (#244); the remote package's WithRedactedOnly has a publisher's
+// Over RFC 0003 that is the server's store. A client's push asks the
+// server first, by the push's pre-flight ([Store.CheckPush]), which
+// refuses a session whose header does not carry redacted before any
+// object is uploaded; an entry without redacted under a redacted header
+// is refused only at the push, after the closure's objects were
+// uploaded, which stay in the server's store, named by no session, until
+// a sweep. The remote package's WithRedactedOnly has a publisher's
 // client refuse an original before it sends anything.
 //
 // A read-only open given the option refuses as a store set this way

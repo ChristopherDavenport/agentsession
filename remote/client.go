@@ -99,9 +99,11 @@ func WithLeaseTTL(d time.Duration) ClientOption {
 // before the entry or the session is sent. A fork's own entries and a
 // resumed redacted session's native entries are refused alike. The
 // server's store refuses them too when it is set to hold only redacted
-// entries, answering not_redacted, though a push only once its objects
-// are uploaded (#244); the option makes the client fail closed against
-// a server that is not set so, and before it uploads anything.
+// entries, answering not_redacted, a push at its pre-flight before any
+// object is uploaded when the header does not carry redacted; the option
+// makes the client fail closed against a server that is not set so, and
+// refuse an entry without redacted, which the pre-flight cannot see,
+// before it uploads anything.
 func WithRedactedOnly() ClientOption { return func(c *Client) { c.redactedOnly = true } }
 
 // Dial returns a client of the server at baseURL, the URL the /v1

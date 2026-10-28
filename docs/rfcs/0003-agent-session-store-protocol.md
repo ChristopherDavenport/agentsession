@@ -770,6 +770,21 @@ POST /v1/sessions/{id}/push
 
 A push is RFC 0002's, over the wire.
 
+0. Before step 1 the sender MAY post `{"header", "entries", "prefix"}`,
+   the members step 2 names, to `POST /v1/sessions/{id}/push?check`.
+   The server answers with the session-level refusals that need no
+   object, `not_redacted` (a header without `redacted` at a store that
+   holds only redacted entries), `header_differs`, `format`, `bad_entry`
+   for a malformed header, `base_rule` (a prefix that does not end at
+   the header's `base`, or one given to a session with no base),
+   `bad_base` (a fork whose `media` differs from its origin's), or with
+   204, and stores nothing. A sender pushing to a store set to hold
+   only redacted entries SHOULD check first, so an original's objects
+   are never uploaded to it. The check is advisory, since what the
+   server holds can change before the push, and the push stays the
+   authority: a server MUST give the same refusal at the push itself,
+   before it looks for any object, so a push refused by its check is
+   refused the same way when posted without one.
 1. The sender asks which objects of the closure the receiver lacks
    (`POST /v1/objects/missing`), and uploads every one so reported
    (`PUT`). Because `missing` answers per caller, an object that no
@@ -837,6 +852,45 @@ conversation's ref. What a crash can lose is what the harness had not
 yet pushed, which it chooses by how often it pushes. Followers read the
 server.
 
+## Import
+
+```
+POST /v1/sessions/import[?record=true]
+```
+
+RFC 0002's import of a projection, over the wire, for a server whose
+store imports but need not exchange: a server over a store of entries
+alone can take a session whole this way, a redacted one among them.
+
+- The body is an RFC 0001 file (`application/x-ndjson`). The request
+  needs exchange scope, and is authorized as a create of the session the
+  header names: the session ID for that scope, and for a fork the
+  origin as a read and the base as reachable by the caller, as Create
+  says.
+- A sidecar session's blobs are uploaded first, as `media` objects
+  (Objects). Every blob an item names that the server cannot find for
+  the caller is `missing_object`, its `missing` member the hashes in
+  `missing`'s shape. Where a local import takes the session and reports
+  such a blob unresolved (RFC 0002, Projection to JSONL), the wire
+  refuses it, since the client holds the directory and can upload what
+  it lacks. A server whose store holds no sidecar media refuses a
+  sidecar session with `unsupported`.
+- The server holds the file to RFC 0002's import checks and refuses
+  with their codes: `session_exists` for an ID it holds, `bad_entry` for
+  a line that does not verify, a last line cut short or a malformed
+  header (the `reason` naming the rule), `base_rule`, `bad_base`,
+  `format`, `synthetic` for a projection's marker the store cannot keep
+  (`reason` `synthetic_marker`), and `not_redacted` at a store that
+  holds only redacted entries. A refused import admits nothing.
+- `record=true` says the file is the only copy, so the server is the
+  session's record; otherwise it holds a mirror (RFC 0002, the record
+  mark), in a store that keeps marks.
+- The server commits the session before it answers, 201 with the
+  session's state as Get returns it: `{"header", "head", "length",
+  "incarnation", "mark"}`. An import is not retry-safe across a lost
+  answer: the retry is `session_exists`, and the client reads the
+  session to see that it landed.
+
 ## Errors
 
 The codes below are this document's. RFC 0002 states refusals in prose
@@ -848,7 +902,7 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | Code | Status | Meaning |
 |---|---|---|
 | `no_session` | 404 | no such session (also: a session the caller may not reach; a live follow whose session was deleted; a ref `next` naming a missing session) |
-| `session_exists` | 409 | Create of an ID held under another header |
+| `session_exists` | 409 | Create of an ID held under another header; Import of an ID held at all |
 | `session_replaced` | 409 | the incarnation differs from `If-Incarnation` |
 | `no_entry` | 404 | a parent, base, head target, ref pin or `leaf` the session (or the caller) does not hold |
 | `no_object` | 404 | an object hash not held or not reachable by the caller |
@@ -870,7 +924,7 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | `base_rule` | 422 | a parent that is not the base, an own entry, or null; a null parent in a session with a base |
 | `bad_base` | 422 | a fork whose base is a `leaf` label, or whose `media` differs from the origin's |
 | `bad_object` | 422 | bytes that do not hash to the name, an uploaded object's or an imported sidecar blob's |
-| `missing_object` | 409 | a push names objects the server cannot find; body has the hashes |
+| `missing_object` | 409 | a push names objects, or an import sidecar blobs, the server cannot find for the caller; body has the hashes |
 | `bad_ref_target` | 422 | a pushed ref whose `next` is not the pushed session |
 | `format` | 422 | a format the server does not read, or earlier than the session's; also an append or push that would raise a header RFC 0001 forbids raising, one before 0.13 holding `redacted_from`, or whose entries hold `redacted` |
 | `not_redacted` | 403 | a create, append, push or fetch that would bring a session whose header does not carry `redacted`, or an entry that carries no `redacted`, into a store that holds only redacted entries |
@@ -891,9 +945,9 @@ differently from a malformed line.
 ## Out of scope and admin operations
 
 Not carried, because they are a local operator's or a file's:
-- **Import** and **Project** (RFC 0002, Projection to JSONL): moving a
-  session as a file is not moving it as a closure. A client imports into
-  its own store and pushes.
+- **Project** (RFC 0002, Projection to JSONL): a projection is a file
+  the client builds from what it reads. **Import** is carried (Import),
+  for a server whose store takes a file but does not exchange.
 - **Repair**, **Verify**, **Pack** and **Sweep**: store maintenance. A
   deployment MAY expose them under its own admin scope; the protocol
   does not define them. A remote reader that needs to check a session

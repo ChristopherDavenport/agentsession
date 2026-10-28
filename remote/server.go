@@ -250,6 +250,7 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 	mux.HandleFunc("PUT /v1/objects/{space}/{hash}", h.guard("", h.objectPut))
 	mux.HandleFunc("POST /v1/objects/missing", h.guard(ScopeExchange, h.missing))
 	mux.HandleFunc("POST /v1/sessions/{id}/push", h.guard(ScopeExchange, h.push))
+	mux.HandleFunc("POST /v1/sessions/import", h.guard(ScopeExchange, h.importSession))
 	mux.HandleFunc("POST /v1/sessions/{id}/record", h.guard(ScopeExchange, h.record))
 	mux.HandleFunc("POST /v1/sessions/{id}/handover", h.guard(ScopeWrite, h.handover))
 	mux.HandleFunc("/v1/", h.guard("", func(w http.ResponseWriter, r *http.Request) {

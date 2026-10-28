@@ -664,3 +664,72 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 	}
 	return x, nil
 }
+
+// CheckPush is RFC 0003's push pre-flight: it holds a push of the
+// session h names, with its prefix by hash, root first, to the refusals
+// a receiver can make with no object, and stores nothing. It returns the
+// error a push of that session would be refused with first, or nil: a
+// read-only store, a format the store does not read
+// ([agentsession.ErrUnsupportedFormat]), a header RFC 0001 calls
+// malformed, a header without redacted in a store set to hold only
+// redacted entries ([agentsession.ErrNotRedacted]), a prefix that does
+// not end at the base, or one given to a session with no base
+// ([agentsession.ErrBaseRule]), a session held under another header
+// ([ErrHeaderDiffers]) or whose held header may not be raised to h's
+// format, and a fork whose media differs from that of the session
+// holding its base ([agentsession.ErrMediaDiffers]).
+//
+// The check is advisory: what the store holds can change before the
+// push, which is held to the same refusals and remains the authority.
+func (s *Store) CheckPush(ctx context.Context, h agentsession.Header, prefix []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.writable(); err != nil {
+		return err
+	}
+	if laterFormat(h.Format, agentsession.Format) {
+		return fmt.Errorf("%w: %s is later than this store's %s", agentsession.ErrUnsupportedFormat, h.Format, agentsession.Format)
+	}
+	if err := h.Validate(); err != nil {
+		return fmt.Errorf("cas: exchange: %w", err)
+	}
+	if err := s.refuseUnredacted(h, nil); err != nil {
+		return err
+	}
+	switch {
+	case h.Base == "" && len(prefix) > 0:
+		return agentsession.NewBaseRuleError("cas: exchange: a prefix for a session with no base")
+	case h.Base != "" && (len(prefix) == 0 || prefix[len(prefix)-1] != h.Base):
+		return agentsession.NewBaseRuleError(fmt.Sprintf("cas: exchange: the prefix does not end at the base %s", h.Base))
+	}
+	dir, err := s.sessionDir(h.ID)
+	if err != nil {
+		return err
+	}
+	held, err := readHeader(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		if h.Base != "" {
+			if owner, _, err := s.holderOf(h.Base, h.ParentSession); err == nil && owner != "" {
+				if odir, err := s.sessionDir(owner); err == nil {
+					if oh, err := readHeader(odir); err == nil && mediaOf(oh) != mediaOf(h) {
+						return fmt.Errorf("cas: exchange: %w", agentsession.ErrMediaDiffers)
+					}
+				}
+			}
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !sameSession(held, h) {
+		return fmt.Errorf("%w: %s", ErrHeaderDiffers, h.ID)
+	}
+	if laterFormat(h.Format, held.Format) {
+		if err := held.Raise(h.Format); err != nil {
+			return fmt.Errorf("cas: %w", err)
+		}
+	}
+	return nil
+}

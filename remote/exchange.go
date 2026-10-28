@@ -26,6 +26,7 @@ type exchanger interface {
 	MarkOf(ctx context.Context, id string) (mark, head string, err error)
 	DeclareRecordAt(ctx context.Context, id, head string) error
 	HandOver(ctx context.Context, id, head string) error
+	CheckPush(ctx context.Context, h agentsession.Header, prefix []string) error
 }
 
 // Objects are object hashes by RFC 0003's space: the body of a missing
@@ -393,12 +394,19 @@ func resultOf(x cas.Exchange, mark string) *PushResult {
 // the wire. It is not leased: it takes the session's per-session lock,
 // so it is ordered against a lease holder's writes, and presents no
 // token.
+//
+// With ?check it is the pre-flight (RFC 0003, Exchange): the body needs
+// only the header, the entries and the prefix, and the answer is 204 or
+// the first session-level refusal the push would meet with no object,
+// and nothing is stored. The push itself makes the same check before it
+// looks for an object, so it refuses as the pre-flight did.
 func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 	if h.ex == nil {
 		h.writeProblem(w, problem(CodeUnsupported, "the store does not exchange", ""))
 		return
 	}
 	id := r.PathValue("id")
+	check := r.URL.Query().Has("check")
 	var req pushRequest
 	if err := readJSON(r, &req); err != nil {
 		h.fail(w, err)
@@ -408,6 +416,7 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 	case req.Header.ID != id:
 		h.fail(w, problem(CodeBadRequest, "the header names another session", req.Header.ID))
 		return
+	case check:
 	case req.Mark != cas.MarkMirror && req.Mark != cas.MarkRecord:
 		h.fail(w, problem(CodeBadRequest, "mark is mirror or record", req.Mark))
 		return
@@ -424,6 +433,14 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 			p.Reason = "header"
 		}
 		h.fail(w, p)
+		return
+	}
+	if err := h.ex.CheckPush(r.Context(), req.Header, req.Prefix); err != nil {
+		h.fail(w, err)
+		return
+	}
+	if check {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	who := h.principal(r)

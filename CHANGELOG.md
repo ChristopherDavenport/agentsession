@@ -7,6 +7,24 @@ versions may break the API.
 
 ## Unreleased
 
+- **An import endpoint, and a push that asks first (RFC 0003, Import
+  and Exchange).** `POST /v1/sessions/import` takes an RFC 0001 file
+  with exchange scope, authorized as a create of its session, and hands
+  it to the store's import, committed before the 201, so a server over
+  memory, jsonl or sqlite can take a session whole, a redacted one
+  among them; a sidecar session's blobs are uploaded first, and one the
+  server cannot find for the caller is `missing_object`, admitting
+  nothing. **Added: `remote.Client.Import` and `ImportMedia`**, so the
+  client is an `agentsession.Importer`; a missing blob matches
+  `agentsession.ErrNoBlob` as well as `ErrMissingObject`. `POST
+  /v1/sessions/{id}/push?check` is the push's pre-flight: the
+  session-level refusals that need no object, or 204, storing nothing.
+  **Added: `remote.Client.CheckPush` and `cas.Store.CheckPush`.**
+  `remote.Push` checks first, so a push of an original to a server that
+  holds only redacted entries uploads nothing, and the server makes the
+  same check at the push before it looks for an object. The remote
+  conformance suite now imports through the endpoint. (#241, #244)
+
 - **Every store holds sidecar blobs, and an import takes them (RFC 0002,
   Media and Projection to JSONL; RFC 0003, Objects).** **Added: the
   root `BlobWriter` (`PutBlob`) and `BlobReader` (`Blob`, `ErrNoBlob`)**,

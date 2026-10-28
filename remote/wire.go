@@ -251,6 +251,9 @@ var reasons = map[string]error{
 	// A fork's: its media differs from that of the session holding its
 	// base, a bad_base.
 	"media_differs": agentsession.ErrMediaDiffers,
+	// An import's: a file holding a projection's synthetic leaf marker
+	// that the store cannot keep, a synthetic.
+	"synthetic_marker": agentsession.ErrSyntheticMarker,
 }
 
 // Problem is an error that crossed the wire, as RFC 9457's problem

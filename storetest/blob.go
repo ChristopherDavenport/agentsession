@@ -3,6 +3,7 @@ package storetest
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -68,8 +69,23 @@ func testBlobs(t *testing.T, opts Options) {
 		t.Error("a refused import left its session")
 	}
 
+	// A blob the directory lacks is reported unresolved and the session
+	// imported, by a store that takes the file itself; over RFC 0003 the
+	// import is refused with ErrNoBlob, nothing imported, and the caller
+	// uploads the blob and imports again.
 	dir := fstest.MapFS{hex(hh): {Data: held}}
 	got, unresolved, err := agentsession.ImportMedia(ctx, im, bytes.NewReader(file), dir, true)
+	if errors.Is(err, agentsession.ErrNoBlob) {
+		if _, err := st.Open(ctx, "side-imp"); err == nil {
+			t.Error("an import refused for a missing blob left its session")
+		}
+		dir[hex(hl)] = &fstest.MapFile{Data: lacked}
+		got, unresolved, err = agentsession.ImportMedia(ctx, im, bytes.NewReader(file), dir, true)
+		if err == nil && len(unresolved) != 0 {
+			t.Errorf("an import with every blob reports %v unresolved", unresolved)
+		}
+		unresolved = []string{hl}
+	}
 	if err != nil {
 		t.Fatalf("an import with its directory: %v", err)
 	}
