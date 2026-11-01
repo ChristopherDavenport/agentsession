@@ -1,0 +1,313 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000021",
+  "trajectory_id": "sha256:061d64f118e23d7960dc61b2a0079edfa10724510779eddcb635a71cfadbbfde",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-01T10:00:02Z",
+      "source": "user",
+      "message": "Have the research agent look into order 7.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:aa2d8b7381873d884bbb367e145adcceba87029c92f2725c5f3c8b5d5032c82c"
+        },
+        "config_entries": [
+          "sha256:86e2bd9e77feb2ee76e7ae8edbd843d9019d664489fabcac4ef104df5680ae45"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Have the research agent look into order 7."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-01T10:00:04Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_research",
+          "function_name": "research",
+          "arguments": {
+            "message": "order 7"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_research",
+            "content": "{\"status\":\"dispatched\"}",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_research",
+                  "output": "{\"status\":\"dispatched\"}"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:ae5bf73a686f4f2b6097ec975b1787c8f305f536875efbb52f836f7f4abf1efb"
+        },
+        "calls": {
+          "call_research": {
+            "dispatch": {
+              "entry_id": "sha256:07c71ba78046acb6e392ee536c3dfa5fae461babaed76c72c1209c94f7042e4e"
+            }
+          }
+        },
+        "item_entry_ids": [
+          "sha256:fd4c8c77bd4bb7adb251e2f56238f8a2c3d9ce2dc352f64761683982e60348e6"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_1",
+              "call_id": "call_research",
+              "name": "research",
+              "arguments": "{\"message\":\"order 7\"}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:ae5bf73a686f4f2b6097ec975b1787c8f305f536875efbb52f836f7f4abf1efb",
+            "model": "gpt-5",
+            "request_hash": "sha256:f0993df7014b31eb052827604cb6bbe2bddc9b990e5c0357adbc8c6fdc525bc9",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-11-01T10:00:04Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-01T10:00:09Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "The research agent is on it.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:681ada740510e9ea12b0cc9bb17493580050709c8198a77409ce041909bc342a"
+        },
+        "item_entry_ids": [
+          "sha256:1a2279e07c5382c55b0d14463ecd7babe2379dcaa89fe644fa09609f1c83b849"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_2",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "The research agent is on it.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:681ada740510e9ea12b0cc9bb17493580050709c8198a77409ce041909bc342a",
+            "model": "gpt-5",
+            "request_hash": "sha256:3a2e44b5f3766ad07a7e31a60472a4109a70377872266f5675e4a996b9c5bf91",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-11-01T10:00:09Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-11-01T10:00:10Z",
+      "source": "user",
+      "message": "Thanks. Anything else on the queue?",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:a1de4c155b68f69bce44afeefda61ee72e86d15dfcb13fd7a1348a052cb0ad45"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Thanks. Anything else on the queue?"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 5,
+      "timestamp": "2026-11-01T10:00:12Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Nothing else.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:db946102731d1bcdbd2b1e947d900d1ac8242b0d67b3eecb0742d8d7a95573b5"
+        },
+        "item_entry_ids": [
+          "sha256:d8226c6dfa98e00fc99b0a047fe9119880ca107435932712a21297239105b4dc"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_3",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Nothing else.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:db946102731d1bcdbd2b1e947d900d1ac8242b0d67b3eecb0742d8d7a95573b5",
+            "model": "gpt-5",
+            "request_hash": "sha256:a1c39abc45986c31485572c2e745f672533791b5b874bdc862c9bd2f5aa301ec",
+            "response_id": "resp_3",
+            "status": "completed",
+            "ts": "2026-11-01T10:00:12Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 6,
+      "timestamp": "2026-11-01T10:00:13Z",
+      "source": "user",
+      "message": "Research report on order 7: the refund was issued twice.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:fcac6f484c9308a4d97eabc376bf88c4c676d7706ee843f223467d9ace653988",
+          "from_link": "sha256:45c08738b81dc6fc1ce774875e93a1f06f1a7244f31d16a986c50036d72532ad"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Research report on order 7: the refund was issued twice."
+              }
+            ]
+          }
+        },
+        "source": {
+          "kind": "delivery",
+          "ref": "task-r1",
+          "source": "a2a"
+        }
+      }
+    },
+    {
+      "step_id": 7,
+      "timestamp": "2026-11-01T10:00:15Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "The research is in: order 7 was refunded twice.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:061d64f118e23d7960dc61b2a0079edfa10724510779eddcb635a71cfadbbfde"
+        },
+        "item_entry_ids": [
+          "sha256:623e8c20e25d478410b87a60d6ff5b4cabdc51c83a57a60b7f941478b9de788d"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_5",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "The research is in: order 7 was refunded twice.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:061d64f118e23d7960dc61b2a0079edfa10724510779eddcb635a71cfadbbfde",
+            "model": "gpt-5",
+            "request_hash": "sha256:2fd6fadf8a645bdd5e4bdd7102b89fa28fabeb95d492a8fda4ed319e81236edc",
+            "response_id": "resp_5",
+            "status": "completed",
+            "ts": "2026-11-01T10:00:15Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 4 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 7 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 4
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.14",
+      "leaf": "sha256:061d64f118e23d7960dc61b2a0079edfa10724510779eddcb635a71cfadbbfde",
+      "main": true,
+      "records": [
+        "dispatch"
+      ]
+    },
+    "links": [
+      {
+        "call_id": "call_research",
+        "context": "ctx-r1",
+        "entry_id": "sha256:45c08738b81dc6fc1ce774875e93a1f06f1a7244f31d16a986c50036d72532ad",
+        "rel": "peer",
+        "session": "",
+        "task": "task-r1",
+        "url": "https://research.example/a2a"
+      }
+    ],
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

@@ -7,6 +7,26 @@ versions may break the API.
 
 ## Unreleased
 
+- **ATIF: what each step's own request left out, cost with subagents,
+  a call's records with the call, and calls counted by attempts (RFC
+  0001 0.14, Projections/ATIF and `custom`).** Each agent step carries,
+  under `extra.agentsession`, `request_omitted` and `request_replaced`
+  from its response's request context, so after a model switch a step
+  no longer reads as sent the leaf's prompt (#223). A `custom` entry
+  whose `call_id` names a call with an agent step travels under that
+  step's `calls[call_id].custom` (#224). With subagents embedded, the
+  root's `total_cost_usd` adds each embedded document's, and the notes
+  say so and name what is left out; token totals and `total_steps` stay
+  the path's (#220). `total_steps` counts a response as its `attempts`
+  and a `custom` entry's usage as the `attempts` beside it, so it equals
+  the agent steps' `llm_call_count` plus the other model calls (#225).
+  The 0.14 members project too: `failed` and `from_link` under
+  `extra.agentsession`, a withdrawal's `withdrawn` in its decision
+  record, and a placeholder as `replaced` with the item as `sent`, which
+  `Items` reads. **Added: `CustomEntry.Calls`, `PathRequestContext`,
+  `ExtraRequestOmitted`, `ExtraRequestReplaced` and `ExtraReplaced`.**
+  ATIF goldens for `withdrawn`, `late-report` and `placeholders`.
+
 - **Member names that are data reach a redactor (RFC 0001 0.14, Every
   redacted entry).** A member name is data in an `env` entry's `files`
   and `tools`, and at any depth in every object whose members the

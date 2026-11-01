@@ -1063,6 +1063,36 @@ type CustomEntry struct {
 	CallID string `json:"-" member:"call_id"`
 }
 
+// Calls returns the number of model calls the entry records, which RFC
+// 0001 has a custom entry record when its data is an object with a
+// top-level usage member in the payload profile's usage shape: calls the
+// path paid for that produced no response. They are the data's attempts
+// member beside the usage, a positive integer with a response's
+// meaning, or one when it is absent or in another form. An entry whose
+// data holds no such usage records none, and Calls returns zero.
+func (e *CustomEntry) Calls() int {
+	var paid struct {
+		Usage    *openresponses.Usage `json:"usage"`
+		Attempts json.RawMessage      `json:"attempts"`
+	}
+	if json.Unmarshal(e.Data, &paid) != nil || paid.Usage == nil {
+		return 0
+	}
+	if n, ok := positiveInt(paid.Attempts); ok {
+		return n
+	}
+	return 1
+}
+
+// positiveInt reads raw as a positive integer written as digits.
+func positiveInt(raw json.RawMessage) (int, bool) {
+	if len(raw) == 0 || raw[0] < '1' || raw[0] > '9' {
+		return 0, false
+	}
+	n, err := strconv.Atoi(string(raw))
+	return n, err == nil && n > 0
+}
+
 // EntryType returns "custom".
 func (*CustomEntry) EntryType() string { return TypeCustom }
 

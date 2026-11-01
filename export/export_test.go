@@ -116,7 +116,7 @@ func encode(t *testing.T, v any) []byte {
 func TestATIFGolden(t *testing.T) {
 	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge",
 		"empty-resume", "bad-resume", "handback", "bad-handback", "omit", "omit-absent", "bad-omit", "omit-folded", "bad-handback-folded", "judged", "peer",
-		"refold", "no-response-id"} {
+		"refold", "no-response-id", "withdrawn", "late-report", "placeholders"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			n := 0
@@ -1237,13 +1237,15 @@ func TestTotalsCountCustomUsage(t *testing.T) {
 		data                       []string // the data of the custom entries between the two responses
 		prompt, completion, cached int
 		models                     []string // the models the price source is asked for, in path order
+		calls                      int      // the model calls total_steps counts: attempts beside a usage
 	}{
-		{"naming a model", []string{`{"attempts":2,"model":"m2","usage":{"input_tokens":100,"output_tokens":50,"input_tokens_details":{"cached_tokens":50}}}`}, 130, 53, 65, []string{"m1", "m2", "m1"}},
-		{"naming no model", []string{`{"usage":{"input_tokens":100,"output_tokens":50}}`}, 130, 53, 15, []string{"m1", "m1", "m1"}},
-		{"two of them", []string{`{"usage":{"input_tokens":100,"output_tokens":50}}`, `{"usage":{"input_tokens":1,"output_tokens":1},"model":"m3"}`}, 131, 54, 15, []string{"m1", "m1", "m3", "m1"}},
-		{"no usage", []string{`{"attempts":2,"model":"m2"}`}, 30, 3, 15, []string{"m1", "m1"}},
-		{"no object", []string{`"paid"`, `[1]`, `null`, `7`}, 30, 3, 15, []string{"m1", "m1"}},
-		{"usage of another shape", []string{`{"usage":"lots"}`, `{"usage":[1]}`}, 30, 3, 15, []string{"m1", "m1"}},
+		{"naming a model, with attempts", []string{`{"attempts":2,"model":"m2","usage":{"input_tokens":100,"output_tokens":50,"input_tokens_details":{"cached_tokens":50}}}`}, 130, 53, 65, []string{"m1", "m2", "m1"}, 4},
+		{"naming no model", []string{`{"usage":{"input_tokens":100,"output_tokens":50}}`}, 130, 53, 15, []string{"m1", "m1", "m1"}, 3},
+		{"attempts in another form", []string{`{"usage":{"input_tokens":100,"output_tokens":50},"attempts":"2"}`, `{"usage":{"input_tokens":1,"output_tokens":1},"attempts":0}`}, 131, 54, 15, []string{"m1", "m1", "m1", "m1"}, 4},
+		{"two of them", []string{`{"usage":{"input_tokens":100,"output_tokens":50}}`, `{"usage":{"input_tokens":1,"output_tokens":1},"model":"m3"}`}, 131, 54, 15, []string{"m1", "m1", "m3", "m1"}, 4},
+		{"no usage", []string{`{"attempts":2,"model":"m2"}`}, 30, 3, 15, []string{"m1", "m1"}, 2},
+		{"no object", []string{`"paid"`, `[1]`, `null`, `7`}, 30, 3, 15, []string{"m1", "m1"}, 2},
+		{"usage of another shape", []string{`{"usage":"lots"}`, `{"usage":[1]}`}, 30, 3, 15, []string{"m1", "m1"}, 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1286,11 +1288,12 @@ func TestTotalsCountCustomUsage(t *testing.T) {
 			if !slices.Equal(models, want) {
 				t.Errorf("priced %v, want %v", models, want)
 			}
-			// Each counted custom entry is a model call total_steps
-			// counts, and the notes say what it counts where that is not
-			// the number of steps; none was folded away, so they say
-			// nothing of that.
-			calls := len(tt.models)
+			// Each counted custom entry is as many model calls as the
+			// attempts beside its usage say, one without them, which
+			// total_steps counts, and the notes say what it counts where
+			// that is not the number of steps; none was folded away, so
+			// they say nothing of that.
+			calls := tt.calls
 			if *fm.TotalSteps != calls {
 				t.Errorf("total_steps = %d, want %d", *fm.TotalSteps, calls)
 			}
@@ -1941,6 +1944,11 @@ func TestLLMCallCountFromAttempts(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, []int{3, 1}) {
 		t.Errorf("llm_call_count = %v, want [3 1]", got)
+	}
+	// total_steps counts a response as its attempts, so it is the sum of
+	// the agent steps' llm_call_count when nothing else called the model.
+	if n := *mustDoc(t, tr).FinalMetrics.TotalSteps; n != 4 {
+		t.Errorf("total_steps = %d, want 4", n)
 	}
 }
 

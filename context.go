@@ -1463,6 +1463,21 @@ func (s *Session) RequestContext(id string) (Context, error) {
 	return s.requestContext(id, true)
 }
 
+// PathRequestContext is [Session.RequestContext] for a reader holding a
+// root-first path and not its session, a projection among them: the
+// context of the request that produced the response entry the path ends
+// at, the path before it with the response's own output items removed.
+func PathRequestContext(path []Entry) (Context, error) {
+	if len(path) == 0 {
+		return Context{}, errors.New("agentsession: empty path")
+	}
+	resp, ok := path[len(path)-1].(*ResponseEntry)
+	if !ok {
+		return Context{}, fmt.Errorf("agentsession: entry %s is a %s, not a response", path[len(path)-1].Base().ID, path[len(path)-1].EntryType())
+	}
+	return requestContextAt(path[:len(path)-1], resp, true)
+}
+
 // requestContext is RequestContext with the omit setting applied when
 // omit is set; see buildContext.
 func (s *Session) requestContext(id string, omit bool) (Context, error) {

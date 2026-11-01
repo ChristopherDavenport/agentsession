@@ -1671,10 +1671,12 @@ records a model call the path paid for that produced no `response`
 entry: a fold whose summary was refused, with the usage of its calls
 summed, or a call whose answer earned no entry in context. An optional
 top-level `model` names the model billed; without one, the model in
-force from the `config` entries applies. A reader computing what the
-path cost counts such an entry as one model call, however many calls
-its usage sums, and the ATIF projection's `final_metrics` do. The rest
-of `data` is the writer's. A writer that records a paid call under
+force from the `config` entries applies. An optional top-level
+`attempts` beside `usage`, since 0.14, is the number of model calls the
+usage sums, a positive integer with `response`'s meaning; absent, or in
+another form, it is 1. A reader computing what the path cost counts
+such an entry as `attempts` model calls, and the ATIF projection's
+`final_metrics` do. The rest of `data` is the writer's. A writer that records a paid call under
 another member name records it for itself alone.
 
 ## Namespaced types
@@ -2224,7 +2226,14 @@ call's decisions and its first dispatch travel under `calls`, keyed by
 call ID, in the `extra` of the agent step that produced the call, and
 a call handed to its tool more than once carries every dispatch there
 too, in path order, as the list `dispatches`, so the count survives
-the projection; a queued
+the projection, and a withdrawal's record carries `withdrawn: true`. A
+`custom` entry whose `call_id` names a call whose agent step is in the
+document travels in that step's `extra`, under `calls[call_id].custom`,
+as a list in path order, since the step after it may be the model's
+next turn or another call's; one naming no call in the document
+travels, as every other `custom` entry does, in the list `custom` of
+the next step's `extra`, or of the top-level `extra` when no step
+follows. A queued
 input travels as a list under `queued`, and the step of the item that
 drained one carries its trigger under `source`; a fold's usage
 travels under `usage` in its system step's `extra`, and a fold's
@@ -2237,16 +2246,38 @@ An `item` entry that `omit` leaves out of the request at the trajectory's
 leaf is in the step that holds it, since the model produced it or the
 person sent it, and the step's `extra` lists it under `omitted` with the
 reason, `other_models` or `items`, so a reader sees it as left out and
-not as absent.
+not as absent. An `item` entry the request at the leaf sends with a
+placeholder, by `omit`'s `outputs` or `images`, is in its step, or its
+observation result, as recorded, and that `extra` lists it under
+`agentsession` as `replaced`, an object with the `entry_id`, the
+`reason`, `outputs` or `images`, and for `images` the number of
+`parts` replaced, one object per member that reaches it; the item as
+sent travels beside the raw item as `sent`, so the projection rebuilds
+both. `omitted` and `replaced` describe the leaf's request. Each agent
+step's `extra` also lists, under `agentsession`, the item entries its
+own request left out, as `request_omitted`, and those it sent with a
+placeholder, as `request_replaced`, each with its reason, from the
+request context of the step's `response`, since a model switch or a
+later `omit` makes the leaf's request a different prompt from the one
+an earlier step was sent. Both are absent when empty.
+
+An output's entry marked `failed` carries `failed: true` under
+`agentsession` in the `extra` of the observation result, or step, it
+maps to, and an `item` carrying `from_link` carries it there in its
+step's `extra`, so a reader tells a failed call and a peer's late
+report from any other.
 
 A document's steps are the context the algorithm produces, so a run
 that compacted is described by its last summary and what followed it.
 Its `final_metrics` are not: they total every model call on the path,
 the ones a fold replaced and the ones a `custom` entry's `usage`
-records included, and `total_steps` counts those model calls, the
-path's `response`, `compaction` and `branch_summary` entries and its
-`custom` entries carrying `usage`, one each, which a reader can count
-in the path and check against the document. It is not the number of
+records included, and `total_steps` counts those model calls, which a
+reader can count in the path and check against the document: a
+`response` as its `attempts`, 1 when absent, a `compaction` and a
+`branch_summary` one each, and a `custom` entry carrying `usage` as
+the `attempts` beside it, 1 when absent. So `total_steps` is the sum of
+the agent steps' `llm_call_count` plus the path's other model calls,
+those a fold replaced included. It is not the number of
 steps: a user turn is a step and no model call, and a fold's calls are
 model calls and no step. Whenever it differs from the number of steps
 the root `notes` says so, which is what ATIF requires of a
@@ -2254,6 +2285,14 @@ the root `notes` says so, which is what ATIF requires of a
 model calls out of the steps the note says how many. Without that rule
 a cost column reads the tail's cost as the run's, and an agent that
 folded eleven times outranks one that did not.
+
+ATIF defines `total_cost_usd` to include subagents. When the document
+embeds subagent trajectories, the root's `total_cost_usd` is the path's
+cost plus each embedded document's `total_cost_usd`, which includes its
+own embedded subagents, and the root `notes` says so; the token totals
+and `total_steps` stay the path's, as ATIF defines them over the steps.
+A child not embedded, or embedded without a cost, is not counted, and
+the notes say the cost excludes it.
 
 One document per path is a projection of the whole session, so a
 trajectory may be built at any entry and not only at a leaf: anything
@@ -2536,6 +2575,20 @@ reader of 0.13 refuses those files until it is upgraded.
   alone, so a path or a secret used as a key in a `custom` entry's
   `data` survived a redaction that rewrote every string value, and a
   redactor that refused such keys refused a quarter of a real corpus.
+
+- `custom` defines `attempts` beside `usage`, the number of model calls
+  the usage sums. 0.13 counted such an entry as one call, so a failed
+  fold that asked twice read as one call while a retried `response`
+  read as its `attempts`, and `total_steps` disagreed with the sum of
+  `llm_call_count`.
+
+- The ATIF projection carries what a step's own request left out
+  (`request_omitted`, `request_replaced`), the placeholders the leaf's
+  request sends (`replaced`, with the item as `sent`), a `custom` entry
+  naming a call in that call's step, `failed`, `from_link` and a
+  withdrawal; counts `total_steps` by `attempts`; and includes embedded
+  subagents in the root's `total_cost_usd`, as ATIF defines it. A
+  projection is not a file, so no file reads differently.
 
 - Request hash says which form a sidecar session hashes: the request
   with each `sidecar:` URL as recorded, while the provider is sent the

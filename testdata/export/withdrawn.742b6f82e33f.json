@@ -1,0 +1,245 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000020",
+  "trajectory_id": "sha256:742b6f82e33f3fe2e06ca528ce3e80b6e72831a9f14dbdd3479ce79ed0f26a29",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-01T09:00:03Z",
+      "source": "user",
+      "message": "Tell the team, then run the tests.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:3da93a4f857f33f45229d4b4caab0977d29d1d417fe8d7222069e70cb4f18381"
+        },
+        "config_entries": [
+          "sha256:9526ceffe5e7b9ed34d3f656ae7dcc13d07a7ec40c36d66dc5c1f3e56f61ff59"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Tell the team, then run the tests."
+              }
+            ]
+          }
+        },
+        "run": [
+          {
+            "end_entry_id": "sha256:b63fc6c78dc109ec65bcdd4551025be13e9ba17bc7133ce79084ee2f7976e3fe",
+            "pending": [
+              "call_notify"
+            ],
+            "reason": "aborted",
+            "run_id": "run-1",
+            "source": "input",
+            "start_entry_id": "sha256:74d3dc453483ac9dce294bc288962ed964b2a6a04423a2106b2ff6905e1f3e5c"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-01T09:00:06Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_notify",
+          "function_name": "notify",
+          "arguments": {
+            "to": "team"
+          }
+        },
+        {
+          "tool_call_id": "call_tests",
+          "function_name": "bash",
+          "arguments": {
+            "cmd": "make test"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_tests",
+            "content": "Error: exit status 2: 3 tests failed",
+            "extra": {
+              "agentsession": {
+                "failed": true
+              },
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_tests",
+                  "output": "Error: exit status 2: 3 tests failed"
+                }
+              }
+            }
+          },
+          {
+            "source_call_id": "call_notify",
+            "content": "sent",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_notify",
+                  "output": "sent"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:9718b58f360f059a826abd80a7ea85e904568a23362c01a72f4eda3d82463b25"
+        },
+        "calls": {
+          "call_notify": {
+            "decisions": [
+              {
+                "by": "policy",
+                "entry_id": "sha256:0da146452449290967414090de9fd14ed8fb7ad84f938736e7a7117c43dd6e6b",
+                "reason": "a dispatch subscriber refused the hand-off",
+                "verdict": "reject",
+                "withdrawn": true
+              }
+            ],
+            "dispatch": {
+              "entry_id": "sha256:a5aebfd688f33eccdfb255d39c16ae38ebc3c0fee9874fe8d5fedb3a850b3024"
+            },
+            "dispatches": [
+              {
+                "entry_id": "sha256:a5aebfd688f33eccdfb255d39c16ae38ebc3c0fee9874fe8d5fedb3a850b3024"
+              },
+              {
+                "entry_id": "sha256:2563f4a738971d95bbd86ee6b4dd4ab94f41afcb376e2b8de676f0299ee51930"
+              }
+            ]
+          },
+          "call_tests": {
+            "dispatch": {
+              "entry_id": "sha256:0644e0b3a62f6868d5b5b923dfa1b734513e6261347cdf19d6775642af94e9cd"
+            }
+          }
+        },
+        "item_entry_ids": [
+          "sha256:14c7cb1fe58e3208759ad17ee32dae30b1a4b9da617b9eeacfcfbe46c5c36c32",
+          "sha256:15ed2d0cabe1d8c037a4ebf5ab198238daaf05a3c54ff92edeca3b87c4ac00a8"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_1",
+              "call_id": "call_notify",
+              "name": "notify",
+              "arguments": "{\"to\":\"team\"}"
+            },
+            {
+              "type": "function_call",
+              "id": "fc_2",
+              "call_id": "call_tests",
+              "name": "bash",
+              "arguments": "{\"cmd\":\"make test\"}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:9718b58f360f059a826abd80a7ea85e904568a23362c01a72f4eda3d82463b25",
+            "model": "gpt-5",
+            "request_hash": "sha256:7ead408a33aaad2b7a40e6cdc71a6ecd0fa17438553c989db4d5afd630820c47",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-11-01T09:00:06Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-01T09:00:16Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "The team is told; three tests fail.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:636c9c0a3b73f949cd4b3f06b1e459b5b044785e25c4357d8e9fb6a9d98c6833"
+        },
+        "item_entry_ids": [
+          "sha256:8711dc53e4e384fed1f0c1a2a5f756b23032eab338ec24b6220d138a56622c69"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_2",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "The team is told; three tests fail.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:636c9c0a3b73f949cd4b3f06b1e459b5b044785e25c4357d8e9fb6a9d98c6833",
+            "model": "gpt-5",
+            "request_hash": "sha256:45fe0bcb3d3868127ed969a9fc5eaba2797bca1a66faa9f7149aa58dc315b9ff",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-11-01T09:00:16Z"
+          }
+        },
+        "run": [
+          {
+            "end_entry_id": "sha256:742b6f82e33f3fe2e06ca528ce3e80b6e72831a9f14dbdd3479ce79ed0f26a29",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-2",
+            "source": "resume",
+            "start_entry_id": "sha256:851113bd6ed09375e626a49f068742cc6972549c9960fb672c5e57b9d166881a"
+          }
+        ]
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 2 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 3 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 2
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.14",
+      "leaf": "sha256:742b6f82e33f3fe2e06ca528ce3e80b6e72831a9f14dbdd3479ce79ed0f26a29",
+      "main": true,
+      "records": [
+        "run",
+        "dispatch",
+        "decision"
+      ]
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

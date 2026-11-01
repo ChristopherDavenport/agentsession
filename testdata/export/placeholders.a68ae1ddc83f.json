@@ -1,0 +1,640 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000023",
+  "trajectory_id": "sha256:a68ae1ddc83f38e7fbbbeeb8672f38f977f811c07d5d63674772334043388f10",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-01T11:00:20Z",
+      "source": "system",
+      "message": "Summary: the cart page loaded; two steps taken.",
+      "observation": {
+        "results": [
+          {
+            "content": "Summary: the cart page loaded; two steps taken."
+          }
+        ]
+      },
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:0d81a2de6f69702043032da23046ccd25346c1f6c33e4a22792568e8a37d9948"
+        },
+        "context_management": {
+          "boundary": "replace",
+          "type": "compaction"
+        },
+        "first_kept": "sha256:e54256a3472e205c437e0e6f88bd114275dd5450603fcf66c59f142b60f509e1",
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "system",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Summary: the cart page loaded; two steps taken."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-01T11:00:10Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_3",
+          "function_name": "screenshot",
+          "arguments": {}
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_3",
+            "content": [
+              {
+                "type": "text",
+                "text": "step 3"
+              },
+              {
+                "type": "image",
+                "source": {
+                  "media_type": "image/png",
+                  "path": "data:image/png;base64,c2NyZWVu03"
+                }
+              }
+            ],
+            "extra": {
+              "agentsession": {
+                "replaced": [
+                  {
+                    "entry_id": "sha256:40cfcc3137dfeb2e90d28e2dd8668094cb9d36be5754f40968380d38e55ac54e",
+                    "reason": "outputs"
+                  }
+                ]
+              },
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_3",
+                  "output": [
+                    {
+                      "type": "input_text",
+                      "text": "step 3"
+                    },
+                    {
+                      "type": "input_image",
+                      "image_url": "data:image/png;base64,c2NyZWVu03",
+                      "detail": "auto"
+                    }
+                  ]
+                },
+                "sent": {
+                  "type": "function_call_output",
+                  "call_id": "call_3",
+                  "output": "[cleared earlier]"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "is_copied_context": true,
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:1bcc199d8641acd348cae1b44d14bdab346fd6b77f1de0840de079c61eaf2f55"
+        },
+        "item_entry_ids": [
+          "sha256:e54256a3472e205c437e0e6f88bd114275dd5450603fcf66c59f142b60f509e1"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_3",
+              "call_id": "call_3",
+              "name": "screenshot",
+              "arguments": "{}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:1bcc199d8641acd348cae1b44d14bdab346fd6b77f1de0840de079c61eaf2f55",
+            "model": "gpt-5",
+            "request_hash": "sha256:685ecbdf4b4d84c00695bf9103fd14a92add7a67db0123e2f6ff6bae201406f4",
+            "response_id": "resp_3",
+            "status": "completed",
+            "ts": "2026-11-01T11:00:10Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-01T11:00:14Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_4",
+          "function_name": "screenshot",
+          "arguments": {}
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_4",
+            "content": [
+              {
+                "type": "text",
+                "text": "step 4"
+              },
+              {
+                "type": "image",
+                "source": {
+                  "media_type": "image/png",
+                  "path": "data:image/png;base64,c2NyZWVu04"
+                }
+              }
+            ],
+            "extra": {
+              "agentsession": {
+                "replaced": [
+                  {
+                    "entry_id": "sha256:33a4dd27e87e379ef111ec8c1f97beb98016fc995a13e6ca0bda8cb67f0edb70",
+                    "parts": 1,
+                    "reason": "images"
+                  }
+                ]
+              },
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_4",
+                  "output": [
+                    {
+                      "type": "input_text",
+                      "text": "step 4"
+                    },
+                    {
+                      "type": "input_image",
+                      "image_url": "data:image/png;base64,c2NyZWVu04",
+                      "detail": "auto"
+                    }
+                  ]
+                },
+                "sent": {
+                  "type": "function_call_output",
+                  "call_id": "call_4",
+                  "output": [
+                    {
+                      "type": "input_text",
+                      "text": "step 4"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "[older screenshot]"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "is_copied_context": true,
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:abfb027e403c6e9d27691444337c583200a11db80c66be8633038d7edf5e96d4",
+          "request_replaced": [
+            {
+              "entry_id": "sha256:a7a6d74acae9bb451c4318aa6cad0e54a21de7084d3ec9237224a38502c94bae",
+              "parts": 1,
+              "reason": "images"
+            }
+          ]
+        },
+        "config_entries": [
+          "sha256:81d04a27f4f117cd464808fd3ad55eae3f2e748c79164a32560a0665f1580234"
+        ],
+        "item_entry_ids": [
+          "sha256:26105b849214a044e55e68d63e62dc45ba3fcdd93deb204d7fdb57ac8f335186"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_4",
+              "call_id": "call_4",
+              "name": "screenshot",
+              "arguments": "{}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:abfb027e403c6e9d27691444337c583200a11db80c66be8633038d7edf5e96d4",
+            "model": "gpt-5",
+            "request_hash": "sha256:9abb1ef8f6ff577f0d31105c81d2b7b60c955cba4cbef80dfbf915a6d1a70ba3",
+            "response_id": "resp_4",
+            "status": "completed",
+            "ts": "2026-11-01T11:00:14Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-11-01T11:00:18Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_5",
+          "function_name": "screenshot",
+          "arguments": {}
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_5",
+            "content": [
+              {
+                "type": "text",
+                "text": "step 5"
+              },
+              {
+                "type": "image",
+                "source": {
+                  "media_type": "image/png",
+                  "path": "data:image/png;base64,c2NyZWVu05"
+                }
+              }
+            ],
+            "extra": {
+              "agentsession": {
+                "replaced": [
+                  {
+                    "entry_id": "sha256:2d577dad17b7e6eded0b497fdcfb8abb59c191f835a1bfa93d32bc4e8d1cc75e",
+                    "parts": 1,
+                    "reason": "images"
+                  }
+                ]
+              },
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_5",
+                  "output": [
+                    {
+                      "type": "input_text",
+                      "text": "step 5"
+                    },
+                    {
+                      "type": "input_image",
+                      "image_url": "data:image/png;base64,c2NyZWVu05",
+                      "detail": "auto"
+                    }
+                  ]
+                },
+                "sent": {
+                  "type": "function_call_output",
+                  "call_id": "call_5",
+                  "output": [
+                    {
+                      "type": "input_text",
+                      "text": "step 5"
+                    },
+                    {
+                      "type": "input_text",
+                      "text": "[older screenshot]"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "is_copied_context": true,
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:ad3cc166e632ad24e189e63e5880c8ad0ac9a53eabafbdae001ce3d57771cb7e",
+          "request_replaced": [
+            {
+              "entry_id": "sha256:a7a6d74acae9bb451c4318aa6cad0e54a21de7084d3ec9237224a38502c94bae",
+              "reason": "outputs"
+            },
+            {
+              "entry_id": "sha256:11ce22cf1a92de9bf2a106aa335a7e4c0737c7fc19c54557ddbf21a6784b39c3",
+              "parts": 1,
+              "reason": "images"
+            }
+          ]
+        },
+        "config_entries": [
+          "sha256:6eee5ecfe7560e63899952bf9624fee5eaa0f5375ef3870c0b4dfa695897be79"
+        ],
+        "item_entry_ids": [
+          "sha256:05f65b1d2427f18778a6f345bb6668b3ad5471e5079002119db4efe52e674bdd"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_5",
+              "call_id": "call_5",
+              "name": "screenshot",
+              "arguments": "{}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:ad3cc166e632ad24e189e63e5880c8ad0ac9a53eabafbdae001ce3d57771cb7e",
+            "model": "gpt-5",
+            "request_hash": "sha256:b190581adba494a2ea763842a779f4a34b7eb5eda3b581d60f8bcaa64d3ae0da",
+            "response_id": "resp_5",
+            "status": "completed",
+            "ts": "2026-11-01T11:00:18Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 5,
+      "timestamp": "2026-11-01T11:00:22Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_6",
+          "function_name": "screenshot",
+          "arguments": {}
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_6",
+            "content": [
+              {
+                "type": "text",
+                "text": "step 6"
+              },
+              {
+                "type": "image",
+                "source": {
+                  "media_type": "image/png",
+                  "path": "data:image/png;base64,c2NyZWVu06"
+                }
+              }
+            ],
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_6",
+                  "output": [
+                    {
+                      "type": "input_text",
+                      "text": "step 6"
+                    },
+                    {
+                      "type": "input_image",
+                      "image_url": "data:image/png;base64,c2NyZWVu06",
+                      "detail": "auto"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:d7b623d8fb901ab61a1244366f69047a1d11df6af7d369bf03ac72b9bfa78277",
+          "request_replaced": [
+            {
+              "entry_id": "sha256:40cfcc3137dfeb2e90d28e2dd8668094cb9d36be5754f40968380d38e55ac54e",
+              "parts": 1,
+              "reason": "images"
+            }
+          ]
+        },
+        "item_entry_ids": [
+          "sha256:b5f1e9f80561777265198533f11143fe86fb52509bdf69996bad522fb3a890d4"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_6",
+              "call_id": "call_6",
+              "name": "screenshot",
+              "arguments": "{}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:d7b623d8fb901ab61a1244366f69047a1d11df6af7d369bf03ac72b9bfa78277",
+            "model": "gpt-5",
+            "request_hash": "sha256:d01be6e59fe56a997fbbeba89219f1588cbf5180aa01998f3b364fea8c5fd763",
+            "response_id": "resp_6",
+            "status": "completed",
+            "ts": "2026-11-01T11:00:22Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 6,
+      "timestamp": "2026-11-01T11:00:26Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_7",
+          "function_name": "screenshot",
+          "arguments": {}
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_7",
+            "content": [
+              {
+                "type": "text",
+                "text": "step 7"
+              },
+              {
+                "type": "image",
+                "source": {
+                  "media_type": "image/png",
+                  "path": "data:image/png;base64,c2NyZWVu07"
+                }
+              }
+            ],
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_7",
+                  "output": [
+                    {
+                      "type": "input_text",
+                      "text": "step 7"
+                    },
+                    {
+                      "type": "input_image",
+                      "image_url": "data:image/png;base64,c2NyZWVu07",
+                      "detail": "auto"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:5fe4258066cdc38df6f486237e4b16acdd18a47c252cfba27778c7152145595a",
+          "request_replaced": [
+            {
+              "entry_id": "sha256:40cfcc3137dfeb2e90d28e2dd8668094cb9d36be5754f40968380d38e55ac54e",
+              "reason": "outputs"
+            },
+            {
+              "entry_id": "sha256:33a4dd27e87e379ef111ec8c1f97beb98016fc995a13e6ca0bda8cb67f0edb70",
+              "parts": 1,
+              "reason": "images"
+            },
+            {
+              "entry_id": "sha256:2d577dad17b7e6eded0b497fdcfb8abb59c191f835a1bfa93d32bc4e8d1cc75e",
+              "parts": 1,
+              "reason": "images"
+            }
+          ]
+        },
+        "config_entries": [
+          "sha256:80fb21e3b435841dc4a341d37b00bfa7463cd6aa217b774bf7566751556fa184"
+        ],
+        "item_entry_ids": [
+          "sha256:2e0008dc5261e397301291f54147fadda3310225fb7371343fcdd3c3c1aa6bc7"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_7",
+              "call_id": "call_7",
+              "name": "screenshot",
+              "arguments": "{}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:5fe4258066cdc38df6f486237e4b16acdd18a47c252cfba27778c7152145595a",
+            "model": "gpt-5",
+            "request_hash": "sha256:89c4960854b469ae90dca3d124d9207ebbc4f2e26a270829413049da17a17810",
+            "response_id": "resp_7",
+            "status": "completed",
+            "ts": "2026-11-01T11:00:26Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 7,
+      "timestamp": "2026-11-01T11:00:29Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "The cart is checked out.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:a68ae1ddc83f38e7fbbbeeb8672f38f977f811c07d5d63674772334043388f10",
+          "request_replaced": [
+            {
+              "entry_id": "sha256:40cfcc3137dfeb2e90d28e2dd8668094cb9d36be5754f40968380d38e55ac54e",
+              "reason": "outputs"
+            },
+            {
+              "entry_id": "sha256:33a4dd27e87e379ef111ec8c1f97beb98016fc995a13e6ca0bda8cb67f0edb70",
+              "parts": 1,
+              "reason": "images"
+            },
+            {
+              "entry_id": "sha256:2d577dad17b7e6eded0b497fdcfb8abb59c191f835a1bfa93d32bc4e8d1cc75e",
+              "parts": 1,
+              "reason": "images"
+            }
+          ]
+        },
+        "item_entry_ids": [
+          "sha256:74b3c09d4cbde32cb848a70185c6c2cb9425a9351ce15cc523b4a7274c4dddcd"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_8",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "The cart is checked out.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:a68ae1ddc83f38e7fbbbeeb8672f38f977f811c07d5d63674772334043388f10",
+            "model": "gpt-5",
+            "request_hash": "sha256:bea2c58f59e08a8b582d659fab52685370f696e84aae4d9f4c9a20ebb10b8170",
+            "response_id": "resp_8",
+            "status": "completed",
+            "ts": "2026-11-01T11:00:29Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 9 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 7 steps. The steps are the context after compaction and leave out 2 model call(s) that were folded away; final_metrics totals the whole path.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 9
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.14",
+      "leaf": "sha256:a68ae1ddc83f38e7fbbbeeb8672f38f977f811c07d5d63674772334043388f10",
+      "main": true
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

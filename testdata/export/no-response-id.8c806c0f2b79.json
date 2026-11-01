@@ -198,7 +198,7 @@
       }
     }
   ],
-  "notes": "total_steps counts the path's 3 model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its 6 steps.",
+  "notes": "total_steps counts the path's 3 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 6 steps.",
   "final_metrics": {
     "total_prompt_tokens": 0,
     "total_completion_tokens": 0,

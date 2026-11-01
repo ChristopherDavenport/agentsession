@@ -95,6 +95,24 @@ const (
 	// does not carry it. The reason is "other_models" or "items", as
 	// [agentsession.OmittedItem] has it. [Items] leaves these items out.
 	ExtraOmitted = "omitted"
+	// ExtraRequestOmitted carries, under ExtraAgentSession in an agent
+	// step's extra, the item entries the step's own request left out, the
+	// request context of its response, as a list of objects with an
+	// entry_id and a reason, where ExtraOmitted says what the request at
+	// the leaf leaves out; ExtraRequestReplaced does the same for the
+	// items that request sent with a placeholder, with the parts
+	// replaced for an image. Both are written only when the trajectory
+	// has its Path and the list is not empty.
+	ExtraRequestOmitted  = "request_omitted"
+	ExtraRequestReplaced = "request_replaced"
+	// ExtraReplaced carries, under ExtraAgentSession in the extra of the
+	// step, or of the observation result, that holds an item entry, the
+	// placeholders the request at the leaf sends for its item: an object
+	// with the entry_id, the reason, "outputs" or "images", and for
+	// images the number of parts. The item as sent rides beside the item
+	// as recorded, as "sent" under extra.openresponses, and [Items] reads
+	// it.
+	ExtraReplaced = "replaced"
 )
 
 // ToATIF converts one trajectory into an ATIF document. Every step
@@ -103,9 +121,20 @@ const (
 // docs/plans/session-layer.md.
 func ToATIF(t Trajectory, opts Options) (*atif.Trajectory, error) {
 	b := &builder{t: t, opts: opts, stepByEntry: map[string]int{}, stepFrom: map[int][]agentsession.Entry{}, callStep: map[string]int{},
-		callFrom: map[string][]agentsession.EntryRef{}, omitted: map[string]string{}}
+		callFrom: map[string][]agentsession.EntryRef{}, omitted: map[string]string{}, replaced: map[string][]any{}}
 	for _, o := range t.Context.OmittedItems {
 		b.omitted[o.Entry.ID] = o.Reason
+	}
+	for _, r := range t.Context.ReplacedItems {
+		b.replaced[r.Entry.ID] = append(b.replaced[r.Entry.ID], replacedRecord(r))
+	}
+	for i, e := range t.Context.ItemEntries {
+		if ie, ok := e.(*agentsession.ItemEntry); ok && len(b.replaced[ie.ID]) > 0 && i < len(t.Context.Items) {
+			if b.sent == nil {
+				b.sent = map[string]openresponses.Item{}
+			}
+			b.sent[ie.ID] = t.Context.Items[i]
+		}
 	}
 	b.doc = &atif.Trajectory{
 		SchemaVersion: atif.SchemaVersion,
@@ -179,6 +208,70 @@ type builder struct {
 	// each item entry out of the request, by entry ID. The entry is
 	// still in the step that holds it, which says so under extra.
 	omitted map[string]string
+	// replaced is the placeholders the request at the leaf sends for
+	// each item entry's item, by entry ID, as ExtraReplaced writes them.
+	replaced map[string][]any
+	// sent is the item the request at the leaf sends for each entry it
+	// sends with a placeholder, by entry ID.
+	sent map[string]openresponses.Item
+	// inPath is each entry's index in the trajectory's Path, built on
+	// first use, which a step's request context is rebuilt from.
+	inPath map[string]int
+	// unembedded counts the subsession links whose child was not
+	// embedded, whose cost the root's total_cost_usd leaves out.
+	unembedded int
+}
+
+// replacedRecord is one placeholder a request sends for an item entry,
+// as ExtraReplaced and ExtraRequestReplaced write it.
+func replacedRecord(r agentsession.ReplacedItem) map[string]any {
+	rec := map[string]any{"entry_id": r.Entry.ID, "reason": r.Reason}
+	if r.Parts > 0 {
+		rec["parts"] = r.Parts
+	}
+	return rec
+}
+
+// agentSessionExtra returns the ExtraAgentSession object of extra,
+// creating it on first use.
+func agentSessionExtra(extra map[string]any) map[string]any {
+	as, _ := extra[ExtraAgentSession].(map[string]any)
+	if as == nil {
+		as = map[string]any{}
+		extra[ExtraAgentSession] = as
+	}
+	return as
+}
+
+// requestRecords returns what the request that produced resp left out
+// and sent with a placeholder, rebuilt from the trajectory's Path, as
+// ExtraRequestOmitted and ExtraRequestReplaced write them; both nil when
+// there is no Path or it does not hold resp.
+func (b *builder) requestRecords(resp *agentsession.ResponseEntry) (omitted, replaced []any) {
+	if len(b.t.Path) == 0 {
+		return nil, nil
+	}
+	if b.inPath == nil {
+		b.inPath = make(map[string]int, len(b.t.Path))
+		for i, e := range b.t.Path {
+			b.inPath[e.Base().ID] = i
+		}
+	}
+	i, ok := b.inPath[resp.ID]
+	if !ok {
+		return nil, nil
+	}
+	ctx, err := agentsession.PathRequestContext(b.t.Path[:i+1])
+	if err != nil {
+		return nil, nil
+	}
+	for _, o := range ctx.OmittedItems {
+		omitted = append(omitted, map[string]any{"entry_id": o.Entry.ID, "reason": o.Reason})
+	}
+	for _, r := range ctx.ReplacedItems {
+		replaced = append(replaced, replacedRecord(r))
+	}
+	return omitted, replaced
 }
 
 // price is one answer from Options.Cost.
@@ -363,7 +456,17 @@ func (b *builder) entry(e agentsession.Entry) error {
 		if v.CallID != "" {
 			rec["call_id"] = v.CallID
 		}
-		b.addPendingList("custom", copyUnknown(rec, v.Unknown))
+		copyUnknown(rec, v.Unknown)
+		if _, ok := b.callStep[v.CallID]; ok && v.CallID != "" {
+			// A record about a call travels with the call, in the agent
+			// step that made it, as its decisions do: the step after it
+			// may be the model's next turn, or a step of another call.
+			call := b.callExtra(v.CallID)
+			list, _ := call["custom"].([]any)
+			call["custom"] = append(list, rec)
+			break
+		}
+		b.addPendingList("custom", rec)
 	case *agentsession.EnvEntry:
 		env := envExtra(v)
 		if !b.sawEnv {
@@ -408,6 +511,9 @@ func (b *builder) entry(e agentsession.Entry) error {
 		}
 		if len(v.Args) > 0 {
 			rec["args"] = json.RawMessage(v.Args)
+		}
+		if v.Withdrawn {
+			rec["withdrawn"] = true
 		}
 		copyUnknown(rec, v.Unknown)
 		call := b.callExtra(v.CallID)
@@ -510,9 +616,11 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 
 // itemExtra is the extra block of a step built from one item entry.
 func (b *builder) itemExtra(e *agentsession.ItemEntry) map[string]any {
-	extra := map[string]any{
-		ExtraOpenResponses: map[string]any{"item": rawItem(e.Item)},
+	or := map[string]any{"item": rawItem(e.Item)}
+	if sent, ok := b.sent[e.ID]; ok {
+		or["sent"] = rawItem(sent)
 	}
+	extra := map[string]any{ExtraOpenResponses: or}
 	if !e.IsVisible() {
 		extra["visible"] = false
 	}
@@ -524,6 +632,15 @@ func (b *builder) itemExtra(e *agentsession.ItemEntry) map[string]any {
 	}
 	if reason, ok := b.omitted[e.ID]; ok {
 		extra[ExtraOmitted] = []map[string]any{{"entry_id": e.ID, "reason": reason}}
+	}
+	if e.Failed {
+		agentSessionExtra(extra)["failed"] = true
+	}
+	if e.FromLink != "" {
+		agentSessionExtra(extra)["from_link"] = e.FromLink
+	}
+	if r := b.replaced[e.ID]; len(r) > 0 {
+		agentSessionExtra(extra)[ExtraReplaced] = r
 	}
 	return copyUnknown(extra, e.Unknown)
 }
@@ -666,6 +783,22 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 	if len(left) > 0 {
 		step.Extra[ExtraOmitted] = left
 	}
+	var sent []any
+	for _, e := range g.entries {
+		sent = append(sent, b.replaced[e.ID]...)
+	}
+	if len(sent) > 0 {
+		agentSessionExtra(step.Extra)[ExtraReplaced] = sent
+	}
+	if resp != nil {
+		omitted, replaced := b.requestRecords(resp)
+		if len(omitted) > 0 {
+			agentSessionExtra(step.Extra)[ExtraRequestOmitted] = omitted
+		}
+		if len(replaced) > 0 {
+			agentSessionExtra(step.Extra)[ExtraRequestReplaced] = replaced
+		}
+	}
 	for _, e := range g.entries {
 		copyUnknown(step.Extra, e.Unknown)
 	}
@@ -789,7 +922,7 @@ func (b *builder) addStep(step atif.Step, e agentsession.Entry) int {
 	if step.Extra == nil {
 		step.Extra = map[string]any{}
 	}
-	step.Extra[ExtraAgentSession] = map[string]any{"entry_id": e.Base().ID}
+	agentSessionExtra(step.Extra)["entry_id"] = e.Base().ID
 	if b.copied && step.IsCopiedContext == nil {
 		step.IsCopiedContext = atif.Ptr(true)
 	}
@@ -1000,8 +1133,27 @@ func (b *builder) finish() {
 	fm.TotalCompletionTokens = atif.Ptr(b.completion)
 	fm.TotalCachedTokens = atif.Ptr(b.cached)
 	fm.TotalSteps = atif.Ptr(calls)
+	// ATIF's total_cost_usd includes subagents, where the token totals
+	// and total_steps are the steps': each embedded document's cost,
+	// which includes its own embedded children, is added to the path's.
+	var costNotes []string
 	if b.hasCost {
+		embedded, unpriced := 0, 0
+		for _, sub := range b.doc.SubagentTrajectories {
+			if sub.FinalMetrics != nil && sub.FinalMetrics.TotalCostUSD != nil {
+				b.cost += *sub.FinalMetrics.TotalCostUSD
+				embedded++
+			} else {
+				unpriced++
+			}
+		}
 		fm.TotalCostUSD = atif.Ptr(b.cost)
+		if embedded > 0 {
+			costNotes = append(costNotes, fmt.Sprintf("total_cost_usd includes the total_cost_usd of %d embedded subagent trajectory(ies); the token totals and total_steps are this path's alone.", embedded))
+		}
+		if unpriced+b.unembedded > 0 {
+			costNotes = append(costNotes, fmt.Sprintf("total_cost_usd excludes %d subagent(s) not embedded or not priced.", unpriced+b.unembedded))
+		}
 	}
 	// total_steps is the path's model calls, which a reader can count
 	// in the path and check against the document; it is not the number
@@ -1012,11 +1164,12 @@ func (b *builder) finish() {
 	// says how many.
 	var notes []string
 	if calls != len(b.doc.Steps) {
-		notes = append(notes, fmt.Sprintf("total_steps counts the path's %d model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its %d steps.", calls, len(b.doc.Steps)))
+		notes = append(notes, fmt.Sprintf("total_steps counts the path's %d model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its %d steps.", calls, len(b.doc.Steps)))
 	}
 	if hidden > 0 {
 		notes = append(notes, fmt.Sprintf("The steps are the context after compaction and leave out %d model call(s) that were folded away; final_metrics totals the whole path.", hidden))
 	}
+	notes = append(notes, costNotes...)
 	if len(notes) > 0 {
 		note := strings.Join(notes, " ")
 		if b.doc.Notes != "" {
@@ -1090,8 +1243,8 @@ func (b *builder) markRedacted() {
 func (b *builder) pathTotals() (calls, hidden int) {
 	if len(b.t.Path) == 0 {
 		for _, e := range b.t.Context.Entries {
-			if _, _, ok := modelCall(e, ""); ok {
-				calls++
+			if _, _, n := modelCall(e, ""); n > 0 {
+				calls += n
 			}
 		}
 		return calls, 0
@@ -1117,13 +1270,13 @@ func (b *builder) pathTotals() (calls, hidden int) {
 		case *agentsession.CompactionEntry:
 			model = v.Config.Model
 		}
-		u, priced, ok := modelCall(e, model)
-		if !ok {
+		u, priced, n := modelCall(e, model)
+		if n == 0 {
 			continue
 		}
-		calls++
+		calls += n
 		if !inContext[e.Base().ID] {
-			hidden++
+			hidden += n
 		}
 		if u == nil {
 			continue
@@ -1139,18 +1292,21 @@ func (b *builder) pathTotals() (calls, hidden int) {
 	return calls, hidden
 }
 
-// modelCall reports whether e records a model call, and if so its
-// usage, which may be nil, and the model it is priced at: a response, a
-// fold, a branch summary, or a custom entry whose data is an object
-// with a usage member in the payload's shape, which RFC 0001 reads as
-// a call the path paid for that produced no response, a failed fold's
-// summary calls for one; anything else such an entry carries is the
-// writer's and not read. A call that names no model is priced at
-// inForce, the model the config entries have in force.
-func modelCall(e agentsession.Entry, inForce string) (u *openresponses.Usage, priced string, ok bool) {
+// modelCall reports how many model calls e records, 0 for none, and
+// when it records any their usage, which may be nil, and the model they
+// are priced at: a response, as many as its attempts; a fold or a branch
+// summary, one; or a custom entry whose data is an object with a usage
+// member in the payload's shape, which RFC 0001 reads as calls the path
+// paid for that produced no response, a failed fold's summary calls for
+// one, as many as the attempts member beside the usage says, one when
+// it is absent; anything else such an entry carries is the writer's and
+// not read. A call that names no model is priced at inForce, the model
+// the config entries have in force.
+func modelCall(e agentsession.Entry, inForce string) (u *openresponses.Usage, priced string, n int) {
+	n = 1
 	switch v := e.(type) {
 	case *agentsession.ResponseEntry:
-		u, priced = v.Usage, inForce
+		u, priced, n = v.Usage, inForce, v.Calls()
 		if v.Model != "" {
 			priced = v.Model
 		}
@@ -1164,16 +1320,16 @@ func modelCall(e agentsession.Entry, inForce string) (u *openresponses.Usage, pr
 			Model string               `json:"model"`
 		}
 		if json.Unmarshal(v.Data, &paid) != nil || paid.Usage == nil {
-			return nil, "", false
+			return nil, "", 0
 		}
-		u, priced = paid.Usage, inForce
+		u, priced, n = paid.Usage, inForce, v.Calls()
 		if paid.Model != "" {
 			priced = paid.Model
 		}
 	default:
-		return nil, "", false
+		return nil, "", 0
 	}
-	return u, priced, true
+	return u, priced, n
 }
 
 // subsessions resolves link entries: a subsession is embedded and
@@ -1221,6 +1377,7 @@ func (b *builder) subsessions() {
 			// the session's document would be, which is all a document
 			// that could not load the child can offer.
 			ref.TrajectoryPath = MainDocumentName(l.Session)
+			b.unembedded++
 		}
 		if !b.attachRef(l.CallID, ref) {
 			rec["subagent_trajectory_ref"] = ref
@@ -1691,8 +1848,9 @@ var ErrNoRawItems = errors.New("export: document carries no raw items")
 // Items rebuilds the item list of the path a document was exported
 // from, reading the raw items every step carries under
 // extra.openresponses, and leaving out those a step lists under
-// [ExtraOmitted]: the list is the request's input, as the context
-// algorithm builds it. Steps without raw items are skipped; a document
+// [ExtraOmitted], an item the request sends with a placeholder read as
+// sent ([ExtraReplaced]): the list is the request's input, as the
+// context algorithm builds it. Steps without raw items are skipped; a document
 // with none at all yields ErrNoRawItems.
 func Items(doc *atif.Trajectory) (openresponses.Items, error) {
 	var items openresponses.Items
@@ -1706,6 +1864,9 @@ func Items(doc *atif.Trajectory) (openresponses.Items, error) {
 		var raws []any
 		if item, ok := or["item"]; ok {
 			found = true // the document carries raw items, though this one is left out
+			if sent, ok := or["sent"]; ok {
+				item = sent
+			}
 			if len(left) == 0 {
 				raws = append(raws, item)
 			}
@@ -1765,6 +1926,9 @@ func Items(doc *atif.Trajectory) (openresponses.Items, error) {
 				raw, ok := or["item"]
 				if !ok {
 					continue
+				}
+				if sent, ok := or["sent"]; ok {
+					raw = sent
 				}
 				found = true
 				if len(omittedEntries(r.Extra)) > 0 {
