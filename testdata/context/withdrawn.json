@@ -1,0 +1,84 @@
+{
+  "sha256:742b6f82e33f3fe2e06ca528ce3e80b6e72831a9f14dbdd3479ce79ed0f26a29": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Be brief."
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Tell the team, then run the tests."
+          }
+        ]
+      },
+      {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_notify",
+        "name": "notify",
+        "arguments": "{\"to\":\"team\"}"
+      },
+      {
+        "type": "function_call",
+        "id": "fc_2",
+        "call_id": "call_tests",
+        "name": "bash",
+        "arguments": "{\"cmd\":\"make test\"}"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_tests",
+        "output": "Error: exit status 2: 3 tests failed"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_notify",
+        "output": "sent"
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_2",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "The team is told; three tests fail.",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "sha256:9526ceffe5e7b9ed34d3f656ae7dcc13d07a7ec40c36d66dc5c1f3e56f61ff59",
+      "sha256:74d3dc453483ac9dce294bc288962ed964b2a6a04423a2106b2ff6905e1f3e5c",
+      "sha256:3da93a4f857f33f45229d4b4caab0977d29d1d417fe8d7222069e70cb4f18381",
+      "sha256:14c7cb1fe58e3208759ad17ee32dae30b1a4b9da617b9eeacfcfbe46c5c36c32",
+      "sha256:15ed2d0cabe1d8c037a4ebf5ab198238daaf05a3c54ff92edeca3b87c4ac00a8",
+      "sha256:9718b58f360f059a826abd80a7ea85e904568a23362c01a72f4eda3d82463b25",
+      "sha256:a5aebfd688f33eccdfb255d39c16ae38ebc3c0fee9874fe8d5fedb3a850b3024",
+      "sha256:0644e0b3a62f6868d5b5b923dfa1b734513e6261347cdf19d6775642af94e9cd",
+      "sha256:0da146452449290967414090de9fd14ed8fb7ad84f938736e7a7117c43dd6e6b",
+      "sha256:09669c82b0d9475cadf24b4e2b3dc1a41cfdfedebfa08d677ed83ace4dd72c3f",
+      "sha256:b63fc6c78dc109ec65bcdd4551025be13e9ba17bc7133ce79084ee2f7976e3fe",
+      "sha256:851113bd6ed09375e626a49f068742cc6972549c9960fb672c5e57b9d166881a",
+      "sha256:2563f4a738971d95bbd86ee6b4dd4ab94f41afcb376e2b8de676f0299ee51930",
+      "sha256:e472c531d521ddb46d1108fad55699e9abf10298ca70800e5e5b0b85815542bc",
+      "sha256:8711dc53e4e384fed1f0c1a2a5f756b23032eab338ec24b6220d138a56622c69",
+      "sha256:636c9c0a3b73f949cd4b3f06b1e459b5b044785e25c4357d8e9fb6a9d98c6833",
+      "sha256:742b6f82e33f3fe2e06ca528ce3e80b6e72831a9f14dbdd3479ce79ed0f26a29"
+    ],
+    "item_entries": [
+      "sha256:3da93a4f857f33f45229d4b4caab0977d29d1d417fe8d7222069e70cb4f18381",
+      "sha256:14c7cb1fe58e3208759ad17ee32dae30b1a4b9da617b9eeacfcfbe46c5c36c32",
+      "sha256:15ed2d0cabe1d8c037a4ebf5ab198238daaf05a3c54ff92edeca3b87c4ac00a8",
+      "sha256:09669c82b0d9475cadf24b4e2b3dc1a41cfdfedebfa08d677ed83ace4dd72c3f",
+      "sha256:e472c531d521ddb46d1108fad55699e9abf10298ca70800e5e5b0b85815542bc",
+      "sha256:8711dc53e4e384fed1f0c1a2a5f756b23032eab338ec24b6220d138a56622c69"
+    ]
+  }
+}

@@ -3,6 +3,7 @@ package agentsession
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -298,5 +299,106 @@ func TestFromLink(t *testing.T) {
 	}
 	if len(hashes) != 1 {
 		t.Errorf("from_link moved the context hash: %v", hashes)
+	}
+}
+
+// TestOmitPlaceholderForms: omit's outputs and images are taken in the
+// forms 0.14 defines, in a file of any minor; a member in another form
+// is kept as written and replaces nothing, and the line writes back as
+// it was (#262).
+func TestOmitPlaceholderForms(t *testing.T) {
+	for _, tt := range []struct {
+		omit            string
+		outputs, images bool
+	}{
+		{`{"outputs":{"text":"[x]","items":["a"]}}`, true, false},
+		{`{"outputs":{"text":"[x]"}}`, true, false},
+		{`{"images":{"keep":0,"placeholder":"[x]"}}`, false, true},
+		{`{"images":{"before":"a","placeholder":"[x]"}}`, false, true},
+		{`{"items":["a"],"outputs":{"items":["a"]}}`, false, false},
+		{`{"items":["a"],"images":{"keep":2,"before":"a","placeholder":"[x]"}}`, false, false},
+		{`{"items":["a"],"images":{"keep":-1,"placeholder":"[x]"}}`, false, false},
+		{`{"items":["a"],"images":{"keep":2}}`, false, false},
+		{`{"items":["a"],"images":{"before":"","placeholder":"[x]"}}`, false, false},
+	} {
+		for _, format := range []string{Format, "agentsession/0.13"} {
+			in, _ := hashedLines(t, format, `"type":"config","model":"m","omit":`+tt.omit)
+			s, err := Read(strings.NewReader(in))
+			if err != nil {
+				t.Fatalf("%s: %v", tt.omit, err)
+			}
+			c := s.Entries()[0].(*ConfigEntry)
+			if c.Omit == nil || (c.Omit.Outputs != nil) != tt.outputs || (c.Omit.Images != nil) != tt.images {
+				t.Errorf("%s as %s: omit = %+v", tt.omit, format, c.Omit)
+			}
+			var buf bytes.Buffer
+			if err := Write(&buf, s); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Read(&buf); err != nil {
+				t.Errorf("%s as %s: written back: %v", tt.omit, format, err)
+			}
+		}
+	}
+	// A delta adds outputs' items and sets the text, replaces images, and
+	// {} clears everything.
+	var o Omit
+	o = o.merged(Omit{Outputs: &OmitOutputs{Text: "a", Items: []string{"x"}}, Images: &OmitImages{Keep: 3, Placeholder: "p"}})
+	o = o.merged(Omit{Outputs: &OmitOutputs{Text: "b", Items: []string{"y", "x"}}, Images: &OmitImages{Before: "e", Placeholder: "q"}})
+	if o.Outputs.Text != "b" || !slices.Equal(o.Outputs.Items, []string{"x", "y"}) || *o.Images != (OmitImages{Before: "e", Placeholder: "q"}) {
+		t.Errorf("merged = %+v %+v", o.Outputs, o.Images)
+	}
+	if o.merged(Omit{}).IsZero() != true {
+		t.Error("{} does not clear outputs and images")
+	}
+	// OmitDelta writes what changed, and refuses to drop what a delta
+	// cannot.
+	st := Settings{Omit: o}
+	if d, ok := st.OmitDelta(o); !ok || d != nil {
+		t.Errorf("OmitDelta(in force) = %+v, %v", d, ok)
+	}
+	if d, ok := st.OmitDelta(Omit{Outputs: &OmitOutputs{Text: "b", Items: []string{"x", "y", "z"}}, Images: o.Images}); !ok || d == nil || d.Images != nil || !slices.Equal(d.Outputs.Items, []string{"z"}) {
+		t.Errorf("OmitDelta(one more output) = %+v, %v", d, ok)
+	}
+	if _, ok := st.OmitDelta(Omit{Outputs: &OmitOutputs{Text: "b", Items: []string{"x"}}, Images: o.Images}); ok {
+		t.Error("OmitDelta dropped an output in force")
+	}
+	if _, ok := st.OmitDelta(Omit{Outputs: o.Outputs}); ok {
+		t.Error("OmitDelta dropped the images rule in force")
+	}
+}
+
+// TestPlaceholderDivergence: a response whose recorded hash is the
+// request as the path holds it, though the omit in force sends a
+// placeholder, is a divergence, as one recorded over an item the omit
+// leaves out is.
+func TestPlaceholderDivergence(t *testing.T) {
+	s := New(Header{})
+	if _, err := s.Append(&ConfigEntry{Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewItemEntry(&openresponses.Message{Role: openresponses.RoleUser, Content: openresponses.Contents{&openresponses.InputImage{ImageURL: "data:image/png;base64,AA"}}})); err != nil {
+		t.Fatal(err)
+	}
+	unedited := fixtureHash(t, s)
+	if _, err := s.Append(&ConfigEntry{Omit: &Omit{Images: &OmitImages{Placeholder: "[image]"}}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctx.ReplacedItems) != 1 || ctx.ReplacedItems[0].Parts != 1 {
+		t.Fatalf("replaced = %+v", ctx.ReplacedItems)
+	}
+	if text, ok := ctx.Items[0].(*openresponses.Message).Content[0].(*openresponses.InputText); !ok || text.Text != "[image]" {
+		t.Errorf("sent %+v", ctx.Items[0])
+	}
+	id, err := s.Append(&ResponseEntry{ResponseID: "r", Status: openresponses.ResponseStatusCompleted, RequestHash: unedited})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Verify(id); !errors.Is(err, ErrOmitDivergence) {
+		t.Errorf("Verify = %v, want ErrOmitDivergence", err)
 	}
 }

@@ -7,6 +7,25 @@ versions may break the API.
 
 ## Unreleased
 
+- **Placeholders for a tool output or a screenshot (RFC 0001 0.14,
+  Items left out of the context and Context building).** `omit` gains
+  `outputs`, `{"text": t, "items": [ids]}`, which sends each listed
+  entry's function call output as `t`, and `images`, `{"keep": n,
+  "placeholder": t}` or `{"before": id, "placeholder": t}`, which sends
+  every `input_image` part but the last n, or every one before an
+  entry, as an `input_text` part holding `t`. Both apply after `items`
+  and `reasoning`, the request hash covers the result, and a
+  compaction's checkpoint carries them, so a loop that clears old tool
+  results or prunes screenshots records a request that verifies.
+  **Added: `Omit.Outputs`, `Omit.Images`, `OmitOutputs`, `OmitImages`,
+  `Context.ReplacedItems`, `ReplacedItem`, `OmitOutputsReason` and
+  `OmitImagesReason`**; `Settings.OmitDelta` writes both, and `Verify`
+  reports a hash over the unedited request as `ErrOmitDivergence`. A
+  member in another form is kept as written and replaces nothing.
+  `outputs`' `items` and `images`' `before` name entries, so `RemapRefs`
+  re-points them. Conformance fixture `placeholders.jsonl`, with
+  context goldens for it and the other 0.14 fixtures. (#262)
+
 - **An item names the peer link whose late report it carries (RFC 0001
   0.14, `item`; RFC 0002, Entries and the context hash).** A peer whose
   work outlives its call answers later, as an input the harness

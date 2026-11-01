@@ -379,5 +379,13 @@ func describeOmit(o agentsession.Omit) string {
 	if n := len(o.Items); n > 0 {
 		bits = append(bits, fmt.Sprintf("%d item(s)", n))
 	}
+	if o.Outputs != nil {
+		bits = append(bits, fmt.Sprintf("%d output(s) as %q", len(o.Outputs.Items), shorten(o.Outputs.Text, 20)))
+	}
+	if i := o.Images; i != nil && i.Before != "" {
+		bits = append(bits, "images before "+shortID(i.Before))
+	} else if i != nil {
+		bits = append(bits, fmt.Sprintf("images but the last %d", i.Keep))
+	}
 	return "omit " + strings.Join(bits, ", ")
 }

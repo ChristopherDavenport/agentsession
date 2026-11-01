@@ -135,12 +135,19 @@ var bodyMembers = map[string][]special{
 	TypeResponse: {{path: memberPath("request_hash"), role: roleHash}},
 	TypeConfig: {
 		{path: memberPath("omit", "items", "[]"), role: roleEntry, when: func(e Entry) bool { return e.(*ConfigEntry).Omit != nil }},
+		{path: memberPath("omit", "outputs", "items", "[]"), role: roleEntry, when: func(e Entry) bool { o := e.(*ConfigEntry).Omit; return o != nil && o.Outputs != nil }},
+		{path: memberPath("omit", "images", "before"), role: roleEntry, when: func(e Entry) bool {
+			o := e.(*ConfigEntry).Omit
+			return o != nil && o.Images != nil && o.Images.Before != ""
+		}},
 		{path: memberPath("instructions_omitted", "[]", "of"), role: roleEntry, holds: keepOf},
 		{path: memberPath("instructions_parts", "[]", "hash"), role: roleHash},
 	},
 	TypeCompaction: {
 		{path: memberPath("first_kept"), role: roleEntry},
 		{path: memberPath("config", "omit", "items", "[]"), role: roleEntry, when: func(e Entry) bool { return !e.(*CompactionEntry).Config.Omit.IsZero() }},
+		{path: memberPath("config", "omit", "outputs", "items", "[]"), role: roleEntry, when: func(e Entry) bool { return e.(*CompactionEntry).Config.Omit.Outputs != nil }},
+		{path: memberPath("config", "omit", "images", "before"), role: roleEntry, when: func(e Entry) bool { i := e.(*CompactionEntry).Config.Omit.Images; return i != nil && i.Before != "" }},
 		{path: memberPath("config", "instructions_parts", "[]", "hash"), role: roleHash},
 		{path: memberPath("pinned", "[]", "call_id"), role: roleCallID},
 	},
@@ -229,11 +236,12 @@ type Remapped struct {
 // RemapRefs re-points every member of e that names an entry or a
 // session, through m, and returns the result as a new entry; e is not
 // changed. The entry references are parent, each parents element's
-// entry, an item's queued_from and from_link, a compaction's first_kept and the omit
-// items of its checkpoint, a branch summary's from, the target of a
-// label, an outcome, a dispatch and a decision, a config entry's omit
-// items and the of of each omitted part that is a keep, a positive keep
-// and no id, and the target of a judged_by link and of a cancel notice,
+// entry, an item's queued_from and from_link, a compaction's first_kept
+// and the omit items, outputs items and images before of its
+// checkpoint, a branch summary's from, the target of a label, an
+// outcome, a dispatch and a decision, a config entry's omit items,
+// outputs items and images before and the of of each omitted part that
+// is a keep, a positive keep and no id, and the target of a judged_by link and of a cancel notice,
 // which name an entry of this session. The session references are each
 // parents element's session and a link's session. A member of one of
 // those names in a form or place the format does not define it in, kept

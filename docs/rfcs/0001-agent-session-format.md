@@ -354,8 +354,8 @@ verifies without the bodies, which is what lets a store hold or send
 history it does not hold in full, and a body is held once however many
 entries name it, which RFC 0002 builds on. Wherever this document has a
 member name an entry — `parent`, `parents`, `target`, `first_kept`,
-`from`, `queued_from`, `from_link`, `omit`'s `items` in a `config` and in a
-compaction's checkpoint, `instructions_omitted`'s `of` beside a positive
+`from`, `queued_from`, `from_link`, `omit`'s `items`, `outputs`' `items`
+and `images`' `before` in a `config` and in a compaction's checkpoint, `instructions_omitted`'s `of` beside a positive
 `keep` and no `id`, where alone it is defined — it names it by `id`.
 
 Two entries with the same type, content, parent, `parents` and `ts` are
@@ -827,7 +827,9 @@ long as those items are on the path. `omit` records the rule, once.
 
 ```json
 {"type":"config","id":"…","parent":"…","ts":"…",
- "omit":{"reasoning":"other_models","items":["sha256:…"]}}
+ "omit":{"reasoning":"other_models","items":["sha256:…"],
+         "outputs":{"text":"[cleared]","items":["sha256:…"]},
+         "images":{"keep":3,"placeholder":"[screenshot removed]"}}}
 ```
 
 `omit` is an object, in force as a setting is: a delta without it
@@ -862,25 +864,67 @@ it. A `config` entry MAY carry it and no setting. Its members:
   `item` entry on the path names nothing; a `compaction`'s summary and
   pinned items and a `branch_summary`'s summary are not `item` entries,
   and `omit` does not reach them.
+- `outputs`, since 0.14, is `{"text": t, "items": [ids]}`, `t` a
+  string: an `item` entry on the path whose id the items in force list,
+  and that holds a `function_call_output`, is sent with that item's
+  `output` the string `t`, its `call_id` and every other member as they
+  are. The call stays in the request with an output, since a call
+  without its output is not a valid request; this is how a harness
+  that clears old tool results, as the Claude API's context editing
+  does, records the request it sent. The items in force are the union
+  of every `outputs`' `items` on the path since the last `replace` or
+  compaction's checkpoint, as for `items`, and `t` is the `text` of the
+  latest `outputs` on the path. An id that names no such entry names
+  nothing.
+- `images`, since 0.14, takes one of two forms, each with a string
+  `placeholder` `t`, and an `images` in a later delta replaces the one
+  in force:
+  - `{"keep": n, "placeholder": t}`, `n` a non-negative integer: of the
+    `input_image` parts of the items the request carries from `item`
+    entries, counted in request order, every one but the last `n` is
+    sent as an `input_text` part whose `text` is `t`.
+  - `{"before": id, "placeholder": t}`: every `input_image` part of an
+    `item` entry before the entry `id` names on the path is sent as an
+    `input_text` part whose `text` is `t`. An `id` not on the path names
+    nothing, and nothing is replaced.
+
+  An `input_image` part is one in a `message`'s `content`, or in a
+  `function_call_output`'s `output` when that is a list of parts. A
+  loop that keeps the last three screenshots writes `keep`, or moves
+  `before` each turn, or every 25 turns to keep a provider's cache
+  warm, as Anthropic's computer-use guidance advises. A member holding
+  both `keep` and `before`, or neither, or anything but a string
+  `placeholder`, is not a form this document defines: a reader keeps it
+  as written and replaces nothing by it, and a writer MUST NOT write it.
+- `outputs` and `images` reach the items of `item` entries alone, as
+  `items` does. They apply after `items` and `reasoning`, to the items
+  those leave in the request: first each output `outputs` lists, then
+  the image parts `images` reaches among what remains, so an output
+  sent as `t` holds no image to count.
 - An `omit` in a delta sets the `reasoning` it names when this document
   defines it, leaves the one in force when it names none, and adds its
   `items` to those in force: the set in force is the union of every
   `items` on the path since the last `replace` or compaction's
-  checkpoint, so a later entry adds to it and never has to repeat it. An object that names no `reasoning` and lists
-  no id, `{}` above all, clears both. A writer that wants to drop one
-  and keep the other writes `{}` in one entry and what it keeps in the
-  next.
+  checkpoint, so a later entry adds to it and never has to repeat it.
+  Its `outputs` adds its `items` to those in force and sets the `text`,
+  and its `images` replaces the one in force; a delta without either
+  leaves it as it was. An object that names no `reasoning`, lists no
+  id and carries neither `outputs` nor `images`, `{}` above all, clears
+  all four. A writer that wants to drop one and keep the others writes
+  `{}` in one entry and what it keeps in the next.
 
 The `omit` in force at the end of a path decides every `item` entry on
 it, those before the entry that wrote it among them, so a request built
 over a path that ends before the entry never meets the member. What a
-request leaves out stays in the record: the entry is on the path and
-among the context's entries, and a projection can show it as omitted
-and not as absent. The `request_hash` is over the request built without
-it, so a response that hashes verifies. A response whose recorded hash
-is the request built with an item the `omit` in force leaves out is a
-divergence, a hash that does not match, and not a response that recorded
-none.
+request leaves out, or sends a placeholder for, stays in the record:
+the entry is on the path and among the context's entries, as written,
+and a projection can show it as omitted or replaced and not as absent.
+The `request_hash` is over the request built with the `omit` in force
+applied, so a response that hashes verifies. A response whose recorded
+hash is the request built with an item the `omit` in force leaves out,
+or with the output or image parts it sends a placeholder for, is a
+divergence, a hash that does not match, and not a response that
+recorded none.
 
 ### `compaction`
 
@@ -937,8 +981,9 @@ Replaces earlier context with a summary.
   `instructions` is their join. `instructions_omitted` is the list of
   omitted parts in force, every part written out and no `keep` and no
   `of`, and a checkpoint without it has none in force. `omit` is the
-  object in force, its `items` the union so far, and a checkpoint
-  without it has none in force. `tools` is the full list of tool
+  object in force, its `items` and its `outputs`' `items` the unions so
+  far, its `outputs`' `text` and its `images` the latest, and a
+  checkpoint without it has none in force. `tools` is the full list of tool
   definitions in force at the compaction, in the order the context
   algorithm would send them, not a delta; there are no `tools_added`, `tools_removed` or `replace`
   members. `extra` is the merged map of passthrough request members
@@ -1723,7 +1768,11 @@ list as follows.
    context: the input enters when it is appended as an `item`. An
    `item` entry that the `omit` in force at the end of the path leaves
    out contributes nothing either; it stays on the path, and a reader
-   reports that it was left out and why.
+   reports that it was left out and why. Then the `omit` in force sends
+   the outputs its `outputs` lists, and the image parts its `images`
+   reaches, as their placeholders, among the items of `item` entries
+   that remain, as the section on items left out defines; the entries
+   keep what they hold, and a reader reports which items it sent so.
 5. The canonical request is settings plus the item list, encoded as the
    payload profile's request with `store: false` and no
    `previous_response_id`. Its hash is `request_hash`.
@@ -1902,8 +1951,9 @@ A redactor:
 - MUST compute every content hash and `id` over what it wrote, and
   rewrite `parent` and every entry-naming member to the IDs of the
   entries it wrote — `parents` into this file, `target`, `first_kept`,
-  `from`, `queued_from`, `from_link`, `omit`'s `items` in a `config` and in a
-  compaction's checkpoint, and `instructions_omitted`'s `of` where it
+  `from`, `queued_from`, `from_link`, `omit`'s `items`, `outputs`'
+  `items` and `images`' `before` in a `config` and in a compaction's
+  checkpoint, and `instructions_omitted`'s `of` where it
   is defined — and the header's `base`. A member of one of those names
   in a form or place this document does not define there is body text,
   not a reference;
@@ -2207,7 +2257,10 @@ names and whose second dispatch's task answered, an `of` naming no `config` entr
 or one before a compaction's checkpoint, kept as written and noted by a
 tool that checks a file, a `peer` call acknowledged by its output and
 answered turns later by an item whose `from_link` names the link, beside
-a `from_link` naming a cancel notice, which is reported, and
+a `from_link` naming a cancel notice, which is reported, a session that
+sends old tool outputs as a placeholder by `omit`'s `outputs` and old
+screenshots as one by `images`, in both of its forms, across a
+compaction's checkpoint, every response hashed and verifying, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
@@ -2294,6 +2347,17 @@ reader of 0.13 refuses those files until it is upgraded.
   later report the item carries. A reader of 0.13 could tell that report
   from any other input only through a harness's own members. It joins
   the members that name an entry, which migration and redaction rewrite.
+
+- `omit` defines `outputs` and `images`, which send a tool output, or
+  the image parts of items, as placeholder text. A reader of 0.13 read
+  a request so edited as the request the path rebuilds, so every
+  response after the first edit was written without a `request_hash`
+  or verified as a divergence. `outputs`' `items` and `images`'
+  `before` join the members that name an entry. A reader of 0.14 reads
+  either member by its form in a file of any minor, as it reads `omit`;
+  a 0.13 file that held one under another meaning, which it was free
+  to, rebuilds requests differently under 0.14, and no writer of this
+  library wrote one.
 
 ## Changes since 0.12
 

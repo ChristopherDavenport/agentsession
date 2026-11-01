@@ -1,0 +1,118 @@
+{
+  "sha256:061d64f118e23d7960dc61b2a0079edfa10724510779eddcb635a71cfadbbfde": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Delegate research."
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Have the research agent look into order 7."
+          }
+        ]
+      },
+      {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_research",
+        "name": "research",
+        "arguments": "{\"message\":\"order 7\"}"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_research",
+        "output": "{\"status\":\"dispatched\"}"
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_2",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "The research agent is on it.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Thanks. Anything else on the queue?"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_3",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Nothing else.",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Research report on order 7: the refund was issued twice."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_5",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "The research is in: order 7 was refunded twice.",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "sha256:86e2bd9e77feb2ee76e7ae8edbd843d9019d664489fabcac4ef104df5680ae45",
+      "sha256:aa2d8b7381873d884bbb367e145adcceba87029c92f2725c5f3c8b5d5032c82c",
+      "sha256:fd4c8c77bd4bb7adb251e2f56238f8a2c3d9ce2dc352f64761683982e60348e6",
+      "sha256:ae5bf73a686f4f2b6097ec975b1787c8f305f536875efbb52f836f7f4abf1efb",
+      "sha256:07c71ba78046acb6e392ee536c3dfa5fae461babaed76c72c1209c94f7042e4e",
+      "sha256:45c08738b81dc6fc1ce774875e93a1f06f1a7244f31d16a986c50036d72532ad",
+      "sha256:1395466d70cf622de738b070d4b633905d6229ba8b02b3e5819dba7282894184",
+      "sha256:1a2279e07c5382c55b0d14463ecd7babe2379dcaa89fe644fa09609f1c83b849",
+      "sha256:681ada740510e9ea12b0cc9bb17493580050709c8198a77409ce041909bc342a",
+      "sha256:a1de4c155b68f69bce44afeefda61ee72e86d15dfcb13fd7a1348a052cb0ad45",
+      "sha256:d8226c6dfa98e00fc99b0a047fe9119880ca107435932712a21297239105b4dc",
+      "sha256:db946102731d1bcdbd2b1e947d900d1ac8242b0d67b3eecb0742d8d7a95573b5",
+      "sha256:fcac6f484c9308a4d97eabc376bf88c4c676d7706ee843f223467d9ace653988",
+      "sha256:623e8c20e25d478410b87a60d6ff5b4cabdc51c83a57a60b7f941478b9de788d",
+      "sha256:061d64f118e23d7960dc61b2a0079edfa10724510779eddcb635a71cfadbbfde"
+    ],
+    "item_entries": [
+      "sha256:aa2d8b7381873d884bbb367e145adcceba87029c92f2725c5f3c8b5d5032c82c",
+      "sha256:fd4c8c77bd4bb7adb251e2f56238f8a2c3d9ce2dc352f64761683982e60348e6",
+      "sha256:1395466d70cf622de738b070d4b633905d6229ba8b02b3e5819dba7282894184",
+      "sha256:1a2279e07c5382c55b0d14463ecd7babe2379dcaa89fe644fa09609f1c83b849",
+      "sha256:a1de4c155b68f69bce44afeefda61ee72e86d15dfcb13fd7a1348a052cb0ad45",
+      "sha256:d8226c6dfa98e00fc99b0a047fe9119880ca107435932712a21297239105b4dc",
+      "sha256:fcac6f484c9308a4d97eabc376bf88c4c676d7706ee843f223467d9ace653988",
+      "sha256:623e8c20e25d478410b87a60d6ff5b4cabdc51c83a57a60b7f941478b9de788d"
+    ]
+  }
+}

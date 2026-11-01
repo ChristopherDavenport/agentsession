@@ -132,6 +132,18 @@ func TestRemapRefsEveryMember(t *testing.T) {
 			false,
 		},
 		{
+			"config: omit outputs items and images before",
+			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"outputs":{"text":"o-cleared","items":["o-1","o-2"]},"images":{"before":"o-3","placeholder":"o-image"}}}`,
+			map[string]string{"/parent": "n-p", "/omit/outputs/items/0": "n-1", "/omit/outputs/items/1": "n-2", "/omit/images/before": "n-3"},
+			false,
+		},
+		{
+			"config: omit images keep names no entry, and images in another form is body",
+			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"items":["o-1"],"outputs":{"items":["o-2"]},"images":{"keep":2,"before":"o-3","placeholder":"p"}}}`,
+			map[string]string{"/parent": "n-p", "/omit/items/0": "n-1"},
+			false,
+		},
+		{
 			"config: omit items and omitted parts' of",
 			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"reasoning":"other_models","items":["o-1","o-2"]},"instructions_omitted":[{"keep":2,"of":"o-3","x:note":"o-keep"},{"id":"o-name","reason":"budget","size":1}],"instructions_parts":[{"id":"o-part","hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]}`,
 			map[string]string{"/parent": "n-p", "/omit/items/0": "n-1", "/omit/items/1": "n-2", "/instructions_omitted/0/of": "n-3"},
@@ -147,6 +159,12 @@ func TestRemapRefsEveryMember(t *testing.T) {
 			"compaction: first_kept and the checkpoint's omit",
 			`{"type":"compaction","id":"x","parent":"o-p",` + tsLine + `,"first_kept":"o-f","summary":` + msg + `,"config":{"model":"m","omit":{"items":["o-i"]},"instructions_omitted":[{"id":"o-name","reason":"r"}]}}`,
 			map[string]string{"/parent": "n-p", "/first_kept": "n-f", "/config/omit/items/0": "n-i"},
+			false,
+		},
+		{
+			"compaction: the checkpoint's omit outputs and images",
+			`{"type":"compaction","id":"x","parent":"o-p",` + tsLine + `,"first_kept":"o-f","summary":` + msg + `,"config":{"model":"m","omit":{"outputs":{"text":"o-t","items":["o-i"]},"images":{"before":"o-b","placeholder":"o-x"}}}}`,
+			map[string]string{"/parent": "n-p", "/first_kept": "n-f", "/config/omit/outputs/items/0": "n-i", "/config/omit/images/before": "n-b"},
 			false,
 		},
 		{
@@ -411,8 +429,8 @@ func TestMigrationRewritesEveryEntryNamingMember(t *testing.T) {
 var coreStringMembers = map[string][]string{
 	TypeItem:          {"response", "source/kind", "source/ref", "source/source"},
 	TypeResponse:      {"response_id", "model", "status"},
-	TypeConfig:        {"model", "instructions", "instructions_parts/[]/id", "instructions_parts/[]/text", "instructions_parts/[]/source", "instructions_omitted/[]/id", "instructions_omitted/[]/reason", "instructions_omitted/[]/source", "tools_removed/[]", "omit/reasoning"},
-	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_parts/[]/source", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/source", "config/instructions_omitted/[]/of", "config/omit/reasoning"},
+	TypeConfig:        {"model", "instructions", "instructions_parts/[]/id", "instructions_parts/[]/text", "instructions_parts/[]/source", "instructions_omitted/[]/id", "instructions_omitted/[]/reason", "instructions_omitted/[]/source", "tools_removed/[]", "omit/reasoning", "omit/outputs/text", "omit/images/placeholder"},
+	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_parts/[]/source", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/source", "config/instructions_omitted/[]/of", "config/omit/reasoning", "config/omit/outputs/text", "config/omit/images/placeholder"},
 	TypeBranchSummary: {},
 	TypeRun:           {"run_id", "phase", "source", "reason", "ref", "trigger/kind", "trigger/ref", "trigger/source"},
 	TypeDispatch:      {"idempotency_key"},
@@ -548,6 +566,8 @@ type rfcMember struct {
 var rfcNames = func() map[string][]rfcMember {
 	targets := []rfcMember{{TypeDispatch, "target", roleEntry}, {TypeDecision, "target", roleEntry}, {TypeLabel, "target", roleEntry}, {TypeOutcome, "target", roleEntry}, {TypeLink, "target", roleEntry}}
 	omit := []rfcMember{{TypeConfig, "omit/items/[]", roleEntry}, {TypeCompaction, "config/omit/items/[]", roleEntry}}
+	outputs := []rfcMember{{TypeConfig, "omit/outputs/items/[]", roleEntry}, {TypeCompaction, "config/omit/outputs/items/[]", roleEntry}}
+	images := []rfcMember{{TypeConfig, "omit/images/before", roleEntry}, {TypeCompaction, "config/omit/images/before", roleEntry}}
 	of := []rfcMember{{TypeConfig, "instructions_omitted/[]/of", roleEntry}}
 	session := []rfcMember{{TypeLink, "session", roleSession}}
 	return map[string][]rfcMember{
@@ -558,6 +578,9 @@ var rfcNames = func() map[string][]rfcMember {
 		"from":                 {{TypeBranchSummary, "from", roleEntry}},
 		"queued_from":          {{TypeItem, "queued_from", roleEntry}},
 		"from_link":            {{TypeItem, "from_link", roleEntry}},
+		"outputs":              outputs,
+		"images":               images,
+		"before":               images,
 		"omit":                 omit,
 		"items":                omit,
 		"config":               append(append([]rfcMember{}, omit[:1]...), of...),

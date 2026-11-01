@@ -1429,6 +1429,12 @@ func validateConfig(c *ConfigEntry) error {
 				return errors.New("agentsession: an omit items list names an empty id")
 			}
 		}
+		if o := c.Omit.Outputs; o != nil && slices.Contains(o.Items, "") {
+			return errors.New("agentsession: an omit outputs list names an empty id")
+		}
+		if i := c.Omit.Images; i != nil && i.Keep < 0 {
+			return errors.New("agentsession: an omit images keep is negative")
+		}
 	}
 	seen := make(map[string]bool, len(c.InstructionsParts))
 	full := true

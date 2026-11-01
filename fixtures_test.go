@@ -1930,6 +1930,7 @@ var fixtures014 = map[string]func(t *testing.T) *Session{
 	"withdrawn":       withdrawnFixture,
 	"late-report":     func(t *testing.T) *Session { return lateReportFixture(t, false) },
 	"bad-late-report": func(t *testing.T) *Session { return lateReportFixture(t, true) },
+	"placeholders":    placeholdersFixture,
 }
 
 // checkBuilt fails the test when testdata/sessions/<name>.jsonl is not
@@ -2178,5 +2179,152 @@ func TestLateReportFixture(t *testing.T) {
 	bad := loadFixture(t, "bad-late-report")
 	if err := bad.VerifyRecords(bad.Leaf()); !errors.Is(err, ErrBadFromLink) {
 		t.Errorf("a from_link naming a cancel notice: VerifyRecords = %v, want ErrBadFromLink", err)
+	}
+}
+
+// screenshot is a function call output holding a caption and a
+// screenshot, as a computer-use loop's tool returns one.
+func screenshot(callID string, n int) *openresponses.FunctionCallOutput {
+	return &openresponses.FunctionCallOutput{CallID: callID, Output: openresponses.FunctionCallOutputData{Parts: openresponses.Contents{
+		&openresponses.InputText{Text: fmt.Sprintf("step %d", n)},
+		&openresponses.InputImage{ImageURL: fmt.Sprintf("data:image/png;base64,c2NyZWVu%02d", n)},
+	}}}
+}
+
+// placeholdersFixture builds the session placeholders.jsonl holds: a
+// browser loop that takes a screenshot each step and keeps a context
+// small. After the third step it sends every screenshot but the last
+// two as a placeholder (images keep); after the fourth it clears the
+// first step's output too (outputs). A compaction keeps from the third
+// step's call, its checkpoint carrying both. After it the loop names
+// the step before which screenshots are dropped (images before), and a
+// further outputs member changes the text and clears the third step.
+// Every model call's response carries the hash of the request the
+// context at its leaf rebuilds, which is the request sent.
+func placeholdersFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-11-01T11:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000023", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must, say := fixtureAppender(t, s)
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Drive the browser.")})
+	must(NewItemEntry(openresponses.UserText("Check out the cart.")))
+	calls, outputs := map[int]string{}, map[int]string{}
+	step := func(n int) {
+		t.Helper()
+		sent := fixtureHash(t, s)
+		id := fmt.Sprintf("resp_%d", n)
+		calls[n] = must(&ItemEntry{Item: &openresponses.FunctionCall{ID: fmt.Sprintf("fc_%d", n), CallID: fmt.Sprintf("call_%d", n), Name: "screenshot", Arguments: "{}"}, ResponseID: id})
+		must(&ResponseEntry{ResponseID: id, Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+		outputs[n] = must(NewItemEntry(screenshot(fmt.Sprintf("call_%d", n), n)))
+	}
+	omit := func(o Omit) {
+		t.Helper()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, ok := ctx.Settings.OmitDelta(o)
+		if !ok || d == nil {
+			t.Fatalf("OmitDelta(%+v) = %+v, %v", o, d, ok)
+		}
+		must(&ConfigEntry{Omit: d})
+	}
+	step(1)
+	step(2)
+	step(3)
+	omit(Omit{Images: &OmitImages{Keep: 2, Placeholder: "[screenshot removed]"}})
+	step(4)
+	omit(Omit{Images: &OmitImages{Keep: 2, Placeholder: "[screenshot removed]"}, Outputs: &OmitOutputs{Text: "[cleared]", Items: []string{outputs[1]}}})
+	step(5)
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(&CompactionEntry{FirstKept: calls[3], Summary: openresponses.SystemText("Summary: the cart page loaded; two steps taken."), Config: ctx.Settings})
+	step(6)
+	omit(Omit{Images: &OmitImages{Before: outputs[6], Placeholder: "[older screenshot]"}, Outputs: &OmitOutputs{Text: "[cleared earlier]", Items: []string{outputs[1], outputs[3]}}})
+	step(7)
+	say("resp_8", "The cart is checked out.")
+	return s
+}
+
+// TestPlaceholdersFixture reads the 0.14 conformance fixture for
+// placeholders: every response verifies, so each request was rebuilt
+// with the outputs and screenshots the omit in force sends as text; the
+// context at the leaf sends the third step's output as the latest text,
+// the screenshots before the sixth step's output as placeholders, and
+// reports both; and the request without the placeholders hashes to
+// something else, which a writer that recorded it would be told is a
+// divergence.
+func TestPlaceholdersFixture(t *testing.T) {
+	raw := checkBuilt(t, "placeholders")
+	for _, want := range []string{`"outputs":{"items":[`, `"images":{"keep":2,`, `"images":{"before":"sha256:`} {
+		if !bytes.Contains(raw, []byte(want)) {
+			t.Errorf("the fixture lacks %s", want)
+		}
+	}
+	s := loadFixture(t, "placeholders")
+	for _, e := range s.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			if err := s.Verify(r.ID); err != nil {
+				t.Errorf("%s: %v", r.ResponseID, err)
+			}
+		}
+	}
+	// At the last model call: steps 3 to 7 are in the context, after the
+	// summary. Step 3's output is cleared, steps 4 and 5 have their
+	// screenshot replaced, and steps 6 and 7 keep theirs.
+	path := s.Path(s.Leaf())
+	ctx, err := requestContextAt(path[:len(path)-1], path[len(path)-1].(*ResponseEntry), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, item := range ctx.Items {
+		out, ok := item.(*openresponses.FunctionCallOutput)
+		if !ok {
+			continue
+		}
+		if out.Output.Parts == nil {
+			texts = append(texts, out.Output.Text)
+			continue
+		}
+		var parts []string
+		for _, p := range out.Output.Parts {
+			switch v := p.(type) {
+			case *openresponses.InputText:
+				parts = append(parts, v.Text)
+			case *openresponses.InputImage:
+				parts = append(parts, "image")
+			}
+		}
+		texts = append(texts, strings.Join(parts, "+"))
+	}
+	want := []string{"[cleared earlier]", "step 4+[older screenshot]", "step 5+[older screenshot]", "step 6+image", "step 7+image"}
+	if !slices.Equal(texts, want) {
+		t.Errorf("outputs sent = %q, want %q", texts, want)
+	}
+	reasons := map[string]int{}
+	for _, r := range ctx.ReplacedItems {
+		reasons[r.Reason]++
+	}
+	if reasons[OmitOutputsReason] != 1 || reasons[OmitImagesReason] != 2 {
+		t.Errorf("replaced = %+v", ctx.ReplacedItems)
+	}
+	// The entries hold what they held.
+	for _, r := range ctx.ReplacedItems {
+		if out := r.Entry.Item.(*openresponses.FunctionCallOutput); out.Output.Parts == nil {
+			t.Errorf("entry %s was modified: %+v", r.Entry.ID, out)
+		}
+	}
+	bare, err := requestContextAt(path[:len(path)-1], path[len(path)-1].(*ResponseEntry), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h1, _ := contextHash(ctx)
+	h2, _ := contextHash(bare)
+	if h1 == h2 {
+		t.Error("the placeholders do not change the request")
 	}
 }
