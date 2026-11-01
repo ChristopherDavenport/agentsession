@@ -1371,10 +1371,12 @@ A call's tool returned, and its output is not yet on the path. Since
   `decision` other than an `answer` after one, and a `result` that
   follows no `dispatch` of its call that nothing else ended.
 - A writer that names `result` in the header's `records` writes one for
-  every call whose tool returns, before it appends the call's output.
-  A reader of such a file may then take a call that has a `dispatch`,
-  no `result` and no output as one whose tool had not returned when
-  the record stopped.
+  every call whose output settles before it can join the path, as the
+  writer rule above has it, before it appends that output; an output it
+  appends as its tool returns needs none. A reader of such a file may
+  then take a call that has a `dispatch`, no `result` and no output as
+  one whose tool had not returned when the record stopped, since an
+  output that had settled would have been appended or recorded.
 
 ### `decision`
 
