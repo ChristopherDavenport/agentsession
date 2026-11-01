@@ -726,6 +726,10 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		if v.CopiedFrom != nil && v.CopiedFrom.Session == s.header.ID {
 			return fmt.Errorf("%w: %s", ErrBadCopiedFrom, v.CopiedFrom.Session)
 		}
+		if v.CopiedFrom != nil && v.ResponseID != "" {
+			// A copied item is no response's output in this session.
+			return fmt.Errorf("%w: a copied item names response %s", ErrBadCopiedFrom, v.ResponseID)
+		}
 		if out, ok := v.Item.(*openresponses.FunctionCallOutput); ok && v.CopiedFrom == nil && s.copied[out.CallID] {
 			return fmt.Errorf("%w: output of %s", ErrBadCopiedFrom, out.CallID)
 		}

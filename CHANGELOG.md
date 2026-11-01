@@ -23,7 +23,8 @@ versions may break the API.
   `CallUnknown` rather than `CallNeverStarted` with no output, and no
   records promise covers it. `Append` refuses a dispatch or a decision
   naming one (`ErrCopiedCall`), an output for one that is not marked
-  copied, and an item copied from its own session (`ErrBadCopiedFrom`);
+  copied, an item copied from its own session, and a copied item
+  carrying `response` (`ErrBadCopiedFrom`);
   `VerifyRecords` reports each. The context hash leaves the member out;
   `RemapRefs` maps its `entry` as a reference into its `session`, and a
   `Rewriter` that changes a copied item removes its `entry` unless

@@ -962,3 +962,43 @@ func TestVerifyCopies(t *testing.T) {
 		t.Errorf("the copied fixture: %v", err)
 	}
 }
+
+// TestCopiedItemNamesNoResponse: a copied item is no response's output
+// in this session, so a writer refuses one carrying response, and
+// VerifyRecords reports one in a file, which would otherwise let a
+// writer mark its own model's call copied and escape the dispatch
+// promise.
+func TestCopiedItemNamesNoResponse(t *testing.T) {
+	s := New(Header{ID: "child", Records: AllRecords})
+	mk := func() *ItemEntry {
+		return &ItemEntry{Item: &openresponses.FunctionCall{CallID: "c", Name: "rm", Arguments: "{}"}, ResponseID: "resp_1", CopiedFrom: &CopiedFrom{Session: "parent"}}
+	}
+	if _, err := New(Header{ID: "child"}).Append(mk()); !errors.Is(err, ErrBadCopiedFrom) {
+		t.Errorf("Append = %v, want ErrBadCopiedFrom", err)
+	}
+	copied := mk()
+	copied.Base().ID, copied.Base().Timestamp = "x", time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	line, err := MarshalEntry(copied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := &ResponseEntry{ResponseID: "resp_1", Status: openresponses.ResponseStatusCompleted}
+	resp.ID, resp.Timestamp = "x", time.Date(2026, 11, 1, 10, 0, 1, 0, time.UTC)
+	respLine, err := MarshalEntry(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	first := reparent(t, string(line), "")
+	buf.WriteString(first + "\n" + reparent(t, string(respLine), lineID(t, first)) + "\n")
+	read, err := Read(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := read.VerifyRecords(read.Leaf()); !errors.Is(err, ErrBadCopiedFrom) {
+		t.Errorf("VerifyRecords = %v, want ErrBadCopiedFrom", err)
+	}
+}

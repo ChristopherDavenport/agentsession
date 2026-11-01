@@ -1283,8 +1283,9 @@ var ErrBadFromLink = errors.New("agentsession: from_link names no peer link befo
 var ErrCopiedCall = errors.New("agentsession: dispatch or decision names a copied call")
 
 // ErrBadCopiedFrom is returned when an item is appended whose
-// copied_from names this session, or an output for a copied call that
-// does not carry copied_from, and by [Session.VerifyRecords] for a path
+// copied_from names this session, or that carries copied_from and
+// response, or an output for a copied call that does not carry
+// copied_from, and by [Session.VerifyRecords] for a path
 // that holds either: an item copied from a session is copied from
 // another, and a writer marks every output it gives a copied call.
 var ErrBadCopiedFrom = errors.New("agentsession: copied_from names this session, or a copied call's output is not marked")
@@ -1300,6 +1301,9 @@ func verifyCopied(self string, path []Entry) error {
 		case *ItemEntry:
 			if v.CopiedFrom != nil && v.CopiedFrom.Session == self {
 				return fmt.Errorf("%w: item %s names %s", ErrBadCopiedFrom, v.ID, self)
+			}
+			if v.CopiedFrom != nil && v.ResponseID != "" {
+				return fmt.Errorf("%w: copied item %s names response %s", ErrBadCopiedFrom, v.ID, v.ResponseID)
 			}
 			switch it := v.Item.(type) {
 			case *openresponses.FunctionCall:

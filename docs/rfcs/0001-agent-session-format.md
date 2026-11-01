@@ -601,8 +601,10 @@ One conversation item in the payload profile.
   link, since a `subsession` link names a child of the session that
   writes it.
 - A copied item is never one of a response's output items. A writer
-  SHOULD NOT write `response` on one, since no `response` entry of this
-  session envelopes it.
+  MUST NOT write `response` on one, since no `response` entry of this
+  session envelopes it, and a tool that checks a file reports one that
+  carries it: an item of this session's own model call written as
+  copied would escape every rule a call of this session is held to.
 - A `function_call`'s `call_id` MUST NOT be empty and MUST differ from
   that of every other `function_call` in the session, on any branch: a
   `function_call_output`, a `link`, a `custom` entry, a run end's
