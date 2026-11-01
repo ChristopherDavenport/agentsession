@@ -217,6 +217,9 @@ type builder struct {
 	// inPath is each entry's index in the trajectory's Path, built on
 	// first use, which a step's request context is rebuilt from.
 	inPath map[string]int
+	// anyOmit is whether a config entry or a checkpoint on Path sets
+	// omit, without which no request leaves anything out.
+	anyOmit bool
 	// unembedded counts the subsession links whose child was not
 	// embedded, whose cost the root's total_cost_usd leaves out.
 	unembedded int
@@ -252,10 +255,21 @@ func (b *builder) requestRecords(resp *agentsession.ResponseEntry) (omitted, rep
 		return nil, nil
 	}
 	if b.inPath == nil {
+		// A path that never sets omit leaves nothing out of any request,
+		// and rebuilding each one would cost a context per step.
 		b.inPath = make(map[string]int, len(b.t.Path))
 		for i, e := range b.t.Path {
 			b.inPath[e.Base().ID] = i
+			switch v := e.(type) {
+			case *agentsession.ConfigEntry:
+				b.anyOmit = b.anyOmit || v.Omit != nil && !v.Omit.IsZero()
+			case *agentsession.CompactionEntry:
+				b.anyOmit = b.anyOmit || !v.Config.Omit.IsZero()
+			}
 		}
+	}
+	if !b.anyOmit {
+		return nil, nil
 	}
 	i, ok := b.inPath[resp.ID]
 	if !ok {
