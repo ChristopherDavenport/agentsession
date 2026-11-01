@@ -1139,7 +1139,8 @@ by hash. Three things in it are the reference server's:
 - **Uploads** go into the store's object space at once, where a sweep
   collects them as any unreferenced object, and the server keeps in
   memory which principal uploaded each, for `upload_grace_ms`. An
-  operator sweeps a cas store with at least that grace; over a store
+  operator sweeps a cas store with more than that grace, a margin for
+  a write admitted on an upload to land, as Objects asks; over a store
   that holds blobs and keeps no other objects (memory, JSONL, SQLite)
   the server runs the store's blob sweep itself, with twice that grace,
   from the first media upload a grace after the last sweep.

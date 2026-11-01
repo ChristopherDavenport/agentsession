@@ -156,8 +156,10 @@ func WithLeaseLimits(def, max time.Duration) Option {
 
 // WithUploadGrace sets how long an object uploaded for a push stays
 // usable by its uploader's push (default 1h). It is published in the
-// capabilities, and it is the least grace a Sweep of the store must give
-// unreferenced objects, since an upload is one until a push names it.
+// capabilities, and a Sweep of the store must give unreferenced objects
+// more than it, since an upload is one until a push names it and a push
+// admitted on it near its end lands after it: an operator sweeps a cas
+// store with a margin, as twice the grace.
 // Over a store that holds blobs and keeps no objects, an
 // [agentsession.BlobSweeper], the server sweeps with it itself: a media
 // upload no session names is removed once older than twice the grace,

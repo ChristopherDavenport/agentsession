@@ -64,9 +64,10 @@ type Limits struct {
 	// without loading the session again.
 	FollowReplay int `json:"follow_replay"`
 	// UploadGraceMS is how long an object uploaded for a push is kept
-	// for its uploader's push before nothing reaches it: the grace a
-	// sweep of the store must give unreferenced objects. Zero where the
-	// server takes no objects.
+	// for its uploader's push before nothing reaches it: a sweep of the
+	// store gives unreferenced objects more than it, a margin for a write
+	// admitted on an upload to land. Zero where the server takes no
+	// objects or media.
 	UploadGraceMS int64 `json:"upload_grace_ms,omitempty"`
 	// SnapshotBytes is the most entry-line bytes a follow's snapshot or
 	// reset carries inline: past it a server that serves objects sends
