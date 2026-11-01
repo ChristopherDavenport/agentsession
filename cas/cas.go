@@ -2201,6 +2201,17 @@ func before013(format string) bool {
 // and of no session after the first it admits. "" when no admitted
 // session holds the base.
 func (s *Store) forkOrigin(base, named string, readable func(string) bool) (string, error) {
+	// The chain is picked from before the index is read, and the index's
+	// sessions after; each session is asked of once across the two.
+	asked := map[string]bool{}
+	once := func(id string) bool {
+		v, seen := asked[id]
+		if !seen {
+			v = readable(id)
+			asked[id] = v
+		}
+		return v
+	}
 	var c origin.Candidates
 	for seen := 0; named != "" && seen < 64; seen++ {
 		dir, err := s.sessionDir(named)
@@ -2233,7 +2244,7 @@ func (s *Store) forkOrigin(base, named string, readable func(string) bool) (stri
 	// when a lookup needs it. A chain the check stops on is done with:
 	// the pick goes on to the index's sessions, as Pick would.
 	if c.Ends {
-		if id := c.Pick(readable); id != "" {
+		if id := c.Pick(once); id != "" {
 			return id, nil
 		}
 	}
@@ -2267,7 +2278,7 @@ func (s *Store) forkOrigin(base, named string, readable func(string) bool) (stri
 		}
 		gather()
 	}
-	return c.Pick(readable), nil
+	return c.Pick(once), nil
 }
 
 // prefixHolder returns a session that holds base on its prefix, owning

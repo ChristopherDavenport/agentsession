@@ -22,19 +22,21 @@ type Candidates struct {
 // Pick returns the origin among the sessions readable admits, as the
 // store would find it holding none it does not: up the chain while each
 // is admitted, to its end; else the first admitted owner; else the first
-// admitted session holding the base on its prefix. It returns "" when
-// none is admitted.
+// admitted session holding the base on its prefix. It asks readable in
+// that order, of each session once, and of none after the first it
+// admits, and returns "" when none is admitted.
 func (c Candidates) Pick(readable func(string) bool) string {
-	ok := map[string]bool{}
-	for _, l := range [][]string{c.Chain, c.Owners, c.OnPrefix} {
-		for _, id := range l {
-			if _, seen := ok[id]; !seen {
-				ok[id] = readable(id)
-			}
+	asked := map[string]bool{}
+	ok := func(id string) bool {
+		v, seen := asked[id]
+		if !seen {
+			v = readable(id)
+			asked[id] = v
 		}
+		return v
 	}
 	for i, id := range c.Chain {
-		if !ok[id] {
+		if !ok(id) {
 			break
 		}
 		if i == len(c.Chain)-1 && c.Ends {
@@ -42,12 +44,12 @@ func (c Candidates) Pick(readable func(string) bool) string {
 		}
 	}
 	for _, id := range c.Owners {
-		if ok[id] {
+		if ok(id) {
 			return id
 		}
 	}
 	for _, id := range c.OnPrefix {
-		if ok[id] {
+		if ok(id) {
 			return id
 		}
 	}

@@ -136,3 +136,37 @@ func TestMemoryStoreKeepsItsOwnEntry(t *testing.T) {
 		t.Errorf("the store's entry changed with the caller's: %s", b)
 	}
 }
+
+// TestMemoryStoreAsksReadableUntilAdmitted: a fork's origin is the first
+// session in the store's holder order the read check admits, and the
+// store asks of no session after it.
+func TestMemoryStoreAsksReadableUntilAdmitted(t *testing.T) {
+	ctx := context.Background()
+	st := agentsession.NewMemoryStore()
+	e := agentsession.NewItemEntry(openresponses.UserText("held by three"))
+	for _, id := range []string{"a", "b", "c"} {
+		s := agentsession.New(agentsession.Header{ID: id})
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		if err := agentsession.Write(&buf, s); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Import(ctx, &buf, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var asked []string
+	rctx := agentsession.WithReadable(ctx, func(id string) bool {
+		asked = append(asked, id)
+		return true
+	})
+	f, err := st.Create(rctx, agentsession.Header{ID: "f", Base: e.Base().ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Header().ParentSession != "a" || strings.Join(asked, ",") != "a" {
+		t.Errorf("forked from %s asking %v; want a, asking a alone", f.Header().ParentSession, asked)
+	}
+}

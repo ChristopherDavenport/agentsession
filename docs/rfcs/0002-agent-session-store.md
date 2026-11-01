@@ -217,8 +217,9 @@ A session is created with a header and optionally a base.
   `media` is its own origin's. An import and a receive of a fork are
   held to the same rule. A store that serves more than one principal,
   as RFC 0003's server does, looks for the origin only among the
-  sessions the caller may read: one it may not read is as one the store
-  does not hold, so neither a refusal nor what the store fills in a
+  sessions the caller may read, asking of the sessions holding the base
+  in the order above and of none after the first the caller may read:
+  one it may not read is as one the store does not hold, so neither a refusal nor what the store fills in a
   fork's header from its origin (`parent_session`, `media`, `payload`)
   tells the caller anything of a session it may not read. The question
   whether the caller may read a session is the program's, and may read
