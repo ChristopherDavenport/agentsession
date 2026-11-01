@@ -3725,7 +3725,7 @@ func (s *Store) importRead(ctx context.Context, sess *agentsession.Session, blob
 	if err := s.refuseUnredacted(h, stored); err != nil {
 		return nil, err
 	}
-	if s.forkMediaDiffers(h, agentsession.ReadableIn(ctx)) {
+	if s.forkMediaDiffers(ctx, h) {
 		return nil, fmt.Errorf("cas: import: %w", agentsession.ErrMediaDiffers)
 	}
 	mark := MarkMirror

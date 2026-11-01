@@ -796,12 +796,15 @@ A push is RFC 0002's, over the wire.
 
 0. Before step 1 the sender MAY post `{"header", "entries", "prefix"}`,
    the members step 2 names, to `POST /v1/sessions/{id}/push?check`.
-   The server first authorizes a fork's origin for reading: the session
-   its `parent_session` names, and the session it finds holding its
-   `base`, each MUST be one the caller may read, and one that is not
-   is treated as a session the server does not hold, never refused, so
-   the answer for a base held only where the caller cannot read is the
-   answer for a hash nobody holds. Then it answers with the
+   The server first authorizes a fork's origin for reading: it looks
+   for the origin as RFC 0002's Sessions says, from the session the
+   `parent_session` names and up its line, else a session whose own
+   entries include the `base`, else one that holds it on its prefix,
+   and MUST pass over every session the caller may not read, as one the
+   server does not hold, taking the first it may read. It never stops
+   at, or skips the check for, a session it passed over, so the answer
+   for a base held where the caller cannot read is the answer for a
+   base held only where it can, or by nobody. Then it answers with the
    session-level refusals that need no object, `not_redacted` (a
    header without `redacted` at a store that holds only redacted
    entries), `header_differs`, `format`, `bad_entry` for a malformed

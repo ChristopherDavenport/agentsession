@@ -378,29 +378,22 @@ type receiveOptions struct {
 	expected string
 	force    bool
 	handover bool
-	readable func(string) bool
 }
 
 // forkMediaDiffers reports whether a fork's media differs from that of
-// its origin, the session whose own entries include its base, where
-// this store holds that session and readable, when set, admits it. A
-// parent_session readable does not admit is not where the lookup
-// begins, and an origin it does not admit is as one the store does not
-// hold: the answer is the same as for a base no session here holds, so
-// it says nothing to a caller of a session it may not read.
-func (s *Store) forkMediaDiffers(h agentsession.Header, readable func(string) bool) bool {
+// its origin, as [Store.forkOrigin] finds it among the sessions
+// [agentsession.ReadableIn] admits for ctx: a session the caller may
+// not read is as one this store does not hold, so the answer is the
+// one the store would give without it.
+func (s *Store) forkMediaDiffers(ctx context.Context, h agentsession.Header) bool {
 	if h.Base == "" {
 		return false
 	}
-	parent := h.ParentSession
-	if readable != nil && parent != "" && !readable(parent) {
-		parent = ""
-	}
-	owner, _, err := s.holderOf(h.Base, parent)
-	if err != nil || owner == "" || readable != nil && !readable(owner) {
+	origin, err := s.forkOrigin(h.Base, h.ParentSession, agentsession.ReadableIn(ctx))
+	if err != nil || origin == "" {
 		return false
 	}
-	odir, err := s.sessionDir(owner)
+	odir, err := s.sessionDir(origin)
 	if err != nil {
 		return false
 	}
@@ -514,10 +507,10 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 			}
 			mark = MarkRecord
 		}
-		// A fork's media is its origin's, where this store holds the
-		// session whose own entries include the base, as at Create and
-		// Import, and the caller may read it.
-		if s.forkMediaDiffers(b.header, o.readable) {
+		// A fork's media is its origin's, where this store holds a
+		// session holding the base that the caller may read
+		// (agentsession.WithReadable), as at Create and Import.
+		if s.forkMediaDiffers(ctx, b.header) {
 			return Exchange{}, fmt.Errorf("cas: exchange: %w", agentsession.ErrMediaDiffers)
 		}
 		stored := append(append([]agentsession.Entry(nil), b.prefix...), b.own...)
@@ -699,13 +692,14 @@ func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Excha
 // ([agentsession.ErrBaseRule]), a session held under another header
 // ([ErrHeaderDiffers]) or whose held header may not be raised to h's
 // format, and a fork whose media differs from that of the session
-// holding its base ([agentsession.ErrMediaDiffers]). readable is
-// [ReceiveOptions.Readable]'s, for a caller the push will be received
-// for: an origin it does not admit is as one the store does not hold.
+// holding its base ([agentsession.ErrMediaDiffers]), found, as the push
+// finds it, among the sessions [agentsession.WithReadable] admits for
+// ctx: an origin the caller may not read is as one the store does not
+// hold.
 //
 // The check is advisory: what the store holds can change before the
 // push, which is held to the same refusals and remains the authority.
-func (s *Store) CheckPush(ctx context.Context, h agentsession.Header, prefix []string, readable func(session string) bool) error {
+func (s *Store) CheckPush(ctx context.Context, h agentsession.Header, prefix []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -733,7 +727,7 @@ func (s *Store) CheckPush(ctx context.Context, h agentsession.Header, prefix []s
 	}
 	held, err := readHeader(dir)
 	if errors.Is(err, os.ErrNotExist) {
-		if s.forkMediaDiffers(h, readable) {
+		if s.forkMediaDiffers(ctx, h) {
 			return fmt.Errorf("cas: exchange: %w", agentsession.ErrMediaDiffers)
 		}
 		return nil

@@ -26,7 +26,7 @@ type exchanger interface {
 	MarkOf(ctx context.Context, id string) (mark, head string, err error)
 	DeclareRecordAt(ctx context.Context, id, head string) error
 	HandOver(ctx context.Context, id, head string) error
-	CheckPush(ctx context.Context, h agentsession.Header, prefix []string, readable func(session string) bool) error
+	CheckPush(ctx context.Context, h agentsession.Header, prefix []string) error
 }
 
 // Objects are object hashes by RFC 0003's space: the body of a missing
@@ -517,8 +517,8 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 	// the server does not hold, so neither the check nor the push says
 	// whether, or how, another's session holds the base (RFC 0003,
 	// Exchange).
-	readable := agentsession.ReadableIn(h.readableCtx(r.Context()))
-	if err := h.ex.CheckPush(r.Context(), req.Header, req.Prefix, readable); err != nil {
+	ctx := h.readableCtx(r.Context())
+	if err := h.ex.CheckPush(ctx, req.Header, req.Prefix); err != nil {
 		h.fail(w, err)
 		return
 	}
@@ -559,7 +559,7 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, p)
 		return
 	}
-	x, err := h.ex.Receive(r.Context(), c, cas.ReceiveOptions{Expected: headIn(req.Head.Expected), Force: req.Head.Force, Handover: req.Mark == cas.MarkRecord, Readable: readable})
+	x, err := h.ex.Receive(ctx, c, cas.ReceiveOptions{Expected: headIn(req.Head.Expected), Force: req.Head.Force, Handover: req.Mark == cas.MarkRecord})
 	defer h.settle(r.Context(), st)
 	mark, _, _ := h.ex.MarkOf(r.Context(), id)
 	if errors.Is(err, cas.ErrHeadMoved) {

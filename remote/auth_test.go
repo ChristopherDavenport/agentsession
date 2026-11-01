@@ -659,7 +659,10 @@ func TestUnnamedUploadsSwept(t *testing.T) {
 // base held only in another's session answers as a base nobody holds:
 // mallory's import of a fork of alice's entry in another media is
 // taken, as one of an entry nobody holds is, and a fork he creates from
-// it names none of alice's sessions.
+// it names none of alice's sessions. A push is held to the media of
+// the origin he may read, the first session holding the base that he
+// may read, so his own fork of her entry cannot be forked again in
+// another media, whether or not the push names it.
 func TestForkOriginUnreadable(t *testing.T) {
 	stores := []struct {
 		name string
@@ -760,5 +763,17 @@ func testForkOriginUnreadable(t *testing.T, st agentsession.Store) {
 	}
 	if p := f.Header().ParentSession; p == "alices" {
 		t.Errorf("mallory's fork names alice's session as its parent")
+	}
+	if _, ok := st.(*cas.Store); !ok {
+		return
+	}
+	// m1 holds alice's entry on its prefix and is sidecar; a fork of it
+	// in another media is refused, whether or not it names m1, as it
+	// would be if alice's session were not there.
+	for _, parent := range []string{"m1", ""} {
+		fork := agentsession.New(agentsession.Header{ID: "m3", Base: x, ParentSession: parent}).Header()
+		if err := m.CheckPush(ctx, fork, nil, []string{x}); !errors.Is(err, agentsession.ErrMediaDiffers) {
+			t.Errorf("CheckPush of an inline fork of m1's prefix, parent %q: %v, want ErrMediaDiffers", parent, err)
+		}
 	}
 }
