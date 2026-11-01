@@ -21,7 +21,12 @@ versions may break the API.
   takes (memory, jsonl, sqlite and cas). Over the wire an append naming
   a blob the caller cannot reach is refused where it was accepted with
   the blob unresolved: upload it first. `remote.Client`'s append then
-  matches `ErrMissingObject` and `agentsession.ErrNoBlob`.
+  matches `ErrMissingObject` and `agentsession.ErrNoBlob`. This guards
+  new writes only: reach is still read from what sessions name, so a
+  session that already names another principal's blob, as one could be
+  written through a v0.0.30 cas server, keeps reach to it for every
+  reader of that session. An operator who needs to revoke it removes
+  those sessions.
 
 - **An import endpoint, and a push that asks first (RFC 0003, Import
   and Exchange).** `POST /v1/sessions/import` takes an RFC 0001 file
