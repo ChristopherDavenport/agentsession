@@ -310,6 +310,15 @@ type ItemEntry struct {
 	// QueuedFrom names the [QueuedEntry] this item was accepted as,
 	// for an input that waited before it could be appended.
 	QueuedFrom string `json:"queued_from,omitempty"`
+	// Failed marks, in format 0.14, an entry holding a function call
+	// output whose tool reported failure, or which the harness gave up:
+	// cut off, timed out, its outcome unknown. The output describes it.
+	// It is a record member: the item is sent as it is, and the call is
+	// completed by its output all the same. A reader maps it to its
+	// protocol's failure state; [Call.Failed] reads it. A failed member
+	// on any other item, or one that is not true, is kept as written in
+	// Unknown and Failed is false.
+	Failed bool `json:"-" member:"failed"`
 }
 
 // EntryType returns "item".
@@ -1848,7 +1857,19 @@ func (e *ItemEntry) MarshalJSON() ([]byte, error) {
 		return nil, errors.New("agentsession: item entry has no item")
 	}
 	type plain ItemEntry
-	return marshalEntry(TypeItem, &e.EntryBase, (*plain)(e))
+	if !e.Failed {
+		return marshalEntry(TypeItem, &e.EntryBase, (*plain)(e))
+	}
+	if _, ok := e.Item.(*openresponses.FunctionCallOutput); !ok {
+		return nil, errors.New("agentsession: failed is defined on a function call output's entry alone")
+	}
+	if _, dup := e.Unknown["failed"]; dup {
+		return nil, errors.New("agentsession: item entry has failed both typed and unknown")
+	}
+	return marshalEntry(TypeItem, &e.EntryBase, struct {
+		*plain
+		Failed bool `json:"failed"`
+	}{(*plain)(e), true})
 }
 
 // UnmarshalJSON decodes the entry, dispatching the item through the
@@ -1905,6 +1926,12 @@ func (e *ItemEntry) decodeMembers(_ []byte, all map[string]json.RawMessage) erro
 		if err := json.Unmarshal(raw, &e.QueuedFrom); err != nil {
 			return fmt.Errorf("queued_from: %w", err)
 		}
+	}
+	// failed is taken where 0.14 defines it, true on an output's entry,
+	// in a file of any minor; anything else is kept as written.
+	e.Failed = false
+	if _, ok := e.Item.(*openresponses.FunctionCallOutput); ok {
+		promote(&e.EntryBase, "failed", &e.Failed)
 	}
 	return nil
 }

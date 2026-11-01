@@ -365,10 +365,11 @@ func (h *Header) fill(now time.Time) {
 // a redacted session one of its own; a 0.12 file is a 0.13 file without
 // either, and one it holds there is kept as written, as a member this
 // package does not know, and the file is not raised. 0.14 defines the
-// universal root, which a leaf label may name, and the host and
-// instance members of an env entry's workspace. A 0.13 file is a 0.14
-// file that holds none of them, and each is read by its form in a file
-// of any minor.
+// universal root, which a leaf label may name, the host and instance
+// members of an env entry's workspace, an output's failed member, and
+// a reject's withdrawn member, which withdraws the dispatch it directly
+// follows. A 0.13 file is a 0.14 file that holds none of them, and each
+// is read by its form in a file of any minor.
 const FormatMinor = 14
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.

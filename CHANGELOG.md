@@ -7,6 +7,25 @@ versions may break the API.
 
 ## Unreleased
 
+- **A failed call, and a withdrawn hand-off (RFC 0001 0.14, `item` and
+  `decision`).** An output's entry may carry `failed: true`: the tool
+  reported failure, or the harness gave the call up. **Added:
+  `ItemEntry.Failed` and `Call.Failed`**; the call is completed all the
+  same, and the member reaches no request. A writer that wrote a call's
+  `dispatch` and then did not hand it to its tool writes a `reject`
+  carrying `withdrawn: true` directly after it among the call's
+  entries; a reader reads that hand-off as never made, so the call is
+  never started when it has no other dispatch, and may be dispatched
+  again. **Added: `DecisionEntry.Withdrawn`, `NewWithdrawal`,
+  `Call.Withdrawn` and `Withdrawal`, and `ErrBadWithdrawal`** (wire
+  reason `bad_withdrawal`), which `Append` returns for a withdrawal
+  anywhere else; a reader reads one found elsewhere as a plain reject.
+  `Session.Dispatches` leaves a withdrawn dispatch out. otel ends a
+  withdrawn hand-off's span at its withdrawal, without an error, with
+  call state `withdrawn` (`CallStateWithdrawn`, `AttrWithdrawn` on the
+  decision event), and gives a failed call's span an error status. A
+  conformance fixture, `withdrawn.jsonl`, holds both. (#264, #226)
+
 - **Format 0.14 (RFC 0001, draft 0.14).** `Format` and `FormatMinor`
   name 0.14, so a writer raises every file it appends to and a reader
   of 0.13 refuses it; a 0.5 to 0.13 file reads as it stands and no

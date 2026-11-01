@@ -193,6 +193,17 @@ type DecisionEntry struct {
 	By        string          `json:"by,omitempty"`
 	Reason    string          `json:"reason,omitempty"`
 	Args      json.RawMessage `json:"args,omitempty"`
+	// Withdrawn marks, in format 0.14, a reject that withdraws the
+	// dispatch it directly follows: the writer wrote the dispatch and
+	// then did not hand the call to its tool. A reader reads that
+	// hand-off as never made and this decision as none, so the call is
+	// what it was before the dispatch, never started when it has no
+	// other; see [Call.Withdrawn] and [NewWithdrawal]. It is defined on
+	// a reject alone: a withdrawn member on another verdict, or one that
+	// is not true, is kept as written in Unknown and Withdrawn is false.
+	// A reject carrying it that follows no dispatch of its call directly
+	// reads as a reject without it.
+	Withdrawn bool `json:"-" member:"withdrawn"`
 }
 
 // EntryType returns "decision".
@@ -202,6 +213,15 @@ func (*DecisionEntry) EntryType() string { return TypeDecision }
 // entry target. by may be "".
 func NewDecision(callID, target, verdict, by string) *DecisionEntry {
 	return &DecisionEntry{CallID: callID, Target: target, Verdict: verdict, By: by}
+}
+
+// NewWithdrawal builds the reject that withdraws the dispatch of the
+// call callID held by the item entry target: the writer wrote the
+// dispatch and then did not hand the call to its tool. It is appended
+// directly after that dispatch, before any other decision, dispatch or
+// output of the call; reason says why the hand-off was not made.
+func NewWithdrawal(callID, target, by, reason string) *DecisionEntry {
+	return &DecisionEntry{CallID: callID, Target: target, Verdict: VerdictReject, By: by, Reason: reason, Withdrawn: true}
 }
 
 // WithReason sets the decider's text and returns the entry, for
@@ -554,6 +574,9 @@ func validateLifecycle(e Entry) error {
 		if v.Verdict == VerdictReject && v.Reason == "" {
 			return errors.New("agentsession: a reject decision needs a reason")
 		}
+		if v.Withdrawn && v.Verdict != VerdictReject {
+			return errors.New("agentsession: withdrawn is defined on a reject alone")
+		}
 	case *QueuedEntry:
 		if v.Item == nil {
 			return errors.New("agentsession: queued entry has no item")
@@ -684,7 +707,16 @@ func (e *DecisionEntry) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	type plain DecisionEntry
-	return marshalEntry(TypeDecision, &e.EntryBase, (*plain)(e))
+	if !e.Withdrawn {
+		return marshalEntry(TypeDecision, &e.EntryBase, (*plain)(e))
+	}
+	if _, dup := e.Unknown["withdrawn"]; dup {
+		return nil, errors.New("agentsession: decision entry has withdrawn both typed and unknown")
+	}
+	return marshalEntry(TypeDecision, &e.EntryBase, struct {
+		*plain
+		Withdrawn bool `json:"withdrawn"`
+	}{(*plain)(e), true})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -698,8 +730,12 @@ func (e *DecisionEntry) UnmarshalJSON(data []byte) error {
 
 func (e *DecisionEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain DecisionEntry
+	e.Withdrawn = false
 	if err := unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), decisionKeys); err != nil {
 		return err
+	}
+	if e.Verdict == VerdictReject {
+		promote(&e.EntryBase, "withdrawn", &e.Withdrawn)
 	}
 	return validateLifecycle(e)
 }

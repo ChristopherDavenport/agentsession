@@ -933,3 +933,45 @@ func TestPeerBySessionOnTheToolSpan(t *testing.T) {
 		t.Errorf("peer attribute = %q, want the peer's session", got)
 	}
 }
+
+// TestWithdrawnAndFailed: a withdrawn hand-off's span ends at its
+// withdrawal, without an error, since the tool never ran, and the
+// call's next hand-off opens a span of its own; an output marked failed
+// ends its call's span with an error status (RFC 0001 0.14).
+func TestWithdrawnAndFailed(t *testing.T) {
+	sr, tracer := recorder()
+	s := agentsession.New(agentsession.Header{ID: "withdrawn", Records: agentsession.AllRecords})
+	if _, err := s.Append(agentsession.NewRunStart("r1", agentsession.SourceInput, "")); err != nil {
+		t.Fatal(err)
+	}
+	target, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "notify", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("c", "Error: unreachable"))
+	failed.Failed = true
+	for _, e := range []agentsession.Entry{
+		agentsession.NewDispatch("c", target),
+		agentsession.NewWithdrawal("c", target, agentsession.ByPolicy, "vetoed"),
+		agentsession.NewDispatch("c", target),
+		failed,
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	tool := spans(sr.Ended()).named(OpTool + " notify")
+	withdrawn, completed := tool.withAttr(AttrCallState, CallStateWithdrawn), tool.withAttr(AttrCallState, agentsession.CallCompleted.String())
+	if len(tool) != 2 || len(withdrawn) != 1 || len(completed) != 1 {
+		t.Fatalf("tool spans = %d, withdrawn %d, completed %d", len(tool), len(withdrawn), len(completed))
+	}
+	if withdrawn[0].Status().Code == codes.Error || len(eventAttr(withdrawn[0], EventDecision, AttrWithdrawn)) != 1 {
+		t.Errorf("withdrawn span status %v, withdrawn events %v", withdrawn[0].Status(), eventAttr(withdrawn[0], EventDecision, AttrWithdrawn))
+	}
+	if completed[0].Status().Code != codes.Error {
+		t.Errorf("the failed call's span status = %v, want an error", completed[0].Status())
+	}
+}

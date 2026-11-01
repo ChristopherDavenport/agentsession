@@ -3,6 +3,7 @@ package agentsession
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -707,8 +708,9 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 // output and nothing else. An answer is for a call that may have run
 // and has no output; with dispatches promised, one with none never
 // started. A reject is for a call that did not run and has no output,
-// so none with a dispatch. No dispatch follows the output, which ends
-// the call.
+// so none with a dispatch, save a withdrawal, which directly follows
+// the dispatch it withdraws and is written nowhere else. No dispatch
+// follows the output, which ends the call.
 func (s *Session) checkCallRules(e Entry, parent string) error {
 	switch v := e.(type) {
 	case *ItemEntry:
@@ -730,6 +732,12 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 			return fmt.Errorf("%w: %s", ErrCallAnswered, v.CallID)
 		case c.Rejected():
 			return fmt.Errorf("%w: %s", ErrCallRejected, v.CallID)
+		case v.Withdrawn && v.Verdict == VerdictReject:
+			// A withdrawal follows the call's dispatch directly, before
+			// any output, and withdraws it; it is written nowhere else.
+			if !c.withdraws(v) {
+				return fmt.Errorf("%w: %s", ErrBadWithdrawal, v.CallID)
+			}
 		case v.Verdict == VerdictReject && c.Dispatch != nil:
 			return fmt.Errorf("%w: %s", ErrRejectDispatched, v.CallID)
 		case v.Verdict != VerdictAnswer && v.Verdict != VerdictReject:
@@ -1537,7 +1545,48 @@ func (s *Session) add(e Entry) {
 				s.dispatches[v.Target] = append(s.dispatches[v.Target], v)
 			}
 		}
+	case *DecisionEntry:
+		// A withdrawal says its dispatch was no hand-off, so it is not
+		// one elsewhere in the session either.
+		if d := s.withdrawnDispatch(v); d != nil {
+			s.dispatches[v.Target] = slices.DeleteFunc(s.dispatches[v.Target], func(x *DispatchEntry) bool { return x == d })
+		}
 	}
+}
+
+// withdrawnDispatch returns the dispatch the decision d withdraws, or
+// nil: for a reject carrying withdrawn, the call's latest decision,
+// dispatch or output above it, when that is a dispatch the index holds.
+// The walk stops at the call's first entry that names it.
+func (s *Session) withdrawnDispatch(d *DecisionEntry) *DispatchEntry {
+	if !d.Withdrawn || d.Verdict != VerdictReject || len(s.dispatches[d.Target]) == 0 {
+		return nil
+	}
+	for id := d.Parent; id != "" && id != d.Target; {
+		e, ok := s.byID[id]
+		if !ok {
+			return nil
+		}
+		switch v := e.(type) {
+		case *DispatchEntry:
+			if v.Target == d.Target {
+				if slices.Contains(s.dispatches[d.Target], v) {
+					return v
+				}
+				return nil
+			}
+		case *DecisionEntry:
+			if v.Target == d.Target {
+				return nil
+			}
+		case *ItemEntry:
+			if out, ok := v.Item.(*openresponses.FunctionCallOutput); ok && out.CallID == d.CallID {
+				return nil
+			}
+		}
+		id = e.Base().Parent
+	}
+	return nil
 }
 
 // Dispatches returns the dispatches for the call whose function call is

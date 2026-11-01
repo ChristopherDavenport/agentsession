@@ -86,12 +86,15 @@ const (
 	AttrDecisionBy     = "agentsession.decision.by"
 	AttrDecisionReason = "agentsession.decision.reason"
 	AttrVerdict        = "agentsession.decision.verdict"
-	AttrOutcomeKind    = "agentsession.outcome.kind"
-	AttrOutcomeTarget  = "agentsession.outcome.target"
-	AttrOutcomeScore   = "agentsession.outcome.score"
-	AttrOutcomePass    = "agentsession.outcome.pass"
-	AttrLinkRel        = "agentsession.link.rel"
-	AttrLinkSession    = "agentsession.link.session"
+	// AttrWithdrawn marks a decision event for a reject that withdrew the
+	// hand-off it follows (RFC 0001 0.14): the tool never ran.
+	AttrWithdrawn     = "agentsession.decision.withdrawn"
+	AttrOutcomeKind   = "agentsession.outcome.kind"
+	AttrOutcomeTarget = "agentsession.outcome.target"
+	AttrOutcomeScore  = "agentsession.outcome.score"
+	AttrOutcomePass   = "agentsession.outcome.pass"
+	AttrLinkRel       = "agentsession.link.rel"
+	AttrLinkSession   = "agentsession.link.session"
 	// AttrLinkURL, AttrLinkTask and AttrLinkContext name a callee in
 	// another system, reached over a protocol such as A2A, on a
 	// subsession or peer link; AttrLinkTarget is the link a cancel
@@ -345,6 +348,9 @@ type callState struct {
 	// the entry ID of the latest.
 	dispatches   int
 	lastDispatch string
+	// lastIsDispatch reports that the call's latest decision, dispatch
+	// or output is a dispatch, which a withdrawal may follow.
+	lastIsDispatch bool
 	// closed reports that a run end closed the call's last span with
 	// the call still pending, in the state closedState, so finish opens
 	// another only when a later decision changed what the path reads.
@@ -356,6 +362,11 @@ type callState struct {
 	// names, for the span the call's next hand-off opens.
 	callee []attribute.KeyValue
 }
+
+// CallStateWithdrawn is the call state a tool span carries when a
+// withdrawal ended it: the hand-off it covers was never made, and the
+// call is what it was before it.
+const CallStateWithdrawn = "withdrawn"
 
 // Links a tool span carries to an earlier span of the same call: the
 // hand-off it repeats, or the hand-off whose outcome it records.
@@ -463,6 +474,7 @@ func (t *tracker) prime(path []agentsession.Entry) {
 				c.dispatched, c.held = true, false
 				c.dispatches++
 				c.lastDispatch = v.ID
+				c.lastIsDispatch = true
 			}
 		}
 	}
@@ -502,7 +514,16 @@ func (t *tracker) forget(c *callState) {
 	}
 }
 
-func (t *tracker) noteDecision(c *callState, d *agentsession.DecisionEntry) {
+func (t *tracker) noteDecision(c *callState, d *agentsession.DecisionEntry) (withdrawn bool) {
+	if d.Verdict == agentsession.VerdictReject && d.Withdrawn && c.lastIsDispatch {
+		// A withdrawal: the dispatch it follows was no hand-off, and it
+		// is no decision, so the call is what it was before it.
+		c.dispatches--
+		c.dispatched = c.dispatches > 0
+		c.lastIsDispatch = false
+		return true
+	}
+	c.lastIsDispatch = false
 	// A call is held while its latest decision is a hold, so any later
 	// decision answers the hold.
 	c.held = d.Verdict == agentsession.VerdictHold
@@ -518,6 +539,7 @@ func (t *tracker) noteDecision(c *callState, d *agentsession.DecisionEntry) {
 	if len(d.Args) > 0 && d.Verdict != agentsession.VerdictAnswer {
 		c.rewritten = true
 	}
+	return false
 }
 
 // entry feeds one entry, in path order, to the open spans.
@@ -725,8 +747,21 @@ func (t *tracker) decision(d *agentsession.DecisionEntry, ts time.Time) {
 	if c == nil {
 		return
 	}
-	t.noteDecision(c, d)
+	withdrawn := t.noteDecision(c, d)
 	attrs := []attribute.KeyValue{attribute.String(AttrEntryID, d.ID), attribute.String(AttrVerdict, d.Verdict)}
+	if withdrawn {
+		// The hand-off's span ends at its withdrawal, without an error:
+		// the tool never ran. A later hand-off opens a span of its own.
+		attrs = append(attrs, attribute.Bool(AttrWithdrawn, true))
+		if c.span != nil {
+			c.span.AddEvent(EventDecision, trace.WithTimestamp(ts), trace.WithAttributes(attrs...))
+			c.span.SetAttributes(attribute.String(AttrCallState, CallStateWithdrawn))
+			c.span.End(trace.WithTimestamp(ts))
+			c.span = nil
+		}
+		t.spans[d.ID] = trace.SpanContext{}
+		return
+	}
 	if d.By != "" {
 		attrs = append(attrs, attribute.String(AttrDecisionBy, d.By))
 	}
@@ -808,6 +843,7 @@ func (t *tracker) dispatch(d *agentsession.DispatchEntry, ts time.Time) {
 	}
 	c.dispatched, c.held = true, false
 	c.dispatches++
+	c.lastIsDispatch = true
 	var prev trace.SpanContext
 	if c.lastDispatch != "" {
 		prev = t.spans[c.lastDispatch]
@@ -892,6 +928,11 @@ func (t *tracker) output(callID string, e *agentsession.ItemEntry, ts time.Time)
 		state = "answered"
 	}
 	c.span.SetAttributes(attribute.String(AttrCallState, state))
+	if e.Failed {
+		// The output says the tool failed, or that the harness gave the
+		// call up: the call completed, and its span reports the failure.
+		c.span.SetStatus(codes.Error, "the call failed")
+	}
 	t.spans[e.ID] = c.span.SpanContext()
 	c.span.End(trace.WithTimestamp(ts))
 	t.forget(c)

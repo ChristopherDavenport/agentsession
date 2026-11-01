@@ -489,6 +489,20 @@ One conversation item in the payload profile.
 - `source` MAY carry the trigger of an item a person or another system
   sent, in the shape `queued` defines, and `queued_from` MAY name the
   `queued` entry the item was accepted as.
+- `failed` MAY be `true` on an `item` entry holding a
+  `function_call_output`, since 0.14: the tool reported failure, or the
+  harness gave the call up (cut it off, timed it out, could not learn
+  its outcome), and the output describes it. It is a record member: the
+  item is sent as it is, the member reaches no request, and the output
+  ends the call as any output does. A reader maps it to its protocol's
+  failure state, such as a tool span's error status or a replayed
+  call's `failed`. Its absence says nothing: an output without it does
+  not say the call succeeded. A writer writes it on no other item; a
+  reader keeps `failed` on another item, or holding anything but
+  `true`, as a member it does not know. A model that has to see the
+  failure sees it in the output; a member the model sees, as Claude's
+  `is_error`, belongs inside the item under the payload profile's
+  extension mechanism, not here.
 - A `function_call`'s `call_id` MUST NOT be empty and MUST differ from
   that of every other `function_call` in the session, on any branch: a
   `function_call_output`, a `link`, a `custom` entry, a run end's
@@ -1076,7 +1090,11 @@ A call was handed to its tool.
 
 `call_id` and `target` are required; `target` is the `item` entry
 holding the `function_call`, on the path before the `dispatch`, and
-`call_id` MUST be that call's. The `target` names the call. A call with
+`call_id` MUST be that call's. The `target` names the call. A
+`dispatch` a withdrawal follows, as `decision` defines it, was no
+hand-off: a reader reads the path as though neither it nor the
+withdrawal were there, and what this section says of a call's
+dispatches is said of the others. A call with
 a `dispatch` and no `function_call_output` on the path may have run: its
 side effect may have happened. It is **in flight**, handed to its tool
 when the record stopped, unless the latest `decision` after its last
@@ -1158,10 +1176,11 @@ A call's fate was decided outside the tool.
     `dispatch` and no other `decision` ever follow, and a
     `function_call_output` for the call follows that carries `reason`.
     A writer writes `reject` only for a call with no `dispatch` and no
-    output on the path, and SHOULD NOT for one with a `dispatch` for it
-    elsewhere in the session, which may have run and is ended by
-    `answer`; a reader accepts such a `reject`, which 0.9 left as the
-    only way to end that call without a second `dispatch`. A
+    output on the path, save a withdrawal, below, and SHOULD NOT for one
+    with a `dispatch` for it elsewhere in the session, which may have
+    run and is ended by `answer`; a reader accepts such a `reject`,
+    which 0.9 left as the only way to end that call without a second
+    `dispatch`. A
     `reject` with no output after it is a call the harness refused and
     has not yet written the output of, since the record stopped between
     the two; the harness that continues the path writes that output and
@@ -1220,6 +1239,29 @@ A call's fate was decided outside the tool.
   tool ran or runs with passes over an `answer`'s `args`, which are
   read from the `answer` alone, so an output the harness wrote never
   reads as a rewrite of the call.
+
+A **withdrawal**, since 0.14, is a `reject` carrying `withdrawn: true`
+that directly follows a `dispatch` of its call: the latest `decision`,
+`dispatch` or `function_call_output` of the call on the path before it
+is that `dispatch`, and entries of other calls or of no call may stand
+between them. A writer that wrote a call's `dispatch` and then did not
+hand the call to its tool, as when a subscriber to the hand-off refused
+it once the `dispatch` was durable, writes a withdrawal directly after
+that `dispatch`, before any output; its `reason` says why. A reader
+reads that `dispatch` as a hand-off never made and the withdrawal as no
+decision: the call is what it was before the `dispatch`, which for a
+call with no other `dispatch` on the path, in a file whose header names
+`dispatch` in `records`, is never started, and every rule of this
+section and of `dispatch` applies to what follows as though neither
+entry were there. Another `dispatch` may follow, as may any decision
+the call could take before the withdrawn one, or its output. A `reject`
+is the verdict so that a reader that does not know the member reads the
+call as one that did not run, never as one in flight. A writer MUST NOT
+write `withdrawn` anywhere else: a reader reads a `reject` carrying it
+that follows no `dispatch` of its call directly as a `reject` without
+it, which after a `dispatch` is the `reject` this section forbids, and
+keeps the member on another verdict, or holding anything but `true`, as
+a member it does not know.
 
 A `decision` is a lifecycle fact and carries no score. A judgement of
 how something went is an `outcome`.
@@ -2029,7 +2071,10 @@ status, unless a `decision` after the `dispatch` holds or answers it;
 a hand-off still open when the record stops ends there the same way. A
 later `dispatch` for the call or its output opens a span of its own,
 linked to the hand-off's; a second hand-off within one run ends the
-first in flight at the moment of the second.
+first in flight at the moment of the second. A withdrawn hand-off's span
+ends at its withdrawal, without an error status, since the tool never
+ran, and an output marked `failed` ends its call's span with an error
+status.
 
 ## Versioning
 
@@ -2130,7 +2175,10 @@ checkpoint and cleared by `[]`, a queued `trigger` with members of its
 own drained into an `item`'s `source`, a list of omitted parts naming
 runs of the list in force by `keep` across deltas that move a part
 across a budget, beside a `replace` and a compaction's checkpoint that
-write it whole, the recomputed `reason` for every `run` end, a `run` written `resume`
+write it whole, the recomputed `reason` for every `run` end, a call whose `dispatch` a
+withdrawal follows after another call's `dispatch`, read as never
+started at its run's end and dispatched again by the next, beside an
+output marked `failed`, a `run` written `resume`
 whose segment holds nothing, beside one that adds a message and is
 reported, a hand-back naming every instructions part by `hash`, those
 out of force among them, and its omitted list by `of`, a two-model session
@@ -2148,7 +2196,9 @@ a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
 before the base that is not on the path to it, a `dispatch` that follows a
 `reject`, an `answer` or the call's output, a decision that follows a
-`reject`, a `reject` that follows a `dispatch` or an output, a `target`
+`reject`, a `reject` that follows a `dispatch` or an output, a
+withdrawal that a decision or the output separates from its `dispatch`,
+a `target`
 naming another call, a repeated `call_id`, an empty `call_id`, a `run`
 start whose `source` is not the shape of its segment, a response whose
 recorded hash is the request an `omit` in force leaves an item out of,
@@ -2208,6 +2258,20 @@ reader of 0.13 refuses those files until it is upgraded.
   a substitution. The substitution rule already compared every member
   of `workspace`, so no earlier file reads differently, and a 0.13 file
   that names the host in `ref` stays valid.
+
+- `item` defines `failed`, `true` on an output's entry whose call
+  failed or was given up. A reader of 0.13 could not tell such a call
+  from one that succeeded: the output's text says so by a harness's
+  convention, which no reader can rely on.
+
+- A `reject` carrying `withdrawn` directly after a call's `dispatch`
+  withdraws that hand-off, and is the one `reject` a `dispatch` may
+  precede. A reader of 0.13 read a call whose hand-off a subscriber
+  refused after the `dispatch` was durable as in flight, and a harness
+  that knew better recorded it in a member of its own that no other
+  reader knew. A reader of 0.13 reports a withdrawal as a `reject`
+  after a `dispatch`, and refuses a file of 0.14 by its header in any
+  case.
 
 ## Changes since 0.12
 
