@@ -936,8 +936,11 @@ Replaces earlier context with a summary.
  "config":{…full config…},"tokens_before":50000,"usage":{…}}
 ```
 
-- `first_kept` MUST name an entry on the path. Entries before it are
-  excluded from context; entries from it up to this entry are kept.
+- `first_kept` MUST name an entry on the path before this one, since
+  0.14 in those words: a compaction cannot name itself. Entries before
+  it are excluded from context; entries from it up to this entry are
+  kept. A reader refuses to build a context through a compaction whose
+  `first_kept` names no entry before it on the path.
 - `summary` is an item. Under the Open Responses profile a server-side
   compaction stores the returned `compaction` item verbatim; a local
   summary is a `message` item.
@@ -1963,10 +1966,10 @@ A redactor:
 
 - MUST write a valid session: every entry valid for its type, every
   `parent` an entry the file holds or null, and the base rule held.
-  When it leaves an entry out, the entries under it hang from what it
-  kept in that entry's place, and a member that named it names that or
-  is removed, so that no member names an entry of this file the file
-  does not hold;
+  When it leaves an entry out, the entries under it hang from what
+  stands in that entry's place, and a member that named it names that
+  or is removed, member by member as Leaving entries out says, so that
+  no member names an entry of this file the file does not hold;
 - MUST compute every content hash and `id` over what it wrote, and
   rewrite `parent` and every entry-naming member to the IDs of the
   entries it wrote — `parents` into this file, `target`, `first_kept`,
@@ -2021,6 +2024,79 @@ report its hashes as verifying the original, and holds a redacted entry
 to every rule it holds any entry to, its `request_hash` among them, so
 a `request_hash` that does not match is a fault in a redacted session as
 in any other.
+
+### Leaving entries out
+
+A redactor that leaves an entry of the original out writes nothing for
+it, or a placeholder: an entry of its choosing, such as a `custom`
+entry saying that a block was redacted, which stands for a run of
+left-out entries on one path and carries their positions in
+`redacted`. A placeholder for one left-out entry carries `[n]`, since a
+range needs `from` below `to`. A position records what an entry was
+made from, not how: `[n]` on a placeholder and on an entry rewritten
+from entry `n` are one mark, and the entry's own body says which it is.
+
+What **stands in the place** of a left-out entry is the placeholder
+whose `redacted` covers its position on that path, when the redactor
+wrote one, and otherwise the nearest entry above it on its path that
+the redaction wrote, or the universal root when it wrote none. A member
+that named the left-out entry then follows the rule for its kind:
+
+- A member naming one predecessor names what stands in the left-out
+  entry's place: `parent`; the `target` of a `label`, an `outcome`, a
+  `judged_by` link and a cancel notice; a `branch_summary`'s `from`;
+  `images`' `before` in a `config` and in a compaction's checkpoint;
+  `instructions_omitted`'s `of`; and a compaction's `first_kept`, by the
+  rule below. A redactor MUST NOT remove such a member. Where the
+  universal root stands in the place and the member may not name it,
+  since only `parent` and a `leaf` label's `target` do, the redactor
+  leaves the entry holding the member out too, or does not redact. What
+  stands in the place of the `config` entry an `of` names holds no
+  omitted list, so its `keep` then names no part a reader can rebuild,
+  as `of` says; a redactor that would keep those parts writes them
+  whole instead.
+- A member naming one element of a set loses that element: a `parents`
+  element; an ID in `omit`'s `items` and in `outputs`' `items`, in a
+  `config` and in a compaction's checkpoint; and an `item`'s
+  `queued_from` and `from_link`, which are removed. A list so emptied is
+  removed, and an `omit` left with no member is removed with it, since
+  an empty `omit` in a `config` clears what is in force rather than
+  adding nothing. An `outputs` whose `items` is removed keeps its
+  `text`, which it still sets.
+- An entry of a call goes with the call: a redactor that leaves out a
+  `function_call`'s entry leaves out every `dispatch`, `decision` and
+  `function_call_output` entry of that call, a withdrawal and an output
+  marked `failed` among them, since each says what became of a call the
+  file no longer holds. A withdrawal also goes with the `dispatch` it
+  follows, which it would otherwise not follow.
+- `first_kept` names an entry before the compaction on its path, as
+  `compaction` says. When the redaction leaves that entry out, what
+  stands in its place is the placeholder covering it or, with none, the
+  first entry the redaction wrote after it on the path before the
+  compaction: the entries above it were folded, and naming one would put
+  it back into every later request. A redaction that leaves out every
+  entry from `first_kept` up to the compaction MUST write a placeholder
+  for them, for `first_kept` to name.
+- A `run` end whose segment the redaction changed MUST carry the
+  `reason` and `pending` its redacted segment reads, computed as `run`
+  says, unless its `reason` is a written value, `error` or
+  `interrupted`, which stands; or the redaction leaves the run end out.
+  `pending` loses every call the redaction left out, as a set does.
+- A `queued` entry goes with the `item` that drained it: a redactor that
+  leaves out an `item` entry whose `queued_from` names a `queued` entry
+  leaves out that `queued` entry too, since a `queued` entry no `item`
+  names reads as an input the harness still owes. Leaving out the
+  `queued` entry and keeping the `item` removes the item's
+  `queued_from`, as above.
+- A compaction's `pinned` items are copies of items of entries before
+  `first_kept`, and a copy says what its source says. A redactor that
+  removes or replaces a pin's source, the item or any part of it, MUST
+  do the same to the pin, and one that leaves out every entry a pin was
+  copied from removes the pin.
+
+Leaving an entry out never leaves its children without a parent, and
+the members of the entries it keeps name only entries it wrote, so a
+redacted session verifies as any session does.
 
 ### The redacted session
 
@@ -2322,7 +2398,7 @@ dispatches and decisions, environment, outcome and cross-session links.
 ## Changes since 0.13
 
 Optional members, two relaxed rules, the form a sidecar session's
-request hash covers, and the universal root. A 0.13 file is a 0.14
+request hash covers, the universal root, and the rules of redaction. A 0.13 file is a 0.14
 file that holds none of the new members. No hash changes. Like 0.12's, the new rules turn on the members an entry
 carries and not on the header, so a reader of 0.14 reads each member
 below by its form in a file of any minor, and raising a file's
@@ -2382,6 +2458,19 @@ reader of 0.13 refuses those files until it is upgraded.
   a 0.13 file that held one under another meaning, which it was free
   to, rebuilds requests differently under 0.14, and no writer of this
   library wrote one.
+
+- Redaction says what leaving entries out means, member by member
+  (Leaving entries out): what stands in a left-out entry's place, which
+  members name it and which lose it, which entries go with a call, a
+  `dispatch` or a drained `queued` entry, how a placeholder for one
+  entry is marked, and what a run end and a pin become. 0.13 said only
+  that a member "names that or is removed", and two redactors could
+  answer differently and both be valid. Two rules tighten the format: a
+  redactor that changes a pin's source changes the pin, and `first_kept`
+  names an entry before its compaction, which the context algorithm
+  already required; a redaction that leaves out every entry from
+  `first_kept` to the compaction writes a placeholder for it to name.
+  No file a reader of 0.13 accepted reads differently.
 
 - Request hash says which form a sidecar session hashes: the request
   with each `sidecar:` URL as recorded, while the provider is sent the

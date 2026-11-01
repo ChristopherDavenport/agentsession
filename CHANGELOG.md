@@ -7,6 +7,25 @@ versions may break the API.
 
 ## Unreleased
 
+- **What leaving entries out means, member by member (RFC 0001 0.14,
+  Leaving entries out).** A left-out entry's place is the placeholder
+  covering it, or else the nearest entry kept above it; a member naming
+  one predecessor (`parent`, a `target`, `from`, `first_kept`, `images`'
+  `before`, `of`) names that place, and a member naming one element of
+  a set (a `parents` element, an `omit` or `outputs` item, `queued_from`,
+  `from_link`) loses the element. A call's dispatches, decisions and
+  outputs go with it, a drained `queued` entry with its item, a run end
+  is recomputed or left out, and a pin follows its source. Two rules
+  tighten: a redactor that changes a pin's source changes the pin, and
+  `first_kept` names an entry before its compaction, with a placeholder
+  written when a redaction leaves every entry from it out. **Added:
+  `ErrNoPlace` and `Remapped.Dropped`**; a `Remap` callback that returns
+  an empty ID says the entry was left out with nothing in its place, and
+  `RemapRefs` removes the set members that named it, removes a list it
+  empties and an `omit` left naming nothing (an empty one would clear
+  what is in force), points `parent` at the root, and refuses any other
+  member with `ErrNoPlace`. (#253)
+
 - **Which form a sidecar session's request hash covers (RFC 0001 0.14,
   Request hash).** The request as recorded, each `sidecar:` URL as the
   item holds it, which is the only form a reader can rebuild; a writer

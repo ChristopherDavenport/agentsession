@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -736,5 +737,106 @@ func TestRemapRefsSortsExtensionParents(t *testing.T) {
 	}
 	if e.Base().Parents[0].Entry != "o-a" {
 		t.Error("the input changed")
+	}
+}
+
+// leftOutRemap is prefixRemap with every entry ID starting gone- left out
+// and nothing standing in its place.
+var leftOutRemap = Remap{
+	Entry: func(session, entry string) (string, bool) {
+		if strings.HasPrefix(entry, "gone-") {
+			return "", true
+		}
+		return prefixRemap.Entry(session, entry)
+	},
+	Session: prefixRemap.Session,
+}
+
+// TestRemapRefsLeftOut: RFC 0001's rules for leaving entries out, member
+// by member. A member naming one element of a set loses it, a list so
+// emptied goes, and an omit left naming nothing goes with it, since an
+// empty one would clear what is in force; parent names the universal
+// root; and a member naming one predecessor, which must name what stands
+// in the place, is refused.
+func TestRemapRefsLeftOut(t *testing.T) {
+	msg := `{"type":"message","role":"user","content":[]}`
+	for _, tt := range []struct {
+		name, line, want string
+		dropped          []string
+	}{
+		{
+			"item: a parents element, queued_from and from_link",
+			`{"type":"item","id":"x","parent":"o-p",` + tsLine + `,"parents":[{"entry":"gone-a"},{"entry":"o-b"}],"item":` + msg + `,"queued_from":"gone-q","from_link":"gone-l"}`,
+			`{"type":"item","id":"x","parent":"n-p",` + tsLine + `,"parents":[{"entry":"n-b"}],"item":` + msg + `}`,
+			[]string{"/from_link", "/parents/0/entry", "/queued_from"},
+		},
+		{
+			"item: every parents element, and parent to the root",
+			`{"type":"item","id":"x","parent":"gone-p",` + tsLine + `,"parents":[{"entry":"gone-a","session":"s-1"}],"item":` + msg + `}`,
+			`{"type":"item","id":"x","parent":null,` + tsLine + `,"item":` + msg + `}`,
+			[]string{"/parents/0/entry"},
+		},
+		{
+			"config: an omit that only added what was left out",
+			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"model":"m","omit":{"items":["gone-1","gone-2"]}}`,
+			`{"type":"config","id":"x","parent":"n-p",` + tsLine + `,"model":"m"}`,
+			[]string{"/omit/items/0", "/omit/items/1"},
+		},
+		{
+			"config: omit keeps the rest, and outputs its text",
+			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"reasoning":"other_models","items":["o-1","gone-2","o-3"],"outputs":{"text":"t","items":["gone-4"]}}}`,
+			`{"type":"config","id":"x","parent":"n-p",` + tsLine + `,"omit":{"reasoning":"other_models","items":["n-1","n-3"],"outputs":{"text":"t"}}}`,
+			[]string{"/omit/items/1", "/omit/outputs/items/0"},
+		},
+		{
+			"config: an omit that clears stays",
+			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{}}`,
+			`{"type":"config","id":"x","parent":"n-p",` + tsLine + `,"omit":{}}`,
+			nil,
+		},
+		{
+			"compaction: the checkpoint's omit",
+			`{"type":"compaction","id":"x","parent":"o-p",` + tsLine + `,"first_kept":"o-f","summary":` + msg + `,"config":{"model":"m","omit":{"items":["gone-i"],"outputs":{"text":"t","items":["o-j","gone-k"]}}}}`,
+			`{"type":"compaction","id":"x","parent":"n-p",` + tsLine + `,"first_kept":"n-f","summary":` + msg + `,"config":{"model":"m","omit":{"outputs":{"text":"t","items":["n-j"]}}}}`,
+			[]string{"/config/omit/items/0", "/config/omit/outputs/items/1"},
+		},
+		{
+			"extension entry: its parents",
+			`{"type":"x:thing","id":"x","parent":"o-p",` + tsLine + `,"parents":[{"entry":"gone-a"},{"entry":"o-b"}]}`,
+			`{"type":"x:thing","id":"x","parent":"n-p",` + tsLine + `,"parents":[{"entry":"n-b"}]}`,
+			[]string{"/parents/0/entry"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r, err := RemapRefs(entryOf(t, tt.line), leftOutRemap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := canonicalEntry(t, r.Entry), withValues(t, tt.want, nil); got != want {
+				t.Errorf("remapped\n got %s\nwant %s", got, want)
+			}
+			var dropped []string
+			for _, d := range r.Dropped {
+				dropped = append(dropped, d.At)
+			}
+			sort.Strings(dropped)
+			if !slices.Equal(dropped, tt.dropped) {
+				t.Errorf("Dropped %v, want %v", dropped, tt.dropped)
+			}
+		})
+	}
+	for _, line := range []string{
+		`{"type":"label","id":"x","parent":"o-p",` + tsLine + `,"target":"gone-t","label":"l"}`,
+		`{"type":"outcome","id":"x","parent":"o-p",` + tsLine + `,"kind":"eval","target":"gone-t"}`,
+		`{"type":"branch_summary","id":"x","parent":"o-p",` + tsLine + `,"from":"gone-f","summary":` + msg + `}`,
+		`{"type":"compaction","id":"x","parent":"o-p",` + tsLine + `,"first_kept":"gone-f","summary":` + msg + `,"config":{"model":"m"}}`,
+		`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"images":{"before":"gone-b","placeholder":"p"}}}`,
+		`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"instructions_omitted":[{"keep":1,"of":"gone-c"}]}`,
+		`{"type":"dispatch","id":"x","parent":"o-p",` + tsLine + `,"call_id":"c","target":"gone-call"}`,
+		`{"type":"link","id":"x","parent":"o-p",` + tsLine + `,"rel":"peer","session":"s-1","call_id":"c","target":"gone-l","cancel":"sent"}`,
+	} {
+		if _, err := RemapRefs(entryOf(t, line), leftOutRemap); !errors.Is(err, ErrNoPlace) {
+			t.Errorf("%s: err %v, want ErrNoPlace", line, err)
+		}
 	}
 }
