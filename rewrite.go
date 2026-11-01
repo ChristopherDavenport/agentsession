@@ -75,6 +75,21 @@ type Rewriter struct {
 	settings map[string]Settings
 	// unmet lists the parts written under a hash whose text was not met.
 	unmet []UnmetPart
+	// alongside reports whether a session is redacted alongside the one
+	// being rewritten, by the same redaction; nil for none.
+	alongside func(session string) bool
+}
+
+// Alongside tells the Rewriter which sessions are redacted alongside
+// the one it rewrites, by the same redaction, and returns it, for
+// chaining. A copied item's copied_from entry names an entry of such a
+// session, which the redaction changed as it changes the copy, so the
+// Rewriter keeps it for a remap to point at that entry's redaction; it
+// removes it from a changed copy of any other session's entry, which
+// then names no equal item (RFC 0001, Every redacted entry).
+func (r *Rewriter) Alongside(sessions func(session string) bool) *Rewriter {
+	r.alongside = sessions
+	return r
 }
 
 // UnmetPart is an instruction part a [Rewriter] wrote that the path it
@@ -370,7 +385,7 @@ func (r *Rewriter) rewriteCore(e Entry) (Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	if it, ok := e.(*ItemEntry); ok && it.CopiedFrom != nil && it.CopiedFrom.Entry != "" {
+	if it, ok := e.(*ItemEntry); ok && it.CopiedFrom != nil && it.CopiedFrom.Entry != "" && (r.alongside == nil || !r.alongside(it.CopiedFrom.Session)) {
 		dropCopiedEntry(root, out)
 	}
 	if hasParts {
@@ -387,7 +402,8 @@ func (r *Rewriter) rewriteCore(e Entry) (Entry, error) {
 // dropCopiedEntry removes copied_from's entry from out when the rewrite
 // changed the item, which then no longer equals the item of the entry
 // it names; copied_from keeps its session, since the item is still
-// another session's (RFC 0001, Every redacted entry).
+// another session's (RFC 0001, Every redacted entry). A copy of a
+// session redacted alongside keeps it: see [Rewriter.Alongside].
 func dropCopiedEntry(before, out map[string]any) {
 	was, err1 := json.Marshal(before["item"])
 	now, err2 := json.Marshal(out["item"])

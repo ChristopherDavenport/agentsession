@@ -2203,9 +2203,12 @@ A redactor:
   to it: `parent_session`, a `parents` entry into that session, a
   `link`'s `session` and an item's `copied_from`. A redactor MUST NOT
   remove `copied_from` from a copied call or its output, since without
-  it the call reads as this session's and fails the record rules; when
-  it changes an item that carries one, it removes the member's entry,
-  which then no longer names an equal item, and keeps its session. A
+  it the call reads as this session's and fails the record rules. When
+  it changes an item that carries one and does not hold the source
+  session's redaction, made by the same redaction, it removes the
+  member's entry, which then no longer names an equal item, and keeps
+  its session; when it holds it, the entry named was changed alike,
+  and it rewrites both members to that redaction, as above. A
   link's `target` names an entry of this session,
   so it is rewritten as the members above are. A redaction of a whole
   store holds a redaction of every session in it, and so re-points

@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // hideSecret is the rewrite the tests redact with.
@@ -312,6 +314,8 @@ type redaction struct {
 	back    *Session
 	entries []string          // the redacted file's entry lines
 	byOrig  map[string]string // each original entry's id to its redacted line
+	orig    string            // the original session's id
+	ids     map[string]string // each original entry's id to its redacted id
 }
 
 // redact makes a redaction of orig with the exported API alone, as a
@@ -325,16 +329,29 @@ type redaction struct {
 // entry reads back redacted from its position, and every response
 // whose original recorded a request_hash verifies with Verify, while
 // one whose original recorded none still has none.
-func redact(t *testing.T, orig *Session, f func(string) string, profile string) redaction {
+func redact(t *testing.T, orig *Session, f func(string) string, profile string, alongside ...redaction) redaction {
 	t.Helper()
 	oh := orig.Header()
 	ids := map[string]string{}
+	with := map[string]redaction{}
+	for _, a := range alongside {
+		with[a.orig] = a
+	}
 	remap := Remap{Entry: func(session, entry string) (string, bool) {
+		if a, ok := with[session]; ok {
+			id, ok := a.ids[entry]
+			return id, ok
+		}
 		if session != "" && session != oh.ID {
 			return "", false // not redacted alongside
 		}
 		id, ok := ids[entry]
 		return id, ok
+	}, Session: func(id string) (string, bool) {
+		if a, ok := with[id]; ok {
+			return a.back.ID(), true
+		}
+		return "", false
 	}}
 	h := oh
 	h.ID = RedactedSessionID(oh.ID, profile)
@@ -342,7 +359,7 @@ func redact(t *testing.T, orig *Session, f func(string) string, profile string) 
 	h.Redacted = true
 	h.RedactedFrom = &RedactedFrom{Session: oh.ID, Profile: profile}
 	red := New(h)
-	rw := NewRewriter(f)
+	rw := NewRewriter(f).Alongside(func(session string) bool { _, ok := with[session]; return ok })
 	var order []string
 	for i, e := range orig.Entries() {
 		old := e.Base().ID
@@ -426,7 +443,7 @@ func redact(t *testing.T, orig *Session, f func(string) string, profile string) 
 			t.Errorf("response %d of the redaction does not verify: %v", i, err)
 		}
 	}
-	out := redaction{back: back, entries: strings.Split(strings.TrimSuffix(entries, "\n"), "\n"), byOrig: map[string]string{}}
+	out := redaction{back: back, entries: strings.Split(strings.TrimSuffix(entries, "\n"), "\n"), byOrig: map[string]string{}, orig: oh.ID, ids: ids}
 	for i, old := range order {
 		out.byOrig[old] = out.entries[i]
 	}
@@ -896,5 +913,77 @@ func TestRewriterUnmetCheckpoint(t *testing.T) {
 	want := []UnmetPart{{Entry: "x", At: "/config/instructions_parts/1/hash", ID: "b"}, {Entry: "x", At: "/config/instructions_parts/2/keep"}}
 	if got := r.Unmet(); !slices.Equal(got, want) {
 		t.Errorf("Unmet = %+v, want %+v", got, want)
+	}
+}
+
+// TestRedactionCopiedAlongside: a redaction that changes a copied item's
+// text keeps copied_from's entry when the source session is redacted
+// alongside, by the same redaction, and remaps it and the session to
+// their redactions, where the copy still holds the entry's item; without
+// the source alongside it removes the entry and keeps the session as
+// written. Trust labels the rewrite would change stay as they are.
+func TestRedactionCopiedAlongside(t *testing.T) {
+	f := func(v string) string {
+		return strings.NewReplacer("design", "plan", "untrusted", "UNTRUSTED", "private", "PRIVATE").Replace(v)
+	}
+	parent, child := copiedFixture(t)
+	redParent := redact(t, parent, f, "test.words@1")
+	with := redact(t, child, f, "test.words@1", redParent)
+	if err := with.back.VerifyCopies(func(id string) (*Session, error) {
+		if id == redParent.back.ID() {
+			return redParent.back, nil
+		}
+		return nil, fmt.Errorf("resolved %s, not the redacted parent", id)
+	}); err != nil {
+		t.Errorf("redacted alongside: %v", err)
+	}
+	changed := 0
+	for _, e := range with.back.Entries() {
+		it, ok := e.(*ItemEntry)
+		if !ok || it.CopiedFrom == nil {
+			continue
+		}
+		if it.CopiedFrom.Session != redParent.back.ID() {
+			t.Errorf("%s names session %s", it.ID, it.CopiedFrom.Session)
+		}
+		if m, ok := it.Item.(*openresponses.Message); ok && strings.Contains(m.Content.Text(), "plan") {
+			changed++
+			if it.CopiedFrom.Entry == "" {
+				t.Errorf("the changed copy %s lost its entry though its source was redacted alongside", it.ID)
+			}
+		}
+	}
+	if changed != 1 {
+		t.Fatalf("%d changed copies", changed)
+	}
+	alone := redact(t, child, f, "test.words@1")
+	for _, e := range alone.back.Entries() {
+		it, ok := e.(*ItemEntry)
+		if !ok || it.CopiedFrom == nil {
+			continue
+		}
+		m, isMsg := it.Item.(*openresponses.Message)
+		if isMsg && strings.Contains(m.Content.Text(), "plan") && (it.CopiedFrom.Entry != "" || it.CopiedFrom.Session != copiedParentID) {
+			t.Errorf("a changed copy without its source names %+v", it.CopiedFrom)
+		}
+	}
+	trust := redact(t, loadFixture(t, "trust"), f, "test.words@1")
+	labels := map[string]bool{}
+	for _, e := range trust.back.Entries() {
+		var tr *Trust
+		switch v := e.(type) {
+		case *ItemEntry:
+			tr = v.Trust
+		case *CompactionEntry:
+			tr = v.Trust
+		}
+		if tr != nil {
+			for _, l := range tr.Reads {
+				labels[l] = true
+			}
+		}
+	}
+	if !labels[TrustUntrusted] || !labels[TrustPrivate] || labels["UNTRUSTED"] || labels["PRIVATE"] {
+		t.Errorf("the redacted trust labels are %v", labels)
 	}
 }

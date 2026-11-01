@@ -26,7 +26,9 @@ versions may break the API.
   copied, and an item copied from its own session (`ErrBadCopiedFrom`);
   `VerifyRecords` reports each. The context hash leaves the member out;
   `RemapRefs` maps its `entry` as a reference into its `session`, and a
-  `Rewriter` that changes a copied item removes its `entry`. ATIF marks
+  `Rewriter` that changes a copied item removes its `entry` unless
+  `Rewriter.Alongside` says the source session is redacted alongside,
+  when the remap points it at the source's redaction. ATIF marks
   copied steps `is_copied_context` with no `model_name`, metrics or
   `llm_call_count`, carries `copied_from` under `extra.agentsession`, and
   counts no copied step in `total_steps`; otel gives a copied call no
@@ -36,7 +38,7 @@ versions may break the API.
   a copy whose item or trust differs from the entry it names
   (`ErrCopyMismatch`). **Added: `CopiedFrom`, `ItemEntry.CopiedFrom`,
   `Call.Copied`, `ErrCopiedCall`, `ErrBadCopiedFrom`,
-  `Session.VerifyCopies`, `ErrCopyMismatch`.**
+  `Session.VerifyCopies`, `ErrCopyMismatch`, `Rewriter.Alongside`.**
 
 - **Delivered inputs (RFC 0001 0.15, `queued`; agentturn#244).** A
   `queued` steer may carry `deliver: true` (`QueuedEntry.Deliver`): an
