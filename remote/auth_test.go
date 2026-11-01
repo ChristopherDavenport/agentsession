@@ -591,7 +591,8 @@ func testNamingABlobGrantsNothing(t *testing.T, st agentsession.Store) {
 }
 
 // TestUnnamedUploadsSwept: a writer's media upload that no session comes
-// to name is removed once older than the server's upload grace, over a
+// to name is removed once older than twice the server's upload grace,
+// the second a margin for a write admitted on the upload, over a
 // store that keeps no objects but holds blobs, as RFC 0003's Objects
 // has every upload collected; one a session names stays. Without it a
 // principal with write scope could fill the store with blobs nothing
@@ -636,12 +637,21 @@ func TestUnnamedUploadsSwept(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			br := st.(agentsession.BlobReader)
+			// Past the grace, a write admitted on the upload may still be
+			// landing: a sweep then spares it.
+			time.Sleep(grace + 50*time.Millisecond)
+			if _, err := c.PutBlob(ctx, []byte("an upload within the margin")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := br.Blob(ctx, stray); err != nil {
+				t.Errorf("an upload a grace old, which a write admitted on it may still name: %v", err)
+			}
 			time.Sleep(grace + 100*time.Millisecond)
 			late, err := c.PutBlob(ctx, []byte("an upload after the grace"))
 			if err != nil {
 				t.Fatal(err)
 			}
-			br := st.(agentsession.BlobReader)
 			if _, err := br.Blob(ctx, stray); !errors.Is(err, agentsession.ErrNoBlob) {
 				t.Errorf("an upload nothing names, past the grace: %v, want ErrNoBlob", err)
 			}

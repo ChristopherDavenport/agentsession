@@ -35,12 +35,17 @@ type BlobReader interface {
 // BlobSweeper is implemented by a store whose blobs RFC 0002's sweep
 // collects (Deletion and retention): SweepBlobs removes each blob that
 // no entry of any session the store holds names, prefixes included, and
-// that was stored, stored again or named by an append longer than grace
-// ago, and returns how many it removed. A blob is retained while a
-// session names it, and grace spares one a write is about to name, as
-// an upload awaits the append, import or push that names it. A store
-// whose blobs are objects among others, as cas's are, collects them in
-// its own sweep instead.
+// that was stored, or stored again, longer than grace ago, and returns
+// how many it removed. A blob is retained while a session names it, and
+// grace spares one a write is about to name, as an upload awaits the
+// append, import or push that names it. A sweep never removes a blob
+// that a write it races names: [MemoryStore] and the sqlite store sweep
+// in one step no write interleaves with, and the jsonl store's append
+// and import restart the grace of each blob they name before they land,
+// and its sweep looks at a blob's age again under a guard the restart
+// takes. The library sweeps only when called; RFC 0003's server calls
+// it for the store it serves. A store whose blobs are objects among
+// others, as cas's are, collects them in its own sweep instead.
 type BlobSweeper interface {
 	SweepBlobs(ctx context.Context, grace time.Duration) (int, error)
 }

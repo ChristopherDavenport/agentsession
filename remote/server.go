@@ -160,7 +160,8 @@ func WithLeaseLimits(def, max time.Duration) Option {
 // unreferenced objects, since an upload is one until a push names it.
 // Over a store that holds blobs and keeps no objects, an
 // [agentsession.BlobSweeper], the server sweeps with it itself: a media
-// upload no session names is removed once older than the grace.
+// upload no session names is removed once older than twice the grace,
+// the second a margin for a write admitted on the upload's reach.
 func WithUploadGrace(d time.Duration) Option {
 	return func(h *Handler) {
 		if d > 0 {

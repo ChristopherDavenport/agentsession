@@ -345,12 +345,14 @@ func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
 
 // sweepUploads collects the uploads no session came to name, over a
 // store that holds blobs and keeps no objects of its own, as RFC 0003's
-// Objects has every upload collected: the store's blob sweep, with the
-// upload grace, at most once a grace, run by the upload that finds the
-// last one a grace old. So what unnamed uploads hold is bounded by what
-// arrives in two graces. A store whose sweep is its operator's, as
-// cas's is, is not swept here. A sweep that fails is logged and the
-// upload goes on.
+// Objects has every upload collected: the store's blob sweep, at most
+// once a grace, run by the upload that finds the last one a grace old.
+// It sweeps with twice the upload grace: a write admitted on an upload's
+// reach, which lasts a grace from the upload, may land after that grace
+// has passed, and the second grace is its margin. So what unnamed
+// uploads hold is bounded by what arrives in three graces. A store whose
+// sweep is its operator's, as cas's is, is not swept here. A sweep that
+// fails is logged and the upload goes on.
 func (h *Handler) sweepUploads(ctx context.Context) {
 	sw, ok := h.blobs.(agentsession.BlobSweeper)
 	if !ok {
@@ -363,7 +365,7 @@ func (h *Handler) sweepUploads(ctx context.Context) {
 	}
 	h.blobSweep.last = time.Now()
 	h.blobSweep.mu.Unlock()
-	if _, err := sw.SweepBlobs(ctx, h.uploadGrace); err != nil {
+	if _, err := sw.SweepBlobs(ctx, 2*h.uploadGrace); err != nil {
 		h.logError(fmt.Errorf("remote: sweeping unnamed uploads: %w", err))
 	}
 }

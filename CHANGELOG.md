@@ -65,10 +65,14 @@ versions may break the API.
   root `BlobSweeper` (`SweepBlobs`)**, implemented by `MemoryStore`,
   `jsonl.Store` and `sqlite.Store` (a `stored` column in `blobs`): it
   removes each blob no session names, prefixes included, older than the
-  grace; storing a blob again, and in jsonl an append naming it,
-  restarts its grace. The remote server runs it with its upload grace
-  over such a store, at most once a grace, from a media upload, and
-  publishes `upload_grace_ms` whenever it takes media. `cas` collects
+  grace, and never one a write it races names: memory and sqlite sweep
+  in one step no write interleaves with, and in jsonl an append or an
+  import naming a blob restarts its grace first, as storing it again
+  does on every store. The remote server runs it over such a store, at
+  most once a grace, from a media upload, with twice its upload grace,
+  so a write admitted on an upload near the grace's end still lands
+  before its blob can go, and publishes `upload_grace_ms` whenever it
+  takes media. `cas` collects
   blobs in its `Sweep`, as before.
 
 - **Every store holds sidecar blobs, and an import takes them (RFC 0002,

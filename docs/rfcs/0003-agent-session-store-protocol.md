@@ -224,10 +224,14 @@ Media).
   `upload_grace_ms`. This holds over every store a server takes
   uploads for: a server whose store holds sidecar media and no other
   objects MUST see its unnamed `media` uploads swept too, as RFC 0002
-  requires of such a store, with at least that grace, and, where no
-  operator sweeps it, sweeps them itself at least once a grace while
-  uploads arrive, so a principal with write scope cannot fill the store
-  with blobs no session names. An object swept before its push (or its
+  requires of such a store, and, where no operator sweeps it, sweeps
+  them itself at least once a grace while uploads arrive, so a
+  principal with write scope cannot fill the store with blobs no
+  session names. Since an upload is reachable by its uploader for a
+  grace from the upload, a write admitted on it can land after that
+  grace has passed, so a sweep MUST give unnamed uploads more than the
+  grace: a margin long enough for any write the server admitted to
+  land (the reference server's is a second grace). An object swept before its push (or its
   import or append) is `missing_object` there.
   Entry-level rules (reserved members, `ts` form, I-JSON, parent) are
   not checked at `PUT`, which sees one object; admission checks them.
@@ -1136,8 +1140,8 @@ by hash. Three things in it are the reference server's:
   memory which principal uploaded each, for `upload_grace_ms`. An
   operator sweeps a cas store with at least that grace; over a store
   that holds blobs and keeps no other objects (memory, JSONL, SQLite)
-  the server runs the store's blob sweep with that grace itself, from
-  the first media upload a grace after the last sweep.
+  the server runs the store's blob sweep itself, with twice that grace,
+  from the first media upload a grace after the last sweep.
 - **Read scope reads every session** unless the program authorizes per
   session (`WithAuthorize`), so an object a session holds is reachable
   by every reader; with the hook, only through a session the caller may

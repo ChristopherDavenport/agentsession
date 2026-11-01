@@ -327,6 +327,12 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 			return nil, err
 		}
 	}
+	// Each sidecar blob the file names starts its grace again before the
+	// session lands, as an append's does, so a sweep that found it old
+	// and unnamed spares it.
+	if names, err := agentsession.SessionBlobs(sess); err == nil {
+		_ = s.freshenBlobs(names)
+	}
 	return s.place(sess)
 }
 
