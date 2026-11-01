@@ -245,3 +245,58 @@ func TestWithdrawalAmongOtherCalls(t *testing.T) {
 		t.Errorf("dispatches a %d, b %d", len(s.Dispatches(a)), len(s.Dispatches(b)))
 	}
 }
+
+// TestFromLink: an item's from_link names a peer link before it on its
+// path, and is provenance: the context hash leaves it out, as it does
+// queued_from, and a from_link in another form is kept as written and
+// names nothing (#248).
+func TestFromLink(t *testing.T) {
+	msg := `"item":{"type":"message","role":"user","content":[{"type":"input_text","text":"report"}]}`
+	peer := `"type":"link","rel":"peer","session":"","call_id":"c","url":"https://peer.example"`
+	_, ids := hashedLines(t, Format, peer)
+	for name, tt := range map[string]struct {
+		bodies []string
+		want   error
+	}{
+		"names the peer link":   {[]string{peer, `"type":"item",` + msg + `,"from_link":"` + ids[0] + `"`}, nil},
+		"names no entry":        {[]string{peer, `"type":"item",` + msg + `,"from_link":"sha256:00"`}, ErrBadFromLink},
+		"names a later link":    {[]string{`"type":"item",` + msg + `,"from_link":"` + ids[0] + `"`, peer}, ErrBadFromLink},
+		"in another form, kept": {[]string{peer, `"type":"item",` + msg + `,"from_link":7`}, nil},
+	} {
+		in, _ := hashedLines(t, Format, tt.bodies...)
+		s, err := Read(strings.NewReader(in))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, tt.want) {
+			t.Errorf("%s: VerifyRecords = %v, want %v", name, err, tt.want)
+		}
+	}
+	// Two sessions whose context entries differ only in from_link share
+	// a context hash.
+	hashes := map[string]bool{}
+	for _, from := range []string{"", "a"} {
+		s := New(Header{})
+		link, err := s.Append(NewPeerLink("c", Callee{URL: "https://peer.example"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		item := NewItemEntry(openresponses.UserText("report"))
+		item.Timestamp = fixedTime
+		if from != "" {
+			item.FromLink = link
+		}
+		id, err := s.Append(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := s.ContextHash(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hashes[h] = true
+	}
+	if len(hashes) != 1 {
+		t.Errorf("from_link moved the context hash: %v", hashes)
+	}
+}

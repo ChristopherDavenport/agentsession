@@ -136,8 +136,8 @@ over the body, and the entry's `id` over the envelope, which carries the
 content hash. A store checks an `id` from an envelope and a content hash
 without the body, and holds the two as separate objects. The `parent`
 member names an entry by hash, and so do `parents`, `target`,
-`first_kept`, `from` and `queued_from` wherever RFC 0001 has them name
-an entry.
+`first_kept`, `from`, `queued_from` and `from_link` wherever RFC 0001
+has them name an entry.
 
 - A store computes an entry's hashes itself and MUST refuse an append
   whose `id` is present and differs from it, and MUST refuse one that an
@@ -156,8 +156,9 @@ an entry.
   MUST refuse an entry whose `id` carries another.
 - A store MUST NOT accept an entry whose `parent` it does not hold. No
   other reference is a condition of acceptance: `parents`, `target`,
-  `first_kept`, `from` and `queued_from` are the writer's to place, as
-  RFC 0001 says, and a store MAY report one it cannot resolve.
+  `first_kept`, `from`, `queued_from` and `from_link` are the writer's
+  to place, as RFC 0001 says, and a store MAY report one it cannot
+  resolve.
 - An entry is immutable. There is no update and no in-place correction;
   a correction is a new entry, as RFC 0001 already requires of entries.
 - Acyclicity is structural. An entry names its parent by a hash that
@@ -1142,8 +1143,8 @@ not by any later leaf:
   keeping from the other; for a `branch_summary` it is over the content
   with `from` removed, present or not, since the leaf that was left is
   provenance and not context, and a store need not hold it; and for an
-  `item` it is over the content with `queued_from` removed, for the same
-  reason. For every type, `legacy_id`, `normalised`, `redacted`, and on an `item`
+  `item` it is over the content with `queued_from` removed, and
+  `from_link` where RFC 0001 defines it, for the same reason. For every type, `legacy_id`, `normalised`, `redacted`, and on an `item`
   `response` and `source` are removed as well, since each is provenance
   a provider or a harness minted per run and none reaches the model;
   `response` above all, which a provider mints anew for every call, so

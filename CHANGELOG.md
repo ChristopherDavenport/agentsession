@@ -7,6 +7,19 @@ versions may break the API.
 
 ## Unreleased
 
+- **An item names the peer link whose late report it carries (RFC 0001
+  0.14, `item`; RFC 0002, Entries and the context hash).** A peer whose
+  work outlives its call answers later, as an input the harness
+  appends; `from_link` on that item names the `peer` link, by ID. It is
+  provenance: the call is answered by its own output as before, the
+  member reaches no request, and the context hash leaves it out, as it
+  leaves out `queued_from`. **Added: `ItemEntry.FromLink` and
+  `ErrBadFromLink`**, which `VerifyRecords` returns for a `from_link`
+  naming no peer link before the item, a cancel notice included.
+  `RemapRefs` re-points it, so migration and redaction rewrite it.
+  Conformance fixtures `late-report.jsonl` and `bad-late-report.jsonl`.
+  (#248)
+
 - **A failed call, and a withdrawn hand-off (RFC 0001 0.14, `item` and
   `decision`).** An output's entry may carry `failed: true`: the tool
   reported failure, or the harness gave the call up. **Added:

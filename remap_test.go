@@ -120,6 +120,18 @@ func TestRemapRefsEveryMember(t *testing.T) {
 			false,
 		},
 		{
+			"item: from_link, and one in another form left as body",
+			`{"type":"item","id":"x","parent":"o-p",` + tsLine + `,"item":` + msg + `,"from_link":"o-link"}`,
+			map[string]string{"/parent": "n-p", "/from_link": "n-link"},
+			false,
+		},
+		{
+			"item: from_link that is not a string",
+			`{"type":"item","id":"x","parent":"o-p",` + tsLine + `,"item":` + msg + `,"from_link":["o-link"]}`,
+			map[string]string{"/parent": "n-p"},
+			false,
+		},
+		{
 			"config: omit items and omitted parts' of",
 			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"reasoning":"other_models","items":["o-1","o-2"]},"instructions_omitted":[{"keep":2,"of":"o-3","x:note":"o-keep"},{"id":"o-name","reason":"budget","size":1}],"instructions_parts":[{"id":"o-part","hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]}`,
 			map[string]string{"/parent": "n-p", "/omit/items/0": "n-1", "/omit/items/1": "n-2", "/instructions_omitted/0/of": "n-3"},
@@ -545,6 +557,7 @@ var rfcNames = func() map[string][]rfcMember {
 		"first_kept":           {{TypeCompaction, "first_kept", roleEntry}},
 		"from":                 {{TypeBranchSummary, "from", roleEntry}},
 		"queued_from":          {{TypeItem, "queued_from", roleEntry}},
+		"from_link":            {{TypeItem, "from_link", roleEntry}},
 		"omit":                 omit,
 		"items":                omit,
 		"config":               append(append([]rfcMember{}, omit[:1]...), of...),

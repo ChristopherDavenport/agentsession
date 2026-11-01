@@ -126,7 +126,11 @@ var envelopeMembers = []special{
 // a custom entry's data, an outcome's details or a member it does not
 // define, is the writer's text and body.
 var bodyMembers = map[string][]special{
-	TypeItem:     {{path: memberPath("queued_from"), role: roleEntry}, {path: memberPath("item", "call_id"), role: roleCallID}},
+	TypeItem: {
+		{path: memberPath("queued_from"), role: roleEntry},
+		{path: memberPath("from_link"), role: roleEntry, when: func(e Entry) bool { return e.(*ItemEntry).FromLink != "" }},
+		{path: memberPath("item", "call_id"), role: roleCallID},
+	},
 	TypeQueued:   {{path: memberPath("item", "call_id"), role: roleCallID}},
 	TypeResponse: {{path: memberPath("request_hash"), role: roleHash}},
 	TypeConfig: {
@@ -225,7 +229,7 @@ type Remapped struct {
 // RemapRefs re-points every member of e that names an entry or a
 // session, through m, and returns the result as a new entry; e is not
 // changed. The entry references are parent, each parents element's
-// entry, an item's queued_from, a compaction's first_kept and the omit
+// entry, an item's queued_from and from_link, a compaction's first_kept and the omit
 // items of its checkpoint, a branch summary's from, the target of a
 // label, an outcome, a dispatch and a decision, a config entry's omit
 // items and the of of each omitted part that is a keep, a positive keep

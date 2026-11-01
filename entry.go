@@ -319,6 +319,15 @@ type ItemEntry struct {
 	// on any other item, or one that is not true, is kept as written in
 	// Unknown and Failed is false.
 	Failed bool `json:"-" member:"failed"`
+	// FromLink names, in format 0.14, a peer link entry before this item
+	// on its path, by ID: the item carries that callee's later report,
+	// such as the result a peer whose work outlived its call delivers
+	// some turns after the call's acknowledgement. It is provenance: it
+	// does not make the call answered, and it reaches no request.
+	// [Session.VerifyRecords] reports one that names no peer link before
+	// the item. A from_link member that is not a non-empty string is
+	// kept as written in Unknown and FromLink is empty.
+	FromLink string `json:"-" member:"from_link"`
 }
 
 // EntryType returns "item".
@@ -1857,19 +1866,25 @@ func (e *ItemEntry) MarshalJSON() ([]byte, error) {
 		return nil, errors.New("agentsession: item entry has no item")
 	}
 	type plain ItemEntry
-	if !e.Failed {
+	if !e.Failed && e.FromLink == "" {
 		return marshalEntry(TypeItem, &e.EntryBase, (*plain)(e))
 	}
-	if _, ok := e.Item.(*openresponses.FunctionCallOutput); !ok {
+	if _, ok := e.Item.(*openresponses.FunctionCallOutput); e.Failed && !ok {
 		return nil, errors.New("agentsession: failed is defined on a function call output's entry alone")
 	}
-	if _, dup := e.Unknown["failed"]; dup {
-		return nil, errors.New("agentsession: item entry has failed both typed and unknown")
+	for _, m := range []struct {
+		key string
+		set bool
+	}{{"failed", e.Failed}, {"from_link", e.FromLink != ""}} {
+		if _, dup := e.Unknown[m.key]; dup && m.set {
+			return nil, fmt.Errorf("agentsession: item entry has %s both typed and unknown", m.key)
+		}
 	}
 	return marshalEntry(TypeItem, &e.EntryBase, struct {
 		*plain
-		Failed bool `json:"failed"`
-	}{(*plain)(e), true})
+		Failed   bool   `json:"failed,omitempty"`
+		FromLink string `json:"from_link,omitempty"`
+	}{(*plain)(e), e.Failed, e.FromLink})
 }
 
 // UnmarshalJSON decodes the entry, dispatching the item through the
@@ -1929,10 +1944,11 @@ func (e *ItemEntry) decodeMembers(_ []byte, all map[string]json.RawMessage) erro
 	}
 	// failed is taken where 0.14 defines it, true on an output's entry,
 	// in a file of any minor; anything else is kept as written.
-	e.Failed = false
+	e.Failed, e.FromLink = false, ""
 	if _, ok := e.Item.(*openresponses.FunctionCallOutput); ok {
 		promote(&e.EntryBase, "failed", &e.Failed)
 	}
+	promote(&e.EntryBase, "from_link", &e.FromLink)
 	return nil
 }
 

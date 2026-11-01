@@ -923,7 +923,8 @@ var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 // by target, every run start's source and every run end agree with
 // the segment, no dispatch or decision follows a reject or an answer
 // on the same call, no answer, reject or dispatch follows an output and
-// no reject a dispatch, and, when the header names dispatch in records,
+// no reject a dispatch but a withdrawal, every item's from_link names a
+// peer link before it, and, when the header names dispatch in records,
 // no answer ends a call with no dispatch and every call that ran has a
 // dispatch. A run written resume over a segment that holds nothing
 // agrees with it, as format 0.11 has it, in a file of any minor. The
@@ -946,6 +947,9 @@ func (s *Session) VerifyRecords(leaf string) error {
 		return err
 	}
 	if err := verifyCallees(path); err != nil {
+		return err
+	}
+	if err := verifyFromLinks(path); err != nil {
 		return err
 	}
 	calls := Calls(path)
@@ -1117,6 +1121,30 @@ func (s *Session) verifyCallIDs() error {
 // earlier file may hold under an extension's meaning, is not held to
 // them.
 var ErrCalleeLink = errors.New("agentsession: callee link is not one the format allows")
+
+// ErrBadFromLink is returned by [Session.VerifyRecords] for an item
+// whose from_link names no peer link before it on its path, a cancel
+// notice included, since a cancel notice names no callee.
+var ErrBadFromLink = errors.New("agentsession: from_link names no peer link before the item")
+
+// verifyFromLinks checks every item's from_link on a path against the
+// peer links before it.
+func verifyFromLinks(path []Entry) error {
+	peers := map[string]bool{}
+	for _, e := range path {
+		switch v := e.(type) {
+		case *LinkEntry:
+			if v.Rel == RelPeer && v.Cancel == "" {
+				peers[v.ID] = true
+			}
+		case *ItemEntry:
+			if v.FromLink != "" && !peers[v.FromLink] {
+				return fmt.Errorf("%w: item %s names %s", ErrBadFromLink, v.ID, v.FromLink)
+			}
+		}
+	}
+	return nil
+}
 
 // verifyCallees checks the subsession and peer links of a path that
 // carry members 0.12 defines, as RFC 0001 has a writer write them.

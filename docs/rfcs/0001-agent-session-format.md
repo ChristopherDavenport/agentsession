@@ -354,7 +354,7 @@ verifies without the bodies, which is what lets a store hold or send
 history it does not hold in full, and a body is held once however many
 entries name it, which RFC 0002 builds on. Wherever this document has a
 member name an entry — `parent`, `parents`, `target`, `first_kept`,
-`from`, `queued_from`, `omit`'s `items` in a `config` and in a
+`from`, `queued_from`, `from_link`, `omit`'s `items` in a `config` and in a
 compaction's checkpoint, `instructions_omitted`'s `of` beside a positive
 `keep` and no `id`, where alone it is defined — it names it by `id`.
 
@@ -503,6 +503,20 @@ One conversation item in the payload profile.
   failure sees it in the output; a member the model sees, as Claude's
   `is_error`, belongs inside the item under the payload profile's
   extension mechanism, not here.
+- `from_link` MAY name, by `id`, a `peer` link entry before the item on
+  its path, other than a cancel notice, since 0.14: the item carries
+  that callee's later report, as a peer whose work outlives its call
+  delivers its result some turns after the call's output acknowledged
+  it. It is provenance. It does not make the call answered, which
+  `link` decides from the call's output alone, and it reaches no
+  request. A writer MUST NOT write one that names anything else; a
+  reader keeps a `from_link` that is not a non-empty string as a member
+  it does not know, and a tool that checks a file reports one that
+  names no `peer` link before the item on its path. An item MAY carry
+  `source` beside it, the harness's own trigger for the delivery. The
+  reference points back, into this file, at an entry already written,
+  so writing and verifying the file needs nothing from the peer's
+  record, and the peer's record names nothing of this one.
 - A `function_call`'s `call_id` MUST NOT be empty and MUST differ from
   that of every other `function_call` in the session, on any branch: a
   `function_call_output`, a `link`, a `custom` entry, a run end's
@@ -1534,7 +1548,8 @@ call's output follows its link, the link belongs to the call's last
 `dispatch` before the output, no cancel notice names the link, and no
 `answer` decision of the call comes between the link and the output,
 which would make the output the harness's; a reader concludes nothing
-of a link that is not so. The header check above is the in-store
+of a link that is not so. A peer's later report, delivered after the
+call's output, is an `item` whose `from_link` names the link. The header check above is the in-store
 subsession's alone: a callee in another system did not derive its
 session from this one, so a verifier does not check a link carrying
 `url` against it. A link without `url` is checked as it was, in a file
@@ -1887,7 +1902,7 @@ A redactor:
 - MUST compute every content hash and `id` over what it wrote, and
   rewrite `parent` and every entry-naming member to the IDs of the
   entries it wrote — `parents` into this file, `target`, `first_kept`,
-  `from`, `queued_from`, `omit`'s `items` in a `config` and in a
+  `from`, `queued_from`, `from_link`, `omit`'s `items` in a `config` and in a
   compaction's checkpoint, and `instructions_omitted`'s `of` where it
   is defined — and the header's `base`. A member of one of those names
   in a form or place this document does not define there is body text,
@@ -2190,7 +2205,9 @@ after its `dispatch` in a file that promises them: a `peer` that answered
 without a task, and a `subsession` call whose first task a cancel notice
 names and whose second dispatch's task answered, an `of` naming no `config` entry on the path,
 or one before a compaction's checkpoint, kept as written and noted by a
-tool that checks a file, and
+tool that checks a file, a `peer` call acknowledged by its output and
+answered turns later by an item whose `from_link` names the link, beside
+a `from_link` naming a cancel notice, which is reported, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
@@ -2272,6 +2289,11 @@ reader of 0.13 refuses those files until it is upgraded.
   reader knew. A reader of 0.13 reports a withdrawal as a `reject`
   after a `dispatch`, and refuses a file of 0.14 by its header in any
   case.
+
+- `item` defines `from_link`, naming the `peer` link whose callee's
+  later report the item carries. A reader of 0.13 could tell that report
+  from any other input only through a harness's own members. It joins
+  the members that name an entry, which migration and redaction rewrite.
 
 ## Changes since 0.12
 

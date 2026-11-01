@@ -1927,7 +1927,9 @@ func TestFoldedHandbackFixture(t *testing.T) {
 // its function; TestRegenerateFixtures writes them and each test checks
 // its file is what the function builds.
 var fixtures014 = map[string]func(t *testing.T) *Session{
-	"withdrawn": withdrawnFixture,
+	"withdrawn":       withdrawnFixture,
+	"late-report":     func(t *testing.T) *Session { return lateReportFixture(t, false) },
+	"bad-late-report": func(t *testing.T) *Session { return lateReportFixture(t, true) },
 }
 
 // checkBuilt fails the test when testdata/sessions/<name>.jsonl is not
@@ -2082,5 +2084,99 @@ func TestWithdrawnFixture(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// lateReportFixture builds the session late-report.jsonl holds, or with
+// bad set bad-late-report.jsonl. A research call reaches a peer, whose
+// work outlives the call: its output acknowledges the hand-off, and the
+// model answers the user. Two turns later the peer's report arrives as
+// an input item whose from_link names the peer link, with the
+// harness's own trigger in source, and the model answers again. With
+// bad set, a second, cancelled hand-off of another call is linked too,
+// and the report's from_link names that cancel notice, which names no
+// callee.
+func lateReportFixture(t *testing.T, bad bool) *Session {
+	t.Helper()
+	id := "01995b2a-0000-7000-8000-00000000001b"
+	if bad {
+		id = "01995b2a-0000-7000-8000-00000000001c"
+	}
+	at, _ := time.Parse(time.RFC3339, "2026-11-01T10:00:00Z")
+	s := New(Header{ID: id, CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: []string{TypeDispatch}})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must, say := fixtureAppender(t, s)
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Delegate research.")})
+	must(NewItemEntry(openresponses.UserText("Have the research agent look into order 7.")))
+	sent := fixtureHash(t, s)
+	call := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_research", Name: "research", Arguments: `{"message":"order 7"}`}, ResponseID: "resp_1"})
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+	must(NewDispatch("call_research", call))
+	link := must(NewPeerLink("call_research", Callee{URL: "https://research.example/a2a", Task: "task-r1", Context: "ctx-r1"}))
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_research", `{"status":"dispatched"}`)))
+	say("resp_2", "The research agent is on it.")
+	must(NewItemEntry(openresponses.UserText("Thanks. Anything else on the queue?")))
+	say("resp_3", "Nothing else.")
+	if bad {
+		sent := fixtureHash(t, s)
+		other := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_2", CallID: "call_audit", Name: "audit", Arguments: `{"message":"order 7"}`}, ResponseID: "resp_4"})
+		must(&ResponseEntry{ResponseID: "resp_4", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+		must(NewDispatch("call_audit", other))
+		audit := NewPeerLink("call_audit", Callee{URL: "https://audit.example/a2a", Task: "task-a1"})
+		must(audit)
+		link = must(NewCancelSentLink(audit))
+		must(NewItemEntry(openresponses.NewFunctionCallOutput("call_audit", "cancelled")))
+	}
+	report := NewItemEntry(openresponses.UserText("Research report on order 7: the refund was issued twice."))
+	report.FromLink = link
+	report.Source = &Trigger{Kind: "delivery", Ref: "task-r1", Source: "a2a"}
+	must(report)
+	say("resp_5", "The research is in: order 7 was refunded twice.")
+	return s
+}
+
+// TestLateReportFixture reads the 0.14 conformance fixtures for a peer's
+// late report: the report's from_link names the peer link, the call was
+// answered by its acknowledgement and by nothing else, and every
+// response hashes with the report sent as it is; a from_link naming a
+// cancel notice is reported.
+func TestLateReportFixture(t *testing.T) {
+	raw := checkBuilt(t, "late-report")
+	checkBuilt(t, "bad-late-report")
+	if !bytes.Contains(raw, []byte(`"from_link":"sha256:`)) {
+		t.Error("the fixture lacks a from_link")
+	}
+	s := loadFixture(t, "late-report")
+	if err := s.VerifyRecords(s.Leaf()); err != nil {
+		t.Errorf("VerifyRecords: %v", err)
+	}
+	var report *ItemEntry
+	for _, e := range s.Entries() {
+		if it, ok := e.(*ItemEntry); ok && it.FromLink != "" {
+			report = it
+		}
+		if r, ok := e.(*ResponseEntry); ok {
+			if err := s.Verify(r.ID); err != nil {
+				t.Errorf("%s: %v", r.ResponseID, err)
+			}
+		}
+	}
+	if report == nil {
+		t.Fatal("no item carries from_link")
+	}
+	l, ok := s.Entry(report.FromLink)
+	if link, isLink := l.(*LinkEntry); !ok || !isLink || link.Rel != RelPeer || link.CallID != "call_research" {
+		t.Errorf("from_link names %v", l)
+	}
+	callees, err := s.Callees(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(callees) != 1 || !callees[0].Answered {
+		t.Errorf("callees = %+v", callees)
+	}
+	bad := loadFixture(t, "bad-late-report")
+	if err := bad.VerifyRecords(bad.Leaf()); !errors.Is(err, ErrBadFromLink) {
+		t.Errorf("a from_link naming a cancel notice: VerifyRecords = %v, want ErrBadFromLink", err)
 	}
 }
