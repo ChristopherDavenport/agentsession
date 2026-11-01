@@ -1102,3 +1102,51 @@ func TestRepairRefFromCurrentTarget(t *testing.T) {
 		}
 	}
 }
+
+// TestRefPinCommitsLatestAppend: an entry a crash took and its session
+// appended again lazily is pinned through its latest append, in a
+// session another process holds. The commit before the ref makes the
+// objects of that append durable, as it does an entry's only append,
+// rather than stopping at the first append, the one the crash took, and
+// leaving the pin on working state the next crash takes.
+func TestRefPinCommitsLatestAppend(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, _ := Open(root, WithSync(SyncNever))
+	st.Create(ctx, agentsession.Header{ID: "s"})
+	mustAppend(t, st, "s", item("one"))
+	if err := st.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e := item("two")
+	two := mustAppend(t, st, "s", e)
+	die(st)
+	removeObject(t, st, two, false)
+	// Another process recovers the session and appends the entry again,
+	// lazily, and goes away with its objects not yet flushed.
+	st2, _ := Open(root, WithSync(SyncNever))
+	if _, err := st2.Open(ctx, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if again := mustAppend(t, st2, "s", e); again != two {
+		t.Fatalf("appended again as %s, want %s", again, two)
+	}
+	die(st2)
+	env, _ := st2.objs.loosePath(spaceEntries, two)
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(env, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	st3, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st3.Close()
+	if err := st3.UpdateRef(ctx, "pin/p", agentsession.RefTarget{}, agentsession.RefTarget{Session: "s", Entry: two}, "pin"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(env); err != nil || !info.ModTime().After(past.Add(time.Minute)) {
+		t.Errorf("the ref was set and the latest append of its pin was not committed: %v %v", info.ModTime(), err)
+	}
+}

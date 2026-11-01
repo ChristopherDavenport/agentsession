@@ -416,7 +416,10 @@ projection to a file carries none.
   equal changes nothing, and a store MUST NOT log it; it still fails if
   the held target is not the expected one. A store MUST NOT commit a
   ref update that pins an entry before that entry's append is
-  committed: it commits the session first, or refuses. A ref is
+  committed: it commits the session first, or refuses. The append is
+  the one through which the session holds the entry now: for an entry
+  recovery found lost and the session appended again, the latest, not
+  the first, which no longer holds it. A ref is
   durable once set, and a pin of working state would otherwise outlive
   the entry a crash takes.
 - **A ref outlives its session's deletion.** Deleting a session does

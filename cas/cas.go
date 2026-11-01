@@ -2268,7 +2268,7 @@ func (s *Store) placeSession(dir string, h agentsession.Header, recs []logRecord
 // through the base, so a crash cannot take the base from under a fork
 // that hangs from it. A session this store holds commits its working
 // state. For one another process holds, the objects of every lazy
-// append up to the base's record are made durable here, since recovery
+// append up to the base's latest record are made durable here, since recovery
 // cuts the log at the first lazy append whose objects are gone, whether
 // or not it is the base's ancestor; then its log is fsynced. A lazy
 // append whose objects are gone already means the base will not
@@ -2295,12 +2295,15 @@ func (s *Store) commitOrigin(owner, base string) error {
 	if err != nil {
 		return fmt.Errorf("cas: session %s: %w", owner, err)
 	}
+	// Through the base's latest append: an entry a crash took and the
+	// session appended again is held by the append again, which the
+	// first, cut by its lost record, is not.
 	at, synced := -1, -1
 	for i, r := range l.recs {
 		switch {
 		case r.Op == opSync:
 			synced = i
-		case r.Op == opAppend && r.Entry == base && at < 0:
+		case r.Op == opAppend && r.Entry == base:
 			at = i
 		}
 	}
