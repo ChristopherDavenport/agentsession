@@ -1162,9 +1162,10 @@ A call was handed to its tool.
 holding the `function_call`, on the path before the `dispatch`, and
 `call_id` MUST be that call's. The `target` names the call. A
 `dispatch` a withdrawal follows, as `decision` defines it, was no
-hand-off: a reader reads the path as though neither it nor the
-withdrawal were there, and what this section says of a call's
-dispatches is said of the others. A call with
+hand-off: what this section says of a call's dispatches is said of
+the others, and the call's state is read as though neither it nor the
+withdrawal were there, within the limit `decision` sets: a withdrawal
+withdraws the one `dispatch` it directly follows. A call with
 a `dispatch` and no `function_call_output` on the path may have run: its
 side effect may have happened. It is **in flight**, handed to its tool
 when the record stopped, unless the latest `decision` after its last
@@ -1323,8 +1324,16 @@ decision: the call is what it was before the `dispatch`, which for a
 call with no other `dispatch` on the path, in a file whose header names
 `dispatch` in `records`, is never started, and every rule of this
 section and of `dispatch` applies to what follows as though neither
-entry were there. Another `dispatch` may follow, as may any decision
-the call could take before the withdrawn one, or its output. A `reject`
+entry were there, save the definition of a withdrawal itself: a later
+`reject` carrying `withdrawn` withdraws a `dispatch` only when that
+`dispatch` is the call's latest `decision`, `dispatch` or
+`function_call_output` before it, never one a withdrawal already
+passed over. After `dispatch` D, `dispatch` D' and a withdrawal of D',
+a second `reject` carrying `withdrawn` follows a withdrawal, not a
+`dispatch`, so it is a `reject` without the member, after D, which
+this section forbids. Another `dispatch` may follow a withdrawal, as
+may any decision the call could take before the withdrawn one, or its
+output. A `reject`
 is the verdict so that a reader that does not know the member reads the
 call as one that did not run, never as one in flight. A writer MUST NOT
 write `withdrawn` anywhere else: a reader reads a `reject` carrying it
