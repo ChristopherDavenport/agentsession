@@ -3,6 +3,7 @@ package agentsession
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -574,6 +575,63 @@ func TestRewriteStringsCallOrder(t *testing.T) {
 	for range 20 {
 		if again := run(); again != first {
 			t.Fatalf("two runs differ:\n%s\n%s", first, again)
+		}
+	}
+}
+
+// TestRewriteHeaderStrings: in a header, cwd, the harness and every
+// member the format does not define are text, at any depth; what a
+// redaction writes, the references and spawned_by, a call_id, are not
+// given to f (RFC 0001, The redacted session). Every member a Header
+// writes is classified, so one added to the type cannot drift.
+func TestRewriteHeaderStrings(t *testing.T) {
+	line := `{"type":"session","format":"agentsession/0.14","id":"SECRET-id","created_at":"2026-10-16T09:00:00Z","payload":"openresponses/SECRET","harness":{"name":"SECRET-h","version":"1-SECRET"},"records":["SECRET:rec"],"cwd":"/home/SECRET/proj","parent_session":"SECRET-parent","spawned_by":"call-SECRET","base":"sha256:SECRET","media":"inline","redacted":true,"redacted_from":{"session":"SECRET-orig","profile":"SECRET-p"},"x:host":{"name":"SECRET.example","list":["SECRET",{"deep":"SECRET"}],"n":9007199254740993}}`
+	var h Header
+	if err := json.Unmarshal([]byte(line), &h); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := json.Marshal(h)
+	var seen []string
+	got, err := RewriteHeaderStrings(h, func(s string) string {
+		seen = append(seen, s)
+		return hideSecret(s)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := json.Marshal(h); !bytes.Equal(before, after) {
+		t.Errorf("the input changed: %s", after)
+	}
+	if got.CWD != "/home/gone/proj" || got.Harness.Name != "gone-h" || got.Harness.Version != "1-gone" {
+		t.Errorf("text left: cwd %q harness %+v", got.CWD, got.Harness)
+	}
+	if x := string(got.Extra["x:host"]); strings.Contains(x, "SECRET") || !strings.Contains(x, "9007199254740993") {
+		t.Errorf("an extra member: %s", x)
+	}
+	want := h
+	want.CWD, want.Harness, want.Extra = got.CWD, got.Harness, got.Extra
+	if a, b := string(mustJSON(t, got)), string(mustJSON(t, want)); a != b {
+		t.Errorf("a member that is not text changed:\n got %s\nwant %s", a, b)
+	}
+	for _, s := range seen {
+		for _, fixed := range []string{"SECRET-id", "openresponses/SECRET", "SECRET:rec", "SECRET-parent", "call-SECRET", "sha256:SECRET", "SECRET-orig", "SECRET-p", "inline", "agentsession/0.14"} {
+			if s == fixed {
+				t.Errorf("f was given %q", s)
+			}
+		}
+	}
+
+	// Every member a header writes is in the table or is text.
+	text := map[string]bool{"cwd": true, "harness": true}
+	all := map[string]any{}
+	full := Header{Format: Format, ID: "i", Payload: Payload, Harness: &Harness{Name: "n", Version: "v"}, Records: []string{"r"}, CWD: "c", ParentSession: "p", SpawnedBy: "s", Base: "b", Media: "inline", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o", Profile: "p"}}
+	if err := json.Unmarshal(mustJSON(t, full), &all); err != nil {
+		t.Fatal(err)
+	}
+	for name := range all {
+		inTable := slices.ContainsFunc(headerMembers, func(sp special) bool { return sp.path[0] == name })
+		if inTable == text[name] {
+			t.Errorf("header member %s: in the table %v, listed as text %v; it must be one", name, inTable, text[name])
 		}
 	}
 }

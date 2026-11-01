@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -155,6 +156,41 @@ func NewRewriter(f func(string) string) *Rewriter {
 // original's is never kept (RFC 0001, Redaction).
 func RewriteStrings(e Entry, f func(string) string) (Entry, error) {
 	return NewRewriter(f).Rewrite(e)
+}
+
+// RewriteHeaderStrings returns a copy of h with f applied to every
+// string of it that is text, under the contract [RewriteStrings]
+// states: cwd, the harness's name and version, and every string at any
+// depth in a member the format does not define (Extra). What a
+// redaction writes, type, format, id, created_at, payload, records,
+// media, redacted and redacted_from, is left for the redactor to set;
+// base and parent_session are references, which [RemapHeaderRefs]
+// re-points; and spawned_by is a call_id, which a redactor that changes
+// call IDs changes in step with the parent's, as it does every call_id
+// RewriteStrings leaves (RFC 0001, The redacted session). One table in
+// this package says which header member is which, so a header that
+// gains a member cannot drift out of step with a redactor.
+func RewriteHeaderStrings(h Header, f func(string) string) (Header, error) {
+	data, err := jsonx.MarshalNoEscape(h)
+	if err != nil {
+		return Header{}, err
+	}
+	v, err := parseValue(data)
+	if err != nil {
+		return Header{}, err
+	}
+	out, err := NewRewriter(f).walk(v, headerMembers, 0, nil)
+	if err != nil {
+		return Header{}, fmt.Errorf("agentsession: header: %w", err)
+	}
+	if data, err = jsonx.MarshalNoEscape(out); err != nil {
+		return Header{}, err
+	}
+	var nh Header
+	if err := json.Unmarshal(data, &nh); err != nil {
+		return Header{}, fmt.Errorf("agentsession: header: %w", err)
+	}
+	return nh, nil
 }
 
 // Rewrite is [RewriteStrings] with what the entries the Rewriter was

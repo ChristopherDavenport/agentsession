@@ -7,6 +7,17 @@ versions may break the API.
 
 ## Unreleased
 
+- **A header's text, rewritten from one table (RFC 0001 0.14, The
+  redacted session).** In a redacted session's header `cwd`, `harness`
+  and every member the format does not define are text; `type`,
+  `format`, `created_at`, `payload`, `records`, `media`, `redacted` and
+  `redacted_from` are the redaction's to write; `id` is derived; `base`
+  and `parent_session` are references; `spawned_by` is a `call_id` and
+  changes only in step with the call IDs. **Added:
+  `RewriteHeaderStrings`**, driven by a header member table beside the
+  entry table `RewriteStrings` and `RemapRefs` use, so a redactor no
+  longer walks `Header.Extra` itself. (#250)
+
 - **What leaving entries out means, member by member (RFC 0001 0.14,
   Leaving entries out).** A left-out entry's place is the placeholder
   covering it, or else the nearest entry kept above it; a member naming

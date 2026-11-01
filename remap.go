@@ -178,6 +178,28 @@ var bodyMembers = map[string][]special{
 	},
 }
 
+// headerMembers are the members of a header that are not text (RFC
+// 0001, The redacted session): those a redaction writes, type, format,
+// id, created_at, payload, records, media, redacted and redacted_from,
+// fixed whole; base, an entry of this file, and parent_session, a
+// session, which are references; and spawned_by, a call_id, which
+// changes only in step with the call IDs. Every other member, cwd,
+// harness and each member the format does not define, is text.
+var headerMembers = []special{
+	{path: memberPath("type"), role: roleFixed},
+	{path: memberPath("format"), role: roleFixed},
+	{path: memberPath("id"), role: roleFixed},
+	{path: memberPath("created_at"), role: roleFixed},
+	{path: memberPath("payload"), role: roleFixed},
+	{path: memberPath("records"), role: roleFixed},
+	{path: memberPath("media"), role: roleFixed},
+	{path: memberPath("redacted"), role: roleFixed},
+	{path: memberPath("redacted_from"), role: roleFixed},
+	{path: memberPath("base"), role: roleEntry},
+	{path: memberPath("parent_session"), role: roleSession},
+	{path: memberPath("spawned_by"), role: roleCallID},
+}
+
 // specialsOf returns the members of e that are not body text, those its
 // decoder did not take as the format defines them left out. An extension
 // entry's are its envelope's alone, since this package cannot read the

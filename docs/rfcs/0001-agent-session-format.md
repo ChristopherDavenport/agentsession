@@ -2124,6 +2124,28 @@ over a store finds the session it made before and appends only what the
 original added since. Two sets of rules under one profile write into
 one session; a profile names one set.
 
+A redactor writes the redacted session's header from the original's,
+member by member, since 0.14 in these words:
+
+- `cwd`, `harness` and every member this document does not define are
+  text, and a redactor reaches them as it reaches an entry's body text,
+  at any depth.
+- `type`, `format`, `created_at`, `payload`, `records`, `media`,
+  `redacted` and `redacted_from` are the redaction's to write: `type`
+  and `format` as any writer does, `redacted` and `redacted_from` as
+  this section says, and the rest as the redactor chooses, `media` in
+  the original's form, as Every redacted entry requires of the media
+  itself. No text rule reaches them.
+- `id` is derived as below.
+- `base` and `parent_session` are references, under the rules for
+  references above: `base` names an entry this file holds, and
+  `parent_session` stays as written unless the redaction holds that
+  session's redaction.
+- `spawned_by` is a `call_id`, which changes in step with the call IDs:
+  a redactor that changes the call IDs of the parent session writes the
+  one it gave the call that spawned this one, and otherwise leaves it as
+  written.
+
 A fork of a redacted session is a session of its own. Its header carries
 `redacted` only when a redactor made it, and its prefix entries carry
 their `redacted` as they did.
@@ -2471,6 +2493,12 @@ reader of 0.13 refuses those files until it is upgraded.
   already required; a redaction that leaves out every entry from
   `first_kept` to the compaction writes a placeholder for it to name.
   No file a reader of 0.13 accepted reads differently.
+
+- Redaction says which members of a redacted session's header are
+  text, which the redaction writes, and which are references or a
+  `call_id` (The redacted session). 0.13 named header members only as
+  references, and left a redactor to decide whether a member it did not
+  know held text.
 
 - Request hash says which form a sidecar session hashes: the request
   with each `sidecar:` URL as recorded, while the provider is sent the
