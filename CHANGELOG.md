@@ -148,7 +148,8 @@ versions may break the API.
   `decision`).** An output's entry may carry `failed: true`: the tool
   reported failure, or the harness gave the call up. **Added:
   `ItemEntry.Failed` and `Call.Failed`**; the call is completed all the
-  same, and the member reaches no request. A writer that wrote a call's
+  same, the member reaches no request, and the context hash (RFC 0002)
+  leaves it out. A writer that wrote a call's
   `dispatch` and then did not hand it to its tool writes a `reject`
   carrying `withdrawn: true` directly after it among the call's
   entries; a reader reads that hand-off as never made, so the call is

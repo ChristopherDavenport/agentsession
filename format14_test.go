@@ -493,3 +493,32 @@ func TestMalformedPlaceholderClearsNothing(t *testing.T) {
 		}
 	}
 }
+
+// TestContextHashLeavesOutFailed: failed reaches no request, so two
+// outputs that differ only by it share a context hash, as from_link
+// and queued_from do (review finding 4).
+func TestContextHashLeavesOutFailed(t *testing.T) {
+	hashes := map[string]bool{}
+	for _, failed := range []bool{false, true} {
+		s := New(Header{})
+		call := &ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "t", Arguments: "{}"}}
+		call.Timestamp = fixedTime
+		if _, err := s.Append(call); err != nil {
+			t.Fatal(err)
+		}
+		out := NewItemEntry(openresponses.NewFunctionCallOutput("c", "Error: x"))
+		out.Timestamp, out.Failed = fixedTime, failed
+		id, err := s.Append(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := s.ContextHash(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hashes[h] = true
+	}
+	if len(hashes) != 1 {
+		t.Errorf("failed moved the context hash: %v", hashes)
+	}
+}

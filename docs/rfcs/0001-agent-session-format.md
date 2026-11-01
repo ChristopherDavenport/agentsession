@@ -2533,7 +2533,8 @@ reader of 0.13 refuses those files until it is upgraded.
 - `item` defines `failed`, `true` on an output's entry whose call
   failed or was given up. A reader of 0.13 could not tell such a call
   from one that succeeded: the output's text says so by a harness's
-  convention, which no reader can rely on.
+  convention, which no reader can rely on. Like `from_link`, it reaches
+  no request, and RFC 0002's context hash leaves it out.
 
 - A `reject` carrying `withdrawn` directly after a call's `dispatch`
   withdraws that hand-off, and is the one `reject` a `dispatch` may

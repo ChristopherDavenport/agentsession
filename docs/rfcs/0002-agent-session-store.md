@@ -1144,7 +1144,11 @@ not by any later leaf:
   with `from` removed, present or not, since the leaf that was left is
   provenance and not context, and a store need not hold it; and for an
   `item` it is over the content with `queued_from` removed, and
-  `from_link` where RFC 0001 defines it, for the same reason. For every type, `legacy_id`, `normalised`, `redacted`, and on an `item`
+  `from_link` where RFC 0001 defines it, for the same reason. On an
+  `item` holding a `function_call_output`, `failed` is removed where RFC
+  0001 defines it, `true`: it is a record member that reaches no
+  request, so two sessions whose model saw the same output share a key
+  whether or not their harnesses marked the call failed. For every type, `legacy_id`, `normalised`, `redacted`, and on an `item`
   `response` and `source` are removed as well, since each is provenance
   a provider or a harness minted per run and none reaches the model;
   `response` above all, which a provider mints anew for every call, so
