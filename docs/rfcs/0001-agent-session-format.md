@@ -912,6 +912,12 @@ it. A `config` entry MAY carry it and no setting. Its members:
   id and carries neither `outputs` nor `images`, `{}` above all, clears
   all four. A writer that wants to drop one and keep the others writes
   `{}` in one entry and what it keeps in the next.
+- An `outputs` or `images` member in a form this document does not
+  define, such as `images` without a `placeholder` or `outputs` without
+  a string `text`, is carried all the same, as a `reasoning` value this
+  document does not define is: it changes nothing, the object holding
+  it is not one that clears, and a reader keeps it as written. A writer
+  MUST NOT write either member in such a form.
 
 The `omit` in force at the end of a path decides every `item` entry on
 it, those before the entry that wrote it among them, so a request built

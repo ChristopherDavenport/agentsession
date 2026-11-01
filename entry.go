@@ -448,6 +448,12 @@ type Omit struct {
 	// Images, from 0.14, sends input_image parts with a placeholder text
 	// in their place: all but the last few, or all before an entry.
 	Images *OmitImages `json:"images,omitempty"`
+	// undefined is set on an object read with an outputs or images member
+	// in a form the format does not define, which its entry keeps as
+	// written: the member is carried and changes nothing, as an
+	// undefined reasoning value changes nothing, so the object is not
+	// the empty one that clears what is in force.
+	undefined bool
 }
 
 // OmitOutputs is the outputs member of omit: each item entry on the
@@ -538,13 +544,21 @@ func (o *Omit) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*o = Omit{Reasoning: plain.Reasoning, Items: plain.Items}
-	var outputs OmitOutputs
-	if len(plain.Outputs) > 0 && !isNull(plain.Outputs) && holdsExactly(plain.Outputs, &outputs) {
-		o.Outputs = &outputs
+	if len(plain.Outputs) > 0 && !isNull(plain.Outputs) {
+		var outputs OmitOutputs
+		if holdsExactly(plain.Outputs, &outputs) {
+			o.Outputs = &outputs
+		} else {
+			o.undefined = true
+		}
 	}
-	var images OmitImages
-	if len(plain.Images) > 0 && !isNull(plain.Images) && holdsExactly(plain.Images, &images) {
-		o.Images = &images
+	if len(plain.Images) > 0 && !isNull(plain.Images) {
+		var images OmitImages
+		if holdsExactly(plain.Images, &images) {
+			o.Images = &images
+		} else {
+			o.undefined = true
+		}
 	}
 	return nil
 }
@@ -572,9 +586,11 @@ const (
 // IsZero reports whether the object names no rule, no entry and no
 // placeholder, which is the object a config entry writes to clear the
 // one in force, and the settings of a path that left nothing out. An
-// empty id names no entry, so a list of them names none.
+// empty id names no entry, so a list of them names none. An object read
+// with an outputs or images member in a form the format does not define
+// carries it, and is not zero.
 func (o Omit) IsZero() bool {
-	if o.Reasoning != "" || o.Outputs != nil || o.Images != nil {
+	if o.Reasoning != "" || o.Outputs != nil || o.Images != nil || o.undefined {
 		return false
 	}
 	for _, id := range o.Items {

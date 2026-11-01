@@ -468,3 +468,28 @@ func TestResumeWithAResponseIsNotEmpty(t *testing.T) {
 		t.Errorf("VerifyRecords = %v, want ErrSourceMismatch", err)
 	}
 }
+
+// TestMalformedPlaceholderClearsNothing: an outputs or images member in
+// a form the format does not define is carried, as an undefined
+// reasoning value is: it changes nothing, and the object is not the
+// empty one that clears what is in force (review finding 3).
+func TestMalformedPlaceholderClearsNothing(t *testing.T) {
+	msg := `"type":"item","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}`
+	_, ids := hashedLines(t, Format, msg)
+	for _, member := range []string{`{"images":{"keep":3}}`, `{"outputs":{"items":["a"]}}`, `{"images":"all"}`} {
+		in, _ := hashedLines(t, Format, msg,
+			`"type":"config","model":"m","omit":{"items":["`+ids[0]+`"]}`,
+			`"type":"config","omit":`+member)
+		s, err := Read(strings.NewReader(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ctx.OmittedItems) != 1 || len(ctx.Items) != 0 {
+			t.Errorf("%s cleared the omit in force: %+v", member, ctx.Settings.Omit)
+		}
+	}
+}
