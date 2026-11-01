@@ -1036,8 +1036,8 @@ Why a run started and how it ended. Two entries per run, paired by
   it writes `start`: it started the run to take up a call. A run written
   `resume` whose segment, between its `start` and its `end`, or after
   its `start` to the end of the path when the run was cut, holds no
-  entry that is in context and no `dispatch` or `decision`, is accepted
-  as written: the writer started it to take up a call and the run ended
+  entry that is in context, no `response` and no `dispatch` or
+  `decision`, is accepted as written: the writer started it to take up a call and the run ended
   before it did, a refusal by a subscriber to the run's start and a
   kill among the causes, and `resume` records what it meant to do,
   which such a segment cannot contradict. Record entries (`link`,
@@ -1045,8 +1045,10 @@ Why a run started and how it ended. Two entries per run, paired by
   segment the shape of `input`: a writer that resumes may replay a
   child's link onto a new branch, or a hook may annotate the run,
   before the run takes its call up. A `resume` over a segment that adds
-  a message, a setting or an output and takes up no call is not that,
-  and a reader reports it. A reader of 0.14 applies the rule to every
+  a message, a setting or an output, or holds a `response`, and takes up
+  no call is not that, and a reader reports it: a `response` is a model
+  call, and one that took no call up is the shape of an `input` that
+  retries, as below. A reader of 0.14 applies the rule to every
   file it reads, as a reader of 0.11 applied its narrower form, a
   segment holding nothing, to files of 0.9 and 0.10, since the rule
   only accepts what an earlier reader reported. `input`:
@@ -2597,7 +2599,7 @@ reader of 0.13 refuses those files until it is upgraded.
   sidecar session's hash any other way.
 
 - A run written `resume` whose segment holds record entries alone, no
-  entry in context and no `dispatch` or `decision`, is accepted as
+  entry in context, no `response` and no `dispatch` or `decision`, is accepted as
   written, as 0.11 accepted one whose segment held nothing. A writer
   that replays a child's link, or a hook that annotates the run, before
   the run takes its call up no longer writes a run a reader reports.

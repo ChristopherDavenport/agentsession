@@ -107,8 +107,10 @@ versions may break the API.
   of an input, and `VerifyRecords` reported `ErrSourceMismatch`. Now a
   segment holding no entry in context and no dispatch or decision is
   accepted, in a file of any minor. **Changed: `Run.Empty`** reports
-  that shape: record entries and a response no longer make a segment
-  other than empty. Conformance fixture `record-resume.jsonl`. (#229)
+  that shape: record entries no longer make a segment
+  other than empty; a `response`, a model call that took nothing up,
+  still does, since that is an input's retry. Conformance fixture
+  `record-resume.jsonl`. (#229)
 
 - **Placeholders for a tool output or a screenshot (RFC 0001 0.14,
   Items left out of the context and Context building).** `omit` gains

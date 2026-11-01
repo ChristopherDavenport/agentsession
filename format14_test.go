@@ -439,3 +439,32 @@ func TestSidecarRequestHash(t *testing.T) {
 		t.Error("the resolved request hashes as the recorded one")
 	}
 }
+
+// TestResumeWithAResponseIsNotEmpty: a response in a resume's segment
+// is a model call, which an input's retry makes, so a segment holding
+// one is not empty even with no entry in context, and a run written
+// resume over it is reported, as 0.13 reported it.
+func TestResumeWithAResponseIsNotEmpty(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	target, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "t", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []Entry{
+		NewDecision("c", target, VerdictHold, ByPolicy),
+		NewRunStart("r", SourceResume, ""),
+		&ResponseEntry{Status: openresponses.ResponseStatusFailed, Error: &openresponses.ErrorPayload{Code: "server_error", Message: "x"}},
+		NewRunEnd("r", ReasonError, "", []string{}),
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs, _ := s.Runs(s.Leaf())
+	if runs[0].Empty() {
+		t.Error("a resume whose segment holds a response is empty")
+	}
+	if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrSourceMismatch) {
+		t.Errorf("VerifyRecords = %v, want ErrSourceMismatch", err)
+	}
+}

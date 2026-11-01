@@ -597,8 +597,8 @@ func ComputeSource(r *Run) string {
 
 // Empty reports whether the run's segment, between its start and its
 // end, or after its start for a run that was cut, holds no entry in
-// context (an item, a config, a compaction or a branch summary) and no
-// dispatch or decision: a run refused, or killed, before it took
+// context (an item, a config, a compaction or a branch summary), no
+// response and no dispatch or decision: a run refused, or killed, before it took
 // anything up, though a writer may have replayed a link onto its branch
 // or a hook annotated it. Such a run written [SourceResume] is the shape
 // of [SourceInput], and the format accepts it as written, since all it
@@ -607,12 +607,12 @@ func ComputeSource(r *Run) string {
 // Format 0.11 accepted a segment holding nothing; 0.14 accepts record
 // entries in it, in a file of any minor. Empty tells it from a resume
 // that adds a message, a setting or an output and takes up nothing,
-// which is still reported. A response, which is no entry in context,
-// does not make a segment other than empty.
+// which is still reported, and from one that called the model and took
+// nothing up, which is a retry's shape, an input's.
 func (r *Run) Empty() bool {
 	for _, e := range r.Segment {
 		switch e.(type) {
-		case *ItemEntry, *ConfigEntry, *CompactionEntry, *BranchSummaryEntry, *DispatchEntry, *DecisionEntry:
+		case *ItemEntry, *ConfigEntry, *CompactionEntry, *BranchSummaryEntry, *ResponseEntry, *DispatchEntry, *DecisionEntry:
 			return false
 		}
 	}
