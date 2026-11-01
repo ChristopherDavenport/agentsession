@@ -86,7 +86,9 @@ type Rewriter struct {
 // session, which the redaction changed as it changes the copy, so the
 // Rewriter keeps it for a remap to point at that entry's redaction; it
 // removes it from a changed copy of any other session's entry, which
-// then names no equal item (RFC 0001, Every redacted entry).
+// then names no equal item (RFC 0001, Every redacted entry). The remap
+// that follows must then map the entry: [RemapRefs] refuses a copy whose
+// session it re-points and whose entry it leaves ([ErrUnmappedCopy]).
 func (r *Rewriter) Alongside(sessions func(session string) bool) *Rewriter {
 	r.alongside = sessions
 	return r

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // entryOf decodes one entry line, failing the test if it does not.
@@ -948,5 +949,26 @@ func TestRemapRefsBaseExtension(t *testing.T) {
 	}
 	if r, err := RemapRefs(entryOf(t, line), leftOutRemap); err != nil || r.Entry.Base().Parent != "" {
 		t.Errorf("without a base: parent %q, %v; want the root", r.Entry.Base().Parent, err)
+	}
+}
+
+// TestRemapRefsCopiedAlongside: a remap that re-points a copied item's
+// copied_from session, which says that session is redacted alongside,
+// and leaves its entry as written would name an entry of the original
+// inside the redaction, so RemapRefs refuses it; a remap that leaves
+// both as written reports both.
+func TestRemapRefsCopiedAlongside(t *testing.T) {
+	e := &ItemEntry{Item: openresponses.UserText("hi"), CopiedFrom: &CopiedFrom{Session: "parent", Entry: "sha256:e"}}
+	e.ID, e.Timestamp = "x", fixedTime
+	alongside := Remap{
+		Entry:   func(session, entry string) (string, bool) { return "", false },
+		Session: func(id string) (string, bool) { return "red-" + id, id == "parent" },
+	}
+	if _, err := RemapRefs(e, alongside); !errors.Is(err, ErrUnmappedCopy) {
+		t.Errorf("RemapRefs = %v, want ErrUnmappedCopy", err)
+	}
+	r, err := RemapRefs(e, Remap{Entry: alongside.Entry, Session: func(string) (string, bool) { return "", false }})
+	if err != nil || len(r.Unmapped) != 2 {
+		t.Errorf("not alongside: %v, unmapped %v", err, r.Unmapped)
 	}
 }

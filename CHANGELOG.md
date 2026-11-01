@@ -39,7 +39,11 @@ versions may break the API.
   a copy whose item or trust differs from the entry it names
   (`ErrCopyMismatch`). **Added: `CopiedFrom`, `ItemEntry.CopiedFrom`,
   `Call.Copied`, `ErrCopiedCall`, `ErrBadCopiedFrom`,
-  `Session.VerifyCopies`, `ErrCopyMismatch`, `Rewriter.Alongside`.**
+  `Session.VerifyCopies`, `ErrCopyMismatch`, `Rewriter.Alongside`,
+  `ErrUnmappedCopy`.** `RemapRefs` refuses a copy whose session it
+  re-points and whose entry it leaves as written (`ErrUnmappedCopy`).
+  `VerifyCopies` resolves each source session once, and its resolver
+  must apply the caller's read rights.
 
 - **Delivered inputs (RFC 0001 0.15, `queued`; agentturn#244).** A
   `queued` steer may carry `deliver: true` (`QueuedEntry.Deliver`): an

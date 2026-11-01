@@ -253,6 +253,13 @@ func specialsOf(e Entry) []special {
 // is a link.
 var ErrNoPlace = errors.New("agentsession: a member naming one entry has nothing in the place of the entry left out")
 
+// ErrUnmappedCopy is returned by [RemapRefs] for a copied item whose
+// copied_from session the remap re-points while it leaves the entry as
+// written: the session is redacted alongside, so the entry names an
+// entry of the original inside the redaction, which neither verifies
+// there nor hides what was redacted (RFC 0001, Every redacted entry).
+var ErrUnmappedCopy = errors.New("agentsession: copied_from's session is redacted alongside and its entry is not mapped")
+
 // Remap says where the references [RemapRefs] meets now point. A
 // callback returns the ID a reference is to name instead, or false to
 // leave it as written; a nil callback leaves every reference of its kind
@@ -459,6 +466,11 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 	}
 	if noPlace != nil {
 		return Remapped{}, noPlace
+	}
+	if it, ok := e.(*ItemEntry); ok && it.CopiedFrom != nil && it.CopiedFrom.Entry != "" && m.Session != nil {
+		if _, alongside := m.Session(it.CopiedFrom.Session); alongside && slices.ContainsFunc(out.Unmapped, func(r Reference) bool { return r.At == "/copied_from/entry" }) {
+			return Remapped{}, fmt.Errorf("%w: %s names %s in %s", ErrUnmappedCopy, it.ID, it.CopiedFrom.Entry, it.CopiedFrom.Session)
+		}
 	}
 	if root0 && m.Base != "" {
 		root["parent"] = m.Base

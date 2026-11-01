@@ -961,8 +961,12 @@ func TestVerifyCopies(t *testing.T) {
 	}
 	parent, _ := copiedFixture(t)
 	child := loadFixture(t, "copied")
-	if err := child.VerifyCopies(func(string) (*Session, error) { return parent, nil }); err != nil {
+	resolved := 0
+	if err := child.VerifyCopies(func(string) (*Session, error) { resolved++; return parent, nil }); err != nil {
 		t.Errorf("the copied fixture: %v", err)
+	}
+	if resolved != 1 {
+		t.Errorf("three copies of one session resolved it %d times", resolved)
 	}
 }
 

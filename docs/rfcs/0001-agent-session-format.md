@@ -570,7 +570,9 @@ One conversation item in the payload profile.
   way as a member it does not know. A reader that holds the session
   named MAY check an item naming an entry against that entry, its
   `item` and its `trust`, and reports one that differs, or an entry
-  that session does not hold; it does not check an item a redaction
+  that session does not hold. It checks with the read rights of whoever
+  asks for the check and no more, since a check made with more answers
+  whether an entry the asker may not read holds a given item; it does not check an item a redaction
   made against a session that was not redacted alongside it.
 - A `function_call` whose entry carries `copied_from` is a **copied
   call**: the call was made in the session named, and this session

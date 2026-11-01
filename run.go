@@ -1438,19 +1438,31 @@ var ErrCopyMismatch = errors.New("agentsession: copied item differs from the ent
 // through resolve: the entry holds the same item, member for member, and
 // the same trust. A session resolve does not find, returned as (nil,
 // nil), is not checked; an error from resolve is returned. With a nil
-// resolve it checks nothing. It returns the first problem found.
+// resolve it checks nothing. Each session is resolved once. It returns
+// the first problem found.
+//
+// resolve MUST apply the read rights of whoever asks for the check, and
+// return (nil, nil) for a session that caller may not read. A resolve
+// that reads more than the caller makes VerifyCopies an oracle: a copy
+// the caller writes, naming an entry it cannot read, would learn from
+// the answer whether that entry holds a given item and trust.
 func (s *Session) VerifyCopies(resolve func(id string) (*Session, error)) error {
 	if resolve == nil {
 		return nil
 	}
+	sources := map[string]*Session{}
 	for _, e := range s.Entries() {
 		it, ok := e.(*ItemEntry)
 		if !ok || it.CopiedFrom == nil || it.CopiedFrom.Entry == "" {
 			continue
 		}
-		src, err := resolve(it.CopiedFrom.Session)
-		if err != nil {
-			return fmt.Errorf("agentsession: item %s: %w", it.ID, err)
+		src, seen := sources[it.CopiedFrom.Session]
+		if !seen {
+			var err error
+			if src, err = resolve(it.CopiedFrom.Session); err != nil {
+				return fmt.Errorf("agentsession: item %s: %w", it.ID, err)
+			}
+			sources[it.CopiedFrom.Session] = src
 		}
 		if src == nil {
 			continue
