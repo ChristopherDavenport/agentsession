@@ -412,15 +412,15 @@ func (m *MemoryStore) Create(ctx context.Context, h Header) (*Session, error) {
 	if err := CheckCreate(h, m.redactedOnly); err != nil {
 		return nil, err
 	}
-	var originID string
+	var origin *Session
 	if h.Base != "" {
-		originID = m.pickOrigin(ctx, h.ParentSession, h.Base)
+		origin = m.lockOrigin(ctx, h.ParentSession, h.Base)
+	} else {
+		m.mu.Lock()
 	}
-	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := New(h)
 	if h.Base != "" {
-		origin := m.heldOrigin(originID, h.Base)
 		if origin == nil {
 			return nil, fmt.Errorf("%w: base %s is not held by this store", ErrNoEntry, h.Base)
 		}
@@ -467,17 +467,18 @@ func (m *MemoryStore) Import(ctx context.Context, r io.Reader, asRecord bool) (*
 			return nil, err
 		}
 	}
-	var originID string
+	var origin *Session
 	if h.Base != "" {
-		originID = m.pickOrigin(ctx, h.ParentSession, h.Base)
+		origin = m.lockOrigin(ctx, h.ParentSession, h.Base)
+	} else {
+		m.mu.Lock()
 	}
-	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, exists := m.sessions[h.ID]; exists {
 		return nil, fmt.Errorf("%w: %s", ErrSessionExists, h.ID)
 	}
 	if h.Base != "" {
-		if err := CheckImportMedia(h, m.heldOrigin(originID, h.Base)); err != nil {
+		if err := CheckImportMedia(h, origin); err != nil {
 			return nil, err
 		}
 	}
@@ -533,7 +534,36 @@ func (m *MemoryStore) pickOrigin(ctx context.Context, named, base string) string
 		}
 	}
 	m.mu.RUnlock()
-	return c.Pick(ReadableIn(ctx))
+	id := c.Pick(ReadableIn(ctx))
+	if memoryOriginPicked != nil {
+		memoryOriginPicked()
+	}
+	return id
+}
+
+// memoryOriginPicked, when set, runs once pickOrigin has picked and
+// before the caller takes the store's lock again: a test's way into the
+// gap.
+var memoryOriginPicked func()
+
+// lockOrigin takes m.mu and returns the origin of a fork at base, as
+// pickOrigin picks it, that the store still holds once the lock is
+// taken; one deleted in between is picked past, the pick made again,
+// and nil is returned when none is held. It returns with m.mu held.
+func (m *MemoryStore) lockOrigin(ctx context.Context, named, base string) *Session {
+	for range 8 {
+		id := m.pickOrigin(ctx, named, base)
+		m.mu.Lock()
+		if id == "" {
+			return nil
+		}
+		if o := m.heldOrigin(id, base); o != nil {
+			return o
+		}
+		m.mu.Unlock()
+	}
+	m.mu.Lock()
+	return nil
 }
 
 // heldOrigin returns the session pickOrigin chose, id, if the store
