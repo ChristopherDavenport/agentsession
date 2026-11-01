@@ -842,3 +842,29 @@ func TestRemapRefsLeftOut(t *testing.T) {
 		}
 	}
 }
+
+// TestRemapRefsLeafLabelToRoot: a leaf label's target may name the
+// universal root, so when what stands in its target's place is the
+// root, the label names it, null, rather than being refused with
+// ErrNoPlace; any other label's target still is (B2 follow-up).
+func TestRemapRefsLeafLabelToRoot(t *testing.T) {
+	leaf := `{"type":"label","id":"x","parent":"o-p",` + tsLine + `,"target":"gone-t","label":"leaf"}`
+	r, err := RemapRefs(entryOf(t, leaf), leftOutRemap)
+	if err != nil {
+		t.Fatalf("a leaf label whose target has the root in its place: %v", err)
+	}
+	if l := r.Entry.(*LabelEntry); l.Target != "" {
+		t.Errorf("target %q, want the root", l.Target)
+	}
+	data, err := MarshalEntry(r.Entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"target":null`) {
+		t.Errorf("written as %s", data)
+	}
+	other := `{"type":"label","id":"x","parent":"o-p",` + tsLine + `,"target":"gone-t","label":"checkpoint"}`
+	if _, err := RemapRefs(entryOf(t, other), leftOutRemap); !errors.Is(err, ErrNoPlace) {
+		t.Errorf("another label: err %v, want ErrNoPlace", err)
+	}
+}

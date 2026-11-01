@@ -225,7 +225,8 @@ func specialsOf(e Entry) []special {
 // was left out with nothing in its place, an empty ID, for a member that
 // names one predecessor and so must name what stands in the left-out
 // entry's place (RFC 0001, Leaving entries out): a target, a from, a
-// first_kept, images' before or an omitted part's of.
+// first_kept, images' before or an omitted part's of. A leaf label's
+// target is not refused: it names the universal root, as parent does.
 var ErrNoPlace = errors.New("agentsession: a member naming one entry has nothing in the place of the entry left out")
 
 // Remap says where the references [RemapRefs] meets now point. A
@@ -245,7 +246,8 @@ type Remap struct {
 	// of a set loses it (a parents element, an omit items or outputs
 	// items ID, an item's queued_from or from_link), a list so emptied
 	// is removed, and an omit left with no member with it; parent names
-	// the universal root, null; and any other member, which names one
+	// the universal root, null, and so does a leaf label's target, the
+	// one other member that may; and any other member, which names one
 	// predecessor and must name what stands in the place, is refused
 	// with [ErrNoPlace].
 	Entry func(session, entry string) (string, bool)
@@ -345,8 +347,11 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 		parents bool
 		gone    []string // pointers to remove, in the order met
 		root0   bool     // parent names the universal root
+		leaf0   bool     // a leaf label's target names the universal root
 		noPlace error
 	)
+	l, isLabel := e.(*LabelEntry)
+	leafLabel := isLabel && l.Label != nil && *l.Label == LeafLabel
 	for _, sp := range specialsOf(e) {
 		var mapped func(at string, s string, holder map[string]any) (string, bool)
 		switch {
@@ -367,6 +372,10 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 					return s, false
 				case len(sp.path) == 1 && sp.path[0] == "parent":
 					root0 = true
+					return s, false
+				case leafLabel && len(sp.path) == 1 && sp.path[0] == "target":
+					// A leaf label may name the universal root.
+					leaf0 = true
 					return s, false
 				case noPlace == nil:
 					noPlace = fmt.Errorf("%w: %s names %s", ErrNoPlace, at, s)
@@ -403,6 +412,9 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 	}
 	if root0 {
 		root["parent"] = nil
+	}
+	if leaf0 {
+		root["target"] = nil
 	}
 	removeAll(root, gone)
 	if parents && sortParents {
