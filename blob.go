@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // BlobWriter is implemented by a store that holds sidecar media, as RFC
@@ -29,6 +30,19 @@ type BlobWriter interface {
 // [ErrNoBlob] for one it does not hold.
 type BlobReader interface {
 	Blob(ctx context.Context, hash string) ([]byte, error)
+}
+
+// BlobSweeper is implemented by a store whose blobs RFC 0002's sweep
+// collects (Deletion and retention): SweepBlobs removes each blob that
+// no entry of any session the store holds names, prefixes included, and
+// that was stored, stored again or named by an append longer than grace
+// ago, and returns how many it removed. A blob is retained while a
+// session names it, and grace spares one a write is about to name, as
+// an upload awaits the append, import or push that names it. A store
+// whose blobs are objects among others, as cas's are, collects them in
+// its own sweep instead.
+type BlobSweeper interface {
+	SweepBlobs(ctx context.Context, grace time.Duration) (int, error)
 }
 
 // ErrNoBlobWriter is returned for a sidecar session given to a store

@@ -732,6 +732,18 @@ document's concern, and it is not this log.
   `gc.pruneExpire`; and when it accepts an append it MUST hold that
   append's objects, writing back any a sweep took, which is harmless
   since a write of an object is idempotent.
+- A media blob a store accepted by its bytes (Media) is an object
+  like any other for these rules, whatever else the store keeps: a
+  store whose blobs are its only objects, such as one that keeps its
+  entries in a file or a database, MUST sweep a blob no retained content
+  names once it is older than the grace, as one that keeps every object
+  does, so blobs no session names cannot accumulate without bound.
+  Storing a blob again restarts its grace. A sweep MUST NOT remove a
+  blob that an append it raced names: either no append lands between
+  its reading what names the blob and its removing it, or an append
+  naming a blob restarts the blob's grace before it lands and the sweep
+  looks again at the blob's age, in a step the restart cannot
+  interleave with, before it removes it.
 - An append recovery dropped as lost, or one no commit covers whose
   objects a crash left torn, does not hold its objects for the first
   rule: nothing reads them, and a torn one is not damage for a sweep

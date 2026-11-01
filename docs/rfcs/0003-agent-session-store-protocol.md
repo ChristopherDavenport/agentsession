@@ -221,8 +221,14 @@ Media).
   nothing twice; no other caller is. It is collected as RFC 0002's sweep collects any
   unreferenced object (Deletion and retention), and the grace period
   that spares it is the server's, published in the capabilities as
-  `upload_grace_ms`. An object swept before its push is
-  `missing_object` at the push.
+  `upload_grace_ms`. This holds over every store a server takes
+  uploads for: a server whose store holds sidecar media and no other
+  objects MUST see its unnamed `media` uploads swept too, as RFC 0002
+  requires of such a store, with at least that grace, and, where no
+  operator sweeps it, sweeps them itself at least once a grace while
+  uploads arrive, so a principal with write scope cannot fill the store
+  with blobs no session names. An object swept before its push (or its
+  import or append) is `missing_object` there.
   Entry-level rules (reserved members, `ts` form, I-JSON, parent) are
   not checked at `PUT`, which sees one object; admission checks them.
 - `POST /v1/objects/missing` (exchange scope) takes `{"entries": [...],
@@ -1117,7 +1123,10 @@ by hash. Three things in it are the reference server's:
 - **Uploads** go into the store's object space at once, where a sweep
   collects them as any unreferenced object, and the server keeps in
   memory which principal uploaded each, for `upload_grace_ms`. An
-  operator sweeps with at least that grace.
+  operator sweeps a cas store with at least that grace; over a store
+  that holds blobs and keeps no other objects (memory, JSONL, SQLite)
+  the server runs the store's blob sweep with that grace itself, from
+  the first media upload a grace after the last sweep.
 - **Read scope reads every session** unless the program authorizes per
   session (`WithAuthorize`), so an object a session holds is reachable
   by every reader; with the hook, only through a session the caller may

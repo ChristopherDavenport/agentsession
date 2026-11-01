@@ -749,6 +749,15 @@ func (s *Store) appendLocked(h *handle, sessionID string, e agentsession.Entry, 
 			return "", err
 		}
 	}
+	// A sidecar blob the entry names starts its grace again before the
+	// line lands, so a sweep that found it old and unnamed spares it. A
+	// blob that could not be freshened is named all the same, as one the
+	// store lacks would be: the session has taken the entry already.
+	if bytes.Contains(buf.Bytes(), []byte("sidecar:")) {
+		if names, err := agentsession.SidecarBlobs(e); err == nil {
+			_ = s.freshenBlobs(names)
+		}
+	}
 	if _, err := h.file.Write(buf.Bytes()); err != nil {
 		return "", fmt.Errorf("jsonl: write entry %s: %w", id, err)
 	}

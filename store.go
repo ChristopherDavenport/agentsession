@@ -288,7 +288,13 @@ type MemoryStore struct {
 	// redactedOnly says the store holds only redacted entries.
 	redactedOnly bool
 	// blobs are the sidecar media blobs the store holds, by hash.
-	blobs map[string][]byte
+	blobs map[string]memBlob
+}
+
+// memBlob is a blob a MemoryStore holds, and when it was last stored.
+type memBlob struct {
+	data []byte
+	at   time.Time
 }
 
 // MemoryOption configures a [MemoryStore].
@@ -314,7 +320,7 @@ func MemoryRedactedOnly() MemoryOption {
 
 // NewMemoryStore returns an empty store.
 func NewMemoryStore(opts ...MemoryOption) *MemoryStore {
-	m := &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{}, blobs: map[string][]byte{},
+	m := &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{}, blobs: map[string]memBlob{},
 		refs: refState{refs: map[string]RefTarget{}, idents: map[string]string{}, logs: map[string][]RefUpdate{}}}
 	for _, o := range opts {
 		o(m)
@@ -323,7 +329,8 @@ func NewMemoryStore(opts ...MemoryOption) *MemoryStore {
 }
 
 // PutBlob implements [BlobWriter]: it keeps a copy of the blob under
-// its hash.
+// its hash. Storing a blob the store holds again restarts its grace
+// for [MemoryStore.SweepBlobs].
 func (m *MemoryStore) PutBlob(ctx context.Context, data []byte) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -331,10 +338,53 @@ func (m *MemoryStore) PutBlob(ctx context.Context, data []byte) (string, error) 
 	h := HashBytes(data)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.blobs[h]; !ok {
-		m.blobs[h] = bytes.Clone(data)
+	b, ok := m.blobs[h]
+	if !ok {
+		b.data = bytes.Clone(data)
 	}
+	b.at = time.Now()
+	m.blobs[h] = b
 	return h, nil
+}
+
+// SweepBlobs implements [BlobSweeper]: it removes each blob no session
+// names that was stored longer than grace ago. It holds the store's
+// writers off for its length, so no append names a blob between its
+// reading the sessions and its removing one.
+func (m *MemoryStore) SweepBlobs(ctx context.Context, grace time.Duration) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	m.wmu.Lock()
+	defer m.wmu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cutoff := time.Now().Add(-grace)
+	old := false
+	for _, b := range m.blobs {
+		old = old || b.at.Before(cutoff)
+	}
+	if !old {
+		return 0, nil
+	}
+	named := map[string]bool{}
+	for _, s := range m.sessions {
+		bs, err := SessionBlobs(s)
+		if err != nil {
+			return 0, err
+		}
+		for _, b := range bs {
+			named[b] = true
+		}
+	}
+	n := 0
+	for h, b := range m.blobs {
+		if b.at.Before(cutoff) && !named[h] {
+			delete(m.blobs, h)
+			n++
+		}
+	}
+	return n, nil
 }
 
 // Blob implements [BlobReader]. The bytes returned are the caller's.
@@ -348,7 +398,7 @@ func (m *MemoryStore) Blob(ctx context.Context, hash string) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrNoBlob, hash)
 	}
-	return bytes.Clone(b), nil
+	return bytes.Clone(b.data), nil
 }
 
 // Create implements Store. A header whose Base is set makes a fork of
@@ -618,11 +668,12 @@ func (m *MemoryStore) Delete(_ context.Context, id string) error {
 }
 
 var (
-	_ Store      = (*MemoryStore)(nil)
-	_ Reader     = (*MemoryStore)(nil)
-	_ Follower   = (*MemoryStore)(nil)
-	_ Importer   = (*MemoryStore)(nil)
-	_ HeadStore  = (*MemoryStore)(nil)
-	_ BlobWriter = (*MemoryStore)(nil)
-	_ BlobReader = (*MemoryStore)(nil)
+	_ Store       = (*MemoryStore)(nil)
+	_ Reader      = (*MemoryStore)(nil)
+	_ Follower    = (*MemoryStore)(nil)
+	_ Importer    = (*MemoryStore)(nil)
+	_ HeadStore   = (*MemoryStore)(nil)
+	_ BlobWriter  = (*MemoryStore)(nil)
+	_ BlobReader  = (*MemoryStore)(nil)
+	_ BlobSweeper = (*MemoryStore)(nil)
 )

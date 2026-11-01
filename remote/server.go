@@ -61,6 +61,7 @@ type Handler struct {
 	uploads     uploads
 	uploadGrace time.Duration
 	reach       reach
+	blobSweep   blobSweep
 
 	// The remaining reads: the log where the store reads its log record
 	// by record, the snapshot bound, and how often a followed ref is
@@ -157,6 +158,9 @@ func WithLeaseLimits(def, max time.Duration) Option {
 // usable by its uploader's push (default 1h). It is published in the
 // capabilities, and it is the least grace a Sweep of the store must give
 // unreferenced objects, since an upload is one until a push names it.
+// Over a store that holds blobs and keeps no objects, an
+// [agentsession.BlobSweeper], the server sweeps with it itself: a media
+// upload no session names is removed once older than the grace.
 func WithUploadGrace(d time.Duration) Option {
 	return func(h *Handler) {
 		if d > 0 {
@@ -305,7 +309,7 @@ func (h *Handler) Capabilities() Capabilities {
 		},
 		Limits: Limits{FollowBuffer: h.buffer, FollowReplay: h.replay, SnapshotBytes: h.snapshotLimit},
 	}
-	if exchange {
+	if exchange || h.holdsMedia() {
 		c.Limits.UploadGraceMS = h.uploadGrace.Milliseconds()
 	}
 	return c

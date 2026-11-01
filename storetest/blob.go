@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 )
@@ -96,5 +97,65 @@ func testBlobs(t *testing.T, opts Options) {
 		if b, err := br.Blob(ctx, hh); err != nil || !bytes.Equal(b, held) {
 			t.Errorf("the imported blob: %q, %v", b, err)
 		}
+	}
+}
+
+// testBlobSweep holds a store that sweeps its blobs to RFC 0002's
+// retention: a blob no session names goes once older than the grace, a
+// young one stays for the write that will name it, and a blob a session
+// names stays however old, a fork's prefix and a session made by an
+// import among the namers.
+func testBlobSweep(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	sw, ok := st.(agentsession.BlobSweeper)
+	if !ok {
+		t.Skip("the store does not sweep its blobs")
+	}
+	bw := st.(agentsession.BlobWriter)
+	put := func(text string) string {
+		t.Helper()
+		h, err := bw.PutBlob(ctx, []byte(text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	named, stray := put("named"), put("nothing names it")
+	if _, err := st.Create(ctx, agentsession.Header{ID: "side", Media: agentsession.MediaSidecar}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := st.Append(ctx, "side", user("see sidecar:"+named))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A fork whose prefix names the blob keeps it once its origin goes.
+	if _, err := st.Create(ctx, agentsession.Header{ID: "fork", Media: agentsession.MediaSidecar, Base: e, ParentSession: "side"}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := sw.SweepBlobs(ctx, time.Hour); err != nil || n != 0 {
+		t.Errorf("a sweep with every blob young: %d, %v; want 0", n, err)
+	}
+	if err := st.Delete(ctx, "side"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if n, err := sw.SweepBlobs(ctx, time.Millisecond); err != nil || n != 1 {
+		t.Errorf("a sweep past the grace: %d, %v; want 1", n, err)
+	}
+	if br, ok := st.(agentsession.BlobReader); ok {
+		if _, err := br.Blob(ctx, stray); !errors.Is(err, agentsession.ErrNoBlob) {
+			t.Errorf("the blob nothing names: %v, want ErrNoBlob", err)
+		}
+		if _, err := br.Blob(ctx, named); err != nil {
+			t.Errorf("the blob the fork's prefix names: %v", err)
+		}
+	}
+	// Stored again, it is young again.
+	if again := put("nothing names it"); again != stray {
+		t.Fatalf("PutBlob again: %s, want %s", again, stray)
+	}
+	if n, err := sw.SweepBlobs(ctx, time.Hour); err != nil || n != 0 {
+		t.Errorf("a sweep after the blob was stored again: %d, %v; want 0", n, err)
 	}
 }

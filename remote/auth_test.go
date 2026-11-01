@@ -589,3 +589,67 @@ func testNamingABlobGrantsNothing(t *testing.T, st agentsession.Store) {
 		t.Errorf("alice reads her blob: %d", resp.StatusCode)
 	}
 }
+
+// TestUnnamedUploadsSwept: a writer's media upload that no session comes
+// to name is removed once older than the server's upload grace, over a
+// store that keeps no objects but holds blobs, as RFC 0003's Objects
+// has every upload collected; one a session names stays. Without it a
+// principal with write scope could fill the store with blobs nothing
+// names.
+func TestUnnamedUploadsSwept(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func(t *testing.T) agentsession.Store
+	}{
+		{"memory", func(t *testing.T) agentsession.Store { return agentsession.NewMemoryStore() }},
+		{"jsonl", func(t *testing.T) agentsession.Store {
+			st, err := jsonl.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := tc.open(t)
+			grace := 200 * time.Millisecond
+			url := server(t, st,
+				remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{
+					"w": {Name: "w", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite}},
+				})),
+				remote.WithUploadGrace(grace),
+			)
+			c := dial(t, url, withToken("w", nil))
+			if _, err := c.Create(ctx, agentsession.Header{ID: "s", Media: agentsession.MediaSidecar}); err != nil {
+				t.Fatal(err)
+			}
+			named, err := c.PutBlob(ctx, []byte("a picture the session shows"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Append(ctx, "s", user("see sidecar:"+named)); err != nil {
+				t.Fatal(err)
+			}
+			stray, err := c.PutBlob(ctx, []byte("a blob nothing names"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(grace + 100*time.Millisecond)
+			late, err := c.PutBlob(ctx, []byte("an upload after the grace"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			br := st.(agentsession.BlobReader)
+			if _, err := br.Blob(ctx, stray); !errors.Is(err, agentsession.ErrNoBlob) {
+				t.Errorf("an upload nothing names, past the grace: %v, want ErrNoBlob", err)
+			}
+			for _, h := range []string{named, late} {
+				if _, err := br.Blob(ctx, h); err != nil {
+					t.Errorf("blob %s: %v", h, err)
+				}
+			}
+		})
+	}
+}

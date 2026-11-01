@@ -83,8 +83,9 @@ CREATE TABLE IF NOT EXISTS ref_log (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS ref_log_name ON ref_log(name, id);
 CREATE TABLE IF NOT EXISTS blobs (
-	hash TEXT PRIMARY KEY,
-	data BLOB NOT NULL
+	hash   TEXT    PRIMARY KEY,
+	data   BLOB    NOT NULL,
+	stored INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 `
 

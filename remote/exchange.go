@@ -321,6 +321,7 @@ func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
 	} else if agentsession.HashBytes(data) != k.hash {
 		err = problem(CodeBadObject, "the bytes do not hash to the name", k.hash)
 	} else {
+		h.sweepUploads(r.Context())
 		_, err = h.blobs.PutBlob(r.Context(), data)
 	}
 	if err != nil {
@@ -329,6 +330,37 @@ func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
 	}
 	h.uploads.put(who.Name, k)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// sweepUploads collects the uploads no session came to name, over a
+// store that holds blobs and keeps no objects of its own, as RFC 0003's
+// Objects has every upload collected: the store's blob sweep, with the
+// upload grace, at most once a grace, run by the upload that finds the
+// last one a grace old. So what unnamed uploads hold is bounded by what
+// arrives in two graces. A store whose sweep is its operator's, as
+// cas's is, is not swept here. A sweep that fails is logged and the
+// upload goes on.
+func (h *Handler) sweepUploads(ctx context.Context) {
+	sw, ok := h.blobs.(agentsession.BlobSweeper)
+	if !ok {
+		return
+	}
+	h.blobSweep.mu.Lock()
+	if time.Since(h.blobSweep.last) < h.uploadGrace {
+		h.blobSweep.mu.Unlock()
+		return
+	}
+	h.blobSweep.last = time.Now()
+	h.blobSweep.mu.Unlock()
+	if _, err := sw.SweepBlobs(ctx, h.uploadGrace); err != nil {
+		h.logError(fmt.Errorf("remote: sweeping unnamed uploads: %w", err))
+	}
+}
+
+// blobSweep is when the server last swept unnamed uploads.
+type blobSweep struct {
+	mu   sync.Mutex
+	last time.Time
 }
 
 // missing answers which of the hashes the caller names it cannot reach:

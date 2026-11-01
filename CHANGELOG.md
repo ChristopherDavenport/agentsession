@@ -47,6 +47,19 @@ versions may break the API.
   `cas.Store.CheckPush` takes the same function. The remote
   conformance suite now imports through the endpoint. (#241, #244)
 
+- **Blobs no session names are swept on every store (RFC 0002, Deletion
+  and retention; RFC 0003, Objects).** A media upload to a server over
+  memory, jsonl or sqlite was kept for good, so a principal with write
+  scope could store any number of blobs nothing names. **Added: the
+  root `BlobSweeper` (`SweepBlobs`)**, implemented by `MemoryStore`,
+  `jsonl.Store` and `sqlite.Store` (a `stored` column in `blobs`): it
+  removes each blob no session names, prefixes included, older than the
+  grace; storing a blob again, and in jsonl an append naming it,
+  restarts its grace. The remote server runs it with its upload grace
+  over such a store, at most once a grace, from a media upload, and
+  publishes `upload_grace_ms` whenever it takes media. `cas` collects
+  blobs in its `Sweep`, as before.
+
 - **Every store holds sidecar blobs, and an import takes them (RFC 0002,
   Media and Projection to JSONL; RFC 0003, Objects).** **Added: the
   root `BlobWriter` (`PutBlob`) and `BlobReader` (`Blob`, `ErrNoBlob`)**,
