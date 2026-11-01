@@ -2078,7 +2078,7 @@ func TestWithdrawnFixture(t *testing.T) {
 			t.Errorf("%s: the failed call is %s, failed %v", format, st, tests.Failed())
 		}
 		calls, _ = s.Calls(s.Leaf())
-		if len(calls[0].Dispatches) != 1 || len(calls[0].Withdrawn) != 1 || calls[0].Failed() || len(s.Dispatches(calls[0].Entry.ID)) != 1 {
+		if len(calls[0].Dispatches) != 1 || len(calls[0].Withdrawn) != 1 || calls[0].Failed() || len(s.Dispatches(calls[0].Entry.ID)) != 2 {
 			t.Errorf("%s: the call dispatched again = %+v", format, calls[0])
 		}
 		for _, e := range s.Entries() {

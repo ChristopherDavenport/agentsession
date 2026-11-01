@@ -1171,7 +1171,11 @@ holding the `function_call`, on the path before the `dispatch`, and
 hand-off: what this section says of a call's dispatches is said of
 the others, and the call's state is read as though neither it nor the
 withdrawal were there, within the limit `decision` sets: a withdrawal
-withdraws the one `dispatch` it directly follows. A call with
+withdraws the one `dispatch` it directly follows. A withdrawal holds on
+its own path: a `dispatch` it withdraws may be followed on another
+branch by the call's output, which says that branch handed the call
+off, so for any path that does not hold the withdrawal the `dispatch`
+is one like any other, on the path or off it. A call with
 a `dispatch` and no `function_call_output` on the path may have run: its
 side effect may have happened. It is **in flight**, handed to its tool
 when the record stopped, unless the latest `decision` after its last
@@ -1184,9 +1188,9 @@ the output of, since the record stopped between the two; the harness
 that continues the path writes that output and nothing else for the
 call. When the header names `dispatch` in `records`, a call with neither
 on its path was never started, unless the session holds a `dispatch`
-naming it elsewhere, off the path: a writer that rebases to a point
-between a call and its `dispatch` leaves the call on the new path with
-no `dispatch`, and it may have run. Otherwise the file does not say
+naming it elsewhere, off the path, a withdrawn one included: a writer
+that rebases to a point between a call and its `dispatch` leaves the
+call on the new path with no `dispatch`, and it may have run. Otherwise the file does not say
 whether it ran. A call in a fork's prefix has its `dispatch` entries,
 if any, in the session the fork was made from: the prefix is the path
 to the base, and a `dispatch` the origin wrote off that path is not

@@ -120,8 +120,8 @@ func TestWithdrawnDispatch(t *testing.T) {
 	if c.Dispatch != nil || len(c.Dispatches) != 0 || len(c.Decisions) != 0 || len(c.Withdrawn) != 1 || c.Rejected() {
 		t.Errorf("call = %+v", c)
 	}
-	if got := s.Dispatches(target); len(got) != 0 {
-		t.Errorf("the session still counts the withdrawn hand-off: %d", len(got))
+	if got := s.Dispatches(target); len(got) != 1 {
+		t.Errorf("the session holds %d dispatches, want the withdrawn one", len(got))
 	}
 	if err := s.VerifyRecords(s.Leaf()); err != nil {
 		t.Errorf("VerifyRecords: %v", err)
@@ -242,7 +242,7 @@ func TestWithdrawalAmongOtherCalls(t *testing.T) {
 	if calls[0].State(s.Header()) != CallNeverStarted || calls[1].State(s.Header()) != CallInFlight {
 		t.Errorf("states %s, %s", calls[0].State(s.Header()), calls[1].State(s.Header()))
 	}
-	if len(s.Dispatches(a)) != 0 || len(s.Dispatches(b)) != 1 {
+	if len(s.Dispatches(a)) != 1 || len(s.Dispatches(b)) != 1 {
 		t.Errorf("dispatches a %d, b %d", len(s.Dispatches(a)), len(s.Dispatches(b)))
 	}
 }
@@ -520,5 +520,56 @@ func TestContextHashLeavesOutFailed(t *testing.T) {
 	}
 	if len(hashes) != 1 {
 		t.Errorf("failed moved the context hash: %v", hashes)
+	}
+}
+
+// TestWithdrawalIsPerPath: a withdrawal says its dispatch was no
+// hand-off on the path it is on. A branch where the same dispatch is
+// followed by the call's output ran the call, so a third branch above
+// the dispatch reads the call as one that may have run, not as never
+// started (review finding 5).
+func TestWithdrawalIsPerPath(t *testing.T) {
+	s := New(Header{Records: AllRecords})
+	target, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "t", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.Append(NewDispatch("c", target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.Append(NewItemEntry(openresponses.NewFunctionCallOutput("c", "ran")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Branch(d); err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Append(NewWithdrawal("c", target, ByPolicy, "vetoed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Branch(target); err != nil {
+		t.Fatal(err)
+	}
+	third, err := s.Append(NewItemEntry(openresponses.UserText("meanwhile")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for leaf, want := range map[string]CallState{out: CallCompleted, w: CallNeverStarted, third: CallUnknown} {
+		calls, err := s.Calls(leaf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := calls[0].State(s.Header()); got != want {
+			t.Errorf("at %s: %s, want %s", leaf, got, want)
+		}
+	}
+	// An answer on the withdrawn path answers a call that never started.
+	if err := s.Branch(w); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewDecision("c", target, VerdictAnswer, ByPolicy).WithReason("x")); !errors.Is(err, ErrAnswerNotDispatched) {
+		t.Errorf("an answer after the withdrawal: Append = %v, want ErrAnswerNotDispatched", err)
 	}
 }

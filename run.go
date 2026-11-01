@@ -395,9 +395,10 @@ func (s *Session) Calls(leaf string) ([]*Call, error) {
 		return nil, fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
 	}
 	calls := Calls(path)
+	on := onPath(path)
 	for _, c := range calls {
 		c.inPrefix = s.Prefix(c.Entry.ID)
-		c.dispatchedElsewhere = c.Dispatch == nil && s.dispatched(c.Entry.ID)
+		c.dispatchedElsewhere = c.Dispatch == nil && s.dispatchedOff(c.Entry.ID, on)
 	}
 	return calls, nil
 }
@@ -960,6 +961,7 @@ func (s *Session) VerifyRecords(leaf string) error {
 		return err
 	}
 	calls := Calls(path)
+	on := onPath(path)
 	for _, r := range Runs(path) {
 		if err := r.Verify(); err != nil {
 			return err
@@ -999,7 +1001,7 @@ func (s *Session) VerifyRecords(leaf string) error {
 		if c.endAfterOutput != nil {
 			return fmt.Errorf("%w: %s %s follows the output of call %s", ErrCallCompleted, c.endAfterOutput.Verdict, c.endAfterOutput.ID, c.ID())
 		}
-		if c.Answered() && c.Dispatch == nil && promised(c.Entry.ID) && !s.dispatched(c.Entry.ID) {
+		if c.Answered() && c.Dispatch == nil && promised(c.Entry.ID) && !s.dispatchedOff(c.Entry.ID, on) {
 			return fmt.Errorf("%w: call %s", ErrAnswerNotDispatched, c.ID())
 		}
 		if c.Output != nil && c.Dispatch == nil && !c.Rejected() && !c.Answered() && promised(c.Output.ID) {

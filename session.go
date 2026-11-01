@@ -743,7 +743,7 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		case v.Verdict != VerdictAnswer && v.Verdict != VerdictReject:
 		case c.Output != nil:
 			return fmt.Errorf("%w: %s", ErrCallCompleted, v.CallID)
-		case v.Verdict == VerdictAnswer && c.Dispatch == nil && s.header.HasRecord(TypeDispatch) && !s.prefix[c.Entry.ID] && len(s.dispatches[c.Entry.ID]) == 0:
+		case v.Verdict == VerdictAnswer && c.Dispatch == nil && s.header.HasRecord(TypeDispatch) && !s.prefix[c.Entry.ID] && !s.dispatchedOffLocked(c.Entry.ID, onPath(s.path(parent))):
 			return fmt.Errorf("%w: %s", ErrAnswerNotDispatched, v.CallID)
 		}
 	case *DispatchEntry:
@@ -1551,55 +1551,16 @@ func (s *Session) add(e Entry) {
 				s.dispatches[v.Target] = append(s.dispatches[v.Target], v)
 			}
 		}
-	case *DecisionEntry:
-		// A withdrawal says its dispatch was no hand-off, so it is not
-		// one elsewhere in the session either.
-		if d := s.withdrawnDispatch(v); d != nil {
-			s.dispatches[v.Target] = slices.DeleteFunc(s.dispatches[v.Target], func(x *DispatchEntry) bool { return x == d })
-		}
 	}
-}
-
-// withdrawnDispatch returns the dispatch the decision d withdraws, or
-// nil: for a reject carrying withdrawn, the call's latest decision,
-// dispatch or output above it, when that is a dispatch the index holds.
-// The walk stops at the call's first entry that names it.
-func (s *Session) withdrawnDispatch(d *DecisionEntry) *DispatchEntry {
-	if !d.Withdrawn || d.Verdict != VerdictReject || len(s.dispatches[d.Target]) == 0 {
-		return nil
-	}
-	for id := d.Parent; id != "" && id != d.Target; {
-		e, ok := s.byID[id]
-		if !ok {
-			return nil
-		}
-		switch v := e.(type) {
-		case *DispatchEntry:
-			if v.Target == d.Target {
-				if slices.Contains(s.dispatches[d.Target], v) {
-					return v
-				}
-				return nil
-			}
-		case *DecisionEntry:
-			if v.Target == d.Target {
-				return nil
-			}
-		case *ItemEntry:
-			if out, ok := v.Item.(*openresponses.FunctionCallOutput); ok && out.CallID == d.CallID {
-				return nil
-			}
-		}
-		id = e.Base().Parent
-	}
-	return nil
 }
 
 // Dispatches returns the dispatches for the call whose function call is
 // the entry target, anywhere in the session, in the order they were
-// added, each naming the call by its call ID. A call with none on its
-// path may have one elsewhere, which a rebase above it leaves, and may
-// then have run. A call in a fork's prefix has its dispatches, if any,
+// added, each naming the call by its call ID, a withdrawn one among
+// them: a withdrawal says its dispatch was no hand-off on the path it
+// is on, and another branch may have handed the call off from the same
+// dispatch. A call with none on its path may have one elsewhere, which
+// a rebase above it leaves, and may then have run. A call in a fork's prefix has its dispatches, if any,
 // in the session the fork was made from, which the fork does not hold;
 // [OriginDispatches] reads them through a store.
 func (s *Session) Dispatches(target string) []*DispatchEntry {
@@ -1608,12 +1569,34 @@ func (s *Session) Dispatches(target string) []*DispatchEntry {
 	return append([]*DispatchEntry(nil), s.dispatches[target]...)
 }
 
-// dispatched reports whether the session holds a dispatch for the call
-// at target anywhere; see Dispatches.
-func (s *Session) dispatched(target string) bool {
+// dispatchedOff reports whether the session holds a dispatch for the
+// call at target that is not on the path, whose entries on reports: one
+// a rebase left above the path, which may have run, withdrawn or not,
+// since a withdrawal holds on its own path alone. A dispatch on the path
+// is the path's to read, a withdrawn one included.
+func (s *Session) dispatchedOff(target string, on func(id string) bool) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.dispatches[target]) > 0
+	return s.dispatchedOffLocked(target, on)
+}
+
+// dispatchedOffLocked is dispatchedOff for a caller holding the lock.
+func (s *Session) dispatchedOffLocked(target string, on func(id string) bool) bool {
+	for _, d := range s.dispatches[target] {
+		if !on(d.ID) {
+			return true
+		}
+	}
+	return false
+}
+
+// onPath returns a report of whether an entry is on path.
+func onPath(path []Entry) func(id string) bool {
+	ids := make(map[string]bool, len(path))
+	for _, e := range path {
+		ids[e.Base().ID] = true
+	}
+	return func(id string) bool { return ids[id] }
 }
 
 // Truncated reports the final line of the file this session was read

@@ -158,7 +158,9 @@ versions may break the API.
   `Call.Withdrawn` and `Withdrawal`, and `ErrBadWithdrawal`** (wire
   reason `bad_withdrawal`), which `Append` returns for a withdrawal
   anywhere else; a reader reads one found elsewhere as a plain reject.
-  `Session.Dispatches` leaves a withdrawn dispatch out. otel ends a
+  A withdrawal holds on its own path: `Session.Dispatches` still lists
+  the dispatch it withdraws, which another branch may have handed off,
+  and a path without the withdrawal reads it as any dispatch elsewhere. otel ends a
   withdrawn hand-off's span at its withdrawal, without an error, with
   call state `withdrawn` (`CallStateWithdrawn`, `AttrWithdrawn` on the
   decision event), and gives a failed call's span an error status. A
