@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.14
+Status: draft 0.15
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -212,7 +212,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.14","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.15","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -2411,13 +2411,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.14 reads a 0.5 to 0.13 file
-as it stands, since 0.6 to 0.14 add optional members, elements and
-relations, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
+it begins at 1.0. A reader of 0.15 reads a 0.5 to 0.14 file
+as it stands, since 0.6 to 0.15 add optional members, elements and
+relations, and 0.15 a record entry type, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.14 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.15 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -2530,6 +2530,18 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.14
+
+Optional members, one record entry type, and the rules that go with
+them. A 0.14 file is a 0.15 file that holds none of them. No hash
+changes. As with 0.12's and 0.14's, the new rules turn on the members
+and entries a file holds, not on the header, so a reader of 0.15 reads
+each one below by its form in a file of any minor. No writer of an
+earlier minor wrote a `result` entry, since a reader of that minor
+reported the type. A writer of 0.15 raises every file it appends to, as
+Versioning says, so every reader of 0.14 refuses those files until it
+is upgraded.
 
 ## Changes since 0.13
 
