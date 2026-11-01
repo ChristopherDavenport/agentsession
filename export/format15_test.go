@@ -3,6 +3,7 @@ package export
 import (
 	"testing"
 
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/atif"
 )
 
@@ -89,5 +90,47 @@ func TestResultTravelsWithItsCall(t *testing.T) {
 	}
 	if r := result(mustDoc(t, tr), "call_a"); r == nil || r["item"] != nil {
 		t.Errorf("at the leaf, which holds the output, call_a's result is %v", r)
+	}
+}
+
+// TestTrustTravels: an output's trust travels under extra.agentsession
+// in its observation result, and a fold's on its system step (RFC 0001,
+// Projections/ATIF, 0.15).
+func TestTrustTravels(t *testing.T) {
+	s := loadFixture(t, "trust")
+	var before, fold string
+	for _, e := range s.Entries() {
+		if c, ok := e.(*agentsession.CompactionEntry); ok {
+			fold, before = c.ID, c.Parent
+		}
+	}
+	tr, err := At(s, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reads := map[string]bool{}
+	for _, step := range mustDoc(t, tr).Steps {
+		if step.Observation == nil {
+			continue
+		}
+		for _, r := range step.Observation.Results {
+			as, _ := r.Extra[ExtraAgentSession].(map[string]any)
+			if tr, ok := as["trust"].(*agentsession.Trust); ok {
+				for _, l := range tr.Reads {
+					reads[l] = true
+				}
+			}
+		}
+	}
+	if !reads[agentsession.TrustUntrusted] || !reads[agentsession.TrustPrivate] {
+		t.Errorf("the observations carry %v", reads)
+	}
+	tr, err = At(s, fold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	as, _ := mustDoc(t, tr).Steps[0].Extra[ExtraAgentSession].(map[string]any)
+	if got, _ := as["trust"].(*agentsession.Trust); got == nil || len(got.Reads) != 3 {
+		t.Errorf("the fold's step carries %v", as["trust"])
 	}
 }

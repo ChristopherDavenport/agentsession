@@ -1151,7 +1151,9 @@ not by any later leaf:
   `item` holding a `function_call_output`, `failed` is removed where RFC
   0001 defines it, `true`: it is a record member that reaches no
   request, so two sessions whose model saw the same output share a key
-  whether or not their harnesses marked the call failed. For every type, `legacy_id`, `normalised`, `redacted`, and on an `item`
+  whether or not their harnesses marked the call failed. `trust` is
+  removed from an `item`, a `compaction` and a `branch_summary` where
+  RFC 0001 defines it, since 0.15, for the same reason. For every type, `legacy_id`, `normalised`, `redacted`, and on an `item`
   `response` and `source` are removed as well, since each is provenance
   a provider or a harness minted per run and none reaches the model;
   `response` above all, which a provider mints anew for every call, so

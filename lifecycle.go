@@ -202,6 +202,9 @@ type ResultEntry struct {
 	// entry carries the same. A failed member that is not true is kept
 	// as written in Unknown and Failed is false.
 	Failed bool `json:"-" member:"failed"`
+	// Trust has the meaning it has on the output's entry, which carries
+	// the same; see [Trust].
+	Trust *Trust `json:"-" member:"trust"`
 }
 
 // EntryType returns "result".
@@ -214,10 +217,10 @@ func NewResult(callID, target string, out *openresponses.FunctionCallOutput) *Re
 }
 
 // Output returns the item entry that appends the result as the call's
-// output, carrying Failed as the result does: what the harness that
+// output, carrying Failed and Trust as the result does: what the harness that
 // continues a path holding a returned call writes for it.
 func (e *ResultEntry) Output() *ItemEntry {
-	return &ItemEntry{Item: e.Item, Failed: e.Failed}
+	return &ItemEntry{Item: e.Item, Failed: e.Failed, Trust: e.Trust}
 }
 
 // DecisionEntry records that a call's fate was decided outside the
@@ -891,16 +894,22 @@ func (e *ResultEntry) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	type plain ResultEntry
-	if !e.Failed {
+	if !e.Failed && e.Trust == nil {
 		return marshalEntry(TypeResult, &e.EntryBase, (*plain)(e))
 	}
-	if _, dup := e.Unknown["failed"]; dup {
-		return nil, errors.New("agentsession: result entry has failed both typed and unknown")
+	for _, m := range []struct {
+		key string
+		set bool
+	}{{"failed", e.Failed}, {"trust", e.Trust != nil}} {
+		if _, dup := e.Unknown[m.key]; dup && m.set {
+			return nil, fmt.Errorf("agentsession: result entry has %s both typed and unknown", m.key)
+		}
 	}
 	return marshalEntry(TypeResult, &e.EntryBase, struct {
 		*plain
-		Failed bool `json:"failed"`
-	}{(*plain)(e), true})
+		Failed bool   `json:"failed,omitempty"`
+		Trust  *Trust `json:"trust,omitempty"`
+	}{(*plain)(e), e.Failed, e.Trust})
 }
 
 // UnmarshalJSON decodes the entry, dispatching the item through the
@@ -932,6 +941,7 @@ func (e *ResultEntry) decodeMembers(data []byte, all map[string]json.RawMessage)
 	e.CallID, e.Target, e.Item = aux.CallID, aux.Target, item
 	e.Failed = false
 	promote(&e.EntryBase, "failed", &e.Failed)
+	promoteTrust(&e.EntryBase, &e.Trust)
 	return validateLifecycle(e)
 }
 

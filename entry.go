@@ -340,6 +340,146 @@ type ItemEntry struct {
 	// whose entry is present and not one, is kept as written in Unknown
 	// and CopiedFrom is nil.
 	CopiedFrom *CopiedFrom `json:"-" member:"copied_from"`
+	// Trust says, in format 0.15, what the harness knows about where the
+	// item's content came from; see [Trust]. A copied item carries the
+	// trust of the entry it was copied from. Nil says nothing. A trust
+	// member in another form is kept as written in Unknown and Trust is
+	// nil.
+	Trust *Trust `json:"-" member:"trust"`
+}
+
+// Trust labels (RFC 0001, item, since 0.15).
+const (
+	// TrustUntrusted says the content came from a source the harness
+	// does not trust, such as a web page or an inbox.
+	TrustUntrusted = "untrusted"
+	// TrustPrivate says the content holds data the session's owner would
+	// not have leave it.
+	TrustPrivate = "private"
+)
+
+// Trust is what a harness knows about where content came from: the
+// labels of what it reads. {"reads": []} says the harness judged the
+// content and found neither label; an absent trust says nothing. A label
+// the format does not define is kept as written, and a reader that
+// decides anything by trust reads it as [TrustUntrusted]. It is a record
+// member and reaches no request.
+type Trust struct {
+	// Reads are the labels, without repeats.
+	Reads []string `json:"reads"`
+}
+
+// MarshalJSON writes reads as a list, empty when there are none.
+func (t Trust) MarshalJSON() ([]byte, error) {
+	reads := t.Reads
+	if reads == nil {
+		reads = []string{}
+	}
+	seen := make(map[string]bool, len(reads))
+	for _, r := range reads {
+		if seen[r] {
+			return nil, fmt.Errorf("agentsession: trust repeats the label %q", r)
+		}
+		seen[r] = true
+	}
+	return json.Marshal(struct {
+		Reads []string `json:"reads"`
+	}{reads})
+}
+
+// Untrusted reports whether the labels hold one a reader that decides by
+// trust reads as untrusted: untrusted itself, or a label the format does
+// not define.
+func (t *Trust) Untrusted() bool {
+	if t == nil {
+		return false
+	}
+	for _, r := range t.Reads {
+		if r != TrustPrivate {
+			return true
+		}
+	}
+	return false
+}
+
+// trustForm reports whether raw holds a trust in the form the format
+// defines: an object whose reads is a list of strings without repeats.
+func trustForm(raw json.RawMessage) bool {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil || m == nil {
+		return false
+	}
+	var reads []string
+	if json.Unmarshal(m["reads"], &reads) != nil || reads == nil {
+		return false
+	}
+	seen := make(map[string]bool, len(reads))
+	for _, r := range reads {
+		if seen[r] {
+			return false
+		}
+		seen[r] = true
+	}
+	return true
+}
+
+// promoteTrust takes a trust member in the form the format defines, in a
+// file of any minor, and keeps anything else as written.
+func promoteTrust(base *EntryBase, dst **Trust) {
+	*dst = nil
+	if raw, ok := base.Unknown["trust"]; ok && trustForm(raw) {
+		promote(base, "trust", dst)
+		if *dst != nil && (*dst).Reads == nil {
+			(*dst).Reads = []string{}
+		}
+	}
+}
+
+// UnionTrust returns the union of the labels of every trust given, sorted,
+// or nil when none is given: a path's trust, or a fold's, which a
+// writer never narrows.
+func UnionTrust(ts ...*Trust) *Trust {
+	var out *Trust
+	seen := map[string]bool{}
+	for _, t := range ts {
+		if t == nil {
+			continue
+		}
+		if out == nil {
+			out = &Trust{Reads: []string{}}
+		}
+		for _, r := range t.Reads {
+			if !seen[r] {
+				seen[r] = true
+				out.Reads = append(out.Reads, r)
+			}
+		}
+	}
+	if out != nil {
+		slices.Sort(out.Reads)
+	}
+	return out
+}
+
+// PathTrust returns the trust of a root-first path (RFC 0001, item,
+// since 0.15): the union of the trust of every item entry on it, those
+// an omit leaves out or sends as a placeholder included, since the model
+// may have read them on an earlier request, and of every compaction and
+// branch summary, whose trust is that of the path they were made from.
+// It is nil when nothing on the path carries trust.
+func PathTrust(path []Entry) *Trust {
+	var ts []*Trust
+	for _, e := range path {
+		switch v := e.(type) {
+		case *ItemEntry:
+			ts = append(ts, v.Trust)
+		case *CompactionEntry:
+			ts = append(ts, v.Trust)
+		case *BranchSummaryEntry:
+			ts = append(ts, v.Trust)
+		}
+	}
+	return UnionTrust(ts...)
 }
 
 // CopiedFrom names where a copied item was taken from (RFC 0001, item,
@@ -876,6 +1016,13 @@ type CompactionEntry struct {
 	Config       Settings             `json:"config"`
 	TokensBefore int                  `json:"tokens_before,omitempty"`
 	Usage        *openresponses.Usage `json:"usage,omitempty"`
+	// Trust is, in format 0.15, the trust of the path up to the
+	// compaction ([PathTrust]), so a reader holding only the path from
+	// the fold on, or the context alone, knows what the summary was made
+	// from. It may be wider than what a reader recomputes from the
+	// entries it holds, since a redaction may have left some out; a
+	// reader takes the union of both, and a writer never narrows it.
+	Trust *Trust `json:"-" member:"trust"`
 }
 
 // EntryType returns "compaction".
@@ -889,6 +1036,9 @@ type BranchSummaryEntry struct {
 	From      string               `json:"from"`
 	Summary   openresponses.Item   `json:"summary"`
 	Usage     *openresponses.Usage `json:"usage,omitempty"`
+	// Trust is, in format 0.15, the trust of the path From names, since
+	// the summary was made from that branch; see [CompactionEntry.Trust].
+	Trust *Trust `json:"-" member:"trust"`
 }
 
 // EntryType returns "branch_summary".
@@ -2111,7 +2261,7 @@ func (e *ItemEntry) MarshalJSON() ([]byte, error) {
 		return nil, errors.New("agentsession: item entry has no item")
 	}
 	type plain ItemEntry
-	if !e.Failed && e.FromLink == "" && e.CopiedFrom == nil {
+	if !e.Failed && e.FromLink == "" && e.CopiedFrom == nil && e.Trust == nil {
 		return marshalEntry(TypeItem, &e.EntryBase, (*plain)(e))
 	}
 	if _, ok := e.Item.(*openresponses.FunctionCallOutput); e.Failed && !ok {
@@ -2123,7 +2273,7 @@ func (e *ItemEntry) MarshalJSON() ([]byte, error) {
 	for _, m := range []struct {
 		key string
 		set bool
-	}{{"failed", e.Failed}, {"from_link", e.FromLink != ""}, {"copied_from", e.CopiedFrom != nil}} {
+	}{{"failed", e.Failed}, {"from_link", e.FromLink != ""}, {"copied_from", e.CopiedFrom != nil}, {"trust", e.Trust != nil}} {
 		if _, dup := e.Unknown[m.key]; dup && m.set {
 			return nil, fmt.Errorf("agentsession: item entry has %s both typed and unknown", m.key)
 		}
@@ -2133,7 +2283,8 @@ func (e *ItemEntry) MarshalJSON() ([]byte, error) {
 		Failed     bool        `json:"failed,omitempty"`
 		FromLink   string      `json:"from_link,omitempty"`
 		CopiedFrom *CopiedFrom `json:"copied_from,omitempty"`
-	}{(*plain)(e), e.Failed, e.FromLink, e.CopiedFrom})
+		Trust      *Trust      `json:"trust,omitempty"`
+	}{(*plain)(e), e.Failed, e.FromLink, e.CopiedFrom, e.Trust})
 }
 
 // UnmarshalJSON decodes the entry, dispatching the item through the
@@ -2203,6 +2354,7 @@ func (e *ItemEntry) decodeMembers(_ []byte, all map[string]json.RawMessage) erro
 	if raw, ok := e.Unknown["copied_from"]; ok && copiedFromForm(raw) {
 		promote(&e.EntryBase, "copied_from", &e.CopiedFrom)
 	}
+	promoteTrust(&e.EntryBase, &e.Trust)
 	return nil
 }
 
@@ -2278,7 +2430,16 @@ func (e *CompactionEntry) MarshalJSON() ([]byte, error) {
 		return nil, errors.New("agentsession: compaction entry has no summary")
 	}
 	type plain CompactionEntry
-	return marshalEntry(TypeCompaction, &e.EntryBase, (*plain)(e))
+	if e.Trust == nil {
+		return marshalEntry(TypeCompaction, &e.EntryBase, (*plain)(e))
+	}
+	if _, dup := e.Unknown["trust"]; dup {
+		return nil, errors.New("agentsession: compaction entry has trust both typed and unknown")
+	}
+	return marshalEntry(TypeCompaction, &e.EntryBase, struct {
+		*plain
+		Trust *Trust `json:"trust"`
+	}{(*plain)(e), e.Trust})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -2324,6 +2485,7 @@ func (e *CompactionEntry) decodeMembers(data []byte, all map[string]json.RawMess
 	e.Config = aux.Config
 	e.TokensBefore = aux.TokensBefore
 	e.Usage = aux.Usage
+	promoteTrust(&e.EntryBase, &e.Trust)
 	return nil
 }
 
@@ -2333,7 +2495,16 @@ func (e *BranchSummaryEntry) MarshalJSON() ([]byte, error) {
 		return nil, errors.New("agentsession: branch_summary entry has no summary")
 	}
 	type plain BranchSummaryEntry
-	return marshalEntry(TypeBranchSummary, &e.EntryBase, (*plain)(e))
+	if e.Trust == nil {
+		return marshalEntry(TypeBranchSummary, &e.EntryBase, (*plain)(e))
+	}
+	if _, dup := e.Unknown["trust"]; dup {
+		return nil, errors.New("agentsession: branch_summary entry has trust both typed and unknown")
+	}
+	return marshalEntry(TypeBranchSummary, &e.EntryBase, struct {
+		*plain
+		Trust *Trust `json:"trust"`
+	}{(*plain)(e), e.Trust})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -2364,6 +2535,7 @@ func (e *BranchSummaryEntry) decodeMembers(data []byte, all map[string]json.RawM
 	e.From = aux.From
 	e.Summary = summary
 	e.Usage = aux.Usage
+	promoteTrust(&e.EntryBase, &e.Trust)
 	return nil
 }
 

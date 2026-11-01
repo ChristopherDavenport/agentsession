@@ -1041,6 +1041,9 @@ type Context struct {
 	// each. Items holds the item as sent, and the entry the item as
 	// recorded.
 	ReplacedItems []ReplacedItem
+	// Trust is the trust of the path the context was built from, folds
+	// included ([PathTrust]): nil when nothing on it carries trust.
+	Trust *Trust
 }
 
 // ReplacedItem is an item entry a request sends with a placeholder in
@@ -1164,6 +1167,7 @@ func buildContext(path []Entry, omit bool) (Context, error) {
 		ctx.leaveOut(path)
 		ctx.replaceParts(path)
 	}
+	ctx.Trust = PathTrust(path)
 	return ctx, nil
 }
 
@@ -1728,7 +1732,8 @@ func contributes(e Entry) bool {
 // contextContentHash is the content hash the context hash uses for one
 // contributing entry: the body with legacy_id, normalised and redacted,
 // in whatever form, removed for every type, response, source and queued_from removed from an
-// item, and from_link, failed and copied_from where the format defines them, from removed from a branch_summary, and a compaction's
+// item, and from_link, failed, copied_from and trust where the format defines them, from removed from a branch_summary, trust
+// removed from a branch_summary and a compaction where defined, and a compaction's
 // first_kept replaced by [context hash, type] of the entry it names
 // when that entry is on the path and by null otherwise.
 func contextContentHash(e Entry, at, types map[string]string) (string, error) {
@@ -1766,9 +1771,19 @@ func contextContentHash(e Entry, at, types map[string]string) (string, error) {
 			// Provenance, which reaches no request.
 			delete(body, "copied_from")
 		}
+		if e.(*ItemEntry).Trust != nil {
+			delete(body, "trust")
+		}
 	case TypeBranchSummary:
 		delete(body, "from")
+		if e.(*BranchSummaryEntry).Trust != nil {
+			// A record member that reaches no request.
+			delete(body, "trust")
+		}
 	case TypeCompaction:
+		if e.(*CompactionEntry).Trust != nil {
+			delete(body, "trust")
+		}
 		var named string
 		if raw, ok := body["first_kept"]; ok {
 			_ = json.Unmarshal(raw, &named)

@@ -139,12 +139,17 @@ var envelopeMembers = []special{
 // A call_id inside data the format does not define, a decision's args,
 // a custom entry's data, an outcome's details or a member it does not
 // define, is the writer's text and body.
+//
+// A trust member's labels, on an item, a result, a compaction and a
+// branch summary, are the format's vocabulary and not text, so a rewrite
+// leaves them as they are (RFC 0001, Every redacted entry).
 var bodyMembers = map[string][]special{
 	TypeItem: {
 		{path: memberPath("queued_from"), role: roleEntry, set: true},
 		{path: memberPath("from_link"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*ItemEntry).FromLink != "" }},
 		{path: memberPath("copied_from", "entry"), role: roleEntry, session: "session", set: true, when: func(e Entry) bool { return e.(*ItemEntry).CopiedFrom != nil }},
 		{path: memberPath("copied_from", "session"), role: roleSession, when: func(e Entry) bool { return e.(*ItemEntry).CopiedFrom != nil }},
+		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*ItemEntry).Trust != nil }},
 		{path: memberPath("item", "call_id"), role: roleCallID},
 	},
 	TypeQueued:   {{path: memberPath("item", "call_id"), role: roleCallID}},
@@ -166,14 +171,23 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("config", "omit", "images", "before"), role: roleEntry, bound: true, when: func(e Entry) bool { i := e.(*CompactionEntry).Config.Omit.Images; return i != nil && i.Before != "" }},
 		{path: memberPath("config", "instructions_parts", "[]", "hash"), role: roleHash},
 		{path: memberPath("pinned", "[]", "call_id"), role: roleCallID},
+		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*CompactionEntry).Trust != nil }},
 	},
-	TypeBranchSummary: {{path: memberPath("from"), role: roleEntry}},
-	TypeRun:           {{path: memberPath("pending", "[]"), role: roleCallID}},
-	TypeDispatch:      {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
-	TypeDecision:      {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
-	TypeResult:        {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}, {path: memberPath("item", "call_id"), role: roleCallID}},
-	TypeLabel:         {{path: memberPath("target"), role: roleEntry}},
-	TypeOutcome:       {{path: memberPath("target"), role: roleEntry}},
+	TypeBranchSummary: {
+		{path: memberPath("from"), role: roleEntry},
+		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*BranchSummaryEntry).Trust != nil }},
+	},
+	TypeRun:      {{path: memberPath("pending", "[]"), role: roleCallID}},
+	TypeDispatch: {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
+	TypeDecision: {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
+	TypeResult: {
+		{path: memberPath("target"), role: roleEntry},
+		{path: memberPath("call_id"), role: roleCallID},
+		{path: memberPath("item", "call_id"), role: roleCallID},
+		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*ResultEntry).Trust != nil }},
+	},
+	TypeLabel:   {{path: memberPath("target"), role: roleEntry}},
+	TypeOutcome: {{path: memberPath("target"), role: roleEntry}},
 	TypeLink: {
 		{path: memberPath("target"), role: roleEntry, when: func(e Entry) bool { return e.(*LinkEntry).Target != "" }},
 		{path: memberPath("session"), role: roleSession},

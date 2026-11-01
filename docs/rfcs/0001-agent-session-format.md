@@ -506,6 +506,31 @@ One conversation item in the payload profile.
   failure sees it in the output; a member the model sees, as Claude's
   `is_error`, belongs inside the item under the payload profile's
   extension mechanism, not here.
+- `trust` MAY be on an `item` entry, since 0.15: what the harness knows
+  about where the item's content came from. It is an object with
+  `reads`, an array of labels without repeats. `untrusted` says the
+  content came from a source the harness does not trust, such as a web
+  page or an inbox. `private` says the content holds data the session's
+  owner would not have leave it. `{"reads": []}` says the harness
+  judged the content and found neither, and an absent `trust` says
+  nothing. A writer writes it on the output of a tool whose
+  declaration labels what it reads, and MAY write it on any item, such
+  as a message carrying pasted content. It is a record member, like
+  `failed`, and reaches no request. A reader keeps a label this
+  document does not define as written, and a reader that decides
+  anything by trust reads such a label as `untrusted`. A writer MUST
+  NOT write another form, and a reader keeps one as a member it does
+  not know.
+- The **trust of a path** is the union of the `reads` of every `trust`
+  on it: each `item` entry's, items an `omit` leaves out or sends as a
+  placeholder included, since the model may have read them on an
+  earlier request, and each `compaction`'s and `branch_summary`'s.
+  The trust of a `branch_summary`'s `from` path is folded into the
+  summary's own member, as `branch_summary` says. A copied item
+  (`copied_from`) carries the `trust` of the entry it was copied from,
+  and the trust of the path that produced it when it is a summary or
+  another item made from that path. The policy a harness applies by
+  trust, to ask, refuse or taint a session, is its own.
 - `from_link` MAY name, by `id`, a `peer` link entry before the item on
   its path, other than a cancel notice, since 0.14: the item carries
   that callee's later report, as a peer whose work outlives its call
@@ -995,6 +1020,13 @@ Replaces earlier context with a summary.
  "config":{…full config…},"tokens_before":50000,"usage":{…}}
 ```
 
+- `trust` MAY be on a `compaction`, since 0.15: the trust of the path
+  up to the compaction, as `item` defines it, so a reader holding only
+  the path from the fold on, or the context alone, knows what the
+  summary was made from. It MAY be wider than the union a reader
+  computes from the entries it holds, since a redaction may have left
+  some out. A reader takes the union of both, and a writer that writes
+  a later fold carries the earlier one's labels and never narrows them.
 - `first_kept` MUST name an entry on the path before this one, since
   0.14 in those words: a compaction cannot name itself. Entries before
   it are excluded from context; entries from it up to this entry are
@@ -1065,7 +1097,9 @@ Context carried across a branch switch.
 ```
 
 `parent` is where the new branch continues; `from` is the leaf that was
-left. `summary` is an item that enters context.
+left. `summary` is an item that enters context. `trust` MAY be on a
+`branch_summary`, since 0.15, as on a `compaction`: the trust of the
+path `from` names, since the summary was made from that branch.
 
 ### `run`
 
@@ -1306,7 +1340,9 @@ A call's tool returned, and its output is not yet on the path. Since
   MUST be a `function_call_output` whose `call_id` is the call's, and
   it is the output as the harness will append it, after whatever the
   harness does to what the tool returned. `failed` MAY be `true`, with
-  the meaning it has on an output's entry. The entry is a record entry:
+  the meaning it has on an output's entry, and `trust` MAY be on it, with
+  the meaning it has on the output's entry, which carries the same. The
+  entry is a record entry:
   its `item` is not in context and reaches no request.
 - A writer writes a `result` only when a call's output settles before
   it can join the path: a harness that appends outputs in an order
@@ -2185,6 +2221,12 @@ A redactor:
   which are request member names the provider reads. Two names of
   one object that a redaction makes one MUST NOT both be kept, nor an
   extension entry's name made one its envelope holds;
+- MUST keep `trust` as written, since 0.15: its labels are the
+  format's vocabulary, not text. An entry merged from several carries
+  the union of theirs. A `compaction`'s or `branch_summary`'s `trust`
+  is kept as written even when the entries behind it are left out,
+  which is why it may be wider than the union a reader recomputes, and
+  a redactor MUST NOT narrow it;
 - MUST give each `response` it writes either no `request_hash` or the
   one the redacted session rebuilds for it, computed as Request hash
   says, and never another: a redacted session hashes independently, and
@@ -2470,6 +2512,11 @@ call is not copied is an observation of its call's step, as any output
 is, with `copied_from` under `agentsession` in the observation
 result's `extra`.
 
+An entry's `trust` travels under `agentsession` in the `extra` of the
+step or observation result it maps to, an agent step carrying the union
+of its items', a fold's in its system step's `extra`, and a `result`'s
+in its record.
+
 A document's steps are the context the algorithm produces, so a run
 that compacted is described by its last summary and what followed it.
 Its `final_metrics` are not: they total every model call on the path,
@@ -2661,7 +2708,9 @@ again after it carrying `deliver` and drained by the next run, beside
 another owed at a cut while a call waits for approval, a parallel batch
 cut before its append with two calls returned, one failed, and one in
 flight, continued by a resume that appends one result unchanged and
-answers the others, and
+answers the others, a web output marked `untrusted` and an inbox output
+marked `private` folded by a compaction carrying both, beside a label
+this document does not define, kept as written, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
@@ -2737,6 +2786,20 @@ is upgraded.
   read a call settled inside a parallel batch cut by a crash as in
   flight. Redaction: a `result` goes with its call, and its `item` is
   redacted in step with its output.
+
+- `item`, `result`, `compaction` and `branch_summary` define `trust`,
+  and a path's trust is the union over it, folds included. A reader of
+  0.14 lost an untrusted output's mark at the first fold, unless it
+  walked the whole path for a harness's own namespace. A redaction
+  keeps `trust`, and never narrows a fold's. RFC 0002's context hash
+  leaves it out.
+
+- The ATIF projection marks copied steps `is_copied_context` without a
+  model, metrics or a call count and leaves them out of `total_steps`,
+  and carries `copied_from`, `deliver`, a call's `result` and `trust`.
+  The OpenTelemetry projection gives a copied call no tool span and ends
+  a hand-off's span at its `result`. A projection is not a file, so no
+  file reads differently.
 
 - Redaction: a `custom` entry carrying a call's `call_id` goes with the
   call, as its `dispatch`, `decision` and `link` entries do. A

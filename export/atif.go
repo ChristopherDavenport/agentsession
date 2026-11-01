@@ -465,6 +465,9 @@ func (b *builder) entry(e agentsession.Entry) error {
 			step.Extra["tokens_before"] = v.TokensBefore
 		}
 		b.foldUsage(v.ID, step.Extra, v.Config.Model, v.Usage)
+		if v.Trust != nil {
+			agentSessionExtra(step.Extra)["trust"] = v.Trust
+		}
 		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.BranchSummaryEntry:
@@ -479,6 +482,9 @@ func (b *builder) entry(e agentsession.Entry) error {
 			},
 		}
 		b.foldUsage(v.ID, step.Extra, b.inForce(b.copied).Model, v.Usage)
+		if v.Trust != nil {
+			agentSessionExtra(step.Extra)["trust"] = v.Trust
+		}
 		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.LabelEntry:
@@ -566,6 +572,9 @@ func (b *builder) entry(e agentsession.Entry) error {
 		rec := map[string]any{"entry_id": v.ID, "ts": v.Timestamp.UTC().Format(time.RFC3339Nano)}
 		if v.Failed {
 			rec["failed"] = true
+		}
+		if v.Trust != nil {
+			rec["trust"] = v.Trust
 		}
 		copyUnknown(rec, v.Unknown)
 		b.callExtra(v.CallID)["result"] = rec
@@ -722,6 +731,9 @@ func (b *builder) itemExtra(e *agentsession.ItemEntry) map[string]any {
 	if e.CopiedFrom != nil {
 		agentSessionExtra(extra)["copied_from"] = e.CopiedFrom
 	}
+	if e.Trust != nil {
+		agentSessionExtra(extra)["trust"] = e.Trust
+	}
 	if r := b.replaced[e.ID]; len(r) > 0 {
 		agentSessionExtra(extra)[ExtraReplaced] = r
 	}
@@ -863,6 +875,13 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 	}
 	if len(ids) > 0 {
 		step.Extra["item_entry_ids"] = ids
+	}
+	trusts := make([]*agentsession.Trust, 0, len(g.entries))
+	for _, e := range g.entries {
+		trusts = append(trusts, e.Trust)
+	}
+	if t := agentsession.UnionTrust(trusts...); t != nil {
+		agentSessionExtra(step.Extra)["trust"] = t
 	}
 	if g.taken {
 		from := make([]any, 0, len(g.entries))

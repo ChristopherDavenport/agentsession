@@ -76,6 +76,23 @@ versions may break the API.
   `agentturn:nested_call`, go with the call that made them. The rule
   binds redactors; nothing in this library leaves entries out.
 
+- **Trust (RFC 0001 0.15, `item`, `result`, `compaction`,
+  `branch_summary`; #263).** An item, a result, a compaction and a
+  branch summary may carry `trust` (`*Trust` with `Reads`; labels
+  `TrustUntrusted` and `TrustPrivate`, others kept as written and read
+  as untrusted by `Trust.Untrusted`). A path's trust is the union over
+  it, items left out or sent as placeholders included and folds
+  included: `PathTrust`, `UnionTrust`, and `Context.Trust`, so the
+  context after a fold still reports an untrusted output the fold
+  replaced. `ResultEntry.Output` carries the result's trust. The context
+  hash leaves the member out; `RewriteStrings` leaves its labels as they
+  are. ATIF carries it under `extra.agentsession` on the step or
+  observation, the fold's system step and the result record. Fixture
+  `trust`, with its ATIF golden. **Added: `Trust`, `TrustUntrusted`,
+  `TrustPrivate`, `UnionTrust`, `PathTrust`, `Context.Trust` and the
+  `Trust` fields of `ItemEntry`, `ResultEntry`, `CompactionEntry` and
+  `BranchSummaryEntry`.**
+
 ## v0.0.31 - 2026-11-01
 
 - **ATIF: what each step's own request left out, cost with subagents,
