@@ -55,7 +55,8 @@ func CheckCreate(h Header, redactedOnly bool) error {
 
 // HeadMove reports whether e is the record of a head move and nothing
 // more (RFC 0002, Head): a leaf label whose target names an entry holds
-// reports, and which carries no other member at any depth, no parents,
+// reports, or the universal root (an empty target, null on the wire)
+// when holds reports "" held, and which carries no other member at any depth, no parents,
 // legacy_id, normalised or member of its own. It carries no content to
 // have been redacted, so a store set to hold only redacted entries
 // takes it, its check being of what was run over an entry's content
@@ -63,7 +64,10 @@ func CheckCreate(h Header, redactedOnly bool) error {
 // free text is content, and so is a member beside it.
 func HeadMove(e Entry, holds func(id string) bool) bool {
 	l, ok := e.(*LabelEntry)
-	if !ok || l.Label == nil || *l.Label != LeafLabel || holds == nil || !ValidHash(l.Target) || !holds(l.Target) {
+	if !ok || l.Label == nil || *l.Label != LeafLabel || holds == nil || !holds(l.Target) {
+		return false
+	}
+	if l.Target != "" && !ValidHash(l.Target) {
 		return false
 	}
 	return len(l.Unknown) == 0 && len(l.Parents) == 0 && l.LegacyID == "" && len(l.Normalised) == 0
@@ -93,6 +97,11 @@ func checkRedacted(h Header, entries []Entry, s *Session) error {
 		}
 	}
 	holds := func(id string) bool {
+		if id == "" {
+			// The universal root, which a session with a base never
+			// rests on.
+			return h.Base == ""
+		}
 		if ids[id] {
 			return true
 		}
