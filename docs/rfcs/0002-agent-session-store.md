@@ -744,9 +744,13 @@ document's concern, and it is not this log.
 - A media blob a store accepted by its bytes (Media) is an object
   like any other for these rules, whatever else the store keeps: a
   store whose blobs are its only objects, such as one that keeps its
-  entries in a file or a database, MUST sweep a blob no retained content
-  names once it is older than the grace, as one that keeps every object
-  does, so blobs no session names cannot accumulate without bound.
+  entries in a file or a database, MUST offer a sweep that removes a
+  blob no retained content names once it is older than the grace, as
+  one that keeps every object does. A store sweeps when it is asked to,
+  by its operator or by the program serving it: RFC 0003's server sweeps
+  the store it takes uploads for (Objects), so blobs no session names
+  cannot accumulate without bound where uploads arrive; a store nobody
+  sweeps keeps them, as a cas store nobody sweeps keeps its objects.
   Storing a blob again restarts its grace. A sweep MUST NOT remove a
   blob that a write it raced names, an append or an import: either no
   such write lands between its reading what names the blob and its
@@ -807,8 +811,9 @@ or projected until the blob arrives.
 Naming an object or a blob grants nothing. A store that serves more
 than one principal, as RFC 0003's server does, decides reach per
 caller: a caller's write, an append, an import or a push, reaches an
-object or a blob it names only if the caller uploaded it for this
-write, or could already read a session holding it. A write that names
+object or a blob it names only if the caller itself uploaded it within
+the store's upload grace (RFC 0003, Objects), or could already read a
+session holding it. A write that names
 one the caller cannot reach MUST be answered exactly as a write naming
 one the store does not hold at all, by the same code and in the same
 class of time, so the answer is no oracle of what another principal's

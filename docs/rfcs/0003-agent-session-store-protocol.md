@@ -200,7 +200,8 @@ Media).
   that names one is held to the caller's reach first (RFC 0002, Media):
   an append, an import or a push that names a blob, in an item of any
   session whatever its `media`, is refused with `missing_object` unless
-  the caller uploaded it or may read a session that names it, so no
+  the caller itself uploaded it within `upload_grace_ms` or may read a
+  session that names it, so no
   session names a blob its writer could not reach. A server whose store
   holds no sidecar media has no blob to reach and checks none.
 - A `PUT` (exchange scope, or write scope for a `media` object) uploads
