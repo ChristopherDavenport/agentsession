@@ -134,7 +134,7 @@ func copiedFixture(t *testing.T) (parent, child *Session) {
 	copy := func(id string) {
 		t.Helper()
 		src := held(t, parent, id).(*ItemEntry)
-		must(&ItemEntry{Item: src.Item, CopiedFrom: &CopiedFrom{Session: copiedParentID, Entry: id}})
+		must(&ItemEntry{Item: src.Item, Trust: src.Trust, CopiedFrom: &CopiedFrom{Session: copiedParentID, Entry: id}})
 	}
 	must(&ConfigEntry{Model: "gpt-5-mini", Instructions: ptr("You are a helper.")})
 	must(NewRunStart("run-c", SourceInput, ""))
@@ -917,5 +917,48 @@ func TestTrustForms(t *testing.T) {
 	}
 	if got := out.(*ItemEntry); !slices.Equal(got.Trust.Reads, []string{TrustPrivate, TrustUntrusted}) || got.Item.(*openresponses.Message).Content.Text() != "U P" {
 		t.Errorf("rewritten: trust %+v, item %+v", got.Trust, got.Item)
+	}
+}
+
+// TestVerifyCopies: a copied item that names an entry holds that entry's
+// item and trust, which a reader holding the source checks; a copy that
+// dropped the source's trust, changed its item, or names an entry the
+// source does not hold is reported.
+func TestVerifyCopies(t *testing.T) {
+	src := New(Header{ID: "parent"})
+	read, err := src.Append(&ItemEntry{Item: openresponses.UserText("v2 ships Friday."), Trust: &Trust{Reads: []string{TrustUntrusted}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolve := func(id string) (*Session, error) {
+		if id == "parent" {
+			return src, nil
+		}
+		return nil, nil
+	}
+	for _, tt := range []struct {
+		name string
+		item *ItemEntry
+		ok   bool
+	}{
+		{"same", &ItemEntry{Item: openresponses.UserText("v2 ships Friday."), Trust: &Trust{Reads: []string{TrustUntrusted}}, CopiedFrom: &CopiedFrom{Session: "parent", Entry: read}}, true},
+		{"trust dropped", &ItemEntry{Item: openresponses.UserText("v2 ships Friday."), CopiedFrom: &CopiedFrom{Session: "parent", Entry: read}}, false},
+		{"trust narrowed", &ItemEntry{Item: openresponses.UserText("v2 ships Friday."), Trust: &Trust{Reads: []string{}}, CopiedFrom: &CopiedFrom{Session: "parent", Entry: read}}, false},
+		{"item changed", &ItemEntry{Item: openresponses.UserText("v3 ships Friday."), Trust: &Trust{Reads: []string{TrustUntrusted}}, CopiedFrom: &CopiedFrom{Session: "parent", Entry: read}}, false},
+		{"no such entry", &ItemEntry{Item: openresponses.UserText("v2 ships Friday."), Trust: &Trust{Reads: []string{TrustUntrusted}}, CopiedFrom: &CopiedFrom{Session: "parent", Entry: "sha256:none"}}, false},
+		{"source not held", &ItemEntry{Item: openresponses.UserText("x"), CopiedFrom: &CopiedFrom{Session: "elsewhere", Entry: read}}, true},
+	} {
+		child := New(Header{ID: "child"})
+		if _, err := child.Append(tt.item); err != nil {
+			t.Fatal(err)
+		}
+		if err := child.VerifyCopies(resolve); (err == nil) != tt.ok || err != nil && !errors.Is(err, ErrCopyMismatch) {
+			t.Errorf("%s: VerifyCopies = %v", tt.name, err)
+		}
+	}
+	parent, _ := copiedFixture(t)
+	child := loadFixture(t, "copied")
+	if err := child.VerifyCopies(func(string) (*Session, error) { return parent, nil }); err != nil {
+		t.Errorf("the copied fixture: %v", err)
 	}
 }

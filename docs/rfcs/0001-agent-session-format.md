@@ -526,10 +526,14 @@ One conversation item in the payload profile.
   placeholder included, since the model may have read them on an
   earlier request, and each `compaction`'s and `branch_summary`'s.
   The trust of a `branch_summary`'s `from` path is folded into the
-  summary's own member, as `branch_summary` says. A copied item
-  (`copied_from`) carries the `trust` of the entry it was copied from,
-  and the trust of the path that produced it when it is a summary or
-  another item made from that path. The policy a harness applies by
+  summary's own member, as `branch_summary` says. A copied item whose
+  `copied_from` names an entry MUST carry that entry's `trust` as
+  written, and none when it carries none, so a label a session read
+  reaches every session its conversation is copied into. A copied item
+  that names no entry, a summary or another item made from the path it
+  was copied from among them, carries the trust of that path. A reader
+  that holds the source checks a copy's `trust` with its `item`, as
+  `copied_from` says. The policy a harness applies by
   trust, to ask, refuse or taint a session, is its own.
 - `from_link` MAY name, by `id`, a `peer` link entry before the item on
   its path, other than a cancel notice, since 0.14: the item carries
@@ -563,7 +567,11 @@ One conversation item in the payload profile.
   no request, and the ingress rule holds, since the item is carried
   whole. A writer MUST NOT write `copied_from` on any other entry, or
   in another form. A reader keeps a `copied_from` it cannot read this
-  way as a member it does not know.
+  way as a member it does not know. A reader that holds the session
+  named MAY check an item naming an entry against that entry, its
+  `item` and its `trust`, and reports one that differs, or an entry
+  that session does not hold; it does not check an item a redaction
+  made against a session that was not redacted alongside it.
 - A `function_call` whose entry carries `copied_from` is a **copied
   call**: the call was made in the session named, and this session
   holds it only as context. A copied call is not a call of this

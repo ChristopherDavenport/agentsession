@@ -1408,3 +1408,54 @@ func verifyTargets(path []Entry) error {
 	}
 	return nil
 }
+
+// sameTrust reports whether two trust members carry the same labels,
+// both absent counting as the same.
+func sameTrust(a, b *Trust) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return slices.Equal(UnionTrust(a).Reads, UnionTrust(b).Reads)
+}
+
+// ErrCopyMismatch is returned by [Session.VerifyCopies] for a copied
+// item whose copied_from names an entry of its source that does not
+// hold an equal item, carrying the same trust, or that the source does
+// not hold (RFC 0001, item, since 0.15).
+var ErrCopyMismatch = errors.New("agentsession: copied item differs from the entry it names")
+
+// VerifyCopies checks every item of the session whose copied_from names
+// an entry against that entry, in the session copied_from names, read
+// through resolve: the entry holds the same item, member for member, and
+// the same trust. A session resolve does not find, returned as (nil,
+// nil), is not checked; an error from resolve is returned. With a nil
+// resolve it checks nothing. It returns the first problem found.
+func (s *Session) VerifyCopies(resolve func(id string) (*Session, error)) error {
+	if resolve == nil {
+		return nil
+	}
+	for _, e := range s.Entries() {
+		it, ok := e.(*ItemEntry)
+		if !ok || it.CopiedFrom == nil || it.CopiedFrom.Entry == "" {
+			continue
+		}
+		src, err := resolve(it.CopiedFrom.Session)
+		if err != nil {
+			return fmt.Errorf("agentsession: item %s: %w", it.ID, err)
+		}
+		if src == nil {
+			continue
+		}
+		held, ok := src.Entry(it.CopiedFrom.Entry)
+		from, isItem := held.(*ItemEntry)
+		switch {
+		case !ok || !isItem:
+			return fmt.Errorf("%w: item %s names %s, which %s holds no item entry under", ErrCopyMismatch, it.ID, it.CopiedFrom.Entry, it.CopiedFrom.Session)
+		case !sameItem(from.Item, it.Item):
+			return fmt.Errorf("%w: item %s is not the item of %s", ErrCopyMismatch, it.ID, from.ID)
+		case !sameTrust(from.Trust, it.Trust):
+			return fmt.Errorf("%w: item %s does not carry the trust of %s", ErrCopyMismatch, it.ID, from.ID)
+		}
+	}
+	return nil
+}

@@ -31,8 +31,12 @@ versions may break the API.
   `llm_call_count`, carries `copied_from` under `extra.agentsession`, and
   counts no copied step in `total_steps`; otel gives a copied call no
   tool span. Fixtures `copied`, `copied-answer` and `bad-copied-*`, with
-  ATIF goldens. **Added: `CopiedFrom`, `ItemEntry.CopiedFrom`,
-  `Call.Copied`, `ErrCopiedCall`, `ErrBadCopiedFrom`.**
+  ATIF goldens. A copied item naming an entry carries that entry's
+  `trust`, and `Session.VerifyCopies`, given the source session, reports
+  a copy whose item or trust differs from the entry it names
+  (`ErrCopyMismatch`). **Added: `CopiedFrom`, `ItemEntry.CopiedFrom`,
+  `Call.Copied`, `ErrCopiedCall`, `ErrBadCopiedFrom`,
+  `Session.VerifyCopies`, `ErrCopyMismatch`.**
 
 - **Delivered inputs (RFC 0001 0.15, `queued`; agentturn#244).** A
   `queued` steer may carry `deliver: true` (`QueuedEntry.Deliver`): an
