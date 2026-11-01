@@ -3,6 +3,7 @@ package remote_test
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -358,3 +359,74 @@ func TestWriteScopeUploadsMedia(t *testing.T) {
 
 // noBlobs is a store with nothing but the Store interface: no blobs.
 type noBlobs struct{ agentsession.Store }
+
+// TestPushRevealsNoUnreadableBase: a push's pre-flight and the push
+// itself authorize a fork's origin and base for reading before the
+// store looks at them, so a base held only in a session the caller may
+// not read answers as one the server does not hold: no bad_base for an
+// origin whose media differs, where a hash nobody holds answers 204.
+func TestPushRevealsNoUnreadableBase(t *testing.T) {
+	ctx := context.Background()
+	st, err := cas.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if _, err := st.Create(ctx, agentsession.Header{ID: "alices", Media: agentsession.MediaSidecar}); err != nil {
+		t.Fatal(err)
+	}
+	base, err := st.Append(ctx, "alices", user("alice's secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := server(t, st,
+		remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{
+			"mallory": {Name: "mallory", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeExchange}},
+		})),
+		remote.WithAuthorize(owners(map[string]string{"alices": "alice"})),
+	)
+	c := dial(t, url, withToken("mallory", nil))
+	unheld := agentsession.HashBytes([]byte("no entry"))
+	for _, tc := range []struct{ name, base, parent string }{
+		{"a hash nobody holds", unheld, ""},
+		{"alice's entry, her session named", base, "alices"},
+		{"alice's entry, found by hash", base, ""},
+	} {
+		fork := agentsession.New(agentsession.Header{ID: "m", Base: tc.base, ParentSession: tc.parent}).Header()
+		if err := c.CheckPush(ctx, fork, nil, []string{tc.base}); err != nil {
+			t.Errorf("CheckPush of a fork of %s: %v, want 204", tc.name, err)
+		}
+	}
+	// The push itself, with the prefix the caller uploaded, answers as
+	// for an origin the server does not hold.
+	for _, sp := range []string{cas.SpaceEntries, cas.SpaceContents} {
+		hash := base
+		if sp == cas.SpaceContents {
+			env, _ := st.Object(ctx, cas.SpaceEntries, base)
+			hash, _ = cas.ContentOf(env)
+		}
+		data, err := st.Object(ctx, sp, hash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.PutObject(ctx, sp, hash, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hdr, err := json.Marshal(agentsession.New(agentsession.Header{ID: "m", Base: base, ParentSession: "alices"}).Header())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"header":` + string(hdr) + `,"entries":[],"prefix":["` + base + `"],"head":{"expected":null,"to":"` + base + `"},"mark":"mirror"}`
+	req, _ := http.NewRequest(http.MethodPost, url+"/v1/sessions/m/push", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer mallory")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Errorf("a push of a fork of alice's entry: %d %s, want 200 as for an origin not held", resp.StatusCode, b)
+	}
+}

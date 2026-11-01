@@ -22,7 +22,13 @@ versions may break the API.
   **Added: `remote.Client.CheckPush` and `cas.Store.CheckPush`.**
   `remote.Push` checks first, so a push of an original to a server that
   holds only redacted entries uploads nothing, and the server makes the
-  same check at the push before it looks for an object. The remote
+  same check at the push before it looks for an object. Both hold a
+  fork's media only to an origin the caller may read: the
+  `parent_session` named and the session holding the base are
+  authorized first, and one the caller may not read is as one the
+  server does not hold, so `bad_base` reveals nothing of another's
+  session. **Added: `cas.ReceiveOptions.Readable`**, and
+  `cas.Store.CheckPush` takes the same function. The remote
   conformance suite now imports through the endpoint. (#241, #244)
 
 - **Every store holds sidecar blobs, and an import takes them (RFC 0002,

@@ -182,6 +182,14 @@ type ReceiveOptions struct {
 	// and Handover are not read. It is how a client admits a session it
 	// read from a server (RFC 0003's fetch).
 	Fetch bool
+	// Readable, when set, reports whether the caller a push is received
+	// for may read a session, as a server that authorizes per caller
+	// knows (RFC 0003, Exchange). A fork's media is held to its origin's
+	// only where the session found holding its base, and the
+	// parent_session that names where to look, are ones Readable admits:
+	// an origin the caller may not read answers as one this store does
+	// not hold, so the push says nothing of it. Nil admits every session.
+	Readable func(session string) bool
 }
 
 // Receive admits a push of c from the record, as Push does at its
@@ -223,7 +231,7 @@ func (s *Store) Receive(ctx context.Context, c Closure, o ReceiveOptions) (Excha
 		b.mark = c.Mark
 		return s.receive(ctx, b, receiveOptions{})
 	}
-	return s.receive(ctx, b, receiveOptions{push: true, expected: o.Expected, force: o.Force, handover: o.Handover})
+	return s.receive(ctx, b, receiveOptions{push: true, expected: o.Expected, force: o.Force, handover: o.Handover, readable: o.Readable})
 }
 
 // checkEntry checks an entry's line hashes to the ID it carries.

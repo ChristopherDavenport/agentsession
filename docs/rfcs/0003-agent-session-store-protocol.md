@@ -772,19 +772,26 @@ A push is RFC 0002's, over the wire.
 
 0. Before step 1 the sender MAY post `{"header", "entries", "prefix"}`,
    the members step 2 names, to `POST /v1/sessions/{id}/push?check`.
-   The server answers with the session-level refusals that need no
-   object, `not_redacted` (a header without `redacted` at a store that
-   holds only redacted entries), `header_differs`, `format`, `bad_entry`
-   for a malformed header, `base_rule` (a prefix that does not end at
-   the header's `base`, or one given to a session with no base),
-   `bad_base` (a fork whose `media` differs from its origin's), or with
-   204, and stores nothing. A sender pushing to a store set to hold
+   The server first authorizes a fork's origin for reading: the session
+   its `parent_session` names, and the session it finds holding its
+   `base`, each MUST be one the caller may read, and one that is not
+   is treated as a session the server does not hold, never refused, so
+   the answer for a base held only where the caller cannot read is the
+   answer for a hash nobody holds. Then it answers with the
+   session-level refusals that need no object, `not_redacted` (a
+   header without `redacted` at a store that holds only redacted
+   entries), `header_differs`, `format`, `bad_entry` for a malformed
+   header, `base_rule` (a prefix that does not end at the header's
+   `base`, or one given to a session with no base), `bad_base` (a fork
+   whose `media` differs from that of an origin the caller may read),
+   or with 204, and stores nothing. A sender pushing to a store set to hold
    only redacted entries SHOULD check first, so an original's objects
    are never uploaded to it. The check is advisory, since what the
    server holds can change before the push, and the push stays the
    authority: a server MUST give the same refusal at the push itself,
    before it looks for any object, so a push refused by its check is
-   refused the same way when posted without one.
+   refused the same way when posted without one, and MUST authorize the
+   origin there as here.
 1. The sender asks which objects of the closure the receiver lacks
    (`POST /v1/objects/missing`), and uploads every one so reported
    (`PUT`). Because `missing` answers per caller, an object that no
@@ -996,7 +1003,10 @@ Not carried, because they are a local operator's or a file's:
   that holds it (`missing`, `GET`, `HEAD`), a push must upload every
   object not so reachable, a fork's `base` and a `path`'s `leaf` are
   authorized against the sessions holding them, and an object response
-  is `private`. A dedup that answered "already stored" to anyone would
+  is `private`. A push, and its check, hold a fork only to an origin
+  the caller may read: one it may not is as one the server does not
+  hold, so `bad_base` cannot tell a caller that another's session holds
+  a hash, or in which `media`. A dedup that answered "already stored" to anyone would
   let one tenant read, or confirm a guess at, another's content.
 - A push's `refs` need refs scope in addition to exchange scope, so that
   moving a ref cannot be done under a weaker grant than a ref update.
