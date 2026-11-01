@@ -7,6 +7,18 @@ versions may break the API.
 
 ## Unreleased
 
+- **A Rewriter reports the parts whose hash it kept (RFC 0001 0.14,
+  Every redacted entry).** A redactor MUST NOT write an instruction
+  part, or an omitted part's `of`, under an original hash whose text or
+  entry it cannot resolve on the path; it writes the part as text of its
+  own, such as placeholder text, and the responses after it carry no
+  `request_hash` or a recomputed one, or it does not redact the entry.
+  **Added: `Rewriter.Unmet` and `UnmetPart`**, which name each part a
+  `Rewriter` wrote under a hash whose text it never met, by entry,
+  pointer and part ID, never by hash, so a redactor refuses before it
+  commits rather than finding the part with `ContextAt` afterwards. An
+  unmapped `of` is in `RemapRefs`' `Unmapped`, as before. (#251)
+
 - **A header's text, rewritten from one table (RFC 0001 0.14, The
   redacted session).** In a redacted session's header `cwd`, `harness`
   and every member the format does not define are text; `type`,

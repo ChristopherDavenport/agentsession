@@ -1984,6 +1984,17 @@ A redactor:
   new text, and instructions that were the join of their parts stay the
   join of the rewritten ones. A redactor that changes text across a
   part boundary breaks the join and MUST NOT;
+- MUST NOT write an instruction part, or an omitted part's `of`, under
+  a hash taken from the original whose text, or entry, it cannot
+  resolve on the path: a part named by a `hash` whose text is in no
+  entry before it that the redactor redacted, or an `of` naming an
+  entry it did not write. Such a hash is the original's, which neither
+  verifies in the redacted session nor hides the text. It writes the
+  part as text of its own instead, such as fixed placeholder text, the
+  part's form changing from a `hash` to its text, or it does not redact
+  the entry. A part so written changes the request the path rebuilds,
+  so the `response` entries after it carry no `request_hash` or the one
+  the redacted session rebuilds, as below;
 - MUST treat a `normalised` record as holding the member it describes:
   `was` is that member's original source text and `raw` its original
   bytes, so what the redactor removes from the member it removes from
@@ -2499,6 +2510,13 @@ reader of 0.13 refuses those files until it is upgraded.
   `call_id` (The redacted session). 0.13 named header members only as
   references, and left a redactor to decide whether a member it did not
   know held text.
+
+- Redaction forbids writing an instruction part, or an omitted part's
+  `of`, under an original hash whose text or entry the redactor cannot
+  resolve on the path: it writes the part as text of its own, or does
+  not redact the entry. 0.13 forbade keeping an original hash anywhere
+  but in a reference into another session, and did not say what a
+  redactor that cannot resolve a part does instead.
 
 - Request hash says which form a sidecar session hashes: the request
   with each `sidecar:` URL as recorded, while the provider is sent the

@@ -635,3 +635,33 @@ func TestRewriteHeaderStrings(t *testing.T) {
 		}
 	}
 }
+
+// TestRewriterUnmet: a part written under a hash whose text the Rewriter
+// never met keeps the original's hash, which a redacted session must not
+// keep, and the Rewriter reports it, by entry, pointer and part id, as
+// it writes it, so a redactor can refuse before committing (RFC 0001,
+// Every redacted entry). A part it met, a part with its text and a keep
+// are not reported.
+func TestRewriterUnmet(t *testing.T) {
+	r := NewRewriter(hideSecret)
+	first := entryOf(t, `{"type":"config","id":"x","parent":null,`+tsLine+`,"instructions_parts":[{"id":"a","text":"one SECRET"},{"id":"b","text":"two"}]}`)
+	later := entryOf(t, `{"type":"config","id":"y","parent":"x",`+tsLine+`,"instructions_parts":[{"keep":1},{"id":"b","hash":"`+HashText("two")+`"},{"id":"c","hash":"`+HashText("unseen")+`"},{"id":"d","text":"new"}]}`)
+	if _, err := r.Rewrite(first); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Unmet(); len(got) != 0 {
+		t.Fatalf("Unmet after the first entry: %+v", got)
+	}
+	if _, err := r.Rewrite(later); err != nil {
+		t.Fatal(err)
+	}
+	want := []UnmetPart{{Entry: "y", At: "/instructions_parts/2/hash", ID: "c"}}
+	got := r.Unmet()
+	if !slices.Equal(got, want) {
+		t.Errorf("Unmet = %+v, want %+v", got, want)
+	}
+	got[0].ID = "changed"
+	if r.Unmet()[0].ID != "c" {
+		t.Error("Unmet returned the Rewriter's own list")
+	}
+}
