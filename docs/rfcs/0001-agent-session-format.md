@@ -497,8 +497,9 @@ One conversation item in the payload profile.
   ends the call as any output does. A reader maps it to its protocol's
   failure state, such as a tool span's error status or a replayed
   call's `failed`. Its absence says nothing: an output without it does
-  not say the call succeeded. A writer writes it on no other item; a
-  reader keeps `failed` on another item, or holding anything but
+  not say the call succeeded. A writer MUST NOT write it on any other
+  item, nor with any value but `true`; a reader keeps `failed` on
+  another item, or holding anything but
   `true`, as a member it does not know. A model that has to see the
   failure sees it in the output; a member the model sees, as Claude's
   `is_error`, belongs inside the item under the payload profile's
@@ -509,10 +510,12 @@ One conversation item in the payload profile.
   delivers its result some turns after the call's output acknowledged
   it. It is provenance. It does not make the call answered, which
   `link` decides from the call's output alone, and it reaches no
-  request. A writer MUST NOT write one that names anything else; a
-  reader keeps a `from_link` that is not a non-empty string as a member
-  it does not know, and a tool that checks a file reports one that
-  names no `peer` link before the item on its path. An item MAY carry
+  request. A writer MUST NOT write one that names anything else, a
+  cancel notice included; a reader keeps a `from_link` that is not a
+  non-empty string as a member it does not know, and a tool that checks
+  a file reports one that names no `peer` link before the item on its
+  path, or names a cancel notice, which names no callee of its own but
+  the link it is about. An item MAY carry
   `source` beside it, the harness's own trigger for the delivery. The
   reference points back, into this file, at an entry already written,
   so writing and verifying the file needs nothing from the peer's
