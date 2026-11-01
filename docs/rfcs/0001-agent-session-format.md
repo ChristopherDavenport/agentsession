@@ -2114,10 +2114,12 @@ that named the left-out entry then follows the rule for its kind:
   omitted list, so its `keep` then names no part a reader can rebuild,
   as `of` says; a redactor that would keep those parts writes them
   whole instead.
-- A member naming one element of a set loses that element: a `parents`
-  element; an ID in `omit`'s `items` and in `outputs`' `items`, in a
-  `config` and in a compaction's checkpoint; and an `item`'s
-  `queued_from` and `from_link`, which are removed. A list so emptied is
+- A member that lists entries, or records where an item came from,
+  loses the left-out entry: a `parents` element and an ID in `omit`'s
+  `items` and in `outputs`' `items`, in a `config` and in a compaction's
+  checkpoint, are removed from their lists, and an `item`'s
+  `queued_from` and `from_link`, provenance that names one entry and
+  reaches no request, are removed whole. A list so emptied is
   removed, and an `omit` left with no member is removed with it, since
   an empty `omit` in a `config` clears what is in force rather than
   adding nothing. An `outputs` whose `items` is removed keeps its
@@ -2151,7 +2153,7 @@ that named the left-out entry then follows the rule for its kind:
   `reason` and `pending` its redacted segment reads, computed as `run`
   says, unless its `reason` is a written value, `error` or
   `interrupted`, which stands; or the redaction leaves the run end out.
-  `pending` loses every call the redaction left out, as a set does.
+  `pending` loses every call the redaction left out, as a list does.
 - A `queued` entry goes with the `item` that drained it: a redactor that
   leaves out an `item` entry whose `queued_from` names a `queued` entry
   leaves out that `queued` entry too, since a `queued` entry no `item`
