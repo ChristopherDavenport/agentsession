@@ -207,3 +207,48 @@ func TestAuthorizerReadsTheStoreOverSQLite(t *testing.T) {
 		t.Fatalf("a create of a fork: %v", err)
 	}
 }
+
+// A fork's origin is picked by asking the read check of the sessions
+// holding the base before any is loaded, and only the one admitted is
+// loaded: a session the caller may not read is never read for it.
+func TestForkOriginLoadsOnlyTheAdmitted(t *testing.T) {
+	ctx := context.Background()
+	st, err := sqlite.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	e := agentsession.NewItemEntry(openresponses.UserText("held by three"))
+	for _, id := range []string{"a", "b", "c"} {
+		s := agentsession.New(agentsession.Header{ID: id})
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		if err := agentsession.Write(&buf, s); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Import(ctx, &buf, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Release(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var loaded []string
+	defer sqlite.SetLoadHook(func(id string) { loaded = append(loaded, id) })()
+	onlyC := agentsession.WithReadable(ctx, func(id string) bool { return id == "c" })
+	f, err := st.Create(onlyC, agentsession.Header{ID: "f", Base: e.Base().ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Header().ParentSession != "c" {
+		t.Errorf("forked from %q, want c", f.Header().ParentSession)
+	}
+	for _, id := range loaded {
+		if id == "a" || id == "b" {
+			t.Errorf("loaded %v; a session the caller may not read was read", loaded)
+			break
+		}
+	}
+}
