@@ -47,6 +47,27 @@ versions may break the API.
   `delivered`, with its ATIF golden. **Added: `QueuedEntry.Deliver`,
   `NewDelivery`, `QueuedEntry.Requeue`.**
 
+- **A call's result before its output (RFC 0001 0.15, `result`;
+  agentturn#273).** A new record entry, `result` (`ResultEntry`,
+  `TypeResult`), records that a call's tool returned before its output
+  could join the path, as inside a parallel batch appended in the
+  model's order. A call with a result after its last dispatch and no
+  output has returned: `Call.Returned`, `CallReturned` ("returned"),
+  `Call.Result`; `InFlight` is false for it, so a resume after a crash
+  appends `ResultEntry.Output()` and runs nothing again. `Append`
+  refuses a result that follows no open hand-off of its call
+  (`ErrBadResult`), a dispatch or a decision other than an answer after
+  one (`ErrCallReturned`), and an output after one, with no answer
+  between, that differs from its item (`ErrResultMismatch`);
+  `VerifyRecords` reports each. ATIF carries the result under
+  `calls[call_id].result`, with its item when the document holds no
+  output for the call; otel ends a hand-off's span at its result and
+  reads a cut call as returned. Fixtures `returned` and `bad-result-*`,
+  with an ATIF golden. **Added: `ResultEntry`, `TypeResult`,
+  `NewResult`, `Call.Result`, `Call.Returned`, `CallReturned`,
+  `ErrBadResult`, `ErrCallReturned`, `ErrResultMismatch`; otel
+  `EventResult`, `AttrResultFailed`.**
+
 ## v0.0.31 - 2026-11-01
 
 - **ATIF: what each step's own request left out, cost with subagents,

@@ -1,10 +1,13 @@
 package agentsession
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 
+	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -34,6 +37,11 @@ type Call struct {
 	// neither is in Dispatches or Decisions, and the call is what it was
 	// before the dispatch.
 	Withdrawn []Withdrawal
+	// Result is the call's latest result entry on the path (format
+	// 0.15): its tool returned, and Result.Item is the output the
+	// harness will append. A call with one after its last dispatch and
+	// no output has returned; see [Call.Returned].
+	Result *ResultEntry
 
 	// inPrefix is set by the session for a call made in a fork's
 	// prefix, which its header's promise does not cover, and
@@ -68,6 +76,18 @@ type Call struct {
 	// output, which it forbids too.
 	dispatchAfterOutput                                           *DispatchEntry
 	afterAnswer, afterReject, endAfterOutput, rejectAfterDispatch *DecisionEntry
+	// resultAfterLast reports whether Result follows the last dispatch,
+	// and answeredSinceResult whether an answer follows Result.
+	resultAfterLast, answeredSinceResult bool
+	// badResult is the first result that follows no dispatch of its call
+	// that nothing else ended: none, or one an output, an answer, a
+	// reject or another result follows. afterResult is the first
+	// dispatch or decision but an answer that follows a result, and
+	// outputMismatch the output after a result, with no answer between,
+	// that does not hold the result's item. The format forbids all three.
+	badResult      *ResultEntry
+	afterResult    Entry
+	outputMismatch *ItemEntry
 }
 
 // Withdrawal is one hand-off withdrawn before the tool ran: the
@@ -107,11 +127,21 @@ func (c *Call) Copied() bool { return c.Entry.CopiedFrom != nil }
 func (c *Call) Held() bool { return c.latestIs(VerdictHold) }
 
 // InFlight reports whether the call was handed to its tool when the
-// record stopped: it has a dispatch and no output, and no decision
-// after its last dispatch holds it or answers it. Its side effect may
-// have happened.
+// record stopped: it has a dispatch and no output, no decision after
+// its last dispatch holds it or answers it, and no result follows that
+// dispatch. Its side effect may have happened.
 func (c *Call) InFlight() bool {
-	return c.Output == nil && len(c.Dispatches) > 0 && !c.latestIs(VerdictHold) && !c.latestIs(VerdictAnswer)
+	return c.Output == nil && len(c.Dispatches) > 0 && !c.latestIs(VerdictHold) && !c.latestIs(VerdictAnswer) && !c.Returned()
+}
+
+// Returned reports whether the call's tool returned before the record
+// stopped and its output is not on the path (format 0.15): a result
+// follows its last dispatch, and it has no output. It is not in flight:
+// the harness that continues the path appends the result's item as the
+// output, and writes no dispatch and no decision for the call, save an
+// answer when it withholds the result.
+func (c *Call) Returned() bool {
+	return c.Output == nil && c.Result != nil && c.resultAfterLast
 }
 
 // latestIs reports whether the latest decision has the verdict and no
@@ -228,6 +258,12 @@ const (
 	// continues the path writes the output, carrying the reject's
 	// reason, and nothing else for the call.
 	CallRejected
+	// CallReturned: a result follows the call's last dispatch and its
+	// output is not on the path yet (format 0.15): the tool ran and
+	// returned. The harness that continues the path appends the result's
+	// item as the output and writes nothing else for the call, save an
+	// answer when it withholds the result.
+	CallReturned
 )
 
 // String names the state.
@@ -247,6 +283,8 @@ func (s CallState) String() string {
 		return "answered"
 	case CallRejected:
 		return "rejected"
+	case CallReturned:
+		return "returned"
 	}
 	return fmt.Sprintf("CallState(%d)", int(s))
 }
@@ -273,6 +311,8 @@ func (c *Call) State(h Header) CallState {
 		return CallAnswered
 	case c.Rejected():
 		return CallRejected
+	case c.Returned():
+		return CallReturned
 	case c.Held():
 		return CallHeld
 	case c.Dispatch != nil:
@@ -316,9 +356,24 @@ func Calls(path []Entry) []*Call {
 				out = append(out, c)
 			case *openresponses.FunctionCallOutput:
 				if c, ok := byID[it.CallID]; ok && c.Output == nil {
+					if c.Returned() && !c.answeredSinceResult && c.outputMismatch == nil && !sameItem(c.Result.Item, v.Item) {
+						c.outputMismatch = v
+					}
 					c.Output = v
 					c.lastIsDispatch = false
 				}
+			}
+		case *ResultEntry:
+			if c := bind(v.CallID, v.Target); c != nil {
+				// A result belongs to the latest dispatch before it, and
+				// follows it with nothing that ended the call between.
+				if c.badResult == nil && (len(c.Dispatches) == 0 || c.Output != nil || c.resultAfterLast || c.Answered() || c.Rejected()) {
+					c.badResult = v
+				}
+				c.Result = v
+				c.resultAfterLast = len(c.Dispatches) > 0
+				c.answeredSinceResult = false
+				c.lastIsDispatch = false
 			}
 		case *DecisionEntry:
 			if c := bind(v.CallID, v.Target); c != nil {
@@ -336,6 +391,13 @@ func Calls(path []Entry) []*Call {
 					continue
 				}
 				c.lastIsDispatch = false
+				if c.Returned() {
+					if v.Verdict == VerdictAnswer {
+						c.answeredSinceResult = true
+					} else if c.afterResult == nil {
+						c.afterResult = v
+					}
+				}
 				if c.afterAnswer == nil && c.Answered() {
 					c.afterAnswer = v
 				}
@@ -356,6 +418,10 @@ func Calls(path []Entry) []*Call {
 				if c.dispatchAfterOutput == nil && c.Output != nil {
 					c.dispatchAfterOutput = v
 				}
+				if c.afterResult == nil && c.Returned() {
+					c.afterResult = v
+				}
+				c.resultAfterLast = false
 				if c.Dispatch == nil {
 					c.Dispatch = v
 				}
@@ -374,6 +440,19 @@ func Calls(path []Entry) []*Call {
 		}
 	}
 	return out
+}
+
+// sameItem reports whether two items are equal member for member, in
+// canonical form.
+func sameItem(a, b openresponses.Item) bool {
+	ja, err1 := json.Marshal(a)
+	jb, err2 := json.Marshal(b)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	ca, err1 := jcs.Transform(ja)
+	cb, err2 := jcs.Transform(jb)
+	return err1 == nil && err2 == nil && bytes.Equal(ca, cb)
 }
 
 // withdraws reports whether d withdraws the call's last dispatch: a
@@ -544,7 +623,7 @@ func (c *Call) takenUpIn(in map[string]bool) bool {
 			return true
 		}
 	}
-	return false
+	return c.Result != nil && in[c.Result.ID]
 }
 
 // ComputeSource returns the source a run's start names, by the
@@ -591,6 +670,9 @@ func ComputeSource(r *Run) string {
 			part[w.Dispatch.ID] = c
 			part[w.Reject.ID] = c
 		}
+		if c.Result != nil {
+			part[c.Result.ID] = c
+		}
 	}
 	for _, e := range r.Segment {
 		c, ok := part[e.Base().ID]
@@ -629,7 +711,7 @@ func ComputeSource(r *Run) string {
 func (r *Run) Empty() bool {
 	for _, e := range r.Segment {
 		switch e.(type) {
-		case *ItemEntry, *ConfigEntry, *CompactionEntry, *BranchSummaryEntry, *ResponseEntry, *DispatchEntry, *DecisionEntry:
+		case *ItemEntry, *ConfigEntry, *CompactionEntry, *BranchSummaryEntry, *ResponseEntry, *DispatchEntry, *DecisionEntry, *ResultEntry:
 			return false
 		}
 	}
@@ -918,6 +1000,27 @@ var ErrRejectDispatched = errors.New("agentsession: reject for a call that was d
 // one found elsewhere as a reject without the member.
 var ErrBadWithdrawal = errors.New("agentsession: withdrawal does not follow a dispatch of its call")
 
+// ErrBadResult is returned when a result is appended that follows no
+// dispatch of its call on the path that no withdrawal follows, or
+// follows one that an output, an answer, a reject or another result
+// already follows, and by [Session.VerifyRecords] for a path that holds
+// one: a result records the return of the hand-off it follows (RFC
+// 0001, result, since 0.15).
+var ErrBadResult = errors.New("agentsession: result follows no open hand-off of its call")
+
+// ErrCallReturned is returned when a dispatch, or a decision other than
+// an answer, is appended for a call that a result says has returned,
+// and by [Session.VerifyRecords] for a path that holds one: the tool
+// ran, so nothing runs it again, and what follows is its output, or an
+// answer when the harness withholds it.
+var ErrCallReturned = errors.New("agentsession: call has returned")
+
+// ErrResultMismatch is returned when an output is appended for a call
+// that has returned, with no answer after the result, that does not
+// hold the result's item, and by [Session.VerifyRecords] for a path
+// that holds one: the result is the output as the harness appends it.
+var ErrResultMismatch = errors.New("agentsession: output differs from its call's result")
+
 // ErrCallAnswered is returned when a dispatch or a decision is
 // appended for a call that an answer decision on the path already
 // ended: what follows an answer is the call's output and nothing else.
@@ -1018,6 +1121,15 @@ func (s *Session) VerifyRecords(leaf string) error {
 		}
 		if c.afterReject != nil {
 			return fmt.Errorf("%w: decision %s follows a reject of call %s", ErrCallRejected, c.afterReject.ID, c.ID())
+		}
+		if c.badResult != nil {
+			return fmt.Errorf("%w: result %s of call %s", ErrBadResult, c.badResult.ID, c.ID())
+		}
+		if c.afterResult != nil {
+			return fmt.Errorf("%w: %s %s follows a result of call %s", ErrCallReturned, c.afterResult.EntryType(), c.afterResult.Base().ID, c.ID())
+		}
+		if c.outputMismatch != nil {
+			return fmt.Errorf("%w: output %s of call %s", ErrResultMismatch, c.outputMismatch.ID, c.ID())
 		}
 		if c.rejectAfterDispatch != nil {
 			return fmt.Errorf("%w: reject %s follows a dispatch of call %s", ErrRejectDispatched, c.rejectAfterDispatch.ID, c.ID())

@@ -1058,3 +1058,51 @@ func TestCopiedCallHasNoSpan(t *testing.T) {
 		t.Errorf("the copied call has %d tool spans", len(tool))
 	}
 }
+
+// TestHandOffEndsAtItsResult: a hand-off's span ends at its result, the
+// tool's time, and not at the output's append; at a cut before the
+// append the call reads returned, not in flight, and its span carries
+// no error (RFC 0001 0.15, OpenTelemetry).
+func TestHandOffEndsAtItsResult(t *testing.T) {
+	sr, tracer := recorder()
+	s := agentsession.New(agentsession.Header{ID: "returned", Records: agentsession.AllRecords})
+	if _, err := s.Append(agentsession.NewRunStart("r1", agentsession.SourceInput, "")); err != nil {
+		t.Fatal(err)
+	}
+	var targets []string
+	for _, id := range []string{"a", "b"} {
+		target, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_" + id, CallID: id, Name: "fetch_" + id, Arguments: "{}"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		targets = append(targets, target)
+	}
+	for _, e := range []agentsession.Entry{
+		agentsession.NewDispatch("a", targets[0]),
+		agentsession.NewDispatch("b", targets[1]),
+		agentsession.NewResult("a", targets[0], openresponses.NewFunctionCallOutput("a", "ok")),
+		agentsession.NewResult("b", targets[1], openresponses.NewFunctionCallOutput("b", "ok")),
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result := s.Entries()[len(s.Entries())-2].Base().Timestamp
+	if _, err := s.Append(agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("a", "ok"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	a := spans(sr.Ended()).named(OpTool + " fetch_a")
+	if len(a) != 1 || !a[0].EndTime().Equal(result) || len(a[0].Events()) == 0 {
+		t.Fatalf("fetch_a spans = %d, end %v, want %v", len(a), a, result)
+	}
+	b := spans(sr.Ended()).named(OpTool + " fetch_b")
+	if len(b) != 1 || b[0].Status().Code == codes.Error || len(b[0].Attributes()) == 0 {
+		t.Fatalf("fetch_b spans = %v", b)
+	}
+	if got := b.withAttr(AttrCallState, agentsession.CallReturned.String()); len(got) != 1 {
+		t.Errorf("fetch_b at the cut is not returned")
+	}
+}

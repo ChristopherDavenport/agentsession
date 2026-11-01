@@ -44,6 +44,10 @@ type Session struct {
 	// copied holds the call ID of every copied call the session holds
 	// (RFC 0001, item, since 0.15), whose outputs are copied too.
 	copied map[string]bool
+	// results holds the call ID of every call the session holds a
+	// result for (RFC 0001, result, since 0.15), whose output an append
+	// checks against it.
+	results map[string]bool
 	// dispatches holds the dispatches for each call, by target, on
 	// every branch: a rebase above a dispatch leaves a call that may
 	// have run with none on its path.
@@ -725,6 +729,13 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		if out, ok := v.Item.(*openresponses.FunctionCallOutput); ok && v.CopiedFrom == nil && s.copied[out.CallID] {
 			return fmt.Errorf("%w: output of %s", ErrBadCopiedFrom, out.CallID)
 		}
+		if out, ok := v.Item.(*openresponses.FunctionCallOutput); ok && s.results[out.CallID] {
+			// An output after a result, with no answer between, holds
+			// the result's item.
+			if c := s.callFor(parent, out.CallID); c != nil && c.Returned() && !c.answeredSinceResult && !sameItem(c.Result.Item, v.Item) {
+				return fmt.Errorf("%w: %s", ErrResultMismatch, out.CallID)
+			}
+		}
 		fc, ok := v.Item.(*openresponses.FunctionCall)
 		switch {
 		case !ok:
@@ -741,6 +752,8 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		switch {
 		case c.Copied():
 			return fmt.Errorf("%w: %s", ErrCopiedCall, v.CallID)
+		case c.Returned() && v.Verdict != VerdictAnswer:
+			return fmt.Errorf("%w: %s", ErrCallReturned, v.CallID)
 		case c.Answered():
 			return fmt.Errorf("%w: %s", ErrCallAnswered, v.CallID)
 		case c.Rejected():
@@ -759,6 +772,19 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		case v.Verdict == VerdictAnswer && c.Dispatch == nil && s.header.HasRecord(TypeDispatch) && !s.prefix[c.Entry.ID] && !s.dispatchedOffLocked(c.Entry.ID, onPath(s.path(parent))):
 			return fmt.Errorf("%w: %s", ErrAnswerNotDispatched, v.CallID)
 		}
+	case *ResultEntry:
+		c, err := s.targetCall(parent, v.CallID, v.Target)
+		if err != nil {
+			return err
+		}
+		switch {
+		case c.Copied():
+			return fmt.Errorf("%w: %s", ErrCopiedCall, v.CallID)
+		case c.Output != nil:
+			return fmt.Errorf("%w: %s", ErrCallCompleted, v.CallID)
+		case len(c.Dispatches) == 0 || c.resultAfterLast || c.Answered() || c.Rejected():
+			return fmt.Errorf("%w: %s", ErrBadResult, v.CallID)
+		}
 	case *DispatchEntry:
 		c, err := s.targetCall(parent, v.CallID, v.Target)
 		if err != nil {
@@ -766,6 +792,9 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		}
 		if c.Copied() {
 			return fmt.Errorf("%w: %s", ErrCopiedCall, v.CallID)
+		}
+		if c.Returned() {
+			return fmt.Errorf("%w: %s", ErrCallReturned, v.CallID)
 		}
 		if c.Rejected() {
 			return fmt.Errorf("%w: %s", ErrCallRejected, v.CallID)
@@ -775,6 +804,47 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		}
 		if c.Output != nil {
 			return fmt.Errorf("%w: %s", ErrCallCompleted, v.CallID)
+		}
+	}
+	return nil
+}
+
+// callFor returns the latest call on the path to parent with the call
+// ID, with every entry of the path bound to it, or nil when the path
+// holds none.
+func (s *Session) callFor(parent, callID string) *Call {
+	var about []Entry
+	for _, e := range s.path(parent) {
+		switch v := e.(type) {
+		case *ItemEntry:
+			switch it := v.Item.(type) {
+			case *openresponses.FunctionCall:
+				if it.CallID == callID {
+					about = append(about, e)
+				}
+			case *openresponses.FunctionCallOutput:
+				if it.CallID == callID {
+					about = append(about, e)
+				}
+			}
+		case *DecisionEntry:
+			if v.CallID == callID {
+				about = append(about, e)
+			}
+		case *DispatchEntry:
+			if v.CallID == callID {
+				about = append(about, e)
+			}
+		case *ResultEntry:
+			if v.CallID == callID {
+				about = append(about, e)
+			}
+		}
+	}
+	calls := Calls(about)
+	for i := len(calls) - 1; i >= 0; i-- {
+		if calls[i].ID() == callID {
+			return calls[i]
 		}
 	}
 	return nil
@@ -814,6 +884,10 @@ func (s *Session) targetCall(parent, callID, target string) (*Call, error) {
 				about = append(about, e)
 			}
 		case *DispatchEntry:
+			if mine(v.CallID, v.Target) {
+				about = append(about, e)
+			}
+		case *ResultEntry:
 			if mine(v.CallID, v.Target) {
 				about = append(about, e)
 			}
@@ -1425,7 +1499,7 @@ func validateEntry(e Entry) error {
 		if len(v.Raw) == 0 {
 			return errors.New("agentsession: unknown entry has no raw bytes")
 		}
-	case *RunEntry, *DispatchEntry, *DecisionEntry, *QueuedEntry:
+	case *RunEntry, *DispatchEntry, *DecisionEntry, *QueuedEntry, *ResultEntry:
 		return validateLifecycle(e)
 	}
 	return nil
@@ -1573,6 +1647,11 @@ func (s *Session) add(e Entry) {
 				s.dispatches[v.Target] = append(s.dispatches[v.Target], v)
 			}
 		}
+	case *ResultEntry:
+		if s.results == nil {
+			s.results = map[string]bool{}
+		}
+		s.results[v.CallID] = true
 	}
 }
 

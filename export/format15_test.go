@@ -47,3 +47,47 @@ func TestCopiedSteps(t *testing.T) {
 		t.Errorf("total_steps = %d, want the child's one response", *doc.FinalMetrics.TotalSteps)
 	}
 }
+
+// TestResultTravelsWithItsCall: a call's result travels under
+// calls[call_id].result with its time and failed, and with its item only
+// when the document holds no output for the call, so a document cut
+// before the append still says the tool returned (RFC 0001,
+// Projections/ATIF, 0.15).
+func TestResultTravelsWithItsCall(t *testing.T) {
+	s := loadFixture(t, "returned")
+	runs, err := s.Runs(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := func(doc *atif.Trajectory, callID string) map[string]any {
+		for _, step := range doc.Steps {
+			calls, _ := step.Extra[ExtraCalls].(map[string]any)
+			if call, ok := calls[callID].(map[string]any); ok {
+				r, _ := call["result"].(map[string]any)
+				return r
+			}
+		}
+		return nil
+	}
+	tr, err := At(s, runs[0].End.Parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut := mustDoc(t, tr)
+	if r := result(cut, "call_a"); r == nil || r["item"] == nil || r["ts"] == nil || r["failed"] != nil {
+		t.Errorf("at the cut call_a's result is %v", r)
+	}
+	if r := result(cut, "call_c"); r == nil || r["failed"] != true || r["item"] == nil {
+		t.Errorf("at the cut call_c's result is %v", r)
+	}
+	if r := result(cut, "call_b"); r != nil {
+		t.Errorf("call_b, still in flight, carries a result %v", r)
+	}
+	tr, err = At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := result(mustDoc(t, tr), "call_a"); r == nil || r["item"] != nil {
+		t.Errorf("at the leaf, which holds the output, call_a's result is %v", r)
+	}
+}

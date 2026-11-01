@@ -1,0 +1,289 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000036",
+  "trajectory_id": "sha256:1684f62f14ac206f65c9312666aed8b6533e99701b7e0e67cdb6e9754d073445",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-01T13:00:03Z",
+      "source": "user",
+      "message": "Fetch the three pages.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:bce413ec9d191f99546049ab685910bac2ed4eb0296ce613fd5e8e5c448914ab"
+        },
+        "config_entries": [
+          "sha256:c62af05477f421a44ab5f12edebb42c7e2cc29674621cb8868455769b98d305a"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Fetch the three pages."
+              }
+            ]
+          }
+        },
+        "run": [
+          {
+            "cause": "cut: the process was killed",
+            "end_entry_id": "sha256:8915a9b2614ddd441da502add54029d32dcfa0d6bebf5b8db3bb2d1310efd92e",
+            "pending": [
+              "call_a",
+              "call_b",
+              "call_c"
+            ],
+            "reason": "error",
+            "run_id": "run-1",
+            "source": "input",
+            "start_entry_id": "sha256:01d25890068de8e5794fab9c4120b8c35de16eb03544bb8f4cd31c210e560ebd"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-01T13:00:07Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_a",
+          "function_name": "fetch_page",
+          "arguments": {
+            "page": "a"
+          }
+        },
+        {
+          "tool_call_id": "call_b",
+          "function_name": "fetch_page",
+          "arguments": {
+            "page": "b"
+          }
+        },
+        {
+          "tool_call_id": "call_c",
+          "function_name": "fetch_page",
+          "arguments": {
+            "page": "c"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_a",
+            "content": "page a: 3 links",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_a",
+                  "output": "page a: 3 links"
+                }
+              }
+            }
+          },
+          {
+            "source_call_id": "call_b",
+            "content": "The fetch of page b was cut off; its outcome is unknown.",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_b",
+                  "output": "The fetch of page b was cut off; its outcome is unknown."
+                }
+              }
+            }
+          },
+          {
+            "source_call_id": "call_c",
+            "content": "The result of page c was withheld.",
+            "extra": {
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_c",
+                  "output": "The result of page c was withheld."
+                }
+              }
+            }
+          }
+        ]
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:281f5e62beec1eff7be7ed9dad7e5a2074a89180fa48c9f3701701406c93a0b4"
+        },
+        "calls": {
+          "call_a": {
+            "dispatch": {
+              "entry_id": "sha256:209172e307eedda221c3a43fe0985b4fc289fc7bdb4fc31e5efd2059d1866384",
+              "idempotency_key": "key-a"
+            },
+            "result": {
+              "entry_id": "sha256:36acd5605764f111d3462fe1a3f505767298a689ebf6f1ce8667a2879f8f3471",
+              "ts": "2026-11-01T13:00:11Z"
+            }
+          },
+          "call_b": {
+            "decisions": [
+              {
+                "by": "policy",
+                "entry_id": "sha256:88275530c50c5f47c98f3496d8d38425f6be44754bef3c9740849413878d5063",
+                "reason": "in flight at the cut; fetch_page cannot say a second run is safe",
+                "verdict": "answer"
+              }
+            ],
+            "dispatch": {
+              "entry_id": "sha256:bce7543daadc14094060ed4ad1beb72ea3ca69f592fccad8a60a3886fd89373d",
+              "idempotency_key": "key-b"
+            }
+          },
+          "call_c": {
+            "decisions": [
+              {
+                "by": "policy",
+                "entry_id": "sha256:d3e41b92fff4719dabd564fd835f5f2d8fab8ad34eb77085b6916f2536047153",
+                "reason": "a hook withheld the result",
+                "verdict": "answer"
+              }
+            ],
+            "dispatch": {
+              "entry_id": "sha256:8d80f13d836b63734fe0ffcc0e6a9a8e86aa383711edb1165ade58e1c87dd416",
+              "idempotency_key": "key-c"
+            },
+            "result": {
+              "entry_id": "sha256:88611836dadc452a6f5b67a36da3cff59ce7f4b615160d52790058e4e1b4e145",
+              "failed": true,
+              "ts": "2026-11-01T13:00:12Z"
+            }
+          }
+        },
+        "item_entry_ids": [
+          "sha256:0b7f4fa6b2e4b9f5751e9991615bb907ca4ff7a080a5e560077aaf32896128db",
+          "sha256:53893468a00b1e0579da63de6cdf58efa0ca4350c106b0d280ee8327e2fed60b",
+          "sha256:bd0c1e9bd1490494e49442fe6d2cd9ac5a96250bfd159f0c7d3e6e465b076934"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_a",
+              "call_id": "call_a",
+              "name": "fetch_page",
+              "arguments": "{\"page\":\"a\"}"
+            },
+            {
+              "type": "function_call",
+              "id": "fc_b",
+              "call_id": "call_b",
+              "name": "fetch_page",
+              "arguments": "{\"page\":\"b\"}"
+            },
+            {
+              "type": "function_call",
+              "id": "fc_c",
+              "call_id": "call_c",
+              "name": "fetch_page",
+              "arguments": "{\"page\":\"c\"}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:281f5e62beec1eff7be7ed9dad7e5a2074a89180fa48c9f3701701406c93a0b4",
+            "model": "gpt-5",
+            "request_hash": "sha256:2f7ee175542868ea022b7077bdd88e7615a210a74c5f5f9486a742e647a4a5c0",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-11-01T13:00:07Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-01T13:00:21Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Page a has 3 links; b and c are unknown.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:6ef91e953bfd5a793252b86cbd48bbd6114bafffb69d4f059acd68ceb8dc70f6"
+        },
+        "item_entry_ids": [
+          "sha256:ad495e3fdaf7e1fce5288d13ac21a645735b27f0754457008ca60383d2957487"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_2",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Page a has 3 links; b and c are unknown.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:6ef91e953bfd5a793252b86cbd48bbd6114bafffb69d4f059acd68ceb8dc70f6",
+            "model": "gpt-5",
+            "request_hash": "sha256:bb1d30a7c3a8d3eddb61e1ab4930d9a124f65eca34af5356a788a8384ba599d2",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-11-01T13:00:21Z"
+          }
+        },
+        "run": [
+          {
+            "end_entry_id": "sha256:1684f62f14ac206f65c9312666aed8b6533e99701b7e0e67cdb6e9754d073445",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-2",
+            "source": "resume",
+            "start_entry_id": "sha256:02c98c77586ddebf04bdca7fa2477bcd18ef5fe74a62332b93874ef3471949db"
+          }
+        ]
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 2 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 3 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 2
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.15",
+      "leaf": "sha256:1684f62f14ac206f65c9312666aed8b6533e99701b7e0e67cdb6e9754d073445",
+      "main": true,
+      "records": [
+        "run",
+        "dispatch",
+        "decision"
+      ]
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

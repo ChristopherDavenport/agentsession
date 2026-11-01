@@ -171,6 +171,7 @@ var bodyMembers = map[string][]special{
 	TypeRun:           {{path: memberPath("pending", "[]"), role: roleCallID}},
 	TypeDispatch:      {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
 	TypeDecision:      {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
+	TypeResult:        {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}, {path: memberPath("item", "call_id"), role: roleCallID}},
 	TypeLabel:         {{path: memberPath("target"), role: roleEntry}},
 	TypeOutcome:       {{path: memberPath("target"), role: roleEntry}},
 	TypeLink: {

@@ -448,7 +448,7 @@ a branch merged back, several workers joined at once.
 ## Core entry types
 
 Context entries: `item`, `response`, `config`, `compaction`,
-`branch_summary`. Record entries: `run`, `dispatch`, `decision`,
+`branch_summary`. Record entries: `run`, `dispatch`, `result`, `decision`,
 `queued`, `label`, `info`, `env`, `outcome`, `link`, `custom`. A record entry
 contributes nothing to context; the context algorithm below is the
 normative statement.
@@ -1233,7 +1233,9 @@ is one like any other, on the path or off it. A call with
 a `dispatch` and no `function_call_output` on the path may have run: its
 side effect may have happened. It is **in flight**, handed to its tool
 when the record stopped, unless the latest `decision` after its last
-`dispatch` is a `hold` or an `answer`. A `hold` after a `dispatch` holds
+`dispatch` is a `hold` or an `answer`, or a `result` follows that
+`dispatch`, when the call has returned, as `result` says. A `hold`
+after a `dispatch` holds
 a call that may have run, and whoever answers the hold answers that
 call, as a replay rule would: a `proceed` and another `dispatch` run it
 again, an `answer` ends it without running it. An `answer` with no
@@ -1286,6 +1288,57 @@ again, carries an `answer` decision, below.
   first crash, and a reader counts the times the tool may have run by
   counting them. A call with several dispatches and no output was in
   flight at its last one.
+
+### `result`
+
+A call's tool returned, and its output is not yet on the path. Since
+0.15.
+
+```json
+{"type":"result","id":"…","parent":"…","ts":"…",
+ "call_id":"call_…","target":"entry-id",
+ "item":{"type":"function_call_output","call_id":"call_…","output":"…"},
+ "failed":true}
+```
+
+- `call_id`, `target` and `item` are required. `target` names the call
+  as it does on `dispatch`, and `call_id` MUST be that call's. `item`
+  MUST be a `function_call_output` whose `call_id` is the call's, and
+  it is the output as the harness will append it, after whatever the
+  harness does to what the tool returned. `failed` MAY be `true`, with
+  the meaning it has on an output's entry. The entry is a record entry:
+  its `item` is not in context and reaches no request.
+- A writer writes a `result` only when a call's output settles before
+  it can join the path: a harness that appends outputs in an order
+  other than the order its calls settle, as one does that runs a batch
+  in parallel and appends the outputs in the model's order, writes one
+  for a call when its tool returns and the output cannot be appended
+  yet. A harness that appends each output as its tool returns has no
+  window to record, and writes none. The entry is written durably
+  before the harness acts on the result in any other way. A writer
+  writes it only after a `dispatch` of the call on the path that no
+  withdrawal follows, and only when no output, `answer`, `reject` or
+  other `result` of the call follows that `dispatch`. A `result`
+  belongs to the latest `dispatch` of its call before it.
+- A call with a `result` after its last `dispatch` and no output on the
+  path has **returned**: its tool ran and returned the result's `item`.
+  It is not in flight. The harness that continues the path appends the
+  result's `item` as the call's output, with `failed` as the result
+  carries it, and writes nothing else for the call. It writes no
+  `dispatch`, since the tool has run, and no `decision`, save an
+  `answer` when it withholds the result, as `answer` says of a tool
+  that ran and whose result the harness withheld. The output after an
+  `answer` is the harness's, and need not equal the result's `item`.
+- An output after a `result` with no `answer` between MUST hold the
+  result's `item`, member for member. A tool that checks a file reports
+  one that does not, as it reports a `dispatch` after a `result`, a
+  `decision` other than an `answer` after one, and a `result` that
+  follows no `dispatch` of its call that nothing else ended.
+- A writer that names `result` in the header's `records` writes one for
+  every call whose tool returns, before it appends the call's output.
+  A reader of such a file may then take a call that has a `dispatch`,
+  no `result` and no output as one whose tool had not returned when
+  the record stopped.
 
 ### `decision`
 
@@ -1378,7 +1431,7 @@ A call's fate was decided outside the tool.
 
 A **withdrawal**, since 0.14, is a `reject` carrying `withdrawn: true`
 that directly follows a `dispatch` of its call: the latest `decision`,
-`dispatch` or `function_call_output` of the call on the path before it
+`dispatch`, `result` or `function_call_output` of the call on the path before it
 is that `dispatch`, and entries of other calls or of no call may stand
 between them. A writer that wrote a call's `dispatch` and then did not
 hand the call to its tool, as when a subscriber to the hand-off refused
@@ -1406,6 +1459,9 @@ that follows no `dispatch` of its call directly as a `reject` without
 it, which after a `dispatch` is the `reject` this section forbids, and
 keeps the member on another verdict, or holding anything but `true`, as
 a member it does not know.
+
+A `reject`, a `hold` or a `proceed` MUST NOT follow a `result` of its
+call, since 0.15; an `answer` may, as `result` says.
 
 A `decision` is a lifecycle fact and carries no score. A judgement of
 how something went is an `outcome`.
@@ -1864,7 +1920,7 @@ list as follows.
 4. An entry contributes an item if it is `item`, or `branch_summary`,
    or a `compaction` selected in step 3, which contributes its
    `summary` and each of its `pinned` items. Every record entry (`run`,
-   `dispatch`, `decision`, `queued`, `label`, `info`, `env`,
+   `dispatch`, `result`, `decision`, `queued`, `label`, `info`, `env`,
    `outcome`, `link`, `custom`) and every unknown extension
    contributes nothing. A `queued` entry holds an item and is not in
    context: the input enters when it is appended as an `item`. An
@@ -1977,9 +2033,9 @@ is predict that the provider's cache will hit.
   above does not forbid it.
 - A user item or function call output SHOULD be written before the
   request that includes it is sent.
-- Writers SHOULD fsync at least on each `response` entry and on each
-  `function_call_output` item, since the output is the record that a
-  side effect happened.
+- Writers SHOULD fsync at least on each `response` entry, on each
+  `result` entry and on each `function_call_output` item, since the
+  result and the output are the record that a side effect happened.
 - A writer that names a type in the header's `records` MUST have each
   such entry durable before the side effect it precedes: a `dispatch`
   is written and synced before the tool runs, and a `run` end before
@@ -2198,7 +2254,7 @@ that named the left-out entry then follows the rule for its kind:
   `text`, which it still sets.
 - An entry of a call goes with the call: a redactor that leaves out a
   `function_call`'s entry leaves out every `dispatch`, `decision`,
-  `function_call_output` and `link` entry of that call, the links that
+  `result`, `function_call_output` and `link` entry of that call, the links that
   carry its `call_id`, a withdrawal, an output marked `failed` and a
   cancel notice among them, since each says what became of a call the
   file no longer holds. A withdrawal also goes with the `dispatch` it
@@ -2232,6 +2288,10 @@ that named the left-out entry then follows the rule for its kind:
   names reads as an input the harness still owes. Leaving out the
   `queued` entry and keeping the `item` removes the item's
   `queued_from`, as above.
+- A `result`'s `item` is a copy of the call's output. A redactor that
+  removes or replaces an output, or any part of it, does the same to
+  the `result` of the same hand-off, and leaves out the `result` when
+  it leaves out the output.
 - A compaction's `pinned` items are copies of items of entries before
   `first_kept`, and a copy says what its source says. A redactor that
   removes or replaces a pin's source, the item or any part of it, MUST
@@ -2332,7 +2392,7 @@ and branch summaries as copied-context system steps, `link` entries to
 reference into the child session names the leaf the answer was taken
 from; where it does not, the projection chooses one, and the document
 then depends on that choice rather than on the record. `run`,
-`dispatch`, `decision` and `queued` entries have no step of their own.
+`dispatch`, `result`, `decision` and `queued` entries have no step of their own.
 A run's `source`, its start `ref` as `trigger`, its end `reason` and
 its end `ref` as `cause` travel under `run` in the `extra` of the first
 step its segment produces, or in the trajectory's top-level `extra`
@@ -2346,6 +2406,10 @@ call ID, in the `extra` of the agent step that produced the call, and
 a call handed to its tool more than once carries every dispatch there
 too, in path order, as the list `dispatches`, so the count survives
 the projection, and a withdrawal's record carries `withdrawn: true`. A
+call's `result` travels there as `result`, holding its `entry_id`, its
+`ts` and `failed`, and its `item` when the document holds no output
+for the call, so a document cut before the append still says the tool
+returned. A
 `custom` entry whose `call_id` names a call whose agent step is in the
 document travels in that step's `extra`, under `calls[call_id].custom`,
 as a list in path order, since the step after it may be the model's
@@ -2457,7 +2521,9 @@ first in flight at the moment of the second. A withdrawn hand-off's span
 ends at its withdrawal, without an error status, since the tool never
 ran, and an output marked `failed` ends its call's span with an error
 status. A copied call has no tool span: the session that made it
-traces it.
+traces it. A hand-off's span ends at its `result` when it has one, in
+the state the path reads, since the output's append is not the tool's
+time.
 
 ## Versioning
 
@@ -2591,7 +2657,10 @@ neither written for the copied call, beside a fork that answers a call
 in its prefix with an `answer` and an output whose `copied_from` names
 the origin's output, a delivered input closed by a run end, queued
 again after it carrying `deliver` and drained by the next run, beside
-another owed at a cut while a call waits for approval, and
+another owed at a cut while a call waits for approval, a parallel batch
+cut before its append with two calls returned, one failed, and one in
+flight, continued by a resume that appends one result unchanged and
+answers the others, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
@@ -2600,7 +2669,10 @@ before the base that is not on the path to it, a `dispatch` that follows a
 `reject`, a `reject` that follows a `dispatch` or an output, a
 withdrawal that a decision or the output separates from its `dispatch`,
 a `dispatch` or a `reject` naming a copied call, a `copied_from` naming
-its own session, a `target`
+its own session, a `result` with no `dispatch` before it or after the
+call's output, a `dispatch` or a `reject` after a `result`, an output
+after a `result` that differs from its `item` with no `answer` between,
+a `target`
 naming another call, a repeated `call_id`, an empty `call_id`, a `run`
 start whose `source` is not the shape of its segment, a response whose
 recorded hash is the request an `omit` in force leaves an item out of,
@@ -2655,6 +2727,15 @@ is upgraded.
   that a harness starts a run for when no run takes it. A reader of
   0.14 handed an owed delivery back as a steer, which waited for the
   next input.
+
+- A new record entry, `result`, records that a call's tool returned
+  before its output joined the path, written when an output settles
+  before it can join, as inside a parallel batch. Such a call has
+  *returned* and is not in flight, and the harness that continues the
+  path appends that output and runs nothing again. A reader of 0.14
+  read a call settled inside a parallel batch cut by a crash as in
+  flight. Redaction: a `result` goes with its call, and its `item` is
+  redacted in step with its output.
 
 ## Changes since 0.13
 

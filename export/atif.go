@@ -225,6 +225,19 @@ type builder struct {
 	// unembedded counts the subsession links whose child was not
 	// embedded, whose cost the root's total_cost_usd leaves out.
 	unembedded int
+	// results are the result records written under calls, each with the
+	// entry it was made from, and outputs the calls whose output the
+	// document holds: a result carries its item when the document holds
+	// no output for its call, so a document cut before the append still
+	// says the tool returned.
+	results []resultRecord
+	outputs map[string]bool
+}
+
+// resultRecord is one call's result record and the entry it came from.
+type resultRecord struct {
+	rec map[string]any
+	e   *agentsession.ResultEntry
 }
 
 // replacedRecord is one placeholder a request sends for an item entry,
@@ -379,7 +392,7 @@ func (b *builder) setAgentDefaults() {
 				b.settings = b.settings.Apply(v)
 				continue
 			case *agentsession.EnvEntry, *agentsession.InfoEntry, *agentsession.LabelEntry, *agentsession.CustomEntry,
-				*agentsession.RunEntry, *agentsession.DispatchEntry, *agentsession.DecisionEntry:
+				*agentsession.RunEntry, *agentsession.DispatchEntry, *agentsession.DecisionEntry, *agentsession.ResultEntry:
 				continue
 			}
 			break
@@ -548,6 +561,15 @@ func (b *builder) entry(e agentsession.Entry) error {
 		call := b.callExtra(v.CallID)
 		list, _ := call["decisions"].([]any)
 		call["decisions"] = append(list, rec)
+	case *agentsession.ResultEntry:
+		// A call's result travels with its call, as its dispatches do.
+		rec := map[string]any{"entry_id": v.ID, "ts": v.Timestamp.UTC().Format(time.RFC3339Nano)}
+		if v.Failed {
+			rec["failed"] = true
+		}
+		copyUnknown(rec, v.Unknown)
+		b.callExtra(v.CallID)["result"] = rec
+		b.results = append(b.results, resultRecord{rec: rec, e: v})
 	case *agentsession.QueuedEntry:
 		rec := map[string]any{"entry_id": v.ID, "mode": v.Mode, "item": rawItem(v.Item)}
 		if v.Trigger != nil {
@@ -612,6 +634,10 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 		}
 		b.addStep(step, e)
 	case *openresponses.FunctionCallOutput:
+		if b.outputs == nil {
+			b.outputs = map[string]bool{}
+		}
+		b.outputs[v.CallID] = true
 		if len(e.Parents) > 0 {
 			// Where the answer came from, which the subsession
 			// reference needs and which nothing else on the path says.
@@ -1155,6 +1181,11 @@ func (b *builder) outcome(o *agentsession.OutcomeEntry) {
 // finish writes the root extras, final metrics, subagent links and
 // anything still pending.
 func (b *builder) finish() {
+	for _, r := range b.results {
+		if !b.outputs[r.e.CallID] {
+			r.rec["item"] = rawItem(r.e.Item)
+		}
+	}
 	b.markRedacted()
 	root := b.rootExtra()
 	root[ExtraOpenResponses] = map[string]any{"payload": b.t.Header.Payload}

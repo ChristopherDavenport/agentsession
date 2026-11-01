@@ -20,14 +20,20 @@ var fixtures015 = map[string]func(t *testing.T) *Session{
 	"copied":        func(t *testing.T) *Session { _, child := copiedFixture(t); return child },
 	"copied-answer": func(t *testing.T) *Session { _, fork := copiedAnswerFixture(t); return fork },
 	"delivered":     deliveredFixture,
+	"returned":      returnedFixture,
 }
 
 // badFixtures015 are the 0.15 negative fixtures: each a valid file with
 // one line a writer refuses, written by hand.
 var badFixtures015 = map[string]func(t *testing.T) []byte{
-	"bad-copied-dispatch": func(t *testing.T) []byte { return badCopiedLines(t, "dispatch") },
-	"bad-copied-reject":   func(t *testing.T) []byte { return badCopiedLines(t, "reject") },
-	"bad-copied-self":     func(t *testing.T) []byte { return badCopiedLines(t, "self") },
+	"bad-copied-dispatch":     func(t *testing.T) []byte { return badCopiedLines(t, "dispatch") },
+	"bad-copied-reject":       func(t *testing.T) []byte { return badCopiedLines(t, "reject") },
+	"bad-copied-self":         func(t *testing.T) []byte { return badCopiedLines(t, "self") },
+	"bad-result-undispatched": func(t *testing.T) []byte { return badResultLines(t, "undispatched") },
+	"bad-result-redispatch":   func(t *testing.T) []byte { return badResultLines(t, "redispatch") },
+	"bad-result-reject":       func(t *testing.T) []byte { return badResultLines(t, "reject") },
+	"bad-result-mismatch":     func(t *testing.T) []byte { return badResultLines(t, "mismatch") },
+	"bad-result-after-output": func(t *testing.T) []byte { return badResultLines(t, "after-output") },
 }
 
 // writeFixtures015 writes the 0.15 fixtures, positive and negative.
@@ -569,5 +575,213 @@ func TestDeliverForms(t *testing.T) {
 	}
 	if _, err := MarshalEntry(&QueuedEntry{Item: openresponses.UserText("hi"), Mode: ModeFollowUp, Deliver: true}); err == nil {
 		t.Error("a follow-up carrying deliver was written")
+	}
+}
+
+// returnedFixture builds the session returned.jsonl holds: one model
+// call makes three calls, run as a parallel batch whose outputs are
+// appended in the model's order. All three are dispatched; the first's
+// tool returns and the third's fails, each recorded by a result, and the
+// record is cut before the batch is appended, with the second still in
+// flight. The writer that continues closes the cut run and resumes: it
+// appends the first call's result as its output with no decision,
+// answers the second, whose outcome it cannot learn, and answers the
+// third with an output of its own, since a hook withheld the result.
+func returnedFixture(t *testing.T) *Session {
+	t.Helper()
+	s, must, say := fixtureSession(t, Header{ID: "01995b2a-0000-7000-8000-000000000036", Records: AllRecords}, "2026-11-01T13:00:00Z")
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewRunStart("run-1", SourceInput, ""))
+	must(NewItemEntry(openresponses.UserText("Fetch the three pages.")))
+	sent := fixtureHash(t, s)
+	var calls []string
+	for i, name := range []string{"a", "b", "c"} {
+		calls = append(calls, must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_" + name, CallID: "call_" + name, Name: "fetch_page", Arguments: `{"page":"` + name + `"}`}, ResponseID: "resp_1"}))
+		_ = i
+	}
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+	for i, name := range []string{"a", "b", "c"} {
+		must(NewDispatch("call_"+name, calls[i]).WithIdempotencyKey("key-" + name))
+	}
+	a := NewResult("call_a", calls[0], openresponses.NewFunctionCallOutput("call_a", "page a: 3 links"))
+	must(a)
+	c := NewResult("call_c", calls[2], openresponses.NewFunctionCallOutput("call_c", "Error: page c: 404"))
+	c.Failed = true
+	must(c)
+	// The cut: the writer that continues owns the run left open.
+	e, err := s.EndRun(ReasonError, "cut: the process was killed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(e)
+	must(NewRunStart("run-2", SourceResume, ""))
+	must(a.Output())
+	must(NewDecision("call_b", calls[1], VerdictAnswer, ByPolicy).WithReason("in flight at the cut; fetch_page cannot say a second run is safe"))
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_b", "The fetch of page b was cut off; its outcome is unknown.")))
+	must(NewDecision("call_c", calls[2], VerdictAnswer, ByPolicy).WithReason("a hook withheld the result"))
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_c", "The result of page c was withheld.")))
+	say("resp_2", "Page a has 3 links; b and c are unknown.")
+	e, err = s.EndRun(ReasonDone, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(e)
+	return s
+}
+
+// TestReturnedFixture reads the result fixture: at the cut the calls
+// with a result have returned and the one without is in flight, the run
+// that continues is a resume that appends the first result unchanged and
+// answers the others, and the file verifies.
+func TestReturnedFixture(t *testing.T) {
+	raw := checkBuilt(t, "returned")
+	if bytes.Count(raw, []byte(`"type":"result"`)) != 2 {
+		t.Errorf("the fixture holds %d results", bytes.Count(raw, []byte(`"type":"result"`)))
+	}
+	s := loadFixture(t, "returned")
+	if err := s.VerifyRecords(s.Leaf()); err != nil {
+		t.Errorf("VerifyRecords: %v", err)
+	}
+	runs, _ := s.Runs(s.Leaf())
+	if len(runs) != 2 || ComputeSource(runs[1]) != SourceResume || len(runs[0].End.Pending) != 3 {
+		t.Fatalf("runs = %+v", runs)
+	}
+	// At the cut, the entry before the first run's end.
+	cut := runs[0].End.Parent
+	calls := Calls(s.Path(cut))
+	want := []CallState{CallReturned, CallInFlight, CallReturned}
+	for i, c := range calls {
+		if st := c.State(s.Header()); st != want[i] || c.InFlight() != (want[i] == CallInFlight) {
+			t.Errorf("call %s at the cut is %s, want %s", c.ID(), st, want[i])
+		}
+	}
+	if calls[0].Result == nil || calls[2].Result == nil || !calls[2].Result.Failed || calls[1].Result != nil {
+		t.Errorf("results = %v %v %v", calls[0].Result, calls[1].Result, calls[2].Result)
+	}
+	// The run the cut left reads aborted: a call returned and pending is
+	// not held, though it is not in flight either.
+	if got := ComputeReason(runs[0].Path, runs[0].Segment); got != ReasonAborted {
+		t.Errorf("the cut run computes %s", got)
+	}
+	calls, _ = s.Calls(s.Leaf())
+	if !sameItem(calls[0].Output.Item, calls[0].Result.Item) || len(calls[0].Decisions) != 0 {
+		t.Errorf("the first call was not appended from its result alone: %+v", calls[0])
+	}
+	if !calls[2].Answered() || sameItem(calls[2].Output.Item, calls[2].Result.Item) {
+		t.Errorf("the third call is %+v", calls[2])
+	}
+}
+
+// TestResultRules: a writer appends a result only after an open
+// hand-off of its call, refuses a dispatch or any decision but an answer
+// after it, and holds the output that follows it to its item unless an
+// answer stands between.
+func TestResultRules(t *testing.T) {
+	s := New(Header{ID: "r", Records: AllRecords})
+	call, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{CallID: "c", Name: "fetch", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := openresponses.NewFunctionCallOutput("c", "done")
+	if _, err := s.Append(NewResult("c", call, out)); !errors.Is(err, ErrBadResult) {
+		t.Errorf("a result with no dispatch: %v", err)
+	}
+	if _, err := s.Append(NewDispatch("c", call)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewResult("c", call, openresponses.NewFunctionCallOutput("other", "done"))); err == nil {
+		t.Error("a result holding another call's output was appended")
+	}
+	if _, err := s.Append(NewResult("c", call, out)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(NewResult("c", call, out)); !errors.Is(err, ErrBadResult) {
+		t.Errorf("a second result: %v", err)
+	}
+	for _, e := range []Entry{
+		NewDispatch("c", call),
+		NewDecision("c", call, VerdictHold, ByPolicy),
+		NewDecision("c", call, VerdictProceed, ByPolicy),
+		NewDecision("c", call, VerdictReject, ByPolicy).WithReason("no"),
+	} {
+		if _, err := s.Append(e); !errors.Is(err, ErrCallReturned) {
+			t.Errorf("%T after a result: %v", e, err)
+		}
+	}
+	if _, err := s.Append(NewItemEntry(openresponses.NewFunctionCallOutput("c", "different"))); !errors.Is(err, ErrResultMismatch) {
+		t.Errorf("a different output after the result: %v", err)
+	}
+	pending, _ := s.PendingCalls(s.Leaf())
+	if len(pending) != 1 || pending[0].State(s.Header()) != CallReturned {
+		t.Fatalf("pending = %+v", pending)
+	}
+	if _, err := s.Append(pending[0].Result.Output()); err != nil {
+		t.Errorf("the result's output: %v", err)
+	}
+	if err := s.VerifyRecords(s.Leaf()); err != nil {
+		t.Errorf("VerifyRecords: %v", err)
+	}
+}
+
+// badResultLines builds a 0.15 negative fixture for a result: a call
+// dispatched, or not, and one line a writer refuses, written by hand.
+func badResultLines(t *testing.T, kind string) []byte {
+	t.Helper()
+	s, must, _ := fixtureSession(t, Header{ID: "01995b2a-0000-7000-8000-000000000037", Records: AllRecords}, "2026-11-01T14:00:00Z")
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	call := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_1", Name: "fetch_page", Arguments: "{}"}, ResponseID: "resp_1"})
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted})
+	result := NewResult("call_1", call, openresponses.NewFunctionCallOutput("call_1", "page: 3 links"))
+	var bad Entry
+	switch kind {
+	case "undispatched":
+		bad = result
+	case "redispatch", "reject", "mismatch":
+		must(NewDispatch("call_1", call))
+		must(result)
+		switch kind {
+		case "redispatch":
+			bad = NewDispatch("call_1", call)
+		case "reject":
+			bad = NewDecision("call_1", call, VerdictReject, ByPolicy).WithReason("too late")
+		case "mismatch":
+			bad = NewItemEntry(openresponses.NewFunctionCallOutput("call_1", "page: 4 links"))
+		}
+	case "after-output":
+		must(NewDispatch("call_1", call))
+		must(NewItemEntry(openresponses.NewFunctionCallOutput("call_1", "page: 3 links")))
+		bad = result
+	}
+	if _, err := s.Append(bad); err == nil {
+		t.Fatalf("%s: the writer appended what the fixture breaks", kind)
+	}
+	b := bad.Base()
+	b.ID, b.Parent, b.Timestamp = "x", "", time.Date(2026, 11, 1, 14, 30, 0, 0, time.UTC)
+	line, err := MarshalEntry(bad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	buf.WriteString(reparent(t, string(line), s.Leaf()) + "\n")
+	return buf.Bytes()
+}
+
+// TestBadResultFixtures reads the 0.15 negative fixtures for results:
+// every line verifies, and VerifyRecords reports the one broken rule.
+func TestBadResultFixtures(t *testing.T) {
+	for name, want := range map[string]error{
+		"bad-result-undispatched": ErrBadResult,
+		"bad-result-redispatch":   ErrCallReturned,
+		"bad-result-reject":       ErrCallReturned,
+		"bad-result-mismatch":     ErrResultMismatch,
+		"bad-result-after-output": ErrBadResult,
+	} {
+		s := checkBad(t, name)
+		if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, want) {
+			t.Errorf("%s: VerifyRecords = %v, want %v", name, err, want)
+		}
 	}
 }

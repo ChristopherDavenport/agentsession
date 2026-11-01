@@ -1888,6 +1888,7 @@ var coreEntries = map[string]func() memberDecoder{
 	TypeDispatch:      func() memberDecoder { return &DispatchEntry{} },
 	TypeDecision:      func() memberDecoder { return &DecisionEntry{} },
 	TypeQueued:        func() memberDecoder { return &QueuedEntry{} },
+	TypeResult:        func() memberDecoder { return &ResultEntry{} },
 	TypeLabel:         func() memberDecoder { return &LabelEntry{} },
 	TypeInfo:          func() memberDecoder { return &InfoEntry{} },
 	TypeEnv:           func() memberDecoder { return &EnvEntry{} },
