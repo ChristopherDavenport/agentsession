@@ -2321,9 +2321,9 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.13
 
-Optional members, one relaxed rule and the universal root. A 0.13
-file is a 0.14 file that holds none of the new members. No hash
-changes. Like 0.12's, the new rules turn on the members an entry
+Optional members, two relaxed rules, the form a sidecar session's
+request hash covers, and the universal root. A 0.13 file is a 0.14
+file that holds none of the new members. No hash changes. Like 0.12's, the new rules turn on the members an entry
 carries and not on the header, so a reader of 0.14 reads each member
 below by its form in a file of any minor, and raising a file's
 `format` never makes an entry that verified before fail. A writer of
