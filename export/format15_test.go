@@ -34,10 +34,12 @@ func TestCopiedSteps(t *testing.T) {
 	if agent.Observation == nil || len(agent.Observation.Results) != 1 || agent.Observation.Results[0].SourceCallID != "call_helper" {
 		t.Errorf("the copied call's observation is %+v", agent.Observation)
 	}
-	for i, step := range doc.Steps[:2] {
-		as, _ := step.Extra[ExtraAgentSession].(map[string]any)
-		if as["copied_from"] == nil {
-			t.Errorf("step %d carries no copied_from", i+1)
+	// copied_from is a list in item order on every step, one item's or
+	// several's, so a reader reads it one way.
+	for i, want := range []int{1, 2} {
+		as, _ := doc.Steps[i].Extra[ExtraAgentSession].(map[string]any)
+		if list, ok := as["copied_from"].([]any); !ok || len(list) != want {
+			t.Errorf("step %d carries copied_from %v, want a list of %d", i+1, as["copied_from"], want)
 		}
 	}
 	own := doc.Steps[3]

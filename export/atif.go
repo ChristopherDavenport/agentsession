@@ -729,7 +729,8 @@ func (b *builder) itemExtra(e *agentsession.ItemEntry) map[string]any {
 		agentSessionExtra(extra)["from_link"] = e.FromLink
 	}
 	if e.CopiedFrom != nil {
-		agentSessionExtra(extra)["copied_from"] = e.CopiedFrom
+		// A list, as on a step made of several copied items.
+		agentSessionExtra(extra)["copied_from"] = []any{e.CopiedFrom}
 	}
 	if e.Trust != nil {
 		agentSessionExtra(extra)["trust"] = e.Trust
@@ -888,11 +889,7 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 		for _, e := range g.entries {
 			from = append(from, e.CopiedFrom)
 		}
-		if len(from) == 1 {
-			agentSessionExtra(step.Extra)["copied_from"] = from[0]
-		} else {
-			agentSessionExtra(step.Extra)["copied_from"] = from
-		}
+		agentSessionExtra(step.Extra)["copied_from"] = from
 	}
 	var left []map[string]any
 	for _, e := range g.entries {

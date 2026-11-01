@@ -2518,15 +2518,15 @@ report from any other.
 An `item` entry carrying `copied_from` maps to the step its item would
 map to, marked `is_copied_context: true`, with no `model_name`, no
 `metrics` and no `llm_call_count`, and with `copied_from` under
-`agentsession` in the step's `extra`, a list in item order for a step
-made of several. Copied model-output items that follow one another
+`agentsession` in the step's `extra`, always a list, in item order,
+one element for a step made of one item. Copied model-output items that follow one another
 form one step. A copied call is a tool call of that step, and its
 output is the step's observation, never a failure of this path. A
 copied step is no model call of this path, so neither `final_metrics`
 nor `total_steps` counts it. An output carrying `copied_from` whose
 call is not copied is an observation of its call's step, as any output
 is, with `copied_from` under `agentsession` in the observation
-result's `extra`.
+result's `extra`, a list of one.
 
 An entry's `trust` travels under `agentsession` in the `extra` of the
 step or observation result it maps to, an agent step carrying the union

@@ -56,10 +56,12 @@
             "content": "TestFollow races the poller.",
             "extra": {
               "agentsession": {
-                "copied_from": {
-                  "session": "01995b2a-0000-7000-8000-000000000032",
-                  "entry": "sha256:e6e3f259ab71b26418a6104552f6cf3f66cd0497de726bcc47867c091bdd4100"
-                }
+                "copied_from": [
+                  {
+                    "session": "01995b2a-0000-7000-8000-000000000032",
+                    "entry": "sha256:e6e3f259ab71b26418a6104552f6cf3f66cd0497de726bcc47867c091bdd4100"
+                  }
+                ]
               },
               "openresponses": {
                 "item": {

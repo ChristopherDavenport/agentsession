@@ -16,10 +16,12 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "copied_from": {
-            "session": "01995b2a-0000-7000-8000-000000000030",
-            "entry": "sha256:f828a51f15df807e68ffb612cdec4d90df9f09e824a344e04fdb12bf69d715e7"
-          },
+          "copied_from": [
+            {
+              "session": "01995b2a-0000-7000-8000-000000000030",
+              "entry": "sha256:f828a51f15df807e68ffb612cdec4d90df9f09e824a344e04fdb12bf69d715e7"
+            }
+          ],
           "entry_id": "sha256:86c3a835b446d895d0e8993921a38bd4338d9a56085febd58cdbb86f17184e6e"
         },
         "config_entries": [
@@ -71,9 +73,11 @@
             "content": "You are this call's helper; the task follows.",
             "extra": {
               "agentsession": {
-                "copied_from": {
-                  "session": "01995b2a-0000-7000-8000-000000000030"
-                }
+                "copied_from": [
+                  {
+                    "session": "01995b2a-0000-7000-8000-000000000030"
+                  }
+                ]
               },
               "openresponses": {
                 "item": {
