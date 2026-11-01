@@ -7,6 +7,19 @@ versions may break the API.
 
 ## Unreleased
 
+- **Format 0.14 (RFC 0001, draft 0.14).** `Format` and `FormatMinor`
+  name 0.14, so a writer raises every file it appends to and a reader
+  of 0.13 refuses it; a 0.5 to 0.13 file reads as it stands and no
+  entry hash moves. The generated fixtures and export goldens carry the
+  new header. 0.14 takes in the universal root and `env.workspace`'s
+  `host` and `instance` (#265), and the members and rules below.
+  **Changed: `Workspace` has `Host` and `Instance` fields**, taken from
+  a member holding a non-empty string in a file of any minor; one in
+  another form stays in `Unknown` as written. `Workspace.SetMember`
+  sets the fields for `host` and `instance`, and refuses a value that
+  is not a non-empty string. A caller that read `Unknown["host"]` reads
+  `Host`.
+
 - **Naming a blob grants nothing (RFC 0002, Media; RFC 0003, Objects,
   Writing, Import and Security considerations).** The remote server
   counted every `sidecar:` URL in a session as a blob that session

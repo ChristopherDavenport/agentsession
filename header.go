@@ -13,7 +13,7 @@ import (
 )
 
 // Format is the session format version this package writes.
-const Format = "agentsession/0.13"
+const Format = "agentsession/0.14"
 
 // FormatMajor is the major version of the format this package reads.
 // Any minor version of it is accepted; files are migrated in memory.
@@ -364,8 +364,12 @@ func (h *Header) fill(now time.Time) {
 // redacted_from header member and the redacted entry member, and makes
 // a redacted session one of its own; a 0.12 file is a 0.13 file without
 // either, and one it holds there is kept as written, as a member this
-// package does not know, and the file is not raised.
-const FormatMinor = 13
+// package does not know, and the file is not raised. 0.14 defines the
+// universal root, which a leaf label may name, and the host and
+// instance members of an env entry's workspace. A 0.13 file is a 0.14
+// file that holds none of them, and each is read by its form in a file
+// of any minor.
+const FormatMinor = 14
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.
 // A file below it is rehashed on read.

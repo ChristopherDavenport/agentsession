@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.13
+Status: draft 0.14
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -212,7 +212,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.13","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.14","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -2070,13 +2070,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.13 reads a 0.5 to 0.12 file
-as it stands, since 0.6 to 0.13 add optional members, elements and
-relations, 0.10 and 0.11 relax one rule each, and the hashes do not change, save for the few rules each minor's changes below say read
+it begins at 1.0. A reader of 0.14 reads a 0.5 to 0.13 file
+as it stands, since 0.6 to 0.14 add optional members, elements and
+relations, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.13 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.14 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -2177,9 +2177,14 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.13
 
-These are the changes 0.14 makes. The document's status, the header's
-`format` and the sections above that name the current minor move to
-0.14 with the rest of its changes.
+Optional members, one relaxed rule and the universal root. A 0.13
+file is a 0.14 file that holds none of the new members. No hash
+changes. Like 0.12's, the new rules turn on the members an entry
+carries and not on the header, so a reader of 0.14 reads each member
+below by its form in a file of any minor, and raising a file's
+`format` never makes an entry that verified before fail. A writer of
+0.14 raises every file it appends to, as Versioning says, so every
+reader of 0.13 refuses those files until it is upgraded.
 
 - The universal root is defined: the one point every session's entries
   hang from, shared by every session, which `parent: null` names on the

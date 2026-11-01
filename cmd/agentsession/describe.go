@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -139,10 +138,9 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		}
 		if v.Workspace != nil {
 			w := strings.TrimSpace(v.Workspace.Kind + " " + shorten(v.Workspace.Ref, 20))
-			for _, key := range []string{"host", "instance"} {
-				var s string
-				if json.Unmarshal(v.Workspace.Unknown[key], &s) == nil && s != "" {
-					w += " " + key + " " + shorten(s, 20)
+			for _, m := range [][2]string{{"host", v.Workspace.Host}, {"instance", v.Workspace.Instance}} {
+				if m[1] != "" {
+					w += " " + m[0] + " " + shorten(m[1], 20)
 				}
 			}
 			parts = append(parts, w)

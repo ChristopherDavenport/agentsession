@@ -957,25 +957,28 @@ func (t *tracker) withBranchLink(opts []trace.SpanStartOption) []trace.SpanStart
 }
 
 // workspaceAttrs is a workspace as workspace.<member> attributes: kind,
-// ref, then every other member that is a non-empty string, by key, so
-// whatever tells one file system from another, which RFC 0001 puts
-// inside workspace, reaches the trace.
+// ref, host and instance, then every other member that is a non-empty
+// string, by key, so whatever tells one file system from another, which
+// RFC 0001 puts inside workspace, reaches the trace.
 func workspaceAttrs(w *agentsession.Workspace) []attribute.KeyValue {
 	if w == nil {
 		return nil
 	}
-	attrs := []attribute.KeyValue{attribute.String("workspace.kind", w.Kind)}
-	if w.Ref != "" {
-		attrs = append(attrs, attribute.String("workspace.ref", w.Ref))
+	members := map[string]string{"ref": w.Ref, "host": w.Host, "instance": w.Instance}
+	for key, raw := range w.Unknown {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			members[key] = s
+		}
 	}
-	keys := make([]string, 0, len(w.Unknown))
-	for key := range w.Unknown {
+	keys := make([]string, 0, len(members))
+	for key := range members {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	attrs := []attribute.KeyValue{attribute.String("workspace.kind", w.Kind)}
 	for _, key := range keys {
-		var s string
-		if json.Unmarshal(w.Unknown[key], &s) == nil && s != "" {
+		if s := members[key]; s != "" {
 			attrs = append(attrs, attribute.String("workspace."+key, s))
 		}
 	}
