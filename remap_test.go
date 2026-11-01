@@ -930,3 +930,22 @@ func TestRemapRefsBase(t *testing.T) {
 		t.Errorf("without a base: parent %q, %v; want the root", r.Entry.Base().Parent, err)
 	}
 }
+
+// TestRemapRefsBaseExtension: an extension entry, whose envelope alone
+// RemapRefs reads, hangs from the base as a core entry does when its
+// ancestors were all left out in a file with a base.
+func TestRemapRefsBaseExtension(t *testing.T) {
+	line := `{"type":"x:thing","id":"x","parent":"gone-p",` + tsLine + `,"x:ref":"o-inside"}`
+	m := leftOutRemap
+	m.Base = "n-base"
+	r, err := RemapRefs(entryOf(t, line), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Entry.Base().Parent; got != "n-base" {
+		t.Errorf("parent %q, want the base", got)
+	}
+	if r, err := RemapRefs(entryOf(t, line), leftOutRemap); err != nil || r.Entry.Base().Parent != "" {
+		t.Errorf("without a base: parent %q, %v; want the root", r.Entry.Base().Parent, err)
+	}
+}

@@ -470,7 +470,10 @@ func remapUnknown(u *UnknownEntry, m Remap) (Remapped, error) {
 	out := Remapped{Opaque: true}
 	if m.Entry != nil && cp.Parent != "" {
 		if id, ok := m.Entry("", cp.Parent); ok {
-			cp.Parent = id // "" is the universal root
+			if id == "" {
+				id = m.Base // the base in a file with one, else the universal root
+			}
+			cp.Parent = id
 		} else {
 			out.Unmapped = append(out.Unmapped, Reference{At: "/parent", Entry: cp.Parent})
 		}
