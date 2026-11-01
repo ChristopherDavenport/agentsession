@@ -30,9 +30,11 @@ versions may break the API.
 - **Member names that are data reach a redactor (RFC 0001 0.14, Every
   redacted entry).** A member name is data in an `env` entry's `files`
   and `tools`, and at any depth in every object whose members the
-  format does not define: a `custom` entry's `data`, an `outcome`'s
-  `details`, a `decision`'s `args`, a config's or a checkpoint's
-  `extra`, the value of any member the format does not define, and an
+  format does not define: a `custom` entry's `data` but for the
+  `usage`, `model` and `attempts` the format defines there, an
+  `outcome`'s `details`, a `decision`'s `args`, the values of a
+  config's or a checkpoint's `extra`, whose own keys are request member
+  names, the value of any member the format does not define, and an
   extension entry's body, its own names included. **Changed:
   `RewriteStrings`, `Rewriter` and `RewriteHeaderStrings`** give f those
   names, found from the type that decodes the entry, and refuse two

@@ -701,9 +701,9 @@ func TestRewriteStringsDataNames(t *testing.T) {
 			`{"type":"config","id":"x","parent":null,` + tsLine + `,"model":"m","extra":{"metadata":{"~":"v"}}}`,
 		},
 		{
-			"compaction checkpoint extra",
-			`{"type":"compaction","id":"x","parent":"p",` + tsLine + `,"first_kept":"f","summary":{"type":"message","role":"user","content":[]},"config":{"model":"m","extra":{"/home/alice":1}}}`,
-			`{"type":"compaction","id":"x","parent":"p",` + tsLine + `,"first_kept":"f","summary":{"type":"message","role":"user","content":[]},"config":{"model":"m","extra":{"~":1}}}`,
+			"compaction checkpoint extra: request member names stay, the names in their values are data",
+			`{"type":"compaction","id":"x","parent":"p",` + tsLine + `,"first_kept":"f","summary":{"type":"message","role":"user","content":[]},"config":{"model":"m","extra":{"metadata":{"/home/alice":1}}}}`,
+			`{"type":"compaction","id":"x","parent":"p",` + tsLine + `,"first_kept":"f","summary":{"type":"message","role":"user","content":[]},"config":{"model":"m","extra":{"metadata":{"~":1}}}}`,
 		},
 		{
 			"env tools and files",
@@ -761,5 +761,37 @@ func TestRewriteStringsDataNames(t *testing.T) {
 	}
 	if x, ok := got.Extra["x:/home/alice"]; !ok || string(x) != `{"~":1}` {
 		t.Errorf("header extra %s", got.Extra)
+	}
+}
+
+// TestRewriteStringsKeepsFormatNamesInData: a pseudonymising rewrite,
+// which changes every string and name it is given, leaves the names RFC
+// 0001 defines inside data: a custom entry's usage, model and attempts,
+// and the names inside the usage, which the payload profile defines, so
+// the entry records as many model calls after it as before; and a
+// config's extra keys, which are request member names (RFC 0001, Every
+// redacted entry).
+func TestRewriteStringsKeepsFormatNamesInData(t *testing.T) {
+	pseudo := func(s string) string { return "p_" + s }
+	e := entryOf(t, `{"type":"custom","id":"x","parent":"p",`+tsLine+`,"ns":"agentturn:compaction_failed","data":{"usage":{"input_tokens":5,"output_tokens":1},"model":"m","attempts":2,"note":{"k":"v"}}}`)
+	if n := e.(*CustomEntry).Calls(); n != 2 {
+		t.Fatalf("Calls before = %d", n)
+	}
+	got, err := RewriteStrings(e, pseudo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := got.(*CustomEntry).Calls(); n != 2 {
+		t.Errorf("Calls after a pseudonymising rewrite = %d, want 2: %s", n, got.(*CustomEntry).Data)
+	}
+	if d := string(got.(*CustomEntry).Data); !strings.Contains(d, `"p_note":{"p_k":"p_v"}`) || !strings.Contains(d, `"model":"p_m"`) {
+		t.Errorf("data %s", d)
+	}
+	c, err := RewriteStrings(entryOf(t, `{"type":"config","id":"x","parent":null,`+tsLine+`,"model":"m","extra":{"temperature":1,"metadata":{"user":"u"}}}`), pseudo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x := c.(*ConfigEntry).Extra; string(x["temperature"]) != "1" || string(x["metadata"]) != `{"p_user":"p_u"}` {
+		t.Errorf("extra %s", x)
 	}
 }

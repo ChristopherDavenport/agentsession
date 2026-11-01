@@ -513,12 +513,12 @@ func (r *Rewriter) walk(v any, specials []special, depth int, holder map[string]
 		}
 		return r.f(x), nil
 	case map[string]any:
-		dataKeys := ending(specials, depth, holder, roleDataKeys) || sh.dataNames()
+		dataKeys := ending(specials, depth, holder, roleDataKeys)
 		out := make(map[string]any, len(x))
 		from := map[string]string{}
 		for _, k := range sortedKeys(x) {
 			name := k
-			if dataKeys {
+			if dataKeys || sh.dataName(k) {
 				name = r.f(k)
 				if was, taken := from[name]; taken {
 					return nil, fmt.Errorf("%w: %q and %q are both %q", ErrKeyCollision, was, k, name)
@@ -555,11 +555,25 @@ func (r *Rewriter) walk(v any, specials []special, depth int, holder map[string]
 type shape struct {
 	t    reflect.Type
 	data bool
+	// paid is a custom entry's data, whose names are data but for those
+	// RFC 0001 defines at its top level, usage, model and attempts; the
+	// usage is the payload profile's.
+	paid bool
+	// request is a config's or a checkpoint's extra, keyed by request
+	// member names, which the provider reads, and whose values are data.
+	request bool
 }
+
+// paidNames are the members RFC 0001 defines at the top level of a
+// custom entry's data, beside the writer's own.
+var paidNames = map[string]bool{"usage": true, "model": true, "attempts": true}
 
 var (
 	rawJSONType  = reflect.TypeOf(json.RawMessage(nil))
 	headerGoType = reflect.TypeOf(Header{})
+	customType   = reflect.TypeOf(CustomEntry{})
+	configType   = reflect.TypeOf(ConfigEntry{})
+	settingsType = reflect.TypeOf(Settings{})
 	payloadPkg   = reflect.TypeOf(openresponses.Usage{}).PkgPath()
 	ownPkg       = reflect.TypeOf(Header{}).PkgPath()
 )
@@ -570,7 +584,7 @@ func entryShape(e Entry) shape { return shape{t: reflect.TypeOf(e)} }
 // resolve follows pointers, and makes a JSON value of any form, a raw
 // message or an interface, data.
 func (s shape) resolve() shape {
-	if s.data || s.t == nil {
+	if s.data || s.paid || s.request || s.t == nil {
 		return s
 	}
 	t := s.t
@@ -586,11 +600,18 @@ func (s shape) resolve() shape {
 	return shape{t: t}
 }
 
-// dataNames reports whether an object of this shape has data for its
-// member names: a map keyed by them, or a value the format does not
-// define.
-func (s shape) dataNames() bool {
+// dataName reports whether the member name of an object of this shape
+// is data: in a map keyed by data, or a value the format does not
+// define, but for the names a custom entry's data and a config's extra
+// hold that are the format's or the request's.
+func (s shape) dataName(name string) bool {
 	s = s.resolve()
+	switch {
+	case s.paid:
+		return !paidNames[name]
+	case s.request:
+		return false
+	}
 	return s.data || s.t != nil && s.t.Kind() == reflect.Map
 }
 
@@ -601,8 +622,16 @@ func (s shape) member(name string) shape {
 	switch {
 	case s.data:
 		return s
+	case s.paid && name == "usage":
+		return shape{}
+	case s.paid, s.request:
+		return shape{data: true}
 	case s.t == nil:
 		return shape{}
+	case s.t == customType && name == "data":
+		return shape{paid: true}
+	case (s.t == configType || s.t == settingsType) && name == "extra":
+		return shape{request: true}
 	case s.t.Kind() == reflect.Map:
 		return shape{t: s.t.Elem()}.resolve()
 	case s.t.Kind() == reflect.Struct && s.t.PkgPath() == ownPkg:
@@ -618,8 +647,8 @@ func (s shape) member(name string) shape {
 func (s shape) elem() shape {
 	s = s.resolve()
 	switch {
-	case s.data:
-		return s
+	case s.data, s.paid, s.request:
+		return shape{data: true}
 	case s.t != nil && (s.t.Kind() == reflect.Slice || s.t.Kind() == reflect.Array):
 		return shape{t: s.t.Elem()}.resolve()
 	}
@@ -791,7 +820,7 @@ func (r *Rewriter) rewriteAt(at string, root map[string]any, specials []special,
 			switch {
 			case i == 0 && rename && !reservedName[t]:
 				tokens[i], child = r.f(t), shape{data: true}
-			case i > 0 && (ending(cur, i, holder, roleDataKeys) || sh.dataNames()):
+			case i > 0 && (ending(cur, i, holder, roleDataKeys) || sh.dataName(t)):
 				tokens[i] = r.f(t)
 			}
 			next, holder, node, sh = onward(cur, i, t, false), n, n[t], child

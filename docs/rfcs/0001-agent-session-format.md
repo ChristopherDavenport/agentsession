@@ -2041,14 +2041,20 @@ A redactor:
   objects keyed by data, an `env` entry's `files` maps and `tools` map,
   and at any depth in every object whose members this document does not
   define: a `custom` entry's `data`, an `outcome`'s `details`, a
-  `decision`'s `args`, a `config`'s `extra` and a compaction
-  checkpoint's, the value of any member this document does not define,
-  and the body of an extension entry, its own member names among them
-  but the envelope's. In the objects this document defines, an entry, a
-  `trigger` or a `workspace` among them, member names are the format's,
-  and a redactor leaves them as they are, the name of a member this
-  document does not define included, whose value is data; so are the
-  names inside an item, which the payload profile defines. Two names of
+  `decision`'s `args`, the value of each member of a `config`'s `extra`
+  and a compaction checkpoint's, the value of any member this document
+  does not define, and the body of an extension entry, its own member
+  names among them but the envelope's. In the objects this document
+  defines, an entry, a `trigger` or a `workspace` among them, member
+  names are the format's, and a redactor leaves them as they are, the
+  name of a member this document does not define included, whose value
+  is data; so are the names inside an item, which the payload profile
+  defines. The names this document defines inside data are the
+  format's too: `usage`, `model` and `attempts` at the top level of a
+  `custom` entry's `data`, and the names inside that `usage`, which the
+  payload profile defines, so a redaction does not change how many
+  model calls the entry records; and the names of `extra`'s members,
+  which are request member names the provider reads. Two names of
   one object that a redaction makes one MUST NOT both be kept, nor an
   extension entry's name made one its envelope holds;
 - MUST give each `response` it writes either no `request_hash` or the
