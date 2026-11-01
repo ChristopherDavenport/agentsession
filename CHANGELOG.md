@@ -7,6 +7,15 @@ versions may break the API.
 
 ## Unreleased
 
+- **Two conformance fixtures for rules nothing measured (RFC 0001,
+  Conformance).** `refold.jsonl` has two compactions on a path, the
+  second restating one pin and dropping the other, so a reader that
+  applies every compaction rather than the last rebuilds requests that
+  do not verify; `no-response-id.jsonl` has a response with no
+  `response_id` right after a user message, so a reader that matches an
+  absent `response` to an absent `response_id` takes that message for
+  its output. Both have context and ATIF goldens. (#51)
+
 - **A resume that wrote only record entries is accepted as written
   (RFC 0001 0.14, `run`).** 0.11 accepted a run written `resume` whose
   segment held nothing; a resume that replayed a child's link or a

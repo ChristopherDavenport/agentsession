@@ -2267,7 +2267,11 @@ answered turns later by an item whose `from_link` names the link, beside
 a `from_link` naming a cancel notice, which is reported, a session that
 sends old tool outputs as a placeholder by `omit`'s `outputs` and old
 screenshots as one by `images`, in both of its forms, across a
-compaction's checkpoint, every response hashed and verifying, and
+compaction's checkpoint, every response hashed and verifying, a path
+with two compactions, the second restating one pin and dropping
+another, whose context applies only the last, a `response` with no
+`response_id` among `item` entries, which has no output items and whose
+request is the whole path before it, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line

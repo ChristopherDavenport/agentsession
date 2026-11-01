@@ -1932,6 +1932,8 @@ var fixtures014 = map[string]func(t *testing.T) *Session{
 	"bad-late-report": func(t *testing.T) *Session { return lateReportFixture(t, true) },
 	"placeholders":    placeholdersFixture,
 	"record-resume":   recordResumeFixture,
+	"refold":          refoldFixture,
+	"no-response-id":  noResponseIDFixture,
 }
 
 // checkBuilt fails the test when testdata/sessions/<name>.jsonl is not
@@ -2427,5 +2429,171 @@ func TestRecordResumeFixture(t *testing.T) {
 	}
 	if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrSourceMismatch) {
 		t.Errorf("a resume that adds a setting: VerifyRecords = %v, want ErrSourceMismatch", err)
+	}
+}
+
+// refoldFixture builds the session refold.jsonl holds: two house rules
+// pinned through a first compaction, and a second compaction that
+// restates one of them and drops the other, so the context after it
+// carries its summary and the one pin, and only the last compaction on
+// the path contributes items. Every response carries the hash of the
+// request its context rebuilds (#51).
+func refoldFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-11-01T13:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000025", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must, say := fixtureAppender(t, s)
+	rule := func(text string) openresponses.Item {
+		return &openresponses.Message{Role: openresponses.RoleDeveloper, Content: openresponses.Contents{&openresponses.InputText{Text: text}}}
+	}
+	fold := func(firstKept, summary string, pinned ...openresponses.Item) {
+		t.Helper()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		must(&CompactionEntry{FirstKept: firstKept, Summary: openresponses.SystemText(summary), Pinned: pinned, Config: ctx.Settings})
+	}
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewItemEntry(rule("House rule: never use Box::leak.")))
+	must(NewItemEntry(rule("House rule: always run the linter.")))
+	must(NewItemEntry(openresponses.UserText("first")))
+	say("resp_1", "one")
+	second := must(NewItemEntry(openresponses.UserText("second")))
+	say("resp_2", "two")
+	fold(second, "Summary: the user said first and the assistant said one.", rule("House rule: never use Box::leak."), rule("House rule: always run the linter."))
+	third := must(NewItemEntry(openresponses.UserText("third")))
+	say("resp_3", "three")
+	fold(third, "Summary: the user said first and second, and the assistant one and two.", rule("House rule: always run the linter."))
+	must(NewItemEntry(openresponses.UserText("fourth")))
+	say("resp_4", "four")
+	return s
+}
+
+// noResponseIDFixture builds the session no-response-id.jsonl holds: a
+// model call answered and named, a call the provider failed before it
+// named it, whose response carries no response_id and so has no output
+// items, and a call after it. The failed call's request is the whole
+// path before it, the earlier response's output and the user's message
+// among it, so a reader that took items before it as its output would
+// rebuild another request (#51).
+func noResponseIDFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-11-01T14:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000026", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must, say := fixtureAppender(t, s)
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewItemEntry(openresponses.UserText("hi")))
+	say("resp_1", "Hello.")
+	must(NewItemEntry(openresponses.UserText("What failed in the build?")))
+	sent := fixtureHash(t, s)
+	must(&ResponseEntry{Model: "gpt-5", Status: openresponses.ResponseStatusFailed, Error: &openresponses.ErrorPayload{Code: "server_error", Message: "the model failed"}, RequestHash: sent})
+	must(NewItemEntry(openresponses.UserText("Try again.")))
+	say("resp_3", "The linker failed.")
+	return s
+}
+
+// TestRefoldFixture reads the 0.14 conformance fixture for two
+// compactions on a path: the context after the second carries its
+// summary and the one pin it restated, and none of the first's, and
+// before it both pins; every response verifies.
+func TestRefoldFixture(t *testing.T) {
+	checkBuilt(t, "refold")
+	s := loadFixture(t, "refold")
+	for _, e := range s.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			if err := s.Verify(r.ID); err != nil {
+				t.Errorf("%s: %v", r.ResponseID, err)
+			}
+		}
+	}
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Summary: the user said first and second, and the assistant one and two.", "House rule: always run the linter.", "third", "three", "fourth", "four"}
+	if got := itemTexts(ctx.Items); !slices.Equal(got, want) {
+		t.Errorf("items after the second fold = %q, want %q", got, want)
+	}
+	var folds []string
+	for _, e := range s.Path(s.Leaf()) {
+		if c, ok := e.(*CompactionEntry); ok {
+			folds = append(folds, c.ID)
+		}
+	}
+	if len(folds) != 2 {
+		t.Fatalf("%d compactions on the path, want 2", len(folds))
+	}
+	path := s.Path(folds[1])
+	ctx, err = BuildContext(path[:len(path)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"Summary: the user said first and the assistant said one.", "House rule: never use Box::leak.", "House rule: always run the linter.", "second", "two", "third", "three"}
+	if got := itemTexts(ctx.Items); !slices.Equal(got, want) {
+		t.Errorf("items before the second fold = %q, want %q", got, want)
+	}
+}
+
+// TestNoResponseIDFixture reads the 0.14 conformance fixture for a
+// response with no response_id: it has no output items, the items
+// before it are not attributed to it, and its request, the whole path
+// before it, verifies; so does the response after it. A response_id
+// absent from the line reads the same as an empty one.
+func TestNoResponseIDFixture(t *testing.T) {
+	raw := checkBuilt(t, "no-response-id")
+	s := loadFixture(t, "no-response-id")
+	var unnamed *ResponseEntry
+	for _, e := range s.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			if r.ResponseID == "" {
+				unnamed = r
+			}
+			if err := s.Verify(r.ID); err != nil {
+				t.Errorf("%q: %v", r.ResponseID, err)
+			}
+		}
+	}
+	if unnamed == nil {
+		t.Fatal("no response without a response_id")
+	}
+	path := s.Path(unnamed.ID)
+	if out := OutputEntries(path, unnamed); len(out) != 0 {
+		t.Errorf("a response with no response_id has %d output items", len(out))
+	}
+	ctx, err := s.RequestContext(unnamed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := itemTexts(ctx.Items), []string{"hi", "Hello.", "What failed in the build?"}; !slices.Equal(got, want) {
+		t.Errorf("its request = %q, want %q", got, want)
+	}
+	// The member absent rather than empty: the same rule.
+	line := bytes.Split(raw, []byte("\n"))[len(path)]
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(line, &all); err != nil {
+		t.Fatal(err)
+	}
+	if string(all["response_id"]) != `""` {
+		t.Fatalf("line %s", line)
+	}
+	delete(all, "response_id")
+	delete(all, "id")
+	body, _ := json.Marshal(all)
+	id, _, err := EntryHashes(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all["id"] = json.RawMessage(`"` + id + `"`)
+	body, _ = json.Marshal(all)
+	head := bytes.Join(bytes.Split(raw, []byte("\n"))[:len(path)], []byte("\n"))
+	absent, err := Read(bytes.NewReader(append(append(head, '\n'), append(body, '\n')...)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := absent.Verify(id); err != nil {
+		t.Errorf("a response with response_id absent: %v", err)
 	}
 }

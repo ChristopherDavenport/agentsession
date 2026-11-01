@@ -38,7 +38,7 @@ type omittedGolden struct {
 func TestContextGolden(t *testing.T) {
 	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge",
 		"empty-resume", "bad-resume", "handback", "bad-handback", "omit", "omit-absent", "bad-omit", "omit-folded", "bad-handback-folded", "judged",
-		"withdrawn", "late-report", "placeholders"} {
+		"withdrawn", "late-report", "placeholders", "refold", "no-response-id"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			got := map[string]contextGolden{}
