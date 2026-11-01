@@ -2094,9 +2094,9 @@ that named the left-out entry then follows the rule for its kind:
 - A member naming one predecessor names what stands in the left-out
   entry's place: `parent`; the `target` of a `label`, an `outcome`, a
   `judged_by` link and a cancel notice; a `branch_summary`'s `from`;
-  `images`' `before` in a `config` and in a compaction's checkpoint;
-  `instructions_omitted`'s `of`; and a compaction's `first_kept`, by the
-  rule below. A redactor MUST NOT remove such a member. Where the
+  and `instructions_omitted`'s `of`. A compaction's `first_kept` and
+  `images`' `before` bound a range from below and have a place of their
+  own, below. A redactor MUST NOT remove such a member. Where the
   universal root stands in the place and the member may not name it,
   since only `parent` and a `leaf` label's `target` do, the redactor
   leaves the entry holding the member out too, or does not redact. What
@@ -2118,14 +2118,20 @@ that named the left-out entry then follows the rule for its kind:
   marked `failed` among them, since each says what became of a call the
   file no longer holds. A withdrawal also goes with the `dispatch` it
   follows, which it would otherwise not follow.
-- `first_kept` names an entry before the compaction on its path, as
-  `compaction` says. When the redaction leaves that entry out, what
+- A member that bounds a range from below, a compaction's `first_kept`
+  and `images`' `before` in a `config` and in a compaction's
+  checkpoint, names the entry it bounds from and none above it: the
+  entries above `first_kept` were folded, and the images above `before`
+  were sent as placeholders, so naming one would put it back into every
+  later request. When the redaction leaves the named entry out, what
   stands in its place is the placeholder covering it or, with none, the
-  first entry the redaction wrote after it on the path before the
-  compaction: the entries above it were folded, and naming one would put
-  it back into every later request. A redaction that leaves out every
-  entry from `first_kept` up to the compaction MUST write a placeholder
-  for them, for `first_kept` to name.
+  first entry the redaction wrote after it on its path, before the
+  compaction for `first_kept`. `first_kept` names an entry before the
+  compaction on its path, as `compaction` says, so a redaction that
+  leaves out every entry from `first_kept` up to the compaction MUST
+  write a placeholder for them, for `first_kept` to name. A `before`
+  with nothing written after it names nothing on the path, and the
+  redactor leaves the member's `images` out or does not redact.
 - A `run` end whose segment the redaction changed MUST carry the
   `reason` and `pending` its redacted segment reads, computed as `run`
   says, unless its `reason` is a written value, `error` or
