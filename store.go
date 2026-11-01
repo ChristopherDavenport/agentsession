@@ -407,7 +407,7 @@ func (m *MemoryStore) Blob(ctx context.Context, hash string) ([]byte, error) {
 // The session returned is the store's own, shared with it, so a write
 // through it, by [Session.Append], Commit or Extend, bypasses every rule
 // the store holds an append to, MemoryRedactedOnly's among them.
-func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
+func (m *MemoryStore) Create(ctx context.Context, h Header) (*Session, error) {
 	if err := CheckCreate(h, m.redactedOnly); err != nil {
 		return nil, err
 	}
@@ -415,7 +415,7 @@ func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
 	defer m.mu.Unlock()
 	s := New(h)
 	if h.Base != "" {
-		origin := m.forkOrigin(h.ParentSession, h.Base)
+		origin := m.forkOrigin(h.ParentSession, h.Base, ReadableIn(ctx))
 		if origin == nil {
 			return nil, fmt.Errorf("%w: base %s is not held by this store", ErrNoEntry, h.Base)
 		}
@@ -468,7 +468,7 @@ func (m *MemoryStore) Import(ctx context.Context, r io.Reader, asRecord bool) (*
 		return nil, fmt.Errorf("%w: %s", ErrSessionExists, h.ID)
 	}
 	if h.Base != "" {
-		if err := CheckImportMedia(h, m.forkOrigin(h.ParentSession, h.Base)); err != nil {
+		if err := CheckImportMedia(h, m.forkOrigin(h.ParentSession, h.Base, ReadableIn(ctx))); err != nil {
 			return nil, err
 		}
 	}
@@ -483,12 +483,13 @@ func (m *MemoryStore) Import(ctx context.Context, r io.Reader, asRecord bool) (*
 // parent_session line that owns it when named holds it on its prefix,
 // else one whose own entries include it,
 // else one that holds it on its prefix, the first by ID when several
-// do. The caller holds m.mu.
-func (m *MemoryStore) forkOrigin(named, base string) *Session {
+// do. A session readable does not admit is passed over, as one the
+// store does not hold. The caller holds m.mu.
+func (m *MemoryStore) forkOrigin(named, base string, readable func(string) bool) *Session {
 	// Named on its prefix, the base is its own origin's: parent_session
 	// is followed up to the session whose own entries include it, as
 	// cas finds it, since an import holds a fork to that one's media.
-	for seen := 0; named != "" && seen < 64; seen++ {
+	for seen := 0; named != "" && readable(named) && seen < 64; seen++ {
 		s, ok := m.sessions[named]
 		if !ok {
 			break
@@ -509,7 +510,7 @@ func (m *MemoryStore) forkOrigin(named, base string) *Session {
 	var onPrefix *Session
 	for _, id := range ids {
 		s := m.sessions[id]
-		if _, ok := s.Entry(base); !ok {
+		if _, ok := s.Entry(base); !ok || !readable(id) {
 			continue
 		}
 		if !s.Prefix(base) {

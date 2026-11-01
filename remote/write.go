@@ -168,7 +168,9 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	st := h.state(hdr.ID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	sess, err := h.store.Create(r.Context(), hdr)
+	// The store finds a fork's origin only among the sessions the caller
+	// may read, so the header it fills names none it may not.
+	sess, err := h.store.Create(h.readableCtx(r.Context()), hdr)
 	fresh := err == nil
 	if errors.Is(err, agentsession.ErrSessionExists) && complete {
 		// A retry of a create whose answer was lost: the same header

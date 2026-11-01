@@ -209,9 +209,18 @@ A session is created with a header and optionally a base.
 - A store MUST refuse to create a session whose base it does not hold or
   whose base is a `leaf` label, since the base is the first head and the
   head never rests on one, and MUST refuse one whose `media` differs
-  from that of a session it holds whose own entries include the base,
-  since the prefix was written in that form and a projection carries
-  media in one form. A session created with a base has that base as its
+  from that of its origin, since the prefix was written in that form
+  and a projection carries media in one form. The origin is the session
+  it holds whose own entries include the base, found by following
+  `parent_session` up from the session the header names, or, where it
+  holds none, a session that holds the base on its prefix, whose
+  `media` is its own origin's. An import and a receive of a fork are
+  held to the same rule. A store that serves more than one principal,
+  as RFC 0003's server does, looks for the origin only among the
+  sessions the caller may read: one it may not read is as one the store
+  does not hold, so neither a refusal nor what the store fills in a
+  fork's header from its origin (`parent_session`, `media`, `payload`)
+  tells the caller anything of a session it may not read. A session created with a base has that base as its
   head. A store MUST commit the log that holds the base, through the
   base, before it creates the fork: a fork's recovery reads only its own
   log, and a base a crash took from its origin's working state would

@@ -92,7 +92,10 @@ func (h *Handler) importSession(w http.ResponseWriter, r *http.Request) {
 	st := h.state(hdr.ID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	sess, err := im.Import(ctx, bytes.NewReader(data), r.URL.Query().Get("record") == "true")
+	// The store holds a fork to the media of an origin the caller may
+	// read, and one it may not is as one it does not hold, so the answer
+	// says nothing of another's session.
+	sess, err := im.Import(h.readableCtx(ctx), bytes.NewReader(data), r.URL.Query().Get("record") == "true")
 	if err != nil {
 		h.fail(w, importProblem(err))
 		return

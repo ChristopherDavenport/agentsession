@@ -653,3 +653,112 @@ func TestUnnamedUploadsSwept(t *testing.T) {
 		})
 	}
 }
+
+// TestForkOriginUnreadable: an import and a create find a fork's origin
+// only among the sessions the caller may read, over every store, so a
+// base held only in another's session answers as a base nobody holds:
+// mallory's import of a fork of alice's entry in another media is
+// taken, as one of an entry nobody holds is, and a fork he creates from
+// it names none of alice's sessions.
+func TestForkOriginUnreadable(t *testing.T) {
+	stores := []struct {
+		name string
+		open func(t *testing.T) agentsession.Store
+	}{
+		{"memory", func(t *testing.T) agentsession.Store { return agentsession.NewMemoryStore() }},
+		{"jsonl", func(t *testing.T) agentsession.Store {
+			st, err := jsonl.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		}},
+		{"cas", func(t *testing.T) agentsession.Store {
+			st, err := cas.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		}},
+	}
+	for _, tc := range stores {
+		t.Run(tc.name, func(t *testing.T) { testForkOriginUnreadable(t, tc.open(t)) })
+	}
+}
+
+// forkFile is the file of a fork of origin at base with the given ID,
+// naming no parent_session, in the media given.
+func forkFile(t *testing.T, origin *agentsession.Session, base, id, media string) []byte {
+	t.Helper()
+	f, err := agentsession.Fork(origin, base, agentsession.Header{ID: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Append(user("on " + id)); err != nil {
+		t.Fatal(err)
+	}
+	head, rest, _ := bytes.Cut(fileOfSession(t, f), []byte("\n"))
+	var hdr map[string]any
+	if err := json.Unmarshal(head, &hdr); err != nil {
+		t.Fatal(err)
+	}
+	delete(hdr, "parent_session")
+	hdr["media"] = media
+	head, err = json.Marshal(hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(append(head, '\n'), rest...)
+}
+
+func testForkOriginUnreadable(t *testing.T, st agentsession.Store) {
+	ctx := context.Background()
+	if _, err := st.Create(ctx, agentsession.Header{ID: "alices"}); err != nil {
+		t.Fatal(err)
+	}
+	x, err := st.Append(ctx, "alices", user("alice's base"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	alices, err := st.(agentsession.Reader).Read(ctx, "alices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nobodys := agentsession.New(agentsession.Header{ID: "nobodys"})
+	y, err := nobodys.Append(user("a base nobody holds"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := server(t, st,
+		remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{
+			"mallory": {Name: "mallory", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeExchange}},
+		})),
+		remote.WithAuthorize(owners(map[string]string{"alices": "alice"})),
+	)
+	m := dial(t, url, withToken("mallory", nil))
+	for _, tc := range []struct {
+		what   string
+		origin *agentsession.Session
+		base   string
+		id     string
+	}{
+		{"a base nobody holds", nobodys, y, "m0"},
+		{"alice's base", alices, x, "m1"},
+	} {
+		_, err := m.Import(ctx, bytes.NewReader(forkFile(t, tc.origin, tc.base, tc.id, agentsession.MediaSidecar)), true)
+		if err != nil {
+			t.Errorf("an import of a fork of %s in another media: %v, want it taken", tc.what, err)
+		}
+	}
+	// A fork created at alice's entry, which mallory reaches through his
+	// own m1, names his origin and not hers.
+	f, err := m.Create(ctx, agentsession.Header{ID: "m2", Base: x})
+	if err != nil {
+		t.Fatalf("a fork of the base mallory holds on his prefix: %v", err)
+	}
+	if p := f.Header().ParentSession; p == "alices" {
+		t.Errorf("mallory's fork names alice's session as its parent")
+	}
+}

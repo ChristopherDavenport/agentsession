@@ -1994,7 +1994,16 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		if err != nil {
 			return nil, err
 		}
-		if !held {
+		// The header is filled from, and held to, the origin among the
+		// sessions the caller may read (agentsession.WithReadable): one
+		// it may not read is as one the store does not hold, so the
+		// fork's parent_session never names it. The log that holds the
+		// base is committed below whoever's it is.
+		origin, err := s.forkOrigin(h.Base, h.ParentSession, agentsession.ReadableIn(ctx))
+		if err != nil {
+			return nil, err
+		}
+		if !held || origin == "" {
 			return nil, fmt.Errorf("%w: base %s is not held by this store", agentsession.ErrNoEntry, h.Base)
 		}
 		if isLabel, err := s.isLeafLabel(h.Base); err != nil {
@@ -2002,11 +2011,11 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		} else if isLabel {
 			return nil, errors.New("cas: a base may not be a leaf label")
 		}
-		if owner != "" {
+		if origin != "" {
 			if h.ParentSession == "" {
-				h.ParentSession = owner
+				h.ParentSession = origin
 			}
-			if dir, err := s.sessionDir(owner); err == nil {
+			if dir, err := s.sessionDir(origin); err == nil {
 				if oh, err := readHeader(dir); err == nil {
 					// The fork's header takes this package's format, which
 					// must be no earlier than the origin's.
@@ -2035,7 +2044,7 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		// a holder before 0.13 holds the first, and only a fork before
 		// it can meet the second, so the holder is read whole only then;
 		// a holder that cannot be found or read refuses the fork.
-		if err := s.forkRaiseRefused(ctx, owner, h); err != nil {
+		if err := s.forkRaiseRefused(ctx, origin, h); err != nil {
 			return nil, err
 		}
 	}
@@ -2178,6 +2187,75 @@ func before013(format string) bool {
 		return false
 	}
 	return laterFormat("agentsession/0.13", format)
+}
+
+// forkOrigin returns the session a fork at base continues from, whose
+// header a fork takes its media from: named, followed up its
+// parent_session line while the base is on its prefix, to the session
+// whose log holds the base; else the first by ID whose log holds it;
+// else the first by ID that holds it on its prefix, whose media is its
+// own origin's. A session readable does not admit is passed over, as
+// one the store does not hold, so the answer is the one the store would
+// give without it. "" when no admitted session holds the base.
+func (s *Store) forkOrigin(base, named string, readable func(string) bool) (string, error) {
+	for seen := 0; named != "" && readable(named) && seen < 64; seen++ {
+		dir, err := s.sessionDir(named)
+		if err != nil {
+			break
+		}
+		l, err := readSessionLog(dir, 0)
+		if err != nil || l.legacy {
+			break
+		}
+		if slices.Contains(heldEntries(l.recs), base) {
+			return named, nil
+		}
+		hdr, err := readHeader(dir)
+		if err != nil || hdr.Base == "" {
+			break
+		}
+		if on, err := s.onPath(base, hdr.Base); err != nil || !on {
+			break
+		}
+		if hdr.ParentSession == "" {
+			return named, nil
+		}
+		named = hdr.ParentSession
+	}
+	if err := s.ensureIndex(); err != nil {
+		return "", err
+	}
+	pick := func() string {
+		s.idx.Lock()
+		defer s.idx.Unlock()
+		var owners, onPrefix []string
+		for id := range s.entries.owners[base] {
+			if readable(id) {
+				owners = append(owners, id)
+			}
+		}
+		if len(owners) > 0 {
+			return slices.Min(owners)
+		}
+		for id, path := range s.entries.paths {
+			if readable(id) && slices.Contains(path, base) {
+				onPrefix = append(onPrefix, id)
+			}
+		}
+		if len(onPrefix) > 0 {
+			return slices.Min(onPrefix)
+		}
+		return ""
+	}
+	if o := pick(); o != "" {
+		return o, nil
+	}
+	// Another process may have committed it since the index was built;
+	// look again before saying no.
+	if err := s.index(true); err != nil {
+		return "", err
+	}
+	return pick(), nil
 }
 
 // prefixHolder returns a session that holds base on its prefix, owning
@@ -3647,14 +3725,8 @@ func (s *Store) importRead(ctx context.Context, sess *agentsession.Session, blob
 	if err := s.refuseUnredacted(h, stored); err != nil {
 		return nil, err
 	}
-	if h.Base != "" {
-		if owner, _, err := s.holderOf(h.Base, h.ParentSession); err == nil && owner != "" {
-			if odir, err := s.sessionDir(owner); err == nil {
-				if oh, err := readHeader(odir); err == nil && mediaOf(oh) != mediaOf(h) {
-					return nil, fmt.Errorf("cas: import: %w", agentsession.ErrMediaDiffers)
-				}
-			}
-		}
+	if s.forkMediaDiffers(h, agentsession.ReadableIn(ctx)) {
+		return nil, fmt.Errorf("cas: import: %w", agentsession.ErrMediaDiffers)
 	}
 	mark := MarkMirror
 	if asRecord {

@@ -44,7 +44,17 @@ versions may break the API.
   authorized first, and one the caller may not read is as one the
   server does not hold, so `bad_base` reveals nothing of another's
   session. **Added: `cas.ReceiveOptions.Readable`**, and
-  `cas.Store.CheckPush` takes the same function. The remote
+  `cas.Store.CheckPush` takes the same function. An import and a
+  create over the wire, on every store, find a fork's origin the same
+  way: **Added: `agentsession.WithReadable` and `ReadableIn`**, a
+  context the server gives the store, which `MemoryStore`, `jsonl`,
+  `sqlite` and `cas` consult when they look for an origin, passing over
+  a session the caller may not read; so an import of a fork of a base
+  held only in another's session is taken as one of a base nobody
+  holds, its refusal never names that session, and a created fork's
+  `parent_session` never does either. A fork whose base only a prefix
+  holds is now held to that session's media at import, as a create
+  already was. The remote
   conformance suite now imports through the endpoint. (#241, #244)
 
 - **Blobs no session names are swept on every store (RFC 0002, Deletion

@@ -770,7 +770,8 @@ func (s *Store) Read(ctx context.Context, id string) (*agentsession.Session, err
 // the named session's own entries include base, or the session up its
 // parent_session line that owns it when named holds it on its prefix,
 // else one whose own entries include it,
-// else one that holds it on its prefix. A session not open here is read
+// else one that holds it on its prefix, among the sessions
+// [agentsession.ReadableIn] admits. A session not open here is read
 // without being claimed, so a fork can be made from a session another
 // process is writing. The caller holds s.mu.
 func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsession.Session, error) {
@@ -781,10 +782,13 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 		sess, _, err := s.load(ctx, id)
 		return sess, err
 	}
+	// A session the caller may not read is as one the store does not
+	// hold (agentsession.WithReadable).
+	readable := agentsession.ReadableIn(ctx)
 	// Named on its prefix, the base is its own origin's: parent_session
 	// is followed up to the session whose own entries include it, as
 	// cas finds it, since an import holds a fork to that one's media.
-	for seen := 0; named != "" && seen < 64; seen++ {
+	for seen := 0; named != "" && readable(named) && seen < 64; seen++ {
 		sess, err := read(named)
 		if err != nil {
 			break
@@ -816,6 +820,9 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 	}
 	var onPrefix *agentsession.Session
 	for _, id := range ids {
+		if !readable(id) {
+			continue
+		}
 		sess, err := read(id)
 		if err != nil {
 			continue

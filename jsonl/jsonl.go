@@ -464,7 +464,8 @@ func syncDir(dir string) {
 // the named session's own entries include base, or the session up its
 // parent_session line that owns it when named holds it on its prefix,
 // else one whose own entries include it,
-// else one that holds it on its prefix. Finding it without a name reads
+// else one that holds it on its prefix, among the sessions
+// [agentsession.ReadableIn] admits. Finding it without a name reads
 // every session under the root. A session not open here is read without
 // taking its lock. The caller holds s.mu.
 func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsession.Session, error) {
@@ -478,10 +479,13 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 		}
 		return h.session
 	}
+	// A session the caller may not read is as one the store does not
+	// hold (agentsession.WithReadable).
+	readable := agentsession.ReadableIn(ctx)
 	// Named on its prefix, the base is its own origin's: parent_session
 	// is followed up to the session whose own entries include it, as
 	// cas finds it, since an import holds a fork to that one's media.
-	for seen := 0; named != "" && seen < 64; seen++ {
+	for seen := 0; named != "" && readable(named) && seen < 64; seen++ {
 		path, err := s.find(named)
 		if err != nil {
 			break
@@ -510,7 +514,7 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 		}
 		name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 		_, id, ok := strings.Cut(name, "_")
-		if !ok {
+		if !ok || !readable(id) {
 			continue
 		}
 		sess := read(id, path)

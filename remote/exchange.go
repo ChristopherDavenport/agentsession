@@ -158,6 +158,17 @@ func (h *Handler) reachable(ctx context.Context, who string, keys []objKey) (map
 	return out, nil
 }
 
+// readableCtx carries the caller's read authorization to the store
+// (agentsession.WithReadable), so a create, an import or a push finds a
+// fork's origin only among the sessions the caller may read, and one it
+// may not is as one the store does not hold.
+func (h *Handler) readableCtx(ctx context.Context) context.Context {
+	if h.authorize == nil {
+		return ctx
+	}
+	return agentsession.WithReadable(ctx, func(session string) bool { return h.may(ctx, ScopeRead, session) })
+}
+
 // unreachedMedia returns which of the sidecar blobs a write names the
 // caller cannot reach, in missing's shape, or nil when it reaches every
 // one. Naming a blob grants nothing (RFC 0003, Security
@@ -506,7 +517,7 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 	// the server does not hold, so neither the check nor the push says
 	// whether, or how, another's session holds the base (RFC 0003,
 	// Exchange).
-	readable := func(session string) bool { return h.may(r.Context(), ScopeRead, session) }
+	readable := agentsession.ReadableIn(h.readableCtx(r.Context()))
 	if err := h.ex.CheckPush(r.Context(), req.Header, req.Prefix, readable); err != nil {
 		h.fail(w, err)
 		return

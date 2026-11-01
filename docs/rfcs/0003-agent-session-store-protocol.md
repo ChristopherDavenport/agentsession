@@ -897,7 +897,13 @@ alone can take a session whole this way, a redacted one among them.
   needs exchange scope, and is authorized as a create of the session the
   header names: the session ID for that scope, and for a fork the
   origin as a read and the base as reachable by the caller, as Create
-  says.
+  says. The fork is held to the media of an origin the caller may read
+  (RFC 0002, Sessions): one it may not read is as one the server does
+  not hold, so the answer for a base held only in another's session is
+  the answer for a base nobody holds, and a refusal names no session
+  the caller may not read. A create of a fork finds its origin the same
+  way, and the header it fills from the origin names none the caller
+  may not read.
 - A sidecar session's blobs are uploaded first, as `media` objects
   (Objects). Every blob an item names that the caller cannot reach
   (Objects, Reach), in a file of any `media`, is `missing_object`, its
@@ -1028,7 +1034,9 @@ Not carried, because they are a local operator's or a file's:
   that holds it (`missing`, `GET`, `HEAD`), a push must upload every
   object not so reachable, a fork's `base` and a `path`'s `leaf` are
   authorized against the sessions holding them, and an object response
-  is `private`. Naming an object or a blob in a write grants nothing
+  is `private`. An import or a create of a fork, as its push, finds
+  the fork's origin only among the sessions the caller may read.
+  Naming an object or a blob in a write grants nothing
   either: an append, an import or a push whose entries name a blob the
   caller cannot reach is refused with `missing_object`, the answer for
   a blob nobody holds, decided from the caller's reach without asking
