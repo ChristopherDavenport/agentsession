@@ -233,7 +233,7 @@
       }
     }
   ],
-  "notes": "total_steps counts the path's 4 model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its 5 steps. The steps are the context after compaction and leave out 1 model call(s) that were folded away; final_metrics totals the whole path.",
+  "notes": "total_steps counts the path's 4 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 5 steps. The steps are the context after compaction and leave out 1 model call(s) that were folded away; final_metrics totals the whole path.",
   "final_metrics": {
     "total_prompt_tokens": 45,
     "total_completion_tokens": 3,
@@ -243,7 +243,7 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.13",
+      "format": "agentsession/0.14",
       "leaf": "sha256:cdf62b2f1a34e4de8b0773622e5fca4ac3c9f2f25348e49dbb5cbfb6b7ae12ed",
       "main": true
     },

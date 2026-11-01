@@ -172,6 +172,9 @@ func (s *Settings) UnmarshalJSON(data []byte) error {
 	if raw, ok := all["omit"]; ok && holdsExactly(raw, &omit) && !omit.IsZero() {
 		// An empty id names no entry; the line keeps it as written.
 		omit.Items = slices.DeleteFunc(omit.Items, func(id string) bool { return id == "" })
+		if omit.Outputs != nil {
+			omit.Outputs.Items = slices.DeleteFunc(omit.Outputs.Items, func(id string) bool { return id == "" })
+		}
 		s.Omit = omit
 	}
 	return nil
@@ -201,7 +204,7 @@ func (s Settings) Apply(c *ConfigEntry) Settings {
 		out.Extra = cloneRaw(s.Extra)
 		out.InstructionsParts = cloneParts(s.InstructionsParts)
 		out.InstructionsOmitted = cloneOmitted(s.InstructionsOmitted)
-		out.Omit.Items = slices.Clone(s.Omit.Items)
+		out.Omit = s.Omit.clone()
 	}
 	if c.InstructionsOmitted != nil {
 		// The entry carries the member, so it replaces the list in
@@ -659,15 +662,17 @@ func omittedRuns(list []OmittedPart, of string, omitted []OmittedPart) ([]Omitte
 // OmitDelta returns the omit member that takes the omit in force in
 // these settings to want, for [ConfigEntry.Omit], and whether one does.
 // It is nil, and true, when want is what is in force, so a recorder
-// that states its rule at every model switch writes it once; the rule
-// and the entries not yet in force when want only adds to what is, a
-// rule other than the one in force included, which a delta replaces; and
-// an empty, non-nil object, which clears, when want is empty and
-// something is in force. A want that drops the rule or an entry in
-// force and keeps something is no single member: a delta only adds, and
-// clears both with {}, so it returns nil and false, and the writer
-// clears in one entry and writes what it keeps in the next. So does a
-// want whose rule is not one the format defines, which no delta sets.
+// that states its rule at every model switch writes it once; the rule,
+// the entries and the outputs not yet in force, the outputs' text when
+// it changed, and the images rule when it changed, when want only adds
+// to what is, a rule other than the one in force included, which a
+// delta replaces; and an empty, non-nil object, which clears, when want
+// is empty and something is in force. A want that drops the rule, an
+// entry, an output or the images rule in force and keeps something is
+// no single member: a delta only adds, and clears everything with {},
+// so it returns nil and false, and the writer clears in one entry and
+// writes what it keeps in the next. So does a want whose rule is not
+// one the format defines, which no delta sets.
 //
 // A config entry with Replace set discards the omit in force with the
 // rest of the settings, so the member it carries is want itself, not
@@ -675,21 +680,19 @@ func omittedRuns(list []OmittedPart, of string, omitted []OmittedPart) ([]Omitte
 // force, would clear it.
 func (s Settings) OmitDelta(want Omit) (*Omit, bool) {
 	have := s.Omit
-	listed := make(map[string]bool, len(have.Items))
-	for _, id := range have.Items {
-		listed[id] = true
+	listed, wanted := idSet(have.Items), idSet(want.Items)
+	var haveOut, wantOut []string
+	if have.Outputs != nil {
+		haveOut = have.Outputs.Items
 	}
-	wanted := make(map[string]bool, len(want.Items))
-	for _, id := range want.Items {
-		if id != "" {
-			wanted[id] = true
-		}
+	if want.Outputs != nil {
+		wantOut = want.Outputs.Items
 	}
-	same := have.Reasoning == want.Reasoning && len(listed) == len(wanted)
-	for id := range wanted {
-		same = same && listed[id]
-	}
-	if same {
+	listedOut, wantedOut := idSet(haveOut), idSet(wantOut)
+	sameOutputs := (have.Outputs == nil) == (want.Outputs == nil) && sameSet(listedOut, wantedOut) &&
+		(have.Outputs == nil || have.Outputs.Text == want.Outputs.Text)
+	sameImages := have.Images == nil && want.Images == nil || have.Images != nil && want.Images != nil && *have.Images == *want.Images
+	if have.Reasoning == want.Reasoning && sameSet(listed, wanted) && sameOutputs && sameImages {
 		return nil, true
 	}
 	if want.IsZero() {
@@ -698,10 +701,8 @@ func (s Settings) OmitDelta(want Omit) (*Omit, bool) {
 	if want.Reasoning != "" && want.Reasoning != OmitOtherModels || have.Reasoning != "" && want.Reasoning == "" {
 		return nil, false
 	}
-	for id := range listed {
-		if !wanted[id] {
-			return nil, false
-		}
+	if !subset(listed, wanted) || have.Outputs != nil && (want.Outputs == nil || !subset(listedOut, wantedOut)) || have.Images != nil && want.Images == nil {
+		return nil, false
 	}
 	var d Omit
 	if want.Reasoning != have.Reasoning {
@@ -713,8 +714,45 @@ func (s Settings) OmitDelta(want Omit) (*Omit, bool) {
 			d.Items = append(d.Items, id)
 		}
 	}
+	if !sameOutputs {
+		d.Outputs = &OmitOutputs{Text: want.Outputs.Text}
+		for _, id := range wantOut {
+			if id != "" && !listedOut[id] {
+				listedOut[id] = true
+				d.Outputs.Items = append(d.Outputs.Items, id)
+			}
+		}
+	}
+	if !sameImages {
+		images := *want.Images
+		d.Images = &images
+	}
 	return &d, true
 }
+
+// idSet is the set of the non-empty IDs in ids.
+func idSet(ids []string) map[string]bool {
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			set[id] = true
+		}
+	}
+	return set
+}
+
+// subset reports whether every member of a is in b.
+func subset(a, b map[string]bool) bool {
+	for id := range a {
+		if !b[id] {
+			return false
+		}
+	}
+	return true
+}
+
+// sameSet reports whether a and b hold the same members.
+func sameSet(a, b map[string]bool) bool { return len(a) == len(b) && subset(a, b) }
 
 // unresolvedParts reports whether any part is one the path could not
 // rebuild: see [InstructionPart.Unresolved].
@@ -997,6 +1035,25 @@ type Context struct {
 	// is what the model was sent. It is empty for a path with no omit
 	// in force.
 	OmittedItems []OmittedItem
+	// ReplacedItems are the item entries whose items the request sends
+	// with a placeholder in place of part of them, as [Omit.Outputs] and
+	// [Omit.Images] say, in path order, an entry both reach once for
+	// each. Items holds the item as sent, and the entry the item as
+	// recorded.
+	ReplacedItems []ReplacedItem
+}
+
+// ReplacedItem is an item entry a request sends with a placeholder in
+// place of part of its item, and why.
+type ReplacedItem struct {
+	// Entry is the item entry as recorded.
+	Entry *ItemEntry
+	// Reason is [OmitOutputsReason] for an output sent as the
+	// placeholder text, and [OmitImagesReason] for image parts sent as
+	// text parts.
+	Reason string
+	// Parts is the number of image parts replaced; zero for an output.
+	Parts int
 }
 
 // OmittedItem is an item entry a request leaves out of the context, and
@@ -1105,6 +1162,7 @@ func buildContext(path []Entry, omit bool) (Context, error) {
 	ctx.Settings = settings
 	if omit && !settings.Omit.IsZero() {
 		ctx.leaveOut(path)
+		ctx.replaceParts(path)
 	}
 	return ctx, nil
 }
@@ -1116,7 +1174,7 @@ func checkpointSettings(c *CompactionEntry) Settings {
 	s := c.Config
 	s.InstructionsParts = cloneParts(c.Config.InstructionsParts)
 	s.InstructionsOmitted = cloneOmitted(c.Config.InstructionsOmitted)
-	s.Omit.Items = slices.Clone(c.Config.Omit.Items)
+	s.Omit = c.Config.Omit.clone()
 	s.left, s.lists = nil, nil
 	return s
 }
@@ -1153,6 +1211,131 @@ func (c *Context) leaveOut(path []Entry) {
 		entries = append(entries, e)
 	}
 	c.Items, c.ItemEntries = items, entries
+}
+
+// replaceParts sends the outputs and the image parts the omit in force
+// reaches with its placeholders in their place, among the items of item
+// entries left after leaveOut: first each output Outputs lists, then
+// the image parts Images reaches, counted over what remains. The
+// session's items are not modified; Items holds copies.
+func (c *Context) replaceParts(path []Entry) {
+	om := c.Settings.Omit
+	if om.Outputs != nil && len(om.Outputs.Items) > 0 {
+		listed := make(map[string]bool, len(om.Outputs.Items))
+		for _, id := range om.Outputs.Items {
+			listed[id] = true
+		}
+		for i, e := range c.ItemEntries {
+			ie, ok := e.(*ItemEntry)
+			if !ok || !listed[ie.ID] {
+				continue
+			}
+			out, ok := c.Items[i].(*openresponses.FunctionCallOutput)
+			if !ok {
+				continue
+			}
+			sent := *out
+			sent.Output = openresponses.FunctionCallOutputData{Text: om.Outputs.Text}
+			c.Items[i] = &sent
+			c.ReplacedItems = append(c.ReplacedItems, ReplacedItem{Entry: ie, Reason: OmitOutputsReason})
+		}
+	}
+	im := om.Images
+	if im == nil {
+		return
+	}
+	// reached says whether the n-th image part, counted in request order
+	// over item entries' items, at the i-th item, is replaced.
+	var reached func(i, n int) bool
+	if im.Before != "" {
+		at := map[string]int{}
+		for i, e := range path {
+			at[e.Base().ID] = i
+		}
+		before, ok := at[im.Before]
+		if !ok {
+			return // names nothing
+		}
+		reached = func(i, _ int) bool {
+			pos, ok := at[c.ItemEntries[i].Base().ID]
+			return ok && pos < before
+		}
+	} else {
+		total := 0
+		for i, e := range c.ItemEntries {
+			if _, ok := e.(*ItemEntry); ok {
+				total += len(imageParts(c.Items[i]))
+			}
+		}
+		reached = func(_, n int) bool { return n < total-im.Keep }
+	}
+	n := 0
+	for i, e := range c.ItemEntries {
+		ie, ok := e.(*ItemEntry)
+		if !ok {
+			continue
+		}
+		parts := imageParts(c.Items[i])
+		replace := map[int]bool{}
+		for _, p := range parts {
+			if reached(i, n) {
+				replace[p] = true
+			}
+			n++
+		}
+		if len(replace) == 0 {
+			continue
+		}
+		c.Items[i] = withPlaceholders(c.Items[i], replace, im.Placeholder)
+		c.ReplacedItems = append(c.ReplacedItems, ReplacedItem{Entry: ie, Reason: OmitImagesReason, Parts: len(replace)})
+	}
+}
+
+// contentOf returns the parts of an item that may hold an input_image:
+// a message's content, and a function call output's output when it is
+// a list of parts.
+func contentOf(item openresponses.Item) openresponses.Contents {
+	switch v := item.(type) {
+	case *openresponses.Message:
+		return v.Content
+	case *openresponses.FunctionCallOutput:
+		return v.Output.Parts
+	}
+	return nil
+}
+
+// imageParts returns the indexes of the input_image parts of an item, in
+// order.
+func imageParts(item openresponses.Item) []int {
+	var out []int
+	for i, p := range contentOf(item) {
+		if _, ok := p.(*openresponses.InputImage); ok {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// withPlaceholders returns a copy of item whose parts at the indexes
+// replace are input_text parts holding text.
+func withPlaceholders(item openresponses.Item, replace map[int]bool, text string) openresponses.Item {
+	parts := slices.Clone(contentOf(item))
+	for i := range parts {
+		if replace[i] {
+			parts[i] = &openresponses.InputText{Text: text}
+		}
+	}
+	switch v := item.(type) {
+	case *openresponses.Message:
+		sent := *v
+		sent.Content = parts
+		return &sent
+	case *openresponses.FunctionCallOutput:
+		sent := *v
+		sent.Output = openresponses.FunctionCallOutputData{Parts: parts}
+		return &sent
+	}
+	return item
 }
 
 // modelsOfOutput returns, for each item entry on the path that holds a
@@ -1280,6 +1463,21 @@ func (s *Session) RequestContext(id string) (Context, error) {
 	return s.requestContext(id, true)
 }
 
+// PathRequestContext is [Session.RequestContext] for a reader holding a
+// root-first path and not its session, a projection among them: the
+// context of the request that produced the response entry the path ends
+// at, the path before it with the response's own output items removed.
+func PathRequestContext(path []Entry) (Context, error) {
+	if len(path) == 0 {
+		return Context{}, errors.New("agentsession: empty path")
+	}
+	resp, ok := path[len(path)-1].(*ResponseEntry)
+	if !ok {
+		return Context{}, fmt.Errorf("agentsession: entry %s is a %s, not a response", path[len(path)-1].Base().ID, path[len(path)-1].EntryType())
+	}
+	return requestContextAt(path[:len(path)-1], resp, true)
+}
+
 // requestContext is RequestContext with the omit setting applied when
 // omit is set; see buildContext.
 func (s *Session) requestContext(id string, omit bool) (Context, error) {
@@ -1366,13 +1564,14 @@ func (s *Session) Verify(id string) error {
 		return err
 	}
 	if got != resp.RequestHash {
-		if len(ctx.OmittedItems) > 0 {
-			// The record leaves items out of this request. A hash that
-			// is the request with them in says the writer disagreed with
-			// the rule it wrote down.
+		if len(ctx.OmittedItems) > 0 || len(ctx.ReplacedItems) > 0 {
+			// The record leaves items out of this request, or sends
+			// placeholders for parts of them. A hash that is the request
+			// as the path holds it says the writer disagreed with the
+			// rule it wrote down.
 			if bare, err := s.requestContext(id, false); err == nil {
 				if h, err := contextHash(bare); err == nil && h == resp.RequestHash {
-					return fmt.Errorf("%w: response %s recorded %s, the request with %d item(s) the omit setting leaves out: %w", ErrHashMismatch, id, resp.RequestHash, len(ctx.OmittedItems), ErrOmitDivergence)
+					return fmt.Errorf("%w: response %s recorded %s, the request without the %d item(s) the omit setting leaves out or the %d it sends placeholders in: %w", ErrHashMismatch, id, resp.RequestHash, len(ctx.OmittedItems), len(ctx.ReplacedItems), ErrOmitDivergence)
 				}
 			}
 		}
@@ -1529,7 +1728,7 @@ func contributes(e Entry) bool {
 // contextContentHash is the content hash the context hash uses for one
 // contributing entry: the body with legacy_id, normalised and redacted,
 // in whatever form, removed for every type, response, source and queued_from removed from an
-// item, from removed from a branch_summary, and a compaction's
+// item, and from_link and failed where the format defines them, from removed from a branch_summary, and a compaction's
 // first_kept replaced by [context hash, type] of the entry it names
 // when that entry is on the path and by null otherwise.
 func contextContentHash(e Entry, at, types map[string]string) (string, error) {
@@ -1556,6 +1755,13 @@ func contextContentHash(e Entry, at, types map[string]string) (string, error) {
 		delete(body, "response")
 		delete(body, "source")
 		delete(body, "queued_from")
+		if e.(*ItemEntry).FromLink != "" {
+			delete(body, "from_link")
+		}
+		if e.(*ItemEntry).Failed {
+			// A record member that reaches no request.
+			delete(body, "failed")
+		}
 	case TypeBranchSummary:
 		delete(body, "from")
 	case TypeCompaction:

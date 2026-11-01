@@ -1,0 +1,208 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000025",
+  "trajectory_id": "sha256:c21494513c04ced6b4bfa8e56ca6abd1eb48f93fa4d5aed829745e46288132e1",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-01T13:00:14Z",
+      "source": "system",
+      "message": "Summary: the user said first and second, and the assistant one and two.",
+      "observation": {
+        "results": [
+          {
+            "content": "Summary: the user said first and second, and the assistant one and two."
+          }
+        ]
+      },
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:944ba8542a62a5c86552f3e7f357ed13389afcc4478df0afe85810be6fc60346"
+        },
+        "context_management": {
+          "boundary": "replace",
+          "type": "compaction"
+        },
+        "first_kept": "sha256:036ca725d4cf805b23796ce563155b51a464f6fd16f82518c0ed502233575065",
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "system",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Summary: the user said first and second, and the assistant one and two."
+              }
+            ]
+          },
+          "pinned": [
+            {
+              "type": "message",
+              "role": "developer",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "House rule: always run the linter."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-01T13:00:11Z",
+      "source": "user",
+      "message": "third",
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:036ca725d4cf805b23796ce563155b51a464f6fd16f82518c0ed502233575065"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "third"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-01T13:00:13Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "three",
+      "is_copied_context": true,
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:7cdbaf468101e19f04a1832402dfbe88b7e2eb8d007888b6fff2c76bad9489df"
+        },
+        "item_entry_ids": [
+          "sha256:ac79f3ac14ce94982f20d4b42045bef29ae7e758b7e32c3b97a15c97f472a923"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_3",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "three",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:7cdbaf468101e19f04a1832402dfbe88b7e2eb8d007888b6fff2c76bad9489df",
+            "model": "gpt-5",
+            "request_hash": "sha256:232d3b513e70c69d7f691f5b48ea6e8013b16e305dd68527be073148772e0892",
+            "response_id": "resp_3",
+            "status": "completed",
+            "ts": "2026-11-01T13:00:13Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-11-01T13:00:15Z",
+      "source": "user",
+      "message": "fourth",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:8cfca7acce243ea183a3f0ba47fe869be6ff4f244c80671072a7f4e8262c6fa6"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "fourth"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 5,
+      "timestamp": "2026-11-01T13:00:17Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "four",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:c21494513c04ced6b4bfa8e56ca6abd1eb48f93fa4d5aed829745e46288132e1"
+        },
+        "item_entry_ids": [
+          "sha256:d83b8071ae0b556306cb801957412026c43999b85df2be16e0db4e39592e3162"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_4",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "four",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:c21494513c04ced6b4bfa8e56ca6abd1eb48f93fa4d5aed829745e46288132e1",
+            "model": "gpt-5",
+            "request_hash": "sha256:24c19f2eb2fdf1409994738294fa81014dd0690a78e56738fcb987128df03c85",
+            "response_id": "resp_4",
+            "status": "completed",
+            "ts": "2026-11-01T13:00:17Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 6 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 5 steps. The steps are the context after compaction and leave out 3 model call(s) that were folded away; final_metrics totals the whole path.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 6
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.14",
+      "leaf": "sha256:c21494513c04ced6b4bfa8e56ca6abd1eb48f93fa4d5aed829745e46288132e1",
+      "main": true
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

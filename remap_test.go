@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -120,6 +121,30 @@ func TestRemapRefsEveryMember(t *testing.T) {
 			false,
 		},
 		{
+			"item: from_link, and one in another form left as body",
+			`{"type":"item","id":"x","parent":"o-p",` + tsLine + `,"item":` + msg + `,"from_link":"o-link"}`,
+			map[string]string{"/parent": "n-p", "/from_link": "n-link"},
+			false,
+		},
+		{
+			"item: from_link that is not a string",
+			`{"type":"item","id":"x","parent":"o-p",` + tsLine + `,"item":` + msg + `,"from_link":["o-link"]}`,
+			map[string]string{"/parent": "n-p"},
+			false,
+		},
+		{
+			"config: omit outputs items and images before",
+			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"outputs":{"text":"o-cleared","items":["o-1","o-2"]},"images":{"before":"o-3","placeholder":"o-image"}}}`,
+			map[string]string{"/parent": "n-p", "/omit/outputs/items/0": "n-1", "/omit/outputs/items/1": "n-2", "/omit/images/before": "n-3"},
+			false,
+		},
+		{
+			"config: omit images keep names no entry, and images in another form is body",
+			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"items":["o-1"],"outputs":{"items":["o-2"]},"images":{"keep":2,"before":"o-3","placeholder":"p"}}}`,
+			map[string]string{"/parent": "n-p", "/omit/items/0": "n-1"},
+			false,
+		},
+		{
 			"config: omit items and omitted parts' of",
 			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"reasoning":"other_models","items":["o-1","o-2"]},"instructions_omitted":[{"keep":2,"of":"o-3","x:note":"o-keep"},{"id":"o-name","reason":"budget","size":1}],"instructions_parts":[{"id":"o-part","hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}]}`,
 			map[string]string{"/parent": "n-p", "/omit/items/0": "n-1", "/omit/items/1": "n-2", "/instructions_omitted/0/of": "n-3"},
@@ -135,6 +160,12 @@ func TestRemapRefsEveryMember(t *testing.T) {
 			"compaction: first_kept and the checkpoint's omit",
 			`{"type":"compaction","id":"x","parent":"o-p",` + tsLine + `,"first_kept":"o-f","summary":` + msg + `,"config":{"model":"m","omit":{"items":["o-i"]},"instructions_omitted":[{"id":"o-name","reason":"r"}]}}`,
 			map[string]string{"/parent": "n-p", "/first_kept": "n-f", "/config/omit/items/0": "n-i"},
+			false,
+		},
+		{
+			"compaction: the checkpoint's omit outputs and images",
+			`{"type":"compaction","id":"x","parent":"o-p",` + tsLine + `,"first_kept":"o-f","summary":` + msg + `,"config":{"model":"m","omit":{"outputs":{"text":"o-t","items":["o-i"]},"images":{"before":"o-b","placeholder":"o-x"}}}}`,
+			map[string]string{"/parent": "n-p", "/first_kept": "n-f", "/config/omit/outputs/items/0": "n-i", "/config/omit/images/before": "n-b"},
 			false,
 		},
 		{
@@ -399,8 +430,8 @@ func TestMigrationRewritesEveryEntryNamingMember(t *testing.T) {
 var coreStringMembers = map[string][]string{
 	TypeItem:          {"response", "source/kind", "source/ref", "source/source"},
 	TypeResponse:      {"response_id", "model", "status"},
-	TypeConfig:        {"model", "instructions", "instructions_parts/[]/id", "instructions_parts/[]/text", "instructions_parts/[]/source", "instructions_omitted/[]/id", "instructions_omitted/[]/reason", "instructions_omitted/[]/source", "tools_removed/[]", "omit/reasoning"},
-	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_parts/[]/source", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/source", "config/instructions_omitted/[]/of", "config/omit/reasoning"},
+	TypeConfig:        {"model", "instructions", "instructions_parts/[]/id", "instructions_parts/[]/text", "instructions_parts/[]/source", "instructions_omitted/[]/id", "instructions_omitted/[]/reason", "instructions_omitted/[]/source", "tools_removed/[]", "omit/reasoning", "omit/outputs/text", "omit/images/placeholder"},
+	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_parts/[]/source", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/source", "config/instructions_omitted/[]/of", "config/omit/reasoning", "config/omit/outputs/text", "config/omit/images/placeholder"},
 	TypeBranchSummary: {},
 	TypeRun:           {"run_id", "phase", "source", "reason", "ref", "trigger/kind", "trigger/ref", "trigger/source"},
 	TypeDispatch:      {"idempotency_key"},
@@ -408,7 +439,7 @@ var coreStringMembers = map[string][]string{
 	TypeQueued:        {"mode", "trigger/kind", "trigger/ref", "trigger/source", "ref"},
 	TypeLabel:         {"label"},
 	TypeInfo:          {"name"},
-	TypeEnv:           {"cwd", "vcs/system", "vcs/revision", "tools/*", "workspace/kind", "workspace/ref"},
+	TypeEnv:           {"cwd", "vcs/system", "vcs/revision", "tools/*", "workspace/kind", "workspace/ref", "workspace/host", "workspace/instance"},
 	TypeOutcome:       {"kind", "label"},
 	TypeLink:          {"rel", "url", "task", "context", "cancel"},
 	TypeCustom:        {"ns"},
@@ -536,6 +567,8 @@ type rfcMember struct {
 var rfcNames = func() map[string][]rfcMember {
 	targets := []rfcMember{{TypeDispatch, "target", roleEntry}, {TypeDecision, "target", roleEntry}, {TypeLabel, "target", roleEntry}, {TypeOutcome, "target", roleEntry}, {TypeLink, "target", roleEntry}}
 	omit := []rfcMember{{TypeConfig, "omit/items/[]", roleEntry}, {TypeCompaction, "config/omit/items/[]", roleEntry}}
+	outputs := []rfcMember{{TypeConfig, "omit/outputs/items/[]", roleEntry}, {TypeCompaction, "config/omit/outputs/items/[]", roleEntry}}
+	images := []rfcMember{{TypeConfig, "omit/images/before", roleEntry}, {TypeCompaction, "config/omit/images/before", roleEntry}}
 	of := []rfcMember{{TypeConfig, "instructions_omitted/[]/of", roleEntry}}
 	session := []rfcMember{{TypeLink, "session", roleSession}}
 	return map[string][]rfcMember{
@@ -545,6 +578,10 @@ var rfcNames = func() map[string][]rfcMember {
 		"first_kept":           {{TypeCompaction, "first_kept", roleEntry}},
 		"from":                 {{TypeBranchSummary, "from", roleEntry}},
 		"queued_from":          {{TypeItem, "queued_from", roleEntry}},
+		"from_link":            {{TypeItem, "from_link", roleEntry}},
+		"outputs":              outputs,
+		"images":               images,
+		"before":               images,
 		"omit":                 omit,
 		"items":                omit,
 		"config":               append(append([]rfcMember{}, omit[:1]...), of...),
@@ -621,16 +658,18 @@ func TestRewriteTableCoversRFC(t *testing.T) {
 		t.Fatalf("RFC 0001 no longer says %q; find the rule again", keys)
 	}
 	names := tick.FindAllStringSubmatch(text[i:i+j], -1)
-	if len(names) < 2 {
+	if len(names) < 3 {
 		t.Fatalf("the rule names no member: %s", text[i:i+j])
 	}
-	typ, member := names[0][1], names[1][1]
-	found := false
-	for _, sp := range bodyMembers[typ] {
-		found = found || sp.role == roleDataKeys && sp.path[0] == member
-	}
-	if !found {
-		t.Errorf("RFC 0001 keeps data in the member names of %s's %s and the table does not key it by data", typ, member)
+	typ := names[0][1]
+	for _, member := range []string{names[1][1], names[2][1]} {
+		found := false
+		for _, sp := range bodyMembers[typ] {
+			found = found || sp.role == roleDataKeys && sp.path[0] == member
+		}
+		if !found {
+			t.Errorf("RFC 0001 keeps data in the member names of %s's %s and the table does not key it by data", typ, member)
+		}
 	}
 }
 
@@ -700,5 +739,213 @@ func TestRemapRefsSortsExtensionParents(t *testing.T) {
 	}
 	if e.Base().Parents[0].Entry != "o-a" {
 		t.Error("the input changed")
+	}
+}
+
+// leftOutRemap is prefixRemap with every entry ID starting gone- left out
+// and nothing standing in its place.
+var leftOutRemap = Remap{
+	Entry: func(session, entry string) (string, bool) {
+		if strings.HasPrefix(entry, "gone-") {
+			return "", true
+		}
+		return prefixRemap.Entry(session, entry)
+	},
+	Session: prefixRemap.Session,
+}
+
+// TestRemapRefsLeftOut: RFC 0001's rules for leaving entries out, member
+// by member. A member naming one element of a set loses it, a list so
+// emptied goes, and an omit left naming nothing goes with it, since an
+// empty one would clear what is in force; parent names the universal
+// root; and a member naming one predecessor, which must name what stands
+// in the place, is refused.
+func TestRemapRefsLeftOut(t *testing.T) {
+	msg := `{"type":"message","role":"user","content":[]}`
+	for _, tt := range []struct {
+		name, line, want string
+		dropped          []string
+	}{
+		{
+			"item: a parents element, queued_from and from_link",
+			`{"type":"item","id":"x","parent":"o-p",` + tsLine + `,"parents":[{"entry":"gone-a"},{"entry":"o-b"}],"item":` + msg + `,"queued_from":"gone-q","from_link":"gone-l"}`,
+			`{"type":"item","id":"x","parent":"n-p",` + tsLine + `,"parents":[{"entry":"n-b"}],"item":` + msg + `}`,
+			[]string{"/from_link", "/parents/0/entry", "/queued_from"},
+		},
+		{
+			"item: every parents element, and parent to the root",
+			`{"type":"item","id":"x","parent":"gone-p",` + tsLine + `,"parents":[{"entry":"gone-a","session":"s-1"}],"item":` + msg + `}`,
+			`{"type":"item","id":"x","parent":null,` + tsLine + `,"item":` + msg + `}`,
+			[]string{"/parents/0/entry"},
+		},
+		{
+			"config: an omit that only added what was left out",
+			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"model":"m","omit":{"items":["gone-1","gone-2"]}}`,
+			`{"type":"config","id":"x","parent":"n-p",` + tsLine + `,"model":"m"}`,
+			[]string{"/omit/items/0", "/omit/items/1"},
+		},
+		{
+			"config: omit keeps the rest, and outputs its text",
+			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"reasoning":"other_models","items":["o-1","gone-2","o-3"],"outputs":{"text":"t","items":["gone-4"]}}}`,
+			`{"type":"config","id":"x","parent":"n-p",` + tsLine + `,"omit":{"reasoning":"other_models","items":["n-1","n-3"],"outputs":{"text":"t"}}}`,
+			[]string{"/omit/items/1", "/omit/outputs/items/0"},
+		},
+		{
+			"config: an omit that clears stays",
+			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{}}`,
+			`{"type":"config","id":"x","parent":"n-p",` + tsLine + `,"omit":{}}`,
+			nil,
+		},
+		{
+			"compaction: the checkpoint's omit",
+			`{"type":"compaction","id":"x","parent":"o-p",` + tsLine + `,"first_kept":"o-f","summary":` + msg + `,"config":{"model":"m","omit":{"items":["gone-i"],"outputs":{"text":"t","items":["o-j","gone-k"]}}}}`,
+			`{"type":"compaction","id":"x","parent":"n-p",` + tsLine + `,"first_kept":"n-f","summary":` + msg + `,"config":{"model":"m","omit":{"outputs":{"text":"t","items":["n-j"]}}}}`,
+			[]string{"/config/omit/items/0", "/config/omit/outputs/items/1"},
+		},
+		{
+			"extension entry: its parents",
+			`{"type":"x:thing","id":"x","parent":"o-p",` + tsLine + `,"parents":[{"entry":"gone-a"},{"entry":"o-b"}]}`,
+			`{"type":"x:thing","id":"x","parent":"n-p",` + tsLine + `,"parents":[{"entry":"n-b"}]}`,
+			[]string{"/parents/0/entry"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r, err := RemapRefs(entryOf(t, tt.line), leftOutRemap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := canonicalEntry(t, r.Entry), withValues(t, tt.want, nil); got != want {
+				t.Errorf("remapped\n got %s\nwant %s", got, want)
+			}
+			var dropped []string
+			for _, d := range r.Dropped {
+				dropped = append(dropped, d.At)
+			}
+			sort.Strings(dropped)
+			if !slices.Equal(dropped, tt.dropped) {
+				t.Errorf("Dropped %v, want %v", dropped, tt.dropped)
+			}
+		})
+	}
+	for _, line := range []string{
+		`{"type":"label","id":"x","parent":"o-p",` + tsLine + `,"target":"gone-t","label":"l"}`,
+		`{"type":"outcome","id":"x","parent":"o-p",` + tsLine + `,"kind":"eval","target":"gone-t"}`,
+		`{"type":"branch_summary","id":"x","parent":"o-p",` + tsLine + `,"from":"gone-f","summary":` + msg + `}`,
+		`{"type":"compaction","id":"x","parent":"o-p",` + tsLine + `,"first_kept":"gone-f","summary":` + msg + `,"config":{"model":"m"}}`,
+		`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"images":{"before":"gone-b","placeholder":"p"}}}`,
+		`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"instructions_omitted":[{"keep":1,"of":"gone-c"}]}`,
+		`{"type":"dispatch","id":"x","parent":"o-p",` + tsLine + `,"call_id":"c","target":"gone-call"}`,
+		`{"type":"link","id":"x","parent":"o-p",` + tsLine + `,"rel":"peer","session":"s-1","call_id":"c","target":"gone-l","cancel":"sent"}`,
+	} {
+		if _, err := RemapRefs(entryOf(t, line), leftOutRemap); !errors.Is(err, ErrNoPlace) {
+			t.Errorf("%s: err %v, want ErrNoPlace", line, err)
+		}
+	}
+}
+
+// TestRemapRefsLeafLabelToRoot: a leaf label's target may name the
+// universal root, so when what stands in its target's place is the
+// root, the label names it, null, rather than being refused with
+// ErrNoPlace; any other label's target still is (B2 follow-up).
+func TestRemapRefsLeafLabelToRoot(t *testing.T) {
+	leaf := `{"type":"label","id":"x","parent":"o-p",` + tsLine + `,"target":"gone-t","label":"leaf"}`
+	r, err := RemapRefs(entryOf(t, leaf), leftOutRemap)
+	if err != nil {
+		t.Fatalf("a leaf label whose target has the root in its place: %v", err)
+	}
+	if l := r.Entry.(*LabelEntry); l.Target != "" {
+		t.Errorf("target %q, want the root", l.Target)
+	}
+	data, err := MarshalEntry(r.Entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"target":null`) {
+		t.Errorf("written as %s", data)
+	}
+	other := `{"type":"label","id":"x","parent":"o-p",` + tsLine + `,"target":"gone-t","label":"checkpoint"}`
+	if _, err := RemapRefs(entryOf(t, other), leftOutRemap); !errors.Is(err, ErrNoPlace) {
+		t.Errorf("another label: err %v, want ErrNoPlace", err)
+	}
+}
+
+// TestRemapRefsBound: a left-out entry has two places (RFC 0001, Leaving
+// entries out). parent and a target name the entry kept above it; a
+// compaction's first_kept and images' before, which bound a range from
+// below, name the first entry written after it, through Remap.Bound, or
+// the entry above would be put back into every later request. A, B
+// (left out), C, then a compaction keeping from B: first_kept is C, not
+// A.
+func TestRemapRefsBound(t *testing.T) {
+	m := Remap{
+		Entry: func(_, entry string) (string, bool) {
+			return map[string]string{"o-a": "n-a", "o-b": "n-a", "o-c": "n-c"}[entry], true
+		},
+		Bound: func(entry string) (string, bool) {
+			return map[string]string{"o-a": "n-a", "o-b": "n-c", "o-c": "n-c"}[entry], true
+		},
+	}
+	msg := `{"type":"message","role":"user","content":[]}`
+	for _, tt := range []struct{ line, want string }{
+		{
+			`{"type":"compaction","id":"x","parent":"o-b",` + tsLine + `,"first_kept":"o-b","summary":` + msg + `,"config":{"model":"m","omit":{"images":{"before":"o-b","placeholder":"p"}}}}`,
+			`{"type":"compaction","id":"x","parent":"n-a",` + tsLine + `,"first_kept":"n-c","summary":` + msg + `,"config":{"model":"m","omit":{"images":{"before":"n-c","placeholder":"p"}}}}`,
+		},
+		{
+			`{"type":"config","id":"x","parent":"o-b",` + tsLine + `,"omit":{"images":{"before":"o-b","placeholder":"p"}}}`,
+			`{"type":"config","id":"x","parent":"n-a",` + tsLine + `,"omit":{"images":{"before":"n-c","placeholder":"p"}}}`,
+		},
+	} {
+		r, err := RemapRefs(entryOf(t, tt.line), m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := canonicalEntry(t, r.Entry), withValues(t, tt.want, nil); got != want {
+			t.Errorf("remapped\n got %s\nwant %s", got, want)
+		}
+	}
+	// Nothing written after it: refused.
+	m.Bound = func(string) (string, bool) { return "", true }
+	if _, err := RemapRefs(entryOf(t, `{"type":"compaction","id":"x","parent":"o-a",`+tsLine+`,"first_kept":"o-b","summary":`+msg+`,"config":{"model":"m"}}`), m); !errors.Is(err, ErrNoPlace) {
+		t.Errorf("err %v, want ErrNoPlace", err)
+	}
+}
+
+// TestRemapRefsBase: in a file with a base, an own entry whose own
+// ancestors were all left out hangs from the base, which is above it on
+// its path, and not from the universal root, which the base rule
+// forbids (RFC 0001, Leaving entries out).
+func TestRemapRefsBase(t *testing.T) {
+	line := `{"type":"item","id":"x","parent":"gone-p",` + tsLine + `,"item":{"type":"message","role":"user","content":[]}}`
+	m := leftOutRemap
+	m.Base = "n-base"
+	r, err := RemapRefs(entryOf(t, line), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Entry.Base().Parent; got != "n-base" {
+		t.Errorf("parent %q, want the base", got)
+	}
+	if r, err := RemapRefs(entryOf(t, line), leftOutRemap); err != nil || r.Entry.Base().Parent != "" {
+		t.Errorf("without a base: parent %q, %v; want the root", r.Entry.Base().Parent, err)
+	}
+}
+
+// TestRemapRefsBaseExtension: an extension entry, whose envelope alone
+// RemapRefs reads, hangs from the base as a core entry does when its
+// ancestors were all left out in a file with a base.
+func TestRemapRefsBaseExtension(t *testing.T) {
+	line := `{"type":"x:thing","id":"x","parent":"gone-p",` + tsLine + `,"x:ref":"o-inside"}`
+	m := leftOutRemap
+	m.Base = "n-base"
+	r, err := RemapRefs(entryOf(t, line), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Entry.Base().Parent; got != "n-base" {
+		t.Errorf("parent %q, want the base", got)
+	}
+	if r, err := RemapRefs(entryOf(t, line), leftOutRemap); err != nil || r.Entry.Base().Parent != "" {
+		t.Errorf("without a base: parent %q, %v; want the root", r.Entry.Base().Parent, err)
 	}
 }

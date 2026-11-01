@@ -106,6 +106,25 @@ Main is not released between the first model and this one. One
 release carries all of it, v0.0.27; step 5 follows in v0.0.28.
 Siblings move to 0.13 through the usual bump.
 
+## Format 0.14
+
+The 0.14 batch (#250–#253) states in RFC 0001 what agentredact had
+decided for itself, so another redactor answers the same way:
+
+- **Leaving entries out** (#253): what stands in a left-out entry's
+  place, which members re-point and which lose the element, what goes
+  with a call, a dispatch or a drained `queued` entry, the run end and
+  the pins. `RemapRefs` applies it when a `Remap` returns an empty ID.
+- **The header** (#250): which members are text, which the redaction
+  writes, and which are references; `RewriteHeaderStrings` uses one
+  member table beside the entries'.
+- **Kept hashes** (#251): a part under an original hash whose text the
+  redactor never met is written as its own text or refused;
+  `Rewriter.Unmet` lists them before the commit.
+- **Names that are data** (#252): the `Rewriter` gives f the member
+  names of every object the format does not define, at any depth,
+  found from the type that decodes the entry, and `env`'s `tools`.
+
 ## Open questions
 
 - Should `RewriteStrings` report what it changed (member paths, not

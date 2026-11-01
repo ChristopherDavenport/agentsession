@@ -251,7 +251,9 @@ shape back reads it out of `extra`.
 | `compaction` | the ATIF context-management convention; steps before `first_kept_entry_id` are not emitted, the summary item becomes a `source: "system"` step with `is_copied_context: true` |
 | `branch_summary` | `source: "system"` step, `is_copied_context: true`, with `extra.branch_from` |
 | `custom_item` | step by its role, `extra.custom_type` |
-| `custom`, `label`, `session_info` | `extra` on the nearest following step, or `extra` on the root |
+| `custom`, `label`, `session_info` | `extra` on the nearest following step, or `extra` on the root; a `custom` entry whose `call_id` names a call with an agent step in the document goes under that step's `extra.calls[call_id].custom` instead |
+| `omit` in force | at the leaf: `extra.omitted` on the step holding a left-out item, and `extra.agentsession.replaced` (with the item as sent under `extra.openresponses.sent`) on one sent with a placeholder; per agent step: `extra.agentsession.request_omitted` and `request_replaced`, from its response's request context |
+| `failed`, `from_link`, a withdrawal | `extra.agentsession.failed` on the output's observation result, `extra.agentsession.from_link` on the item's step, `withdrawn: true` in the decision's record under `extra.calls` |
 | `run`, `dispatch`, `decision`, `queued` | no step of their own: a run's record under `extra.run`, a **list**, on the first step its segment produces or on the root; a call's decisions and first dispatch under `extra.calls` on the agent step that made the call, with every dispatch under `dispatches` for a call handed over more than once; a queued input under `extra.queued` |
 | `environment` | root `extra.environment` for the first, step `extra.environment` afterwards |
 | `outcome` | root `final_metrics.extra.outcome`, and `extra.outcome` on the step it attaches to |
@@ -259,7 +261,10 @@ shape back reads it out of `extra`.
 | tool results with image or file parts | `content` as ATIF content parts, media written beside the document |
 
 `final_metrics` sums the path: total prompt, completion and cached
-tokens, cost when known, total steps.
+tokens, cost when known, total steps, which count a response and a
+`custom` entry's usage by their `attempts`. The cost also adds each
+embedded subagent document's, as ATIF defines `total_cost_usd`; the
+token totals and total steps stay the path's.
 
 ### Lossless extras
 

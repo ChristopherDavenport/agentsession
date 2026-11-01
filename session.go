@@ -3,6 +3,7 @@ package agentsession
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -707,8 +708,9 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 // output and nothing else. An answer is for a call that may have run
 // and has no output; with dispatches promised, one with none never
 // started. A reject is for a call that did not run and has no output,
-// so none with a dispatch. No dispatch follows the output, which ends
-// the call.
+// so none with a dispatch, save a withdrawal, which directly follows
+// the dispatch it withdraws and is written nowhere else. No dispatch
+// follows the output, which ends the call.
 func (s *Session) checkCallRules(e Entry, parent string) error {
 	switch v := e.(type) {
 	case *ItemEntry:
@@ -730,12 +732,18 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 			return fmt.Errorf("%w: %s", ErrCallAnswered, v.CallID)
 		case c.Rejected():
 			return fmt.Errorf("%w: %s", ErrCallRejected, v.CallID)
+		case v.Withdrawn && v.Verdict == VerdictReject:
+			// A withdrawal follows the call's dispatch directly, before
+			// any output, and withdraws it; it is written nowhere else.
+			if !c.withdraws(v) {
+				return fmt.Errorf("%w: %s", ErrBadWithdrawal, v.CallID)
+			}
 		case v.Verdict == VerdictReject && c.Dispatch != nil:
 			return fmt.Errorf("%w: %s", ErrRejectDispatched, v.CallID)
 		case v.Verdict != VerdictAnswer && v.Verdict != VerdictReject:
 		case c.Output != nil:
 			return fmt.Errorf("%w: %s", ErrCallCompleted, v.CallID)
-		case v.Verdict == VerdictAnswer && c.Dispatch == nil && s.header.HasRecord(TypeDispatch) && !s.prefix[c.Entry.ID] && len(s.dispatches[c.Entry.ID]) == 0:
+		case v.Verdict == VerdictAnswer && c.Dispatch == nil && s.header.HasRecord(TypeDispatch) && !s.prefix[c.Entry.ID] && !s.dispatchedOffLocked(c.Entry.ID, onPath(s.path(parent))):
 			return fmt.Errorf("%w: %s", ErrAnswerNotDispatched, v.CallID)
 		}
 	case *DispatchEntry:
@@ -1421,6 +1429,12 @@ func validateConfig(c *ConfigEntry) error {
 				return errors.New("agentsession: an omit items list names an empty id")
 			}
 		}
+		if o := c.Omit.Outputs; o != nil && slices.Contains(o.Items, "") {
+			return errors.New("agentsession: an omit outputs list names an empty id")
+		}
+		if i := c.Omit.Images; i != nil && i.Keep < 0 {
+			return errors.New("agentsession: an omit images keep is negative")
+		}
 	}
 	seen := make(map[string]bool, len(c.InstructionsParts))
 	full := true
@@ -1542,9 +1556,11 @@ func (s *Session) add(e Entry) {
 
 // Dispatches returns the dispatches for the call whose function call is
 // the entry target, anywhere in the session, in the order they were
-// added, each naming the call by its call ID. A call with none on its
-// path may have one elsewhere, which a rebase above it leaves, and may
-// then have run. A call in a fork's prefix has its dispatches, if any,
+// added, each naming the call by its call ID, a withdrawn one among
+// them: a withdrawal says its dispatch was no hand-off on the path it
+// is on, and another branch may have handed the call off from the same
+// dispatch. A call with none on its path may have one elsewhere, which
+// a rebase above it leaves, and may then have run. A call in a fork's prefix has its dispatches, if any,
 // in the session the fork was made from, which the fork does not hold;
 // [OriginDispatches] reads them through a store.
 func (s *Session) Dispatches(target string) []*DispatchEntry {
@@ -1553,12 +1569,34 @@ func (s *Session) Dispatches(target string) []*DispatchEntry {
 	return append([]*DispatchEntry(nil), s.dispatches[target]...)
 }
 
-// dispatched reports whether the session holds a dispatch for the call
-// at target anywhere; see Dispatches.
-func (s *Session) dispatched(target string) bool {
+// dispatchedOff reports whether the session holds a dispatch for the
+// call at target that is not on the path, whose entries on reports: one
+// a rebase left above the path, which may have run, withdrawn or not,
+// since a withdrawal holds on its own path alone. A dispatch on the path
+// is the path's to read, a withdrawn one included.
+func (s *Session) dispatchedOff(target string, on func(id string) bool) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.dispatches[target]) > 0
+	return s.dispatchedOffLocked(target, on)
+}
+
+// dispatchedOffLocked is dispatchedOff for a caller holding the lock.
+func (s *Session) dispatchedOffLocked(target string, on func(id string) bool) bool {
+	for _, d := range s.dispatches[target] {
+		if !on(d.ID) {
+			return true
+		}
+	}
+	return false
+}
+
+// onPath returns a report of whether an entry is on path.
+func onPath(path []Entry) func(id string) bool {
+	ids := make(map[string]bool, len(path))
+	for _, e := range path {
+		ids[e.Base().ID] = true
+	}
+	return func(id string) bool { return ids[id] }
 }
 
 // Truncated reports the final line of the file this session was read

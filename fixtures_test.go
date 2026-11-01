@@ -319,6 +319,22 @@ func TestRegenerateFixtures(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// bad-withdrawal: a withdrawal a hold separates from its dispatch,
+	// which a writer cannot append, so its line is made by hand and
+	// hashed: a reader reads it as a reject after a dispatch.
+	writeBadWithdrawal(t)
+
+	// The 0.14 conformance vectors, appended natively.
+	for name, build := range fixtures014 {
+		var buf bytes.Buffer
+		if err := Write(&buf, build(t)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join("testdata", "sessions", name+".jsonl"), buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	for module, names := range nestedFixtures {
 		dir := filepath.Join(module, "testdata", "sessions")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1909,5 +1925,742 @@ func TestFoldedHandbackFixture(t *testing.T) {
 				t.Errorf("%s: %v", r.ResponseID, err)
 			}
 		}
+	}
+}
+
+// fixtures014 are the 0.14 conformance fixtures, each built natively by
+// its function; TestRegenerateFixtures writes them and each test checks
+// its file is what the function builds.
+var fixtures014 = map[string]func(t *testing.T) *Session{
+	"withdrawn":       withdrawnFixture,
+	"late-report":     func(t *testing.T) *Session { return lateReportFixture(t, false) },
+	"bad-late-report": func(t *testing.T) *Session { return lateReportFixture(t, true) },
+	"placeholders":    placeholdersFixture,
+	"record-resume":   recordResumeFixture,
+	"refold":          refoldFixture,
+	"no-response-id":  noResponseIDFixture,
+}
+
+// checkBuilt fails the test when testdata/sessions/<name>.jsonl is not
+// what build writes, and returns the file's bytes.
+func checkBuilt(t *testing.T, name string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", name+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, fixtures014[name](t)); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf.Bytes(), raw) {
+		t.Errorf("%s.jsonl is not what its builder writes; run go test -update", name)
+	}
+	return raw
+}
+
+// fixtureAppender returns an append that fails the test, and a say that
+// appends an assistant message and its response, hashed over the
+// context at the leaf, for a fixture under construction.
+func fixtureAppender(t *testing.T, s *Session) (must func(Entry) string, say func(responseID, text string)) {
+	must = func(e Entry) string {
+		t.Helper()
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatalf("append %T: %v", e, err)
+		}
+		return id
+	}
+	say = func(responseID, text string) {
+		t.Helper()
+		sent := fixtureHash(t, s)
+		answer := NewItemEntry(&openresponses.Message{ID: "msg_" + responseID, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: text, Annotations: []openresponses.Annotation{}}}})
+		answer.ResponseID = responseID
+		must(answer)
+		must(&ResponseEntry{ResponseID: responseID, Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+	}
+	return must, say
+}
+
+// fixtureHash is the request hash of the context at the leaf, which the
+// next response's request_hash must be.
+func fixtureHash(t *testing.T, s *Session) string {
+	t.Helper()
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := ctx.Request()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := RequestHash(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// withdrawnFixture builds the session withdrawn.jsonl holds: one model
+// call makes two calls, both dispatched in turn; a subscriber to the
+// first hand-off refuses it after its dispatch is durable, and the
+// writer withdraws it after the second call's dispatch, which is
+// another call's entry; the second call's tool fails, and its output
+// says so. The run ends aborted with the first call pending and never
+// started. The next run, written resume, dispatches it again, and it
+// answers.
+func withdrawnFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-11-01T09:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000020", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: AllRecords})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must, say := fixtureAppender(t, s)
+	end := func(reason string) {
+		t.Helper()
+		e, err := s.EndRun(reason, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		must(e)
+	}
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewRunStart("run-1", SourceInput, ""))
+	must(NewItemEntry(openresponses.UserText("Tell the team, then run the tests.")))
+	sent := fixtureHash(t, s)
+	notify := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_notify", Name: "notify", Arguments: `{"to":"team"}`}, ResponseID: "resp_1"})
+	tests := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_2", CallID: "call_tests", Name: "bash", Arguments: `{"cmd":"make test"}`}, ResponseID: "resp_1"})
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+	must(NewDispatch("call_notify", notify))
+	must(NewDispatch("call_tests", tests))
+	must(NewWithdrawal("call_notify", notify, ByPolicy, "a dispatch subscriber refused the hand-off"))
+	failed := NewItemEntry(openresponses.NewFunctionCallOutput("call_tests", "Error: exit status 2: 3 tests failed"))
+	failed.Failed = true
+	must(failed)
+	end(ReasonAborted)
+	must(NewRunStart("run-2", SourceResume, ""))
+	must(NewDispatch("call_notify", notify))
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_notify", "sent")))
+	say("resp_2", "The team is told; three tests fail.")
+	end(ReasonDone)
+	return s
+}
+
+// TestWithdrawnFixture reads the 0.14 conformance fixture for a
+// withdrawn hand-off and a failed call: at the first run's end the
+// withdrawn call is pending and never started, and the failed one
+// completed and failed; the file verifies, its runs agree with their
+// segments, and every response hashes, in a file of 0.13 too.
+func TestWithdrawnFixture(t *testing.T) {
+	raw := checkBuilt(t, "withdrawn")
+	for _, want := range []string{`"withdrawn":true`, `"failed":true`} {
+		if !bytes.Contains(raw, []byte(want)) {
+			t.Errorf("the fixture lacks %s", want)
+		}
+	}
+	for _, format := range []string{Format, "agentsession/0.13"} {
+		s, err := Read(bytes.NewReader(bytes.Replace(raw, []byte(`"format":"`+Format+`"`), []byte(`"format":"`+format+`"`), 1)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.VerifyRecords(s.Leaf()); err != nil {
+			t.Errorf("%s: VerifyRecords: %v", format, err)
+		}
+		runs, err := s.Runs(s.Leaf())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs) != 2 || runs[0].End.Reason != ReasonAborted || len(runs[0].End.Pending) != 1 || ComputeSource(runs[1]) != SourceResume {
+			t.Fatalf("%s: runs = %+v", format, runs)
+		}
+		// Read over the path alone: the session holds the next run's
+		// dispatch, which is elsewhere from the first run's end.
+		calls := Calls(s.Path(runs[0].End.ID))
+		notify, tests := calls[0], calls[1]
+		if st := notify.State(s.Header()); st != CallNeverStarted || len(notify.Withdrawn) != 1 || notify.Dispatch != nil {
+			t.Errorf("%s: the withdrawn call at the first run's end is %s, %d withdrawn", format, st, len(notify.Withdrawn))
+		}
+		if st := tests.State(s.Header()); st != CallCompleted || !tests.Failed() {
+			t.Errorf("%s: the failed call is %s, failed %v", format, st, tests.Failed())
+		}
+		calls, _ = s.Calls(s.Leaf())
+		if len(calls[0].Dispatches) != 1 || len(calls[0].Withdrawn) != 1 || calls[0].Failed() || len(s.Dispatches(calls[0].Entry.ID)) != 2 {
+			t.Errorf("%s: the call dispatched again = %+v", format, calls[0])
+		}
+		for _, e := range s.Entries() {
+			if r, ok := e.(*ResponseEntry); ok {
+				if err := s.Verify(r.ID); err != nil {
+					t.Errorf("%s: %s: %v", format, r.ResponseID, err)
+				}
+			}
+		}
+	}
+}
+
+// lateReportFixture builds the session late-report.jsonl holds, or with
+// bad set bad-late-report.jsonl. A research call reaches a peer, whose
+// work outlives the call: its output acknowledges the hand-off, and the
+// model answers the user. Two turns later the peer's report arrives as
+// an input item whose from_link names the peer link, with the
+// harness's own trigger in source, and the model answers again. With
+// bad set, a second, cancelled hand-off of another call is linked too,
+// and the report's from_link names that cancel notice, which names no
+// callee.
+func lateReportFixture(t *testing.T, bad bool) *Session {
+	t.Helper()
+	id := "01995b2a-0000-7000-8000-000000000021"
+	if bad {
+		id = "01995b2a-0000-7000-8000-000000000022"
+	}
+	at, _ := time.Parse(time.RFC3339, "2026-11-01T10:00:00Z")
+	s := New(Header{ID: id, CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: []string{TypeDispatch}})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must, say := fixtureAppender(t, s)
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Delegate research.")})
+	must(NewItemEntry(openresponses.UserText("Have the research agent look into order 7.")))
+	sent := fixtureHash(t, s)
+	call := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_research", Name: "research", Arguments: `{"message":"order 7"}`}, ResponseID: "resp_1"})
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+	must(NewDispatch("call_research", call))
+	link := must(NewPeerLink("call_research", Callee{URL: "https://research.example/a2a", Task: "task-r1", Context: "ctx-r1"}))
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_research", `{"status":"dispatched"}`)))
+	say("resp_2", "The research agent is on it.")
+	must(NewItemEntry(openresponses.UserText("Thanks. Anything else on the queue?")))
+	say("resp_3", "Nothing else.")
+	if bad {
+		sent := fixtureHash(t, s)
+		other := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_2", CallID: "call_audit", Name: "audit", Arguments: `{"message":"order 7"}`}, ResponseID: "resp_4"})
+		must(&ResponseEntry{ResponseID: "resp_4", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+		must(NewDispatch("call_audit", other))
+		audit := NewPeerLink("call_audit", Callee{URL: "https://audit.example/a2a", Task: "task-a1"})
+		must(audit)
+		link = must(NewCancelSentLink(audit))
+		must(NewItemEntry(openresponses.NewFunctionCallOutput("call_audit", "cancelled")))
+	}
+	report := NewItemEntry(openresponses.UserText("Research report on order 7: the refund was issued twice."))
+	report.FromLink = link
+	report.Source = &Trigger{Kind: "delivery", Ref: "task-r1", Source: "a2a"}
+	must(report)
+	say("resp_5", "The research is in: order 7 was refunded twice.")
+	return s
+}
+
+// TestLateReportFixture reads the 0.14 conformance fixtures for a peer's
+// late report: the report's from_link names the peer link, the call was
+// answered by its acknowledgement and by nothing else, and every
+// response hashes with the report sent as it is; a from_link naming a
+// cancel notice is reported.
+func TestLateReportFixture(t *testing.T) {
+	raw := checkBuilt(t, "late-report")
+	checkBuilt(t, "bad-late-report")
+	if !bytes.Contains(raw, []byte(`"from_link":"sha256:`)) {
+		t.Error("the fixture lacks a from_link")
+	}
+	s := loadFixture(t, "late-report")
+	if err := s.VerifyRecords(s.Leaf()); err != nil {
+		t.Errorf("VerifyRecords: %v", err)
+	}
+	var report *ItemEntry
+	for _, e := range s.Entries() {
+		if it, ok := e.(*ItemEntry); ok && it.FromLink != "" {
+			report = it
+		}
+		if r, ok := e.(*ResponseEntry); ok {
+			if err := s.Verify(r.ID); err != nil {
+				t.Errorf("%s: %v", r.ResponseID, err)
+			}
+		}
+	}
+	if report == nil {
+		t.Fatal("no item carries from_link")
+	}
+	l, ok := s.Entry(report.FromLink)
+	if link, isLink := l.(*LinkEntry); !ok || !isLink || link.Rel != RelPeer || link.CallID != "call_research" {
+		t.Errorf("from_link names %v", l)
+	}
+	callees, err := s.Callees(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(callees) != 1 || !callees[0].Answered {
+		t.Errorf("callees = %+v", callees)
+	}
+	bad := loadFixture(t, "bad-late-report")
+	if err := bad.VerifyRecords(bad.Leaf()); !errors.Is(err, ErrBadFromLink) {
+		t.Errorf("a from_link naming a cancel notice: VerifyRecords = %v, want ErrBadFromLink", err)
+	}
+}
+
+// screenshot is a function call output holding a caption and a
+// screenshot, as a computer-use loop's tool returns one.
+func screenshot(callID string, n int) *openresponses.FunctionCallOutput {
+	return &openresponses.FunctionCallOutput{CallID: callID, Output: openresponses.FunctionCallOutputData{Parts: openresponses.Contents{
+		&openresponses.InputText{Text: fmt.Sprintf("step %d", n)},
+		&openresponses.InputImage{ImageURL: fmt.Sprintf("data:image/png;base64,c2NyZWVu%02d", n)},
+	}}}
+}
+
+// placeholdersFixture builds the session placeholders.jsonl holds: a
+// browser loop that takes a screenshot each step and keeps a context
+// small. After the third step it sends every screenshot but the last
+// two as a placeholder (images keep); after the fourth it clears the
+// first step's output too (outputs). A compaction keeps from the third
+// step's call, its checkpoint carrying both. After it the loop names
+// the step before which screenshots are dropped (images before), and a
+// further outputs member changes the text and clears the third step.
+// Every model call's response carries the hash of the request the
+// context at its leaf rebuilds, which is the request sent.
+func placeholdersFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-11-01T11:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000023", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must, say := fixtureAppender(t, s)
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Drive the browser.")})
+	must(NewItemEntry(openresponses.UserText("Check out the cart.")))
+	calls, outputs := map[int]string{}, map[int]string{}
+	step := func(n int) {
+		t.Helper()
+		sent := fixtureHash(t, s)
+		id := fmt.Sprintf("resp_%d", n)
+		calls[n] = must(&ItemEntry{Item: &openresponses.FunctionCall{ID: fmt.Sprintf("fc_%d", n), CallID: fmt.Sprintf("call_%d", n), Name: "screenshot", Arguments: "{}"}, ResponseID: id})
+		must(&ResponseEntry{ResponseID: id, Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+		outputs[n] = must(NewItemEntry(screenshot(fmt.Sprintf("call_%d", n), n)))
+	}
+	omit := func(o Omit) {
+		t.Helper()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, ok := ctx.Settings.OmitDelta(o)
+		if !ok || d == nil {
+			t.Fatalf("OmitDelta(%+v) = %+v, %v", o, d, ok)
+		}
+		must(&ConfigEntry{Omit: d})
+	}
+	step(1)
+	step(2)
+	step(3)
+	omit(Omit{Images: &OmitImages{Keep: 2, Placeholder: "[screenshot removed]"}})
+	step(4)
+	omit(Omit{Images: &OmitImages{Keep: 2, Placeholder: "[screenshot removed]"}, Outputs: &OmitOutputs{Text: "[cleared]", Items: []string{outputs[1]}}})
+	step(5)
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(&CompactionEntry{FirstKept: calls[3], Summary: openresponses.SystemText("Summary: the cart page loaded; two steps taken."), Config: ctx.Settings})
+	step(6)
+	omit(Omit{Images: &OmitImages{Before: outputs[6], Placeholder: "[older screenshot]"}, Outputs: &OmitOutputs{Text: "[cleared earlier]", Items: []string{outputs[1], outputs[3]}}})
+	step(7)
+	say("resp_8", "The cart is checked out.")
+	return s
+}
+
+// TestPlaceholdersFixture reads the 0.14 conformance fixture for
+// placeholders: every response verifies, so each request was rebuilt
+// with the outputs and screenshots the omit in force sends as text; the
+// context at the leaf sends the third step's output as the latest text,
+// the screenshots before the sixth step's output as placeholders, and
+// reports both; and the request without the placeholders hashes to
+// something else, which a writer that recorded it would be told is a
+// divergence.
+func TestPlaceholdersFixture(t *testing.T) {
+	raw := checkBuilt(t, "placeholders")
+	for _, want := range []string{`"outputs":{"items":[`, `"images":{"keep":2,`, `"images":{"before":"sha256:`} {
+		if !bytes.Contains(raw, []byte(want)) {
+			t.Errorf("the fixture lacks %s", want)
+		}
+	}
+	s := loadFixture(t, "placeholders")
+	for _, e := range s.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			if err := s.Verify(r.ID); err != nil {
+				t.Errorf("%s: %v", r.ResponseID, err)
+			}
+		}
+	}
+	// At the last model call: steps 3 to 7 are in the context, after the
+	// summary. Step 3's output is cleared, steps 4 and 5 have their
+	// screenshot replaced, and steps 6 and 7 keep theirs.
+	path := s.Path(s.Leaf())
+	ctx, err := requestContextAt(path[:len(path)-1], path[len(path)-1].(*ResponseEntry), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, item := range ctx.Items {
+		out, ok := item.(*openresponses.FunctionCallOutput)
+		if !ok {
+			continue
+		}
+		if out.Output.Parts == nil {
+			texts = append(texts, out.Output.Text)
+			continue
+		}
+		var parts []string
+		for _, p := range out.Output.Parts {
+			switch v := p.(type) {
+			case *openresponses.InputText:
+				parts = append(parts, v.Text)
+			case *openresponses.InputImage:
+				parts = append(parts, "image")
+			}
+		}
+		texts = append(texts, strings.Join(parts, "+"))
+	}
+	want := []string{"[cleared earlier]", "step 4+[older screenshot]", "step 5+[older screenshot]", "step 6+image", "step 7+image"}
+	if !slices.Equal(texts, want) {
+		t.Errorf("outputs sent = %q, want %q", texts, want)
+	}
+	reasons := map[string]int{}
+	for _, r := range ctx.ReplacedItems {
+		reasons[r.Reason]++
+	}
+	if reasons[OmitOutputsReason] != 1 || reasons[OmitImagesReason] != 2 {
+		t.Errorf("replaced = %+v", ctx.ReplacedItems)
+	}
+	// The entries hold what they held.
+	for _, r := range ctx.ReplacedItems {
+		if out := r.Entry.Item.(*openresponses.FunctionCallOutput); out.Output.Parts == nil {
+			t.Errorf("entry %s was modified: %+v", r.Entry.ID, out)
+		}
+	}
+	bare, err := requestContextAt(path[:len(path)-1], path[len(path)-1].(*ResponseEntry), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h1, _ := contextHash(ctx)
+	h2, _ := contextHash(bare)
+	if h1 == h2 {
+		t.Error("the placeholders do not change the request")
+	}
+}
+
+// recordResumeFixture builds the session record-resume.jsonl holds, the
+// 0.14 sibling of empty-resume.jsonl. A charge call is held at the end
+// of the first run. The second run is written resume; the writer
+// replays the link to a subsession the call's policy check started and
+// a hook annotates the run, and then a subscriber refuses it before it
+// takes the call up. The third is written resume too, records its
+// environment and a label, and is cut; the restart closes it error. The
+// fourth takes the call up.
+func recordResumeFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-11-01T12:00:00Z")
+	id := "01995b2a-0000-7000-8000-000000000024"
+	s := New(Header{ID: id, CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: AllRecords})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must, say := fixtureAppender(t, s)
+	end := func(reason, ref string) {
+		t.Helper()
+		e, err := s.EndRun(reason, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		must(e)
+	}
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewRunStart("run-1", SourceInput, ""))
+	must(NewItemEntry(openresponses.UserText("Charge the card.")))
+	sent := fixtureHash(t, s)
+	call := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_charge", Name: "charge", Arguments: "{}"}, ResponseID: "resp_1"})
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+	must(NewSubsessionLink(SubsessionID(id, "call_charge"), "call_charge"))
+	must(NewDecision("call_charge", call, VerdictHold, ByPolicy))
+	end(ReasonInputRequired, "")
+	must(NewRunStart("run-2", SourceResume, ""))
+	must(NewSubsessionLink(SubsessionID(id, "call_charge"), "call_charge"))
+	must(&CustomEntry{NS: "hook", Data: json.RawMessage(`{"note":"resume requested by the operator"}`), CallID: "call_charge"})
+	end(ReasonError, "a run_start subscriber refused the run")
+	must(NewRunStart("run-3", SourceResume, ""))
+	env := &EnvEntry{CWD: "/home/u/proj"}
+	env.SetWorkspace(WorkspaceLocal, "").Host = "laptop"
+	must(env)
+	must(NewLabelEntry(call, "resuming"))
+	end(ReasonError, "the harness stopped before the run took anything up")
+	must(NewRunStart("run-4", SourceResume, ""))
+	must(NewDecision("call_charge", call, VerdictProceed, ByHuman))
+	must(NewDispatch("call_charge", call))
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_charge", "charged")))
+	say("resp_2", "Charged.")
+	end(ReasonDone, "")
+	return s
+}
+
+// TestRecordResumeFixture reads the 0.14 conformance fixture for a
+// resume whose segment holds record entries alone: it verifies, in a
+// file of 0.13 too, its two such runs are Empty, and every run agrees
+// with its end; a resume whose segment adds a setting is still reported
+// (#229).
+func TestRecordResumeFixture(t *testing.T) {
+	raw := checkBuilt(t, "record-resume")
+	for _, format := range []string{Format, "agentsession/0.13", "agentsession/0.11"} {
+		s, err := Read(bytes.NewReader(bytes.Replace(raw, []byte(`"format":"`+Format+`"`), []byte(`"format":"`+format+`"`), 1)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.VerifyRecords(s.Leaf()); err != nil {
+			t.Errorf("%s: VerifyRecords: %v", format, err)
+		}
+		runs, err := s.Runs(s.Leaf())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var empty int
+		for _, r := range runs {
+			if r.Start.Source == SourceResume && r.Empty() {
+				empty++
+				if ComputeSource(r) != SourceInput {
+					t.Errorf("%s: run %s computes %s", format, r.RunID(), ComputeSource(r))
+				}
+			}
+		}
+		if empty != 2 || len(runs) != 4 {
+			t.Errorf("%s: %d empty resumes in %d runs, want 2 in 4", format, empty, len(runs))
+		}
+	}
+	// A setting is in context: a resume that writes one and takes
+	// nothing up is the shape of an input, and reported.
+	s := loadFixture(t, "record-resume")
+	held, _ := s.Runs(s.Leaf())
+	if err := s.Branch(held[0].End.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []Entry{NewRunStart("run-x", SourceResume, ""), &ConfigEntry{Model: "gpt-5-mini"}} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrSourceMismatch) {
+		t.Errorf("a resume that adds a setting: VerifyRecords = %v, want ErrSourceMismatch", err)
+	}
+}
+
+// refoldFixture builds the session refold.jsonl holds: two house rules
+// pinned through a first compaction, and a second compaction that
+// restates one of them and drops the other, so the context after it
+// carries its summary and the one pin, and only the last compaction on
+// the path contributes items. Every response carries the hash of the
+// request its context rebuilds (#51).
+func refoldFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-11-01T13:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000025", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must, say := fixtureAppender(t, s)
+	rule := func(text string) openresponses.Item {
+		return &openresponses.Message{Role: openresponses.RoleDeveloper, Content: openresponses.Contents{&openresponses.InputText{Text: text}}}
+	}
+	fold := func(firstKept, summary string, pinned ...openresponses.Item) {
+		t.Helper()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		must(&CompactionEntry{FirstKept: firstKept, Summary: openresponses.SystemText(summary), Pinned: pinned, Config: ctx.Settings})
+	}
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewItemEntry(rule("House rule: never use Box::leak.")))
+	must(NewItemEntry(rule("House rule: always run the linter.")))
+	must(NewItemEntry(openresponses.UserText("first")))
+	say("resp_1", "one")
+	second := must(NewItemEntry(openresponses.UserText("second")))
+	say("resp_2", "two")
+	fold(second, "Summary: the user said first and the assistant said one.", rule("House rule: never use Box::leak."), rule("House rule: always run the linter."))
+	third := must(NewItemEntry(openresponses.UserText("third")))
+	say("resp_3", "three")
+	fold(third, "Summary: the user said first and second, and the assistant one and two.", rule("House rule: always run the linter."))
+	must(NewItemEntry(openresponses.UserText("fourth")))
+	say("resp_4", "four")
+	return s
+}
+
+// noResponseIDFixture builds the session no-response-id.jsonl holds: a
+// model call answered and named, a call the provider failed before it
+// named it, whose response carries no response_id and so has no output
+// items, and a call after it. The failed call's request is the whole
+// path before it, the earlier response's output and the user's message
+// among it, so a reader that took items before it as its output would
+// rebuild another request (#51).
+func noResponseIDFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-11-01T14:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000026", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must, say := fixtureAppender(t, s)
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewItemEntry(openresponses.UserText("hi")))
+	say("resp_1", "Hello.")
+	must(NewItemEntry(openresponses.UserText("What failed in the build?")))
+	sent := fixtureHash(t, s)
+	must(&ResponseEntry{Model: "gpt-5", Status: openresponses.ResponseStatusFailed, Error: &openresponses.ErrorPayload{Code: "server_error", Message: "the model failed"}, RequestHash: sent})
+	must(NewItemEntry(openresponses.UserText("Try again.")))
+	say("resp_3", "The linker failed.")
+	return s
+}
+
+// TestRefoldFixture reads the 0.14 conformance fixture for two
+// compactions on a path: the context after the second carries its
+// summary and the one pin it restated, and none of the first's, and
+// before it both pins; every response verifies.
+func TestRefoldFixture(t *testing.T) {
+	checkBuilt(t, "refold")
+	s := loadFixture(t, "refold")
+	for _, e := range s.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			if err := s.Verify(r.ID); err != nil {
+				t.Errorf("%s: %v", r.ResponseID, err)
+			}
+		}
+	}
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Summary: the user said first and second, and the assistant one and two.", "House rule: always run the linter.", "third", "three", "fourth", "four"}
+	if got := itemTexts(ctx.Items); !slices.Equal(got, want) {
+		t.Errorf("items after the second fold = %q, want %q", got, want)
+	}
+	var folds []string
+	for _, e := range s.Path(s.Leaf()) {
+		if c, ok := e.(*CompactionEntry); ok {
+			folds = append(folds, c.ID)
+		}
+	}
+	if len(folds) != 2 {
+		t.Fatalf("%d compactions on the path, want 2", len(folds))
+	}
+	path := s.Path(folds[1])
+	ctx, err = BuildContext(path[:len(path)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"Summary: the user said first and the assistant said one.", "House rule: never use Box::leak.", "House rule: always run the linter.", "second", "two", "third", "three"}
+	if got := itemTexts(ctx.Items); !slices.Equal(got, want) {
+		t.Errorf("items before the second fold = %q, want %q", got, want)
+	}
+}
+
+// TestNoResponseIDFixture reads the 0.14 conformance fixture for a
+// response with no response_id: it has no output items, the items
+// before it are not attributed to it, and its request, the whole path
+// before it, verifies; so does the response after it. A response_id
+// absent from the line reads the same as an empty one.
+func TestNoResponseIDFixture(t *testing.T) {
+	raw := checkBuilt(t, "no-response-id")
+	s := loadFixture(t, "no-response-id")
+	var unnamed *ResponseEntry
+	for _, e := range s.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			if r.ResponseID == "" {
+				unnamed = r
+			}
+			if err := s.Verify(r.ID); err != nil {
+				t.Errorf("%q: %v", r.ResponseID, err)
+			}
+		}
+	}
+	if unnamed == nil {
+		t.Fatal("no response without a response_id")
+	}
+	path := s.Path(unnamed.ID)
+	if out := OutputEntries(path, unnamed); len(out) != 0 {
+		t.Errorf("a response with no response_id has %d output items", len(out))
+	}
+	ctx, err := s.RequestContext(unnamed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := itemTexts(ctx.Items), []string{"hi", "Hello.", "What failed in the build?"}; !slices.Equal(got, want) {
+		t.Errorf("its request = %q, want %q", got, want)
+	}
+	// The member absent rather than empty: the same rule.
+	line := bytes.Split(raw, []byte("\n"))[len(path)]
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(line, &all); err != nil {
+		t.Fatal(err)
+	}
+	if string(all["response_id"]) != `""` {
+		t.Fatalf("line %s", line)
+	}
+	delete(all, "response_id")
+	delete(all, "id")
+	body, _ := json.Marshal(all)
+	id, _, err := EntryHashes(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all["id"] = json.RawMessage(`"` + id + `"`)
+	body, _ = json.Marshal(all)
+	head := bytes.Join(bytes.Split(raw, []byte("\n"))[:len(path)], []byte("\n"))
+	absent, err := Read(bytes.NewReader(append(append(head, '\n'), append(body, '\n')...)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := absent.Verify(id); err != nil {
+		t.Errorf("a response with response_id absent: %v", err)
+	}
+}
+
+// badWithdrawalLines builds the lines bad-withdrawal.jsonl holds: a
+// call dispatched and then held, and a reject carrying withdrawn after
+// the hold, which a writer refuses and so is written here by hand.
+func badWithdrawalLines(t *testing.T) []byte {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-11-01T15:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000027", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: AllRecords})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must, _ := fixtureAppender(t, s)
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	call := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_notify", Name: "notify", Arguments: "{}"}, ResponseID: "resp_1"})
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted})
+	must(NewDispatch("call_notify", call))
+	hold := must(NewDecision("call_notify", call, VerdictHold, ByPolicy))
+	w := NewWithdrawal("call_notify", call, ByPolicy, "too late to withdraw")
+	w.ID, w.Timestamp = "x", at.Add(time.Second)
+	line, err := MarshalEntry(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	buf.WriteString(reparent(t, string(line), hold) + "\n")
+	return buf.Bytes()
+}
+
+// writeBadWithdrawal writes bad-withdrawal.jsonl.
+func writeBadWithdrawal(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join("testdata", "sessions", "bad-withdrawal.jsonl"), badWithdrawalLines(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBadWithdrawalFixture reads the 0.14 negative fixture for a
+// withdrawal a decision separates from its dispatch: every line
+// verifies, the reject carries withdrawn, and a reader reads it as a
+// reject after a dispatch, which VerifyRecords reports.
+func TestBadWithdrawalFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", "bad-withdrawal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, badWithdrawalLines(t)) {
+		t.Error("bad-withdrawal.jsonl is not what badWithdrawalLines builds; run go test -update")
+	}
+	s := loadFixture(t, "bad-withdrawal")
+	last := s.Entries()[len(s.Entries())-1].(*DecisionEntry)
+	if !last.Withdrawn {
+		t.Fatal("the last entry is not a withdrawal")
+	}
+	calls, _ := s.Calls(s.Leaf())
+	if len(calls[0].Withdrawn) != 0 || !calls[0].Rejected() {
+		t.Errorf("the misplaced withdrawal read as %+v", calls[0])
+	}
+	if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrRejectDispatched) {
+		t.Errorf("VerifyRecords = %v, want ErrRejectDispatched", err)
 	}
 }

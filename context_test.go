@@ -22,6 +22,9 @@ type contextGolden struct {
 	ItemEntries []string            `json:"item_entries"`
 	// Omitted are the item entries the request leaves out, with why.
 	Omitted []omittedGolden `json:"omitted,omitempty"`
+	// Replaced are the item entries the request sends a placeholder
+	// in, with why; Entry is the entry, Reason why.
+	Replaced []omittedGolden `json:"replaced,omitempty"`
 }
 
 type omittedGolden struct {
@@ -34,7 +37,8 @@ type omittedGolden struct {
 // those files is reviewing the algorithm.
 func TestContextGolden(t *testing.T) {
 	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge",
-		"empty-resume", "bad-resume", "handback", "bad-handback", "omit", "omit-absent", "bad-omit", "omit-folded", "bad-handback-folded", "judged"} {
+		"empty-resume", "bad-resume", "handback", "bad-handback", "omit", "omit-absent", "bad-omit", "omit-folded", "bad-handback-folded", "judged",
+		"withdrawn", "late-report", "placeholders", "refold", "no-response-id"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			got := map[string]contextGolden{}
@@ -55,6 +59,9 @@ func TestContextGolden(t *testing.T) {
 				}
 				for _, o := range ctx.OmittedItems {
 					g.Omitted = append(g.Omitted, omittedGolden{Entry: o.Entry.ID, Reason: o.Reason})
+				}
+				for _, r := range ctx.ReplacedItems {
+					g.Replaced = append(g.Replaced, omittedGolden{Entry: r.Entry.ID, Reason: r.Reason})
 				}
 				got[leaf] = g
 			}

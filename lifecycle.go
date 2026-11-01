@@ -193,6 +193,17 @@ type DecisionEntry struct {
 	By        string          `json:"by,omitempty"`
 	Reason    string          `json:"reason,omitempty"`
 	Args      json.RawMessage `json:"args,omitempty"`
+	// Withdrawn marks, in format 0.14, a reject that withdraws the
+	// dispatch it directly follows: the writer wrote the dispatch and
+	// then did not hand the call to its tool. A reader reads that
+	// hand-off as never made and this decision as none, so the call is
+	// what it was before the dispatch, never started when it has no
+	// other; see [Call.Withdrawn] and [NewWithdrawal]. It is defined on
+	// a reject alone: a withdrawn member on another verdict, or one that
+	// is not true, is kept as written in Unknown and Withdrawn is false.
+	// A reject carrying it that follows no dispatch of its call directly
+	// reads as a reject without it.
+	Withdrawn bool `json:"-" member:"withdrawn"`
 }
 
 // EntryType returns "decision".
@@ -202,6 +213,15 @@ func (*DecisionEntry) EntryType() string { return TypeDecision }
 // entry target. by may be "".
 func NewDecision(callID, target, verdict, by string) *DecisionEntry {
 	return &DecisionEntry{CallID: callID, Target: target, Verdict: verdict, By: by}
+}
+
+// NewWithdrawal builds the reject that withdraws the dispatch of the
+// call callID held by the item entry target: the writer wrote the
+// dispatch and then did not hand the call to its tool. It is appended
+// directly after that dispatch, before any other decision, dispatch or
+// output of the call; reason says why the hand-off was not made.
+func NewWithdrawal(callID, target, by, reason string) *DecisionEntry {
+	return &DecisionEntry{CallID: callID, Target: target, Verdict: VerdictReject, By: by, Reason: reason, Withdrawn: true}
 }
 
 // WithReason sets the decider's text and returns the entry, for
@@ -381,26 +401,53 @@ func (e *QueuedEntry) Drain() *ItemEntry {
 // Workspace says which file system an env entry's cwd is a path in.
 // Ref is one string the harness can resolve to it, an image digest or
 // an endpoint, and is empty for a local workspace. A container's Ref
-// should be a digest rather than a tag, because a tag moves. The host
-// the file system is on and its instance, which the format defines
-// since 0.14, go in Unknown as the strings "host" and "instance", as
-// does anything else that tells one file system from another: inside
-// workspace and not beside it, since the format's substitution rule
-// compares workspace alone: see [SameWorkspace].
+// should be a digest rather than a tag, because a tag moves. Host and
+// Instance, which the format defines since 0.14, name the machine the
+// file system is on and the file system among those Kind, Ref and Host
+// describe, such as a container's ID. Anything else that tells one file
+// system from another goes in Unknown: inside workspace and not beside
+// it, since the format's substitution rule compares workspace alone:
+// see [SameWorkspace].
 type Workspace struct {
 	Kind string `json:"kind,omitempty"`
 	Ref  string `json:"ref,omitempty"`
-	// Unknown holds the members of workspace other than kind and ref,
-	// host and instance among them, encoded inline beside kind and ref.
-	// It is nil when there are none.
+	// Host names the machine the file system is on, as the harness names
+	// it: a hostname, a node name. A writer sets it whenever another
+	// machine could hold a file system with the same Kind and Ref, every
+	// local workspace among them.
+	Host string `json:"host,omitempty"`
+	// Instance names the file system among those Kind, Ref and Host
+	// describe: a container's or a sandbox's ID, since a restart from the
+	// same image is another file system with the same digest. A writer
+	// sets it whenever a restart gives a new file system.
+	Instance string `json:"instance,omitempty"`
+	// Unknown holds the members of workspace the format does not define,
+	// encoded inline beside the others, and a host or an instance member
+	// that is not a non-empty string, which a file from before 0.14 was
+	// free to write, as written. It is nil when there are none.
 	Unknown map[string]json.RawMessage `json:"-"`
 }
 
-// SetMember sets a member of the workspace other than kind and ref,
-// such as host, the machine the file system is on, or instance.
+// SetMember sets a member of the workspace the format does not define,
+// such as the zone a node is in. Host and instance are fields; for
+// either, a non-empty string sets the field, as a reader takes one, and
+// any other value is refused.
 func (w *Workspace) SetMember(key string, v any) error {
-	if key == "kind" || key == "ref" {
+	switch key {
+	case "kind", "ref":
 		return fmt.Errorf("agentsession: workspace member %q is defined; set the field", key)
+	case "host", "instance":
+		s, ok := v.(string)
+		if !ok || s == "" {
+			return fmt.Errorf("agentsession: workspace member %q is a non-empty string", key)
+		}
+		if key == "host" {
+			w.Host = s
+		} else {
+			w.Instance = s
+		}
+		delete(w.Unknown, key)
+		return nil
 	}
 	data, err := jsonx.MarshalNoEscape(v)
 	if err != nil {
@@ -413,10 +460,11 @@ func (w *Workspace) SetMember(key string, v any) error {
 	return nil
 }
 
-// MarshalJSON emits kind, ref and the unknown members as one object.
+// MarshalJSON emits kind, ref, host, instance and the unknown members as
+// one object.
 func (w Workspace) MarshalJSON() ([]byte, error) {
 	for key := range w.Unknown {
-		if key == "kind" || key == "ref" {
+		if key == "kind" || key == "ref" || key == "host" && w.Host != "" || key == "instance" && w.Instance != "" {
 			return nil, fmt.Errorf("agentsession: workspace has %s both typed and unknown", key)
 		}
 	}
@@ -428,8 +476,9 @@ func (w Workspace) MarshalJSON() ([]byte, error) {
 	return jsonx.JoinObjects(b, nil, w.Unknown), nil
 }
 
-// UnmarshalJSON takes kind and ref, spelled exactly, and keeps every
-// other member in Unknown.
+// UnmarshalJSON takes kind and ref, spelled exactly, and host and
+// instance, spelled exactly, when each holds a non-empty string, and
+// keeps every other member in Unknown as written.
 func (w *Workspace) UnmarshalJSON(data []byte) error {
 	var all map[string]json.RawMessage
 	if err := json.Unmarshal(data, &all); err != nil {
@@ -443,6 +492,17 @@ func (w *Workspace) UnmarshalJSON(data []byte) error {
 			err = json.Unmarshal(raw, &w.Kind)
 		case "ref":
 			err = json.Unmarshal(raw, &w.Ref)
+		case "host", "instance":
+			var s string
+			if json.Unmarshal(raw, &s) == nil && s != "" {
+				if key == "host" {
+					w.Host = s
+				} else {
+					w.Instance = s
+				}
+				continue
+			}
+			fallthrough
 		default:
 			if w.Unknown == nil {
 				w.Unknown = make(map[string]json.RawMessage)
@@ -513,6 +573,9 @@ func validateLifecycle(e Entry) error {
 		}
 		if v.Verdict == VerdictReject && v.Reason == "" {
 			return errors.New("agentsession: a reject decision needs a reason")
+		}
+		if v.Withdrawn && v.Verdict != VerdictReject {
+			return errors.New("agentsession: withdrawn is defined on a reject alone")
 		}
 	case *QueuedEntry:
 		if v.Item == nil {
@@ -644,7 +707,16 @@ func (e *DecisionEntry) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	type plain DecisionEntry
-	return marshalEntry(TypeDecision, &e.EntryBase, (*plain)(e))
+	if !e.Withdrawn {
+		return marshalEntry(TypeDecision, &e.EntryBase, (*plain)(e))
+	}
+	if _, dup := e.Unknown["withdrawn"]; dup {
+		return nil, errors.New("agentsession: decision entry has withdrawn both typed and unknown")
+	}
+	return marshalEntry(TypeDecision, &e.EntryBase, struct {
+		*plain
+		Withdrawn bool `json:"withdrawn"`
+	}{(*plain)(e), true})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -658,8 +730,12 @@ func (e *DecisionEntry) UnmarshalJSON(data []byte) error {
 
 func (e *DecisionEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain DecisionEntry
+	e.Withdrawn = false
 	if err := unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), decisionKeys); err != nil {
 		return err
+	}
+	if e.Verdict == VerdictReject {
+		promote(&e.EntryBase, "withdrawn", &e.Withdrawn)
 	}
 	return validateLifecycle(e)
 }

@@ -1,0 +1,93 @@
+{
+  "sha256:c21494513c04ced6b4bfa8e56ca6abd1eb48f93fa4d5aed829745e46288132e1": {
+    "settings": {
+      "model": "gpt-5",
+      "instructions": "Be brief."
+    },
+    "items": [
+      {
+        "type": "message",
+        "role": "system",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Summary: the user said first and second, and the assistant one and two."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "developer",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "House rule: always run the linter."
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "third"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_3",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "three",
+            "annotations": []
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "fourth"
+          }
+        ]
+      },
+      {
+        "type": "message",
+        "id": "msg_resp_4",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "four",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "entries": [
+      "sha256:944ba8542a62a5c86552f3e7f357ed13389afcc4478df0afe85810be6fc60346",
+      "sha256:036ca725d4cf805b23796ce563155b51a464f6fd16f82518c0ed502233575065",
+      "sha256:ac79f3ac14ce94982f20d4b42045bef29ae7e758b7e32c3b97a15c97f472a923",
+      "sha256:7cdbaf468101e19f04a1832402dfbe88b7e2eb8d007888b6fff2c76bad9489df",
+      "sha256:8cfca7acce243ea183a3f0ba47fe869be6ff4f244c80671072a7f4e8262c6fa6",
+      "sha256:d83b8071ae0b556306cb801957412026c43999b85df2be16e0db4e39592e3162",
+      "sha256:c21494513c04ced6b4bfa8e56ca6abd1eb48f93fa4d5aed829745e46288132e1"
+    ],
+    "item_entries": [
+      "sha256:944ba8542a62a5c86552f3e7f357ed13389afcc4478df0afe85810be6fc60346",
+      "sha256:944ba8542a62a5c86552f3e7f357ed13389afcc4478df0afe85810be6fc60346",
+      "sha256:036ca725d4cf805b23796ce563155b51a464f6fd16f82518c0ed502233575065",
+      "sha256:ac79f3ac14ce94982f20d4b42045bef29ae7e758b7e32c3b97a15c97f472a923",
+      "sha256:8cfca7acce243ea183a3f0ba47fe869be6ff4f244c80671072a7f4e8262c6fa6",
+      "sha256:d83b8071ae0b556306cb801957412026c43999b85df2be16e0db4e39592e3162"
+    ]
+  }
+}

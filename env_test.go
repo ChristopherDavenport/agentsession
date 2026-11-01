@@ -229,6 +229,60 @@ func TestSameWorkspace(t *testing.T) {
 	}
 }
 
+// TestWorkspaceHostInstance: 0.14 defines host and instance as strings
+// in workspace, so a reader takes each into its field when it holds a
+// non-empty string, in a file of any minor, and keeps one in another
+// form, which an earlier file was free to write, as a member it does
+// not know; either way the line writes back as it was.
+func TestWorkspaceHostInstance(t *testing.T) {
+	for _, tt := range []struct {
+		workspace, host, instance string
+		unknown                   []string
+	}{
+		{`{"kind":"container","ref":"sha256:ab","host":"build-7","instance":"ctr-1"}`, "build-7", "ctr-1", nil},
+		{`{"kind":"local","host":"laptop"}`, "laptop", "", nil},
+		{`{"kind":"container","host":{"name":"build-7"},"instance":7}`, "", "", []string{"host", "instance"}},
+		{`{"kind":"container","host":"","instance":"ctr-1"}`, "", "ctr-1", []string{"host"}},
+	} {
+		for _, format := range []string{Format, "agentsession/0.13"} {
+			line := `{"type":"env","parent":null,"ts":"2026-09-17T16:00:01Z","workspace":` + tt.workspace + `}`
+			id, _, err := EntryHashes([]byte(line))
+			if err != nil {
+				t.Fatal(err)
+			}
+			line = strings.Replace(line, `"type":"env",`, `"type":"env","id":"`+id+`",`, 1)
+			in := `{"type":"session","format":"` + format + `","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}` + "\n" + line + "\n"
+			s, err := Read(strings.NewReader(in))
+			if err != nil {
+				t.Fatalf("%s as %s: %v", tt.workspace, format, err)
+			}
+			w := s.Entries()[0].(*EnvEntry).Workspace
+			if w.Host != tt.host || w.Instance != tt.instance {
+				t.Errorf("%s as %s: host %q, instance %q", tt.workspace, format, w.Host, w.Instance)
+			}
+			for _, key := range tt.unknown {
+				if _, ok := w.Unknown[key]; !ok {
+					t.Errorf("%s as %s: %s is not kept as written", tt.workspace, format, key)
+				}
+			}
+			var buf bytes.Buffer
+			if err := Write(&buf, s); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Read(&buf); err != nil {
+				t.Errorf("%s as %s: written back, %v", tt.workspace, format, err)
+			}
+		}
+	}
+	var w Workspace
+	if err := w.SetMember("host", 7); err == nil {
+		t.Error("SetMember took a host that is not a string")
+	}
+	if err := w.SetMember("instance", "ctr-9"); err != nil || w.Instance != "ctr-9" {
+		t.Errorf("SetMember(instance) = %v, Instance %q", err, w.Instance)
+	}
+}
+
 // TestWorkspaceWithoutKind: kind is written only when set, so a
 // workspace without one reads and writes back as it was.
 func TestWorkspaceWithoutKind(t *testing.T) {

@@ -124,7 +124,13 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:1c0a7302afd02f58caa8db853dc5d45375b0c6e16c14cd052058648650ec0067"
+          "entry_id": "sha256:1c0a7302afd02f58caa8db853dc5d45375b0c6e16c14cd052058648650ec0067",
+          "request_omitted": [
+            {
+              "entry_id": "sha256:881af447ff4a91c60eb2c17d489184b7d4de0d61522c57f3b10c560148cf9c39",
+              "reason": "other_models"
+            }
+          ]
         },
         "item_entry_ids": [
           "sha256:21deadb6a350efaec8057a55d4133b1fea20b74d854db6ef02be340ed075e9e7",
@@ -214,7 +220,13 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:cc55dc7d634e2ab5c1f5a3eb97573a9de48e37c48307ef1d9e1acccf7a02500f"
+          "entry_id": "sha256:cc55dc7d634e2ab5c1f5a3eb97573a9de48e37c48307ef1d9e1acccf7a02500f",
+          "request_omitted": [
+            {
+              "entry_id": "sha256:21deadb6a350efaec8057a55d4133b1fea20b74d854db6ef02be340ed075e9e7",
+              "reason": "other_models"
+            }
+          ]
         },
         "item_entry_ids": [
           "sha256:979a1d8510b45e15541ec437fca762282508d4bb82317eaa719b31ddd8476d22",
@@ -294,7 +306,17 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:8309bbd1037070de2f93e7a3724d8477e090997d431923d4ad9d742755c0ab37"
+          "entry_id": "sha256:8309bbd1037070de2f93e7a3724d8477e090997d431923d4ad9d742755c0ab37",
+          "request_omitted": [
+            {
+              "entry_id": "sha256:21deadb6a350efaec8057a55d4133b1fea20b74d854db6ef02be340ed075e9e7",
+              "reason": "other_models"
+            },
+            {
+              "entry_id": "sha256:c5b17c66c1c979b9a90290d6b3c0ef05411cf666c6ee121338445600c676ff4f",
+              "reason": "items"
+            }
+          ]
         },
         "item_entry_ids": [
           "sha256:8c83f5ce535e4f9226b1932dc8435ab96062434ec2779888eb523810fd92eb1b",
@@ -339,7 +361,7 @@
       }
     }
   ],
-  "notes": "total_steps counts the path's 4 model call(s), its responses, folds, branch summaries and calls recorded with their usage alone, and not its 8 steps.",
+  "notes": "total_steps counts the path's 4 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 8 steps.",
   "final_metrics": {
     "total_prompt_tokens": 0,
     "total_completion_tokens": 0,
@@ -349,7 +371,7 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.13",
+      "format": "agentsession/0.14",
       "leaf": "sha256:8309bbd1037070de2f93e7a3724d8477e090997d431923d4ad9d742755c0ab37",
       "main": true
     },

@@ -27,6 +27,13 @@ type Call struct {
 	// Output is the item entry holding the function call output, or nil
 	// when the call is pending.
 	Output *ItemEntry
+	// Withdrawn are the hand-offs a writer withdrew before the tool ran,
+	// in path order: each a dispatch and the reject carrying withdrawn
+	// that directly follows it among the call's entries. The format reads
+	// such a hand-off as never made and the reject as no decision, so
+	// neither is in Dispatches or Decisions, and the call is what it was
+	// before the dispatch.
+	Withdrawn []Withdrawal
 
 	// inPrefix is set by the session for a call made in a fork's
 	// prefix, which its header's promise does not cover, and
@@ -45,6 +52,14 @@ type Call struct {
 	// dispatchedArgs are the arguments the last dispatch handed the
 	// tool.
 	dispatchedArgs string
+	// lastIsDispatch reports whether the latest of the call's decisions,
+	// dispatches and output on the path is a dispatch, which a withdrawal
+	// may follow; beforeSince and beforeArgs are sinceDecision and
+	// dispatchedArgs as they were before that dispatch, which a
+	// withdrawal restores.
+	lastIsDispatch bool
+	beforeSince    bool
+	beforeArgs     string
 	// afterAnswer and afterReject are the first decisions that follow
 	// an answer and a reject, endAfterOutput the first answer or reject
 	// that follows the output, and rejectAfterDispatch the first reject
@@ -55,8 +70,22 @@ type Call struct {
 	afterAnswer, afterReject, endAfterOutput, rejectAfterDispatch *DecisionEntry
 }
 
+// Withdrawal is one hand-off withdrawn before the tool ran: the
+// dispatch, and the reject carrying withdrawn that directly follows it
+// among the call's entries (RFC 0001, decision).
+type Withdrawal struct {
+	Dispatch *DispatchEntry
+	Reject   *DecisionEntry
+}
+
 // ID returns the call ID.
 func (c *Call) ID() string { return c.Call.CallID }
+
+// Failed reports whether the call's output is marked failed: its tool
+// reported failure, or the harness gave the call up, and the output
+// describes it. A failed call is completed all the same; a pending call
+// has not failed.
+func (c *Call) Failed() bool { return c.Output != nil && c.Output.Failed }
 
 // Pending reports whether the call has no output on the path.
 func (c *Call) Pending() bool { return c.Output == nil }
@@ -279,10 +308,25 @@ func Calls(path []Entry) []*Call {
 			case *openresponses.FunctionCallOutput:
 				if c, ok := byID[it.CallID]; ok && c.Output == nil {
 					c.Output = v
+					c.lastIsDispatch = false
 				}
 			}
 		case *DecisionEntry:
 			if c := bind(v.CallID, v.Target); c != nil {
+				if c.withdraws(v) {
+					// The hand-off was never made: the call is what it
+					// was before the dispatch.
+					last := c.Dispatches[len(c.Dispatches)-1]
+					c.Dispatches = c.Dispatches[:len(c.Dispatches)-1]
+					if len(c.Dispatches) == 0 {
+						c.Dispatch = nil
+					}
+					c.sinceDecision, c.dispatchedArgs = c.beforeSince, c.beforeArgs
+					c.Withdrawn = append(c.Withdrawn, Withdrawal{Dispatch: last, Reject: v})
+					c.lastIsDispatch = false
+					continue
+				}
+				c.lastIsDispatch = false
 				if c.afterAnswer == nil && c.Answered() {
 					c.afterAnswer = v
 				}
@@ -306,9 +350,11 @@ func Calls(path []Entry) []*Call {
 				if c.Dispatch == nil {
 					c.Dispatch = v
 				}
+				c.beforeSince, c.beforeArgs = c.sinceDecision, c.dispatchedArgs
 				c.Dispatches = append(c.Dispatches, v)
 				c.dispatchedArgs = c.Args()
 				c.sinceDecision = true
+				c.lastIsDispatch = c.Output == nil
 				if c.ended == nil {
 					c.ended = c.endingDecision()
 					if c.ended != nil {
@@ -319,6 +365,14 @@ func Calls(path []Entry) []*Call {
 		}
 	}
 	return out
+}
+
+// withdraws reports whether d withdraws the call's last dispatch: a
+// reject carrying withdrawn that directly follows that dispatch among
+// the call's decisions, dispatches and output, before any output. One
+// anywhere else reads as a reject without the member.
+func (c *Call) withdraws(d *DecisionEntry) bool {
+	return d.Verdict == VerdictReject && d.Withdrawn && c.lastIsDispatch && c.Output == nil && len(c.Dispatches) > 0
 }
 
 // endingDecision returns the first decision that ended the call, a
@@ -341,9 +395,10 @@ func (s *Session) Calls(leaf string) ([]*Call, error) {
 		return nil, fmt.Errorf("agentsession: %w: %s", ErrNoEntry, leaf)
 	}
 	calls := Calls(path)
+	on := onPath(path)
 	for _, c := range calls {
 		c.inPrefix = s.Prefix(c.Entry.ID)
-		c.dispatchedElsewhere = c.Dispatch == nil && s.dispatched(c.Entry.ID)
+		c.dispatchedElsewhere = c.Dispatch == nil && s.dispatchedOff(c.Entry.ID, on)
 	}
 	return calls, nil
 }
@@ -472,6 +527,11 @@ func (c *Call) takenUpIn(in map[string]bool) bool {
 			return true
 		}
 	}
+	for _, w := range c.Withdrawn {
+		if in[w.Dispatch.ID] || in[w.Reject.ID] {
+			return true
+		}
+	}
 	return false
 }
 
@@ -485,11 +545,11 @@ func (c *Call) takenUpIn(in map[string]bool) bool {
 //
 // It is the shape the segment shows, which is not always what the
 // writer meant: a run started to take up a call and ended before it did
-// has an empty segment, which computes as an input. Format 0.11
-// accepts such a run written [SourceResume] as it is written, and
-// [Session.VerifyRecords] does not report it; a writer still computes
-// the source it writes at start from what it knows then, and need not
-// change.
+// has a segment that takes nothing up, which computes as an input. The
+// format accepts such a run written [SourceResume] as it is written, as
+// [Run.Empty] says, and [Session.VerifyRecords] does not report it; a
+// writer still computes the source it writes at start from what it
+// knows then, and need not change.
 func ComputeSource(r *Run) string {
 	path := r.Path
 	if path == nil {
@@ -510,6 +570,10 @@ func ComputeSource(r *Run) string {
 		}
 		for _, d := range c.Dispatches {
 			part[d.ID] = c
+		}
+		for _, w := range c.Withdrawn {
+			part[w.Dispatch.ID] = c
+			part[w.Reject.ID] = c
 		}
 	}
 	for _, e := range r.Segment {
@@ -532,18 +596,24 @@ func ComputeSource(r *Run) string {
 	return SourceInput
 }
 
-// Empty reports whether the run's segment holds no entry but its start
-// and its end, or, for a run that was cut, none after its start: a run
-// refused, or killed, before it did anything. Such a run written
-// [SourceResume] is the shape of [SourceInput], and format 0.11
-// accepts it as written, since all it shows is that its writer meant to
-// take up a call and took up nothing: [Session.VerifyRecords] does not
-// report it with [ErrSourceMismatch]. Empty tells it from a resume that
-// adds a message or an output and takes up nothing, which is still
-// reported.
+// Empty reports whether the run's segment, between its start and its
+// end, or after its start for a run that was cut, holds no entry in
+// context (an item, a config, a compaction or a branch summary), no
+// response and no dispatch or decision: a run refused, or killed, before it took
+// anything up, though a writer may have replayed a link onto its branch
+// or a hook annotated it. Such a run written [SourceResume] is the shape
+// of [SourceInput], and the format accepts it as written, since all it
+// shows is that its writer meant to take up a call and took up nothing:
+// [Session.VerifyRecords] does not report it with [ErrSourceMismatch].
+// Format 0.11 accepted a segment holding nothing; 0.14 accepts record
+// entries in it, in a file of any minor. Empty tells it from a resume
+// that adds a message, a setting or an output and takes up nothing,
+// which is still reported, and from one that called the model and took
+// nothing up, which is a retry's shape, an input's.
 func (r *Run) Empty() bool {
 	for _, e := range r.Segment {
-		if e != Entry(r.Start) && (r.End == nil || e != Entry(r.End)) {
+		switch e.(type) {
+		case *ItemEntry, *ConfigEntry, *CompactionEntry, *BranchSummaryEntry, *ResponseEntry, *DispatchEntry, *DecisionEntry:
 			return false
 		}
 	}
@@ -816,13 +886,20 @@ var ErrCallIDEmpty = errors.New("agentsession: function call has no call ID")
 // ErrSourceMismatch is returned by [Session.VerifyRecords] for a run
 // start whose source is not the shape of its segment; see
 // [ComputeSource]. A run written resume over a segment that holds
-// nothing is not one, as [Run.Empty] says.
+// record entries at most is not one, as [Run.Empty] says.
 var ErrSourceMismatch = errors.New("agentsession: run source disagrees with its segment")
 
 // ErrRejectDispatched is returned when a reject is appended for a call
 // that has a dispatch on the path: a reject says the call did not run,
 // and one that may have run is ended by an answer.
 var ErrRejectDispatched = errors.New("agentsession: reject for a call that was dispatched")
+
+// ErrBadWithdrawal is returned when a reject carrying withdrawn is
+// appended anywhere but directly after a dispatch of its call, before
+// any other decision, dispatch or output of it: a withdrawal withdraws
+// the hand-off it follows and is written nowhere else. A reader reads
+// one found elsewhere as a reject without the member.
+var ErrBadWithdrawal = errors.New("agentsession: withdrawal does not follow a dispatch of its call")
 
 // ErrCallAnswered is returned when a dispatch or a decision is
 // appended for a call that an answer decision on the path already
@@ -853,10 +930,12 @@ var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 // by target, every run start's source and every run end agree with
 // the segment, no dispatch or decision follows a reject or an answer
 // on the same call, no answer, reject or dispatch follows an output and
-// no reject a dispatch, and, when the header names dispatch in records,
+// no reject a dispatch but a withdrawal, every item's from_link names a
+// peer link before it, and, when the header names dispatch in records,
 // no answer ends a call with no dispatch and every call that ran has a
-// dispatch. A run written resume over a segment that holds nothing
-// agrees with it, as format 0.11 has it, in a file of any minor. The
+// dispatch. A run written resume over a segment that takes nothing up,
+// holding record entries at most, agrees with it, as [Run.Empty] says,
+// in a file of any minor. The
 // rules that rest on records apply to what the session wrote, the
 // entries after its base: a fork's prefix is another session's record,
 // kept to that session's promise. It returns the first problem found.
@@ -878,7 +957,11 @@ func (s *Session) VerifyRecords(leaf string) error {
 	if err := verifyCallees(path); err != nil {
 		return err
 	}
+	if err := verifyFromLinks(path); err != nil {
+		return err
+	}
 	calls := Calls(path)
+	on := onPath(path)
 	for _, r := range Runs(path) {
 		if err := r.Verify(); err != nil {
 			return err
@@ -918,7 +1001,7 @@ func (s *Session) VerifyRecords(leaf string) error {
 		if c.endAfterOutput != nil {
 			return fmt.Errorf("%w: %s %s follows the output of call %s", ErrCallCompleted, c.endAfterOutput.Verdict, c.endAfterOutput.ID, c.ID())
 		}
-		if c.Answered() && c.Dispatch == nil && promised(c.Entry.ID) && !s.dispatched(c.Entry.ID) {
+		if c.Answered() && c.Dispatch == nil && promised(c.Entry.ID) && !s.dispatchedOff(c.Entry.ID, on) {
 			return fmt.Errorf("%w: call %s", ErrAnswerNotDispatched, c.ID())
 		}
 		if c.Output != nil && c.Dispatch == nil && !c.Rejected() && !c.Answered() && promised(c.Output.ID) {
@@ -1047,6 +1130,30 @@ func (s *Session) verifyCallIDs() error {
 // earlier file may hold under an extension's meaning, is not held to
 // them.
 var ErrCalleeLink = errors.New("agentsession: callee link is not one the format allows")
+
+// ErrBadFromLink is returned by [Session.VerifyRecords] for an item
+// whose from_link names no peer link before it on its path, a cancel
+// notice included, since a cancel notice names no callee.
+var ErrBadFromLink = errors.New("agentsession: from_link names no peer link before the item")
+
+// verifyFromLinks checks every item's from_link on a path against the
+// peer links before it.
+func verifyFromLinks(path []Entry) error {
+	peers := map[string]bool{}
+	for _, e := range path {
+		switch v := e.(type) {
+		case *LinkEntry:
+			if v.Rel == RelPeer && v.Cancel == "" {
+				peers[v.ID] = true
+			}
+		case *ItemEntry:
+			if v.FromLink != "" && !peers[v.FromLink] {
+				return fmt.Errorf("%w: item %s names %s", ErrBadFromLink, v.ID, v.FromLink)
+			}
+		}
+	}
+	return nil
+}
 
 // verifyCallees checks the subsession and peer links of a path that
 // carry members 0.12 defines, as RFC 0001 has a writer write them.

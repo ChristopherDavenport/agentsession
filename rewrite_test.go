@@ -3,6 +3,7 @@ package agentsession
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -134,7 +135,7 @@ var protectedEntries = []string{
 	`{"type":"queued","id":"P-id","parent":"P-parent",` + tsLine + `,"item":{"type":"function_call","call_id":"P-call","name":"B-name","arguments":"B-args"},"mode":"steer"}`,
 	`{"type":"compaction","id":"P-id","parent":"P-parent",` + tsLine + `,"first_kept":"P-first","summary":{"type":"message","role":"user","content":[]},"pinned":[{"type":"function_call","call_id":"P-call","name":"B-name","arguments":"B-args"}],"config":{"instructions_omitted":[{"id":"B-part","reason":"B-reason","of":"B-of-beside-an-id"}],"omit":{"items":["P-omit"]}}}`,
 	`{"type":"config","id":"P-id","parent":"P-parent",` + tsLine + `,"instructions_omitted":[{"id":"B-part","reason":"B-reason","of":"B-of-beside-an-id"},{"keep":2,"of":"P-of"},{"keep":0,"of":"B-of-no-keep"}]}`,
-	`{"type":"x:note","id":"P-id","parent":"P-parent",` + tsLine + `,"parents":[{"entry":"P-entry"}],"legacy_id":"P-legacy","text":"B-text","P-name":"` + sidecarURL + `","call_id":"B-ext-call"}`,
+	`{"type":"x:note","id":"P-id","parent":"P-parent",` + tsLine + `,"parents":[{"entry":"P-entry"}],"legacy_id":"P-legacy","text":"B-text","B-name":"` + sidecarURL + `","call_id":"B-ext-call"}`,
 	`{"type":"label","id":"P-id","parent":"P-parent",` + tsLine + `,"target":"P-target","label":"B-label","redacted":["P-red",{"P-key":"P-red2"}]}`,
 	`{"type":"item","id":"P-id","parent":"P-parent",` + tsLine + `,"item":{"type":"message","role":"user","content":[{"type":"input_text","text":"B-text"}]},"redacted":[1,[3,4]]}`,
 	`{"type":"x:note","id":"P-id","parent":"P-parent",` + tsLine + `,"text":"B-text","redacted":["P-red"]}`,
@@ -298,8 +299,10 @@ func TestRewriteStringsWritesNoReadLine(t *testing.T) {
 // TestRedactionVerifies: between them they hold every core type,
 // an extension, kept extras, instruction parts named by hash, omitted
 // parts, omit, a fork's prefix and base, convergence, normalised records,
-// callee links and judges.
-var redactableFixtures = []string{"basic", "branch", "compaction", "converge", "extensions", "fork", "handback", "instructions", "interleaved", "judged", "normalised", "omit", "omitted", "parts", "peer", "pinned", "queued", "replay", "resume", "runs"}
+// callee links and judges, and the 0.14 members: placeholders, a
+// from_link, a withdrawal and a failed output.
+var redactableFixtures = []string{"basic", "branch", "compaction", "converge", "extensions", "fork", "handback", "instructions", "interleaved", "judged", "normalised", "omit", "omitted", "parts", "peer", "pinned", "queued", "replay", "resume", "runs",
+	"placeholders", "late-report", "withdrawn", "record-resume", "refold", "no-response-id"}
 
 // redaction is a redaction of a session that makes one entry of each of
 // its entries, read back from the file it writes.
@@ -575,5 +578,321 @@ func TestRewriteStringsCallOrder(t *testing.T) {
 		if again := run(); again != first {
 			t.Fatalf("two runs differ:\n%s\n%s", first, again)
 		}
+	}
+}
+
+// TestRewriteHeaderStrings: in a header, cwd, the harness and every
+// member the format does not define are text, at any depth; what a
+// redaction writes, the references and spawned_by, a call_id, are not
+// given to f (RFC 0001, The redacted session). Every member a Header
+// writes is classified, so one added to the type cannot drift.
+func TestRewriteHeaderStrings(t *testing.T) {
+	line := `{"type":"session","format":"agentsession/0.14","id":"SECRET-id","created_at":"2026-10-16T09:00:00Z","payload":"openresponses/SECRET","harness":{"name":"SECRET-h","version":"1-SECRET"},"records":["SECRET:rec"],"cwd":"/home/SECRET/proj","parent_session":"SECRET-parent","spawned_by":"call-SECRET","base":"sha256:SECRET","media":"inline","redacted":true,"redacted_from":{"session":"SECRET-orig","profile":"SECRET-p"},"x:host":{"name":"SECRET.example","list":["SECRET",{"deep":"SECRET"}],"n":9007199254740993}}`
+	var h Header
+	if err := json.Unmarshal([]byte(line), &h); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := json.Marshal(h)
+	var seen []string
+	got, err := RewriteHeaderStrings(h, func(s string) string {
+		seen = append(seen, s)
+		return hideSecret(s)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := json.Marshal(h); !bytes.Equal(before, after) {
+		t.Errorf("the input changed: %s", after)
+	}
+	if got.CWD != "/home/gone/proj" || got.Harness.Name != "gone-h" || got.Harness.Version != "1-gone" {
+		t.Errorf("text left: cwd %q harness %+v", got.CWD, got.Harness)
+	}
+	if x := string(got.Extra["x:host"]); strings.Contains(x, "SECRET") || !strings.Contains(x, "9007199254740993") {
+		t.Errorf("an extra member: %s", x)
+	}
+	want := h
+	want.CWD, want.Harness, want.Extra = got.CWD, got.Harness, got.Extra
+	if a, b := string(mustJSON(t, got)), string(mustJSON(t, want)); a != b {
+		t.Errorf("a member that is not text changed:\n got %s\nwant %s", a, b)
+	}
+	for _, s := range seen {
+		for _, fixed := range []string{"SECRET-id", "openresponses/SECRET", "SECRET:rec", "SECRET-parent", "call-SECRET", "sha256:SECRET", "SECRET-orig", "SECRET-p", "inline", "agentsession/0.14"} {
+			if s == fixed {
+				t.Errorf("f was given %q", s)
+			}
+		}
+	}
+
+	// Every member a header writes is in the table or is text.
+	text := map[string]bool{"cwd": true, "harness": true}
+	all := map[string]any{}
+	full := Header{Format: Format, ID: "i", Payload: Payload, Harness: &Harness{Name: "n", Version: "v"}, Records: []string{"r"}, CWD: "c", ParentSession: "p", SpawnedBy: "s", Base: "b", Media: "inline", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o", Profile: "p"}}
+	if err := json.Unmarshal(mustJSON(t, full), &all); err != nil {
+		t.Fatal(err)
+	}
+	for name := range all {
+		inTable := slices.ContainsFunc(headerMembers, func(sp special) bool { return sp.path[0] == name })
+		if inTable == text[name] {
+			t.Errorf("header member %s: in the table %v, listed as text %v; it must be one", name, inTable, text[name])
+		}
+	}
+}
+
+// TestRewriterUnmet: a part written under a hash whose text the Rewriter
+// never met keeps the original's hash, which a redacted session must not
+// keep, and the Rewriter reports it, by entry, pointer and part id, as
+// it writes it, so a redactor can refuse before committing (RFC 0001,
+// Every redacted entry). A part it met, a part with its text and a keep
+// are not reported.
+func TestRewriterUnmet(t *testing.T) {
+	r := NewRewriter(hideSecret)
+	first := entryOf(t, `{"type":"config","id":"x","parent":null,`+tsLine+`,"instructions_parts":[{"id":"a","text":"one SECRET"},{"id":"b","text":"two"}]}`)
+	later := entryOf(t, `{"type":"config","id":"y","parent":"x",`+tsLine+`,"instructions_parts":[{"keep":1},{"id":"b","hash":"`+HashText("two")+`"},{"id":"c","hash":"`+HashText("unseen")+`"},{"id":"d","text":"new"}]}`)
+	if _, err := r.Rewrite(first); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Unmet(); len(got) != 0 {
+		t.Fatalf("Unmet after the first entry: %+v", got)
+	}
+	if _, err := r.Rewrite(later); err != nil {
+		t.Fatal(err)
+	}
+	want := []UnmetPart{{Entry: "y", At: "/instructions_parts/2/hash", ID: "c"}}
+	got := r.Unmet()
+	if !slices.Equal(got, want) {
+		t.Errorf("Unmet = %+v, want %+v", got, want)
+	}
+	got[0].ID = "changed"
+	if r.Unmet()[0].ID != "c" {
+		t.Error("Unmet returned the Rewriter's own list")
+	}
+}
+
+// TestRewriteStringsDataNames: a member name is data, and f is given it,
+// in an env entry's files and tools and at any depth in an object whose
+// members the format does not define: a custom entry's data, an
+// outcome's details, a decision's args, a config's extra and a
+// checkpoint's, the value of a member the format does not define, and
+// an extension entry's body, its top-level names included. In an object
+// the format defines, an entry or a trigger, and in an item, names stay
+// as written. Two names made one are refused (RFC 0001, Every redacted
+// entry).
+func TestRewriteStringsDataNames(t *testing.T) {
+	home := func(s string) string { return strings.ReplaceAll(s, "/home/alice", "~") }
+	for _, tt := range []struct{ name, line, want string }{
+		{
+			"custom data at any depth",
+			`{"type":"custom","id":"x","parent":"p",` + tsLine + `,"ns":"app","data":{"trackedFileBackups":{"/home/alice/a.go":{"/home/alice/b":1}}},"call_id":"c"}`,
+			`{"type":"custom","id":"x","parent":"p",` + tsLine + `,"ns":"app","data":{"trackedFileBackups":{"~/a.go":{"~/b":1}}},"call_id":"c"}`,
+		},
+		{
+			"outcome details",
+			`{"type":"outcome","id":"x","parent":"p",` + tsLine + `,"kind":"test","target":"t","details":{"/home/alice/t_test.go":true}}`,
+			`{"type":"outcome","id":"x","parent":"p",` + tsLine + `,"kind":"test","target":"t","details":{"~/t_test.go":true}}`,
+		},
+		{
+			"decision args",
+			`{"type":"decision","id":"x","parent":"p",` + tsLine + `,"call_id":"c","target":"t","verdict":"proceed","args":{"/home/alice":"r"}}`,
+			`{"type":"decision","id":"x","parent":"p",` + tsLine + `,"call_id":"c","target":"t","verdict":"proceed","args":{"~":"r"}}`,
+		},
+		{
+			"config extra",
+			`{"type":"config","id":"x","parent":null,` + tsLine + `,"model":"m","extra":{"metadata":{"/home/alice":"v"}}}`,
+			`{"type":"config","id":"x","parent":null,` + tsLine + `,"model":"m","extra":{"metadata":{"~":"v"}}}`,
+		},
+		{
+			"compaction checkpoint extra: request member names stay, the names in their values are data",
+			`{"type":"compaction","id":"x","parent":"p",` + tsLine + `,"first_kept":"f","summary":{"type":"message","role":"user","content":[]},"config":{"model":"m","extra":{"metadata":{"/home/alice":1}}}}`,
+			`{"type":"compaction","id":"x","parent":"p",` + tsLine + `,"first_kept":"f","summary":{"type":"message","role":"user","content":[]},"config":{"model":"m","extra":{"metadata":{"~":1}}}}`,
+		},
+		{
+			"env tools and files",
+			`{"type":"env","id":"x","parent":"p",` + tsLine + `,"tools":{"/home/alice/bin/go":"1.27"},"files":{"read":{"/home/alice/a":"sha256:4444444444444444444444444444444444444444444444444444444444444444"}}}`,
+			`{"type":"env","id":"x","parent":"p",` + tsLine + `,"tools":{"~/bin/go":"1.27"},"files":{"read":{"~/a":"sha256:4444444444444444444444444444444444444444444444444444444444444444"}}}`,
+		},
+		{
+			"undefined members of defined objects: the name stays, the names in its value are data; an item's names stay",
+			`{"type":"run","id":"x","parent":"p",` + tsLine + `,"run_id":"r","phase":"start","source":"input","trigger":{"kind":"k","x:/home/alice":{"/home/alice":1}},"x:/home/alice":{"/home/alice":{"/home/alice":2}}}`,
+			`{"type":"run","id":"x","parent":"p",` + tsLine + `,"run_id":"r","phase":"start","source":"input","trigger":{"kind":"k","x:/home/alice":{"~":1}},"x:/home/alice":{"~":{"~":2}}}`,
+		},
+		{
+			"an item's member names are the payload's",
+			`{"type":"item","id":"x","parent":"p",` + tsLine + `,"item":{"type":"message","role":"user","content":[{"type":"input_text","text":"/home/alice","x:/home/alice":{"/home/alice":1}}]}}`,
+			`{"type":"item","id":"x","parent":"p",` + tsLine + `,"item":{"type":"message","role":"user","content":[{"type":"input_text","text":"~","x:/home/alice":{"/home/alice":1}}]}}`,
+		},
+		{
+			"an extension entry's body, its names included",
+			`{"type":"x:note","id":"x","parent":"p",` + tsLine + `,"/home/alice/a":{"/home/alice/b":"/home/alice"},"redacted":[2]}`,
+			`{"type":"x:note","id":"x","parent":"p",` + tsLine + `,"~/a":{"~/b":"~"},"redacted":[2]}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := RewriteStrings(entryOf(t, tt.line), home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := canonicalEntry(t, got), withValues(t, tt.want, nil); got != want {
+				t.Errorf("rewritten\n got %s\nwant %s", got, want)
+			}
+		})
+	}
+	for _, line := range []string{
+		`{"type":"custom","id":"x","parent":"p",` + tsLine + `,"ns":"app","data":{"/home/alice/a":1,"~/a":2}}`,
+		`{"type":"env","id":"x","parent":"p",` + tsLine + `,"tools":{"/home/alice/go":"1","~/go":"2"}}`,
+		`{"type":"x:note","id":"x","parent":"p",` + tsLine + `,"/home/alice":1,"~":2}`,
+		`{"type":"x:note","id":"x","parent":"p",` + tsLine + `,"/home/alice/x":1}`,
+	} {
+		f := home
+		if strings.Contains(line, "/home/alice/x") {
+			f = func(s string) string { return strings.ReplaceAll(s, "/home/alice/x", "ts") }
+		}
+		if _, err := RewriteStrings(entryOf(t, line), f); !errors.Is(err, ErrKeyCollision) {
+			t.Errorf("%s: err %v, want ErrKeyCollision", line, err)
+		}
+	}
+
+	var h Header
+	if err := json.Unmarshal([]byte(`{"type":"session","format":"agentsession/0.14","id":"s","created_at":"2026-10-16T09:00:00Z","payload":"openresponses/2026-04-24","x:/home/alice":{"/home/alice":1}}`), &h); err != nil {
+		t.Fatal(err)
+	}
+	got, err := RewriteHeaderStrings(h, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x, ok := got.Extra["x:/home/alice"]; !ok || string(x) != `{"~":1}` {
+		t.Errorf("header extra %s", got.Extra)
+	}
+}
+
+// TestRewriteStringsKeepsFormatNamesInData: a pseudonymising rewrite,
+// which changes every string and name it is given, leaves the names RFC
+// 0001 defines inside data: a custom entry's usage, model and attempts,
+// and the names inside the usage, which the payload profile defines, so
+// the entry records as many model calls after it as before; and a
+// config's extra keys, which are request member names (RFC 0001, Every
+// redacted entry).
+func TestRewriteStringsKeepsFormatNamesInData(t *testing.T) {
+	pseudo := func(s string) string { return "p_" + s }
+	e := entryOf(t, `{"type":"custom","id":"x","parent":"p",`+tsLine+`,"ns":"agentturn:compaction_failed","data":{"usage":{"input_tokens":5,"output_tokens":1},"model":"m","attempts":2,"note":{"k":"v"}}}`)
+	if n := e.(*CustomEntry).Calls(); n != 2 {
+		t.Fatalf("Calls before = %d", n)
+	}
+	got, err := RewriteStrings(e, pseudo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := got.(*CustomEntry).Calls(); n != 2 {
+		t.Errorf("Calls after a pseudonymising rewrite = %d, want 2: %s", n, got.(*CustomEntry).Data)
+	}
+	if d := string(got.(*CustomEntry).Data); !strings.Contains(d, `"p_note":{"p_k":"p_v"}`) || !strings.Contains(d, `"model":"p_m"`) {
+		t.Errorf("data %s", d)
+	}
+	c, err := RewriteStrings(entryOf(t, `{"type":"config","id":"x","parent":null,`+tsLine+`,"model":"m","extra":{"temperature":1,"metadata":{"user":"u"}}}`), pseudo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x := c.(*ConfigEntry).Extra; string(x["temperature"]) != "1" || string(x["metadata"]) != `{"p_user":"p_u"}` {
+		t.Errorf("extra %s", x)
+	}
+}
+
+// TestRewriterUnmetOnPath: a part is met only when a part in force on
+// its own path holds its text, as the Rewriter replays the entries it
+// was given less those it was told were left out: a hash whose text came
+// from a config the redactor left out, or from another branch, and a
+// keep over parts a left-out config put in force, are reported, though
+// the Rewriter met the text (RFC 0001, Every redacted entry).
+func TestRewriterUnmetOnPath(t *testing.T) {
+	first := entryOf(t, `{"type":"config","id":"x","parent":null,`+tsLine+`,"instructions_parts":[{"id":"a","text":"one"},{"id":"b","text":"two"}]}`)
+	byHash := entryOf(t, `{"type":"config","id":"y","parent":"x",`+tsLine+`,"instructions_parts":[{"id":"a","hash":"`+HashText("one")+`"},{"id":"b","text":"new"}]}`)
+	byKeep := entryOf(t, `{"type":"config","id":"y","parent":"x",`+tsLine+`,"instructions_parts":[{"keep":2},{"id":"c","text":"three"}]}`)
+
+	for _, tt := range []struct {
+		name  string
+		later Entry
+		want  []UnmetPart
+	}{
+		{"by hash", byHash, []UnmetPart{{Entry: "y", At: "/instructions_parts/0/hash", ID: "a"}}},
+		{"by keep", byKeep, []UnmetPart{{Entry: "y", At: "/instructions_parts/0/keep"}}},
+	} {
+		t.Run(tt.name+", kept", func(t *testing.T) {
+			r := NewRewriter(hideSecret)
+			for _, e := range []Entry{first, tt.later} {
+				if _, err := r.Rewrite(e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := r.Unmet(); len(got) != 0 {
+				t.Errorf("Unmet = %+v, want none", got)
+			}
+		})
+		t.Run(tt.name+", left out", func(t *testing.T) {
+			r := NewRewriter(hideSecret)
+			if _, err := r.Rewrite(first); err != nil {
+				t.Fatal(err)
+			}
+			r.LeftOut(first)
+			if _, err := r.Rewrite(tt.later); err != nil {
+				t.Fatal(err)
+			}
+			if got := r.Unmet(); !slices.Equal(got, tt.want) {
+				t.Errorf("Unmet = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+
+	// The text met on another branch is in force on neither path of the
+	// other.
+	r := NewRewriter(hideSecret)
+	other := entryOf(t, `{"type":"config","id":"z","parent":null,`+tsLine+`,"instructions_parts":[{"id":"a","hash":"`+HashText("one")+`"}]}`)
+	for _, e := range []Entry{first, other} {
+		if _, err := r.Rewrite(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := r.Unmet(), []UnmetPart{{Entry: "z", At: "/instructions_parts/0/hash", ID: "a"}}; !slices.Equal(got, want) {
+		t.Errorf("another branch: Unmet = %+v, want %+v", got, want)
+	}
+}
+
+// TestRewriteStringsNormalisedFollowsNames: a normalised record's at
+// names the member it describes, so where the rewrite renames a member
+// name that is data, in a custom entry's data or an extension entry's
+// body, the pointer is renamed with it, and the record still describes
+// the member.
+func TestRewriteStringsNormalisedFollowsNames(t *testing.T) {
+	home := func(s string) string { return strings.ReplaceAll(s, "/home/alice", "~") }
+	for _, tt := range []struct{ name, line, at string }{
+		{"custom data", `{"type":"custom","id":"x","parent":"p",` + tsLine + `,"ns":"app","data":{"/home/alice/a":"x \ufffd"},"normalised":[{"at":"/data/~1home~1alice~1a","was":"\"x \\ud800\""}]}`, "/data/~0~1a"},
+		{"extension entry", `{"type":"x:note","id":"x","parent":"p",` + tsLine + `,"/home/alice":"x \ufffd","normalised":[{"at":"/~1home~1alice","was":"\"x \\ud800\""}]}`, "/~0"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := RewriteStrings(entryOf(t, tt.line), home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			line := canonicalEntry(t, got)
+			if !strings.Contains(line, `"at":"`+tt.at+`"`) {
+				t.Errorf("the record does not follow the renamed member: %s", line)
+			}
+			if _, err := UnmarshalEntry([]byte(line)); err != nil {
+				t.Errorf("the rewritten entry does not read: %v", err)
+			}
+		})
+	}
+}
+
+// TestRewriterUnmetCheckpoint: a checkpoint writes every part in force
+// with its text, but a file that breaks the rule still reads, and a part
+// there named by a hash alone, or a keep, is reported as a delta's is.
+func TestRewriterUnmetCheckpoint(t *testing.T) {
+	e := entryOf(t, `{"type":"compaction","id":"x","parent":"p",`+tsLine+`,"first_kept":"f","summary":{"type":"message","role":"user","content":[]},"config":{"model":"m","instructions_parts":[{"id":"a","text":"one"},{"id":"b","hash":"`+HashText("two")+`"},{"keep":1}]}}`)
+	r := NewRewriter(hideSecret)
+	if _, err := r.Rewrite(e); err != nil {
+		t.Fatal(err)
+	}
+	want := []UnmetPart{{Entry: "x", At: "/config/instructions_parts/1/hash", ID: "b"}, {Entry: "x", At: "/config/instructions_parts/2/keep"}}
+	if got := r.Unmet(); !slices.Equal(got, want) {
+		t.Errorf("Unmet = %+v, want %+v", got, want)
 	}
 }

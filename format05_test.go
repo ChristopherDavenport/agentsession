@@ -790,7 +790,7 @@ func TestNestedMembersReadAsWritten(t *testing.T) {
 			t.Fatal(err)
 		}
 		w := s.Entries()[0].(*EnvEntry).Workspace
-		if w.Kind != WorkspaceContainer || string(w.Unknown["host"]) != `"build-7"` || string(w.Unknown["Kind"]) != `"x"` {
+		if w.Kind != WorkspaceContainer || w.Host != "build-7" || string(w.Unknown["Kind"]) != `"x"` {
 			t.Errorf("workspace = %+v", w)
 		}
 		var buf bytes.Buffer

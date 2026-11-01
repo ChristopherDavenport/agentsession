@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -139,10 +138,9 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		}
 		if v.Workspace != nil {
 			w := strings.TrimSpace(v.Workspace.Kind + " " + shorten(v.Workspace.Ref, 20))
-			for _, key := range []string{"host", "instance"} {
-				var s string
-				if json.Unmarshal(v.Workspace.Unknown[key], &s) == nil && s != "" {
-					w += " " + key + " " + shorten(s, 20)
+			for _, m := range [][2]string{{"host", v.Workspace.Host}, {"instance", v.Workspace.Instance}} {
+				if m[1] != "" {
+					w += " " + m[0] + " " + shorten(m[1], 20)
 				}
 			}
 			parts = append(parts, w)
@@ -380,6 +378,14 @@ func describeOmit(o agentsession.Omit) string {
 	}
 	if n := len(o.Items); n > 0 {
 		bits = append(bits, fmt.Sprintf("%d item(s)", n))
+	}
+	if o.Outputs != nil {
+		bits = append(bits, fmt.Sprintf("%d output(s) as %q", len(o.Outputs.Items), shorten(o.Outputs.Text, 20)))
+	}
+	if i := o.Images; i != nil && i.Before != "" {
+		bits = append(bits, "images before "+shortID(i.Before))
+	} else if i != nil {
+		bits = append(bits, fmt.Sprintf("images but the last %d", i.Keep))
 	}
 	return "omit " + strings.Join(bits, ", ")
 }

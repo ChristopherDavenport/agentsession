@@ -2,14 +2,19 @@ package agentsession
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
+
+	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/agentsession/internal/jsonx"
@@ -32,8 +37,9 @@ var partLists = map[string][2][]string{
 var ErrInstructionsJoin = errors.New("agentsession: rewritten instructions cannot be shown to be the rewritten parts joined")
 
 // ErrKeyCollision is returned by [RewriteStrings] for an entry in which
-// the rewrite gives two member names that hold data the same name, two
-// paths of an env entry's files made one, which the format forbids a
+// the rewrite gives two member names that hold data the same name, such
+// as two paths of an env entry's files made one, or an extension
+// entry's member a name its envelope holds, which the format forbids a
 // redaction to keep.
 var ErrKeyCollision = errors.New("agentsession: a rewrite makes two member names one")
 
@@ -49,7 +55,10 @@ var ErrKeyCollision = errors.New("agentsession: a rewrite makes two member names
 // instructions from the rewritten parts.
 //
 // A part named by a hash whose text the Rewriter has not met keeps its
-// hash, which then names the original's text. What it has met depends
+// hash, which then names the original's text, and RFC 0001 forbids a
+// redactor to write it: [Rewriter.Unmet] reports each such part, so a
+// redactor writes it as text of its own or refuses before it commits
+// the entry. What it has met depends
 // on what it was given, so a Rewriter fed another file's entries, or a
 // file's out of order, can rewrite one entry two ways: a fork and its
 // origin each redacted by a Rewriter of their own give their shared
@@ -63,6 +72,110 @@ type Rewriter struct {
 	// settings holds the settings in force after each entry met, by its
 	// ID in the original, as context building replays them.
 	settings map[string]Settings
+	// unmet lists the parts written under a hash whose text was not met.
+	unmet []UnmetPart
+}
+
+// UnmetPart is an instruction part a [Rewriter] wrote that the path it
+// is on cannot rebuild in the redacted session: a part named by a hash
+// whose text no part in force on its path holds, as the Rewriter
+// replays the entries it was given and not those it was told were left
+// out, or a keep naming parts no entry on its path put in force. The
+// first keeps the original's hash, which a redacted session MUST NOT
+// keep, as it neither verifies there nor hides the text, and a hash
+// rewritten from a text met elsewhere resolves nowhere on the path;
+// the second names parts the redacted path lacks (RFC 0001, Every
+// redacted entry). A redactor writes such a part as text of its own,
+// such as fixed placeholder text, and gives the responses after it no
+// request_hash or a recomputed one, or it does not redact the entry.
+//
+// The part's hash and text are not carried. Entry and ID are values of
+// the original, an entry's hash and a part's id as written there, for
+// the redactor's own use: a hash of the original can confirm a guessed
+// text, and an id may hold what is redacted, so neither is to be logged
+// or published.
+type UnmetPart struct {
+	// Entry is the ID, in the original, of the entry holding the part.
+	Entry string
+	// At is the part's member in that entry, an RFC 6901 JSON Pointer
+	// such as /instructions_parts/2/hash, or /instructions_parts/0/keep
+	// for a keep.
+	At string
+	// ID is the part's id as the original wrote it, empty for a keep
+	// and for a part with none.
+	ID string
+}
+
+// Unmet returns, in the order met, every part the Rewriter has written
+// that its path cannot rebuild (see [UnmetPart]). A redactor reads it
+// after each [Rewriter.Rewrite], before it commits the entry; an
+// entry's parts are added to it by the Rewrite that wrote them.
+func (r *Rewriter) Unmet() []UnmetPart {
+	return slices.Clone(r.unmet)
+}
+
+// LeftOut tells the Rewriter that the redactor leaves e out of what it
+// writes. A redactor gives the Rewriter every entry of the file, in file
+// order: each it writes to Rewrite, and each it leaves out here, in
+// place of Rewrite or after it. The entries under e then read the
+// settings in force above it, as the redacted path does, so a part
+// whose text only e put in force, or a keep counting parts e put in
+// force, is reported by Unmet.
+func (r *Rewriter) LeftOut(e Entry) {
+	if e == nil || e.Base().ID == "" {
+		return
+	}
+	r.settings[e.Base().ID], _ = r.settingsAt(e.Base().Parent)
+}
+
+// checkCheckpoint adds to unmet each part of a compaction's checkpoint
+// that carries no text: RFC 0001 has a checkpoint write every part in
+// force with its text, so it names nothing a path can rebuild, and a
+// file that breaks the rule still reads, its hash kept as the
+// original's.
+func (r *Rewriter) checkCheckpoint(c *CompactionEntry) {
+	for i, p := range c.Config.InstructionsParts {
+		member := "hash"
+		if p.ID == "" && p.Keep > 0 {
+			member = "keep"
+		}
+		if p.Text == "" && (p.Hash != "" || member == "keep") {
+			r.unmet = append(r.unmet, UnmetPart{Entry: c.ID, At: "/config/instructions_parts/" + strconv.Itoa(i) + "/" + member, ID: p.ID})
+		}
+	}
+}
+
+// checkParts adds to unmet each part of a config delta that the
+// settings in force on its path, as the Rewriter replays them, cannot
+// rebuild: a part named by a hash alone whose text none of them holds,
+// and a keep over parts they do not hold.
+func (r *Rewriter) checkParts(c *ConfigEntry) {
+	if len(c.InstructionsParts) == 0 {
+		return
+	}
+	prev, _ := r.settingsAt(c.Parent)
+	applied := prev.Apply(c).InstructionsParts
+	report := func(i int, member, id string) {
+		r.unmet = append(r.unmet, UnmetPart{Entry: c.ID, At: "/instructions_parts/" + strconv.Itoa(i) + "/" + member, ID: id})
+	}
+	// A delta element is one part in force, but a keep, which is as
+	// many as it keeps when it resolves and one when it does not.
+	j := 0
+	for i, p := range c.InstructionsParts {
+		if p.ID == "" && p.Keep > 0 {
+			if j < len(applied) && applied[j].ID == "" && applied[j].Keep == p.Keep && applied[j].Unresolved() {
+				report(i, "keep", "")
+				j++
+			} else {
+				j += p.Keep
+			}
+			continue
+		}
+		if p.Text == "" && p.Hash != "" && j < len(applied) && applied[j].Unresolved() {
+			report(i, "hash", p.ID)
+		}
+		j++
+	}
 }
 
 // NewRewriter returns a Rewriter applying f, under the contract
@@ -78,16 +191,23 @@ func NewRewriter(f func(string) string) *Rewriter {
 // one (a workspace's host), an extension entry's own members, the items
 // of an item, a compaction and a branch summary, inline media as its
 // data URL, whose base64 payload f is given undecoded, and the record of
-// what a writer normalised. It is also the one place the format keeps
-// data in member names: the paths an env entry's files are keyed by. Two
-// paths the rewrite makes one are refused with [ErrKeyCollision].
+// what a writer normalised. f is given member names too where a name is
+// data rather than the format's (RFC 0001, Every redacted entry): the
+// paths an env entry's files are keyed by and the tool names its tools
+// are keyed by, and every name, at any depth, inside an object whose
+// members the format does not define: a custom entry's data, an
+// outcome's details, a decision's args, a config's extra, the value of
+// any member the format does not define, and an extension entry's own
+// members, their names included. Two names of one object that the
+// rewrite makes one, or an extension entry's name made one the envelope
+// holds, are refused with [ErrKeyCollision].
 //
-// f is never given any other member name, a number or a boolean. A tool
-// name keying an env entry's tools, an extra key in a config entry's
-// settings, and a key inside a custom entry's data or an outcome's
-// details, which may hold a task or a test name, are names a writer
-// chose and stay as written, though the same string elsewhere, a tool's
-// name in a config entry or a function call, is rewritten. Nor is f
+// f is never given any other member name, a number or a boolean: in an
+// object the format defines, an entry, a trigger or a workspace among
+// them, a member name is the format's, and stays as written even when
+// the member is one the format does not define, whose value is data; and
+// the names inside an item, which the payload profile defines, stay as
+// written. Nor is f
 // given the envelope (type, id, parent, parents, ts), legacy_id or
 // redacted, which is kept as it was in whatever form it is held; a
 // member naming an entry or a session, which [RemapRefs] re-points; a
@@ -109,7 +229,8 @@ func NewRewriter(f func(string) string) *Rewriter {
 // An instruction part whose text changed has its hash, where it carries
 // one, recomputed, and a part named by its hash alone, whose text is in
 // an earlier entry, is given the hash of the rewritten text by a
-// [Rewriter] that met it. Instructions that are the join of their parts,
+// [Rewriter] that met it; one it did not meet keeps the original's hash
+// and is reported by [Rewriter.Unmet]. Instructions that are the join of their parts,
 // as the path resolves them, are not given to f whole: they are rebuilt
 // as the join of the rewritten parts, so a rewrite cannot cross a part
 // boundary. Instructions that are not such a join are given to f whole.
@@ -157,6 +278,46 @@ func RewriteStrings(e Entry, f func(string) string) (Entry, error) {
 	return NewRewriter(f).Rewrite(e)
 }
 
+// RewriteHeaderStrings returns a copy of h with f applied to every
+// string of it that is text, under the contract [RewriteStrings]
+// states: cwd, the harness's name and version, and every string and
+// member name at any depth in the value of a member the format does not
+// define (Extra), whose own name stays, as in an entry. What a
+// redaction writes, type, format, id, created_at, payload, records,
+// media, redacted and redacted_from, is left for the redactor to set;
+// base and parent_session are references, which [RemapHeaderRefs]
+// re-points; and spawned_by is a call_id, which a redactor that changes
+// call IDs changes in step with the parent's, as it does every call_id
+// RewriteStrings leaves (RFC 0001, The redacted session). One table in
+// this package says which header member is which, so a header that
+// gains a member cannot drift out of step with a redactor.
+func RewriteHeaderStrings(h Header, f func(string) string) (Header, error) {
+	data, err := jsonx.MarshalNoEscape(h)
+	if err != nil {
+		return Header{}, err
+	}
+	v, err := parseValue(data)
+	if err != nil {
+		return Header{}, err
+	}
+	root, ok := v.(map[string]any)
+	if !ok {
+		return Header{}, errors.New("agentsession: header is not an object")
+	}
+	out, err := NewRewriter(f).rewriteObject(root, headerMembers, shape{t: headerGoType}, false, false)
+	if err != nil {
+		return Header{}, fmt.Errorf("agentsession: header: %w", err)
+	}
+	if data, err = jsonx.MarshalNoEscape(out); err != nil {
+		return Header{}, err
+	}
+	var nh Header
+	if err := json.Unmarshal(data, &nh); err != nil {
+		return Header{}, fmt.Errorf("agentsession: header: %w", err)
+	}
+	return nh, nil
+}
+
 // Rewrite is [RewriteStrings] with what the entries the Rewriter was
 // given before, earlier in the file, say about this one: the rewritten
 // hashes of the instruction parts they hold, and the parts in force on
@@ -176,6 +337,12 @@ func (r *Rewriter) Rewrite(e Entry) (Entry, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("agentsession: entry %s: %w", e.Base().ID, err)
+	}
+	switch v := e.(type) {
+	case *ConfigEntry:
+		r.checkParts(v)
+	case *CompactionEntry:
+		r.checkCheckpoint(v)
 	}
 	r.record(e)
 	return out, nil
@@ -198,7 +365,7 @@ func (r *Rewriter) rewriteCore(e Entry) (Entry, error) {
 			specials = append(specials, special{path: lists[1], role: roleFixed})
 		}
 	}
-	out, err := r.rewriteObject(root, specials)
+	out, err := r.rewriteObject(root, specials, entryShape(e), false, true)
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +473,7 @@ func (r *Rewriter) rewriteUnknown(u *UnknownEntry) (Entry, error) {
 	if !ok {
 		return nil, errors.New("agentsession: unknown entry is not an object")
 	}
-	rewritten, err := r.rewriteObject(root, specialsOf(u))
+	rewritten, err := r.rewriteObject(root, specialsOf(u), shape{data: true}, true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -326,26 +493,56 @@ func (r *Rewriter) rewriteUnknown(u *UnknownEntry) (Entry, error) {
 	return &cp, nil
 }
 
-// rewriteObject returns a copy of an entry's top-level object with f
-// applied to its body strings, the members specials names left as they
-// are and normalised rewritten as its records need. Members are taken
-// in sorted order, so f is called in one order.
-func (r *Rewriter) rewriteObject(root map[string]any, specials []special) (map[string]any, error) {
+// rewriteObject returns a copy of an entry's top-level object, or a
+// header's, with f applied to its body strings, the members specials
+// names left as they are and, with normalised, a normalised member
+// rewritten as its records need. top is what the format defines of the
+// object; with rename, the object is an extension entry's, whose names
+// but the envelope's are data and are given to f. Members are taken in
+// sorted order, so f is called in one order.
+func (r *Rewriter) rewriteObject(root map[string]any, specials []special, top shape, rename, normalised bool) (map[string]any, error) {
 	out := make(map[string]any, len(root))
+	from := map[string]string{}
 	for _, k := range sortedKeys(root) {
 		v := root[k]
-		if k == "normalised" {
-			out[k] = r.rewriteNormalised(v, root, specials)
+		if normalised && k == "normalised" {
+			out[k] = r.rewriteNormalised(v, root, specials, top, rename)
+			from[k] = k
 			continue
 		}
-		w, err := r.walk(v, onward(specials, 0, k, false), 1, root)
+		name, sh := k, top.member(k)
+		if rename && !reservedName[k] {
+			name, sh = r.f(k), shape{data: true}
+		}
+		if was, taken := from[name]; taken || name != k && reservedName[name] {
+			if !taken {
+				was = name
+			}
+			return nil, fmt.Errorf("%w: %q and %q are both %q", ErrKeyCollision, was, k, name)
+		}
+		from[name] = k
+		w, err := r.walk(v, onward(specials, 0, k, false), 1, root, sh)
 		if err != nil {
 			return nil, err
 		}
-		out[k] = w
+		out[name] = w
 	}
 	return out, nil
 }
+
+// reservedName holds the members of an extension entry whose names are
+// the format's: the envelope and the body members any entry may carry.
+var reservedName = func() map[string]bool {
+	m := map[string]bool{}
+	for _, k := range envelopeKeys {
+		m[k] = true
+	}
+	for _, k := range commonBodyKeys {
+		m[k] = true
+	}
+	m["redacted"] = true
+	return m
+}()
 
 // onward returns the specials whose path continues past depth through the
 // member key, or through an element when elem is set.
@@ -376,12 +573,14 @@ func ending(specials []special, depth int, holder map[string]any, roles ...membe
 
 // walk returns a copy of v, a member of holder or an element when holder
 // is nil, with f applied to its body strings. specials are the members
-// whose path has led here, depth steps down. One that ends here leaves v
-// as it is, wholly when it is fixed and as a string otherwise, since a
-// reference, a hash or a call_id in another form names nothing, except
-// an object whose member names are data, whose names f is applied to as
-// well. Members are taken in sorted order and elements in index order.
-func (r *Rewriter) walk(v any, specials []special, depth int, holder map[string]any) (any, error) {
+// whose path has led here, depth steps down, and sh is what the format
+// defines of v. A special that ends here leaves v as it is, wholly when
+// it is fixed and as a string otherwise, since a reference, a hash or a
+// call_id in another form names nothing. f is applied to the member
+// names of an object whose names are data, a special's or the shape's
+// saying so. Members are taken in sorted order and elements in index
+// order.
+func (r *Rewriter) walk(v any, specials []special, depth int, holder map[string]any, sh shape) (any, error) {
 	if ending(specials, depth, holder, roleFixed) {
 		return v, nil
 	}
@@ -400,14 +599,14 @@ func (r *Rewriter) walk(v any, specials []special, depth int, holder map[string]
 		from := map[string]string{}
 		for _, k := range sortedKeys(x) {
 			name := k
-			if dataKeys {
+			if dataKeys || sh.dataName(k) {
 				name = r.f(k)
 				if was, taken := from[name]; taken {
 					return nil, fmt.Errorf("%w: %q and %q are both %q", ErrKeyCollision, was, k, name)
 				}
 				from[name] = k
 			}
-			w, err := r.walk(x[k], onward(specials, depth, k, false), depth+1, x)
+			w, err := r.walk(x[k], onward(specials, depth, k, false), depth+1, x, sh.member(k))
 			if err != nil {
 				return nil, err
 			}
@@ -418,7 +617,7 @@ func (r *Rewriter) walk(v any, specials []special, depth int, holder map[string]
 		out := make([]any, len(x))
 		next := onward(specials, depth, "", true)
 		for i, child := range x {
-			w, err := r.walk(child, next, depth+1, nil)
+			w, err := r.walk(child, next, depth+1, nil, sh.elem())
 			if err != nil {
 				return nil, err
 			}
@@ -428,6 +627,165 @@ func (r *Rewriter) walk(v any, specials []special, depth int, holder map[string]
 	}
 	return v, nil
 }
+
+// shape is what the format defines of a JSON value a rewrite walks: the
+// Go type that decodes it, or, with data set, nothing, a value whose
+// member names are data at every depth. A zero shape is a value whose
+// names are not data and whose members are not known, an item's, which
+// the payload profile defines, among them.
+type shape struct {
+	t    reflect.Type
+	data bool
+	// paid is a custom entry's data, whose names are data but for those
+	// RFC 0001 defines at its top level, usage, model and attempts; the
+	// usage is the payload profile's.
+	paid bool
+	// request is a config's or a checkpoint's extra, keyed by request
+	// member names, which the provider reads, and whose values are data.
+	request bool
+}
+
+// paidNames are the members RFC 0001 defines at the top level of a
+// custom entry's data, beside the writer's own.
+var paidNames = map[string]bool{"usage": true, "model": true, "attempts": true}
+
+var (
+	rawJSONType  = reflect.TypeOf(json.RawMessage(nil))
+	headerGoType = reflect.TypeOf(Header{})
+	customType   = reflect.TypeOf(CustomEntry{})
+	configType   = reflect.TypeOf(ConfigEntry{})
+	settingsType = reflect.TypeOf(Settings{})
+	payloadPkg   = reflect.TypeOf(openresponses.Usage{}).PkgPath()
+	ownPkg       = reflect.TypeOf(Header{}).PkgPath()
+)
+
+// entryShape is the shape of a core entry's top-level object.
+func entryShape(e Entry) shape { return shape{t: reflect.TypeOf(e)} }
+
+// resolve follows pointers, and makes a JSON value of any form, a raw
+// message or an interface, data.
+func (s shape) resolve() shape {
+	if s.data || s.paid || s.request || s.t == nil {
+		return s
+	}
+	t := s.t
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.PkgPath() == payloadPkg {
+		return shape{} // an item or another payload value: the profile's names
+	}
+	if t == rawJSONType || t.Kind() == reflect.Interface {
+		return shape{data: true}
+	}
+	return shape{t: t}
+}
+
+// dataName reports whether the member name of an object of this shape
+// is data: in a map keyed by data, or a value the format does not
+// define, but for the names a custom entry's data and a config's extra
+// hold that are the format's or the request's.
+func (s shape) dataName(name string) bool {
+	s = s.resolve()
+	switch {
+	case s.paid:
+		return !paidNames[name]
+	case s.request:
+		return false
+	}
+	return s.data || s.t != nil && s.t.Kind() == reflect.Map
+}
+
+// member is the shape of the member name of an object of this shape. A
+// member the format does not define, of an object it does, is data.
+func (s shape) member(name string) shape {
+	s = s.resolve()
+	switch {
+	case s.data:
+		return s
+	case s.paid && name == "usage":
+		return shape{}
+	case s.paid, s.request:
+		return shape{data: true}
+	case s.t == nil:
+		return shape{}
+	case s.t == customType && name == "data":
+		return shape{paid: true}
+	case (s.t == configType || s.t == settingsType) && name == "extra":
+		return shape{request: true}
+	case s.t.Kind() == reflect.Map:
+		return shape{t: s.t.Elem()}.resolve()
+	case s.t.Kind() == reflect.Struct && s.t.PkgPath() == ownPkg:
+		if t, ok := structMembers(s.t)[name]; ok {
+			return shape{t: t}.resolve()
+		}
+		return shape{data: true}
+	}
+	return shape{}
+}
+
+// elem is the shape of an element of an array of this shape.
+func (s shape) elem() shape {
+	s = s.resolve()
+	switch {
+	case s.data, s.paid, s.request:
+		return shape{data: true}
+	case s.t != nil && (s.t.Kind() == reflect.Slice || s.t.Kind() == reflect.Array):
+		return shape{t: s.t.Elem()}.resolve()
+	}
+	return shape{}
+}
+
+// structMembers maps each member name a struct of this package defines
+// to the type of the field holding it: a field's json name, or the
+// member tag of a field decoded by hand; an entry's envelope and the
+// body members every entry may carry, which no field holds, map to nil,
+// a value whose names are not data. Unknown and the other fields json
+// leaves out hold members the format does not define, and are not
+// named.
+func structMembers(t reflect.Type) map[string]reflect.Type {
+	if v, ok := structMembersCache.Load(t); ok {
+		return v.(map[string]reflect.Type)
+	}
+	names := map[string]reflect.Type{}
+	if reflect.PointerTo(t).Implements(entryInterface) {
+		for _, k := range envelopeKeys {
+			names[k] = nil
+		}
+		for _, k := range commonBodyKeys {
+			names[k] = nil
+		}
+		names["redacted"] = nil
+	}
+	if t == headerGoType {
+		names["type"], names["redacted_from"] = nil, nil
+	}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.Anonymous || !f.IsExported() {
+			continue
+		}
+		tag := f.Tag.Get("json")
+		if tag == "-" {
+			if m := f.Tag.Get("member"); m != "" {
+				names[m] = f.Type
+			}
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "" {
+			name = f.Name
+		}
+		names[name] = f.Type
+	}
+	structMembersCache.Store(t, names)
+	return names
+}
+
+var (
+	structMembersCache sync.Map
+	entryInterface     = reflect.TypeOf((*Entry)(nil)).Elem()
+)
 
 // isSidecarURL reports whether s is a sidecar media reference, the URL
 // of a blob beside the file named by its hash.
@@ -447,10 +805,10 @@ var jsonNumber = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-
 // rewritten decoded, unless at names a member that is not body text;
 // anything else is body. The records are taken in order, each one's
 // members sorted, and sorted again when an at changed.
-func (r *Rewriter) rewriteNormalised(v any, root map[string]any, specials []special) any {
+func (r *Rewriter) rewriteNormalised(v any, root map[string]any, specials []special, top shape, rename bool) any {
 	list, ok := v.([]any)
 	if !ok {
-		w, _ := r.walk(v, nil, 1, nil)
+		w, _ := r.walk(v, nil, 1, nil, shape{})
 		return w
 	}
 	out := make([]any, len(list))
@@ -458,12 +816,12 @@ func (r *Rewriter) rewriteNormalised(v any, root map[string]any, specials []spec
 	for i, el := range list {
 		rec, ok := el.(map[string]any)
 		if !ok {
-			out[i], _ = r.walk(el, nil, 2, nil)
+			out[i], _ = r.walk(el, nil, 2, nil, shape{})
 			continue
 		}
 		body, newAt := true, ""
 		if at, ok := rec["at"].(string); ok {
-			newAt, body = r.rewriteAt(at, root, specials)
+			newAt, body = r.rewriteAt(at, root, specials, top, rename)
 			moved = moved || newAt != at
 		}
 		cp := make(map[string]any, len(rec))
@@ -486,7 +844,7 @@ func (r *Rewriter) rewriteNormalised(v any, root map[string]any, specials []spec
 				}
 				cp[k] = s
 			default:
-				cp[k], _ = r.walk(x, nil, 3, nil)
+				cp[k], _ = r.walk(x, nil, 3, nil, shape{})
 			}
 		}
 		out[i] = cp
@@ -518,7 +876,7 @@ func (r *Rewriter) rewriteWas(was string) string {
 // each token that is a member name the format keeps data in, and whether
 // the member it names is body text: not inside a fixed member, and not a
 // reference, a hash or a call_id where the format defines one.
-func (r *Rewriter) rewriteAt(at string, root map[string]any, specials []special) (string, bool) {
+func (r *Rewriter) rewriteAt(at string, root map[string]any, specials []special, top shape, rename bool) (string, bool) {
 	if !strings.HasPrefix(at, "/") {
 		return at, true
 	}
@@ -530,26 +888,31 @@ func (r *Rewriter) rewriteAt(at string, root map[string]any, specials []special)
 		cur        = specials
 		node   any = root
 		holder map[string]any
+		sh     = top
 	)
 	for i, t := range tokens {
 		if ending(cur, i, holder, roleFixed) {
 			return at, false
 		}
-		if ending(cur, i, holder, roleDataKeys) {
-			tokens[i] = r.f(t)
-		}
 		var next []special
 		switch n := node.(type) {
 		case map[string]any:
-			next, holder, node = onward(cur, i, t, false), n, n[t]
+			child := sh.member(t)
+			switch {
+			case i == 0 && rename && !reservedName[t]:
+				tokens[i], child = r.f(t), shape{data: true}
+			case i > 0 && (ending(cur, i, holder, roleDataKeys) || sh.dataName(t)):
+				tokens[i] = r.f(t)
+			}
+			next, holder, node, sh = onward(cur, i, t, false), n, n[t], child
 		case []any:
 			k, err := strconv.Atoi(t)
-			next, holder, node = onward(cur, i, "", true), nil, nil
+			next, holder, node, sh = onward(cur, i, "", true), nil, nil, sh.elem()
 			if err == nil && k >= 0 && k < len(n) {
 				node = n[k]
 			}
 		default:
-			next, holder, node = nil, nil, nil
+			next, holder, node, sh = nil, nil, nil, shape{}
 		}
 		cur = next
 	}

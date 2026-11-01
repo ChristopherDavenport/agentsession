@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.13
+Status: draft 0.14
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -212,7 +212,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.13","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.14","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -354,8 +354,8 @@ verifies without the bodies, which is what lets a store hold or send
 history it does not hold in full, and a body is held once however many
 entries name it, which RFC 0002 builds on. Wherever this document has a
 member name an entry — `parent`, `parents`, `target`, `first_kept`,
-`from`, `queued_from`, `omit`'s `items` in a `config` and in a
-compaction's checkpoint, `instructions_omitted`'s `of` beside a positive
+`from`, `queued_from`, `from_link`, `omit`'s `items`, `outputs`' `items`
+and `images`' `before` in a `config` and in a compaction's checkpoint, `instructions_omitted`'s `of` beside a positive
 `keep` and no `id`, where alone it is defined — it names it by `id`.
 
 Two entries with the same type, content, parent, `parents` and `ts` are
@@ -489,6 +489,37 @@ One conversation item in the payload profile.
 - `source` MAY carry the trigger of an item a person or another system
   sent, in the shape `queued` defines, and `queued_from` MAY name the
   `queued` entry the item was accepted as.
+- `failed` MAY be `true` on an `item` entry holding a
+  `function_call_output`, since 0.14: the tool reported failure, or the
+  harness gave the call up (cut it off, timed it out, could not learn
+  its outcome), and the output describes it. It is a record member: the
+  item is sent as it is, the member reaches no request, and the output
+  ends the call as any output does. A reader maps it to its protocol's
+  failure state, such as a tool span's error status or a replayed
+  call's `failed`. Its absence says nothing: an output without it does
+  not say the call succeeded. A writer MUST NOT write it on any other
+  item, nor with any value but `true`; a reader keeps `failed` on
+  another item, or holding anything but
+  `true`, as a member it does not know. A model that has to see the
+  failure sees it in the output; a member the model sees, as Claude's
+  `is_error`, belongs inside the item under the payload profile's
+  extension mechanism, not here.
+- `from_link` MAY name, by `id`, a `peer` link entry before the item on
+  its path, other than a cancel notice, since 0.14: the item carries
+  that callee's later report, as a peer whose work outlives its call
+  delivers its result some turns after the call's output acknowledged
+  it. It is provenance. It does not make the call answered, which
+  `link` decides from the call's output alone, and it reaches no
+  request. A writer MUST NOT write one that names anything else, a
+  cancel notice included; a reader keeps a `from_link` that is not a
+  non-empty string as a member it does not know, and a tool that checks
+  a file reports one that names no `peer` link before the item on its
+  path, or names a cancel notice, which names no callee of its own but
+  the link it is about. An item MAY carry
+  `source` beside it, the harness's own trigger for the delivery. The
+  reference points back, into this file, at an entry already written,
+  so writing and verifying the file needs nothing from the peer's
+  record, and the peer's record names nothing of this one.
 - A `function_call`'s `call_id` MUST NOT be empty and MUST differ from
   that of every other `function_call` in the session, on any branch: a
   `function_call_output`, a `link`, a `custom` entry, a run end's
@@ -799,7 +830,9 @@ long as those items are on the path. `omit` records the rule, once.
 
 ```json
 {"type":"config","id":"…","parent":"…","ts":"…",
- "omit":{"reasoning":"other_models","items":["sha256:…"]}}
+ "omit":{"reasoning":"other_models","items":["sha256:…"],
+         "outputs":{"text":"[cleared]","items":["sha256:…"]},
+         "images":{"keep":3,"placeholder":"[screenshot removed]"}}}
 ```
 
 `omit` is an object, in force as a setting is: a delta without it
@@ -834,25 +867,73 @@ it. A `config` entry MAY carry it and no setting. Its members:
   `item` entry on the path names nothing; a `compaction`'s summary and
   pinned items and a `branch_summary`'s summary are not `item` entries,
   and `omit` does not reach them.
+- `outputs`, since 0.14, is `{"text": t, "items": [ids]}`, `t` a
+  string: an `item` entry on the path whose id the items in force list,
+  and that holds a `function_call_output`, is sent with that item's
+  `output` the string `t`, its `call_id` and every other member as they
+  are. The call stays in the request with an output, since a call
+  without its output is not a valid request; this is how a harness
+  that clears old tool results, as the Claude API's context editing
+  does, records the request it sent. The items in force are the union
+  of every `outputs`' `items` on the path since the last `replace` or
+  compaction's checkpoint, as for `items`, and `t` is the `text` of the
+  latest `outputs` on the path. An id that names no such entry names
+  nothing.
+- `images`, since 0.14, takes one of two forms, each with a string
+  `placeholder` `t`, and an `images` in a later delta replaces the one
+  in force:
+  - `{"keep": n, "placeholder": t}`, `n` a non-negative integer: of the
+    `input_image` parts of the items the request carries from `item`
+    entries, counted in request order, every one but the last `n` is
+    sent as an `input_text` part whose `text` is `t`.
+  - `{"before": id, "placeholder": t}`: every `input_image` part of an
+    `item` entry before the entry `id` names on the path is sent as an
+    `input_text` part whose `text` is `t`. An `id` not on the path names
+    nothing, and nothing is replaced.
+
+  An `input_image` part is one in a `message`'s `content`, or in a
+  `function_call_output`'s `output` when that is a list of parts. A
+  loop that keeps the last three screenshots writes `keep`, or moves
+  `before` each turn, or every 25 turns to keep a provider's cache
+  warm, as Anthropic's computer-use guidance advises. A member holding
+  both `keep` and `before`, or neither, or anything but a string
+  `placeholder`, is not a form this document defines: a reader keeps it
+  as written and replaces nothing by it, and a writer MUST NOT write it.
+- `outputs` and `images` reach the items of `item` entries alone, as
+  `items` does. They apply after `items` and `reasoning`, to the items
+  those leave in the request: first each output `outputs` lists, then
+  the image parts `images` reaches among what remains, so an output
+  sent as `t` holds no image to count.
 - An `omit` in a delta sets the `reasoning` it names when this document
   defines it, leaves the one in force when it names none, and adds its
   `items` to those in force: the set in force is the union of every
   `items` on the path since the last `replace` or compaction's
-  checkpoint, so a later entry adds to it and never has to repeat it. An object that names no `reasoning` and lists
-  no id, `{}` above all, clears both. A writer that wants to drop one
-  and keep the other writes `{}` in one entry and what it keeps in the
-  next.
+  checkpoint, so a later entry adds to it and never has to repeat it.
+  Its `outputs` adds its `items` to those in force and sets the `text`,
+  and its `images` replaces the one in force; a delta without either
+  leaves it as it was. An object that names no `reasoning`, lists no
+  id and carries neither `outputs` nor `images`, `{}` above all, clears
+  all four. A writer that wants to drop one and keep the others writes
+  `{}` in one entry and what it keeps in the next.
+- An `outputs` or `images` member in a form this document does not
+  define, such as `images` without a `placeholder` or `outputs` without
+  a string `text`, is carried all the same, as a `reasoning` value this
+  document does not define is: it changes nothing, the object holding
+  it is not one that clears, and a reader keeps it as written. A writer
+  MUST NOT write either member in such a form.
 
 The `omit` in force at the end of a path decides every `item` entry on
 it, those before the entry that wrote it among them, so a request built
 over a path that ends before the entry never meets the member. What a
-request leaves out stays in the record: the entry is on the path and
-among the context's entries, and a projection can show it as omitted
-and not as absent. The `request_hash` is over the request built without
-it, so a response that hashes verifies. A response whose recorded hash
-is the request built with an item the `omit` in force leaves out is a
-divergence, a hash that does not match, and not a response that recorded
-none.
+request leaves out, or sends a placeholder for, stays in the record:
+the entry is on the path and among the context's entries, as written,
+and a projection can show it as omitted or replaced and not as absent.
+The `request_hash` is over the request built with the `omit` in force
+applied, so a response that hashes verifies. A response whose recorded
+hash is the request built with an item the `omit` in force leaves out,
+or with the output or image parts it sends a placeholder for, is a
+divergence, a hash that does not match, and not a response that
+recorded none.
 
 ### `compaction`
 
@@ -864,8 +945,11 @@ Replaces earlier context with a summary.
  "config":{…full config…},"tokens_before":50000,"usage":{…}}
 ```
 
-- `first_kept` MUST name an entry on the path. Entries before it are
-  excluded from context; entries from it up to this entry are kept.
+- `first_kept` MUST name an entry on the path before this one, since
+  0.14 in those words: a compaction cannot name itself. Entries before
+  it are excluded from context; entries from it up to this entry are
+  kept. A reader refuses to build a context through a compaction whose
+  `first_kept` names no entry before it on the path.
 - `summary` is an item. Under the Open Responses profile a server-side
   compaction stores the returned `compaction` item verbatim; a local
   summary is a `message` item.
@@ -909,8 +993,9 @@ Replaces earlier context with a summary.
   `instructions` is their join. `instructions_omitted` is the list of
   omitted parts in force, every part written out and no `keep` and no
   `of`, and a checkpoint without it has none in force. `omit` is the
-  object in force, its `items` the union so far, and a checkpoint
-  without it has none in force. `tools` is the full list of tool
+  object in force, its `items` and its `outputs`' `items` the unions so
+  far, its `outputs`' `text` and its `images` the latest, and a
+  checkpoint without it has none in force. `tools` is the full list of tool
   definitions in force at the compaction, in the order the context
   algorithm would send them, not a delta; there are no `tools_added`, `tools_removed` or `replace`
   members. `extra` is the merged map of passthrough request members
@@ -958,16 +1043,24 @@ Why a run started and how it ended. Two entries per run, paired by
   message the run adds before or after it, such as the approval a person
   typed, does not change that. The shape is what the writer knows when
   it writes `start`: it started the run to take up a call. A run written
-  `resume` whose segment holds no entry between its `start` and its
-  `end`, or none after its `start` when the run was cut, is accepted as
-  written: the writer started it to take up a call and the run ended
+  `resume` whose segment, between its `start` and its `end`, or after
+  its `start` to the end of the path when the run was cut, holds no
+  entry that is in context, no `response` and no `dispatch` or
+  `decision`, is accepted as written: the writer started it to take up a call and the run ended
   before it did, a refusal by a subscriber to the run's start and a
-  kill among the causes, and `resume` records what it meant to do, which
-  an empty segment cannot contradict. A `resume` over a segment that
-  adds a message or an output and takes up no call is not that, and a
-  reader reports it. A reader of 0.11 applies the rule to every file it
-  reads, those of 0.9 and 0.10 included, as 0.10 applied its relaxation
-  of the `answer` rule to 0.9 files. `input`:
+  kill among the causes, and `resume` records what it meant to do,
+  which such a segment cannot contradict. Record entries (`link`,
+  `custom`, `env`, `info`, `label`, `outcome`, `queued`) do not make a
+  segment the shape of `input`: a writer that resumes may replay a
+  child's link onto a new branch, or a hook may annotate the run,
+  before the run takes its call up. A `resume` over a segment that adds
+  a message, a setting or an output, or holds a `response`, and takes up
+  no call is not that, and a reader reports it: a `response` is a model
+  call, and one that took no call up is the shape of an `input` that
+  retries, as below. A reader of 0.14 applies the rule to every
+  file it reads, as a reader of 0.11 applied its narrower form, a
+  segment holding nothing, to files of 0.9 and 0.10, since the rule
+  only accepts what an earlier reader reported. `input`:
   otherwise, including a run that answers nothing and adds nothing, such
   as a retry after an error, which `ref` names. `ref` on `start` names
   what triggered the input (a cron name, a channel message ID). How an
@@ -1076,7 +1169,16 @@ A call was handed to its tool.
 
 `call_id` and `target` are required; `target` is the `item` entry
 holding the `function_call`, on the path before the `dispatch`, and
-`call_id` MUST be that call's. The `target` names the call. A call with
+`call_id` MUST be that call's. The `target` names the call. A
+`dispatch` a withdrawal follows, as `decision` defines it, was no
+hand-off: what this section says of a call's dispatches is said of
+the others, and the call's state is read as though neither it nor the
+withdrawal were there, within the limit `decision` sets: a withdrawal
+withdraws the one `dispatch` it directly follows. A withdrawal holds on
+its own path: a `dispatch` it withdraws may be followed on another
+branch by the call's output, which says that branch handed the call
+off, so for any path that does not hold the withdrawal the `dispatch`
+is one like any other, on the path or off it. A call with
 a `dispatch` and no `function_call_output` on the path may have run: its
 side effect may have happened. It is **in flight**, handed to its tool
 when the record stopped, unless the latest `decision` after its last
@@ -1089,9 +1191,9 @@ the output of, since the record stopped between the two; the harness
 that continues the path writes that output and nothing else for the
 call. When the header names `dispatch` in `records`, a call with neither
 on its path was never started, unless the session holds a `dispatch`
-naming it elsewhere, off the path: a writer that rebases to a point
-between a call and its `dispatch` leaves the call on the new path with
-no `dispatch`, and it may have run. Otherwise the file does not say
+naming it elsewhere, off the path, a withdrawn one included: a writer
+that rebases to a point between a call and its `dispatch` leaves the
+call on the new path with no `dispatch`, and it may have run. Otherwise the file does not say
 whether it ran. A call in a fork's prefix has its `dispatch` entries,
 if any, in the session the fork was made from: the prefix is the path
 to the base, and a `dispatch` the origin wrote off that path is not
@@ -1158,10 +1260,11 @@ A call's fate was decided outside the tool.
     `dispatch` and no other `decision` ever follow, and a
     `function_call_output` for the call follows that carries `reason`.
     A writer writes `reject` only for a call with no `dispatch` and no
-    output on the path, and SHOULD NOT for one with a `dispatch` for it
-    elsewhere in the session, which may have run and is ended by
-    `answer`; a reader accepts such a `reject`, which 0.9 left as the
-    only way to end that call without a second `dispatch`. A
+    output on the path, save a withdrawal, below, and SHOULD NOT for one
+    with a `dispatch` for it elsewhere in the session, which may have
+    run and is ended by `answer`; a reader accepts such a `reject`,
+    which 0.9 left as the only way to end that call without a second
+    `dispatch`. A
     `reject` with no output after it is a call the harness refused and
     has not yet written the output of, since the record stopped between
     the two; the harness that continues the path writes that output and
@@ -1220,6 +1323,37 @@ A call's fate was decided outside the tool.
   tool ran or runs with passes over an `answer`'s `args`, which are
   read from the `answer` alone, so an output the harness wrote never
   reads as a rewrite of the call.
+
+A **withdrawal**, since 0.14, is a `reject` carrying `withdrawn: true`
+that directly follows a `dispatch` of its call: the latest `decision`,
+`dispatch` or `function_call_output` of the call on the path before it
+is that `dispatch`, and entries of other calls or of no call may stand
+between them. A writer that wrote a call's `dispatch` and then did not
+hand the call to its tool, as when a subscriber to the hand-off refused
+it once the `dispatch` was durable, writes a withdrawal directly after
+that `dispatch`, before any output; its `reason` says why. A reader
+reads that `dispatch` as a hand-off never made and the withdrawal as no
+decision: the call is what it was before the `dispatch`, which for a
+call with no other `dispatch` on the path, in a file whose header names
+`dispatch` in `records`, is never started, and every rule of this
+section and of `dispatch` applies to what follows as though neither
+entry were there, save the definition of a withdrawal itself: a later
+`reject` carrying `withdrawn` withdraws a `dispatch` only when that
+`dispatch` is the call's latest `decision`, `dispatch` or
+`function_call_output` before it, never one a withdrawal already
+passed over. After `dispatch` D, `dispatch` D' and a withdrawal of D',
+a second `reject` carrying `withdrawn` follows a withdrawal, not a
+`dispatch`, so it is a `reject` without the member, after D, which
+this section forbids. Another `dispatch` may follow a withdrawal, as
+may any decision the call could take before the withdrawn one, or its
+output. A `reject`
+is the verdict so that a reader that does not know the member reads the
+call as one that did not run, never as one in flight. A writer MUST NOT
+write `withdrawn` anywhere else: a reader reads a `reject` carrying it
+that follows no `dispatch` of its call directly as a `reject` without
+it, which after a `dispatch` is the `reject` this section forbids, and
+keeps the member on another verdict, or holding anything but `true`, as
+a member it does not know.
 
 A `decision` is a lifecycle fact and carries no score. A judgement of
 how something went is an `outcome`.
@@ -1492,7 +1626,8 @@ call's output follows its link, the link belongs to the call's last
 `dispatch` before the output, no cancel notice names the link, and no
 `answer` decision of the call comes between the link and the output,
 which would make the output the harness's; a reader concludes nothing
-of a link that is not so. The header check above is the in-store
+of a link that is not so. A peer's later report, delivered after the
+call's output, is an `item` whose `from_link` names the link. The header check above is the in-store
 subsession's alone: a callee in another system did not derive its
 session from this one, so a verifier does not check a link carrying
 `url` against it. A link without `url` is checked as it was, in a file
@@ -1560,10 +1695,12 @@ records a model call the path paid for that produced no `response`
 entry: a fold whose summary was refused, with the usage of its calls
 summed, or a call whose answer earned no entry in context. An optional
 top-level `model` names the model billed; without one, the model in
-force from the `config` entries applies. A reader computing what the
-path cost counts such an entry as one model call, however many calls
-its usage sums, and the ATIF projection's `final_metrics` do. The rest
-of `data` is the writer's. A writer that records a paid call under
+force from the `config` entries applies. An optional top-level
+`attempts` beside `usage`, since 0.14, is the number of model calls the
+usage sums, a positive integer with `response`'s meaning; absent, or in
+another form, it is 1. A reader computing what the path cost counts
+such an entry as `attempts` model calls, and the ATIF projection's
+`final_metrics` do. The rest of `data` is the writer's. A writer that records a paid call under
 another member name records it for itself alone.
 
 ## Namespaced types
@@ -1666,7 +1803,11 @@ list as follows.
    context: the input enters when it is appended as an `item`. An
    `item` entry that the `omit` in force at the end of the path leaves
    out contributes nothing either; it stays on the path, and a reader
-   reports that it was left out and why.
+   reports that it was left out and why. Then the `omit` in force sends
+   the outputs its `outputs` lists, and the image parts its `images`
+   reaches, as their placeholders, among the items of `item` entries
+   that remain, as the section on items left out defines; the entries
+   keep what they hold, and a reader reports which items it sent so.
 5. The canonical request is settings plus the item list, encoded as the
    payload profile's request with `store: false` and no
    `previous_response_id`. Its hash is `request_hash`.
@@ -1719,7 +1860,8 @@ separately agree without sharing code.
 
 - The input is the request object of step 5 as it was sent, including
   any passthrough keys the payload profile allows, because those reached
-  the model.
+  the model, with one exception, below: in a sidecar session the input
+  holds each `sidecar:` URL as the item records it.
 - The object is serialised with the JSON Canonicalization Scheme (RFC
   8785): members sorted by UTF-16 code units, no insignificant
   whitespace, numbers and strings in their canonical forms.
@@ -1728,6 +1870,18 @@ separately agree without sharing code.
 
 A writer that records `request_hash` MUST compute it this way. A reader
 MAY verify it by rebuilding the request from the path and comparing.
+
+In a sidecar session, since 0.14, the canonical request is built from
+items as recorded, `sidecar:` URLs included, and `request_hash` covers
+that form, which is the only form a reader can rebuild without the
+blobs. A writer resolves each `sidecar:` URL to its blob's bytes before
+it sends the request, as the payload profile carries media, and MUST
+NOT send a `sidecar:` URL to a provider, which cannot resolve it. A
+reader that resolves the references, to replay a call against a model,
+resolves them after it rebuilds and hashes the request. Converting an
+item's media between the two forms is the writer's, before it records
+the item: a store MUST NOT, as RFC 0002 says, since the item's bytes
+are hashed.
 
 `request_hash` and an entry's hashes have different jobs. The entry
 hash identifies a record, `ts` included, so a replay never collides
@@ -1838,15 +1992,16 @@ A redactor:
 
 - MUST write a valid session: every entry valid for its type, every
   `parent` an entry the file holds or null, and the base rule held.
-  When it leaves an entry out, the entries under it hang from what it
-  kept in that entry's place, and a member that named it names that or
-  is removed, so that no member names an entry of this file the file
-  does not hold;
+  When it leaves an entry out, the entries under it hang from what
+  stands in that entry's place, and a member that named it names that
+  or is removed, member by member as Leaving entries out says, so that
+  no member names an entry of this file the file does not hold;
 - MUST compute every content hash and `id` over what it wrote, and
   rewrite `parent` and every entry-naming member to the IDs of the
   entries it wrote — `parents` into this file, `target`, `first_kept`,
-  `from`, `queued_from`, `omit`'s `items` in a `config` and in a
-  compaction's checkpoint, and `instructions_omitted`'s `of` where it
+  `from`, `queued_from`, `from_link`, `omit`'s `items`, `outputs`'
+  `items` and `images`' `before` in a `config` and in a compaction's
+  checkpoint, and `instructions_omitted`'s `of` where it
   is defined — and the header's `base`. A member of one of those names
   in a form or place this document does not define there is body text,
   not a reference;
@@ -1855,6 +2010,17 @@ A redactor:
   new text, and instructions that were the join of their parts stay the
   join of the rewritten ones. A redactor that changes text across a
   part boundary breaks the join and MUST NOT;
+- MUST NOT write an instruction part, or an omitted part's `of`, under
+  a hash taken from the original whose text, or entry, it cannot
+  resolve on the path: a part named by a `hash` whose text is in no
+  entry before it that the redactor redacted, or an `of` naming an
+  entry it did not write. Such a hash is the original's, which neither
+  verifies in the redacted session nor hides the text. It writes the
+  part as text of its own instead, such as fixed placeholder text, the
+  part's form changing from a `hash` to its text, or it does not redact
+  the entry. A part so written changes the request the path rebuilds,
+  so the `response` entries after it carry no `request_hash` or the one
+  the redacted session rebuilds, as below;
 - MUST treat a `normalised` record as holding the member it describes:
   `was` is that member's original source text and `raw` its original
   bytes, so what the redactor removes from the member it removes from
@@ -1870,9 +2036,27 @@ A redactor:
   so it is rewritten as the members above are. A redaction of a whole
   store holds a redaction of every session in it, and so re-points
   every reference that stays inside the store;
-- MUST reach data the format keeps in member names: an `env` entry's
-  `files` are keyed by path, and a path can hold what is redacted. Two
-  keys a redaction makes one MUST NOT both be kept;
+- MUST reach data the format keeps in member names: a member name is
+  data, and a redactor reaches it as it reaches a string value, in the
+  objects keyed by data, an `env` entry's `files` maps and `tools` map,
+  and at any depth in every object whose members this document does not
+  define: a `custom` entry's `data`, an `outcome`'s `details`, a
+  `decision`'s `args`, the value of each member of a `config`'s `extra`
+  and a compaction checkpoint's, the value of any member this document
+  does not define, and the body of an extension entry, its own member
+  names among them but the envelope's. In the objects this document
+  defines, an entry, a `trigger` or a `workspace` among them, member
+  names are the format's, and a redactor leaves them as they are, the
+  name of a member this document does not define included, whose value
+  is data; so are the names inside an item, which the payload profile
+  defines. The names this document defines inside data are the
+  format's too: `usage`, `model` and `attempts` at the top level of a
+  `custom` entry's `data`, and the names inside that `usage`, which the
+  payload profile defines, so a redaction does not change how many
+  model calls the entry records; and the names of `extra`'s members,
+  which are request member names the provider reads. Two names of
+  one object that a redaction makes one MUST NOT both be kept, nor an
+  extension entry's name made one its envelope holds;
 - MUST give each `response` it writes either no `request_hash` or the
   one the redacted session rebuilds for it, computed as Request hash
   says, and never another: a redacted session hashes independently, and
@@ -1895,6 +2079,96 @@ report its hashes as verifying the original, and holds a redacted entry
 to every rule it holds any entry to, its `request_hash` among them, so
 a `request_hash` that does not match is a fault in a redacted session as
 in any other.
+
+### Leaving entries out
+
+A redactor that leaves an entry of the original out writes nothing for
+it, or a placeholder: an entry of its choosing, such as a `custom`
+entry saying that a block was redacted, which stands for a run of
+left-out entries on one path and carries their positions in
+`redacted`. A placeholder for one left-out entry carries `[n]`, since a
+range needs `from` below `to`. A position records what an entry was
+made from, not how: `[n]` on a placeholder and on an entry rewritten
+from entry `n` are one mark, and the entry's own body says which it is.
+
+What **stands in the place** of a left-out entry is the placeholder
+whose `redacted` covers its position on that path, when the redactor
+wrote one, and otherwise the nearest entry above it on its path that
+the redaction wrote, or the universal root when it wrote none. In a
+file with a `base` the base is written and above every own entry, so
+an own entry's left-out ancestors are replaced by an own entry or the
+base, never the root, which the base rule forbids an own entry to hang
+from. A member
+that named the left-out entry then follows the rule for its kind:
+
+- A member naming one predecessor names what stands in the left-out
+  entry's place: `parent`; the `target` of a `label`, an `outcome` and a
+  `judged_by` link; a `branch_summary`'s `from`;
+  and `instructions_omitted`'s `of`. A compaction's `first_kept` and
+  `images`' `before` bound a range from below and have a place of their
+  own, below. A redactor MUST NOT remove such a member. Where the
+  universal root stands in the place and the member may not name it,
+  since only `parent` and a `leaf` label's `target` do, the redactor
+  leaves the entry holding the member out too, or does not redact. What
+  stands in the place of the `config` entry an `of` names holds no
+  omitted list, so its `keep` then names no part a reader can rebuild,
+  as `of` says; a redactor that would keep those parts writes them
+  whole instead.
+- A member that lists entries, or records where an item came from,
+  loses the left-out entry: a `parents` element and an ID in `omit`'s
+  `items` and in `outputs`' `items`, in a `config` and in a compaction's
+  checkpoint, are removed from their lists, and an `item`'s
+  `queued_from` and `from_link`, provenance that names one entry and
+  reaches no request, are removed whole. A list so emptied is
+  removed, and an `omit` left with no member is removed with it, since
+  an empty `omit` in a `config` clears what is in force rather than
+  adding nothing. An `outputs` whose `items` is removed keeps its
+  `text`, which it still sets.
+- An entry of a call goes with the call: a redactor that leaves out a
+  `function_call`'s entry leaves out every `dispatch`, `decision`,
+  `function_call_output` and `link` entry of that call, the links that
+  carry its `call_id`, a withdrawal, an output marked `failed` and a
+  cancel notice among them, since each says what became of a call the
+  file no longer holds. A withdrawal also goes with the `dispatch` it
+  follows, which it would otherwise not follow, and a cancel notice
+  with the link its `target` names: neither a placeholder nor an entry
+  above the link is a link, and `link` forbids a notice naming one, so
+  a notice's `target` is never re-pointed to what stands in a link's
+  place.
+- A member that bounds a range from below, a compaction's `first_kept`
+  and `images`' `before` in a `config` and in a compaction's
+  checkpoint, names the entry it bounds from and none above it: the
+  entries above `first_kept` were folded, and the images above `before`
+  were sent as placeholders, so naming one would put it back into every
+  later request. When the redaction leaves the named entry out, what
+  stands in its place is the placeholder covering it or, with none, the
+  first entry the redaction wrote after it on its path, before the
+  compaction for `first_kept`. `first_kept` names an entry before the
+  compaction on its path, as `compaction` says, so a redaction that
+  leaves out every entry from `first_kept` up to the compaction MUST
+  write a placeholder for them, for `first_kept` to name. A `before`
+  with nothing written after it names nothing on the path, and the
+  redactor leaves the member's `images` out or does not redact.
+- A `run` end whose segment the redaction changed MUST carry the
+  `reason` and `pending` its redacted segment reads, computed as `run`
+  says, unless its `reason` is a written value, `error` or
+  `interrupted`, which stands; or the redaction leaves the run end out.
+  `pending` loses every call the redaction left out, as a list does.
+- A `queued` entry goes with the `item` that drained it: a redactor that
+  leaves out an `item` entry whose `queued_from` names a `queued` entry
+  leaves out that `queued` entry too, since a `queued` entry no `item`
+  names reads as an input the harness still owes. Leaving out the
+  `queued` entry and keeping the `item` removes the item's
+  `queued_from`, as above.
+- A compaction's `pinned` items are copies of items of entries before
+  `first_kept`, and a copy says what its source says. A redactor that
+  removes or replaces a pin's source, the item or any part of it, MUST
+  do the same to the pin, and one that leaves out every entry a pin was
+  copied from removes the pin.
+
+Leaving an entry out never leaves its children without a parent, and
+the members of the entries it keeps name only entries it wrote, so a
+redacted session verifies as any session does.
 
 ### The redacted session
 
@@ -1921,6 +2195,28 @@ redacted session, whose ID stays as it grows, and repeating a redaction
 over a store finds the session it made before and appends only what the
 original added since. Two sets of rules under one profile write into
 one session; a profile names one set.
+
+A redactor writes the redacted session's header from the original's,
+member by member, since 0.14 in these words:
+
+- `cwd`, `harness` and every member this document does not define are
+  text, and a redactor reaches them as it reaches an entry's body text,
+  at any depth.
+- `type`, `format`, `created_at`, `payload`, `records`, `media`,
+  `redacted` and `redacted_from` are the redaction's to write: `type`
+  and `format` as any writer does, `redacted` and `redacted_from` as
+  this section says, and the rest as the redactor chooses, `media` in
+  the original's form, as Every redacted entry requires of the media
+  itself. No text rule reaches them.
+- `id` is derived as below.
+- `base` and `parent_session` are references, under the rules for
+  references above: `base` names an entry this file holds, and
+  `parent_session` stays as written unless the redaction holds that
+  session's redaction.
+- `spawned_by` is a `call_id`, which changes in step with the call IDs:
+  a redactor that changes the call IDs of the parent session writes the
+  one it gave the call that spawned this one, and otherwise leaves it as
+  written.
 
 A fork of a redacted session is a session of its own. Its header carries
 `redacted` only when a redactor made it, and its prefix entries carry
@@ -1977,7 +2273,14 @@ call's decisions and its first dispatch travel under `calls`, keyed by
 call ID, in the `extra` of the agent step that produced the call, and
 a call handed to its tool more than once carries every dispatch there
 too, in path order, as the list `dispatches`, so the count survives
-the projection; a queued
+the projection, and a withdrawal's record carries `withdrawn: true`. A
+`custom` entry whose `call_id` names a call whose agent step is in the
+document travels in that step's `extra`, under `calls[call_id].custom`,
+as a list in path order, since the step after it may be the model's
+next turn or another call's; one naming no call in the document
+travels, as every other `custom` entry does, in the list `custom` of
+the next step's `extra`, or of the top-level `extra` when no step
+follows. A queued
 input travels as a list under `queued`, and the step of the item that
 drained one carries its trigger under `source`; a fold's usage
 travels under `usage` in its system step's `extra`, and a fold's
@@ -1990,16 +2293,43 @@ An `item` entry that `omit` leaves out of the request at the trajectory's
 leaf is in the step that holds it, since the model produced it or the
 person sent it, and the step's `extra` lists it under `omitted` with the
 reason, `other_models` or `items`, so a reader sees it as left out and
-not as absent.
+not as absent. An `item` entry the request at the leaf sends with a
+placeholder, by `omit`'s `outputs` or `images`, is in its step, or its
+observation result, as recorded, and that `extra` lists it under
+`agentsession` as `replaced`, an object with the `entry_id`, the
+`reason`, `outputs` or `images`, the placeholder `text` sent, and for
+`images` the number of `parts` replaced, one object per member that
+reaches it; the item as
+sent travels beside the raw item as `sent`, so the projection rebuilds
+both. `omitted` and `replaced` describe the leaf's request. Each agent
+step's `extra` also lists, under `agentsession`, the item entries its
+own request left out, as `request_omitted`, and those it sent with a
+placeholder, as `request_replaced`, each with its reason, from the
+request context of the step's `response`, since a model switch or a
+later `omit` makes the leaf's request a different prompt from the one
+an earlier step was sent; each `request_replaced` object carries the
+placeholder `text` that request sent, which a later `omit` may change.
+Both are absent when empty, and when the projection is built from the
+context alone, without the path it was built over, since a step's
+request is rebuilt from the path.
+
+An output's entry marked `failed` carries `failed: true` under
+`agentsession` in the `extra` of the observation result, or step, it
+maps to, and an `item` carrying `from_link` carries it there in its
+step's `extra`, so a reader tells a failed call and a peer's late
+report from any other.
 
 A document's steps are the context the algorithm produces, so a run
 that compacted is described by its last summary and what followed it.
 Its `final_metrics` are not: they total every model call on the path,
 the ones a fold replaced and the ones a `custom` entry's `usage`
-records included, and `total_steps` counts those model calls, the
-path's `response`, `compaction` and `branch_summary` entries and its
-`custom` entries carrying `usage`, one each, which a reader can count
-in the path and check against the document. It is not the number of
+records included, and `total_steps` counts those model calls, which a
+reader can count in the path and check against the document: a
+`response` as its `attempts`, 1 when absent, a `compaction` and a
+`branch_summary` one each, and a `custom` entry carrying `usage` as
+the `attempts` beside it, 1 when absent. So `total_steps` is the sum of
+the agent steps' `llm_call_count` plus the path's other model calls,
+those a fold replaced included. It is not the number of
 steps: a user turn is a step and no model call, and a fold's calls are
 model calls and no step. Whenever it differs from the number of steps
 the root `notes` says so, which is what ATIF requires of a
@@ -2007,6 +2337,14 @@ the root `notes` says so, which is what ATIF requires of a
 model calls out of the steps the note says how many. Without that rule
 a cost column reads the tail's cost as the run's, and an agent that
 folded eleven times outranks one that did not.
+
+ATIF defines `total_cost_usd` to include subagents. When the document
+embeds subagent trajectories, the root's `total_cost_usd` is the path's
+cost plus each embedded document's `total_cost_usd`, which includes its
+own embedded subagents, and the root `notes` says so; the token totals
+and `total_steps` stay the path's, as ATIF defines them over the steps.
+A child not embedded, or embedded without a cost, is not counted, and
+the notes say the cost excludes it.
 
 One document per path is a projection of the whole session, so a
 trajectory may be built at any entry and not only at a leaf: anything
@@ -2029,7 +2367,10 @@ status, unless a `decision` after the `dispatch` holds or answers it;
 a hand-off still open when the record stops ends there the same way. A
 later `dispatch` for the call or its output opens a span of its own,
 linked to the hand-off's; a second hand-off within one run ends the
-first in flight at the moment of the second.
+first in flight at the moment of the second. A withdrawn hand-off's span
+ends at its withdrawal, without an error status, since the tool never
+ran, and an output marked `failed` ends its call's span with an error
+status.
 
 ## Versioning
 
@@ -2070,13 +2411,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.13 reads a 0.5 to 0.12 file
-as it stands, since 0.6 to 0.13 add optional members, elements and
-relations, 0.10 and 0.11 relax one rule each, and the hashes do not change, save for the few rules each minor's changes below say read
+it begins at 1.0. A reader of 0.14 reads a 0.5 to 0.13 file
+as it stands, since 0.6 to 0.14 add optional members, elements and
+relations, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.13 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.14 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -2130,9 +2471,13 @@ checkpoint and cleared by `[]`, a queued `trigger` with members of its
 own drained into an `item`'s `source`, a list of omitted parts naming
 runs of the list in force by `keep` across deltas that move a part
 across a budget, beside a `replace` and a compaction's checkpoint that
-write it whole, the recomputed `reason` for every `run` end, a `run` written `resume`
+write it whole, the recomputed `reason` for every `run` end, a call whose `dispatch` a
+withdrawal follows after another call's `dispatch`, read as never
+started at its run's end and dispatched again by the next, beside an
+output marked `failed`, a `run` written `resume`
 whose segment holds nothing, beside one that adds a message and is
-reported, a hand-back naming every instructions part by `hash`, those
+reported, and runs written `resume` whose segments hold record entries
+alone, one refused and one cut, a hand-back naming every instructions part by `hash`, those
 out of force among them, and its omitted list by `of`, a two-model session
 whose `omit` is written at each switch, every response hashed and
 verifying, beside the same session written as 0.10 does, and one whose
@@ -2142,13 +2487,24 @@ after its `dispatch` in a file that promises them: a `peer` that answered
 without a task, and a `subsession` call whose first task a cancel notice
 names and whose second dispatch's task answered, an `of` naming no `config` entry on the path,
 or one before a compaction's checkpoint, kept as written and noted by a
-tool that checks a file, and
+tool that checks a file, a `peer` call acknowledged by its output and
+answered turns later by an item whose `from_link` names the link, beside
+a `from_link` naming a cancel notice, which is reported, a session that
+sends old tool outputs as a placeholder by `omit`'s `outputs` and old
+screenshots as one by `images`, in both of its forms, across a
+compaction's checkpoint, every response hashed and verifying, a path
+with two compactions, the second restating one pin and dropping
+another, whose context applies only the last, a `response` with no
+`response_id` among `item` entries, which has no output items and whose
+request is the whole path before it, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
 before the base that is not on the path to it, a `dispatch` that follows a
 `reject`, an `answer` or the call's output, a decision that follows a
-`reject`, a `reject` that follows a `dispatch` or an output, a `target`
+`reject`, a `reject` that follows a `dispatch` or an output, a
+withdrawal that a decision or the output separates from its `dispatch`,
+a `target`
 naming another call, a repeated `call_id`, an empty `call_id`, a `run`
 start whose `source` is not the shape of its segment, a response whose
 recorded hash is the request an `omit` in force leaves an item out of,
@@ -2177,9 +2533,14 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.13
 
-These are the changes 0.14 makes. The document's status, the header's
-`format` and the sections above that name the current minor move to
-0.14 with the rest of its changes.
+Optional members, two relaxed rules, the form a sidecar session's
+request hash covers, the universal root, and the rules of redaction. A 0.13 file is a 0.14
+file that holds none of the new members. No hash changes. Like 0.12's, the new rules turn on the members an entry
+carries and not on the header, so a reader of 0.14 reads each member
+below by its form in a file of any minor, and raising a file's
+`format` never makes an entry that verified before fail. A writer of
+0.14 raises every file it appends to, as Versioning says, so every
+reader of 0.13 refuses those files until it is upgraded.
 
 - The universal root is defined: the one point every session's entries
   hang from, shared by every session, which `parent: null` names on the
@@ -2203,6 +2564,98 @@ These are the changes 0.14 makes. The document's status, the header's
   a substitution. The substitution rule already compared every member
   of `workspace`, so no earlier file reads differently, and a 0.13 file
   that names the host in `ref` stays valid.
+
+- `item` defines `failed`, `true` on an output's entry whose call
+  failed or was given up. A reader of 0.13 could not tell such a call
+  from one that succeeded: the output's text says so by a harness's
+  convention, which no reader can rely on. Like `from_link`, it reaches
+  no request, and RFC 0002's context hash leaves it out.
+
+- A `reject` carrying `withdrawn` directly after a call's `dispatch`
+  withdraws that hand-off, and is the one `reject` a `dispatch` may
+  precede. A reader of 0.13 read a call whose hand-off a subscriber
+  refused after the `dispatch` was durable as in flight, and a harness
+  that knew better recorded it in a member of its own that no other
+  reader knew. A reader of 0.13 reports a withdrawal as a `reject`
+  after a `dispatch`, and refuses a file of 0.14 by its header in any
+  case.
+
+- `item` defines `from_link`, naming the `peer` link whose callee's
+  later report the item carries. A reader of 0.13 could tell that report
+  from any other input only through a harness's own members. It joins
+  the members that name an entry, which migration and redaction rewrite.
+
+- `omit` defines `outputs` and `images`, which send a tool output, or
+  the image parts of items, as placeholder text. A reader of 0.13 read
+  a request so edited as the request the path rebuilds, so every
+  response after the first edit was written without a `request_hash`
+  or verified as a divergence. `outputs`' `items` and `images`'
+  `before` join the members that name an entry. A reader of 0.14 reads
+  either member by its form in a file of any minor, as it reads `omit`;
+  a 0.13 file that held one under another meaning, which it was free
+  to, rebuilds requests differently under 0.14, and no writer of this
+  library wrote one.
+
+- Redaction says what leaving entries out means, member by member
+  (Leaving entries out): what stands in a left-out entry's place, which
+  members name it and which lose it, which entries go with a call, a
+  `dispatch` or a drained `queued` entry, how a placeholder for one
+  entry is marked, and what a run end and a pin become. 0.13 said only
+  that a member "names that or is removed", and two redactors could
+  answer differently and both be valid. Two rules tighten the format: a
+  redactor that changes a pin's source changes the pin, and `first_kept`
+  names an entry before its compaction, which the context algorithm
+  already required; a redaction that leaves out every entry from
+  `first_kept` to the compaction writes a placeholder for it to name.
+  No file a reader of 0.13 accepted reads differently.
+
+- Redaction says which members of a redacted session's header are
+  text, which the redaction writes, and which are references or a
+  `call_id` (The redacted session). 0.13 named header members only as
+  references, and left a redactor to decide whether a member it did not
+  know held text.
+
+- Redaction forbids writing an instruction part, or an omitted part's
+  `of`, under an original hash whose text or entry the redactor cannot
+  resolve on the path: it writes the part as text of its own, or does
+  not redact the entry. 0.13 forbade keeping an original hash anywhere
+  but in a reference into another session, and did not say what a
+  redactor that cannot resolve a part does instead.
+
+- Redaction says where a member name is data, which a redactor reaches:
+  an `env` entry's `files` and `tools`, and every object whose members
+  this document does not define, at any depth. 0.13 named `files`
+  alone, so a path or a secret used as a key in a `custom` entry's
+  `data` survived a redaction that rewrote every string value, and a
+  redactor that refused such keys refused a quarter of a real corpus.
+
+- `custom` defines `attempts` beside `usage`, the number of model calls
+  the usage sums. 0.13 counted such an entry as one call, so a failed
+  fold that asked twice read as one call while a retried `response`
+  read as its `attempts`, and `total_steps` disagreed with the sum of
+  `llm_call_count`.
+
+- The ATIF projection carries what a step's own request left out
+  (`request_omitted`, `request_replaced`), the placeholders the leaf's
+  request sends (`replaced`, with the item as `sent`), a `custom` entry
+  naming a call in that call's step, `failed`, `from_link` and a
+  withdrawal; counts `total_steps` by `attempts`; and includes embedded
+  subagents in the root's `total_cost_usd`, as ATIF defines it. A
+  projection is not a file, so no file reads differently.
+
+- Request hash says which form a sidecar session hashes: the request
+  with each `sidecar:` URL as recorded, while the provider is sent the
+  blob's bytes. 0.13 said the request "as it was sent", which no reader
+  of a sidecar session can rebuild. No writer of this library wrote a
+  sidecar session's hash any other way.
+
+- A run written `resume` whose segment holds record entries alone, no
+  entry in context, no `response` and no `dispatch` or `decision`, is accepted as
+  written, as 0.11 accepted one whose segment held nothing. A writer
+  that replays a child's link, or a hook that annotates the run, before
+  the run takes its call up no longer writes a run a reader reports.
+  The rule accepts only what a reader of 0.13 reported, so a reader of
+  0.14 applies it to a file of any minor.
 
 ## Changes since 0.12
 

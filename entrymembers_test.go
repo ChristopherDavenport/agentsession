@@ -146,6 +146,16 @@ func entryVariants(e Entry) []variant {
 			}},
 		}
 	}
+	if _, ok := e.(*ItemEntry); ok {
+		// failed is defined on an output's entry alone, so it is
+		// exercised on one, and left off any other item.
+		return []variant{
+			{"output", func(e Entry) {
+				e.(*ItemEntry).Item = openresponses.NewFunctionCallOutput("call_1", "Error: failed")
+			}},
+			{"message", func(e Entry) { e.(*ItemEntry).Failed = false }},
+		}
+	}
 	return []variant{{"default", func(Entry) {}}}
 }
 

@@ -86,12 +86,15 @@ const (
 	AttrDecisionBy     = "agentsession.decision.by"
 	AttrDecisionReason = "agentsession.decision.reason"
 	AttrVerdict        = "agentsession.decision.verdict"
-	AttrOutcomeKind    = "agentsession.outcome.kind"
-	AttrOutcomeTarget  = "agentsession.outcome.target"
-	AttrOutcomeScore   = "agentsession.outcome.score"
-	AttrOutcomePass    = "agentsession.outcome.pass"
-	AttrLinkRel        = "agentsession.link.rel"
-	AttrLinkSession    = "agentsession.link.session"
+	// AttrWithdrawn marks a decision event for a reject that withdrew the
+	// hand-off it follows (RFC 0001 0.14): the tool never ran.
+	AttrWithdrawn     = "agentsession.decision.withdrawn"
+	AttrOutcomeKind   = "agentsession.outcome.kind"
+	AttrOutcomeTarget = "agentsession.outcome.target"
+	AttrOutcomeScore  = "agentsession.outcome.score"
+	AttrOutcomePass   = "agentsession.outcome.pass"
+	AttrLinkRel       = "agentsession.link.rel"
+	AttrLinkSession   = "agentsession.link.session"
 	// AttrLinkURL, AttrLinkTask and AttrLinkContext name a callee in
 	// another system, reached over a protocol such as A2A, on a
 	// subsession or peer link; AttrLinkTarget is the link a cancel
@@ -345,6 +348,17 @@ type callState struct {
 	// the entry ID of the latest.
 	dispatches   int
 	lastDispatch string
+	// lastIsDispatch reports that the call's latest decision, dispatch
+	// or output is a dispatch, which a withdrawal may follow; heldBefore
+	// and lastBefore are held and lastDispatch as they were before that
+	// dispatch, which a withdrawal restores, as Calls reads it.
+	lastIsDispatch bool
+	heldBefore     bool
+	lastBefore     string
+	// onPath holds the IDs of the call's dispatches on the path, a
+	// withdrawn one included: one the session holds elsewhere may have
+	// run.
+	onPath map[string]bool
 	// closed reports that a run end closed the call's last span with
 	// the call still pending, in the state closedState, so finish opens
 	// another only when a later decision changed what the path reads.
@@ -356,6 +370,11 @@ type callState struct {
 	// names, for the span the call's next hand-off opens.
 	callee []attribute.KeyValue
 }
+
+// CallStateWithdrawn is the call state a tool span carries when a
+// withdrawal ended it: the hand-off it covers was never made, and the
+// call is what it was before it.
+const CallStateWithdrawn = "withdrawn"
 
 // Links a tool span carries to an earlier span of the same call: the
 // hand-off it repeats, or the hand-off whose outcome it records.
@@ -375,10 +394,38 @@ func (t *tracker) pendingState(c *callState) agentsession.CallState {
 		return agentsession.CallHeld
 	case c.dispatched:
 		return agentsession.CallInFlight
-	case t.header.HasRecord(agentsession.TypeDispatch) && !c.inPrefix && (t.sess == nil || len(t.sess.Dispatches(c.entryID)) == 0):
+	case t.header.HasRecord(agentsession.TypeDispatch) && !c.inPrefix && !t.dispatchedElsewhere(c):
 		return agentsession.CallNeverStarted
 	}
 	return agentsession.CallUnknown
+}
+
+// dispatchedElsewhere reports whether the session holds a dispatch for
+// the call off the path, which may have run, withdrawn or not.
+func (t *tracker) dispatchedElsewhere(c *callState) bool {
+	if t.sess == nil {
+		return false
+	}
+	for _, d := range t.sess.Dispatches(c.entryID) {
+		if !c.onPath[d.ID] {
+			return true
+		}
+	}
+	return false
+}
+
+// noteDispatch records one hand-off of the call, remembering what a
+// withdrawal of it would restore.
+func (c *callState) noteDispatch(d *agentsession.DispatchEntry) {
+	c.heldBefore, c.lastBefore = c.held, c.lastDispatch
+	c.dispatched, c.held = true, false
+	c.dispatches++
+	c.lastDispatch = d.ID
+	c.lastIsDispatch = true
+	if c.onPath == nil {
+		c.onPath = map[string]bool{}
+	}
+	c.onPath[d.ID] = true
 }
 
 // lastHandOff is the span of the call's last dispatch, or none.
@@ -452,6 +499,7 @@ func (t *tracker) prime(path []agentsession.Entry) {
 			case *openresponses.FunctionCallOutput:
 				if c, ok := t.calls[it.CallID]; ok {
 					c.output = true
+					c.lastIsDispatch = false
 				}
 			}
 		case *agentsession.DecisionEntry:
@@ -460,9 +508,7 @@ func (t *tracker) prime(path []agentsession.Entry) {
 			}
 		case *agentsession.DispatchEntry:
 			if c := t.callFor(v.CallID, v.Target); c != nil {
-				c.dispatched, c.held = true, false
-				c.dispatches++
-				c.lastDispatch = v.ID
+				c.noteDispatch(v)
 			}
 		}
 	}
@@ -502,7 +548,17 @@ func (t *tracker) forget(c *callState) {
 	}
 }
 
-func (t *tracker) noteDecision(c *callState, d *agentsession.DecisionEntry) {
+func (t *tracker) noteDecision(c *callState, d *agentsession.DecisionEntry) (withdrawn bool) {
+	if d.Verdict == agentsession.VerdictReject && d.Withdrawn && c.lastIsDispatch {
+		// A withdrawal: the dispatch it follows was no hand-off, and it
+		// is no decision, so the call is what it was before it.
+		c.dispatches--
+		c.dispatched = c.dispatches > 0
+		c.held, c.lastDispatch = c.heldBefore, c.lastBefore
+		c.lastIsDispatch = false
+		return true
+	}
+	c.lastIsDispatch = false
 	// A call is held while its latest decision is a hold, so any later
 	// decision answers the hold.
 	c.held = d.Verdict == agentsession.VerdictHold
@@ -518,6 +574,7 @@ func (t *tracker) noteDecision(c *callState, d *agentsession.DecisionEntry) {
 	if len(d.Args) > 0 && d.Verdict != agentsession.VerdictAnswer {
 		c.rewritten = true
 	}
+	return false
 }
 
 // entry feeds one entry, in path order, to the open spans.
@@ -725,8 +782,21 @@ func (t *tracker) decision(d *agentsession.DecisionEntry, ts time.Time) {
 	if c == nil {
 		return
 	}
-	t.noteDecision(c, d)
+	withdrawn := t.noteDecision(c, d)
 	attrs := []attribute.KeyValue{attribute.String(AttrEntryID, d.ID), attribute.String(AttrVerdict, d.Verdict)}
+	if withdrawn {
+		// The hand-off's span ends at its withdrawal, without an error:
+		// the tool never ran. A later hand-off opens a span of its own.
+		attrs = append(attrs, attribute.Bool(AttrWithdrawn, true))
+		if c.span != nil {
+			c.span.AddEvent(EventDecision, trace.WithTimestamp(ts), trace.WithAttributes(attrs...))
+			c.span.SetAttributes(attribute.String(AttrCallState, CallStateWithdrawn))
+			c.span.End(trace.WithTimestamp(ts))
+			c.span = nil
+		}
+		t.spans[d.ID] = trace.SpanContext{}
+		return
+	}
 	if d.By != "" {
 		attrs = append(attrs, attribute.String(AttrDecisionBy, d.By))
 	}
@@ -806,12 +876,11 @@ func (t *tracker) dispatch(d *agentsession.DispatchEntry, ts time.Time) {
 	if c == nil {
 		return
 	}
-	c.dispatched, c.held = true, false
-	c.dispatches++
 	var prev trace.SpanContext
 	if c.lastDispatch != "" {
 		prev = t.spans[c.lastDispatch]
 	}
+	c.noteDispatch(d)
 	if c.span != nil && c.dispatches > 1 {
 		prev = c.span.SpanContext()
 		c.span.SetAttributes(attribute.String(AttrCallState, agentsession.CallInFlight.String()))
@@ -819,7 +888,6 @@ func (t *tracker) dispatch(d *agentsession.DispatchEntry, ts time.Time) {
 		c.span.End(trace.WithTimestamp(ts))
 		c.span = nil
 	}
-	c.lastDispatch = d.ID
 	t.startCall(c, ts, d.ID, prev, linkDispatchedAgain)
 	c.span.SetAttributes(attribute.Int(AttrDispatch, c.dispatches))
 }
@@ -892,6 +960,11 @@ func (t *tracker) output(callID string, e *agentsession.ItemEntry, ts time.Time)
 		state = "answered"
 	}
 	c.span.SetAttributes(attribute.String(AttrCallState, state))
+	if e.Failed {
+		// The output says the tool failed, or that the harness gave the
+		// call up: the call completed, and its span reports the failure.
+		c.span.SetStatus(codes.Error, "the call failed")
+	}
 	t.spans[e.ID] = c.span.SpanContext()
 	c.span.End(trace.WithTimestamp(ts))
 	t.forget(c)
@@ -957,25 +1030,28 @@ func (t *tracker) withBranchLink(opts []trace.SpanStartOption) []trace.SpanStart
 }
 
 // workspaceAttrs is a workspace as workspace.<member> attributes: kind,
-// ref, then every other member that is a non-empty string, by key, so
-// whatever tells one file system from another, which RFC 0001 puts
-// inside workspace, reaches the trace.
+// ref, host and instance, then every other member that is a non-empty
+// string, by key, so whatever tells one file system from another, which
+// RFC 0001 puts inside workspace, reaches the trace.
 func workspaceAttrs(w *agentsession.Workspace) []attribute.KeyValue {
 	if w == nil {
 		return nil
 	}
-	attrs := []attribute.KeyValue{attribute.String("workspace.kind", w.Kind)}
-	if w.Ref != "" {
-		attrs = append(attrs, attribute.String("workspace.ref", w.Ref))
+	members := map[string]string{"ref": w.Ref, "host": w.Host, "instance": w.Instance}
+	for key, raw := range w.Unknown {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			members[key] = s
+		}
 	}
-	keys := make([]string, 0, len(w.Unknown))
-	for key := range w.Unknown {
+	keys := make([]string, 0, len(members))
+	for key := range members {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	attrs := []attribute.KeyValue{attribute.String("workspace.kind", w.Kind)}
 	for _, key := range keys {
-		var s string
-		if json.Unmarshal(w.Unknown[key], &s) == nil && s != "" {
+		if s := members[key]; s != "" {
 			attrs = append(attrs, attribute.String("workspace."+key, s))
 		}
 	}

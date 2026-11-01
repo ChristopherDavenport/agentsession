@@ -59,6 +59,17 @@ type special struct {
 	// object it is a member of, an element of a list, is one the format
 	// defines the member on.
 	holds func(holder map[string]any) bool
+	// set marks an entry reference naming one element of a set, which
+	// loses the element when the entry it names was left out, rather
+	// than naming what stands in its place (RFC 0001, Leaving entries
+	// out). up is how many steps of the path above the reference the
+	// element is: 1 for a parents element, whose entry is a member of it.
+	set bool
+	up  int
+	// bound marks an entry reference that bounds a range from below,
+	// first_kept and images' before, whose left-out entry is replaced by
+	// the first entry written after it, not by one above it: [Remap.Bound].
+	bound bool
 }
 
 // applies reports whether sp names the member that holder holds.
@@ -99,7 +110,7 @@ var envelopeMembers = []special{
 	{path: memberPath("redacted"), role: roleFixed},
 	{path: memberPath("parent"), role: roleEntry},
 	{path: memberPath("parents"), role: roleFixed},
-	{path: memberPath("parents", "[]", "entry"), role: roleEntry, session: "session"},
+	{path: memberPath("parents", "[]", "entry"), role: roleEntry, session: "session", set: true, up: 1},
 	{path: memberPath("parents", "[]", "session"), role: roleSession},
 }
 
@@ -115,7 +126,10 @@ var envelopeMembers = []special{
 // whose omit items name entries as a config entry's do; it writes its
 // omitted parts whole, so carries no of. An env entry's files map a path
 // to the hash of the file: the hash is not body text, and the path is
-// data in a member name, which a rewrite of the body reaches.
+// data in a member name, which a rewrite of the body reaches, as is the
+// tool name keying its tools. Every other object keyed by data, one
+// whose members the format does not define, is found from the type that
+// decodes the entry, by the rewrite (see shape).
 //
 // A call_id pairs a call with its output, its dispatches, decisions and
 // links, and a subsession's ID is derived from it, so a rewrite of the
@@ -126,17 +140,28 @@ var envelopeMembers = []special{
 // a custom entry's data, an outcome's details or a member it does not
 // define, is the writer's text and body.
 var bodyMembers = map[string][]special{
-	TypeItem:     {{path: memberPath("queued_from"), role: roleEntry}, {path: memberPath("item", "call_id"), role: roleCallID}},
+	TypeItem: {
+		{path: memberPath("queued_from"), role: roleEntry, set: true},
+		{path: memberPath("from_link"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*ItemEntry).FromLink != "" }},
+		{path: memberPath("item", "call_id"), role: roleCallID},
+	},
 	TypeQueued:   {{path: memberPath("item", "call_id"), role: roleCallID}},
 	TypeResponse: {{path: memberPath("request_hash"), role: roleHash}},
 	TypeConfig: {
-		{path: memberPath("omit", "items", "[]"), role: roleEntry, when: func(e Entry) bool { return e.(*ConfigEntry).Omit != nil }},
+		{path: memberPath("omit", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*ConfigEntry).Omit != nil }},
+		{path: memberPath("omit", "outputs", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { o := e.(*ConfigEntry).Omit; return o != nil && o.Outputs != nil }},
+		{path: memberPath("omit", "images", "before"), role: roleEntry, bound: true, when: func(e Entry) bool {
+			o := e.(*ConfigEntry).Omit
+			return o != nil && o.Images != nil && o.Images.Before != ""
+		}},
 		{path: memberPath("instructions_omitted", "[]", "of"), role: roleEntry, holds: keepOf},
 		{path: memberPath("instructions_parts", "[]", "hash"), role: roleHash},
 	},
 	TypeCompaction: {
-		{path: memberPath("first_kept"), role: roleEntry},
-		{path: memberPath("config", "omit", "items", "[]"), role: roleEntry, when: func(e Entry) bool { return !e.(*CompactionEntry).Config.Omit.IsZero() }},
+		{path: memberPath("first_kept"), role: roleEntry, bound: true},
+		{path: memberPath("config", "omit", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return !e.(*CompactionEntry).Config.Omit.IsZero() }},
+		{path: memberPath("config", "omit", "outputs", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*CompactionEntry).Config.Omit.Outputs != nil }},
+		{path: memberPath("config", "omit", "images", "before"), role: roleEntry, bound: true, when: func(e Entry) bool { i := e.(*CompactionEntry).Config.Omit.Images; return i != nil && i.Before != "" }},
 		{path: memberPath("config", "instructions_parts", "[]", "hash"), role: roleHash},
 		{path: memberPath("pinned", "[]", "call_id"), role: roleCallID},
 	},
@@ -153,11 +178,34 @@ var bodyMembers = map[string][]special{
 	},
 	TypeCustom: {{path: memberPath("call_id"), role: roleCallID}},
 	TypeEnv: {
+		{path: memberPath("tools"), role: roleDataKeys},
 		{path: memberPath("files", "read"), role: roleDataKeys},
 		{path: memberPath("files", "written"), role: roleDataKeys},
 		{path: memberPath("files", "read", "*"), role: roleHash},
 		{path: memberPath("files", "written", "*"), role: roleHash},
 	},
+}
+
+// headerMembers are the members of a header that are not text (RFC
+// 0001, The redacted session): those a redaction writes, type, format,
+// id, created_at, payload, records, media, redacted and redacted_from,
+// fixed whole; base, an entry of this file, and parent_session, a
+// session, which are references; and spawned_by, a call_id, which
+// changes only in step with the call IDs. Every other member, cwd,
+// harness and each member the format does not define, is text.
+var headerMembers = []special{
+	{path: memberPath("type"), role: roleFixed},
+	{path: memberPath("format"), role: roleFixed},
+	{path: memberPath("id"), role: roleFixed},
+	{path: memberPath("created_at"), role: roleFixed},
+	{path: memberPath("payload"), role: roleFixed},
+	{path: memberPath("records"), role: roleFixed},
+	{path: memberPath("media"), role: roleFixed},
+	{path: memberPath("redacted"), role: roleFixed},
+	{path: memberPath("redacted_from"), role: roleFixed},
+	{path: memberPath("base"), role: roleEntry},
+	{path: memberPath("parent_session"), role: roleSession},
+	{path: memberPath("spawned_by"), role: roleCallID},
 }
 
 // specialsOf returns the members of e that are not body text, those its
@@ -177,6 +225,17 @@ func specialsOf(e Entry) []special {
 	return out
 }
 
+// ErrNoPlace is returned by [RemapRefs] when a [Remap] says an entry
+// was left out with nothing in its place, an empty ID, for a member that
+// names one predecessor and so must name what stands in the left-out
+// entry's place (RFC 0001, Leaving entries out): a target, a from, a
+// first_kept, images' before or an omitted part's of. A leaf label's
+// target is not refused: it names the universal root, as parent does. A
+// cancel notice's target is refused too, and a writer leaves the notice
+// out with the link it names, since nothing standing in a link's place
+// is a link.
+var ErrNoPlace = errors.New("agentsession: a member naming one entry has nothing in the place of the entry left out")
+
 // Remap says where the references [RemapRefs] meets now point. A
 // callback returns the ID a reference is to name instead, or false to
 // leave it as written; a nil callback leaves every reference of its kind
@@ -187,7 +246,36 @@ type Remap struct {
 	// names none, which is this file. Only a parents element names a
 	// session, and it may name this file's own session by its ID, which
 	// the callback takes as it takes "".
+	//
+	// An empty ID and true say the entry was left out and nothing a
+	// member may name stands in its place, and RemapRefs applies RFC
+	// 0001's rules for leaving entries out: a member naming one element
+	// of a set loses it (a parents element, an omit items or outputs
+	// items ID, an item's queued_from or from_link), a list so emptied
+	// is removed, and an omit left with no member with it; parent names
+	// the universal root, null, or Base in a file with one; a leaf
+	// label's target, the one other member that may, names the root;
+	// and any other member, which names one predecessor and must name
+	// what stands in the place, is refused with [ErrNoPlace].
 	Entry func(session, entry string) (string, bool)
+	// Bound maps a reference that bounds a range from below, a
+	// compaction's first_kept and images' before in a config or a
+	// checkpoint, which RFC 0001 gives a place of its own: a left-out
+	// entry is replaced there by the first entry written after it on its
+	// path, since naming one above it would put that entry back into
+	// every later request, or send its images. An empty ID and true say
+	// nothing was written after it, which is refused with [ErrNoPlace].
+	// When Bound is nil, Entry maps those members too, which is right
+	// only while every entry they name was kept: a writer that leaves
+	// entries out sets it.
+	Bound func(entry string) (string, bool)
+	// Base is, for entries written to a file with a base, that base as
+	// the file names it. Every entry given is then one of the session's
+	// own, and the base is above each on its path, so a parent with
+	// nothing else in its place names the base and not the universal
+	// root, which would break the base rule (RFC 0001, Leaving entries
+	// out). Empty for a file without one.
+	Base string
 	// Session maps a reference to a session by its ID.
 	Session func(id string) (string, bool)
 }
@@ -215,6 +303,9 @@ type Remapped struct {
 	// Unmapped lists the references a callback left as written, member
 	// by member.
 	Unmapped []Reference
+	// Dropped lists the references removed because the entry they named
+	// was left out, each at the place it had in the input.
+	Dropped []Reference
 	// Opaque is set for an extension entry. Its members are its own and
 	// this package cannot read them, so only its envelope, parent and
 	// parents, is re-pointed, and a member of its own may still name an
@@ -225,11 +316,12 @@ type Remapped struct {
 // RemapRefs re-points every member of e that names an entry or a
 // session, through m, and returns the result as a new entry; e is not
 // changed. The entry references are parent, each parents element's
-// entry, an item's queued_from, a compaction's first_kept and the omit
-// items of its checkpoint, a branch summary's from, the target of a
-// label, an outcome, a dispatch and a decision, a config entry's omit
-// items and the of of each omitted part that is a keep, a positive keep
-// and no id, and the target of a judged_by link and of a cancel notice,
+// entry, an item's queued_from and from_link, a compaction's first_kept
+// and the omit items, outputs items and images before of its
+// checkpoint, a branch summary's from, the target of a label, an
+// outcome, a dispatch and a decision, a config entry's omit items,
+// outputs items and images before and the of of each omitted part that
+// is a keep, a positive keep and no id, and the target of a judged_by link and of a cancel notice,
 // which name an entry of this session. The session references are each
 // parents element's session and a link's session. A member of one of
 // those names in a form or place the format does not define it in, kept
@@ -251,10 +343,12 @@ type Remapped struct {
 //
 // What it cannot read, an extension entry's members, is reported as
 // Opaque; a reference a callback left as written, in Unmapped. Header
-// members are [RemapHeaderRefs]'s. Leaving an entry out, or
-// re-parenting its children, is not a re-pointing: the entries a
-// writer keeps say what replaces one it leaves out, and the callback
-// returns that.
+// members are [RemapHeaderRefs]'s. Which entry stands in the place of
+// one a writer leaves out, a placeholder or the nearest entry kept above
+// it, is the writer's to say, and the callback returns it; when nothing
+// does, the callback returns an empty ID and RemapRefs removes or
+// refuses each member that named the entry as RFC 0001's Leaving
+// entries out has it, reporting what it removed in Dropped.
 func RemapRefs(e Entry, m Remap) (Remapped, error) {
 	return remapRefs(e, m, true)
 }
@@ -276,19 +370,51 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 	var (
 		out     Remapped
 		parents bool
+		gone    []string // pointers to remove, in the order met
+		root0   bool     // parent names the universal root
+		leaf0   bool     // a leaf label's target names the universal root
+		noPlace error
 	)
+	l, isLabel := e.(*LabelEntry)
+	leafLabel := isLabel && l.Label != nil && *l.Label == LeafLabel
 	for _, sp := range specialsOf(e) {
 		var mapped func(at string, s string, holder map[string]any) (string, bool)
 		switch {
-		case sp.role == roleEntry && m.Entry != nil:
+		case sp.role == roleEntry && (m.Entry != nil || sp.bound && m.Bound != nil):
 			mapped = func(at, s string, holder map[string]any) (string, bool) {
 				session := ""
 				if sp.session != "" && holder != nil {
 					session, _ = holder[sp.session].(string)
 				}
-				id, ok := m.Entry(session, s)
-				if !ok {
+				var (
+					id string
+					ok bool
+				)
+				if sp.bound && m.Bound != nil {
+					id, ok = m.Bound(s)
+				} else {
+					id, ok = m.Entry(session, s)
+				}
+				switch {
+				case !ok:
 					out.Unmapped = append(out.Unmapped, Reference{At: at, Session: session, Entry: s})
+				case id != "":
+				case sp.set:
+					out.Dropped = append(out.Dropped, Reference{At: at, Session: session, Entry: s})
+					gone = append(gone, pointerUp(at, sp.up))
+					return s, false
+				case len(sp.path) == 1 && sp.path[0] == "parent":
+					root0 = true
+					return s, false
+				case leafLabel && len(sp.path) == 1 && sp.path[0] == "target":
+					// A leaf label may name the universal root.
+					leaf0 = true
+					return s, false
+				case noPlace == nil:
+					noPlace = fmt.Errorf("%w: %s names %s", ErrNoPlace, at, s)
+					return s, false
+				default:
+					return s, false
 				}
 				return id, ok
 			}
@@ -314,6 +440,18 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 			return id, ok && id != s
 		})
 	}
+	if noPlace != nil {
+		return Remapped{}, noPlace
+	}
+	if root0 && m.Base != "" {
+		root["parent"] = m.Base
+	} else if root0 {
+		root["parent"] = nil
+	}
+	if leaf0 {
+		root["target"] = nil
+	}
+	removeAll(root, gone)
 	if parents && sortParents {
 		sortParentsJSON(root)
 	}
@@ -332,28 +470,40 @@ func remapUnknown(u *UnknownEntry, m Remap) (Remapped, error) {
 	out := Remapped{Opaque: true}
 	if m.Entry != nil && cp.Parent != "" {
 		if id, ok := m.Entry("", cp.Parent); ok {
+			if id == "" {
+				id = m.Base // the base in a file with one, else the universal root
+			}
 			cp.Parent = id
 		} else {
 			out.Unmapped = append(out.Unmapped, Reference{At: "/parent", Entry: cp.Parent})
 		}
 	}
+	kept := cp.Parents[:0:0]
 	for i, r := range cp.Parents {
 		at := "/parents/" + strconv.Itoa(i)
 		if m.Entry != nil && r.Entry != "" {
-			if id, ok := m.Entry(r.Session, r.Entry); ok {
-				cp.Parents[i].Entry = id
-			} else {
+			if id, ok := m.Entry(r.Session, r.Entry); !ok {
 				out.Unmapped = append(out.Unmapped, Reference{At: at + "/entry", Session: r.Session, Entry: r.Entry})
+			} else if id == "" {
+				out.Dropped = append(out.Dropped, Reference{At: at + "/entry", Session: r.Session, Entry: r.Entry})
+				continue
+			} else {
+				r.Entry = id
 			}
 		}
 		if m.Session != nil && r.Session != "" {
 			if id, ok := m.Session(r.Session); ok {
-				cp.Parents[i].Session = id
+				r.Session = id
 			} else {
 				out.Unmapped = append(out.Unmapped, Reference{At: at + "/session", Session: r.Session})
 			}
 		}
+		kept = append(kept, r)
 	}
+	if len(kept) == 0 {
+		kept = nil
+	}
+	cp.Parents = kept
 	if !slices.Equal(cp.Parents, u.Parents) {
 		sortParents(cp.Parents) // a re-pointed reference is a writer's, sorted
 	}
@@ -432,6 +582,97 @@ func eachString(v any, path []string, at string, holder map[string]any, fn func(
 		}
 	}
 	return v
+}
+
+// pointerUp is the pointer at with its last n tokens removed.
+func pointerUp(at string, n int) string {
+	for ; n > 0; n-- {
+		if i := strings.LastIndexByte(at, '/'); i >= 0 {
+			at = at[:i]
+		}
+	}
+	return at
+}
+
+// removeAll removes from root the member or element each pointer names,
+// the last met first, so an element removed never moves one still to
+// be. A list it empties is removed, and so is an omit object left with
+// no member: an empty omit clears the one in force, where the list
+// removed only added to it.
+func removeAll(root map[string]any, pointers []string) {
+	var emptied []string
+	for i := len(pointers) - 1; i >= 0; i-- {
+		at := pointers[i]
+		up := pointerUp(at, 1)
+		key := unescapeToken(at[len(up)+1:])
+		switch c := pointerValue(root, up).(type) {
+		case map[string]any:
+			delete(c, key)
+		case []any:
+			k, err := strconv.Atoi(key)
+			if err != nil || k < 0 || k >= len(c) {
+				continue
+			}
+			setPointer(root, up, slices.Delete(c, k, k+1))
+		}
+		emptied = append(emptied, up)
+	}
+	slices.Sort(emptied)
+	for _, up := range slices.Compact(emptied) {
+		if list, ok := pointerValue(root, up).([]any); ok && len(list) == 0 {
+			holder := pointerUp(up, 1)
+			if obj, ok := pointerValue(root, holder).(map[string]any); ok {
+				delete(obj, unescapeToken(up[len(holder)+1:]))
+				if len(obj) == 0 && strings.HasSuffix(holder, "/omit") {
+					if h, ok := pointerValue(root, pointerUp(holder, 1)).(map[string]any); ok {
+						delete(h, "omit")
+					}
+				}
+			}
+		}
+	}
+}
+
+// pointerValue returns the value pointer at names in v, nil if none.
+func pointerValue(v any, at string) any {
+	if at == "" {
+		return v
+	}
+	for _, t := range strings.Split(at[1:], "/") {
+		switch c := v.(type) {
+		case map[string]any:
+			v = c[unescapeToken(t)]
+		case []any:
+			k, err := strconv.Atoi(t)
+			if err != nil || k < 0 || k >= len(c) {
+				return nil
+			}
+			v = c[k]
+		default:
+			return nil
+		}
+	}
+	return v
+}
+
+// setPointer puts val at the member or element pointer at names in
+// root, which holds it already.
+func setPointer(root map[string]any, at string, val any) {
+	up := pointerUp(at, 1)
+	key := unescapeToken(at[len(up)+1:])
+	switch c := pointerValue(root, up).(type) {
+	case map[string]any:
+		c[key] = val
+	case []any:
+		if k, err := strconv.Atoi(key); err == nil && k >= 0 && k < len(c) {
+			c[k] = val
+		}
+	}
+}
+
+// unescapeToken undoes pointerToken.
+func unescapeToken(t string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(t, "~1", "/"), "~0", "~")
 }
 
 // sortParentsJSON sorts an entry's parents elements as sortParents sorts

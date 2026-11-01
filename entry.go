@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -310,6 +311,24 @@ type ItemEntry struct {
 	// QueuedFrom names the [QueuedEntry] this item was accepted as,
 	// for an input that waited before it could be appended.
 	QueuedFrom string `json:"queued_from,omitempty"`
+	// Failed marks, in format 0.14, an entry holding a function call
+	// output whose tool reported failure, or which the harness gave up:
+	// cut off, timed out, its outcome unknown. The output describes it.
+	// It is a record member: the item is sent as it is, and the call is
+	// completed by its output all the same. A reader maps it to its
+	// protocol's failure state; [Call.Failed] reads it. A failed member
+	// on any other item, or one that is not true, is kept as written in
+	// Unknown and Failed is false.
+	Failed bool `json:"-" member:"failed"`
+	// FromLink names, in format 0.14, a peer link entry before this item
+	// on its path, by ID: the item carries that callee's later report,
+	// such as the result a peer whose work outlived its call delivers
+	// some turns after the call's acknowledgement. It is provenance: it
+	// does not make the call answered, and it reaches no request.
+	// [Session.VerifyRecords] reports one that names no peer link before
+	// the item. A from_link member that is not a non-empty string is
+	// kept as written in Unknown and FromLink is empty.
+	FromLink string `json:"-" member:"from_link"`
 }
 
 // EntryType returns "item".
@@ -404,11 +423,13 @@ type ConfigEntry struct {
 }
 
 // Omit is the omit setting: what a request leaves out of the context
-// though it is on the path, as format 0.11 records it. Settings carry
-// the object in force, which a config entry's Omit extends: its
-// Reasoning replaces the rule in force when it names one, its Items
-// are added to the set in force, and an object naming neither clears
-// both.
+// though it is on the path, as format 0.11 records it, and, from 0.14,
+// what it sends a placeholder for. Settings carry the object in force,
+// which a config entry's Omit extends: its Reasoning replaces the rule
+// in force when it names one, its Items are added to the set in force,
+// its Outputs add their items to those in force and set the text, its
+// Images replace the rule in force, and an object naming none of them
+// clears all of them.
 type Omit struct {
 	// Reasoning is a rule over the reasoning items on the path. It is
 	// closed: [OmitOtherModels] is the one value defined, and a value
@@ -421,6 +442,125 @@ type Omit struct {
 	// The set in force is the union of every list since the last replace
 	// or compaction's checkpoint.
 	Items []string `json:"items,omitempty"`
+	// Outputs, from 0.14, sends the function call output of each item
+	// entry it lists with a placeholder text in place of its output.
+	Outputs *OmitOutputs `json:"outputs,omitempty"`
+	// Images, from 0.14, sends input_image parts with a placeholder text
+	// in their place: all but the last few, or all before an entry.
+	Images *OmitImages `json:"images,omitempty"`
+	// undefined is set on an object read with an outputs or images member
+	// in a form the format does not define, which its entry keeps as
+	// written: the member is carried and changes nothing, as an
+	// undefined reasoning value changes nothing, so the object is not
+	// the empty one that clears what is in force.
+	undefined bool
+}
+
+// OmitOutputs is the outputs member of omit: each item entry on the
+// path whose ID Items lists, and that holds a function call output, is
+// sent with its output the string Text, its call ID and every other
+// member as they are. The items in force are the union of every list
+// since the last replace or compaction's checkpoint, as for
+// [Omit.Items], and the text is the one the latest member wrote.
+type OmitOutputs struct {
+	Text  string   `json:"text"`
+	Items []string `json:"items,omitempty"`
+}
+
+// OmitImages is the images member of omit, in one of two forms: with
+// Before empty, every input_image part the request's item entries
+// contribute but the last Keep is sent as an input_text part holding
+// Placeholder; with Before set, every input_image part of an item entry
+// on the path before the entry Before names is. A later images member
+// replaces the one in force.
+type OmitImages struct {
+	Keep        int    `json:"keep"`
+	Before      string `json:"before"`
+	Placeholder string `json:"placeholder"`
+}
+
+// MarshalJSON writes the form the member is in: before, or keep.
+func (o OmitImages) MarshalJSON() ([]byte, error) {
+	if o.Before != "" {
+		return jsonx.MarshalNoEscape(struct {
+			Before      string `json:"before"`
+			Placeholder string `json:"placeholder"`
+		}{o.Before, o.Placeholder})
+	}
+	return jsonx.MarshalNoEscape(struct {
+		Keep        int    `json:"keep"`
+		Placeholder string `json:"placeholder"`
+	}{o.Keep, o.Placeholder})
+}
+
+// UnmarshalJSON takes either form, spelled exactly: a non-empty string
+// before or a non-negative integer keep, not both, beside a string
+// placeholder. Anything else is an error, so an [Omit] holding it keeps
+// the member as written.
+func (o *OmitImages) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	*o = OmitImages{}
+	if json.Unmarshal(all["placeholder"], &o.Placeholder) != nil {
+		return errors.New("omit images: placeholder is a string")
+	}
+	_, hasKeep := all["keep"]
+	_, hasBefore := all["before"]
+	switch {
+	case hasKeep && !hasBefore:
+		var n json.Number
+		if json.Unmarshal(all["keep"], &n) != nil {
+			return errors.New("omit images: keep is a number")
+		}
+		k, err := strconv.Atoi(n.String())
+		if err != nil || k < 0 {
+			return errors.New("omit images: keep is a non-negative integer")
+		}
+		o.Keep = k
+	case hasBefore && !hasKeep:
+		if json.Unmarshal(all["before"], &o.Before) != nil || o.Before == "" {
+			return errors.New("omit images: before is a non-empty string")
+		}
+	default:
+		return errors.New("omit images: one of keep and before")
+	}
+	return nil
+}
+
+// UnmarshalJSON takes reasoning and items as the struct names them, and
+// outputs and images only in the form the format defines; a member in
+// another form, which a file from before 0.14 was free to write, is left
+// for the entry to keep as written.
+func (o *Omit) UnmarshalJSON(data []byte) error {
+	var plain struct {
+		Reasoning string          `json:"reasoning,omitempty"`
+		Items     []string        `json:"items,omitempty"`
+		Outputs   json.RawMessage `json:"outputs"`
+		Images    json.RawMessage `json:"images"`
+	}
+	if err := json.Unmarshal(data, &plain); err != nil {
+		return err
+	}
+	*o = Omit{Reasoning: plain.Reasoning, Items: plain.Items}
+	if len(plain.Outputs) > 0 && !isNull(plain.Outputs) {
+		var outputs OmitOutputs
+		if holdsExactly(plain.Outputs, &outputs) {
+			o.Outputs = &outputs
+		} else {
+			o.undefined = true
+		}
+	}
+	if len(plain.Images) > 0 && !isNull(plain.Images) {
+		var images OmitImages
+		if holdsExactly(plain.Images, &images) {
+			o.Images = &images
+		} else {
+			o.undefined = true
+		}
+	}
+	return nil
 }
 
 // OmitOtherModels is the one value of [Omit.Reasoning] the format
@@ -434,12 +574,23 @@ const OmitOtherModels = "other_models"
 // because [Omit.Items] lists its entry.
 const OmitItems = "items"
 
-// IsZero reports whether the object names no rule and no entry, which
-// is the object a config entry writes to clear the one in force, and the
-// settings of a path that left nothing out. An empty id names no entry,
-// so a list of them names none.
+// OmitOutputsReason and OmitImagesReason are the reasons a [Context]
+// reports for an item sent with a placeholder: its output, because
+// [Omit.Outputs] lists its entry, or image parts, which [Omit.Images]
+// reaches.
+const (
+	OmitOutputsReason = "outputs"
+	OmitImagesReason  = "images"
+)
+
+// IsZero reports whether the object names no rule, no entry and no
+// placeholder, which is the object a config entry writes to clear the
+// one in force, and the settings of a path that left nothing out. An
+// empty id names no entry, so a list of them names none. An object read
+// with an outputs or images member in a form the format does not define
+// carries it, and is not zero.
 func (o Omit) IsZero() bool {
-	if o.Reasoning != "" {
+	if o.Reasoning != "" || o.Outputs != nil || o.Images != nil || o.undefined {
 		return false
 	}
 	for _, id := range o.Items {
@@ -450,27 +601,62 @@ func (o Omit) IsZero() bool {
 	return true
 }
 
+// clone returns a copy of the object that shares no slice or pointer
+// with it.
+func (o Omit) clone() Omit {
+	out := Omit{Reasoning: o.Reasoning, Items: slices.Clone(o.Items)}
+	if o.Outputs != nil {
+		out.Outputs = &OmitOutputs{Text: o.Outputs.Text, Items: slices.Clone(o.Outputs.Items)}
+	}
+	if o.Images != nil {
+		images := *o.Images
+		out.Images = &images
+	}
+	return out
+}
+
+// union returns the IDs of a and then b, each once, empty ones left out,
+// in the order they were first written.
+func union(a, b []string) []string {
+	var out []string
+	seen := make(map[string]bool, len(a)+len(b))
+	for _, list := range [][]string{a, b} {
+		for _, id := range list {
+			if id != "" && !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
 // merged returns the object in force after a delta d: d's rule replaces
 // this one's when it is one the format defines, a rule it does not
 // define leaves this one's in force, d's items are added to this one's
-// in the order they were first written, and a delta that names neither a
-// rule nor an entry clears both. The receiver and d are not modified.
+// in the order they were first written, d's outputs add their items to
+// those in force and set the text, d's images replace those in force,
+// and a delta that names none of them clears all of them. The receiver
+// and d are not modified.
 func (o Omit) merged(d Omit) Omit {
 	if d.IsZero() {
 		return Omit{}
 	}
-	out := Omit{Reasoning: o.Reasoning}
+	out := o.clone()
 	if d.Reasoning == OmitOtherModels {
 		out.Reasoning = d.Reasoning
 	}
-	seen := make(map[string]bool, len(o.Items)+len(d.Items))
-	for _, list := range [][]string{o.Items, d.Items} {
-		for _, id := range list {
-			if id != "" && !seen[id] {
-				seen[id] = true
-				out.Items = append(out.Items, id)
-			}
+	out.Items = union(o.Items, d.Items)
+	if d.Outputs != nil {
+		var held []string
+		if o.Outputs != nil {
+			held = o.Outputs.Items
 		}
+		out.Outputs = &OmitOutputs{Text: d.Outputs.Text, Items: union(held, d.Outputs.Items)}
+	}
+	if d.Images != nil {
+		images := *d.Images
+		out.Images = &images
 	}
 	return out
 }
@@ -891,6 +1077,36 @@ type CustomEntry struct {
 	// the member was defined may hold, is kept as written in Unknown and
 	// CallID is empty.
 	CallID string `json:"-" member:"call_id"`
+}
+
+// Calls returns the number of model calls the entry records, which RFC
+// 0001 has a custom entry record when its data is an object with a
+// top-level usage member in the payload profile's usage shape: calls the
+// path paid for that produced no response. They are the data's attempts
+// member beside the usage, a positive integer with a response's
+// meaning, or one when it is absent or in another form. An entry whose
+// data holds no such usage records none, and Calls returns zero.
+func (e *CustomEntry) Calls() int {
+	var paid struct {
+		Usage    *openresponses.Usage `json:"usage"`
+		Attempts json.RawMessage      `json:"attempts"`
+	}
+	if json.Unmarshal(e.Data, &paid) != nil || paid.Usage == nil {
+		return 0
+	}
+	if n, ok := positiveInt(paid.Attempts); ok {
+		return n
+	}
+	return 1
+}
+
+// positiveInt reads raw as a positive integer written as digits.
+func positiveInt(raw json.RawMessage) (int, bool) {
+	if len(raw) == 0 || raw[0] < '1' || raw[0] > '9' {
+		return 0, false
+	}
+	n, err := strconv.Atoi(string(raw))
+	return n, err == nil && n > 0
 }
 
 // EntryType returns "custom".
@@ -1848,7 +2064,25 @@ func (e *ItemEntry) MarshalJSON() ([]byte, error) {
 		return nil, errors.New("agentsession: item entry has no item")
 	}
 	type plain ItemEntry
-	return marshalEntry(TypeItem, &e.EntryBase, (*plain)(e))
+	if !e.Failed && e.FromLink == "" {
+		return marshalEntry(TypeItem, &e.EntryBase, (*plain)(e))
+	}
+	if _, ok := e.Item.(*openresponses.FunctionCallOutput); e.Failed && !ok {
+		return nil, errors.New("agentsession: failed is defined on a function call output's entry alone")
+	}
+	for _, m := range []struct {
+		key string
+		set bool
+	}{{"failed", e.Failed}, {"from_link", e.FromLink != ""}} {
+		if _, dup := e.Unknown[m.key]; dup && m.set {
+			return nil, fmt.Errorf("agentsession: item entry has %s both typed and unknown", m.key)
+		}
+	}
+	return marshalEntry(TypeItem, &e.EntryBase, struct {
+		*plain
+		Failed   bool   `json:"failed,omitempty"`
+		FromLink string `json:"from_link,omitempty"`
+	}{(*plain)(e), e.Failed, e.FromLink})
 }
 
 // UnmarshalJSON decodes the entry, dispatching the item through the
@@ -1906,6 +2140,13 @@ func (e *ItemEntry) decodeMembers(_ []byte, all map[string]json.RawMessage) erro
 			return fmt.Errorf("queued_from: %w", err)
 		}
 	}
+	// failed is taken where 0.14 defines it, true on an output's entry,
+	// in a file of any minor; anything else is kept as written.
+	e.Failed, e.FromLink = false, ""
+	if _, ok := e.Item.(*openresponses.FunctionCallOutput); ok {
+		promote(&e.EntryBase, "failed", &e.Failed)
+	}
+	promote(&e.EntryBase, "from_link", &e.FromLink)
 	return nil
 }
 

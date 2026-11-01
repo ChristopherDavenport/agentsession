@@ -933,3 +933,104 @@ func TestPeerBySessionOnTheToolSpan(t *testing.T) {
 		t.Errorf("peer attribute = %q, want the peer's session", got)
 	}
 }
+
+// TestWithdrawnAndFailed: a withdrawn hand-off's span ends at its
+// withdrawal, without an error, since the tool never ran, and the
+// call's next hand-off opens a span of its own; an output marked failed
+// ends its call's span with an error status (RFC 0001 0.14).
+func TestWithdrawnAndFailed(t *testing.T) {
+	sr, tracer := recorder()
+	s := agentsession.New(agentsession.Header{ID: "withdrawn", Records: agentsession.AllRecords})
+	if _, err := s.Append(agentsession.NewRunStart("r1", agentsession.SourceInput, "")); err != nil {
+		t.Fatal(err)
+	}
+	target, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "notify", Arguments: "{}"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("c", "Error: unreachable"))
+	failed.Failed = true
+	for _, e := range []agentsession.Entry{
+		agentsession.NewDispatch("c", target),
+		agentsession.NewWithdrawal("c", target, agentsession.ByPolicy, "vetoed"),
+		agentsession.NewDispatch("c", target),
+		failed,
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	tool := spans(sr.Ended()).named(OpTool + " notify")
+	withdrawn, completed := tool.withAttr(AttrCallState, CallStateWithdrawn), tool.withAttr(AttrCallState, agentsession.CallCompleted.String())
+	if len(tool) != 2 || len(withdrawn) != 1 || len(completed) != 1 {
+		t.Fatalf("tool spans = %d, withdrawn %d, completed %d", len(tool), len(withdrawn), len(completed))
+	}
+	if withdrawn[0].Status().Code == codes.Error || len(eventAttr(withdrawn[0], EventDecision, AttrWithdrawn)) != 1 {
+		t.Errorf("withdrawn span status %v, withdrawn events %v", withdrawn[0].Status(), eventAttr(withdrawn[0], EventDecision, AttrWithdrawn))
+	}
+	if completed[0].Status().Code != codes.Error {
+		t.Errorf("the failed call's span status = %v, want an error", completed[0].Status())
+	}
+}
+
+// TestWithdrawalRestoresTheCall: a withdrawal puts the call back as it
+// was before the dispatch, as Calls reads it: a held call is held again,
+// and the next hand-off's span does not link to the withdrawn one as a
+// hand-off it repeats (review finding 6).
+func TestWithdrawalRestoresTheCall(t *testing.T) {
+	build := func(again bool) *agentsession.Session {
+		s := agentsession.New(agentsession.Header{ID: "restore", Records: agentsession.AllRecords})
+		if _, err := s.Append(agentsession.NewRunStart("r1", agentsession.SourceInput, "")); err != nil {
+			t.Fatal(err)
+		}
+		target, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "notify", Arguments: "{}"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries := []agentsession.Entry{
+			agentsession.NewDecision("c", target, agentsession.VerdictHold, agentsession.ByPolicy),
+			agentsession.NewDispatch("c", target),
+			agentsession.NewWithdrawal("c", target, agentsession.ByPolicy, "vetoed"),
+		}
+		if again {
+			entries = append(entries, agentsession.NewDecision("c", target, agentsession.VerdictProceed, agentsession.ByHuman), agentsession.NewDispatch("c", target))
+		}
+		for _, e := range entries {
+			if _, err := s.Append(e); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return s
+	}
+	s := build(false)
+	calls, _ := s.Calls(s.Leaf())
+	want := calls[0].State(s.Header()).String()
+	sr, tracer := recorder()
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	tool := spans(sr.Ended()).named(OpTool + " notify")
+	if got := tool.withAttr(AttrCallState, want); len(got) != 1 || want != agentsession.CallHeld.String() {
+		var states []string
+		for _, sp := range tool {
+			states = append(states, attr(sp, AttrCallState))
+		}
+		t.Errorf("Calls reads %s; tool span states %v", want, states)
+	}
+	s = build(true)
+	sr, tracer = recorder()
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	tool = spans(sr.Ended()).named(OpTool + " notify")
+	withdrawn, live := tool.withAttr(AttrCallState, CallStateWithdrawn), tool.withAttr(AttrCallState, agentsession.CallInFlight.String())
+	if len(withdrawn) != 1 || len(live) != 1 {
+		t.Fatalf("withdrawn %d, in flight %d", len(withdrawn), len(live))
+	}
+	if linksTo(live[0], withdrawn[0]) {
+		t.Error("the next hand-off links to the withdrawn one as a hand-off it repeats")
+	}
+}

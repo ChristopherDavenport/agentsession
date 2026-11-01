@@ -242,6 +242,7 @@ var reasons = map[string]error{
 	"call_completed":        agentsession.ErrCallCompleted,
 	"source_mismatch":       agentsession.ErrSourceMismatch,
 	"reject_dispatched":     agentsession.ErrRejectDispatched,
+	"bad_withdrawal":        agentsession.ErrBadWithdrawal,
 	"answer_not_dispatched": agentsession.ErrAnswerNotDispatched,
 	"reason_mismatch":       agentsession.ErrReasonMismatch,
 	"link_mismatch":         agentsession.ErrLinkMismatch,

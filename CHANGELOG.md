@@ -7,6 +7,191 @@ versions may break the API.
 
 ## Unreleased
 
+- **ATIF: what each step's own request left out, cost with subagents,
+  a call's records with the call, and calls counted by attempts (RFC
+  0001 0.14, Projections/ATIF and `custom`).** Each agent step carries,
+  under `extra.agentsession`, `request_omitted` and `request_replaced`
+  from its response's request context, so after a model switch a step
+  no longer reads as sent the leaf's prompt (#223). A `custom` entry
+  whose `call_id` names a call with an agent step travels under that
+  step's `calls[call_id].custom` (#224). With subagents embedded, the
+  root's `total_cost_usd` adds each embedded document's, and the notes
+  say so and name what is left out; token totals and `total_steps` stay
+  the path's (#220). `total_steps` counts a response as its `attempts`
+  and a `custom` entry's usage as the `attempts` beside it, so it equals
+  the agent steps' `llm_call_count` plus the other model calls (#225).
+  The 0.14 members project too: `failed` and `from_link` under
+  `extra.agentsession`, a withdrawal's `withdrawn` in its decision
+  record, and a placeholder as `replaced` with the item as `sent`, which
+  `Items` reads; each placeholder record carries the text its request
+  sent. **Added: `CustomEntry.Calls`, `PathRequestContext`,
+  `ExtraRequestOmitted`, `ExtraRequestReplaced` and `ExtraReplaced`.**
+  ATIF goldens for `withdrawn`, `late-report` and `placeholders`.
+
+- **Member names that are data reach a redactor (RFC 0001 0.14, Every
+  redacted entry).** A member name is data in an `env` entry's `files`
+  and `tools`, and at any depth in every object whose members the
+  format does not define: a `custom` entry's `data` but for the
+  `usage`, `model` and `attempts` the format defines there, an
+  `outcome`'s `details`, a `decision`'s `args`, the values of a
+  config's or a checkpoint's `extra`, whose own keys are request member
+  names, the value of any member the format does not define, and an
+  extension entry's body, its own names included. **Changed:
+  `RewriteStrings`, `Rewriter` and `RewriteHeaderStrings`** give f those
+  names, found from the type that decodes the entry, and refuse two
+  names made one, or an extension entry's name made one its envelope
+  holds, with `ErrKeyCollision`; names in objects the format defines,
+  and in items, stay as written. A path keying a `custom` record, such as
+  Claude Code's tracked file backups, is now redacted rather than
+  refused. (#252)
+
+- **A Rewriter reports the parts whose hash it kept (RFC 0001 0.14,
+  Every redacted entry).** A redactor MUST NOT write an instruction
+  part, or an omitted part's `of`, under an original hash whose text or
+  entry it cannot resolve on the path; it writes the part as text of its
+  own, such as placeholder text, and the responses after it carry no
+  `request_hash` or a recomputed one, or it does not redact the entry.
+  **Added: `Rewriter.Unmet`, `UnmetPart` and `Rewriter.LeftOut`**:
+  `Unmet` names each part a `Rewriter` wrote that its path cannot
+  rebuild, a hash whose text no part in force on the path holds or a
+  keep over parts none put in force, by entry, pointer and part ID,
+  never by hash or text, so a redactor refuses before it commits rather
+  than finding the part with `ContextAt` afterwards. A redactor tells
+  the `Rewriter` which entries it leaves out with `LeftOut`, so a text
+  only a left-out entry held is not taken as met. The entry and part ID
+  are the original's, not to be logged. An
+  unmapped `of` is in `RemapRefs`' `Unmapped`, as before. (#251)
+
+- **A header's text, rewritten from one table (RFC 0001 0.14, The
+  redacted session).** In a redacted session's header `cwd`, `harness`
+  and every member the format does not define are text; `type`,
+  `format`, `created_at`, `payload`, `records`, `media`, `redacted` and
+  `redacted_from` are the redaction's to write; `id` is derived; `base`
+  and `parent_session` are references; `spawned_by` is a `call_id` and
+  changes only in step with the call IDs. **Added:
+  `RewriteHeaderStrings`**, driven by a header member table beside the
+  entry table `RewriteStrings` and `RemapRefs` use, so a redactor no
+  longer walks `Header.Extra` itself. (#250)
+
+- **What leaving entries out means, member by member (RFC 0001 0.14,
+  Leaving entries out).** A left-out entry's place is the placeholder
+  covering it, or else the nearest entry kept above it; a member naming
+  one predecessor (`parent`, a label's, an outcome's or a `judged_by`
+  link's `target`, `from`, `of`) names that place, and `first_kept` and
+  `images`' `before`, which bound a range from below, name the first
+  entry written after it. A member listing entries, or recording where
+  an item came from (a `parents` element, an `omit` or `outputs` item,
+  `queued_from`, `from_link`), loses the entry. A call's dispatches,
+  decisions, outputs and links go with it, a cancel notice with the
+  link it names, a drained `queued` entry with its item, a run end is
+  recomputed or left out, and a pin follows its source. Two rules
+  tighten: a redactor that changes a pin's source changes the pin, and
+  `first_kept` names an entry before its compaction, with a placeholder
+  written when a redaction leaves every entry from it out. **Added:
+  `ErrNoPlace`, `Remapped.Dropped`, `Remap.Bound` and `Remap.Base`**; a `Remap`
+  callback that returns an empty ID says the entry was left out with
+  nothing in its place, and `RemapRefs` removes the members listing it,
+  removes a list it empties and an `omit` left naming nothing (an empty
+  one would clear what is in force), points `parent` at the root, or
+  at `Remap.Base` in a file with a base, and a `leaf` label's `target`
+  at the root, and refuses any other member with `ErrNoPlace`. `Remap.Bound` maps `first_kept` and `before`, so they
+  never name the entry above a left-out one that `Entry` returns. (#253)
+
+- **Which form a sidecar session's request hash covers (RFC 0001 0.14,
+  Request hash).** The request as recorded, each `sidecar:` URL as the
+  item holds it, which is the only form a reader can rebuild; a writer
+  resolves the URLs to the blobs' bytes before sending and never sends
+  one to a provider. This is what the library already computed;
+  `RequestHash` says so, and a test holds it. (#5)
+
+- **Two conformance fixtures for rules nothing measured (RFC 0001,
+  Conformance).** `refold.jsonl` has two compactions on a path, the
+  second restating one pin and dropping the other, so a reader that
+  applies every compaction rather than the last rebuilds requests that
+  do not verify; `no-response-id.jsonl` has a response with no
+  `response_id` right after a user message, so a reader that matches an
+  absent `response` to an absent `response_id` takes that message for
+  its output. Both have context and ATIF goldens. (#51)
+
+- **A resume that wrote only record entries is accepted as written
+  (RFC 0001 0.14, `run`).** 0.11 accepted a run written `resume` whose
+  segment held nothing; a resume that replayed a child's link or a
+  hook's annotation and was then refused or cut still read as the shape
+  of an input, and `VerifyRecords` reported `ErrSourceMismatch`. Now a
+  segment holding no entry in context and no dispatch or decision is
+  accepted, in a file of any minor. **Changed: `Run.Empty`** reports
+  that shape: record entries no longer make a segment
+  other than empty; a `response`, a model call that took nothing up,
+  still does, since that is an input's retry. Conformance fixture
+  `record-resume.jsonl`. (#229)
+
+- **Placeholders for a tool output or a screenshot (RFC 0001 0.14,
+  Items left out of the context and Context building).** `omit` gains
+  `outputs`, `{"text": t, "items": [ids]}`, which sends each listed
+  entry's function call output as `t`, and `images`, `{"keep": n,
+  "placeholder": t}` or `{"before": id, "placeholder": t}`, which sends
+  every `input_image` part but the last n, or every one before an
+  entry, as an `input_text` part holding `t`. Both apply after `items`
+  and `reasoning`, the request hash covers the result, and a
+  compaction's checkpoint carries them, so a loop that clears old tool
+  results or prunes screenshots records a request that verifies.
+  **Added: `Omit.Outputs`, `Omit.Images`, `OmitOutputs`, `OmitImages`,
+  `Context.ReplacedItems`, `ReplacedItem`, `OmitOutputsReason` and
+  `OmitImagesReason`**; `Settings.OmitDelta` writes both, and `Verify`
+  reports a hash over the unedited request as `ErrOmitDivergence`. A
+  member in another form is kept as written and replaces nothing.
+  `outputs`' `items` and `images`' `before` name entries, so `RemapRefs`
+  re-points them. Conformance fixture `placeholders.jsonl`, with
+  context goldens for it and the other 0.14 fixtures. (#262)
+
+- **An item names the peer link whose late report it carries (RFC 0001
+  0.14, `item`; RFC 0002, Entries and the context hash).** A peer whose
+  work outlives its call answers later, as an input the harness
+  appends; `from_link` on that item names the `peer` link, by ID. It is
+  provenance: the call is answered by its own output as before, the
+  member reaches no request, and the context hash leaves it out, as it
+  leaves out `queued_from`. **Added: `ItemEntry.FromLink` and
+  `ErrBadFromLink`**, which `VerifyRecords` returns for a `from_link`
+  naming no peer link before the item, a cancel notice included.
+  `RemapRefs` re-points it, so migration and redaction rewrite it.
+  Conformance fixtures `late-report.jsonl` and `bad-late-report.jsonl`.
+  (#248)
+
+- **A failed call, and a withdrawn hand-off (RFC 0001 0.14, `item` and
+  `decision`).** An output's entry may carry `failed: true`: the tool
+  reported failure, or the harness gave the call up. **Added:
+  `ItemEntry.Failed` and `Call.Failed`**; the call is completed all the
+  same, the member reaches no request, and the context hash (RFC 0002)
+  leaves it out. A writer that wrote a call's
+  `dispatch` and then did not hand it to its tool writes a `reject`
+  carrying `withdrawn: true` directly after it among the call's
+  entries; a reader reads that hand-off as never made, so the call is
+  never started when it has no other dispatch, and may be dispatched
+  again. **Added: `DecisionEntry.Withdrawn`, `NewWithdrawal`,
+  `Call.Withdrawn` and `Withdrawal`, and `ErrBadWithdrawal`** (wire
+  reason `bad_withdrawal`), which `Append` returns for a withdrawal
+  anywhere else; a reader reads one found elsewhere as a plain reject.
+  A withdrawal holds on its own path: `Session.Dispatches` still lists
+  the dispatch it withdraws, which another branch may have handed off,
+  and a path without the withdrawal reads it as any dispatch elsewhere. otel ends a
+  withdrawn hand-off's span at its withdrawal, without an error, with
+  call state `withdrawn` (`CallStateWithdrawn`, `AttrWithdrawn` on the
+  decision event), and gives a failed call's span an error status. A
+  conformance fixture, `withdrawn.jsonl`, holds both. (#264, #226)
+
+- **Format 0.14 (RFC 0001, draft 0.14).** `Format` and `FormatMinor`
+  name 0.14, so a writer raises every file it appends to and a reader
+  of 0.13 refuses it; a 0.5 to 0.13 file reads as it stands and no
+  entry hash moves. The generated fixtures and export goldens carry the
+  new header. 0.14 takes in the universal root and `env.workspace`'s
+  `host` and `instance` (#265), and the members and rules below.
+  **Changed: `Workspace` has `Host` and `Instance` fields**, taken from
+  a member holding a non-empty string in a file of any minor; one in
+  another form stays in `Unknown` as written. `Workspace.SetMember`
+  sets the fields for `host` and `instance`, and refuses a value that
+  is not a non-empty string. A caller that read `Unknown["host"]` reads
+  `Host`.
+
 - **Naming a blob grants nothing (RFC 0002, Media; RFC 0003, Objects,
   Writing, Import and Security considerations).** The remote server
   counted every `sidecar:` URL in a session as a blob that session
