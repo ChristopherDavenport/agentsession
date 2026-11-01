@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
+	"github.com/ChristopherDavenport/agentsession/internal/origin"
 	"github.com/ChristopherDavenport/agentsession/internal/wake"
 )
 
@@ -287,6 +288,14 @@ type MemoryStore struct {
 	wmu sync.Mutex
 	// redactedOnly says the store holds only redacted entries.
 	redactedOnly bool
+	// blobs are the sidecar media blobs the store holds, by hash.
+	blobs map[string]memBlob
+}
+
+// memBlob is a blob a MemoryStore holds, and when it was last stored.
+type memBlob struct {
+	data []byte
+	at   time.Time
 }
 
 // MemoryOption configures a [MemoryStore].
@@ -312,12 +321,85 @@ func MemoryRedactedOnly() MemoryOption {
 
 // NewMemoryStore returns an empty store.
 func NewMemoryStore(opts ...MemoryOption) *MemoryStore {
-	m := &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{},
+	m := &MemoryStore{sessions: map[string]*Session{}, gens: map[string]uint64{}, blobs: map[string]memBlob{},
 		refs: refState{refs: map[string]RefTarget{}, idents: map[string]string{}, logs: map[string][]RefUpdate{}}}
 	for _, o := range opts {
 		o(m)
 	}
 	return m
+}
+
+// PutBlob implements [BlobWriter]: it keeps a copy of the blob under
+// its hash. Storing a blob the store holds again restarts its grace
+// for [MemoryStore.SweepBlobs].
+func (m *MemoryStore) PutBlob(ctx context.Context, data []byte) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	h := HashBytes(data)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.blobs[h]
+	if !ok {
+		b.data = bytes.Clone(data)
+	}
+	b.at = time.Now()
+	m.blobs[h] = b
+	return h, nil
+}
+
+// SweepBlobs implements [BlobSweeper]: it removes each blob no session
+// names that was stored longer than grace ago. It holds the store's
+// writers off for its length, so no append names a blob between its
+// reading the sessions and its removing one.
+func (m *MemoryStore) SweepBlobs(ctx context.Context, grace time.Duration) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	m.wmu.Lock()
+	defer m.wmu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cutoff := time.Now().Add(-grace)
+	old := false
+	for _, b := range m.blobs {
+		old = old || b.at.Before(cutoff)
+	}
+	if !old {
+		return 0, nil
+	}
+	named := map[string]bool{}
+	for _, s := range m.sessions {
+		bs, err := SessionBlobs(s)
+		if err != nil {
+			return 0, err
+		}
+		for _, b := range bs {
+			named[b] = true
+		}
+	}
+	n := 0
+	for h, b := range m.blobs {
+		if b.at.Before(cutoff) && !named[h] {
+			delete(m.blobs, h)
+			n++
+		}
+	}
+	return n, nil
+}
+
+// Blob implements [BlobReader]. The bytes returned are the caller's.
+func (m *MemoryStore) Blob(ctx context.Context, hash string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	b, ok := m.blobs[hash]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNoBlob, hash)
+	}
+	return bytes.Clone(b.data), nil
 }
 
 // Create implements Store. A header whose Base is set makes a fork of
@@ -326,15 +408,19 @@ func NewMemoryStore(opts ...MemoryOption) *MemoryStore {
 // The session returned is the store's own, shared with it, so a write
 // through it, by [Session.Append], Commit or Extend, bypasses every rule
 // the store holds an append to, MemoryRedactedOnly's among them.
-func (m *MemoryStore) Create(_ context.Context, h Header) (*Session, error) {
+func (m *MemoryStore) Create(ctx context.Context, h Header) (*Session, error) {
 	if err := CheckCreate(h, m.redactedOnly); err != nil {
 		return nil, err
 	}
-	m.mu.Lock()
+	var origin *Session
+	if h.Base != "" {
+		origin = m.lockOrigin(ctx, h.ParentSession, h.Base)
+	} else {
+		m.mu.Lock()
+	}
 	defer m.mu.Unlock()
 	s := New(h)
 	if h.Base != "" {
-		origin := m.forkOrigin(h.ParentSession, h.Base)
 		if origin == nil {
 			return nil, fmt.Errorf("%w: base %s is not held by this store", ErrNoEntry, h.Base)
 		}
@@ -381,13 +467,18 @@ func (m *MemoryStore) Import(ctx context.Context, r io.Reader, asRecord bool) (*
 			return nil, err
 		}
 	}
-	m.mu.Lock()
+	var origin *Session
+	if h.Base != "" {
+		origin = m.lockOrigin(ctx, h.ParentSession, h.Base)
+	} else {
+		m.mu.Lock()
+	}
 	defer m.mu.Unlock()
 	if _, exists := m.sessions[h.ID]; exists {
 		return nil, fmt.Errorf("%w: %s", ErrSessionExists, h.ID)
 	}
 	if h.Base != "" {
-		if err := CheckImportMedia(h, m.forkOrigin(h.ParentSession, h.Base)); err != nil {
+		if err := CheckImportMedia(h, origin); err != nil {
 			return nil, err
 		}
 	}
@@ -397,13 +488,17 @@ func (m *MemoryStore) Import(ctx context.Context, r io.Reader, asRecord bool) (*
 	return s, nil
 }
 
-// forkOrigin returns the session a fork at base continues from: named, when
-// the named session's own entries include base, or the session up its
-// parent_session line that owns it when named holds it on its prefix,
-// else one whose own entries include it,
-// else one that holds it on its prefix, the first by ID when several
-// do. The caller holds m.mu.
-func (m *MemoryStore) forkOrigin(named, base string) *Session {
+// pickOrigin returns the ID of the session a fork at base continues
+// from: named, when the named session's own entries include base, or the
+// session up its parent_session line that owns it when named holds it on
+// its prefix, else one whose own entries include it, else one that holds
+// it on its prefix, the first by ID when several do; among the sessions
+// [ReadableIn] admits, "" when none is. The holders are gathered under
+// the store's lock and the read check asked after it is let go, since
+// the check may read the store. The caller holds no lock of the store's.
+func (m *MemoryStore) pickOrigin(ctx context.Context, named, base string) string {
+	m.mu.RLock()
+	var c origin.Candidates
 	// Named on its prefix, the base is its own origin's: parent_session
 	// is followed up to the session whose own entries include it, as
 	// cas finds it, since an import holds a fork to that one's media.
@@ -415,8 +510,10 @@ func (m *MemoryStore) forkOrigin(named, base string) *Session {
 		if _, ok := s.Entry(base); !ok {
 			break
 		}
+		c.Chain = append(c.Chain, named)
 		if !s.Prefix(base) || s.Header().ParentSession == "" {
-			return s
+			c.Ends = true
+			break
 		}
 		named = s.Header().ParentSession
 	}
@@ -425,20 +522,62 @@ func (m *MemoryStore) forkOrigin(named, base string) *Session {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	var onPrefix *Session
 	for _, id := range ids {
 		s := m.sessions[id]
 		if _, ok := s.Entry(base); !ok {
 			continue
 		}
-		if !s.Prefix(base) {
-			return s
-		}
-		if onPrefix == nil {
-			onPrefix = s
+		if s.Prefix(base) {
+			c.OnPrefix = append(c.OnPrefix, id)
+		} else {
+			c.Owners = append(c.Owners, id)
 		}
 	}
-	return onPrefix
+	m.mu.RUnlock()
+	id := c.Pick(ReadableIn(ctx))
+	if memoryOriginPicked != nil {
+		memoryOriginPicked()
+	}
+	return id
+}
+
+// memoryOriginPicked, when set, runs once pickOrigin has picked and
+// before the caller takes the store's lock again: a test's way into the
+// gap.
+var memoryOriginPicked func()
+
+// lockOrigin takes m.mu and returns the origin of a fork at base, as
+// pickOrigin picks it, that the store still holds once the lock is
+// taken; one deleted in between is picked past, the pick made again,
+// and nil is returned when none is held. It returns with m.mu held.
+func (m *MemoryStore) lockOrigin(ctx context.Context, named, base string) *Session {
+	for range 8 {
+		id := m.pickOrigin(ctx, named, base)
+		m.mu.Lock()
+		if id == "" {
+			return nil
+		}
+		if o := m.heldOrigin(id, base); o != nil {
+			return o
+		}
+		m.mu.Unlock()
+	}
+	m.mu.Lock()
+	return nil
+}
+
+// heldOrigin returns the session pickOrigin chose, id, if the store
+// still holds it and it still holds base, else nil: a session deleted
+// since is as one the store does not hold. The caller holds m.mu.
+func (m *MemoryStore) heldOrigin(id, base string) *Session {
+	s, ok := m.sessions[id]
+	if !ok {
+		return nil
+	}
+	if _, ok := s.Entry(base); !ok {
+		return nil
+	}
+	return s
 }
 
 // Open implements Store.
@@ -587,9 +726,12 @@ func (m *MemoryStore) Delete(_ context.Context, id string) error {
 }
 
 var (
-	_ Store     = (*MemoryStore)(nil)
-	_ Reader    = (*MemoryStore)(nil)
-	_ Follower  = (*MemoryStore)(nil)
-	_ Importer  = (*MemoryStore)(nil)
-	_ HeadStore = (*MemoryStore)(nil)
+	_ Store       = (*MemoryStore)(nil)
+	_ Reader      = (*MemoryStore)(nil)
+	_ Follower    = (*MemoryStore)(nil)
+	_ Importer    = (*MemoryStore)(nil)
+	_ HeadStore   = (*MemoryStore)(nil)
+	_ BlobWriter  = (*MemoryStore)(nil)
+	_ BlobReader  = (*MemoryStore)(nil)
+	_ BlobSweeper = (*MemoryStore)(nil)
 )

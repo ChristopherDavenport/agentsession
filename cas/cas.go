@@ -155,6 +155,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"iter"
 	"os"
 	"path/filepath"
@@ -169,6 +170,7 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/internal/ijson"
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
+	"github.com/ChristopherDavenport/agentsession/internal/origin"
 	"github.com/ChristopherDavenport/agentsession/internal/wake"
 	"github.com/ChristopherDavenport/openresponses"
 )
@@ -317,10 +319,13 @@ func WithReadOnly() Option {
 // journal are migrated by the next writing open without this check.
 //
 // What is refused is refused before this store writes anything of it.
-// Over RFC 0003 that is the server's store, and a client's push uploads
-// the objects of the closure before it posts the push, so a refused
-// push leaves them in the server's store, named by no session, until a
-// sweep (#244); the remote package's WithRedactedOnly has a publisher's
+// Over RFC 0003 that is the server's store. A client's push asks the
+// server first, by the push's pre-flight ([Store.CheckPush]), which
+// refuses a session whose header does not carry redacted before any
+// object is uploaded; an entry without redacted under a redacted header
+// is refused only at the push, after the closure's objects were
+// uploaded, which stay in the server's store, named by no session, until
+// a sweep. The remote package's WithRedactedOnly has a publisher's
 // client refuse an original before it sends anything.
 //
 // A read-only open given the option refuses as a store set this way
@@ -382,6 +387,8 @@ type Store struct {
 	// indexed says it is.
 	entries *entryIndex
 	indexed bool
+	// scans counts the index's builds, under idx.
+	scans int
 	// faulty records sessions the index could not read, with why, so
 	// one fault is reported at that session's Open and hides no other.
 	faulty map[string]error
@@ -1394,12 +1401,16 @@ func (s *Store) PutBlob(ctx context.Context, data []byte) (string, error) {
 	return hash, nil
 }
 
-// Blob returns a media blob by its hash.
+// Blob returns a media blob by its hash, [agentsession.BlobReader]'s:
+// one the store does not hold is [agentsession.ErrNoBlob].
 func (s *Store) Blob(ctx context.Context, hash string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	data, err := s.objs.read(spaceContents, hash)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("cas: blob %s: %w: %w", hash, agentsession.ErrNoBlob, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("cas: blob %s: %w", hash, err)
 	}
@@ -1771,6 +1782,7 @@ func (s *Store) index(force bool) error {
 	defer s.idx.Unlock()
 	deltas := s.deltas
 	s.building, s.deltas = false, nil
+	s.scans++
 	if err != nil {
 		return err
 	}
@@ -1986,7 +1998,16 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		if err != nil {
 			return nil, err
 		}
-		if !held {
+		// The header is filled from, and held to, the origin among the
+		// sessions the caller may read (agentsession.WithReadable): one
+		// it may not read is as one the store does not hold, so the
+		// fork's parent_session never names it. The log that holds the
+		// base is committed below whoever's it is.
+		origin, err := s.forkOrigin(h.Base, h.ParentSession, agentsession.ReadableIn(ctx))
+		if err != nil {
+			return nil, err
+		}
+		if !held || origin == "" {
 			return nil, fmt.Errorf("%w: base %s is not held by this store", agentsession.ErrNoEntry, h.Base)
 		}
 		if isLabel, err := s.isLeafLabel(h.Base); err != nil {
@@ -1994,11 +2015,11 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		} else if isLabel {
 			return nil, errors.New("cas: a base may not be a leaf label")
 		}
-		if owner != "" {
+		if origin != "" {
 			if h.ParentSession == "" {
-				h.ParentSession = owner
+				h.ParentSession = origin
 			}
-			if dir, err := s.sessionDir(owner); err == nil {
+			if dir, err := s.sessionDir(origin); err == nil {
 				if oh, err := readHeader(dir); err == nil {
 					// The fork's header takes this package's format, which
 					// must be no earlier than the origin's.
@@ -2027,7 +2048,7 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		// a holder before 0.13 holds the first, and only a fork before
 		// it can meet the second, so the holder is read whole only then;
 		// a holder that cannot be found or read refuses the fork.
-		if err := s.forkRaiseRefused(ctx, owner, h); err != nil {
+		if err := s.forkRaiseRefused(ctx, origin, h); err != nil {
 			return nil, err
 		}
 	}
@@ -2172,6 +2193,100 @@ func before013(format string) bool {
 	return laterFormat("agentsession/0.13", format)
 }
 
+// forkOrigin returns the session a fork at base continues from, whose
+// header a fork takes its media from: named, followed up its
+// parent_session line while the base is on its prefix, to the session
+// whose log holds the base; else the first by ID whose log holds it;
+// else the first by ID that holds it on its prefix, whose media is its
+// own origin's. A session readable does not admit is passed over, as
+// one the store does not hold, so the answer is the one the store would
+// give without it; readable is asked holding none of the store's locks,
+// and of no session after the first it admits. "" when no admitted
+// session holds the base.
+func (s *Store) forkOrigin(base, named string, readable func(string) bool) (string, error) {
+	// The chain is picked from before the index is read, and the index's
+	// sessions after; each session is asked of once across the two.
+	asked := map[string]bool{}
+	once := func(id string) bool {
+		v, seen := asked[id]
+		if !seen {
+			v = readable(id)
+			asked[id] = v
+		}
+		return v
+	}
+	var c origin.Candidates
+	for seen := 0; named != "" && seen < 64; seen++ {
+		dir, err := s.sessionDir(named)
+		if err != nil {
+			break
+		}
+		l, err := readSessionLog(dir, 0)
+		if err != nil || l.legacy {
+			break
+		}
+		if slices.Contains(heldEntries(l.recs), base) {
+			c.Chain, c.Ends = append(c.Chain, named), true
+			break
+		}
+		hdr, err := readHeader(dir)
+		if err != nil || hdr.Base == "" {
+			break
+		}
+		if on, err := s.onPath(base, hdr.Base); err != nil || !on {
+			break
+		}
+		c.Chain = append(c.Chain, named)
+		if hdr.ParentSession == "" {
+			c.Ends = true
+			break
+		}
+		named = hdr.ParentSession
+	}
+	// A chain that reaches the origin needs no index, which is built only
+	// when a lookup needs it. A chain the check stops on is done with:
+	// the pick goes on to the index's sessions, as Pick would.
+	if c.Ends {
+		if id := c.Pick(once); id != "" {
+			return id, nil
+		}
+	}
+	c.Chain, c.Ends = nil, false
+	if err := s.ensureIndex(); err != nil {
+		return "", err
+	}
+	// The index is read under its lock and the read check asked after,
+	// since the check may read the store.
+	gather := func() {
+		s.idx.Lock()
+		defer s.idx.Unlock()
+		c.Owners, c.OnPrefix = c.Owners[:0], c.OnPrefix[:0]
+		for id := range s.entries.owners[base] {
+			c.Owners = append(c.Owners, id)
+		}
+		for id, path := range s.entries.paths {
+			if slices.Contains(path, base) {
+				c.OnPrefix = append(c.OnPrefix, id)
+			}
+		}
+		slices.Sort(c.Owners)
+		slices.Sort(c.OnPrefix)
+	}
+	gather()
+	if id := c.Pick(once); id != "" {
+		return id, nil
+	}
+	// Another process may have committed it since the index was built;
+	// look again before saying no. A base held only where the caller may
+	// not read is looked for again too, so it takes the path an unheld
+	// one takes.
+	if err := s.index(true); err != nil {
+		return "", err
+	}
+	gather()
+	return c.Pick(once), nil
+}
+
 // prefixHolder returns a session that holds base on its prefix, owning
 // it in no log: named, when its prefix holds it, else the first by ID
 // whose prefix the index finds it on. It refuses when it finds none.
@@ -2260,7 +2375,7 @@ func (s *Store) placeSession(dir string, h agentsession.Header, recs []logRecord
 // through the base, so a crash cannot take the base from under a fork
 // that hangs from it. A session this store holds commits its working
 // state. For one another process holds, the objects of every lazy
-// append up to the base's record are made durable here, since recovery
+// append up to the base's latest record are made durable here, since recovery
 // cuts the log at the first lazy append whose objects are gone, whether
 // or not it is the base's ancestor; then its log is fsynced. A lazy
 // append whose objects are gone already means the base will not
@@ -2287,12 +2402,15 @@ func (s *Store) commitOrigin(owner, base string) error {
 	if err != nil {
 		return fmt.Errorf("cas: session %s: %w", owner, err)
 	}
+	// Through the base's latest append: an entry a crash took and the
+	// session appended again is held by the append again, which the
+	// first, cut by its lost record, is not.
 	at, synced := -1, -1
 	for i, r := range l.recs {
 		switch {
 		case r.Op == opSync:
 			synced = i
-		case r.Op == opAppend && r.Entry == base && at < 0:
+		case r.Op == opAppend && r.Entry == base:
 			at = i
 		}
 	}
@@ -3541,17 +3659,66 @@ func project(w io.Writer, sess *agentsession.Session, head string) error {
 // arrive as one pack and the records as one commit. A session the store
 // already holds is refused; one store takes a session from another by
 // exchange, [Store.Fetch] and [Store.Push].
+//
+// A session whose media is sidecar is imported with no blobs, each its
+// items name and the store lacks then unresolved until [Store.PutBlob]
+// stores it; [Store.ImportMedia] takes the blobs with the file.
 func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agentsession.Session, error) {
+	sess, _, err := s.ImportMedia(ctx, r, nil, asRecord)
+	return sess, err
+}
+
+// ImportMedia implements [agentsession.MediaImporter]: it imports an
+// RFC 0001 file as Import does, and for a session whose media is
+// sidecar takes the session's blobs from media, its sidecar directory,
+// each named by its hex digest. Each blob the items name is verified
+// against its name, and one that fails refuses the import with
+// [agentsession.ErrBlobMismatch]; the blobs arrive in the import's pack,
+// so the session and its blobs are committed together. A blob media
+// lacks that the store does not hold is returned unresolved, and the
+// session is imported without it: a projection of it fails until
+// [Store.PutBlob] stores it. media may be nil, which supplies nothing.
+func (s *Store) ImportMedia(ctx context.Context, r io.Reader, media fs.FS, asRecord bool) (*agentsession.Session, []string, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := s.writable(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sess, err := agentsession.Read(r)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	blobs := map[string][]byte{}
+	var unresolved []string
+	if mediaOf(sess.Header()) == agentsession.MediaSidecar {
+		hashes, err := agentsession.SessionBlobs(sess)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, h := range hashes {
+			data, err := agentsession.ReadSidecarBlob(media, h)
+			switch {
+			case err == nil:
+				blobs[h] = data
+			case errors.Is(err, fs.ErrNotExist):
+				if ok, _ := s.HasObject(ctx, SpaceMedia, h); !ok {
+					unresolved = append(unresolved, h)
+				}
+			default:
+				return nil, nil, fmt.Errorf("cas: import: %w", err)
+			}
+		}
+	}
+	out, err := s.importRead(ctx, sess, blobs, asRecord)
+	if err != nil {
+		return nil, nil, err
+	}
+	return out, unresolved, nil
+}
+
+// importRead imports a session read from a file, with the blobs given.
+func (s *Store) importRead(ctx context.Context, sess *agentsession.Session, blobs map[string][]byte, asRecord bool) (*agentsession.Session, error) {
 	if t := sess.Truncated(); t != nil {
 		return nil, fmt.Errorf("cas: import: %w", t)
 	}
@@ -3587,14 +3754,8 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	if err := s.refuseUnredacted(h, stored); err != nil {
 		return nil, err
 	}
-	if h.Base != "" {
-		if owner, _, err := s.holderOf(h.Base, h.ParentSession); err == nil && owner != "" {
-			if odir, err := s.sessionDir(owner); err == nil {
-				if oh, err := readHeader(odir); err == nil && mediaOf(oh) != mediaOf(h) {
-					return nil, fmt.Errorf("cas: import: %w", agentsession.ErrMediaDiffers)
-				}
-			}
-		}
+	if s.forkMediaDiffers(ctx, h) {
+		return nil, fmt.Errorf("cas: import: %w", agentsession.ErrMediaDiffers)
 	}
 	mark := MarkMirror
 	if asRecord {
@@ -3605,7 +3766,7 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 		slot.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
-	hd, err := s.admitNew(ctx, dir, h, mark, stored, own, nil, sess.Leaf())
+	hd, err := s.admitNew(ctx, dir, h, mark, stored, own, blobs, sess.Leaf())
 	if err != nil {
 		s.abandon(h.ID, slot)
 		return nil, err
@@ -3693,4 +3854,8 @@ var (
 	_ agentsession.Importer  = (*Store)(nil)
 	_ agentsession.HeadStore = (*Store)(nil)
 	_ agentsession.Releaser  = (*Store)(nil)
+
+	_ agentsession.BlobWriter    = (*Store)(nil)
+	_ agentsession.BlobReader    = (*Store)(nil)
+	_ agentsession.MediaImporter = (*Store)(nil)
 )

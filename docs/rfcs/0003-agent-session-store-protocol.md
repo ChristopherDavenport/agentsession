@@ -118,6 +118,7 @@ from RFC 0001 and RFC 0002 keep their meanings.
   `committed_view` (which `durable=true` needs), `log` (the log read,
   which needs a store that keeps a log of records with a cursor after
   each), `refs`, `ref_follow`, `durable_marks` (Following), `leases`,
+  `media` (a store that holds sidecar blobs, Objects),
   plus its limits, `snapshot_bytes` among them (Following). A request
   for a feature the store lacks is 501 `unsupported`. A server over a
   store that keeps no commit or mark (the reference memory, JSONL and
@@ -195,18 +196,44 @@ Media).
   as held, only objects reachable by the caller. A hash is a name, not a
   capability. Where the server's store shares one lookup table between
   contents and media (RFC 0002, Entries), the check is still per space.
-- A `PUT` (exchange scope) uploads an object. The server MUST verify
+  A session reaches a media blob by naming it only because every write
+  that names one is held to the caller's reach first (RFC 0002, Media):
+  an append, an import or a push that names a blob, in an item of any
+  session whatever its `media`, is refused with `missing_object` unless
+  the caller itself uploaded it within `upload_grace_ms` or may read a
+  session that names it, so no
+  session names a blob its writer could not reach. A server whose store
+  holds no sidecar media has no blob to reach and checks none.
+- A `PUT` (exchange scope, or write scope for a `media` object) uploads
+  an object. Write scope uploads media so that a writer appending a
+  sidecar item can upload the blob it names, as RFC 0002's Media
+  requires of a store that holds sidecar sessions. A server whose store
+  holds sidecar media and no other objects serves `media` alone, and
+  says so with the `media` capability; one whose store holds no sidecar
+  media refuses a `media` upload with `unsupported` and refuses to
+  create or import a session whose `media` is `sidecar` with
+  `unsupported`. The server MUST verify
   that the bytes hash to the name and refuse them with `bad_object`
   otherwise. Uploading an object it holds is a no-op that succeeds, and
   the response does not say whether it was held. An uploaded object is
   reachable from nothing but its uploader until a push names it: the
-  uploader may name it in a push, and is told it holds it (`missing`,
-  `GET`, `HEAD`), so a retried push uploads nothing twice; no other
-  caller is. It is collected as RFC 0002's sweep collects any
+  uploader may name it in a push, an import or an append, and is told
+  it holds it (`missing`, `GET`, `HEAD`), so a retried push uploads
+  nothing twice; no other caller is. It is collected as RFC 0002's sweep collects any
   unreferenced object (Deletion and retention), and the grace period
   that spares it is the server's, published in the capabilities as
-  `upload_grace_ms`. An object swept before its push is
-  `missing_object` at the push.
+  `upload_grace_ms`. This holds over every store a server takes
+  uploads for: a server whose store holds sidecar media and no other
+  objects MUST see its unnamed `media` uploads swept too, as RFC 0002
+  requires of such a store, and, where no operator sweeps it, sweeps
+  them itself at least once a grace while uploads arrive, so a
+  principal with write scope cannot fill the store with blobs no
+  session names. Since an upload is reachable by its uploader for a
+  grace from the upload, a write admitted on it can land after that
+  grace has passed, so a sweep MUST give unnamed uploads more than the
+  grace: a margin long enough for any write the server admitted to
+  land (the reference server's is a second grace). An object swept before its push (or its
+  import or append) is `missing_object` there.
   Entry-level rules (reserved members, `ts` form, I-JSON, parent) are
   not checked at `PUT`, which sees one object; admission checks them.
 - `POST /v1/objects/missing` (exchange scope) takes `{"entries": [...],
@@ -606,14 +633,25 @@ later one, as RFC 0002's Sessions say.
     `leaf_moved` or `leaf_not_moved`. These name what an append did;
     they are not error codes. (`head_moved` is the compare-and-swap's
     refusal and is a different thing.)
+  - A line naming a sidecar blob the caller cannot reach (Objects,
+    Reach), one it did not upload and no session it may read names, is
+    refused with `missing_object`, its `missing` member the hashes in
+    `missing`'s shape, exactly as a line naming a blob the server does
+    not hold at all: the server decides from the caller's reach alone
+    and asks its store nothing of the blob first, so the refusal says
+    nothing of another's sessions. Where a local store accepts an
+    append naming a blob it lacks and reports it unresolved (RFC 0002,
+    Media), the wire refuses it, since the writer can upload the blob
+    (write scope uploads media) and append again.
   - `unresolved` lists references the server could not resolve: a
-    sidecar blob it lacks, or a convergence into a session it does not
-    hold. The entry is accepted, as the library accepts one, and the
-    server reports what is missing. A session with an unresolved blob
-    cannot be pushed or projected until it arrives.
+    sidecar blob the caller reaches through a session that names it and
+    the store lacks, or a convergence into a session it does not hold.
+    The entry is accepted, as the library accepts one, and the server
+    reports what is missing. A session with an unresolved blob cannot
+    be pushed or projected until it arrives.
   - Refusals are `bad_entry` family codes (below), `no_entry` for a
-    parent the session does not hold, `format`, and `mirror` on a
-    session held as a mirror.
+    parent the session does not hold, `missing_object` (above),
+    `format`, and `mirror` on a session held as a mirror.
   - **Retries.** An entry line the client builds completely, `id`,
     `parent` and `ts` set, is the same entry on a retry: the second
     append is `held`, and a `held` response with `?commit=true` still
@@ -761,6 +799,31 @@ POST /v1/sessions/{id}/push
 
 A push is RFC 0002's, over the wire.
 
+0. Before step 1 the sender MAY post `{"header", "entries", "prefix"}`,
+   the members step 2 names, to `POST /v1/sessions/{id}/push?check`.
+   The server first authorizes a fork's origin for reading: it looks
+   for the origin as RFC 0002's Sessions says, from the session the
+   `parent_session` names and up its line, else a session whose own
+   entries include the `base`, else one that holds it on its prefix,
+   and MUST pass over every session the caller may not read, as one the
+   server does not hold, taking the first it may read. It never stops
+   at, or skips the check for, a session it passed over, so the answer
+   for a base held where the caller cannot read is the answer for a
+   base held only where it can, or by nobody. Then it answers with the
+   session-level refusals that need no object, `not_redacted` (a
+   header without `redacted` at a store that holds only redacted
+   entries), `header_differs`, `format`, `bad_entry` for a malformed
+   header, `base_rule` (a prefix that does not end at the header's
+   `base`, or one given to a session with no base), `bad_base` (a fork
+   whose `media` differs from that of an origin the caller may read),
+   or with 204, and stores nothing. A sender pushing to a store set to hold
+   only redacted entries SHOULD check first, so an original's objects
+   are never uploaded to it. The check is advisory, since what the
+   server holds can change before the push, and the push stays the
+   authority: a server MUST give the same refusal at the push itself,
+   before it looks for any object, so a push refused by its check is
+   refused the same way when posted without one, and MUST authorize the
+   origin there as here.
 1. The sender asks which objects of the closure the receiver lacks
    (`POST /v1/objects/missing`), and uploads every one so reported
    (`PUT`). Because `missing` answers per caller, an object that no
@@ -828,6 +891,52 @@ conversation's ref. What a crash can lose is what the harness had not
 yet pushed, which it chooses by how often it pushes. Followers read the
 server.
 
+## Import
+
+```
+POST /v1/sessions/import[?record=true]
+```
+
+RFC 0002's import of a projection, over the wire, for a server whose
+store imports but need not exchange: a server over a store of entries
+alone can take a session whole this way, a redacted one among them.
+
+- The body is an RFC 0001 file (`application/x-ndjson`). The request
+  needs exchange scope, and is authorized as a create of the session the
+  header names: the session ID for that scope, and for a fork the
+  origin as a read and the base as reachable by the caller, as Create
+  says. The fork is held to the media of an origin the caller may read
+  (RFC 0002, Sessions): one it may not read is as one the server does
+  not hold, so the answer for a base held only in another's session is
+  the answer for a base nobody holds, and a refusal names no session
+  the caller may not read. A create of a fork finds its origin the same
+  way, and the header it fills from the origin names none the caller
+  may not read.
+- A sidecar session's blobs are uploaded first, as `media` objects
+  (Objects). Every blob an item names that the caller cannot reach
+  (Objects, Reach), in a file of any `media`, is `missing_object`, its
+  `missing` member the hashes in `missing`'s shape, the same answer
+  whether another's session holds the blob or none does. Where a local import takes the session and reports
+  such a blob unresolved (RFC 0002, Projection to JSONL), the wire
+  refuses it, since the client holds the directory and can upload what
+  it lacks. A server whose store holds no sidecar media refuses a
+  sidecar session with `unsupported`.
+- The server holds the file to RFC 0002's import checks and refuses
+  with their codes: `session_exists` for an ID it holds, `bad_entry` for
+  a line that does not verify, a last line cut short or a malformed
+  header (the `reason` naming the rule), `base_rule`, `bad_base`,
+  `format`, `synthetic` for a projection's marker the store cannot keep
+  (`reason` `synthetic_marker`), and `not_redacted` at a store that
+  holds only redacted entries. A refused import admits nothing.
+- `record=true` says the file is the only copy, so the server is the
+  session's record; otherwise it holds a mirror (RFC 0002, the record
+  mark), in a store that keeps marks.
+- The server commits the session before it answers, 201 with the
+  session's state as Get returns it: `{"header", "head", "length",
+  "incarnation", "mark"}`. An import is not retry-safe across a lost
+  answer: the retry is `session_exists`, and the client reads the
+  session to see that it landed.
+
 ## Errors
 
 The codes below are this document's. RFC 0002 states refusals in prose
@@ -839,7 +948,7 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | Code | Status | Meaning |
 |---|---|---|
 | `no_session` | 404 | no such session (also: a session the caller may not reach; a live follow whose session was deleted; a ref `next` naming a missing session) |
-| `session_exists` | 409 | Create of an ID held under another header |
+| `session_exists` | 409 | Create of an ID held under another header; Import of an ID held at all |
 | `session_replaced` | 409 | the incarnation differs from `If-Incarnation` |
 | `no_entry` | 404 | a parent, base, head target, ref pin or `leaf` the session (or the caller) does not hold |
 | `no_object` | 404 | an object hash not held or not reachable by the caller |
@@ -860,13 +969,13 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | `bad_entry` | 422 | malformed: `id` differs, reserved member, `ts` form, not I-JSON, unknown prefix; also a pushed or created header RFC 0001 calls malformed, such as `redacted_from` without `redacted` |
 | `base_rule` | 422 | a parent that is not the base, an own entry, or null; a null parent in a session with a base |
 | `bad_base` | 422 | a fork whose base is a `leaf` label, or whose `media` differs from the origin's |
-| `bad_object` | 422 | bytes that do not hash to the name |
-| `missing_object` | 409 | a push names objects the server cannot find; body has the hashes |
+| `bad_object` | 422 | bytes that do not hash to the name, an uploaded object's or an imported sidecar blob's |
+| `missing_object` | 409 | a push names objects, or an import or an append sidecar blobs, the caller cannot reach; body has the hashes |
 | `bad_ref_target` | 422 | a pushed ref whose `next` is not the pushed session |
 | `format` | 422 | a format the server does not read, or earlier than the session's; also an append or push that would raise a header RFC 0001 forbids raising, one before 0.13 holding `redacted_from`, or whose entries hold `redacted` |
 | `not_redacted` | 403 | a create, append, push or fetch that would bring a session whose header does not carry `redacted`, or an entry that carries no `redacted`, into a store that holds only redacted entries |
 | `read_only` | 403 | a write to a store open read-only |
-| `unsupported` | 501 | a feature the store lacks (marks, exchange, commit, committed view, refs, objects) |
+| `unsupported` | 501 | a feature the store lacks (marks, exchange, commit, committed view, refs, objects); also a sidecar session or a media upload to a store that holds no sidecar media |
 | `store_fault` | 500/503 | a store failure the client cannot fix: corrupt object, stopped store, layout, a session modified outside the store |
 | `overflow` | 503 | a follow the server cut because the client fell behind; resume after the last event read |
 | `too_large` | 413 | a snapshot or reset past the server's `snapshot_bytes` from a server that serves no objects; read the session another way |
@@ -882,9 +991,9 @@ differently from a malformed line.
 ## Out of scope and admin operations
 
 Not carried, because they are a local operator's or a file's:
-- **Import** and **Project** (RFC 0002, Projection to JSONL): moving a
-  session as a file is not moving it as a closure. A client imports into
-  its own store and pushes.
+- **Project** (RFC 0002, Projection to JSONL): a projection is a file
+  the client builds from what it reads. **Import** is carried (Import),
+  for a server whose store takes a file but does not exchange.
 - **Repair**, **Verify**, **Pack** and **Sweep**: store maintenance. A
   deployment MAY expose them under its own admin scope; the protocol
   does not define them. A remote reader that needs to check a session
@@ -933,7 +1042,18 @@ Not carried, because they are a local operator's or a file's:
   that holds it (`missing`, `GET`, `HEAD`), a push must upload every
   object not so reachable, a fork's `base` and a `path`'s `leaf` are
   authorized against the sessions holding them, and an object response
-  is `private`. A dedup that answered "already stored" to anyone would
+  is `private`. An import or a create of a fork, as its push, finds
+  the fork's origin only among the sessions the caller may read.
+  Naming an object or a blob in a write grants nothing
+  either: an append, an import or a push whose entries name a blob the
+  caller cannot reach is refused with `missing_object`, the answer for
+  a blob nobody holds, decided from the caller's reach without asking
+  the store whether the blob exists, so the write confers no reach on
+  its session and its answer is no existence oracle (RFC 0002, Media).
+  A push, and its check, hold a fork only to an origin
+  the caller may read: one it may not is as one the server does not
+  hold, so `bad_base` cannot tell a caller that another's session holds
+  a hash, or in which `media`. A dedup that answered "already stored" to anyone would
   let one tenant read, or confirm a guess at, another's content.
 - A push's `refs` need refs scope in addition to exchange scope, so that
   moving a ref cannot be done under a weaker grant than a ref update.
@@ -1019,7 +1139,11 @@ by hash. Three things in it are the reference server's:
 - **Uploads** go into the store's object space at once, where a sweep
   collects them as any unreferenced object, and the server keeps in
   memory which principal uploaded each, for `upload_grace_ms`. An
-  operator sweeps with at least that grace.
+  operator sweeps a cas store with more than that grace, a margin for
+  a write admitted on an upload to land, as Objects asks; over a store
+  that holds blobs and keeps no other objects (memory, JSONL, SQLite)
+  the server runs the store's blob sweep itself, with twice that grace,
+  from the first media upload a grace after the last sweep.
 - **Read scope reads every session** unless the program authorizes per
   session (`WithAuthorize`), so an object a session holds is reachable
   by every reader; with the hook, only through a session the caller may

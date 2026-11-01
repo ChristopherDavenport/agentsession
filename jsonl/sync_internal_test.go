@@ -3,6 +3,7 @@ package jsonl
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -139,5 +140,62 @@ func TestATornBranchKeepsTheHead(t *testing.T) {
 	}
 	if s.Leaf() != ids[2] {
 		t.Errorf("head after a torn branch = %s, want %s", s.Leaf(), ids[2])
+	}
+}
+
+// TestRefPinSyncsEntry is #217: under a lazy policy a ref pinning an
+// entry makes the session's file durable before the ref, through this
+// store's handle or, for a session it does not hold, a handle of its
+// own; and a ref whose pinned entry the file no longer holds resolves
+// to its target with ErrNoEntry.
+func TestRefPinSyncsEntry(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	st, err := Open(root, WithSync(SyncNever))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Create(ctx, agentsession.Header{ID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := st.Append(ctx, "s", &agentsession.InfoEntry{Name: "lazy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncs := 0
+	old := syncEntry
+	defer func() { syncEntry = old }()
+	syncEntry = func(f *os.File) error { syncs++; return f.Sync() }
+	pin := agentsession.RefTarget{Session: "s", Entry: a}
+	if err := st.UpdateRef(ctx, "pin", agentsession.RefTarget{}, pin, ""); err != nil {
+		t.Fatal(err)
+	}
+	if syncs != 1 {
+		t.Errorf("a pin of a lazy entry in a held session: %d syncs, want 1", syncs)
+	}
+	other, err := Open(root, WithSync(SyncNever))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := other.UpdateRef(ctx, "pin2", agentsession.RefTarget{}, pin, ""); err != nil {
+		t.Fatal(err)
+	}
+	if syncs != 2 {
+		t.Errorf("a pin of a lazy entry in a session another store holds: %d syncs, want 2", syncs)
+	}
+
+	// A crash took the pinned line.
+	st.Close()
+	path, _ := other.find("s")
+	data, _ := os.ReadFile(path)
+	i := bytes.LastIndex(bytes.TrimRight(data, "\n"), []byte("\n"))
+	if err := os.WriteFile(path, data[:i+1], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := other.ResolveRef(ctx, "pin")
+	if !errors.Is(err, agentsession.ErrNoEntry) || got != pin {
+		t.Errorf("a ref to a lost entry resolves to %v, %v; want %v with ErrNoEntry", got, err, pin)
 	}
 }

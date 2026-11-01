@@ -200,7 +200,8 @@ type ReceiveOptions struct {
 // redacted member a minor before 0.13 does not define. Either way it is
 // held to Push's
 // rules for a redacted session and for a store set with
-// WithRedactedOnly.
+// WithRedactedOnly. A fork's origin is looked for only among the
+// sessions [agentsession.WithReadable] admits for ctx.
 func (s *Store) Receive(ctx context.Context, c Closure, o ReceiveOptions) (Exchange, error) {
 	if err := ctx.Err(); err != nil {
 		return Exchange{}, err

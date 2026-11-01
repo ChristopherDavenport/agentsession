@@ -40,6 +40,12 @@ import (
 // finishes it, and a read of the ref sees the record's target at once,
 // as the log says. A ref file changed with no record, by a crash with
 // no write-ahead or by hand, is logged by the next update.
+//
+// A file in refs/ or logs/refs/ whose name begins %tmp- is crash
+// debris: a write killed between its temporary file and the rename.
+// Verify reports it as a leftover and Sweep removes it once older than
+// its grace. One whose name begins %damaged- is a damaged log
+// [Store.RepairRef] kept, which Verify reports until it is removed.
 
 // refStep is called at the steps of an update that a test holds still
 // to make another caller's arrive between them.
@@ -325,7 +331,55 @@ func (s *Store) ResolveRef(ctx context.Context, name string) (agentsession.RefTa
 	if v.Ident != "" && ident != v.Ident {
 		return t, fmt.Errorf("%w: %s was created again after ref %s was set", agentsession.ErrNoSession, t.Session, name)
 	}
+	if t.Entry != "" {
+		held, err := s.holdsPin(ctx, t)
+		if err != nil {
+			return t, err
+		}
+		if !held {
+			return t, fmt.Errorf("%w: %s, which ref %s pins, is no longer in session %s", agentsession.ErrNoEntry, t.Entry, name, t.Session)
+		}
+	}
 	return t, nil
+}
+
+// holdsPin reports whether the session a target names still holds the
+// entry it pins. A ref written before the store committed pins first,
+// or one whose pin a crash took with the session's working state, can
+// name an entry recovery dropped: the ref then dangles as a ref to a
+// deleted session does. The session's log answers without building the
+// session when it records the entry's append as committed, or the
+// entry is on its prefix; anything else is decided by a read.
+func (s *Store) holdsPin(ctx context.Context, t agentsession.RefTarget) (bool, error) {
+	if dir, err := s.sessionDir(t.Session); err == nil {
+		if l, err := readSessionLog(dir, 0); err == nil && !l.legacy {
+			synced, lostAt := -1, -1
+			for i, r := range l.recs {
+				switch {
+				case r.Op == opSync:
+					synced = i
+				case r.Op == opLost && r.Entry == t.Entry:
+					lostAt = i
+				}
+			}
+			for i, r := range l.recs {
+				if r.Op == opAppend && r.Entry == t.Entry && lostAt < i && (!r.Lazy || i < synced) {
+					return true, nil
+				}
+			}
+			if hdr, err := readHeader(dir); err == nil && hdr.Base != "" {
+				if on, err := s.onPath(t.Entry, hdr.Base); err == nil && on {
+					return true, nil
+				}
+			}
+		}
+	}
+	sess, err := s.Read(ctx, t.Session)
+	if err != nil {
+		return false, err
+	}
+	_, ok := sess.Entry(t.Entry)
+	return ok, nil
 }
 
 // incarnation is the identity of the session now under id, and false
@@ -343,14 +397,25 @@ func (s *Store) incarnation(id string) (string, bool) {
 	return ident, err == nil
 }
 
-// refNames lists the names of the refs the store holds: every name with
-// a ref file or a log, kept when the ref is not none as the file and the
-// log's last record say together. A creation recorded and not yet made
-// is a ref, so it is listed, conflicts and keeps its pin through a
-// sweep; a deletion recorded and not yet made is not, though its file
-// is still there. A name is any a ref may have: files this store makes
-// for its own use carry a "%" and are no names.
-func (s *Store) refNames() ([]string, error) {
+// refName is a ref the store holds, or one it cannot read: Err is set
+// for a ref whose file or log's last record does not read, which is
+// listed by name, so that it conflicts with a creation as a ref does
+// and is reported rather than skipped.
+type namedRef struct {
+	Name string
+	Val  refVal
+	Err  error
+}
+
+// refNames lists the refs the store holds, in name order: every name
+// with a ref file or a log, kept when the ref is not none as the file
+// and the log's last record say together, or when it cannot be read. A
+// creation recorded and not yet made is a ref, so it is listed,
+// conflicts and keeps its pin through a sweep; a deletion recorded and
+// not yet made is not, though its file is still there. A name is any a
+// ref may have: files this store makes for its own use carry a "%" and
+// are no names. One unreadable ref does not stop the listing.
+func (s *Store) refNames() ([]namedRef, error) {
 	seen := map[string]bool{}
 	for _, dir := range []string{refsDir, refLogsDir} {
 		ents, err := os.ReadDir(filepath.Join(s.root, dir))
@@ -366,33 +431,33 @@ func (s *Store) refNames() ([]string, error) {
 			}
 		}
 	}
-	var out []string
+	var out []namedRef
 	for n := range seen {
 		v, _, err := s.effectiveRef(n)
-		if err != nil {
-			return nil, err
-		}
-		if !v.IsZero() {
-			out = append(out, n)
+		if err != nil || !v.IsZero() {
+			out = append(out, namedRef{Name: n, Val: v, Err: err})
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
-// ListRefs implements [agentsession.RefStore].
+// ListRefs implements [agentsession.RefStore]. A ref that cannot be
+// read is reported by name, with its error, in its place in the
+// listing, and the listing goes on past it.
 func (s *Store) ListRefs(ctx context.Context, prefix string) iter.Seq2[agentsession.Ref, error] {
 	return func(yield func(agentsession.Ref, error) bool) {
 		if err := agentsession.ValidRefPrefix(prefix); err != nil {
 			yield(agentsession.Ref{}, err)
 			return
 		}
-		names, err := s.refNames()
+		refs, err := s.refNames()
 		if err != nil {
 			yield(agentsession.Ref{}, err)
 			return
 		}
-		for _, n := range names {
+		for _, r := range refs {
+			n := r.Name
 			if !strings.HasPrefix(n, prefix) {
 				continue
 			}
@@ -402,8 +467,10 @@ func (s *Store) ListRefs(ctx context.Context, prefix string) iter.Seq2[agentsess
 			}
 			v, _, err := s.effectiveRef(n)
 			if err != nil {
-				yield(agentsession.Ref{}, err)
-				return
+				if !yield(agentsession.Ref{Name: n}, err) {
+					return
+				}
+				continue
 			}
 			if v.IsZero() {
 				continue // deleted since the directory was read
@@ -413,6 +480,27 @@ func (s *Store) ListRefs(ctx context.Context, prefix string) iter.Seq2[agentsess
 			}
 		}
 	}
+}
+
+// lastNamed is what an unreadable ref last named, as far as anything of
+// it reads: the target its file holds, and that of the last record of
+// its log that reads. A sweep keeps both, since either may be the ref's.
+func (s *Store) lastNamed(name string) []agentsession.RefTarget {
+	var out []agentsession.RefTarget
+	if v, err := s.readRefFile(name); err == nil && !v.IsZero() {
+		out = append(out, v.RefTarget)
+	}
+	data, _ := os.ReadFile(s.refLogPath(name))
+	lines := bytes.Split(bytes.TrimRight(data, "\n"), []byte{'\n'})
+	for i := len(lines) - 1; i >= 0; i-- {
+		if rec, err := decodeRefRecord(lines[i]); err == nil {
+			if t := rec.next(); !t.IsZero() {
+				out = append(out, t)
+			}
+			break
+		}
+	}
+	return out
 }
 
 // RefLog implements [agentsession.RefStore].
@@ -490,6 +578,14 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 	}
 	defer lk.release()
 	if next.Entry != "" {
+		// A ref is durable once placed, so the append of the entry it
+		// pins is committed first: a crash cannot then leave the ref
+		// pinning an entry its session no longer holds. That is done
+		// before the sweep's lock is taken, as a fork commits its
+		// base's origin.
+		if err := s.commitPin(next); err != nil {
+			return err
+		}
 		// A sweep's last step does not run between the check that the
 		// session holds the entry and the record that names it.
 		g, err := s.writeGuard(ctx)
@@ -533,9 +629,13 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 		return nil
 	}
 	if cur.IsZero() {
-		names, err := s.refNames()
+		refs, err := s.refNames()
 		if err != nil {
 			return err
+		}
+		names := make([]string, len(refs))
+		for i, r := range refs {
+			names[i] = r.Name
 		}
 		if err := agentsession.RefConflict(name, names); err != nil {
 			return err
@@ -559,6 +659,20 @@ func (s *Store) UpdateRef(ctx context.Context, name string, expected, next agent
 			return fmt.Errorf("cas: ref %s: %w; and cutting its record back: %v", name, err, terr)
 		}
 		return err
+	}
+	return nil
+}
+
+// commitPin commits the session whose log holds the entry a target
+// pins, through that entry, or fails. An entry no session holds is
+// left to the check that follows, which refuses it.
+func (s *Store) commitPin(t agentsession.RefTarget) error {
+	owner, held, err := s.holderOf(t.Entry, t.Session)
+	if err != nil || !held {
+		return err
+	}
+	if err := s.commitOrigin(owner, t.Entry); err != nil {
+		return fmt.Errorf("cas: ref pins %s, whose append could not be committed: %w", t.Entry, err)
 	}
 	return nil
 }
@@ -674,6 +788,168 @@ func (s *Store) writeRefFile(path string, data []byte) error {
 		return err
 	}
 	return s.objs.fsyncDir(dir)
+}
+
+// refDamaged prefixes a damaged ref log a repair set aside in
+// logs/refs, followed by the ref's file name and the time.
+const refDamaged = "%damaged-"
+
+// refDebris lists the temporary files a crash left in refs/ and
+// logs/refs/ between a write and its rename. They are no refs, since a
+// "%" is no name character, and a sweep removes them once older than
+// its grace.
+func (s *Store) refDebris() []string {
+	var out []string
+	for _, dir := range []string{refsDir, refLogsDir} {
+		m, _ := filepath.Glob(filepath.Join(s.root, dir, refTmp+"*"))
+		out = append(out, m...)
+	}
+	return out
+}
+
+// refLogDamage reads a ref's whole log and returns the damage in it: a
+// whole line that fails its checksum or names no ref. A last line with
+// no newline is a record being written, or one a crash cut, and no
+// damage.
+func (s *Store) refLogDamage(name string) ([]error, []byte, error) {
+	data, err := os.ReadFile(s.refLogPath(name))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("cas: ref %s log: %w", name, err)
+	}
+	whole := data
+	if i := bytes.LastIndexByte(whole, '\n'); i < 0 {
+		whole = nil
+	} else {
+		whole = whole[:i+1]
+	}
+	var damage []error
+	for i, line := range bytes.Split(bytes.TrimRight(whole, "\n"), []byte{'\n'}) {
+		if len(whole) == 0 {
+			break
+		}
+		if _, err := decodeRefRecord(line); err != nil {
+			damage = append(damage, fmt.Errorf("%w: ref %s log line %d: %v", ErrCorrupt, name, i+1, err))
+		}
+	}
+	return damage, data, nil
+}
+
+// ErrRefNotDamaged is returned by RepairRef for a ref whose file and
+// log read whole: there is nothing to repair.
+var ErrRefNotDamaged = errors.New("cas: the ref and its log are not damaged; there is nothing to repair")
+
+// RefRepair is what RepairRef did.
+type RefRepair struct {
+	// Damage is each damaged line of the ref's log, and the ref file's
+	// own damage when it did not read.
+	Damage []error
+	// Target is the target the ref holds after the repair, which the
+	// restarted log's one record names; zero when the ref is none.
+	Target agentsession.RefTarget
+	// DamagedLog is where the damaged log is kept, in logs/refs; empty
+	// when the ref had no log.
+	DamagedLog string
+}
+
+// RepairRef restarts a damaged ref's log from the ref's current target,
+// RFC 0002's repair of a ref. The current target is the one ResolveRef
+// reads: what the ref's file holds, unless the log's last record moves
+// the ref from there to another target, an update recorded and not made,
+// whose target it is; or, when the file does not read, what the log's
+// last readable record names. The damaged
+// log is kept in logs/refs under a name no ref has, %damaged-<ref>-<time>,
+// which Verify reports until someone removes it, and the new log holds
+// one record, from no target to the current one, whose reason says it
+// was recovered; the ref file is written again when it did not read or
+// lagged the log. The
+// ref's history up to the damage is in the kept log alone.
+//
+// It holds the ref's lock, refuses a read-only or stopped store, and
+// returns ErrRefNotDamaged for a ref whose file and log read whole.
+func (s *Store) RepairRef(ctx context.Context, name string) (RefRepair, error) {
+	var rep RefRepair
+	if err := agentsession.ValidRefName(name); err != nil {
+		return rep, err
+	}
+	if err := ctx.Err(); err != nil {
+		return rep, err
+	}
+	if err := s.writable(); err != nil {
+		return rep, err
+	}
+	for _, d := range []string{refsDir, refLogsDir, refLocksDir} {
+		if err := os.MkdirAll(filepath.Join(s.root, d), 0o755); err != nil {
+			return rep, fmt.Errorf("cas: refs: %w", err)
+		}
+	}
+	lk, err := lockBlocking(ctx, filepath.Join(s.root, refLocksDir, refFile(name)))
+	if err != nil {
+		return rep, err
+	}
+	defer lk.release()
+	damage, data, err := s.refLogDamage(name)
+	if err != nil {
+		return rep, err
+	}
+	file, ferr := s.readRefFile(name)
+	if ferr != nil {
+		damage = append(damage, ferr)
+	}
+	rep.Damage = damage
+	if len(damage) == 0 {
+		return rep, fmt.Errorf("%w: %s", ErrRefNotDamaged, name)
+	}
+	// The current target is the one ResolveRef reads: the file's, unless
+	// the log's last whole record moves the ref from it to another, an
+	// update recorded and not made (a creation among them), whose target
+	// is the ref's. A file that does not read gives way to the last
+	// record that does.
+	whole := data[:bytes.LastIndexByte(data, '\n')+1]
+	lines := bytes.Split(bytes.TrimRight(whole, "\n"), []byte{'\n'})
+	cur := file
+	switch {
+	case ferr != nil:
+		cur = refVal{}
+		for i := len(lines) - 1; i >= 0; i-- {
+			if rec, err := decodeRefRecord(lines[i]); err == nil {
+				cur = rec.nextVal()
+				break
+			}
+		}
+	case len(whole) > 0:
+		if rec, err := decodeRefRecord(lines[len(lines)-1]); err == nil && rec.oldVal().same(file) && !rec.nextVal().same(file) {
+			cur = rec.nextVal()
+		}
+	}
+	rep.Target = cur.RefTarget
+	logDir := filepath.Join(s.root, refLogsDir)
+	if data != nil {
+		aside := filepath.Join(logDir, fmt.Sprintf("%s%s-%d", refDamaged, refFile(name), time.Now().UnixNano()))
+		if err := s.writeRefFile(aside, data); err != nil {
+			return rep, fmt.Errorf("cas: ref %s: keeping its damaged log: %w", name, err)
+		}
+		rep.DamagedLog = aside
+	}
+	var fresh []byte
+	if !cur.IsZero() {
+		rec := newRefRecord(name, agentsession.RefTarget{}, cur.RefTarget, time.Now(), "recovered: the ref's log was damaged and restarted from the ref's target")
+		rec.NewIdent = cur.Ident
+		if fresh, err = rec.encode(); err != nil {
+			return rep, err
+		}
+	}
+	if err := s.writeRefFile(s.refLogPath(name), fresh); err != nil {
+		return rep, fmt.Errorf("cas: ref %s log: %w", name, err)
+	}
+	if ferr != nil || cur != file {
+		if err := s.placeRef(name, cur); err != nil {
+			return rep, err
+		}
+	}
+	return rep, nil
 }
 
 var _ agentsession.RefStore = (*Store)(nil)

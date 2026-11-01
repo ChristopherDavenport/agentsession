@@ -49,6 +49,10 @@ type Features struct {
 	// them: its follow is a store's follower, which does not say; a
 	// client that needs committed records follows with durable=true.
 	DurableMarks bool `json:"durable_marks"`
+	// Media is set when the server's store holds sidecar blobs, so it
+	// takes sidecar sessions and a media object's PUT; one that does not
+	// refuses a sidecar session with unsupported (RFC 0002, Media).
+	Media bool `json:"media"`
 }
 
 // Limits are the server's bounds a client can plan around.
@@ -60,9 +64,10 @@ type Limits struct {
 	// without loading the session again.
 	FollowReplay int `json:"follow_replay"`
 	// UploadGraceMS is how long an object uploaded for a push is kept
-	// for its uploader's push before nothing reaches it: the grace a
-	// sweep of the store must give unreferenced objects. Zero where the
-	// server takes no objects.
+	// for its uploader's push before nothing reaches it: a sweep of the
+	// store gives unreferenced objects more than it, a margin for a write
+	// admitted on an upload to land. Zero where the server takes no
+	// objects or media.
 	UploadGraceMS int64 `json:"upload_grace_ms,omitempty"`
 	// SnapshotBytes is the most entry-line bytes a follow's snapshot or
 	// reset carries inline: past it a server that serves objects sends
@@ -247,6 +252,9 @@ var reasons = map[string]error{
 	// A fork's: its media differs from that of the session holding its
 	// base, a bad_base.
 	"media_differs": agentsession.ErrMediaDiffers,
+	// An import's: a file holding a projection's synthetic leaf marker
+	// that the store cannot keep, a synthetic.
+	"synthetic_marker": agentsession.ErrSyntheticMarker,
 }
 
 // Problem is an error that crossed the wire, as RFC 9457's problem
@@ -370,8 +378,14 @@ func problemOf(err error) *Problem {
 		return problem(CodeHeaderDiffers, "the server holds another session under this ID", "")
 	case errors.Is(err, cas.ErrNotRecord):
 		return problem(CodeNotRecord, "only the record may push a session", "")
-	case errors.Is(err, cas.ErrSynthetic):
+	case errors.Is(err, cas.ErrSynthetic), errors.Is(err, agentsession.ErrSyntheticMarker):
 		return problem(CodeSynthetic, "a synthetic leaf label is a projection's", "")
+	case errors.Is(err, agentsession.ErrNoBlobWriter):
+		return problem(CodeUnsupported, "the store holds no sidecar media", "")
+	case errors.Is(err, agentsession.ErrBlobMismatch):
+		return problem(CodeBadObject, "the bytes do not hash to the name", "")
+	case errors.Is(err, agentsession.ErrNoBlob):
+		return problem(CodeNoObject, "no such object", "")
 	}
 	for reason, sentinel := range reasons {
 		if errors.Is(err, sentinel) {

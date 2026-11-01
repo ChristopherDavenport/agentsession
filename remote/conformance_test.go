@@ -78,8 +78,7 @@ func lowerHeaderFile(t *testing.T, path, format string) {
 
 func TestConformanceOverMemory(t *testing.T) {
 	storetest.Run(t, storetest.Options{
-		New:    func(t *testing.T) agentsession.Store { return serve(t, agentsession.NewMemoryStore(), nil) },
-		Import: importBehind,
+		New: func(t *testing.T) agentsession.Store { return serve(t, agentsession.NewMemoryStore(), nil) },
 		RedactedOnly: func(t *testing.T) agentsession.Store {
 			return serve(t, agentsession.NewMemoryStore(agentsession.MemoryRedactedOnly()), nil)
 		},
@@ -113,7 +112,6 @@ func TestConformanceOverJSONL(t *testing.T) {
 		ReadOnly: func(t *testing.T, s agentsession.Store) agentsession.Store {
 			return open(t, root(s), jsonl.WithReadOnly())
 		},
-		Import: importBehind,
 		RedactedOnly: func(t *testing.T) agentsession.Store {
 			return open(t, t.TempDir(), jsonl.WithRedactedOnly())
 		},
@@ -148,7 +146,6 @@ func TestConformanceOverCAS(t *testing.T) {
 		ReadOnly: func(t *testing.T, s agentsession.Store) agentsession.Store {
 			return open(t, root(s), cas.WithReadOnly())
 		},
-		Import: importBehind,
 		Push: func(t *testing.T, s agentsession.Store, file []byte) error {
 			return pushFile(t, s.(*wire).Client, file)
 		},
@@ -161,14 +158,6 @@ func TestConformanceOverCAS(t *testing.T) {
 			return open(t, root(s))
 		},
 	})
-}
-
-// importBehind imports a session file into the store behind the
-// server, as the record: the server has no import, so a session file
-// reaches it over the wire only by push.
-func importBehind(t *testing.T, s agentsession.Store, file []byte) error {
-	_, err := s.(*wire).backing.(agentsession.Importer).Import(context.Background(), bytes.NewReader(file), true)
-	return err
 }
 
 // pushFile pushes the session file holds to the server c reaches, from

@@ -56,9 +56,12 @@ type Handler struct {
 	// objects each principal uploaded for a push and how long they are
 	// kept for it, and which objects the store's sessions reach.
 	ex          exchanger
+	blobs       agentsession.BlobWriter
+	blobReader  agentsession.BlobReader
 	uploads     uploads
 	uploadGrace time.Duration
 	reach       reach
+	blobSweep   blobSweep
 
 	// The remaining reads: the log where the store reads its log record
 	// by record, the snapshot bound, and how often a followed ref is
@@ -153,8 +156,14 @@ func WithLeaseLimits(def, max time.Duration) Option {
 
 // WithUploadGrace sets how long an object uploaded for a push stays
 // usable by its uploader's push (default 1h). It is published in the
-// capabilities, and it is the least grace a Sweep of the store must give
-// unreferenced objects, since an upload is one until a push names it.
+// capabilities, and a Sweep of the store must give unreferenced objects
+// more than it, since an upload is one until a push names it and a push
+// admitted on it near its end lands after it: an operator sweeps a cas
+// store with a margin, as twice the grace.
+// Over a store that holds blobs and keeps no objects, an
+// [agentsession.BlobSweeper], the server sweeps with it itself: a media
+// upload no session names is removed once older than twice the grace,
+// the second a margin for a write admitted on the upload's reach.
 func WithUploadGrace(d time.Duration) Option {
 	return func(h *Handler) {
 		if d > 0 {
@@ -216,6 +225,8 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 	h.reader, _ = store.(agentsession.Reader)
 	h.follower, _ = store.(agentsession.Follower)
 	h.refs, _ = store.(agentsession.RefStore)
+	h.blobs, _ = store.(agentsession.BlobWriter)
+	h.blobReader, _ = store.(agentsession.BlobReader)
 	for _, o := range opts {
 		o(h)
 	}
@@ -240,9 +251,13 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 	mux.HandleFunc("PUT /v1/sessions/{id}/head", h.guard(ScopeWrite, h.setHead))
 	mux.HandleFunc("PUT /v1/refs/{name...}", h.guard(ScopeRefs, h.updateRef))
 	mux.HandleFunc("GET /v1/objects/{space}/{hash}", h.guard(ScopeRead, h.objectGet))
-	mux.HandleFunc("PUT /v1/objects/{space}/{hash}", h.guard(ScopeExchange, h.objectPut))
+	// A media blob is uploaded with write scope too, so a writer can
+	// upload what the sidecar items it appends name; the scope is
+	// checked per space.
+	mux.HandleFunc("PUT /v1/objects/{space}/{hash}", h.guard("", h.objectPut))
 	mux.HandleFunc("POST /v1/objects/missing", h.guard(ScopeExchange, h.missing))
 	mux.HandleFunc("POST /v1/sessions/{id}/push", h.guard(ScopeExchange, h.push))
+	mux.HandleFunc("POST /v1/sessions/import", h.guard(ScopeExchange, h.importSession))
 	mux.HandleFunc("POST /v1/sessions/{id}/record", h.guard(ScopeExchange, h.record))
 	mux.HandleFunc("POST /v1/sessions/{id}/handover", h.guard(ScopeWrite, h.handover))
 	mux.HandleFunc("/v1/", h.guard("", func(w http.ResponseWriter, r *http.Request) {
@@ -293,10 +308,11 @@ func (h *Handler) Capabilities() Capabilities {
 			Shallow:       reads,
 			Log:           h.lr != nil,
 			CommittedView: h.lr != nil,
+			Media:         h.holdsMedia(),
 		},
 		Limits: Limits{FollowBuffer: h.buffer, FollowReplay: h.replay, SnapshotBytes: h.snapshotLimit},
 	}
-	if exchange {
+	if exchange || h.holdsMedia() {
 		c.Limits.UploadGraceMS = h.uploadGrace.Milliseconds()
 	}
 	return c

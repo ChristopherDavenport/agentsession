@@ -161,10 +161,16 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if hdr.Media == agentsession.MediaSidecar && !h.holdsMedia() {
+		h.fail(w, fmt.Errorf("%w: %s", agentsession.ErrNoBlobWriter, hdr.ID))
+		return
+	}
 	st := h.state(hdr.ID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	sess, err := h.store.Create(r.Context(), hdr)
+	// The store finds a fork's origin only among the sessions the caller
+	// may read, so the header it fills names none it may not.
+	sess, err := h.store.Create(h.readableCtx(r.Context()), hdr)
 	fresh := err == nil
 	if errors.Is(err, agentsession.ErrSessionExists) && complete {
 		// A retry of a create whose answer was lost: the same header
@@ -436,6 +442,23 @@ func (h *Handler) appendLine(ctx context.Context, st *held, line []byte) (append
 	if err != nil {
 		p := problem(CodeBadEntry, "the line is not an entry", err.Error())
 		p.Reason = "parse"
+		return appended{}, p
+	}
+	// A sidecar blob the entry names must be one the caller reaches, or
+	// the append is missing_object, as for one the server lacks: naming
+	// a blob is no way to reach it (RFC 0003, Writing).
+	names, err := agentsession.SidecarBlobs(e)
+	if err != nil {
+		return appended{}, problem(CodeBadEntry, "the entry does not encode", err.Error())
+	}
+	who, _ := PrincipalFrom(ctx)
+	missing, err := h.unreachedMedia(ctx, who.Name, names)
+	if err != nil {
+		return appended{}, err
+	}
+	if missing != nil {
+		p := problem(CodeMissingObject, "the entry names sidecar blobs the server cannot find", "")
+		p.Missing = missing
 		return appended{}, p
 	}
 	res, err := h.write(ctx, st, e)

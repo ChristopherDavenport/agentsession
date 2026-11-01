@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+
+	"github.com/ChristopherDavenport/agentsession"
 )
 
 // Problem is one thing Verify found wrong.
@@ -14,18 +17,23 @@ type Problem struct {
 	// Kind is "log" for a damaged log record, "corrupt" for an object or
 	// pack whose bytes fail their name or checksum, "missing" for an
 	// object something the store holds names and the store lacks,
-	// "session" for a session that cannot be opened, and KindLeftover.
+	// "session" for a session that cannot be opened, KindRef for a ref
+	// whose file or log does not read, and KindLeftover.
 	Kind string
 	// Object is the object's hash, for "corrupt", "missing" and
 	// KindLeftover.
 	Object string
 	// Session is the session concerned, when there is one.
 	Session string
-	Err     error
+	// Ref is the ref concerned, for KindRef.
+	Ref string
+	Err error
 }
 
 func (p Problem) String() string {
 	switch {
+	case p.Ref != "":
+		return fmt.Sprintf("%s %s: %v", p.Kind, p.Ref, p.Err)
 	case p.Object != "" && p.Session != "":
 		return fmt.Sprintf("%s %s (session %s): %v", p.Kind, p.Object, p.Session, p.Err)
 	case p.Object != "":
@@ -49,6 +57,10 @@ type Report struct {
 // an append recovery recorded lost. It is no failure: a sweep removes
 // it once it is older than the sweep's grace.
 const KindLeftover = "leftover"
+
+// KindRef is the Kind of a ref whose file or log does not read, or a
+// damaged ref log a RepairRef set aside. RepairRef restarts the log.
+const KindRef = "ref"
 
 // OK reports whether Verify found nothing wrong, a leftover aside.
 func (r Report) OK() bool {
@@ -146,6 +158,10 @@ func (s *Store) Verify(ctx context.Context) (Report, error) {
 		if err != nil {
 			return rep, err
 		}
+	}
+
+	if err := s.verifyRefs(ctx, add); err != nil {
+		return rep, err
 	}
 
 	// Every session, as Open would build it, without its lock.
@@ -267,4 +283,56 @@ func (s *Store) checkEntry(id string) (Problem, bool) {
 		}
 	}
 	return Problem{}, true
+}
+
+// verifyRefs reads every ref's file and its whole log, and reports one
+// that does not read, by name, as KindRef; a damaged log a RepairRef
+// set aside, as KindRef too, until someone removes it; and a temporary
+// file a crash left, as KindLeftover, which a sweep removes.
+func (s *Store) verifyRefs(ctx context.Context, add func(Problem)) error {
+	seen := map[string]bool{}
+	for _, dir := range []string{refsDir, refLogsDir} {
+		ents, err := os.ReadDir(filepath.Join(s.root, dir))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("cas: refs: %w", err)
+		}
+		for _, e := range ents {
+			if n := refName(e.Name()); !e.IsDir() && agentsession.ValidRefName(n) == nil {
+				seen[n] = true
+			}
+			if kept, ok := strings.CutPrefix(e.Name(), refDamaged); ok && dir == refLogsDir {
+				if i := strings.LastIndexByte(kept, '-'); i > 0 {
+					kept = kept[:i]
+				}
+				add(Problem{Kind: KindRef, Ref: refName(kept), Err: fmt.Errorf("a repair restarted a damaged ref log; the damaged log is kept as %s", filepath.Join(refLogsDir, e.Name()))})
+			}
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for n := range seen {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := s.readRefFile(n); err != nil {
+			add(Problem{Kind: KindRef, Ref: n, Err: err})
+		}
+		damage, _, err := s.refLogDamage(n)
+		if err != nil {
+			add(Problem{Kind: KindRef, Ref: n, Err: err})
+		}
+		for _, d := range damage {
+			add(Problem{Kind: KindRef, Ref: n, Err: d})
+		}
+	}
+	for _, p := range s.refDebris() {
+		add(Problem{Kind: KindLeftover, Err: fmt.Errorf("%s is a ref write a crash left before its rename; a sweep removes it once it is older than the sweep's grace", s.objs.rel(p))})
+	}
+	return nil
 }

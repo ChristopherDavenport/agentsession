@@ -85,6 +85,34 @@ func (c *Client) PutObject(ctx context.Context, space, hash string, data []byte)
 	return nil
 }
 
+// PutBlob implements [agentsession.BlobWriter]: it uploads a sidecar
+// blob as a media object, which write scope may do, so a writer can
+// upload what the sidecar items it appends name. A server whose store
+// holds no sidecar media refuses it with [ErrUnsupported].
+func (c *Client) PutBlob(ctx context.Context, data []byte) (string, error) {
+	hash := agentsession.HashBytes(data)
+	if err := c.PutObject(ctx, cas.SpaceMedia, hash, data); err != nil {
+		return "", err
+	}
+	return hash, nil
+}
+
+// Blob implements [agentsession.BlobReader]: a media object the caller
+// may read, checked against its hash. One the server does not hold, or
+// the caller may not read, is [agentsession.ErrNoBlob].
+func (c *Client) Blob(ctx context.Context, hash string) ([]byte, error) {
+	data, err := c.Object(ctx, cas.SpaceMedia, hash)
+	if errors.Is(err, cas.ErrNoObject) {
+		return nil, fmt.Errorf("%w: %w", agentsession.ErrNoBlob, err)
+	}
+	return data, err
+}
+
+var (
+	_ agentsession.BlobWriter = (*Client)(nil)
+	_ agentsession.BlobReader = (*Client)(nil)
+)
+
 // DeclareRecord makes the server the record for a session it holds as a
 // mirror, RFC 0002's declare-record, when its head is head, the one the
 // caller fetched; basis is "record_deleted" or "sole_copy". It is how a
@@ -143,10 +171,15 @@ func (c *Client) HandOver(ctx context.Context, id, head string) error {
 // committed its mark; a failure between the two leaves two records,
 // never none. A server whose store holds only redacted entries refuses
 // a push of a session whose header does not carry redacted or that
-// carries an entry without it (agentsession.ErrNotRedacted). It refuses
-// at the post, after the objects were uploaded, which stay in its
-// store, named by no session, until a sweep (#244); [WithRedactedOnly]
-// has the client refuse before it sends anything.
+// carries an entry without it (agentsession.ErrNotRedacted).
+//
+// Push asks first, by the push's pre-flight ([Client.CheckPush]), so a
+// refusal that needs no object, a header without redacted at such a
+// server among them, comes before any object is uploaded. One that needs
+// the objects, an entry without redacted under a redacted header, comes
+// at the post, after the objects were uploaded, which stay in the
+// server's store, named by no session, until a sweep;
+// [WithRedactedOnly] has the client refuse before it sends anything.
 func Push(ctx context.Context, local *cas.Store, c *Client, id string, opts cas.PushOptions) (cas.Exchange, error) {
 	targets := make([]agentsession.RefTarget, len(opts.Refs))
 	for i, r := range opts.Refs {
@@ -206,6 +239,9 @@ func Push(ctx context.Context, local *cas.Store, c *Client, id string, opts cas.
 	}
 	for i, r := range opts.Refs {
 		req.Refs = append(req.Refs, PushRef{Name: r.Name, Expected: targetOut(r.Expected), Next: targetOut(targets[i])})
+	}
+	if err := c.CheckPush(ctx, cl.Header, req.Entries, req.Prefix); err != nil {
+		return cas.Exchange{}, err
 	}
 	lacks, err := c.Missing(ctx, all)
 	if err != nil {

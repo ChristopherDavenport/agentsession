@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/internal/origin"
 	"github.com/ChristopherDavenport/agentsession/internal/procs"
 	"github.com/ChristopherDavenport/agentsession/internal/wake"
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
@@ -82,6 +83,11 @@ CREATE TABLE IF NOT EXISTS ref_log (
 	reason      TEXT NOT NULL DEFAULT ''
 ) STRICT;
 CREATE INDEX IF NOT EXISTS ref_log_name ON ref_log(name, id);
+CREATE TABLE IF NOT EXISTS blobs (
+	hash   TEXT    PRIMARY KEY,
+	data   BLOB    NOT NULL,
+	stored INTEGER NOT NULL DEFAULT 0
+) STRICT;
 `
 
 // ErrSessionLocked is returned by Create, Open and Append when another
@@ -453,15 +459,19 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	if err := agentsession.CheckCreate(h, s.redactedOnly); err != nil {
 		return nil, err
 	}
+	var from *agentsession.Session
+	if h.Base != "" {
+		var err error
+		if from, err = s.forkOrigin(ctx, h.ParentSession, h.Base); err != nil {
+			return nil, err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess := agentsession.New(h)
 	if h.Base != "" {
-		origin, err := s.forkOrigin(ctx, h.ParentSession, h.Base)
-		if err != nil {
-			return nil, err
-		}
-		if sess, err = agentsession.Fork(origin, h.Base, h); err != nil {
+		var err error
+		if sess, err = agentsession.Fork(from, h.Base, h); err != nil {
 			return nil, err
 		}
 		if s.redactedOnly {
@@ -501,17 +511,17 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 			return nil, err
 		}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if h.Base != "" {
-		origin, err := s.forkOrigin(ctx, h.ParentSession, h.Base)
+		from, err := s.forkOrigin(ctx, h.ParentSession, h.Base)
 		if err != nil && !errors.Is(err, agentsession.ErrNoEntry) {
 			return nil, err
 		}
-		if err := agentsession.CheckImportMedia(h, origin); err != nil {
+		if err := agentsession.CheckImportMedia(h, from); err != nil {
 			return nil, err
 		}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.insert(ctx, sess)
 }
 
@@ -701,6 +711,9 @@ func (s *Store) load(ctx context.Context, id string) (*agentsession.Session, str
 // session as it stood when its newest row had that seq, which a
 // follower resumes from.
 func (s *Store) loadTo(ctx context.Context, id string, limit int64) (*agentsession.Session, string, int64, error) {
+	if loadHook != nil {
+		loadHook(id)
+	}
 	tx, err := s.r.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, "", 0, fmt.Errorf("sqlite: begin: %w", err)
@@ -761,71 +774,99 @@ func (s *Store) Read(ctx context.Context, id string) (*agentsession.Session, err
 	return sess, err
 }
 
+// loadHook, when set, is told of each session the store loads: a
+// test's way to see which it read.
+var loadHook func(id string)
+
 // forkOrigin returns the session a fork at base continues from: named, when
 // the named session's own entries include base, or the session up its
 // parent_session line that owns it when named holds it on its prefix,
 // else one whose own entries include it,
-// else one that holds it on its prefix. A session not open here is read
-// without being claimed, so a fork can be made from a session another
-// process is writing. The caller holds s.mu.
+// else one that holds it on its prefix, among the sessions
+// [agentsession.ReadableIn] admits. The holders are found in the
+// database without reading any session, the read check is asked of them
+// holding none of the store's locks, since it may read the store, and
+// only the one it admits is read, so the caller does not hold s.mu. A
+// session not open here is read without being claimed, so a fork can be
+// made from a session another process is writing. One deleted between
+// the pick and the read is looked for again.
 func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsession.Session, error) {
-	read := func(id string) (*agentsession.Session, error) {
-		if sess, ok := s.open[id]; ok {
+	for range 3 {
+		c, err := s.originCandidates(ctx, named, base)
+		if err != nil {
+			return nil, err
+		}
+		id := c.Pick(agentsession.ReadableIn(ctx))
+		if id == "" {
+			break
+		}
+		s.mu.Lock()
+		sess, ok := s.open[id]
+		s.mu.Unlock()
+		if !ok {
+			if sess, _, err = s.load(ctx, id); errors.Is(err, agentsession.ErrNoSession) {
+				continue
+			} else if err != nil {
+				return nil, err
+			}
+		}
+		if _, ok := sess.Entry(base); ok {
 			return sess, nil
 		}
-		sess, _, err := s.load(ctx, id)
-		return sess, err
 	}
+	return nil, fmt.Errorf("%w: base %s is not held by this store", agentsession.ErrNoEntry, base)
+}
+
+// onPrefixExpr is a query's expression for whether the session of the
+// entries row e, whose session row is s, holds it on its prefix: a
+// fork's rows open with its prefix, which ends at the header's base.
+const onPrefixExpr = `e.seq <= COALESCE((SELECT b.seq FROM entries b WHERE b.session_id = e.session_id AND b.id = json_extract(s.header, '$.base')), 0)`
+
+// originCandidates finds in the database, reading no session, the
+// sessions that hold base in forkOrigin's order.
+func (s *Store) originCandidates(ctx context.Context, named, base string) (origin.Candidates, error) {
+	var c origin.Candidates
 	// Named on its prefix, the base is its own origin's: parent_session
 	// is followed up to the session whose own entries include it, as
 	// cas finds it, since an import holds a fork to that one's media.
 	for seen := 0; named != "" && seen < 64; seen++ {
-		sess, err := read(named)
+		var onPrefix bool
+		var parent string
+		err := s.r.QueryRowContext(ctx, `SELECT `+onPrefixExpr+`, s.parent_session FROM entries e JOIN sessions s ON s.id = e.session_id WHERE e.session_id = ? AND e.id = ?`, named, base).Scan(&onPrefix, &parent)
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		}
 		if err != nil {
+			return c, fmt.Errorf("sqlite: find base: %w", err)
+		}
+		c.Chain = append(c.Chain, named)
+		if !onPrefix || parent == "" {
+			c.Ends = true
 			break
 		}
-		if _, ok := sess.Entry(base); !ok {
-			break
-		}
-		if !sess.Prefix(base) || sess.Header().ParentSession == "" {
-			return sess, nil
-		}
-		named = sess.Header().ParentSession
+		named = parent
 	}
-	rows, err := s.r.QueryContext(ctx, `SELECT DISTINCT session_id FROM entries WHERE id = ? ORDER BY session_id`, base)
+	rows, err := s.r.QueryContext(ctx, `SELECT DISTINCT e.session_id, `+onPrefixExpr+` FROM entries e JOIN sessions s ON s.id = e.session_id WHERE e.id = ? ORDER BY e.session_id`, base)
 	if err != nil {
-		return nil, fmt.Errorf("sqlite: find base: %w", err)
+		return c, fmt.Errorf("sqlite: find base: %w", err)
 	}
-	var ids []string
+	defer rows.Close()
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("sqlite: find base: %w", err)
+		var onPrefix bool
+		if err := rows.Scan(&id, &onPrefix); err != nil {
+			return c, fmt.Errorf("sqlite: find base: %w", err)
 		}
-		ids = append(ids, id)
+		if onPrefix {
+			c.OnPrefix = append(c.OnPrefix, id)
+		} else {
+			c.Owners = append(c.Owners, id)
+		}
 	}
-	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sqlite: find base: %w", err)
+		return c, fmt.Errorf("sqlite: find base: %w", err)
 	}
-	var onPrefix *agentsession.Session
-	for _, id := range ids {
-		sess, err := read(id)
-		if err != nil {
-			continue
-		}
-		if !sess.Prefix(base) {
-			return sess, nil
-		}
-		if onPrefix == nil {
-			onPrefix = sess
-		}
-	}
-	if onPrefix == nil {
-		return nil, fmt.Errorf("%w: base %s is not held by this store", agentsession.ErrNoEntry, base)
-	}
-	return onPrefix, nil
+	return c, nil
 }
 
 // Append implements agentsession.Store: the entry is held to the rules

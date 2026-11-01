@@ -209,9 +209,23 @@ A session is created with a header and optionally a base.
 - A store MUST refuse to create a session whose base it does not hold or
   whose base is a `leaf` label, since the base is the first head and the
   head never rests on one, and MUST refuse one whose `media` differs
-  from that of a session it holds whose own entries include the base,
-  since the prefix was written in that form and a projection carries
-  media in one form. A session created with a base has that base as its
+  from that of its origin, since the prefix was written in that form
+  and a projection carries media in one form. The origin is the session
+  it holds whose own entries include the base, found by following
+  `parent_session` up from the session the header names, or, where it
+  holds none, a session that holds the base on its prefix, whose
+  `media` is its own origin's. An import and a receive of a fork are
+  held to the same rule. A store that serves more than one principal,
+  as RFC 0003's server does, looks for the origin only among the
+  sessions the caller may read, asking of the sessions holding the base
+  in the order above and of none after the first the caller may read:
+  one it may not read is as one the store does not hold, so neither a refusal nor what the store fills in a
+  fork's header from its origin (`parent_session`, `media`, `payload`)
+  tells the caller anything of a session it may not read. The question
+  whether the caller may read a session is the program's, and may read
+  the store; a store asks it holding none of its own locks, gathering
+  the sessions that hold the base first and checking what it relies on
+  again once it takes them back. A session created with a base has that base as its
   head. A store MUST commit the log that holds the base, through the
   base, before it creates the fork: a fork's recovery reads only its own
   log, and a base a crash took from its origin's working state would
@@ -414,7 +428,14 @@ projection to a file carries none.
   `no such session`, and one whose entry the session does not hold
   with `no such entry`. An update whose expected and next targets are
   equal changes nothing, and a store MUST NOT log it; it still fails if
-  the held target is not the expected one.
+  the held target is not the expected one. A store MUST NOT commit a
+  ref update that pins an entry before that entry's append is
+  committed: it commits the session first, or refuses. The append is
+  the one through which the session holds the entry now: for an entry
+  recovery found lost and the session appended again, the latest, not
+  the first, which no longer holds it. A ref is
+  durable once set, and a pin of working state would otherwise outlive
+  the entry a crash takes.
 - **A ref outlives its session's deletion.** Deleting a session does
   not delete its refs, and a store need not know of them. A ref whose
   session is gone is dangling: resolving it reports that the session
@@ -435,12 +456,21 @@ projection to a file carries none.
   with `no such session`: a ref is re-adopted by deleting it and
   setting it again, two updates, each logged, and moving a dangling ref
   to a different target is allowed. Setting a live ref to the target it
-  holds changes nothing.
+  holds changes nothing. A ref whose pinned entry the session no longer
+  holds, such as one a store wrote before the rule above or one whose
+  pin the medium took, dangles too: resolving it reports `no such
+  entry` and still reports the target, as for a dangling session, and
+  a store MUST NOT return such a target without that error.
 - **Listing is by prefix, in name order.** A store MUST list refs whose
   name begins with a given string, in the byte order of the name, and
   the prefix need not end at a segment boundary. A listing that cannot
   be completed, such as one that finds a ref it cannot read, reports
-  the error rather than a short list.
+  the error rather than a short list. One unreadable ref MUST NOT stop
+  resolving, updating or retaining by another ref: a listing reports
+  the unreadable ref by name, in its place, and goes on, a creation
+  counts its name as held for the rules about names, and retention
+  keeps what an unreadable ref last named, as far as anything of it
+  reads.
 - **The ref log records every accepted update**, in the order the
   store accepted them: the name, the old and the new target (either may
   be none), the time, and an optional reason. It is what says where a
@@ -483,7 +513,9 @@ projection to a file carries none.
   session holds MUST treat the entry a ref pins, and the path above it,
   as it treats a session's base: reachable. A ref that pins nothing
   keeps no object of its own, since the session it names keeps its own
-  while it is held.
+  while it is held. A pin whose entry is gone is satisfied with nothing
+  kept, not taken for corruption: the ref dangles, and retention does
+  not stop at it.
 - **Exchange moves refs** as the exchange section says.
 
 These are store rules. RFC 0001 does not change, and a projection
@@ -574,6 +606,9 @@ the store promises them as one.
   committed, and MUST say which it did. A store MUST also offer a
   commit of a session on its own, so a writer that needs what it has
   appended durable need not append again to get it.
+- A ref update that pins an entry commits that entry's append first,
+  as the refs section says, so a ref never makes working state durable
+  by naming it.
 - A head move by compare-and-swap is accepted and committed as an
   append is, and a store MUST offer a durable one and say which it
   performed. A record mark is committed before it is acknowledged.
@@ -674,6 +709,10 @@ one session's log, when the session is opened, so what a store pays to
 recover a session is proportional to that session's log, however large
 the store has grown. A session's log is deleted with the session and
 holds nothing of any other, so there is nothing store-wide to compact.
+A write a crash interrupts can leave debris no record names, such as a
+temporary file not yet renamed into place; a sweep removes the debris
+of a crashed write older than its grace, and a write in flight keeps
+its own younger than that.
 
 A store built on a database that has its own write-ahead log gets
 atomicity and recovery from the database. Durability it must still ask
@@ -707,6 +746,22 @@ document's concern, and it is not this log.
   `gc.pruneExpire`; and when it accepts an append it MUST hold that
   append's objects, writing back any a sweep took, which is harmless
   since a write of an object is idempotent.
+- A media blob a store accepted by its bytes (Media) is an object
+  like any other for these rules, whatever else the store keeps: a
+  store whose blobs are its only objects, such as one that keeps its
+  entries in a file or a database, MUST offer a sweep that removes a
+  blob no retained content names once it is older than the grace, as
+  one that keeps every object does. A store sweeps when it is asked to,
+  by its operator or by the program serving it: RFC 0003's server sweeps
+  the store it takes uploads for (Objects), so blobs no session names
+  cannot accumulate without bound where uploads arrive; a store nobody
+  sweeps keeps them, as a cas store nobody sweeps keeps its objects.
+  Storing a blob again restarts its grace. A sweep MUST NOT remove a
+  blob that a write it raced names, an append or an import: either no
+  such write lands between its reading what names the blob and its
+  removing it, or a write naming a blob restarts the blob's grace
+  before it lands and the sweep looks again at the blob's age, in a
+  step the restart cannot interleave with, before it removes it.
 - An append recovery dropped as lost, or one no commit covers whose
   objects a crash left torn, does not hold its objects for the first
   rule: nothing reads them, and a torn one is not damage for a sweep
@@ -747,6 +802,32 @@ held once; an inline data URL is part of its entry's content and is held
 once only as that content is. An item names a sidecar blob as RFC 0001
 says, by a `sidecar:` URL carrying the blob's hash, so a push's closure
 over media is computable: the blobs the pushed entries' items name.
+
+A store that holds a sidecar session MUST accept a blob by its bytes
+and store it under its hash after verifying them, so that a writer
+appending a sidecar item, a redactor replacing a blob and an import can
+each put the blob where the session's items find it. A store that
+cannot MUST refuse to create or import a session whose `media` is
+`sidecar`, rather than hold items that name blobs it can never serve.
+An append naming a blob the store lacks is accepted, and the blob is
+reported unresolved; a session with an unresolved blob cannot be pushed
+or projected until the blob arrives.
+
+Naming an object or a blob grants nothing. A store that serves more
+than one principal, as RFC 0003's server does, decides reach per
+caller: a caller's write, an append, an import or a push, reaches an
+object or a blob it names only if the caller itself uploaded it within
+the store's upload grace (RFC 0003, Objects), or could already read a
+session holding it. A write that names
+one the caller cannot reach MUST be answered exactly as a write naming
+one the store does not hold at all, by the same code and in the same
+class of time, so the answer is no oracle of what another principal's
+sessions hold, and the session the write lands in reaches nothing by
+the name. Since a session holds a blob only through a write whose
+caller could reach it, a session that names a blob reaches it. RFC 0003
+answers such a write with `missing_object` (Writing, Import, Exchange).
+A store's own caller, with no principals, reaches everything the store
+holds, and these rules ask nothing of it.
 
 ## Redacted sessions
 
@@ -842,7 +923,15 @@ MUST refuse a file in which one fails. A file whose header carries
 of its own, under an ID of its own, and RFC 0001 requires its lines to
 verify against themselves. An
 importer MUST refuse a header carrying `redacted_from` without
-`redacted`, which RFC 0001 calls malformed. Earlier drafts refused every
+`redacted`, which RFC 0001 calls malformed.
+
+An import of a session whose `media` is `sidecar` takes the session's
+directory with the file, as projection writes it beside the file. It
+verifies each blob the items name against its name, refuses the import
+when one fails, as it does a line that fails its hash, and stores each
+as an object. A blob an item names that the directory lacks and the
+store does not hold is reported unresolved, as an append reports one,
+and the session cannot be pushed or projected until the blob arrives. Earlier drafts refused every
 redacted file, from when redaction left a file that did not verify.
 
 ## Exchange between stores
@@ -997,6 +1086,23 @@ entries or on its prefix. Because the hash covers the whole path,
 agreement on that hash is agreement on every byte of the prefix. RFC
 0001's conformance suite asks for a forked fixture whose base is found
 in its origin; this is that check, and it is one lookup.
+
+A store's own verification, as git's fsck, covers its refs and their
+logs as well as its sessions: it reads every ref and every record of
+every ref log, and names a ref whose target or log does not read. A
+store offers a repair that restarts a damaged ref log from the ref's
+current target, the target the ref held until the damage: the new log
+begins with one record that sets the ref to that target and says it
+was recovered, and the damaged log is kept, and reported, until an
+operator removes it, since it is the ref's only history. The current
+target is the one resolving the ref reads, never the stored value
+alone: where the stored value lags the log, because the log's last
+record moves the ref from that value to another (an update, a creation
+among them, recorded and not yet made), the record's target is the
+current one, and the repair makes the stored value hold it. A repair
+MUST NOT move, revert or delete a ref that a resolve before it would
+have read whole; where the stored value does not read, the last record
+that does names the target.
 
 `request_hash` is unchanged; RFC 0001 says how the two hashes divide
 the work.

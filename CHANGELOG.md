@@ -7,6 +7,132 @@ versions may break the API.
 
 ## Unreleased
 
+- **Naming a blob grants nothing (RFC 0002, Media; RFC 0003, Objects,
+  Writing, Import and Security considerations).** The remote server
+  counted every `sidecar:` URL in a session as a blob that session
+  reached, so a caller who appended `sidecar:<hash>` to a session of
+  his own, or imported a file with no sidecar header naming it, could
+  then `GET` another tenant's blob, and on `cas` an append's
+  `unresolved` said whether the store held a hash. Now an append, an
+  import (whatever the file's `media`) and a push that name a blob the
+  caller did not upload and cannot read through a session are refused
+  with `missing_object`, exactly as for a blob nobody holds, decided
+  without asking the store about the blob, over every store the server
+  takes (memory, jsonl, sqlite and cas). Over the wire an append naming
+  a blob the caller cannot reach is refused where it was accepted with
+  the blob unresolved: upload it first. `remote.Client`'s append then
+  matches `ErrMissingObject` and `agentsession.ErrNoBlob`. This guards
+  new writes only: reach is still read from what sessions name, so a
+  session that already names another principal's blob, as one could be
+  written through a v0.0.30 cas server, keeps reach to it for every
+  reader of that session. An operator who needs to revoke it removes
+  those sessions.
+
+- **An import endpoint, and a push that asks first (RFC 0003, Import
+  and Exchange).** `POST /v1/sessions/import` takes an RFC 0001 file
+  with exchange scope, authorized as a create of its session, and hands
+  it to the store's import, committed before the 201, so a server over
+  memory, jsonl or sqlite can take a session whole, a redacted one
+  among them; a sidecar session's blobs are uploaded first, and one the
+  server cannot find for the caller is `missing_object`, admitting
+  nothing. **Added: `remote.Client.Import` and `ImportMedia`**, so the
+  client is an `agentsession.Importer`; a missing blob matches
+  `agentsession.ErrNoBlob` as well as `ErrMissingObject`. `POST
+  /v1/sessions/{id}/push?check` is the push's pre-flight: the
+  session-level refusals that need no object, or 204, storing nothing.
+  **Added: `remote.Client.CheckPush` and `cas.Store.CheckPush`.**
+  `remote.Push` checks first, so a push of an original to a server that
+  holds only redacted entries uploads nothing, and the server makes the
+  same check at the push before it looks for an object. Both hold a
+  fork's media only to an origin the caller may read: the
+  `parent_session` named and the session holding the base are
+  authorized first, and one the caller may not read is as one the
+  server does not hold, so `bad_base` reveals nothing of another's
+  session; the origin is the first session holding the base the
+  caller may read, so one passed over never lets a fork's media go
+  unchecked. An import and a create over the wire, on every store, find
+  a fork's origin the same way: **Added: `agentsession.WithReadable`
+  and `ReadableIn`**, a
+  context the server gives the store, which `MemoryStore`, `jsonl`,
+  `sqlite` and `cas` consult when they look for an origin, passing over
+  a session the caller may not read, and ask it holding none of their
+  own locks, so an authorizer that reads the store does not deadlock;
+  so an import of a fork of a base
+  held only in another's session is taken as one of a base nobody
+  holds, its refusal never names that session, and a created fork's
+  `parent_session` never does either. A fork whose base only a prefix
+  holds is now held to that session's media at import, as a create
+  already was. The remote
+  conformance suite now imports through the endpoint. (#241, #244)
+
+- **Blobs no session names are swept on every store (RFC 0002, Deletion
+  and retention; RFC 0003, Objects).** A media upload to a server over
+  memory, jsonl or sqlite was kept for good, so a principal with write
+  scope could store any number of blobs nothing names. **Added: the
+  root `BlobSweeper` (`SweepBlobs`)**, implemented by `MemoryStore`,
+  `jsonl.Store` and `sqlite.Store` (a `stored` column in `blobs`): it
+  removes each blob no session names, prefixes included, older than the
+  grace, and never one a write it races names: memory and sqlite sweep
+  in one step no write interleaves with, and in jsonl an append or an
+  import naming a blob restarts its grace first, as storing it again
+  does on every store. The remote server runs it over such a store, at
+  most once a grace, from a media upload, with twice its upload grace,
+  so a write admitted on an upload near the grace's end still lands
+  before its blob can go, and publishes `upload_grace_ms` whenever it
+  takes media. `cas` collects
+  blobs in its `Sweep`, as before.
+
+- **Every store holds sidecar blobs, and an import takes them (RFC 0002,
+  Media and Projection to JSONL; RFC 0003, Objects).** **Added: the
+  root `BlobWriter` (`PutBlob`) and `BlobReader` (`Blob`, `ErrNoBlob`)**,
+  implemented by `MemoryStore`, `jsonl.Store` (a `media/` directory
+  under the root, one file per blob named by its hex digest),
+  `sqlite.Store` (a `blobs` table), `cas.Store` and `remote.Client`
+  (over `PUT /v1/objects/media/{hash}`). **Added: `MediaImporter`,
+  `ImportMedia`, `SidecarBlobs`, `SessionBlobs`, `ReadSidecarBlob`,
+  `ErrBlobMismatch` and `ErrNoBlobWriter`.** `ImportMedia` imports a
+  file with its sidecar directory as an `fs.FS`: each blob the items
+  name is verified and stored, one the directory lacks is returned
+  unresolved, and one that fails its name refuses the import.
+  `cas.Store.ImportMedia` packs the blobs with the session; `Import` of
+  a sidecar session took no blobs. The remote server takes a media
+  upload with write scope as well as exchange scope, serves media over
+  a store that holds blobs and keeps no other objects, publishes a
+  `media` capability, and refuses a sidecar session with `unsupported`
+  over a store that holds no blobs. `cas.Store.Blob` of a blob the store
+  lacks matches `ErrNoBlob`. (#254, #245)
+
+- **One damaged ref stops only itself in `cas` (RFC 0002, Refs,
+  Verification and "A log per session").** A ref whose file or log's
+  last record does not read failed `ListRefs` for every ref, every
+  `Sweep`, and every creation of a ref, while `Verify` said nothing.
+  Now `ListRefs` yields the damaged ref by name with its error and goes
+  on, a creation counts its name as held, and a sweep keeps what it
+  last named. `Verify` reads every ref and every record of its log and
+  reports a damaged one as **`KindRef`**, naming it in the new
+  **`Problem.Ref`**. **Added: `Store.RepairRef`** (and
+  `agentsession repair <cas-root> -ref <name>`), which keeps the
+  damaged log as `logs/refs/%damaged-<ref>-<time>`, reported by
+  `Verify` until removed, and restarts the log from the ref's target
+  as `ResolveRef` reads it: an update or a creation the log records and
+  the file never caught up with stands, where it was reverted or lost.
+  `Sweep` removes the `%tmp-*` files a crash leaves in `refs/` and
+  `logs/refs/` once older than its grace, and `Verify` reports them as
+  leftovers. (#218, #219)
+
+- **A ref never pins working state (RFC 0002, Refs and Durability).**
+  `cas` and `jsonl` commit the session holding an entry a ref update
+  pins before the ref is written: `cas` commits the append, a held
+  session's working state or another process's lazy objects and log,
+  and refuses when it cannot; for an entry a crash took and the session
+  appended again, it commits through the latest append, and so does a
+  fork of it; `jsonl` fsyncs the session's file. A ref whose pinned
+  entry the session no longer holds, as one written before this could
+  be left after a power cut, now resolves to its target with
+  `ErrNoEntry`, in `cas` and `jsonl`, where it returned the lost entry
+  with no error, and a `cas` sweep keeps nothing for it where it failed
+  on every run. (#217)
+
 - **The universal root (RFC 0001 Terminology; RFC 0002 Sessions,
   Append, Head; RFC 0003 Writing).** Every session hangs from one root,
   shared by all, which `parent: null` spells on the wire; a session is

@@ -96,16 +96,17 @@ func synthetic(l *LabelEntry) bool {
 // CheckImportMedia is the media check RFC 0002's import makes, for a
 // store that has found origin, the session holding the base, or nil
 // when it holds none: a fork whose media differs from origin's is
-// refused with [ErrMediaDiffers] when origin's own entries include the
-// base. A store finds origin by following parent_session up to the
-// session that owns the base, so one that holds it only on its prefix
-// is not taken for it.
+// refused with [ErrMediaDiffers]. A store finds origin by following
+// parent_session up to the session that owns the base, else takes a
+// session that owns it, else one that holds it on its prefix, whose
+// media is its own origin's, as a create forks from it; and only among
+// the sessions [ReadableIn] admits.
 func CheckImportMedia(h Header, origin *Session) error {
-	if origin == nil || h.Base == "" || origin.Prefix(h.Base) {
+	if origin == nil || h.Base == "" {
 		return nil
 	}
 	if om := origin.Header().Media; mediaForm(h.Media) != mediaForm(om) {
-		return fmt.Errorf("%w: import: media %q, where %s, whose own entries include the base, is %q", ErrMediaDiffers, mediaForm(h.Media), origin.ID(), mediaForm(om))
+		return fmt.Errorf("%w: import: media %q, where %s, which holds the base, is %q", ErrMediaDiffers, mediaForm(h.Media), origin.ID(), mediaForm(om))
 	}
 	return nil
 }

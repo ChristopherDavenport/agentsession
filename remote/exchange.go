@@ -26,6 +26,7 @@ type exchanger interface {
 	MarkOf(ctx context.Context, id string) (mark, head string, err error)
 	DeclareRecordAt(ctx context.Context, id, head string) error
 	HandOver(ctx context.Context, id, head string) error
+	CheckPush(ctx context.Context, h agentsession.Header, prefix []string) error
 }
 
 // Objects are object hashes by RFC 0003's space: the body of a missing
@@ -157,6 +158,51 @@ func (h *Handler) reachable(ctx context.Context, who string, keys []objKey) (map
 	return out, nil
 }
 
+// readableCtx carries the caller's read authorization to the store
+// (agentsession.WithReadable), so a create, an import or a push finds a
+// fork's origin only among the sessions the caller may read, and one it
+// may not is as one the store does not hold.
+func (h *Handler) readableCtx(ctx context.Context) context.Context {
+	if h.authorize == nil {
+		return ctx
+	}
+	return agentsession.WithReadable(ctx, func(session string) bool { return h.may(ctx, ScopeRead, session) })
+}
+
+// unreachedMedia returns which of the sidecar blobs a write names the
+// caller cannot reach, in missing's shape, or nil when it reaches every
+// one. Naming a blob grants nothing (RFC 0003, Security
+// considerations): a session reaches a blob only when its writer could,
+// having uploaded it or being able to read a session that holds it, so
+// a write that names one the caller cannot reach is refused with
+// missing_object, exactly as one naming a blob the server does not hold
+// at all. The check reads no blob and asks the store nothing of one, so
+// the two answers cannot be told apart. A server whose store holds no
+// media has none to reach, and checks nothing.
+func (h *Handler) unreachedMedia(ctx context.Context, who string, names []string) (*Objects, error) {
+	if len(names) == 0 || !h.holdsMedia() {
+		return nil, nil
+	}
+	keys := make([]objKey, 0, len(names))
+	for _, b := range names {
+		keys = append(keys, objKey{cas.SpaceMedia, b})
+	}
+	ok, err := h.reachable(ctx, who, keys)
+	if err != nil {
+		return nil, err
+	}
+	missing := &Objects{Entries: []string{}, Contents: []string{}, Media: []string{}}
+	for _, k := range keys {
+		if !ok[k] {
+			missing.add(k.space, k.hash)
+		}
+	}
+	if missing.empty() {
+		return nil, nil
+	}
+	return missing, nil
+}
+
 // reachSets is the objects each of the store's sessions holds, by
 // session ID, each rebuilt when the listing's size or modified time for
 // it has changed.
@@ -208,13 +254,14 @@ func (h *Handler) principal(r *http.Request) Principal {
 }
 
 // objectGet serves an object's canonical bytes, to a caller it is
-// reachable by; HEAD answers the same without the body.
+// reachable by; HEAD answers the same without the body. A server over a
+// store that keeps no objects but holds sidecar blobs serves media.
 func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
-	if h.ex == nil {
+	k := objKey{r.PathValue("space"), r.PathValue("hash")}
+	if h.ex == nil && (k.space != cas.SpaceMedia || h.blobReader == nil) {
 		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no objects", ""))
 		return
 	}
-	k := objKey{r.PathValue("space"), r.PathValue("hash")}
 	if !validSpace(k.space) || !agentsession.ValidHash(k.hash) {
 		h.writeProblem(w, problem(CodeNoObject, "no such object", ""))
 		return
@@ -228,7 +275,12 @@ func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
 		h.writeProblem(w, problem(CodeNoObject, "no such object", ""))
 		return
 	}
-	data, err := h.ex.Object(r.Context(), k.space, k.hash)
+	var data []byte
+	if h.ex != nil {
+		data, err = h.ex.Object(r.Context(), k.space, k.hash)
+	} else {
+		data, err = h.blobReader.Blob(r.Context(), k.hash)
+	}
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -241,15 +293,27 @@ func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// objectPut takes an object a push will name, checked against its hash.
-// One the store holds already is a write that succeeds and says nothing
-// of it.
+// holdsMedia reports whether the store holds sidecar blobs: a store that
+// exchanges, whose objects include media, or one that writes blobs.
+func (h *Handler) holdsMedia() bool { return h.ex != nil || h.blobs != nil }
+
+// objectPut takes an object a push, an import or an append will name,
+// checked against its hash. One the store holds already is a write that
+// succeeds and says nothing of it. Exchange scope uploads any object;
+// write scope uploads media, which a writer's sidecar items name (RFC
+// 0003, Objects). A server over a store that keeps no objects but holds
+// sidecar blobs takes media alone.
 func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
-	if h.ex == nil {
+	k := objKey{r.PathValue("space"), r.PathValue("hash")}
+	who := h.principal(r)
+	if !who.Has(ScopeExchange) && (k.space != cas.SpaceMedia || !who.Has(ScopeWrite)) {
+		h.writeProblem(w, problem(CodeScope, "the principal lacks the scope this needs", string(ScopeExchange)))
+		return
+	}
+	if h.ex == nil && (k.space != cas.SpaceMedia || h.blobs == nil) {
 		h.writeProblem(w, problem(CodeUnsupported, "the store keeps no objects", ""))
 		return
 	}
-	k := objKey{r.PathValue("space"), r.PathValue("hash")}
 	if !validSpace(k.space) {
 		h.writeProblem(w, problem(CodeBadRequest, "no such object space", k.space))
 		return
@@ -263,12 +327,53 @@ func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, problem(CodeBadRequest, "the object is larger than the server takes", ""))
 		return
 	}
-	if err := h.ex.PutObject(r.Context(), k.space, k.hash, data); err != nil {
+	if h.ex != nil {
+		err = h.ex.PutObject(r.Context(), k.space, k.hash, data)
+	} else if agentsession.HashBytes(data) != k.hash {
+		err = problem(CodeBadObject, "the bytes do not hash to the name", k.hash)
+	} else {
+		h.sweepUploads(r.Context())
+		_, err = h.blobs.PutBlob(r.Context(), data)
+	}
+	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	h.uploads.put(h.principal(r).Name, k)
+	h.uploads.put(who.Name, k)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// sweepUploads collects the uploads no session came to name, over a
+// store that holds blobs and keeps no objects of its own, as RFC 0003's
+// Objects has every upload collected: the store's blob sweep, at most
+// once a grace, run by the upload that finds the last one a grace old.
+// It sweeps with twice the upload grace: a write admitted on an upload's
+// reach, which lasts a grace from the upload, may land after that grace
+// has passed, and the second grace is its margin. So what unnamed
+// uploads hold is bounded by what arrives in three graces. A store whose
+// sweep is its operator's, as cas's is, is not swept here. A sweep that
+// fails is logged and the upload goes on.
+func (h *Handler) sweepUploads(ctx context.Context) {
+	sw, ok := h.blobs.(agentsession.BlobSweeper)
+	if !ok {
+		return
+	}
+	h.blobSweep.mu.Lock()
+	if time.Since(h.blobSweep.last) < h.uploadGrace {
+		h.blobSweep.mu.Unlock()
+		return
+	}
+	h.blobSweep.last = time.Now()
+	h.blobSweep.mu.Unlock()
+	if _, err := sw.SweepBlobs(ctx, 2*h.uploadGrace); err != nil {
+		h.logError(fmt.Errorf("remote: sweeping unnamed uploads: %w", err))
+	}
+}
+
+// blobSweep is when the server last swept unnamed uploads.
+type blobSweep struct {
+	mu   sync.Mutex
+	last time.Time
 }
 
 // missing answers which of the hashes the caller names it cannot reach:
@@ -368,12 +473,19 @@ func resultOf(x cas.Exchange, mark string) *PushResult {
 // the wire. It is not leased: it takes the session's per-session lock,
 // so it is ordered against a lease holder's writes, and presents no
 // token.
+//
+// With ?check it is the pre-flight (RFC 0003, Exchange): the body needs
+// only the header, the entries and the prefix, and the answer is 204 or
+// the first session-level refusal the push would meet with no object,
+// and nothing is stored. The push itself makes the same check before it
+// looks for an object, so it refuses as the pre-flight did.
 func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 	if h.ex == nil {
 		h.writeProblem(w, problem(CodeUnsupported, "the store does not exchange", ""))
 		return
 	}
 	id := r.PathValue("id")
+	check := r.URL.Query().Has("check")
 	var req pushRequest
 	if err := readJSON(r, &req); err != nil {
 		h.fail(w, err)
@@ -383,6 +495,7 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 	case req.Header.ID != id:
 		h.fail(w, problem(CodeBadRequest, "the header names another session", req.Header.ID))
 		return
+	case check:
 	case req.Mark != cas.MarkMirror && req.Mark != cas.MarkRecord:
 		h.fail(w, problem(CodeBadRequest, "mark is mirror or record", req.Mark))
 		return
@@ -399,6 +512,20 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 			p.Reason = "header"
 		}
 		h.fail(w, p)
+		return
+	}
+	// A fork's origin and base are authorized for reading before the
+	// store looks at them: one the caller may not read answers as one
+	// the server does not hold, so neither the check nor the push says
+	// whether, or how, another's session holds the base (RFC 0003,
+	// Exchange).
+	ctx := h.readableCtx(r.Context())
+	if err := h.ex.CheckPush(ctx, req.Header, req.Prefix); err != nil {
+		h.fail(w, err)
+		return
+	}
+	if check {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	who := h.principal(r)
@@ -434,7 +561,7 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, p)
 		return
 	}
-	x, err := h.ex.Receive(r.Context(), c, cas.ReceiveOptions{Expected: headIn(req.Head.Expected), Force: req.Head.Force, Handover: req.Mark == cas.MarkRecord})
+	x, err := h.ex.Receive(ctx, c, cas.ReceiveOptions{Expected: headIn(req.Head.Expected), Force: req.Head.Force, Handover: req.Mark == cas.MarkRecord})
 	defer h.settle(r.Context(), st)
 	mark, _, _ := h.ex.MarkOf(r.Context(), id)
 	if errors.Is(err, cas.ErrHeadMoved) {
