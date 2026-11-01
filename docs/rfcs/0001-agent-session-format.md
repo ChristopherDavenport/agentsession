@@ -2094,7 +2094,11 @@ from entry `n` are one mark, and the entry's own body says which it is.
 What **stands in the place** of a left-out entry is the placeholder
 whose `redacted` covers its position on that path, when the redactor
 wrote one, and otherwise the nearest entry above it on its path that
-the redaction wrote, or the universal root when it wrote none. A member
+the redaction wrote, or the universal root when it wrote none. In a
+file with a `base` the base is written and above every own entry, so
+an own entry's left-out ancestors are replaced by an own entry or the
+base, never the root, which the base rule forbids an own entry to hang
+from. A member
 that named the left-out entry then follows the rule for its kind:
 
 - A member naming one predecessor names what stands in the left-out

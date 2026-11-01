@@ -88,13 +88,13 @@ versions may break the API.
   tighten: a redactor that changes a pin's source changes the pin, and
   `first_kept` names an entry before its compaction, with a placeholder
   written when a redaction leaves every entry from it out. **Added:
-  `ErrNoPlace`, `Remapped.Dropped` and `Remap.Bound`**; a `Remap`
+  `ErrNoPlace`, `Remapped.Dropped`, `Remap.Bound` and `Remap.Base`**; a `Remap`
   callback that returns an empty ID says the entry was left out with
   nothing in its place, and `RemapRefs` removes the members listing it,
   removes a list it empties and an `omit` left naming nothing (an empty
-  one would clear what is in force), points `parent`, and a `leaf`
-  label's `target`, at the root, and refuses any other member with
-  `ErrNoPlace`. `Remap.Bound` maps `first_kept` and `before`, so they
+  one would clear what is in force), points `parent` at the root, or
+  at `Remap.Base` in a file with a base, and a `leaf` label's `target`
+  at the root, and refuses any other member with `ErrNoPlace`. `Remap.Bound` maps `first_kept` and `before`, so they
   never name the entry above a left-out one that `Entry` returns. (#253)
 
 - **Which form a sidecar session's request hash covers (RFC 0001 0.14,

@@ -910,3 +910,23 @@ func TestRemapRefsBound(t *testing.T) {
 		t.Errorf("err %v, want ErrNoPlace", err)
 	}
 }
+
+// TestRemapRefsBase: in a file with a base, an own entry whose own
+// ancestors were all left out hangs from the base, which is above it on
+// its path, and not from the universal root, which the base rule
+// forbids (RFC 0001, Leaving entries out).
+func TestRemapRefsBase(t *testing.T) {
+	line := `{"type":"item","id":"x","parent":"gone-p",` + tsLine + `,"item":{"type":"message","role":"user","content":[]}}`
+	m := leftOutRemap
+	m.Base = "n-base"
+	r, err := RemapRefs(entryOf(t, line), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Entry.Base().Parent; got != "n-base" {
+		t.Errorf("parent %q, want the base", got)
+	}
+	if r, err := RemapRefs(entryOf(t, line), leftOutRemap); err != nil || r.Entry.Base().Parent != "" {
+		t.Errorf("without a base: parent %q, %v; want the root", r.Entry.Base().Parent, err)
+	}
+}

@@ -253,10 +253,10 @@ type Remap struct {
 	// of a set loses it (a parents element, an omit items or outputs
 	// items ID, an item's queued_from or from_link), a list so emptied
 	// is removed, and an omit left with no member with it; parent names
-	// the universal root, null, and so does a leaf label's target, the
-	// one other member that may; and any other member, which names one
-	// predecessor and must name what stands in the place, is refused
-	// with [ErrNoPlace].
+	// the universal root, null, or Base in a file with one; a leaf
+	// label's target, the one other member that may, names the root;
+	// and any other member, which names one predecessor and must name
+	// what stands in the place, is refused with [ErrNoPlace].
 	Entry func(session, entry string) (string, bool)
 	// Bound maps a reference that bounds a range from below, a
 	// compaction's first_kept and images' before in a config or a
@@ -269,6 +269,13 @@ type Remap struct {
 	// only while every entry they name was kept: a writer that leaves
 	// entries out sets it.
 	Bound func(entry string) (string, bool)
+	// Base is, for entries written to a file with a base, that base as
+	// the file names it. Every entry given is then one of the session's
+	// own, and the base is above each on its path, so a parent with
+	// nothing else in its place names the base and not the universal
+	// root, which would break the base rule (RFC 0001, Leaving entries
+	// out). Empty for a file without one.
+	Base string
 	// Session maps a reference to a session by its ID.
 	Session func(id string) (string, bool)
 }
@@ -436,7 +443,9 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 	if noPlace != nil {
 		return Remapped{}, noPlace
 	}
-	if root0 {
+	if root0 && m.Base != "" {
+		root["parent"] = m.Base
+	} else if root0 {
 		root["parent"] = nil
 	}
 	if leaf0 {
