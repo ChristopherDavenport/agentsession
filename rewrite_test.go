@@ -299,8 +299,10 @@ func TestRewriteStringsWritesNoReadLine(t *testing.T) {
 // TestRedactionVerifies: between them they hold every core type,
 // an extension, kept extras, instruction parts named by hash, omitted
 // parts, omit, a fork's prefix and base, convergence, normalised records,
-// callee links and judges.
-var redactableFixtures = []string{"basic", "branch", "compaction", "converge", "extensions", "fork", "handback", "instructions", "interleaved", "judged", "normalised", "omit", "omitted", "parts", "peer", "pinned", "queued", "replay", "resume", "runs"}
+// callee links and judges, and the 0.14 members: placeholders, a
+// from_link, a withdrawal and a failed output.
+var redactableFixtures = []string{"basic", "branch", "compaction", "converge", "extensions", "fork", "handback", "instructions", "interleaved", "judged", "normalised", "omit", "omitted", "parts", "peer", "pinned", "queued", "replay", "resume", "runs",
+	"placeholders", "late-report", "withdrawn", "record-resume", "refold", "no-response-id"}
 
 // redaction is a redaction of a session that makes one entry of each of
 // its entries, read back from the file it writes.
