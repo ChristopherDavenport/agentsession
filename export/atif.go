@@ -556,6 +556,9 @@ func (b *builder) entry(e agentsession.Entry) error {
 		if v.Ref != "" {
 			rec["ref"] = v.Ref
 		}
+		if v.Deliver {
+			rec["deliver"] = true
+		}
 		copyUnknown(rec, v.Unknown)
 		b.addPendingList(ExtraQueued, rec)
 	case *agentsession.UnknownEntry:

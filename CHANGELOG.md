@@ -34,6 +34,19 @@ versions may break the API.
   ATIF goldens. **Added: `CopiedFrom`, `ItemEntry.CopiedFrom`,
   `Call.Copied`, `ErrCopiedCall`, `ErrBadCopiedFrom`.**
 
+- **Delivered inputs (RFC 0001 0.15, `queued`; agentturn#244).** A
+  `queued` steer may carry `deliver: true` (`QueuedEntry.Deliver`): an
+  input that arrived on its own time and must reach the model, for
+  which a harness starts a run when none takes it. `PendingQueued`
+  returns an owed delivery with the field set, so a resume can tell it
+  from a plain steer. A writer refuses `deliver` on a follow-up; a
+  reader keeps one there, or not `true`, as written. `NewDelivery`
+  builds one, and `QueuedEntry.Requeue` writes an input again after a
+  run end closed it, `deliver` included. ATIF carries `deliver` in the
+  `queued` record; the CLI describes the entry as delivered. Fixture
+  `delivered`, with its ATIF golden. **Added: `QueuedEntry.Deliver`,
+  `NewDelivery`, `QueuedEntry.Requeue`.**
+
 ## v0.0.31 - 2026-11-01
 
 - **ATIF: what each step's own request left out, cost with subagents,

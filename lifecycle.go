@@ -369,6 +369,18 @@ type QueuedEntry struct {
 	// Ref names the queued input in the harness's own terms, for a
 	// caller that holds a handle to it.
 	Ref string `json:"ref,omitempty"`
+	// Deliver marks, in format 0.15, a steer that arrived on its own
+	// time, as a background task's result does, and must reach the
+	// model whether or not a run is in flight to take it: it joins a
+	// run in flight as any steer does, and when none takes it the
+	// harness starts a run that does, once the run in flight has ended,
+	// unless calls are pending, when it waits for the resume. One owed
+	// when a harness resumes the path is handed back as a delivery and
+	// starts a run when nothing else does. It is defined on a steer
+	// alone: a deliver member on a follow-up, or one that is not true, is
+	// kept as written in Unknown and Deliver is false. See [NewDelivery]
+	// and [QueuedEntry.Requeue].
+	Deliver bool `json:"-" member:"deliver"`
 }
 
 // EntryType returns "queued".
@@ -378,6 +390,24 @@ func (*QueuedEntry) EntryType() string { return TypeQueued }
 // [ModeSteer] or [ModeFollowUp].
 func NewQueued(item openresponses.Item, mode string) *QueuedEntry {
 	return &QueuedEntry{Item: item, Mode: mode}
+}
+
+// NewDelivery builds a queued entry for an input delivered on its own
+// time: a steer carrying deliver, which a harness starts a run for when
+// no run takes it.
+func NewDelivery(item openresponses.Item) *QueuedEntry {
+	return &QueuedEntry{Item: item, Mode: ModeSteer, Deliver: true}
+}
+
+// Requeue returns the entry that queues this input again, as a harness
+// that still wants it writes one after a run end closed this one: the
+// same item, mode, trigger, ref and deliver, members the format does
+// not define included, and no ID. The trigger is copied whole, as
+// [QueuedEntry.Drain] copies it.
+func (e *QueuedEntry) Requeue() *QueuedEntry {
+	out := &QueuedEntry{Item: e.Item, Mode: e.Mode, Trigger: e.Trigger.Clone(), Ref: e.Ref, Deliver: e.Deliver}
+	out.Unknown = cloneRaw(e.Unknown)
+	return out
 }
 
 // WithTrigger records what brought the input in and returns the
@@ -584,6 +614,9 @@ func validateLifecycle(e Entry) error {
 		if v.Mode == "" {
 			return errors.New("agentsession: queued entry has no mode")
 		}
+		if v.Deliver && v.Mode != ModeSteer {
+			return errors.New("agentsession: deliver is defined on a steer alone")
+		}
 	}
 	return nil
 }
@@ -746,7 +779,16 @@ func (e *QueuedEntry) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	type plain QueuedEntry
-	return marshalEntry(TypeQueued, &e.EntryBase, (*plain)(e))
+	if !e.Deliver {
+		return marshalEntry(TypeQueued, &e.EntryBase, (*plain)(e))
+	}
+	if _, dup := e.Unknown["deliver"]; dup {
+		return nil, errors.New("agentsession: queued entry has deliver both typed and unknown")
+	}
+	return marshalEntry(TypeQueued, &e.EntryBase, struct {
+		*plain
+		Deliver bool `json:"deliver"`
+	}{(*plain)(e), true})
 }
 
 // UnmarshalJSON decodes the entry, dispatching the item through the
@@ -780,6 +822,12 @@ func (e *QueuedEntry) decodeMembers(data []byte, all map[string]json.RawMessage)
 	e.Mode = aux.Mode
 	e.Trigger = aux.Trigger
 	e.Ref = aux.Ref
+	// deliver is taken where 0.15 defines it, true on a steer, in a file
+	// of any minor; anything else is kept as written.
+	e.Deliver = false
+	if e.Mode == ModeSteer {
+		promote(&e.EntryBase, "deliver", &e.Deliver)
+	}
 	return validateLifecycle(e)
 }
 

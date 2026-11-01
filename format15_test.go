@@ -19,6 +19,7 @@ import (
 var fixtures015 = map[string]func(t *testing.T) *Session{
 	"copied":        func(t *testing.T) *Session { _, child := copiedFixture(t); return child },
 	"copied-answer": func(t *testing.T) *Session { _, fork := copiedAnswerFixture(t); return fork },
+	"delivered":     deliveredFixture,
 }
 
 // badFixtures015 are the 0.15 negative fixtures: each a valid file with
@@ -464,5 +465,109 @@ func TestRewriteDropsCopiedEntry(t *testing.T) {
 	}
 	if got := out.(*ItemEntry).CopiedFrom; got == nil || got.Entry != "sha256:e" {
 		t.Errorf("an unchanged copy names %+v", got)
+	}
+}
+
+// deliveredFixture builds the session delivered.jsonl holds: a
+// background result is delivered while the first run is in flight and
+// the run ends without draining it, so the writer queues it again after
+// the run end, carrying deliver; the next run starts for it and drains
+// it, its model makes a call a policy holds for approval, and a second
+// delivery arrives before the record is cut, with no run end.
+func deliveredFixture(t *testing.T) *Session {
+	t.Helper()
+	s, must, say := fixtureSession(t, Header{ID: "01995b2a-0000-7000-8000-000000000035", Records: AllRecords}, "2026-11-01T12:00:00Z")
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewRunStart("run-1", SourceInput, ""))
+	must(NewItemEntry(openresponses.UserText("Start the build in the background.")))
+	say("resp_1", "The build is running.")
+	first := NewDelivery(openresponses.UserText("Background task build-7 finished: 2 warnings.")).WithTrigger("task", "build-7", "background")
+	first.Ref = "inbox-1"
+	must(first)
+	e, err := s.EndRun(ReasonDone, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(e)
+	again := first.Requeue()
+	must(again)
+	must(NewRunStart("run-2", SourceInput, ""))
+	must(again.Drain())
+	sent := fixtureHash(t, s)
+	call := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_fix", Name: "bash", Arguments: `{"cmd":"make fix-warnings"}`}, ResponseID: "resp_2"})
+	must(&ResponseEntry{ResponseID: "resp_2", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+	must(NewDecision("call_fix", call, VerdictHold, ByPolicy).WithReason("asks a person"))
+	must(NewDelivery(openresponses.UserText("Background task lint-3 finished: clean.")).WithTrigger("task", "lint-3", "background"))
+	return s
+}
+
+// TestDeliveredFixture reads the delivery fixture: the run end closes
+// the first delivery, the entry queued again after it carries deliver
+// and is owed until the next run drains it, and at the cut the second
+// delivery is owed as a delivery while the held call waits.
+func TestDeliveredFixture(t *testing.T) {
+	raw := checkBuilt(t, "delivered")
+	if bytes.Count(raw, []byte(`"deliver":true`)) != 3 {
+		t.Errorf("the fixture holds %d deliveries", bytes.Count(raw, []byte(`"deliver":true`)))
+	}
+	s := loadFixture(t, "delivered")
+	if err := s.VerifyRecords(s.Leaf()); err != nil {
+		t.Errorf("VerifyRecords: %v", err)
+	}
+	var queued []*QueuedEntry
+	for _, e := range s.Entries() {
+		if q, ok := e.(*QueuedEntry); ok {
+			queued = append(queued, q)
+		}
+	}
+	if len(queued) != 3 {
+		t.Fatalf("%d queued entries", len(queued))
+	}
+	owed, _ := s.PendingQueued(queued[1].ID)
+	if len(owed) != 1 || owed[0] != queued[1] || !owed[0].Deliver || owed[0].Ref != "inbox-1" {
+		t.Errorf("after the run end the owed input is %+v", owed)
+	}
+	owed, _ = s.PendingQueued(s.Leaf())
+	if len(owed) != 1 || owed[0] != queued[2] || !owed[0].Deliver {
+		t.Errorf("at the cut the owed input is %+v", owed)
+	}
+	pending, _ := s.PendingCalls(s.Leaf())
+	if len(pending) != 1 || !pending[0].Held() {
+		t.Errorf("pending = %+v", pending)
+	}
+}
+
+// TestDeliverForms: deliver is taken as true on a steer, in a file of
+// any minor; on a follow-up, or holding anything but true, it is kept as
+// written; a writer refuses it on a follow-up.
+func TestDeliverForms(t *testing.T) {
+	for _, tt := range []struct {
+		mode, member string
+		typed        bool
+	}{
+		{"steer", "true", true},
+		{"steer", "false", false},
+		{"steer", `"yes"`, false},
+		{"followup", "true", false},
+	} {
+		line := `{"type":"queued","id":"x","parent":null,"ts":"2026-11-01T10:00:00Z","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},"mode":"` + tt.mode + `","deliver":` + tt.member + `}`
+		e, err := UnmarshalEntry([]byte(reparent(t, line, "")))
+		if err != nil {
+			t.Fatalf("%s %s: %v", tt.mode, tt.member, err)
+		}
+		q := e.(*QueuedEntry)
+		if _, kept := q.Unknown["deliver"]; q.Deliver != tt.typed || kept == tt.typed {
+			t.Errorf("%s %s: typed %v, kept %v", tt.mode, tt.member, q.Deliver, kept)
+		}
+		back, err := MarshalEntry(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sameJSON(t, members(t, back)["deliver"], []byte(tt.member)) {
+			t.Errorf("%s %s: written back as %s", tt.mode, tt.member, back)
+		}
+	}
+	if _, err := MarshalEntry(&QueuedEntry{Item: openresponses.UserText("hi"), Mode: ModeFollowUp, Deliver: true}); err == nil {
+		t.Error("a follow-up carrying deliver was written")
 	}
 }

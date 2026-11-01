@@ -219,6 +219,9 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		return strings.Join(parts, " ")
 	case *agentsession.QueuedEntry:
 		s := v.Mode + " " + describeItem(v.Item)
+		if v.Deliver {
+			s = "delivered " + s
+		}
 		if v.Trigger != nil {
 			s += " from " + describeTrigger(v.Trigger)
 		}

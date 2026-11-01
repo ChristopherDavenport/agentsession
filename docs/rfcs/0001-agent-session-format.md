@@ -1426,6 +1426,21 @@ end.
 - `item` and `mode` are required. `mode` is `steer` for an input that
   joins the run in flight and `followup` for one that waits for it to
   end.
+- `deliver` MAY be `true` on a `queued` entry whose `mode` is `steer`,
+  since 0.15: the input arrived on its own time, as a background task's
+  result does, and must reach the model whether or not a run is in
+  flight to take it. It joins a run in flight as any steer does. When
+  no run takes it, the harness starts a run that does, once the run in
+  flight has ended, unless calls are pending, when the input waits for
+  the resume. A `queued` entry carrying `deliver` that is owed when a
+  harness resumes the path is handed back as a delivery, and starts a
+  run when nothing else does, where an owed steer waits for the next
+  input. A writer that writes the entry again after a run end, as the
+  inbox rule below asks, writes `deliver` with it. A writer MUST NOT
+  write `deliver` with `mode: "followup"`, nor with any value but
+  `true`; a reader keeps such a member as one it does not know. The
+  `item` that drains the entry carries nothing new: its `queued_from`
+  names the entry, which says how the item arrived.
 - The entry is a record entry: its `item` is not in context and
   reaches no request. The input enters the conversation when it is
   appended as an `item` entry, which carries `queued_from` naming this
@@ -2338,7 +2353,8 @@ next turn or another call's; one naming no call in the document
 travels, as every other `custom` entry does, in the list `custom` of
 the next step's `extra`, or of the top-level `extra` when no step
 follows. A queued
-input travels as a list under `queued`, and the step of the item that
+input travels as a list under `queued`, a delivered input's record
+carrying `deliver: true`, and the step of the item that
 drained one carries its trigger under `source`; a fold's usage
 travels under `usage` in its system step's `extra`, and a fold's
 `pinned` items travel beside its `summary` in the same step, since the
@@ -2573,7 +2589,9 @@ with its `entry`, and a placeholder output carrying it without one,
 which verifies under a header promising `dispatch` and `decision` with
 neither written for the copied call, beside a fork that answers a call
 in its prefix with an `answer` and an output whose `copied_from` names
-the origin's output, and
+the origin's output, a delivered input closed by a run end, queued
+again after it carrying `deliver` and drained by the next run, beside
+another owed at a cut while a call waits for approval, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
@@ -2632,6 +2650,11 @@ is upgraded.
   context hash leaves the member out, and its `entry` joins the members
   that name an entry, into another session, which a redaction holding
   that session's redaction rewrites.
+
+- `queued` defines `deliver`: a steer that must reach the model, and
+  that a harness starts a run for when no run takes it. A reader of
+  0.14 handed an owed delivery back as a steer, which waited for the
+  next input.
 
 ## Changes since 0.13
 
