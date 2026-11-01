@@ -349,8 +349,16 @@ type callState struct {
 	dispatches   int
 	lastDispatch string
 	// lastIsDispatch reports that the call's latest decision, dispatch
-	// or output is a dispatch, which a withdrawal may follow.
+	// or output is a dispatch, which a withdrawal may follow; heldBefore
+	// and lastBefore are held and lastDispatch as they were before that
+	// dispatch, which a withdrawal restores, as Calls reads it.
 	lastIsDispatch bool
+	heldBefore     bool
+	lastBefore     string
+	// onPath holds the IDs of the call's dispatches on the path, a
+	// withdrawn one included: one the session holds elsewhere may have
+	// run.
+	onPath map[string]bool
 	// closed reports that a run end closed the call's last span with
 	// the call still pending, in the state closedState, so finish opens
 	// another only when a later decision changed what the path reads.
@@ -386,10 +394,38 @@ func (t *tracker) pendingState(c *callState) agentsession.CallState {
 		return agentsession.CallHeld
 	case c.dispatched:
 		return agentsession.CallInFlight
-	case t.header.HasRecord(agentsession.TypeDispatch) && !c.inPrefix && (t.sess == nil || len(t.sess.Dispatches(c.entryID)) == 0):
+	case t.header.HasRecord(agentsession.TypeDispatch) && !c.inPrefix && !t.dispatchedElsewhere(c):
 		return agentsession.CallNeverStarted
 	}
 	return agentsession.CallUnknown
+}
+
+// dispatchedElsewhere reports whether the session holds a dispatch for
+// the call off the path, which may have run, withdrawn or not.
+func (t *tracker) dispatchedElsewhere(c *callState) bool {
+	if t.sess == nil {
+		return false
+	}
+	for _, d := range t.sess.Dispatches(c.entryID) {
+		if !c.onPath[d.ID] {
+			return true
+		}
+	}
+	return false
+}
+
+// noteDispatch records one hand-off of the call, remembering what a
+// withdrawal of it would restore.
+func (c *callState) noteDispatch(d *agentsession.DispatchEntry) {
+	c.heldBefore, c.lastBefore = c.held, c.lastDispatch
+	c.dispatched, c.held = true, false
+	c.dispatches++
+	c.lastDispatch = d.ID
+	c.lastIsDispatch = true
+	if c.onPath == nil {
+		c.onPath = map[string]bool{}
+	}
+	c.onPath[d.ID] = true
 }
 
 // lastHandOff is the span of the call's last dispatch, or none.
@@ -463,6 +499,7 @@ func (t *tracker) prime(path []agentsession.Entry) {
 			case *openresponses.FunctionCallOutput:
 				if c, ok := t.calls[it.CallID]; ok {
 					c.output = true
+					c.lastIsDispatch = false
 				}
 			}
 		case *agentsession.DecisionEntry:
@@ -471,10 +508,7 @@ func (t *tracker) prime(path []agentsession.Entry) {
 			}
 		case *agentsession.DispatchEntry:
 			if c := t.callFor(v.CallID, v.Target); c != nil {
-				c.dispatched, c.held = true, false
-				c.dispatches++
-				c.lastDispatch = v.ID
-				c.lastIsDispatch = true
+				c.noteDispatch(v)
 			}
 		}
 	}
@@ -520,6 +554,7 @@ func (t *tracker) noteDecision(c *callState, d *agentsession.DecisionEntry) (wit
 		// is no decision, so the call is what it was before it.
 		c.dispatches--
 		c.dispatched = c.dispatches > 0
+		c.held, c.lastDispatch = c.heldBefore, c.lastBefore
 		c.lastIsDispatch = false
 		return true
 	}
@@ -841,13 +876,11 @@ func (t *tracker) dispatch(d *agentsession.DispatchEntry, ts time.Time) {
 	if c == nil {
 		return
 	}
-	c.dispatched, c.held = true, false
-	c.dispatches++
-	c.lastIsDispatch = true
 	var prev trace.SpanContext
 	if c.lastDispatch != "" {
 		prev = t.spans[c.lastDispatch]
 	}
+	c.noteDispatch(d)
 	if c.span != nil && c.dispatches > 1 {
 		prev = c.span.SpanContext()
 		c.span.SetAttributes(attribute.String(AttrCallState, agentsession.CallInFlight.String()))
@@ -855,7 +888,6 @@ func (t *tracker) dispatch(d *agentsession.DispatchEntry, ts time.Time) {
 		c.span.End(trace.WithTimestamp(ts))
 		c.span = nil
 	}
-	c.lastDispatch = d.ID
 	t.startCall(c, ts, d.ID, prev, linkDispatchedAgain)
 	c.span.SetAttributes(attribute.Int(AttrDispatch, c.dispatches))
 }
