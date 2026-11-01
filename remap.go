@@ -143,6 +143,8 @@ var bodyMembers = map[string][]special{
 	TypeItem: {
 		{path: memberPath("queued_from"), role: roleEntry, set: true},
 		{path: memberPath("from_link"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*ItemEntry).FromLink != "" }},
+		{path: memberPath("copied_from", "entry"), role: roleEntry, session: "session", set: true, when: func(e Entry) bool { return e.(*ItemEntry).CopiedFrom != nil }},
+		{path: memberPath("copied_from", "session"), role: roleSession, when: func(e Entry) bool { return e.(*ItemEntry).CopiedFrom != nil }},
 		{path: memberPath("item", "call_id"), role: roleCallID},
 	},
 	TypeQueued:   {{path: memberPath("item", "call_id"), role: roleCallID}},

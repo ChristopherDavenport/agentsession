@@ -328,6 +328,10 @@ type agentGroup struct {
 	responseID string
 	entries    []*agentsession.ItemEntry
 	copied     bool // opened inside the kept window after a compaction
+	// taken is set for a group of items carrying copied_from: model
+	// output another session produced, which is no model call of this
+	// path (RFC 0001, Projections/ATIF, since 0.15).
+	taken bool
 }
 
 func (b *builder) run() error {
@@ -563,8 +567,21 @@ func (b *builder) entry(e agentsession.Entry) error {
 }
 
 func (b *builder) item(e *agentsession.ItemEntry) error {
+	taken := e.CopiedFrom != nil
+	if taken && isModelOutput(e.Item) {
+		// Copied model output that follows one another forms one step,
+		// whatever response it names: no response of this path made it.
+		if b.group != nil && !b.group.taken {
+			b.flushGroup(nil)
+		}
+		if b.group == nil {
+			b.group = &agentGroup{copied: b.copied, taken: true}
+		}
+		b.group.entries = append(b.group.entries, e)
+		return nil
+	}
 	if e.ResponseID != "" || isModelOutput(e.Item) {
-		if b.group != nil && b.group.responseID != "" && e.ResponseID != "" && b.group.responseID != e.ResponseID {
+		if b.group != nil && (b.group.taken || b.group.responseID != "" && e.ResponseID != "" && b.group.responseID != e.ResponseID) {
 			b.flushGroup(nil)
 		}
 		if b.group == nil {
@@ -586,6 +603,9 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 		step := atif.Step{Source: source, Message: messageContent(v), Extra: b.itemExtra(e)}
 		if v.Role != openresponses.RoleUser {
 			step.Extra["role"] = string(v.Role)
+		}
+		if taken {
+			step.IsCopiedContext = atif.Ptr(true)
 		}
 		b.addStep(step, e)
 	case *openresponses.FunctionCallOutput:
@@ -618,6 +638,9 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 			Extra:       b.itemExtra(e),
 		}
 		step.Extra["orphan_call_id"] = v.CallID
+		if taken {
+			step.IsCopiedContext = atif.Ptr(true)
+		}
 		b.addStep(step, e)
 	default:
 		// Extension items, item references and anything else that is
@@ -625,6 +648,9 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 		// declares one.
 		step := atif.Step{Source: atif.SourceSystem, Message: atif.Text(itemText(v)), Extra: b.itemExtra(e)}
 		step.Extra["item_type"] = v.ItemType()
+		if taken {
+			step.IsCopiedContext = atif.Ptr(true)
+		}
 		if u, ok := v.(*openresponses.UnknownItem); ok {
 			var probe struct {
 				Role string `json:"role"`
@@ -664,6 +690,9 @@ func (b *builder) itemExtra(e *agentsession.ItemEntry) map[string]any {
 	if e.FromLink != "" {
 		agentSessionExtra(extra)["from_link"] = e.FromLink
 	}
+	if e.CopiedFrom != nil {
+		agentSessionExtra(extra)["copied_from"] = e.CopiedFrom
+	}
 	if r := b.replaced[e.ID]; len(r) > 0 {
 		agentSessionExtra(extra)[ExtraReplaced] = r
 	}
@@ -681,8 +710,9 @@ func (b *builder) flushGroup(resp *agentsession.ResponseEntry) {
 	if g == nil {
 		g = &agentGroup{responseID: resp.ResponseID, copied: b.copied}
 	}
-	if resp != nil && g.responseID != "" && g.responseID != resp.ResponseID {
-		// The group belongs to another call; close it on its own first.
+	if resp != nil && (g.taken || g.responseID != "" && g.responseID != resp.ResponseID) {
+		// The group belongs to another call, or to none of this path's;
+		// close it on its own first.
 		b.flushGroupItems(g, nil)
 		g = &agentGroup{responseID: resp.ResponseID, copied: b.copied}
 	}
@@ -737,6 +767,12 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 		calls = resp.Calls()
 	}
 	step := atif.Step{Source: atif.SourceAgent, ModelName: b.modelName(settings.Model), LLMCallCount: atif.Ptr(calls)}
+	if g.taken {
+		// Another session's model output: no model call of this path,
+		// so no model, no call count and no metrics.
+		step.ModelName, step.LLMCallCount, resp = "", nil, nil
+		step.IsCopiedContext = atif.Ptr(true)
+	}
 	if g.copied {
 		// Marked from the group, not from where the flush happens: a
 		// group the first entry after the compaction flushes is still
@@ -798,6 +834,17 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 	}
 	if len(ids) > 0 {
 		step.Extra["item_entry_ids"] = ids
+	}
+	if g.taken {
+		from := make([]any, 0, len(g.entries))
+		for _, e := range g.entries {
+			from = append(from, e.CopiedFrom)
+		}
+		if len(from) == 1 {
+			agentSessionExtra(step.Extra)["copied_from"] = from[0]
+		} else {
+			agentSessionExtra(step.Extra)["copied_from"] = from
+		}
 	}
 	var left []map[string]any
 	for _, e := range g.entries {

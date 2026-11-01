@@ -137,7 +137,8 @@ content hash. A store checks an `id` from an envelope and a content hash
 without the body, and holds the two as separate objects. The `parent`
 member names an entry by hash, and so do `parents`, `target`,
 `first_kept`, `from`, `queued_from` and `from_link` wherever RFC 0001
-has them name an entry.
+has them name an entry, and `copied_from`'s `entry`, which names an
+entry of another session.
 
 - A store computes an entry's hashes itself and MUST refuse an append
   whose `id` is present and differs from it, and MUST refuse one that an
@@ -156,9 +157,10 @@ has them name an entry.
   MUST refuse an entry whose `id` carries another.
 - A store MUST NOT accept an entry whose `parent` it does not hold. No
   other reference is a condition of acceptance: `parents`, `target`,
-  `first_kept`, `from`, `queued_from` and `from_link` are the writer's
-  to place, as RFC 0001 says, and a store MAY report one it cannot
-  resolve.
+  `first_kept`, `from`, `queued_from`, `from_link` and `copied_from`'s
+  `entry` are the writer's to place, as RFC 0001 says, and a store MAY
+  report one it cannot resolve; a store does not check `copied_from`'s
+  `entry`, which names an entry of another session.
 - An entry is immutable. There is no update and no in-place correction;
   a correction is a new entry, as RFC 0001 already requires of entries.
 - Acyclicity is structural. An entry names its parent by a hash that
@@ -1144,7 +1146,8 @@ not by any later leaf:
   with `from` removed, present or not, since the leaf that was left is
   provenance and not context, and a store need not hold it; and for an
   `item` it is over the content with `queued_from` removed, and
-  `from_link` where RFC 0001 defines it, for the same reason. On an
+  `from_link` and `copied_from` where RFC 0001 defines them, for the
+  same reason. On an
   `item` holding a `function_call_output`, `failed` is removed where RFC
   0001 defines it, `true`: it is a record member that reaches no
   request, so two sessions whose model saw the same output share a key

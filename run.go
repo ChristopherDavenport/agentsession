@@ -90,6 +90,15 @@ func (c *Call) Failed() bool { return c.Output != nil && c.Output.Failed }
 // Pending reports whether the call has no output on the path.
 func (c *Call) Pending() bool { return c.Output == nil }
 
+// Copied reports whether the call is a copied call (RFC 0001, item,
+// since 0.15): its entry carries copied_from, so another session made
+// the call and this one holds it as context alone. A copied call is no
+// call of this session: it is never one of a run's calls, never pending
+// here, no records promise covers it, and no dispatch or decision may
+// name it. Its output, whether or not that entry carries copied_from, is
+// copied too.
+func (c *Call) Copied() bool { return c.Entry.CopiedFrom != nil }
+
 // Held reports whether the call is waiting on an answer: its latest
 // decision is a hold and no dispatch follows it. A hold after a
 // dispatch is a call that may have run and waits on someone to say
@@ -268,7 +277,7 @@ func (c *Call) State(h Header) CallState {
 		return CallHeld
 	case c.Dispatch != nil:
 		return CallInFlight
-	case h.HasRecord(TypeDispatch) && !c.inPrefix && !c.dispatchedElsewhere:
+	case h.HasRecord(TypeDispatch) && !c.inPrefix && !c.dispatchedElsewhere && !c.Copied():
 		return CallNeverStarted
 	}
 	return CallUnknown
@@ -404,7 +413,9 @@ func (s *Session) Calls(leaf string) ([]*Call, error) {
 }
 
 // PendingCalls returns the calls on the path to leaf that have no
-// output, which is what a resume answers.
+// output, which is what a resume answers. A copied call is never
+// pending in this session, since nothing here may run it, so none is
+// among them.
 func (s *Session) PendingCalls(leaf string) ([]*Call, error) {
 	calls, err := s.Calls(leaf)
 	if err != nil {
@@ -412,7 +423,7 @@ func (s *Session) PendingCalls(leaf string) ([]*Call, error) {
 	}
 	var out []*Call
 	for _, c := range calls {
-		if c.Pending() {
+		if c.Pending() && !c.Copied() {
 			out = append(out, c)
 		}
 	}
@@ -490,8 +501,9 @@ func (r *Run) Calls() []*Call { return runCalls(r.Path, r.Segment) }
 
 // runCalls returns the calls of the run whose segment ends the path:
 // the calls on the path whose function call, or a decision, dispatch
-// or output bound to them, is on the segment. A nil path means the
-// segment stands for the path.
+// or output bound to them, is on the segment, copied calls excepted,
+// since another session made them. A nil path means the segment
+// stands for the path.
 func runCalls(path, segment []Entry) []*Call {
 	if path == nil {
 		path = segment
@@ -504,7 +516,7 @@ func runCalls(path, segment []Entry) []*Call {
 	}
 	var out []*Call
 	for _, c := range Calls(path) {
-		if c.takenUpIn(in) {
+		if !c.Copied() && c.takenUpIn(in) {
 			out = append(out, c)
 		}
 	}
@@ -562,6 +574,10 @@ func ComputeSource(r *Run) string {
 	// part names the call each output, decision and dispatch is for.
 	part := map[string]*Call{}
 	for _, c := range Calls(path) {
+		if c.Copied() {
+			// No call of this session, so its output takes up nothing.
+			continue
+		}
 		if c.Output != nil {
 			part[c.Output.ID] = c
 		}
@@ -784,9 +800,10 @@ func lastResponse(entries []Entry) *ResponseEntry {
 }
 
 // madeCalls reports whether any of the calls is output of the response.
+// A copied call is no response's output in this session.
 func madeCalls(calls []*Call, resp *ResponseEntry) bool {
 	for _, c := range calls {
-		if c.Entry.ResponseID == resp.ResponseID {
+		if !c.Copied() && c.Entry.ResponseID == resp.ResponseID {
 			return true
 		}
 	}
@@ -795,7 +812,7 @@ func madeCalls(calls []*Call, resp *ResponseEntry) bool {
 
 // stoppedOnPath is the format's stopped shape: the last response on
 // the path before the segment's end has calls, every call on the path
-// has an output, and the segment holds at least one output or
+// but a copied one has an output, and the segment holds at least one output or
 // decision, so the run finished what an earlier or its own model call
 // asked for and the harness chose not to call the model again. No
 // response follows, since the response is the last one on the path.
@@ -808,7 +825,7 @@ func stoppedOnPath(calls []*Call, path, segment []Entry) bool {
 		return false
 	}
 	for _, c := range calls {
-		if c.Pending() {
+		if c.Pending() && !c.Copied() {
 			return false
 		}
 	}
@@ -931,7 +948,9 @@ var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 // the segment, no dispatch or decision follows a reject or an answer
 // on the same call, no answer, reject or dispatch follows an output and
 // no reject a dispatch but a withdrawal, every item's from_link names a
-// peer link before it, and, when the header names dispatch in records,
+// peer link before it, no copied_from names this session, no dispatch or
+// decision names a copied call and every output of one is marked copied,
+// and, when the header names dispatch in records,
 // no answer ends a call with no dispatch and every call that ran has a
 // dispatch. A run written resume over a segment that takes nothing up,
 // holding record entries at most, agrees with it, as [Run.Empty] says,
@@ -960,6 +979,9 @@ func (s *Session) VerifyRecords(leaf string) error {
 	if err := verifyFromLinks(path); err != nil {
 		return err
 	}
+	if err := verifyCopied(s.ID(), path); err != nil {
+		return err
+	}
 	calls := Calls(path)
 	on := onPath(path)
 	for _, r := range Runs(path) {
@@ -980,6 +1002,11 @@ func (s *Session) VerifyRecords(leaf string) error {
 	// the run.
 	promised := func(id string) bool { return h.HasRecord(TypeDispatch) && !s.Prefix(id) }
 	for _, c := range calls {
+		if c.Copied() {
+			// No call of this session: no promise covers it, and
+			// verifyCopied has refused a dispatch or decision naming it.
+			continue
+		}
 		if c.ended != nil {
 			if c.ended.Verdict == VerdictAnswer {
 				return fmt.Errorf("%w: dispatch %s follows an answer to call %s", ErrCallAnswered, c.endedBy.ID, c.ID())
@@ -1135,6 +1162,54 @@ var ErrCalleeLink = errors.New("agentsession: callee link is not one the format 
 // whose from_link names no peer link before it on its path, a cancel
 // notice included, since a cancel notice names no callee.
 var ErrBadFromLink = errors.New("agentsession: from_link names no peer link before the item")
+
+// ErrCopiedCall is returned when a dispatch or a decision is appended
+// whose target is a copied call, and by [Session.VerifyRecords] for a
+// path that holds one: a copied call was made in another session, and
+// nothing in this one may hand it to its tool or decide its fate (RFC
+// 0001, item, since 0.15).
+var ErrCopiedCall = errors.New("agentsession: dispatch or decision names a copied call")
+
+// ErrBadCopiedFrom is returned when an item is appended whose
+// copied_from names this session, or an output for a copied call that
+// does not carry copied_from, and by [Session.VerifyRecords] for a path
+// that holds either: an item copied from a session is copied from
+// another, and a writer marks every output it gives a copied call.
+var ErrBadCopiedFrom = errors.New("agentsession: copied_from names this session, or a copied call's output is not marked")
+
+// verifyCopied checks the copied items of a path: none names the
+// session self, no dispatch or decision names a copied call, and every
+// output of a copied call carries copied_from.
+func verifyCopied(self string, path []Entry) error {
+	copied := map[string]bool{} // function call entry ID -> copied
+	byCallID := map[string]bool{}
+	for _, e := range path {
+		switch v := e.(type) {
+		case *ItemEntry:
+			if v.CopiedFrom != nil && v.CopiedFrom.Session == self {
+				return fmt.Errorf("%w: item %s names %s", ErrBadCopiedFrom, v.ID, self)
+			}
+			switch it := v.Item.(type) {
+			case *openresponses.FunctionCall:
+				copied[v.ID] = v.CopiedFrom != nil
+				byCallID[it.CallID] = v.CopiedFrom != nil
+			case *openresponses.FunctionCallOutput:
+				if byCallID[it.CallID] && v.CopiedFrom == nil {
+					return fmt.Errorf("%w: output %s of copied call %s", ErrBadCopiedFrom, v.ID, it.CallID)
+				}
+			}
+		case *DecisionEntry:
+			if copied[v.Target] {
+				return fmt.Errorf("%w: decision %s names %s", ErrCopiedCall, v.ID, v.Target)
+			}
+		case *DispatchEntry:
+			if copied[v.Target] {
+				return fmt.Errorf("%w: dispatch %s names %s", ErrCopiedCall, v.ID, v.Target)
+			}
+		}
+	}
+	return nil
+}
 
 // verifyFromLinks checks every item's from_link on a path against the
 // peer links before it.

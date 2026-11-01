@@ -1,0 +1,221 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000031",
+  "trajectory_id": "sha256:e0c9c22f3c34fe633e5826a337a2dd9ad214077739f6dd21b36b07e5765824b4",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5-mini"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-01T10:01:03Z",
+      "source": "user",
+      "message": "Summarise the design doc.",
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "copied_from": {
+            "session": "01995b2a-0000-7000-8000-000000000030",
+            "entry": "sha256:f828a51f15df807e68ffb612cdec4d90df9f09e824a344e04fdb12bf69d715e7"
+          },
+          "entry_id": "sha256:86c3a835b446d895d0e8993921a38bd4338d9a56085febd58cdbb86f17184e6e"
+        },
+        "config_entries": [
+          "sha256:887426e3c434d924c12108098a9585b5728d60bdd707f01a27f15f590917bbb8"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Summarise the design doc."
+              }
+            ]
+          }
+        },
+        "run": [
+          {
+            "end_entry_id": "sha256:e0c9c22f3c34fe633e5826a337a2dd9ad214077739f6dd21b36b07e5765824b4",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-c",
+            "source": "input",
+            "start_entry_id": "sha256:33fee0562596c9f871fd2dfab671a94e906f02cf69fc88abafda40bc2ca6a515"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-01T10:01:04Z",
+      "source": "agent",
+      "message": "",
+      "reasoning_content": "Hand it to a helper.",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_helper",
+          "function_name": "helper",
+          "arguments": {
+            "task": "summarise"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_helper",
+            "content": "You are this call's helper; the task follows.",
+            "extra": {
+              "agentsession": {
+                "copied_from": {
+                  "session": "01995b2a-0000-7000-8000-000000000030"
+                }
+              },
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_helper",
+                  "output": "You are this call's helper; the task follows."
+                }
+              }
+            }
+          }
+        ]
+      },
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "copied_from": [
+            {
+              "session": "01995b2a-0000-7000-8000-000000000030",
+              "entry": "sha256:83e9c67f6c0ac58e09c3296bc8eadc5b0c216c2ada6b5e9cfadd23612d8c241b"
+            },
+            {
+              "session": "01995b2a-0000-7000-8000-000000000030",
+              "entry": "sha256:71ecbe469f125677d5d4d2ef35cfe1c288e3bc52fafc35bee49fb49745782793"
+            }
+          ],
+          "entry_id": "sha256:33652900ebfb8593e28d60cba34110e2ff89ee96c217bda620cf3bcf07ca03eb"
+        },
+        "item_entry_ids": [
+          "sha256:33652900ebfb8593e28d60cba34110e2ff89ee96c217bda620cf3bcf07ca03eb",
+          "sha256:ae92d0561f3eef2dc5743dff4d6f553eac403462daf876dd73b42be2ec6ae19c"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "reasoning",
+              "id": "rs_1",
+              "summary": [
+                {
+                  "type": "summary_text",
+                  "text": "Hand it to a helper."
+                }
+              ]
+            },
+            {
+              "type": "function_call",
+              "id": "fc_h",
+              "call_id": "call_helper",
+              "name": "helper",
+              "arguments": "{\"task\":\"summarise\"}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-01T10:01:07Z",
+      "source": "user",
+      "message": "Summarise the design doc in one line.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:5ac854bb9bfa3577252e1c0e9227c645dd50a8075be51294a529398cf6f38ad8"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Summarise the design doc in one line."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-11-01T10:01:09Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "The design adds four members and one record entry.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:b872ab0a4dec4e500e26548f34f840408ef7021e083ed31941ed95dd6de55dd8"
+        },
+        "item_entry_ids": [
+          "sha256:c038452a7b003af8d29f7bb3b248dfd8f166b8a4460839a1bd9b681191bc78c9"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_c1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "The design adds four members and one record entry.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:b872ab0a4dec4e500e26548f34f840408ef7021e083ed31941ed95dd6de55dd8",
+            "model": "gpt-5",
+            "request_hash": "sha256:48b6d9b8f308e96154dfd689706145a7efd27ea430ba668fc15e014a917c3d7c",
+            "response_id": "resp_c1",
+            "status": "completed",
+            "ts": "2026-11-01T10:01:09Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 1 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 4 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 1
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.15",
+      "leaf": "sha256:e0c9c22f3c34fe633e5826a337a2dd9ad214077739f6dd21b36b07e5765824b4",
+      "main": true,
+      "parent_session": "01995b2a-0000-7000-8000-000000000030",
+      "records": [
+        "run",
+        "dispatch",
+        "decision"
+      ],
+      "spawned_by": "call_helper"
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

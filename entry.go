@@ -329,6 +329,52 @@ type ItemEntry struct {
 	// the item. A from_link member that is not a non-empty string is
 	// kept as written in Unknown and FromLink is empty.
 	FromLink string `json:"-" member:"from_link"`
+	// CopiedFrom says, in format 0.15, that the item was not produced in
+	// this session but taken from the conversation of another: a run
+	// prompted with the conversation of the session that spawned it, or
+	// a fork answering a call with the output its origin recorded. It is
+	// provenance and reaches no request. A function call whose entry
+	// carries it is a copied call ([Call.Copied]): the session named made
+	// it, and this one holds it as context alone. A copied_from member
+	// in another form, one whose session is not a non-empty string or
+	// whose entry is present and not one, is kept as written in Unknown
+	// and CopiedFrom is nil.
+	CopiedFrom *CopiedFrom `json:"-" member:"copied_from"`
+}
+
+// CopiedFrom names where a copied item was taken from (RFC 0001, item,
+// since 0.15).
+type CopiedFrom struct {
+	// Session is the session the item was taken from, never the session
+	// that holds the entry.
+	Session string `json:"session"`
+	// Entry is the entry of Session whose item this entry's item is,
+	// member for member, named only for an item copied unchanged. It is
+	// empty for an item changed in the copy, and for one made for it,
+	// such as the output a seed gives a call the copied conversation had
+	// not answered.
+	Entry string `json:"entry,omitempty"`
+}
+
+// copiedFromForm reports whether raw holds a copied_from in the form
+// the format defines: an object whose session is a non-empty string and
+// whose entry, when present, is one too.
+func copiedFromForm(raw json.RawMessage) bool {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil || m == nil {
+		return false
+	}
+	var session string
+	if json.Unmarshal(m["session"], &session) != nil || session == "" {
+		return false
+	}
+	if rawEntry, ok := m["entry"]; ok {
+		var entry string
+		if json.Unmarshal(rawEntry, &entry) != nil || entry == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // EntryType returns "item".
@@ -2064,25 +2110,29 @@ func (e *ItemEntry) MarshalJSON() ([]byte, error) {
 		return nil, errors.New("agentsession: item entry has no item")
 	}
 	type plain ItemEntry
-	if !e.Failed && e.FromLink == "" {
+	if !e.Failed && e.FromLink == "" && e.CopiedFrom == nil {
 		return marshalEntry(TypeItem, &e.EntryBase, (*plain)(e))
 	}
 	if _, ok := e.Item.(*openresponses.FunctionCallOutput); e.Failed && !ok {
 		return nil, errors.New("agentsession: failed is defined on a function call output's entry alone")
 	}
+	if e.CopiedFrom != nil && e.CopiedFrom.Session == "" {
+		return nil, errors.New("agentsession: copied_from names no session")
+	}
 	for _, m := range []struct {
 		key string
 		set bool
-	}{{"failed", e.Failed}, {"from_link", e.FromLink != ""}} {
+	}{{"failed", e.Failed}, {"from_link", e.FromLink != ""}, {"copied_from", e.CopiedFrom != nil}} {
 		if _, dup := e.Unknown[m.key]; dup && m.set {
 			return nil, fmt.Errorf("agentsession: item entry has %s both typed and unknown", m.key)
 		}
 	}
 	return marshalEntry(TypeItem, &e.EntryBase, struct {
 		*plain
-		Failed   bool   `json:"failed,omitempty"`
-		FromLink string `json:"from_link,omitempty"`
-	}{(*plain)(e), e.Failed, e.FromLink})
+		Failed     bool        `json:"failed,omitempty"`
+		FromLink   string      `json:"from_link,omitempty"`
+		CopiedFrom *CopiedFrom `json:"copied_from,omitempty"`
+	}{(*plain)(e), e.Failed, e.FromLink, e.CopiedFrom})
 }
 
 // UnmarshalJSON decodes the entry, dispatching the item through the
@@ -2142,11 +2192,16 @@ func (e *ItemEntry) decodeMembers(_ []byte, all map[string]json.RawMessage) erro
 	}
 	// failed is taken where 0.14 defines it, true on an output's entry,
 	// in a file of any minor; anything else is kept as written.
-	e.Failed, e.FromLink = false, ""
+	e.Failed, e.FromLink, e.CopiedFrom = false, "", nil
 	if _, ok := e.Item.(*openresponses.FunctionCallOutput); ok {
 		promote(&e.EntryBase, "failed", &e.Failed)
 	}
 	promote(&e.EntryBase, "from_link", &e.FromLink)
+	// copied_from is taken in the form 0.15 defines, in a file of any
+	// minor; anything else is kept as written.
+	if raw, ok := e.Unknown["copied_from"]; ok && copiedFromForm(raw) {
+		promote(&e.EntryBase, "copied_from", &e.CopiedFrom)
+	}
 	return nil
 }
 

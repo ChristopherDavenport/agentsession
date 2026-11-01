@@ -41,6 +41,9 @@ type Session struct {
 	// callIDs holds the call ID of every function call the session
 	// holds, on any branch: a call ID names one call in a session.
 	callIDs map[string]bool
+	// copied holds the call ID of every copied call the session holds
+	// (RFC 0001, item, since 0.15), whose outputs are copied too.
+	copied map[string]bool
 	// dispatches holds the dispatches for each call, by target, on
 	// every branch: a rebase above a dispatch leaves a call that may
 	// have run with none on its path.
@@ -710,10 +713,18 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 // started. A reject is for a call that did not run and has no output,
 // so none with a dispatch, save a withdrawal, which directly follows
 // the dispatch it withdraws and is written nowhere else. No dispatch
-// follows the output, which ends the call.
+// follows the output, which ends the call. An item copied from a
+// session is copied from another; a copied call's output is marked
+// copied, and no dispatch or decision names a copied call.
 func (s *Session) checkCallRules(e Entry, parent string) error {
 	switch v := e.(type) {
 	case *ItemEntry:
+		if v.CopiedFrom != nil && v.CopiedFrom.Session == s.header.ID {
+			return fmt.Errorf("%w: %s", ErrBadCopiedFrom, v.CopiedFrom.Session)
+		}
+		if out, ok := v.Item.(*openresponses.FunctionCallOutput); ok && v.CopiedFrom == nil && s.copied[out.CallID] {
+			return fmt.Errorf("%w: output of %s", ErrBadCopiedFrom, out.CallID)
+		}
 		fc, ok := v.Item.(*openresponses.FunctionCall)
 		switch {
 		case !ok:
@@ -728,6 +739,8 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 			return err
 		}
 		switch {
+		case c.Copied():
+			return fmt.Errorf("%w: %s", ErrCopiedCall, v.CallID)
 		case c.Answered():
 			return fmt.Errorf("%w: %s", ErrCallAnswered, v.CallID)
 		case c.Rejected():
@@ -750,6 +763,9 @@ func (s *Session) checkCallRules(e Entry, parent string) error {
 		c, err := s.targetCall(parent, v.CallID, v.Target)
 		if err != nil {
 			return err
+		}
+		if c.Copied() {
+			return fmt.Errorf("%w: %s", ErrCopiedCall, v.CallID)
 		}
 		if c.Rejected() {
 			return fmt.Errorf("%w: %s", ErrCallRejected, v.CallID)
@@ -1538,6 +1554,12 @@ func (s *Session) add(e Entry) {
 	case *ItemEntry:
 		if fc, ok := v.Item.(*openresponses.FunctionCall); ok {
 			s.callIDs[fc.CallID] = true
+			if v.CopiedFrom != nil {
+				if s.copied == nil {
+					s.copied = map[string]bool{}
+				}
+				s.copied[fc.CallID] = true
+			}
 		}
 	case *DispatchEntry:
 		// Only a dispatch that names its call, a function call with its

@@ -579,6 +579,7 @@ var rfcNames = func() map[string][]rfcMember {
 		"from":                 {{TypeBranchSummary, "from", roleEntry}},
 		"queued_from":          {{TypeItem, "queued_from", roleEntry}},
 		"from_link":            {{TypeItem, "from_link", roleEntry}},
+		"copied_from":          {{TypeItem, "copied_from/entry", roleEntry}, {TypeItem, "copied_from/session", roleSession}},
 		"outputs":              outputs,
 		"images":               images,
 		"before":               images,

@@ -14,6 +14,26 @@ versions may break the API.
   new header. 0.15 takes in the members, the record entry type and the
   rules below.
 
+- **Copied context (RFC 0001 0.15, `item`; agentturn#237, #243).** An
+  item entry may carry `copied_from` (`ItemEntry.CopiedFrom`, a
+  `*CopiedFrom` with `Session` and an optional `Entry`): the item was
+  taken from another session's conversation. A function call carrying
+  it is a copied call (`Call.Copied`): no call of this session, never
+  one of a run's calls, never pending (`PendingCalls` leaves it out),
+  `CallUnknown` rather than `CallNeverStarted` with no output, and no
+  records promise covers it. `Append` refuses a dispatch or a decision
+  naming one (`ErrCopiedCall`), an output for one that is not marked
+  copied, and an item copied from its own session (`ErrBadCopiedFrom`);
+  `VerifyRecords` reports each. The context hash leaves the member out;
+  `RemapRefs` maps its `entry` as a reference into its `session`, and a
+  `Rewriter` that changes a copied item removes its `entry`. ATIF marks
+  copied steps `is_copied_context` with no `model_name`, metrics or
+  `llm_call_count`, carries `copied_from` under `extra.agentsession`, and
+  counts no copied step in `total_steps`; otel gives a copied call no
+  tool span. Fixtures `copied`, `copied-answer` and `bad-copied-*`, with
+  ATIF goldens. **Added: `CopiedFrom`, `ItemEntry.CopiedFrom`,
+  `Call.Copied`, `ErrCopiedCall`, `ErrBadCopiedFrom`.**
+
 ## v0.0.31 - 2026-11-01
 
 - **ATIF: what each step's own request left out, cost with subagents,

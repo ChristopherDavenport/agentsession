@@ -1,0 +1,177 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000033",
+  "trajectory_id": "sha256:0858ca14912a683a4ac1b8e208ca2511ca6b325ba60eb67bc221c43b10a35169",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-01T11:00:02Z",
+      "source": "user",
+      "message": "Find the flaky test.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:a0c86c7f20b11565118856e619dfd4c738fe8be491b93f0651605987fd34e34a"
+        },
+        "config_entries": [
+          "sha256:724acc124477e7cf308bbe7c95472f8c353221ce5d4af10a53a950ab3cb82722"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Find the flaky test."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-01T11:00:04Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_agent",
+          "function_name": "agent",
+          "arguments": {
+            "task": "find the flaky test"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_agent",
+            "content": "TestFollow races the poller.",
+            "extra": {
+              "agentsession": {
+                "copied_from": {
+                  "session": "01995b2a-0000-7000-8000-000000000032",
+                  "entry": "sha256:e6e3f259ab71b26418a6104552f6cf3f66cd0497de726bcc47867c091bdd4100"
+                }
+              },
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_agent",
+                  "output": "TestFollow races the poller."
+                }
+              }
+            }
+          }
+        ]
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:ad63b85cb70fd5fd9fce166c812faadb3df7fa7e8c550c51980547d4109d58c8"
+        },
+        "calls": {
+          "call_agent": {
+            "decisions": [
+              {
+                "by": "policy",
+                "entry_id": "sha256:c9668032918f987457628eebe4bdf3857ab35a9d7a58814588837776319d1e85",
+                "reason": "answered from the origin's record",
+                "verdict": "answer"
+              }
+            ]
+          }
+        },
+        "item_entry_ids": [
+          "sha256:0949e2a4b11f3378f987a057c4459b7073bd196a79400ec665469a952c6ae3c0"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_a",
+              "call_id": "call_agent",
+              "name": "agent",
+              "arguments": "{\"task\":\"find the flaky test\"}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:ad63b85cb70fd5fd9fce166c812faadb3df7fa7e8c550c51980547d4109d58c8",
+            "model": "gpt-5",
+            "request_hash": "sha256:964bb4c21df6b283f21149ee75b4b41e253a314c935416973bdb9523581ac329",
+            "response_id": "resp_o1",
+            "status": "completed",
+            "ts": "2026-11-01T11:00:04Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-01T12:00:04Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "TestFollow races the poller; I will fix the wait.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:0858ca14912a683a4ac1b8e208ca2511ca6b325ba60eb67bc221c43b10a35169"
+        },
+        "item_entry_ids": [
+          "sha256:4067545727e092b516fc0e27a656beeadb63ee19dbd4f6f2ad6e0a785556109c"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_f1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "TestFollow races the poller; I will fix the wait.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:0858ca14912a683a4ac1b8e208ca2511ca6b325ba60eb67bc221c43b10a35169",
+            "model": "gpt-5",
+            "request_hash": "sha256:fbe785a15c61e8f83d6651b9903160a047f7bf44279fb3a0425e3bad5dcfa4c0",
+            "response_id": "resp_f1",
+            "status": "completed",
+            "ts": "2026-11-01T12:00:04Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 2 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 3 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 2
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.15",
+      "leaf": "sha256:0858ca14912a683a4ac1b8e208ca2511ca6b325ba60eb67bc221c43b10a35169",
+      "main": true,
+      "parent_session": "01995b2a-0000-7000-8000-000000000032"
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

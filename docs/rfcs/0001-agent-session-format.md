@@ -356,7 +356,9 @@ entries name it, which RFC 0002 builds on. Wherever this document has a
 member name an entry — `parent`, `parents`, `target`, `first_kept`,
 `from`, `queued_from`, `from_link`, `omit`'s `items`, `outputs`' `items`
 and `images`' `before` in a `config` and in a compaction's checkpoint, `instructions_omitted`'s `of` beside a positive
-`keep` and no `id`, where alone it is defined — it names it by `id`.
+`keep` and no `id`, where alone it is defined, and `copied_from`'s
+entry, naming an entry of the session its session member names — it
+names it by `id`.
 
 Two entries with the same type, content, parent, `parents` and `ts` are
 one entry. A writer that means two makes them differ, and sub-second
@@ -520,6 +522,54 @@ One conversation item in the payload profile.
   reference points back, into this file, at an entry already written,
   so writing and verifying the file needs nothing from the peer's
   record, and the peer's record names nothing of this one.
+- `copied_from` MAY be on an `item` entry, since 0.15: the item was not
+  produced in this session but taken from the conversation of another,
+  as when a run is prompted with the conversation of the session that
+  spawned it, or a fork answers a call with the output its origin
+  recorded. It is an object `{"session": s, "entry": e}`. `session` is
+  required: a non-empty string other than this session's `id`, naming
+  the session the item was taken from. `entry` is optional: the `id` of
+  the entry of that session whose `item` this entry's `item` is,
+  member for member in canonical form. A writer names `entry` only for
+  an item it copied unchanged. It leaves `entry` out for an item it
+  changed, and for an item it made for the copy, such as the output a
+  seed gives to a call the copied conversation had not answered. The
+  member is provenance: the item is sent as it is, the member reaches
+  no request, and the ingress rule holds, since the item is carried
+  whole. A writer MUST NOT write `copied_from` on any other entry, or
+  in another form. A reader keeps a `copied_from` it cannot read this
+  way as a member it does not know.
+- A `function_call` whose entry carries `copied_from` is a **copied
+  call**: the call was made in the session named, and this session
+  holds it only as context. A copied call is not a call of this
+  session. It is never one of a run's calls, is never pending in this
+  session, and no `records` promise covers it. A writer MUST NOT write
+  a `dispatch` or a `decision` whose `target` is a copied call. A
+  `function_call_output` for a copied call is copied too, whether or
+  not its entry carries the member. A writer MUST write `copied_from`
+  on every item it copies and on every output it makes for a copied
+  call. A copied call's `call_id` is held to the uniqueness rule like
+  any other, since an output names its call by it. A writer gives each
+  copied call an output, copied or made for the copy, before it sends a
+  request whose context holds the call. A copied call with no output on
+  the path is not resumable in this session: nothing here may run it.
+- A `function_call_output` that carries `copied_from` but whose call is
+  not a copied call is this session's output for that call, with its
+  content taken from the entry named. It ends the call as any output
+  does, and every rule about outputs holds for it, `answer` among them.
+  A writer that answers a call with an output taken from another
+  session's entry MUST name that session and entry in `copied_from`.
+  This is how a fork answers a call in its prefix with the output the
+  origin recorded off the path to the base: an `answer` decision, then
+  the output, whose `copied_from` names the origin and the origin's
+  output entry. A reader that holds the origin follows the member to
+  the origin's `subsession` or `peer` link for the call, on the
+  origin's path to that entry. The fork's own record cannot hold that
+  link, since a `subsession` link names a child of the session that
+  writes it.
+- A copied item is never one of a response's output items. A writer
+  SHOULD NOT write `response` on one, since no `response` entry of this
+  session envelopes it.
 - A `function_call`'s `call_id` MUST NOT be empty and MUST differ from
   that of every other `function_call` in the session, on any branch: a
   `function_call_output`, a `link`, a `custom` entry, a run end's
@@ -1081,9 +1131,10 @@ Why a run started and how it ended. Two entries per run, paired by
   both.
 - `reason` is closed. Each value is a shape of the run's segment, the
   entries on the path from the `start` entry to the `end` entry. A
-  run's calls are the `function_call`s on the segment and those on the
-  path before it that the segment holds a `decision`, a `dispatch` or
-  a `function_call_output` for, since the run took them up; a pending
+  run's calls are the `function_call`s on the segment, copied calls
+  excepted, and those on the path before it that the segment holds a
+  `decision`, a `dispatch` or a `function_call_output` for, since the
+  run took them up; a pending
   call is one of the run's calls with no `function_call_output` on
   the path. Five values are computable, tested in this order with the
   first match winning:
@@ -1097,7 +1148,7 @@ Why a run started and how it ended. Two entries per run, paired by
   4. `done`: the segment has a `response` and its last one has no
      `function_call` in its output.
   5. `stopped`: the last response on the path before the segment's end
-     has calls, every call on the path has an output, the segment
+     has calls, every call on the path but a copied one has an output, the segment
      holds at least one output or decision, and no response follows.
      The harness chose not to call the model again; `ref` names the
      cause (a turn budget, a tool that asked to stop).
@@ -1190,7 +1241,8 @@ output after it is a call the harness answered and has not yet written
 the output of, since the record stopped between the two; the harness
 that continues the path writes that output and nothing else for the
 call. When the header names `dispatch` in `records`, a call with neither
-on its path was never started, unless the session holds a `dispatch`
+on its path was never started, a copied call excepted, which is no call
+of this session, and unless the session holds a `dispatch`
 naming it elsewhere, off the path, a withdrawn one included: a writer
 that rebases to a point between a call and its `dispatch` leaves the
 call on the new path with no `dispatch`, and it may have run. Otherwise the file does not say
@@ -2031,8 +2083,13 @@ A redactor:
 - MUST leave a reference into another session as it was, since it names
   that session's original entries, unless it holds that session's
   redaction, made by the same redaction. Then it rewrites the reference
-  to it: `parent_session`, a `parents` entry into that session and a
-  `link`'s `session`. A link's `target` names an entry of this session,
+  to it: `parent_session`, a `parents` entry into that session, a
+  `link`'s `session` and an item's `copied_from`. A redactor MUST NOT
+  remove `copied_from` from a copied call or its output, since without
+  it the call reads as this session's and fails the record rules; when
+  it changes an item that carries one, it removes the member's entry,
+  which then no longer names an equal item, and keeps its session. A
+  link's `target` names an entry of this session,
   so it is rewritten as the members above are. A redaction of a whole
   store holds a redaction of every session in it, and so re-points
   every reference that stays inside the store;
@@ -2319,6 +2376,19 @@ maps to, and an `item` carrying `from_link` carries it there in its
 step's `extra`, so a reader tells a failed call and a peer's late
 report from any other.
 
+An `item` entry carrying `copied_from` maps to the step its item would
+map to, marked `is_copied_context: true`, with no `model_name`, no
+`metrics` and no `llm_call_count`, and with `copied_from` under
+`agentsession` in the step's `extra`, a list in item order for a step
+made of several. Copied model-output items that follow one another
+form one step. A copied call is a tool call of that step, and its
+output is the step's observation, never a failure of this path. A
+copied step is no model call of this path, so neither `final_metrics`
+nor `total_steps` counts it. An output carrying `copied_from` whose
+call is not copied is an observation of its call's step, as any output
+is, with `copied_from` under `agentsession` in the observation
+result's `extra`.
+
 A document's steps are the context the algorithm produces, so a run
 that compacted is described by its last summary and what followed it.
 Its `final_metrics` are not: they total every model call on the path,
@@ -2370,7 +2440,8 @@ linked to the hand-off's; a second hand-off within one run ends the
 first in flight at the moment of the second. A withdrawn hand-off's span
 ends at its withdrawal, without an error status, since the tool never
 ran, and an output marked `failed` ends its call's span with an error
-status.
+status. A copied call has no tool span: the session that made it
+traces it.
 
 ## Versioning
 
@@ -2496,7 +2567,13 @@ compaction's checkpoint, every response hashed and verifying, a path
 with two compactions, the second restating one pin and dropping
 another, whose context applies only the last, a `response` with no
 `response_id` among `item` entries, which has no output items and whose
-request is the whole path before it, and
+request is the whole path before it, a child prompted with its
+parent's user message, reasoning and call, each carrying `copied_from`
+with its `entry`, and a placeholder output carrying it without one,
+which verifies under a header promising `dispatch` and `decision` with
+neither written for the copied call, beside a fork that answers a call
+in its prefix with an `answer` and an output whose `copied_from` names
+the origin's output, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
@@ -2504,7 +2581,8 @@ before the base that is not on the path to it, a `dispatch` that follows a
 `reject`, an `answer` or the call's output, a decision that follows a
 `reject`, a `reject` that follows a `dispatch` or an output, a
 withdrawal that a decision or the output separates from its `dispatch`,
-a `target`
+a `dispatch` or a `reject` naming a copied call, a `copied_from` naming
+its own session, a `target`
 naming another call, a repeated `call_id`, an empty `call_id`, a `run`
 start whose `source` is not the shape of its segment, a response whose
 recorded hash is the request an `omit` in force leaves an item out of,
@@ -2542,6 +2620,18 @@ earlier minor wrote a `result` entry, since a reader of that minor
 reported the type. A writer of 0.15 raises every file it appends to, as
 Versioning says, so every reader of 0.14 refuses those files until it
 is upgraded.
+
+- `item` defines `copied_from`: the item was taken from another
+  session's conversation. A copied call is no call of this session,
+  and the record rules do not ask it for a `dispatch` or a `decision`,
+  which a writer may not write for one. An output for one of this
+  session's calls taken from another session names its source, so a
+  fork reaches the origin's child. A reader of 0.14 read a child
+  prompted with its parent's conversation as having made the parent's
+  calls, and exported the parent's turn as the child's. RFC 0002's
+  context hash leaves the member out, and its `entry` joins the members
+  that name an entry, into another session, which a redaction holding
+  that session's redaction rewrites.
 
 ## Changes since 0.13
 

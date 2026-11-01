@@ -1034,3 +1034,27 @@ func TestWithdrawalRestoresTheCall(t *testing.T) {
 		t.Error("the next hand-off links to the withdrawn one as a hand-off it repeats")
 	}
 }
+
+// TestCopiedCallHasNoSpan: a copied call was made in another session,
+// which traces it, so it has no tool span here, nor does its output open
+// one (RFC 0001 0.15, OpenTelemetry).
+func TestCopiedCallHasNoSpan(t *testing.T) {
+	sr, tracer := recorder()
+	s := agentsession.New(agentsession.Header{ID: "child", Records: agentsession.AllRecords})
+	from := &agentsession.CopiedFrom{Session: "parent"}
+	for _, e := range []agentsession.Entry{
+		agentsession.NewRunStart("r1", agentsession.SourceInput, ""),
+		&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "helper", Arguments: "{}"}, CopiedFrom: from},
+		&agentsession.ItemEntry{Item: openresponses.NewFunctionCallOutput("c", "placeholder"), CopiedFrom: from},
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	if tool := spans(sr.Ended()).named(OpTool + " helper"); len(tool) != 0 {
+		t.Errorf("the copied call has %d tool spans", len(tool))
+	}
+}

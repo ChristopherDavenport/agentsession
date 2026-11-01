@@ -1,6 +1,7 @@
 package agentsession
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -369,6 +370,9 @@ func (r *Rewriter) rewriteCore(e Entry) (Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	if it, ok := e.(*ItemEntry); ok && it.CopiedFrom != nil && it.CopiedFrom.Entry != "" {
+		dropCopiedEntry(root, out)
+	}
 	if hasParts {
 		r.rewriteParts(root, out, lists[0])
 		if rebuilt {
@@ -378,6 +382,21 @@ func (r *Rewriter) rewriteCore(e Entry) (Entry, error) {
 		}
 	}
 	return entryFromJSON(e, out)
+}
+
+// dropCopiedEntry removes copied_from's entry from out when the rewrite
+// changed the item, which then no longer equals the item of the entry
+// it names; copied_from keeps its session, since the item is still
+// another session's (RFC 0001, Every redacted entry).
+func dropCopiedEntry(before, out map[string]any) {
+	was, err1 := json.Marshal(before["item"])
+	now, err2 := json.Marshal(out["item"])
+	if err1 == nil && err2 == nil && bytes.Equal(was, now) {
+		return
+	}
+	if from, ok := out["copied_from"].(map[string]any); ok {
+		delete(from, "entry")
+	}
 }
 
 // record replays e into the settings in force after it: a compaction's

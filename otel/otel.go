@@ -518,6 +518,12 @@ func (t *tracker) register(e *agentsession.ItemEntry, fc *openresponses.Function
 	if _, ok := t.byEntry[e.ID]; ok {
 		return
 	}
+	if e.CopiedFrom != nil {
+		// A copied call was made in another session, which traces it:
+		// it has no tool span here (RFC 0001 0.15), and its output,
+		// finding no call, opens none.
+		return
+	}
 	c := &callState{name: fc.Name, callID: fc.CallID, entryID: e.ID, responseID: e.ResponseID, seen: e.Timestamp}
 	c.inPrefix = t.sess != nil && t.sess.Prefix(e.ID)
 	t.calls[fc.CallID] = c
