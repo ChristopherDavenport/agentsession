@@ -408,7 +408,7 @@ var coreStringMembers = map[string][]string{
 	TypeQueued:        {"mode", "trigger/kind", "trigger/ref", "trigger/source", "ref"},
 	TypeLabel:         {"label"},
 	TypeInfo:          {"name"},
-	TypeEnv:           {"cwd", "vcs/system", "vcs/revision", "tools/*", "workspace/kind", "workspace/ref"},
+	TypeEnv:           {"cwd", "vcs/system", "vcs/revision", "tools/*", "workspace/kind", "workspace/ref", "workspace/host", "workspace/instance"},
 	TypeOutcome:       {"kind", "label"},
 	TypeLink:          {"rel", "url", "task", "context", "cancel"},
 	TypeCustom:        {"ns"},
