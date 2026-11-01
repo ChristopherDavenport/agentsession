@@ -854,3 +854,30 @@ func TestRewriterUnmetOnPath(t *testing.T) {
 		t.Errorf("another branch: Unmet = %+v, want %+v", got, want)
 	}
 }
+
+// TestRewriteStringsNormalisedFollowsNames: a normalised record's at
+// names the member it describes, so where the rewrite renames a member
+// name that is data, in a custom entry's data or an extension entry's
+// body, the pointer is renamed with it, and the record still describes
+// the member.
+func TestRewriteStringsNormalisedFollowsNames(t *testing.T) {
+	home := func(s string) string { return strings.ReplaceAll(s, "/home/alice", "~") }
+	for _, tt := range []struct{ name, line, at string }{
+		{"custom data", `{"type":"custom","id":"x","parent":"p",` + tsLine + `,"ns":"app","data":{"/home/alice/a":"x \ufffd"},"normalised":[{"at":"/data/~1home~1alice~1a","was":"\"x \\ud800\""}]}`, "/data/~0~1a"},
+		{"extension entry", `{"type":"x:note","id":"x","parent":"p",` + tsLine + `,"/home/alice":"x \ufffd","normalised":[{"at":"/~1home~1alice","was":"\"x \\ud800\""}]}`, "/~0"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := RewriteStrings(entryOf(t, tt.line), home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			line := canonicalEntry(t, got)
+			if !strings.Contains(line, `"at":"`+tt.at+`"`) {
+				t.Errorf("the record does not follow the renamed member: %s", line)
+			}
+			if _, err := UnmarshalEntry([]byte(line)); err != nil {
+				t.Errorf("the rewritten entry does not read: %v", err)
+			}
+		})
+	}
+}
