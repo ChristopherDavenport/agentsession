@@ -1002,3 +1002,43 @@ func TestCopiedItemNamesNoResponse(t *testing.T) {
 		t.Errorf("VerifyRecords = %v, want ErrBadCopiedFrom", err)
 	}
 }
+
+// TestVerifyCopiedResult: VerifyRecords and Append agree on a result
+// naming a copied call: a file holding a copied call, a result for it
+// and its copied output is reported, as Append refuses the result.
+func TestVerifyCopiedResult(t *testing.T) {
+	s := New(Header{ID: "child", Records: AllRecords})
+	from := &CopiedFrom{Session: "parent"}
+	call, err := s.Append(&ItemEntry{Item: &openresponses.FunctionCall{CallID: "c", Name: "helper", Arguments: "{}"}, CopiedFrom: from})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := NewResult("c", call, openresponses.NewFunctionCallOutput("c", "done"))
+	if _, err := s.Append(result); !errors.Is(err, ErrCopiedCall) {
+		t.Errorf("Append = %v, want ErrCopiedCall", err)
+	}
+	result.ID, result.Timestamp = "x", time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	line, err := MarshalEntry(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	bad := reparent(t, string(line), call)
+	out := &ItemEntry{Item: openresponses.NewFunctionCallOutput("c", "done"), CopiedFrom: from}
+	out.ID, out.Timestamp = "x", time.Date(2026, 11, 1, 10, 0, 1, 0, time.UTC)
+	outLine, err := MarshalEntry(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf.WriteString(bad + "\n" + reparent(t, string(outLine), lineID(t, bad)) + "\n")
+	read, err := Read(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := read.VerifyRecords(read.Leaf()); !errors.Is(err, ErrCopiedCall) {
+		t.Errorf("VerifyRecords = %v, want ErrCopiedCall", err)
+	}
+}

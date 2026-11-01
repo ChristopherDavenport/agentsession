@@ -577,7 +577,8 @@ One conversation item in the payload profile.
   holds it only as context. A copied call is not a call of this
   session. It is never one of a run's calls, is never pending in this
   session, and no `records` promise covers it. A writer MUST NOT write
-  a `dispatch` or a `decision` whose `target` is a copied call. A
+  a `dispatch`, a `decision` or a `result` whose `target` is a copied
+  call. A
   `function_call_output` for a copied call is copied too, whether or
   not its entry carries the member. A writer MUST write `copied_from`
   on every item it copies and on every output it makes for a copied

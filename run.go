@@ -1275,8 +1275,8 @@ var ErrCalleeLink = errors.New("agentsession: callee link is not one the format 
 // notice included, since a cancel notice names no callee.
 var ErrBadFromLink = errors.New("agentsession: from_link names no peer link before the item")
 
-// ErrCopiedCall is returned when a dispatch or a decision is appended
-// whose target is a copied call, and by [Session.VerifyRecords] for a
+// ErrCopiedCall is returned when a dispatch, a decision or a result is
+// appended whose target is a copied call, and by [Session.VerifyRecords] for a
 // path that holds one: a copied call was made in another session, and
 // nothing in this one may hand it to its tool or decide its fate (RFC
 // 0001, item, since 0.15).
@@ -1291,8 +1291,9 @@ var ErrCopiedCall = errors.New("agentsession: dispatch or decision names a copie
 var ErrBadCopiedFrom = errors.New("agentsession: copied_from names this session, or a copied call's output is not marked")
 
 // verifyCopied checks the copied items of a path: none names the
-// session self, no dispatch or decision names a copied call, and every
-// output of a copied call carries copied_from.
+// session self or carries response, no dispatch, decision or result
+// names a copied call, and every output of a copied call carries
+// copied_from, as Append has them.
 func verifyCopied(self string, path []Entry) error {
 	copied := map[string]bool{} // function call entry ID -> copied
 	byCallID := map[string]bool{}
@@ -1321,6 +1322,10 @@ func verifyCopied(self string, path []Entry) error {
 		case *DispatchEntry:
 			if copied[v.Target] {
 				return fmt.Errorf("%w: dispatch %s names %s", ErrCopiedCall, v.ID, v.Target)
+			}
+		case *ResultEntry:
+			if copied[v.Target] {
+				return fmt.Errorf("%w: result %s names %s", ErrCopiedCall, v.ID, v.Target)
 			}
 		}
 	}
