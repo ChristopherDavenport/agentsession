@@ -135,7 +135,7 @@ var protectedEntries = []string{
 	`{"type":"queued","id":"P-id","parent":"P-parent",` + tsLine + `,"item":{"type":"function_call","call_id":"P-call","name":"B-name","arguments":"B-args"},"mode":"steer"}`,
 	`{"type":"compaction","id":"P-id","parent":"P-parent",` + tsLine + `,"first_kept":"P-first","summary":{"type":"message","role":"user","content":[]},"pinned":[{"type":"function_call","call_id":"P-call","name":"B-name","arguments":"B-args"}],"config":{"instructions_omitted":[{"id":"B-part","reason":"B-reason","of":"B-of-beside-an-id"}],"omit":{"items":["P-omit"]}}}`,
 	`{"type":"config","id":"P-id","parent":"P-parent",` + tsLine + `,"instructions_omitted":[{"id":"B-part","reason":"B-reason","of":"B-of-beside-an-id"},{"keep":2,"of":"P-of"},{"keep":0,"of":"B-of-no-keep"}]}`,
-	`{"type":"x:note","id":"P-id","parent":"P-parent",` + tsLine + `,"parents":[{"entry":"P-entry"}],"legacy_id":"P-legacy","text":"B-text","P-name":"` + sidecarURL + `","call_id":"B-ext-call"}`,
+	`{"type":"x:note","id":"P-id","parent":"P-parent",` + tsLine + `,"parents":[{"entry":"P-entry"}],"legacy_id":"P-legacy","text":"B-text","B-name":"` + sidecarURL + `","call_id":"B-ext-call"}`,
 	`{"type":"label","id":"P-id","parent":"P-parent",` + tsLine + `,"target":"P-target","label":"B-label","redacted":["P-red",{"P-key":"P-red2"}]}`,
 	`{"type":"item","id":"P-id","parent":"P-parent",` + tsLine + `,"item":{"type":"message","role":"user","content":[{"type":"input_text","text":"B-text"}]},"redacted":[1,[3,4]]}`,
 	`{"type":"x:note","id":"P-id","parent":"P-parent",` + tsLine + `,"text":"B-text","redacted":["P-red"]}`,
@@ -663,5 +663,101 @@ func TestRewriterUnmet(t *testing.T) {
 	got[0].ID = "changed"
 	if r.Unmet()[0].ID != "c" {
 		t.Error("Unmet returned the Rewriter's own list")
+	}
+}
+
+// TestRewriteStringsDataNames: a member name is data, and f is given it,
+// in an env entry's files and tools and at any depth in an object whose
+// members the format does not define: a custom entry's data, an
+// outcome's details, a decision's args, a config's extra and a
+// checkpoint's, the value of a member the format does not define, and
+// an extension entry's body, its top-level names included. In an object
+// the format defines, an entry or a trigger, and in an item, names stay
+// as written. Two names made one are refused (RFC 0001, Every redacted
+// entry).
+func TestRewriteStringsDataNames(t *testing.T) {
+	home := func(s string) string { return strings.ReplaceAll(s, "/home/alice", "~") }
+	for _, tt := range []struct{ name, line, want string }{
+		{
+			"custom data at any depth",
+			`{"type":"custom","id":"x","parent":"p",` + tsLine + `,"ns":"app","data":{"trackedFileBackups":{"/home/alice/a.go":{"/home/alice/b":1}}},"call_id":"c"}`,
+			`{"type":"custom","id":"x","parent":"p",` + tsLine + `,"ns":"app","data":{"trackedFileBackups":{"~/a.go":{"~/b":1}}},"call_id":"c"}`,
+		},
+		{
+			"outcome details",
+			`{"type":"outcome","id":"x","parent":"p",` + tsLine + `,"kind":"test","target":"t","details":{"/home/alice/t_test.go":true}}`,
+			`{"type":"outcome","id":"x","parent":"p",` + tsLine + `,"kind":"test","target":"t","details":{"~/t_test.go":true}}`,
+		},
+		{
+			"decision args",
+			`{"type":"decision","id":"x","parent":"p",` + tsLine + `,"call_id":"c","target":"t","verdict":"proceed","args":{"/home/alice":"r"}}`,
+			`{"type":"decision","id":"x","parent":"p",` + tsLine + `,"call_id":"c","target":"t","verdict":"proceed","args":{"~":"r"}}`,
+		},
+		{
+			"config extra",
+			`{"type":"config","id":"x","parent":null,` + tsLine + `,"model":"m","extra":{"metadata":{"/home/alice":"v"}}}`,
+			`{"type":"config","id":"x","parent":null,` + tsLine + `,"model":"m","extra":{"metadata":{"~":"v"}}}`,
+		},
+		{
+			"compaction checkpoint extra",
+			`{"type":"compaction","id":"x","parent":"p",` + tsLine + `,"first_kept":"f","summary":{"type":"message","role":"user","content":[]},"config":{"model":"m","extra":{"/home/alice":1}}}`,
+			`{"type":"compaction","id":"x","parent":"p",` + tsLine + `,"first_kept":"f","summary":{"type":"message","role":"user","content":[]},"config":{"model":"m","extra":{"~":1}}}`,
+		},
+		{
+			"env tools and files",
+			`{"type":"env","id":"x","parent":"p",` + tsLine + `,"tools":{"/home/alice/bin/go":"1.27"},"files":{"read":{"/home/alice/a":"sha256:4444444444444444444444444444444444444444444444444444444444444444"}}}`,
+			`{"type":"env","id":"x","parent":"p",` + tsLine + `,"tools":{"~/bin/go":"1.27"},"files":{"read":{"~/a":"sha256:4444444444444444444444444444444444444444444444444444444444444444"}}}`,
+		},
+		{
+			"undefined members of defined objects: the name stays, the names in its value are data; an item's names stay",
+			`{"type":"run","id":"x","parent":"p",` + tsLine + `,"run_id":"r","phase":"start","source":"input","trigger":{"kind":"k","x:/home/alice":{"/home/alice":1}},"x:/home/alice":{"/home/alice":{"/home/alice":2}}}`,
+			`{"type":"run","id":"x","parent":"p",` + tsLine + `,"run_id":"r","phase":"start","source":"input","trigger":{"kind":"k","x:/home/alice":{"~":1}},"x:/home/alice":{"~":{"~":2}}}`,
+		},
+		{
+			"an item's member names are the payload's",
+			`{"type":"item","id":"x","parent":"p",` + tsLine + `,"item":{"type":"message","role":"user","content":[{"type":"input_text","text":"/home/alice","x:/home/alice":{"/home/alice":1}}]}}`,
+			`{"type":"item","id":"x","parent":"p",` + tsLine + `,"item":{"type":"message","role":"user","content":[{"type":"input_text","text":"~","x:/home/alice":{"/home/alice":1}}]}}`,
+		},
+		{
+			"an extension entry's body, its names included",
+			`{"type":"x:note","id":"x","parent":"p",` + tsLine + `,"/home/alice/a":{"/home/alice/b":"/home/alice"},"redacted":[2]}`,
+			`{"type":"x:note","id":"x","parent":"p",` + tsLine + `,"~/a":{"~/b":"~"},"redacted":[2]}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := RewriteStrings(entryOf(t, tt.line), home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := canonicalEntry(t, got), withValues(t, tt.want, nil); got != want {
+				t.Errorf("rewritten\n got %s\nwant %s", got, want)
+			}
+		})
+	}
+	for _, line := range []string{
+		`{"type":"custom","id":"x","parent":"p",` + tsLine + `,"ns":"app","data":{"/home/alice/a":1,"~/a":2}}`,
+		`{"type":"env","id":"x","parent":"p",` + tsLine + `,"tools":{"/home/alice/go":"1","~/go":"2"}}`,
+		`{"type":"x:note","id":"x","parent":"p",` + tsLine + `,"/home/alice":1,"~":2}`,
+		`{"type":"x:note","id":"x","parent":"p",` + tsLine + `,"/home/alice/x":1}`,
+	} {
+		f := home
+		if strings.Contains(line, "/home/alice/x") {
+			f = func(s string) string { return strings.ReplaceAll(s, "/home/alice/x", "ts") }
+		}
+		if _, err := RewriteStrings(entryOf(t, line), f); !errors.Is(err, ErrKeyCollision) {
+			t.Errorf("%s: err %v, want ErrKeyCollision", line, err)
+		}
+	}
+
+	var h Header
+	if err := json.Unmarshal([]byte(`{"type":"session","format":"agentsession/0.14","id":"s","created_at":"2026-10-16T09:00:00Z","payload":"openresponses/2026-04-24","x:/home/alice":{"/home/alice":1}}`), &h); err != nil {
+		t.Fatal(err)
+	}
+	got, err := RewriteHeaderStrings(h, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x, ok := got.Extra["x:/home/alice"]; !ok || string(x) != `{"~":1}` {
+		t.Errorf("header extra %s", got.Extra)
 	}
 }

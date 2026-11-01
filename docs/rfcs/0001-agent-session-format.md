@@ -2010,9 +2010,21 @@ A redactor:
   so it is rewritten as the members above are. A redaction of a whole
   store holds a redaction of every session in it, and so re-points
   every reference that stays inside the store;
-- MUST reach data the format keeps in member names: an `env` entry's
-  `files` are keyed by path, and a path can hold what is redacted. Two
-  keys a redaction makes one MUST NOT both be kept;
+- MUST reach data the format keeps in member names: a member name is
+  data, and a redactor reaches it as it reaches a string value, in the
+  objects keyed by data, an `env` entry's `files` maps and `tools` map,
+  and at any depth in every object whose members this document does not
+  define: a `custom` entry's `data`, an `outcome`'s `details`, a
+  `decision`'s `args`, a `config`'s `extra` and a compaction
+  checkpoint's, the value of any member this document does not define,
+  and the body of an extension entry, its own member names among them
+  but the envelope's. In the objects this document defines, an entry, a
+  `trigger` or a `workspace` among them, member names are the format's,
+  and a redactor leaves them as they are, the name of a member this
+  document does not define included, whose value is data; so are the
+  names inside an item, which the payload profile defines. Two names of
+  one object that a redaction makes one MUST NOT both be kept, nor an
+  extension entry's name made one its envelope holds;
 - MUST give each `response` it writes either no `request_hash` or the
   one the redacted session rebuilds for it, computed as Request hash
   says, and never another: a redacted session hashes independently, and
@@ -2517,6 +2529,13 @@ reader of 0.13 refuses those files until it is upgraded.
   not redact the entry. 0.13 forbade keeping an original hash anywhere
   but in a reference into another session, and did not say what a
   redactor that cannot resolve a part does instead.
+
+- Redaction says where a member name is data, which a redactor reaches:
+  an `env` entry's `files` and `tools`, and every object whose members
+  this document does not define, at any depth. 0.13 named `files`
+  alone, so a path or a secret used as a key in a `custom` entry's
+  `data` survived a redaction that rewrote every string value, and a
+  redactor that refused such keys refused a quarter of a real corpus.
 
 - Request hash says which form a sidecar session hashes: the request
   with each `sidecar:` URL as recorded, while the provider is sent the

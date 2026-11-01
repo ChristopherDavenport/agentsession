@@ -7,6 +7,21 @@ versions may break the API.
 
 ## Unreleased
 
+- **Member names that are data reach a redactor (RFC 0001 0.14, Every
+  redacted entry).** A member name is data in an `env` entry's `files`
+  and `tools`, and at any depth in every object whose members the
+  format does not define: a `custom` entry's `data`, an `outcome`'s
+  `details`, a `decision`'s `args`, a config's or a checkpoint's
+  `extra`, the value of any member the format does not define, and an
+  extension entry's body, its own names included. **Changed:
+  `RewriteStrings`, `Rewriter` and `RewriteHeaderStrings`** give f those
+  names, found from the type that decodes the entry, and refuse two
+  names made one, or an extension entry's name made one its envelope
+  holds, with `ErrKeyCollision`; names in objects the format defines,
+  and in items, stay as written. A path keying a `custom` record, such as
+  Claude Code's tracked file backups, is now redacted rather than
+  refused. (#252)
+
 - **A Rewriter reports the parts whose hash it kept (RFC 0001 0.14,
   Every redacted entry).** A redactor MUST NOT write an instruction
   part, or an omitted part's `of`, under an original hash whose text or

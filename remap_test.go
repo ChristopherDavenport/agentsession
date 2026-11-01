@@ -658,16 +658,18 @@ func TestRewriteTableCoversRFC(t *testing.T) {
 		t.Fatalf("RFC 0001 no longer says %q; find the rule again", keys)
 	}
 	names := tick.FindAllStringSubmatch(text[i:i+j], -1)
-	if len(names) < 2 {
+	if len(names) < 3 {
 		t.Fatalf("the rule names no member: %s", text[i:i+j])
 	}
-	typ, member := names[0][1], names[1][1]
-	found := false
-	for _, sp := range bodyMembers[typ] {
-		found = found || sp.role == roleDataKeys && sp.path[0] == member
-	}
-	if !found {
-		t.Errorf("RFC 0001 keeps data in the member names of %s's %s and the table does not key it by data", typ, member)
+	typ := names[0][1]
+	for _, member := range []string{names[1][1], names[2][1]} {
+		found := false
+		for _, sp := range bodyMembers[typ] {
+			found = found || sp.role == roleDataKeys && sp.path[0] == member
+		}
+		if !found {
+			t.Errorf("RFC 0001 keeps data in the member names of %s's %s and the table does not key it by data", typ, member)
+		}
 	}
 }
 

@@ -122,7 +122,10 @@ var envelopeMembers = []special{
 // whose omit items name entries as a config entry's do; it writes its
 // omitted parts whole, so carries no of. An env entry's files map a path
 // to the hash of the file: the hash is not body text, and the path is
-// data in a member name, which a rewrite of the body reaches.
+// data in a member name, which a rewrite of the body reaches, as is the
+// tool name keying its tools. Every other object keyed by data, one
+// whose members the format does not define, is found from the type that
+// decodes the entry, by the rewrite (see shape).
 //
 // A call_id pairs a call with its output, its dispatches, decisions and
 // links, and a subsession's ID is derived from it, so a rewrite of the
@@ -171,6 +174,7 @@ var bodyMembers = map[string][]special{
 	},
 	TypeCustom: {{path: memberPath("call_id"), role: roleCallID}},
 	TypeEnv: {
+		{path: memberPath("tools"), role: roleDataKeys},
 		{path: memberPath("files", "read"), role: roleDataKeys},
 		{path: memberPath("files", "written"), role: roleDataKeys},
 		{path: memberPath("files", "read", "*"), role: roleHash},
