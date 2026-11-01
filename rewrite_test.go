@@ -881,3 +881,18 @@ func TestRewriteStringsNormalisedFollowsNames(t *testing.T) {
 		})
 	}
 }
+
+// TestRewriterUnmetCheckpoint: a checkpoint writes every part in force
+// with its text, but a file that breaks the rule still reads, and a part
+// there named by a hash alone, or a keep, is reported as a delta's is.
+func TestRewriterUnmetCheckpoint(t *testing.T) {
+	e := entryOf(t, `{"type":"compaction","id":"x","parent":"p",`+tsLine+`,"first_kept":"f","summary":{"type":"message","role":"user","content":[]},"config":{"model":"m","instructions_parts":[{"id":"a","text":"one"},{"id":"b","hash":"`+HashText("two")+`"},{"keep":1}]}}`)
+	r := NewRewriter(hideSecret)
+	if _, err := r.Rewrite(e); err != nil {
+		t.Fatal(err)
+	}
+	want := []UnmetPart{{Entry: "x", At: "/config/instructions_parts/1/hash", ID: "b"}, {Entry: "x", At: "/config/instructions_parts/2/keep"}}
+	if got := r.Unmet(); !slices.Equal(got, want) {
+		t.Errorf("Unmet = %+v, want %+v", got, want)
+	}
+}

@@ -128,6 +128,23 @@ func (r *Rewriter) LeftOut(e Entry) {
 	r.settings[e.Base().ID], _ = r.settingsAt(e.Base().Parent)
 }
 
+// checkCheckpoint adds to unmet each part of a compaction's checkpoint
+// that carries no text: RFC 0001 has a checkpoint write every part in
+// force with its text, so it names nothing a path can rebuild, and a
+// file that breaks the rule still reads, its hash kept as the
+// original's.
+func (r *Rewriter) checkCheckpoint(c *CompactionEntry) {
+	for i, p := range c.Config.InstructionsParts {
+		member := "hash"
+		if p.ID == "" && p.Keep > 0 {
+			member = "keep"
+		}
+		if p.Text == "" && (p.Hash != "" || member == "keep") {
+			r.unmet = append(r.unmet, UnmetPart{Entry: c.ID, At: "/config/instructions_parts/" + strconv.Itoa(i) + "/" + member, ID: p.ID})
+		}
+	}
+}
+
 // checkParts adds to unmet each part of a config delta that the
 // settings in force on its path, as the Rewriter replays them, cannot
 // rebuild: a part named by a hash alone whose text none of them holds,
@@ -321,8 +338,11 @@ func (r *Rewriter) Rewrite(e Entry) (Entry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agentsession: entry %s: %w", e.Base().ID, err)
 	}
-	if c, ok := e.(*ConfigEntry); ok {
-		r.checkParts(c)
+	switch v := e.(type) {
+	case *ConfigEntry:
+		r.checkParts(v)
+	case *CompactionEntry:
+		r.checkCheckpoint(v)
 	}
 	r.record(e)
 	return out, nil
