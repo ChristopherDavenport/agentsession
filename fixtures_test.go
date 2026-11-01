@@ -2003,7 +2003,7 @@ func fixtureHash(t *testing.T, s *Session) string {
 func withdrawnFixture(t *testing.T) *Session {
 	t.Helper()
 	at, _ := time.Parse(time.RFC3339, "2026-11-01T09:00:00Z")
-	s := New(Header{ID: "01995b2a-0000-7000-8000-00000000001a", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: AllRecords})
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000020", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: AllRecords})
 	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
 	must, say := fixtureAppender(t, s)
 	end := func(reason string) {
@@ -2098,9 +2098,9 @@ func TestWithdrawnFixture(t *testing.T) {
 // callee.
 func lateReportFixture(t *testing.T, bad bool) *Session {
 	t.Helper()
-	id := "01995b2a-0000-7000-8000-00000000001b"
+	id := "01995b2a-0000-7000-8000-000000000021"
 	if bad {
-		id = "01995b2a-0000-7000-8000-00000000001c"
+		id = "01995b2a-0000-7000-8000-000000000022"
 	}
 	at, _ := time.Parse(time.RFC3339, "2026-11-01T10:00:00Z")
 	s := New(Header{ID: id, CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: []string{TypeDispatch}})
