@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.31 - 2026-11-01
 
 - **ATIF: what each step's own request left out, cost with subagents,
   a call's records with the call, and calls counted by attempts (RFC
