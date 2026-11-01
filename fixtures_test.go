@@ -319,6 +319,11 @@ func TestRegenerateFixtures(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// bad-withdrawal: a withdrawal a hold separates from its dispatch,
+	// which a writer cannot append, so its line is made by hand and
+	// hashed: a reader reads it as a reject after a dispatch.
+	writeBadWithdrawal(t)
+
 	// The 0.14 conformance vectors, appended natively.
 	for name, build := range fixtures014 {
 		var buf bytes.Buffer
@@ -2595,5 +2600,67 @@ func TestNoResponseIDFixture(t *testing.T) {
 	}
 	if err := absent.Verify(id); err != nil {
 		t.Errorf("a response with response_id absent: %v", err)
+	}
+}
+
+// badWithdrawalLines builds the lines bad-withdrawal.jsonl holds: a
+// call dispatched and then held, and a reject carrying withdrawn after
+// the hold, which a writer refuses and so is written here by hand.
+func badWithdrawalLines(t *testing.T) []byte {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-11-01T15:00:00Z")
+	s := New(Header{ID: "01995b2a-0000-7000-8000-000000000027", CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: AllRecords})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must, _ := fixtureAppender(t, s)
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	call := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_notify", Name: "notify", Arguments: "{}"}, ResponseID: "resp_1"})
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted})
+	must(NewDispatch("call_notify", call))
+	hold := must(NewDecision("call_notify", call, VerdictHold, ByPolicy))
+	w := NewWithdrawal("call_notify", call, ByPolicy, "too late to withdraw")
+	w.ID, w.Timestamp = "x", at.Add(time.Second)
+	line, err := MarshalEntry(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	buf.WriteString(reparent(t, string(line), hold) + "\n")
+	return buf.Bytes()
+}
+
+// writeBadWithdrawal writes bad-withdrawal.jsonl.
+func writeBadWithdrawal(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join("testdata", "sessions", "bad-withdrawal.jsonl"), badWithdrawalLines(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBadWithdrawalFixture reads the 0.14 negative fixture for a
+// withdrawal a decision separates from its dispatch: every line
+// verifies, the reject carries withdrawn, and a reader reads it as a
+// reject after a dispatch, which VerifyRecords reports.
+func TestBadWithdrawalFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", "bad-withdrawal.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, badWithdrawalLines(t)) {
+		t.Error("bad-withdrawal.jsonl is not what badWithdrawalLines builds; run go test -update")
+	}
+	s := loadFixture(t, "bad-withdrawal")
+	last := s.Entries()[len(s.Entries())-1].(*DecisionEntry)
+	if !last.Withdrawn {
+		t.Fatal("the last entry is not a withdrawal")
+	}
+	calls, _ := s.Calls(s.Leaf())
+	if len(calls[0].Withdrawn) != 0 || !calls[0].Rejected() {
+		t.Errorf("the misplaced withdrawal read as %+v", calls[0])
+	}
+	if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrRejectDispatched) {
+		t.Errorf("VerifyRecords = %v, want ErrRejectDispatched", err)
 	}
 }
