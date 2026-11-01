@@ -408,3 +408,61 @@ func TestCommitOverCAS(t *testing.T) {
 		t.Errorf("the head after the move: %s, %v; want %s", info.Head, err, first)
 	}
 }
+
+// A second continued_in link naming another successor is refused with a
+// code of its own, superseded, so a client tells "another writer
+// continued this session" from a store fault.
+func TestASecondContinuationIsSuperseded(t *testing.T) {
+	ctx := context.Background()
+	st := agentsession.NewMemoryStore()
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, s.ID(), agentsession.NewLinkEntry(agentsession.RelContinuedIn, "first-successor")); err != nil {
+		t.Fatal(err)
+	}
+	url := server(t, st, remote.WithInsecureNoAuth())
+	b, err := agentsession.MarshalEntry(agentsession.NewLinkEntry(agentsession.RelContinuedIn, "second-successor"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := leaseOn(t, url, s.ID(), "w", time.Minute)
+	resp := send(t, http.MethodPost, url+"/v1/sessions/"+s.ID()+"/entries", map[string]string{"Lease-Token": l.Token}, string(b)+"\n")
+	if p := problemOf(t, resp); p.Code != remote.CodeSuperseded || p.Status != http.StatusConflict {
+		t.Errorf("a second continuation: %+v, want 409 superseded", p)
+	}
+	if resp := send(t, http.MethodDelete, url+"/v1/sessions/"+s.ID()+"/lease", map[string]string{"Lease-Id": l.LeaseID}, ""); resp.StatusCode/100 != 2 {
+		t.Fatalf("release: %d", resp.StatusCode)
+	}
+	if _, err := dial(t, url).Append(ctx, s.ID(), agentsession.NewLinkEntry(agentsession.RelContinuedIn, "third-successor")); !errors.Is(err, agentsession.ErrSuperseded) {
+		t.Errorf("through the client: %v, want ErrSuperseded", err)
+	}
+}
+
+// On the wire null is the universal root: a head move to null rests the
+// head on the empty context, and one that names no target is refused.
+func TestAHeadMoveToNullIsTheRoot(t *testing.T) {
+	ctx := context.Background()
+	st, s, ids := seeded(t, 2)
+	url := server(t, st, remote.WithInsecureNoAuth())
+	l := leaseOn(t, url, s.ID(), "w", time.Minute)
+	head := url + "/v1/sessions/" + s.ID() + "/head"
+	lt := map[string]string{"Lease-Token": l.Token}
+	if p := problemOf(t, send(t, http.MethodPut, head, lt, `{"expected":"`+ids[1]+`","durable":true}`)); p.Code != remote.CodeHeadTarget {
+		t.Errorf("a move with no target: %s, want head_target", p.Code)
+	}
+	resp := send(t, http.MethodPut, head, lt, `{"expected":"`+ids[1]+`","to":null,"durable":true}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("a move to null: %d %+v", resp.StatusCode, problemOf(t, resp))
+	}
+	var out struct {
+		Head *string `json:"head"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.Head != nil {
+		t.Errorf("a move to null answered head %v, %v; want null", out.Head, err)
+	}
+	if got, err := st.Read(ctx, s.ID()); err != nil || got.Leaf() != "" {
+		t.Errorf("the store's head after a move to null: %v, %v; want the root", got.Leaf(), err)
+	}
+}

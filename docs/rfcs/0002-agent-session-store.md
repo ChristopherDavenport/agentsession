@@ -111,7 +111,9 @@ in RFC 2119.
 - **Base**: the entry a session continues from, or none. A session with
   a base is a **fork** of the session that appended that entry.
 - **Head**: the entry a session's next append names as parent, unless
-  the appender names another.
+  the appender names another, or the universal root (RFC 0001), the
+  empty context, when the next append is a first entry. The root
+  replaces what earlier drafts called no head.
 - **Log**: the entries a session appended, in the order the store
   accepted them. These are the session's **own** entries.
 - **Named ref**: a store-level name that points to a session, optionally
@@ -122,7 +124,7 @@ in RFC 2119.
   recovery.
 - **Working state**: a session's appends the store has accepted but not
   yet committed; a crash may take them.
-- **Prefix**: the path from a session's base to its root. A session's
+- **Prefix**: the path from a session's base up to its first entry. A session's
   prefix entries are, or were, another session's own entries; a store
   may hold them without holding that session.
 - **Projection**: an RFC 0001 file built from a session.
@@ -214,15 +216,17 @@ A session is created with a header and optionally a base.
   base, before it creates the fork: a fork's recovery reads only its own
   log, and a base a crash took from its origin's working state would
   leave the fork hanging from nothing.
-- A session with no base is a fresh root. Its first append is a root
-  entry, `parent` null.
+- A session with no base starts with its head at the universal root.
+  Its first append is a first entry, `parent` null.
 - A session's own entry MUST name as `parent` the session's base, one of
   the session's own entries, or, in a session with no base, null.
   Branching above the base is a new session with a lower base, not an
   append to this one, so that a session's base is the one point it
   diverged from and the prefix is exactly the path to it.
-- A session MAY have several roots only when it has no base. A session
-  with a base has one prefix and everything it appends hangs from it.
+- A session with no base MAY branch at the universal root: an entry
+  with `parent` null is a branch at the root, as any entry is a branch
+  at its parent. A session with a base has one prefix and everything it
+  appends hangs from it.
 - A session's header is written at creation and changes afterwards only
   in `format`. A store MUST raise the header's `format` to the minor of
   a writer that appends to the session, when that minor is later than
@@ -273,8 +277,11 @@ Append is the one write that adds to a session, and it is atomic.
   for the `leaf` label the head section describes. The append succeeded
   and created a branch. The store MUST tell the appender which
   happened.
-- An entry with `parent` null continues when the session has no head and
-  is otherwise a branch. A session with a base MUST refuse it, since
+- An entry with `parent` null hangs from the universal root, and its
+  append is an ordinary one: it continues when the head is the root,
+  and otherwise it is a branch and the head does not move. A writer
+  that wants the head on it moves it by the compare-and-swap (Head)
+  once it is appended. A session with a base MUST refuse it, since
   every own entry hangs from the base.
 - A store MAY hold a session for one writer at a time and refuse or
   wait for another, provided an append it accepted is never re-parented
@@ -301,9 +308,29 @@ The head is a session's resume point, and it is a ref.
 
 - A store MUST offer a compare-and-swap on the head: move the head from
   an expected entry to a given entry, or fail if the head is not the
-  expected entry. "No head" is a valid expected value. The target MUST
-  be the base or one of the session's own entries other than a `leaf`
-  label, since the head never rests on one.
+  expected entry. Either may be the universal root: the head may rest
+  on the root, which means the empty context, in a session with no
+  base, and the next append with `parent` null then continues. The
+  target MUST otherwise be the base or one of the session's own entries
+  other than a `leaf` label, since the head never rests on one. A
+  session with a base never rests on the root. Every store offers it, and
+  offers it durable on request (Durability and recovery).
+- A store that keeps sessions as RFC 0001 files, or keeps a session's
+  head only in its entries, performs the move by appending a `leaf`
+  label for the target, a `null` target for the root, under the
+  session's lock, after the compare and
+  before anything else is appended; the move is durable when the label
+  is. Such a store also keeps the head where an append leaves it: after
+  an append its lines would read back as having moved the head, a
+  branch, since a reader of a file takes the newest line under the
+  `leaf` label in force or the last line, it appends a `leaf` label for
+  the head under the same lock, made durable when the entry is, so the
+  head is the same after a reopen. It writes the label ahead of the
+  entry, so a crash that tears the end of the write loses the entry
+  and not the label, except for an entry that descends from the head,
+  which only a label after it keeps from reading as the head. A store set to hold only redacted
+  entries offers the move and keeps the head as every store does, since
+  the label carries no content (Redacted sessions).
 - Resume reads the head. There is no inference from log order and no
   marker to find. The head is what RFC 0001's leaf label was standing in
   for. The label exists only because an append-only file with a
@@ -434,11 +461,20 @@ projection to a file carries none.
   MAY resolve and list.
 - **Refs and continuation.** A session retired by a `continued_in` link
   is replaced by its successor, and a ref does not follow that link by
-  itself: a store MUST NOT move a ref except by an update. The writer
-  that continues a named session moves its ref by compare-and-swap from
-  the old session to the new, and a crash between the two steps leaves
-  the ref on the retired session. A caller that wants the current
-  session of a name, and not the one the ref says, follows
+  itself: a store MUST NOT move a ref except by an update. A session
+  holds at most one `continued_in` link; a writer MUST NOT continue a
+  session that holds one, since a second successor would fork the
+  chain. A store MUST refuse an append of a `continued_in` link naming
+  another successor to a session that holds one, deciding it with the
+  append, under the same lock or transaction, so that of two writers
+  continuing a session at once one lands its link and the other is
+  refused and discards its successor. The writer that continues a named session moves its ref by
+  compare-and-swap from the old session to the new, and a crash between
+  the two steps leaves the ref on the retired session. A writer
+  continuing the session a ref names therefore continues the session at
+  the end of its chain, and moves the ref by compare-and-swap from the
+  ref's literal target, which catches a ref left behind up. A caller
+  that wants the current session of a name, and not the one the ref says, follows
   `continued_in` links from the target to the end of the chain, and
   SHOULD report that it did so, which tells it the ref is behind. The
   chain walk is the caller's, not the store's, and a reader MUST stop
@@ -726,9 +762,18 @@ blobs the redaction kept, which are the same blobs.
 
 - A store MAY be set to hold only redacted entries. Such a store MUST
   refuse to create, import or receive by push or fetch a session whose
-  header does not carry `redacted`, and MUST refuse every entry,
-  however it arrives — append, import, push or fetch, prefix included —
-  that carries no `redacted`. A fork of a redacted session and an entry
+  header does not carry `redacted`, and MUST refuse every entry that
+  carries content, however it arrives — append, import, push or fetch,
+  prefix included — and carries no `redacted`. Redaction is a property
+  of what was run over an entry's content, so the check does not apply
+  to the record of a head move (Head): a `leaf` label whose `target`
+  names an entry of the session or the root, and which carries no
+  other member at any depth, no `parents`, `legacy_id`, `normalised` or member this
+  document does not define. It carries no content to have been
+  redacted, and such a store accepts it, the one a head move writes
+  included. A `leaf` label whose target is any other text, or that
+  carries any other member, is content, and is refused without
+  `redacted`. A fork of a redacted session and an entry
   a writer appended to one natively are refused alike, since neither
   was redacted. It is the store a publisher pushes to, and it fails
   closed: an original, or an unredacted entry, sent to it by mistake is
@@ -745,7 +790,7 @@ blobs the redaction kept, which are the same blobs.
 `ToJSONL(session)` builds an RFC 0001 file:
 
 1. The header, with `base` set when the session has one.
-2. The prefix, root first: the path from the root to the base, every
+2. The prefix, first entry first: the path from its first entry to the base, every
    entry on it, each as its canonical line with `id` set to its hash.
 3. The session's own entries in log order, the same way.
 4. If RFC 0001's resume rule over the lines already written would not
@@ -779,7 +824,7 @@ log in file order, and the head is what RFC 0001's resume rule gives,
 held to the head rule: when the rule names a prefix entry the head is
 the base, when it names a `leaf` label the head is the nearest ancestor
 that is not one, the base when no such ancestor lies above the base, and
-no head in a baseless session with none, and the store reports any of
+the root in a baseless session with none, and the store reports any of
 these. An import is held to the checks a push is: the own entries hang
 from the base or from each other, or from null in a baseless session,
 and `media` equals that of a held session whose own entries include the
@@ -830,7 +875,7 @@ apply here, where holding the session already is the usual case.
   moves only by the compare-and-swap below.
 - **A receiver that lacks the session** first admits the prefix, so that
   it holds the base, then creates the session from the pushed header
-  with the pushed base as its head, or no head when there is no base,
+  with the pushed base as its head, or the root when there is no base,
   and then admits the own entries. A receiver that holds a session with
   that ID MUST refuse the push unless the pushed header equals the held
   one apart from `format`, since a header is fixed at creation but for
@@ -972,8 +1017,8 @@ not by any later leaf:
   `compaction` or `branch_summary`. A `response`, a record entry and an
   extension entry do not.
 - The context hash before any contributing entry is `sha256:` over the
-  canonical bytes of the JSON value `null`. A root that does not
-  contribute has that value.
+  canonical bytes of the JSON value `null`: the universal root's. A
+  first entry that does not contribute has that value.
 - At an entry that does not contribute, the context hash is its
   parent's, unchanged.
 - At an entry that contributes, the context hash is `sha256:` over the

@@ -366,6 +366,11 @@ func (h *Handler) followRef(w http.ResponseWriter, r *http.Request, name string)
 	ctx := r.Context()
 	resolve := func() (refState, error) {
 		t, err := h.refs.ResolveRef(ctx, name)
+		if (err == nil || !t.IsZero()) && !h.mayRead(ctx, t) {
+			// A session the follower may not read: the ref is none of
+			// its, so a move there reads as a move to none.
+			return refState{Name: name}, noRef()
+		}
 		switch {
 		case err == nil:
 			return refState{Name: name, Target: targetOut(t), State: "live"}, nil

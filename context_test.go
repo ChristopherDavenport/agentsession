@@ -285,8 +285,10 @@ func TestRequestContext(t *testing.T) {
 	if req.Store == nil || *req.Store || req.PreviousResponseID != "" {
 		t.Errorf("canonical request store=%v prev=%q", req.Store, req.PreviousResponseID)
 	}
-	if req.Extra["temperature"] != json.Number("0.2") {
-		t.Errorf("extra temperature = %#v", req.Extra["temperature"])
+	// temperature is a member the request type declares, so it fills
+	// the field, not Extra.
+	if req.Temperature == nil || *req.Temperature != 0.2 || req.Extra["temperature"] != nil {
+		t.Errorf("temperature = %v, extra %#v", req.Temperature, req.Extra["temperature"])
 	}
 	if len(req.Tools) != 1 || req.Reasoning.Effort != openresponses.ReasoningEffortLow || req.Instructions != "Be brief." {
 		t.Errorf("request = %+v", req)

@@ -315,8 +315,8 @@ GET /v1/sessions/{id}/path?leaf={entry}&contents={all|since-fold|none}
   - Only a store with a committed view offers this; the capability
     `committed_view` says so, and otherwise `durable=true` is 501
     `unsupported`.
-- **The path** is the entries from the root to `leaf` (the head by
-  default), with the root first, as NDJSON ending with `end`. Each line
+- **The path** is the entries from the first entry to `leaf` (the head
+  by default), the first entry first, as NDJSON ending with `end`. Each line
   is `{"entry": hash, "envelope": {…}, "content": {…}|null}`: the
   envelope inline, so the chain verifies from the response alone, and
   the content according to `contents`. The first line also carries the
@@ -333,7 +333,7 @@ GET /v1/sessions/{id}/path?leaf={entry}&contents={all|since-fold|none}
     is not an `item`:
     - Let the newest `compaction` on the path to `leaf` be the one
       nearest `leaf`. The path is the single chain of `parent` links
-      from `leaf` to a root, across the base into the prefix, so the
+      from `leaf` up to the universal root, across the base into the prefix, so the
       newest compaction is well defined for a given `leaf`, and
       differs between leaves on different branches.
     - Contents come for the compaction itself (its checkpoint, summary
@@ -428,9 +428,13 @@ the reference stores, so a server MAY rate-limit resumes.
   its index among the events of that cursor (`<cursor>.<n>`). A client
   resumes with `Last-Event-ID` (or `after`, with `Last-Event-ID`
   winning when both are sent), and the server resumes after exactly that
-  event. A cursor the server can no longer resume from, because the log
-  was replaced, or one that is no cursor of this server's, gets a
-  `reset`, never a silent skip.
+  event. A resume is a request like any other: the server authorizes it
+  against the session before it sends an event, as it does a fresh
+  follow, and refuses it as `no_session` when the caller may not read
+  the session. An event ID says where a follow was; it does not say
+  who may follow (Security considerations). A cursor the server can no
+  longer resume from, because the log was replaced, or one that is no
+  cursor of this server's, gets a `reset`, never a silent skip.
 - A `reset` is also what answers a resume cursor from a session that was
   deleted and created again under the same ID: the client gets the new
   session read afresh, as another session, and drops what it derived
@@ -588,10 +592,13 @@ later one, as RFC 0002's Sessions say.
     first line is refused is answered with that line's problem, as a
     single append's refusal, with nothing applied.
   - A complete line is taken as written, its parent included: a null
-    parent is a root, and the server puts the session's head to none
-    before appending it, as a writer appending a root has reset its
-    leaf. A line whose `id` is missing or empty is incomplete, and the
-    server fills it as a store fills an entry it is handed: the time now
+    parent is the universal root, and the line an ordinary append
+    there, which continues when the head is the root and is otherwise a
+    branch that leaves the head where it is (RFC 0002, Append). A writer
+    that wants the head on the entry moves it by the compare-and-swap
+    below once it is appended. A line whose `id`
+    is missing or empty is incomplete, and the server fills it as a
+    store fills an entry it is handed: the time now
     for a missing or zero `ts`, the session's head for a missing or null
     `parent`, and the ID the line then hashes to. Only a complete line
     can say its parent is null.
@@ -625,16 +632,24 @@ later one, as RFC 0002's Sessions say.
   that fails after the append was accepted cuts the entries back out of
   the log (RFC 0002, Following a log), and the response is an error:
   the entries did not land, and followers get a `reset`.
-- **Head** is the compare-and-swap: `{"expected": e|null, "to": t,
-  "durable": bool}`, `null` meaning no head; `to` names an entry, and a
-  head is not moved to none. A store with no durable head of its own
-  moves its live head, which a later append records, and refuses
-  `durable: true` as `unsupported`. It is `head_moved` with the
-  current head on a mismatch, `no_entry` for a target that is not the
-  base or an own entry, and `head_target` for a `leaf` label. The
-  response says whether the move was committed, and `durable: true`
-  commits it before it answers, as RFC 0002 asks (Durability and
-  recovery).
+- **Head** is the compare-and-swap: `{"expected": e|null, "to": t|null,
+  "durable": bool}`, `null` being the universal root (RFC 0002, Head),
+  the empty context, in `expected` and in `to`; `to` MUST be present,
+  and a request without it is `head_target`. A session with a base is
+  refused the root as `no_entry`. Wherever this document gives a head as
+  `h|null`, `null` is the root. Every store offers it, durable on
+  request (RFC 0002, Head), so `durable: true` is never `unsupported`
+  from a store that conforms to RFC 0002 (a server over a store that
+  does not, as the reference server can be given one, refuses it so); a
+  move with `durable: false` MAY be made on the live head alone, which a
+  later append records. A store that keeps its head in its entries
+  performs a durable move by appending a `leaf` label, which followers
+  see as an `appended` with outcome `leaf_moved` rather than a `head`.
+  It is `head_moved` with the current head on a mismatch, `no_entry` for
+  a target that is not the root, the base or an own entry, and
+  `head_target` for a `leaf` label. The response says whether the move
+  was committed, and `durable: true` commits it before it answers, as
+  RFC 0002 asks (Durability and recovery).
 - **Record** is RFC 0002's declare-record: `POST /v1/sessions/{id}/record`
   makes this server the record for a session it holds as a mirror. RFC
   0002 permits it when the record has deleted the session without
@@ -752,7 +767,7 @@ A push is RFC 0002's, over the wire.
    session the sender may read holds is uploaded even when another
    tenant's session holds it.
 2. It posts `{"header": …, "entries": [own entry hashes in log order],
-   "prefix": [prefix entry hashes, root first], "head": {"expected": e,
+   "prefix": [prefix entry hashes, first entry first], "head": {"expected": e,
    "to": t, "force": bool}, "mark": "mirror"|"record", "refs": [{"name",
    "expected", "next"}]}`. `mark` is the **receiver's resulting mark**:
    `mirror` (the usual push) or `record` (a handover to the receiver).
@@ -799,7 +814,7 @@ A **fetch** needs nothing new. The fetcher reads the log with
 `durable=true`, which carries the session's header, incarnation, mark
 and head from one committed view, and reads the **closure**: the
 session's own entries from the log, and its prefix from `path` (the
-entries from the root to the base, root first, which `header.base`
+entries from the first entry to the base, first entry first, which `header.base`
 marks), with their contents, and the media the contents name. It
 admits them in its own store, and moves its head and refs under RFC
 0002's fetch rules (Exchange), which hold the head for a record. The
@@ -823,7 +838,7 @@ carry. A request refused for authentication or scope is 401 `auth` or
 
 | Code | Status | Meaning |
 |---|---|---|
-| `no_session` | 404 | no such session (also: a live follow whose session was deleted; a ref `next` naming a missing session) |
+| `no_session` | 404 | no such session (also: a session the caller may not reach; a live follow whose session was deleted; a ref `next` naming a missing session) |
 | `session_exists` | 409 | Create of an ID held under another header |
 | `session_replaced` | 409 | the incarnation differs from `If-Incarnation` |
 | `no_entry` | 404 | a parent, base, head target, ref pin or `leaf` the session (or the caller) does not hold |
@@ -833,13 +848,14 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | `ref_moved` | 409 | the ref is not at `expected`; body has the current target |
 | `ref_name` | 400 | a name or prefix that breaks RFC 0002's name rules, or conflicts with a held ref |
 | `head_moved` | 409 | the head is not `expected` (also a handover whose head did not move) |
-| `head_target` | 422 | a head target that is a `leaf` label, or not the base or an own entry |
+| `head_target` | 422 | a head move with no `to`, or one whose target is a `leaf` label |
 | `session_locked` | 409 | the session is leased or held locally |
 | `lease_lost` | 409 | the token is not the current, unexpired lease |
 | `mirror` | 409 | a local append, head move or mark change on a mirror |
 | `not_record` | 409 | a push from a store that is not the record |
 | `header_differs` | 409 | the receiver holds another session under this ID |
 | `call_id_repeated` | 409 | an append or exchange that would repeat a `call_id` |
+| `superseded` | 409 | an append of a `continued_in` link to a session that holds one naming another successor |
 | `synthetic` | 422 | a `leaf` label carrying `synthetic` |
 | `bad_entry` | 422 | malformed: `id` differs, reserved member, `ts` form, not I-JSON, unknown prefix; also a pushed or created header RFC 0001 calls malformed, such as `redacted_from` without `redacted` |
 | `base_rule` | 422 | a parent that is not the base, an own entry, or null; a null parent in a session with a base |
@@ -886,6 +902,31 @@ Not carried, because they are a local operator's or a file's:
   response, is readable by anyone with read scope. A deployment MUST
   authenticate and authorize every request, over TLS, and SHOULD
   separate read, write (lease), refs, exchange and admin scopes.
+- A server MUST authorize every request against the session it names, a
+  follow resumed from an event ID or `after` included: an event ID, like
+  a hash, is not a capability. A deployment that grants a scope over
+  some sessions and not others checks each request, read or write, lease
+  and push among them, against the session in its path; a create against
+  the session it creates and, for a fork, the session it names as its
+  origin and its `base`, which the caller reaches only through a session
+  it may read (a refused base is `no_entry`); and a ref update or a
+  pushed ref against the session it moves the ref to, the session the
+  ref names now and the one its `expected` names, a ref the caller may
+  not move being answered `no_ref` and a refusal never naming a target
+  the caller may not read. A ref reaches the session it names, so
+  reading one is authorized against that session too: a resolve, a log
+  or a follow of a ref whose target the caller may not read is answered
+  `no_ref`, as for a ref the server does not hold; a listing leaves such
+  refs out, a log leaves out a record naming such a session, and a
+  follow that sees the ref move onto one sends a `target` event with a
+  null target, as for a move to none. What this protects is a ref's
+  target, not its name: ref names are visible to any principal with refs
+  scope, since an update with `expected` null answered `no_ref` where
+  the same update would create a free name tells the caller the name is
+  held. A refused session is answered `no_session`, as one the server
+  does not hold, so a refusal does not confirm that the session exists.
+  A listing leaves out the sessions the caller may not read, and an
+  object is reachable only through a session the caller may read.
 - Objects are named by hash. Knowing a hash is not authorization to
   read it, and the protocol makes sure naming one is not either: the
   server reports an object held only to a caller who may read a session
@@ -918,7 +959,9 @@ allows, and the repository's nested modules exist for dependencies the
 root must not take. It ships no authentication scheme: its server
 checks each route's scope against the principal a hook the program
 supplies resolves the request to, and refuses every request without
-that hook, and its client sends whatever credentials the program's HTTP
+that hook; a second hook the program supplies, `WithAuthorize`, is
+asked about the session each request names, a resumed follow's
+included, and its client sends whatever credentials the program's HTTP
 client adds. A 401 carries the `WWW-Authenticate` challenge the program
 names, as RFC 9110 requires, since the scheme is the program's.
 
@@ -933,15 +976,18 @@ allows.
 
 The second is the writer: create, delete, leases (acquire, renew,
 release, break), append with `Idempotency-Key`, commit and the head
-compare-and-swap where the store has them (the `cas` store's `Sync` and
-`SetHead`), and ref updates, under the scopes `write`, `refs` and
-`admin`. Its client is the library's `Store` and `Writer`: `Create` and
+compare-and-swap (the `cas` store's `Sync`, and every store's
+`SetHead`, the library's `HeadStore`, which a file store performs by
+appending a `leaf` label), and ref updates, under the scopes `write`,
+`refs` and `admin`. Its client is the library's `Store` and `Writer`: `Create` and
 `Open` take a lease and renew it until `Release`, `Delete` or `Close`;
 an append is prepared on the client's session and sent as a complete
 line, and when the writer moved its session's leaf the client first
-moves the server's head there by compare-and-swap, so the record's head
-is the writer's leaf. The library's store suite runs through it over
-the memory, JSONL and `cas` stores. Two things in it are the reference
+moves the server's head there by compare-and-swap, and after a first
+entry the writer's session continues, its leaf reset to the root, it
+moves the head onto that entry, so the record's head is the writer's leaf. Its `SetHead` is
+the durable compare-and-swap. The library's store suite runs through
+it over the memory, JSONL and `cas` stores. Two things in it are the reference
 server's and not the protocol's:
 - **Tokens.** The reference stores keep no lease state, so the server
   keeps its lease table in memory beside the store's hold, which a lease
@@ -974,8 +1020,10 @@ by hash. Three things in it are the reference server's:
   collects them as any unreferenced object, and the server keeps in
   memory which principal uploaded each, for `upload_grace_ms`. An
   operator sweeps with at least that grace.
-- **Read scope reads every session**, so an object a session holds is
-  reachable by every reader; per-session authorization would narrow it.
+- **Read scope reads every session** unless the program authorizes per
+  session (`WithAuthorize`), so an object a session holds is reachable
+  by every reader; with the hook, only through a session the caller may
+  read.
 
 The fourth is the remaining reads. The log read and `durable=true`
 (log and follow) are served over a store that reads its log record by
@@ -1012,7 +1060,8 @@ leaves, each the reference server's choice and not the protocol's:
   `Session`, which would claim the whole session.
 - **The principal of a push or an append** is not recorded (Open
   questions), reach is computed by reading the store's sessions rather
-  than from an index, and read scope reads every session.
+  than from an index, and read scope reads every session unless the
+  program authorizes per session.
 
 The whole implementation is:
 - **A server** that wraps a store the reference library offers, with

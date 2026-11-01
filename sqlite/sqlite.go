@@ -416,17 +416,23 @@ func infoName(line string) string {
 	return probe.Name
 }
 
-// Close runs PRAGMA optimize and closes both pools.
+// Close lets every hold go, runs PRAGMA optimize and closes both pools.
+// The first error is returned.
 func (s *Store) Close() error {
 	s.mu.Lock()
+	var err error
 	for id := range s.open {
-		s.releaseLocked(id)
+		if rerr := s.releaseLocked(id); err == nil {
+			err = rerr
+		}
 	}
 	s.mu.Unlock()
 	if !s.readOnly {
 		_, _ = s.w.Exec("PRAGMA optimize")
 	}
-	err := s.w.Close()
+	if werr := s.w.Close(); err == nil {
+		err = werr
+	}
 	if rerr := s.r.Close(); err == nil {
 		err = rerr
 	}
@@ -828,6 +834,8 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 // insert fails the cached session is dropped so the next Open reloads
 // the database's view. The first append to a session whose header names
 // an earlier minor raises the header's format in the same transaction.
+// As with the jsonl store, the session holds e itself once Append
+// returns, so the caller does not change it afterwards.
 func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Entry) (string, error) {
 	if s.readOnly {
 		return "", agentsession.ErrReadOnly
@@ -839,11 +847,44 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 		return "", err
 	}
 	if s.redactedOnly {
-		if err := agentsession.CheckRedacted(sess.Header(), []agentsession.Entry{e}); err != nil {
+		if err := agentsession.CheckRedactedIn(sess, []agentsession.Entry{e}); err != nil {
 			return "", err
 		}
 	}
 	defer s.hub.Notify(sessionID)
+	return s.appendLocked(ctx, sess, sessionID, e)
+}
+
+// row is one entry's row in the entries table.
+type row struct {
+	seq    int
+	id     string
+	parent any
+	typ    string
+	line   string
+}
+
+// rowOf is e's row at seq.
+func rowOf(e agentsession.Entry, seq int) (row, error) {
+	line, err := agentsession.MarshalEntry(e)
+	if err != nil {
+		return row{}, err
+	}
+	b := e.Base()
+	var parent any
+	if b.Parent != "" {
+		parent = b.Parent
+	}
+	return row{seq: seq, id: b.ID, parent: parent, typ: e.EntryType(), line: string(line)}, nil
+}
+
+// appendLocked appends e to sess, the store's open session, in one
+// transaction. When e would read back as the head, a branch, which RFC
+// 0002 says leaves the head in place, the leaf label that keeps the
+// head ([agentsession.Session.LeafMarkNeeded]) goes in the same
+// transaction, since the store keeps its head only in its entries. The
+// caller holds s.mu.
+func (s *Store) appendLocked(ctx context.Context, sess *agentsession.Session, sessionID string, e agentsession.Entry) (string, error) {
 	// Prepare holds the entry to the rules a writer is held to, which
 	// Commit, a read path's, does not apply.
 	if _, err := sess.Prepare(e); err != nil {
@@ -859,15 +900,23 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 		return r.ID, nil
 	}
 	id := r.ID
-	line, err := agentsession.MarshalEntry(e)
+	first, err := rowOf(e, sess.Len())
 	if err != nil {
 		delete(s.open, sessionID)
 		return "", err
 	}
-	b := e.Base()
-	var parent any
-	if b.Parent != "" {
-		parent = b.Parent
+	rows := []row{first}
+	if mark := sess.LeafMarkNeeded(); mark != nil {
+		if _, err := sess.Commit(mark); err != nil {
+			delete(s.open, sessionID)
+			return "", fmt.Errorf("sqlite: keep the head of %s: %w", sessionID, err)
+		}
+		kept, err := rowOf(mark, sess.Len())
+		if err != nil {
+			delete(s.open, sessionID)
+			return "", err
+		}
+		rows = append(rows, kept)
 	}
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
@@ -889,10 +938,12 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	if raised {
 		err = raiseFormat(ctx, tx, sessionID)
 	}
-	if err == nil {
-		_, err = tx.ExecContext(ctx,
-			`INSERT INTO entries (session_id, seq, id, parent, type, line) VALUES (?, ?, ?, ?, ?, ?)`,
-			sessionID, sess.Len(), id, parent, e.EntryType(), string(line))
+	for _, rw := range rows {
+		if err == nil {
+			_, err = tx.ExecContext(ctx,
+				`INSERT INTO entries (session_id, seq, id, parent, type, line) VALUES (?, ?, ?, ?, ?, ?)`,
+				sessionID, rw.seq, rw.id, rw.parent, rw.typ, rw.line)
+		}
 	}
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at = ? WHERE id = ?`, stamp(time.Now()), sessionID)
@@ -909,7 +960,7 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 	if err != nil {
 		delete(s.open, sessionID)
 		if isSeqConflict(err) {
-			s.refused[sessionID] = fmt.Errorf("%w: entry %s at seq %d", ErrConcurrentWriter, id, sess.Len())
+			s.refused[sessionID] = fmt.Errorf("%w: entry %s at seq %d", ErrConcurrentWriter, id, first.seq)
 			return "", s.refused[sessionID]
 		}
 		return "", fmt.Errorf("sqlite: insert entry %s: %w", id, err)
@@ -918,6 +969,35 @@ func (s *Store) Append(ctx context.Context, sessionID string, e agentsession.Ent
 		delete(s.stale, sessionID)
 	}
 	return id, nil
+}
+
+// SetHead implements [agentsession.HeadStore]. The store keeps a
+// session's head only in its entries, so the move is a leaf label for
+// to, appended under the store's lock after the compare
+// ([agentsession.Session.HeadLabel]) in a transaction of its own, which
+// is committed when SetHead returns. The session Open returned sees it
+// as that label's append. A store set with [WithRedactedOnly] takes the
+// label too: it carries no content to have been redacted.
+func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.readOnly {
+		return agentsession.ErrReadOnly
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, err := s.openLocked(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	label, err := sess.HeadLabel(expected, to)
+	if err != nil {
+		return err
+	}
+	defer s.hub.Notify(sessionID)
+	_, err = s.appendLocked(ctx, sess, sessionID, label)
+	return err
 }
 
 // isSeqConflict reports whether an insert failed on the entries
@@ -1035,19 +1115,27 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 // this store has the session loaded again at its next append, or is
 // refused with ErrSessionLocked if another process took it meanwhile,
 // and the Session it was handed no longer follows the store.
-func (s *Store) Release(id string) {
+//
+// An error says the hold could not be deleted: the session is
+// forgotten here all the same, and the hold stays until its holder's
+// process is found gone or BreakLock clears it.
+func (s *Store) Release(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.releaseLocked(id)
+	return s.releaseLocked(id)
 }
 
-func (s *Store) releaseLocked(id string) {
+func (s *Store) releaseLocked(id string) error {
+	var err error
 	if _, ok := s.open[id]; ok && !s.readOnly {
-		_, _ = s.w.Exec(`DELETE FROM holders WHERE session_id = ? AND token = ?`, id, s.token)
+		if _, err = s.w.Exec(`DELETE FROM holders WHERE session_id = ? AND token = ?`, id, s.token); err != nil {
+			err = fmt.Errorf("sqlite: release %s: %w", id, err)
+		}
 	}
 	delete(s.open, id)
 	delete(s.refused, id)
 	delete(s.stale, id)
+	return err
 }
 
 // LockHolder reports who holds a session, or nil when it is free. A
@@ -1155,8 +1243,11 @@ func isConstraint(err error) bool {
 }
 
 var (
-	_ agentsession.Store    = (*Store)(nil)
-	_ agentsession.Reader   = (*Store)(nil)
-	_ agentsession.RefStore = (*Store)(nil)
-	_ agentsession.Importer = (*Store)(nil)
+	_ agentsession.Store     = (*Store)(nil)
+	_ agentsession.Reader    = (*Store)(nil)
+	_ agentsession.RefStore  = (*Store)(nil)
+	_ agentsession.Importer  = (*Store)(nil)
+	_ agentsession.HeadStore = (*Store)(nil)
+	_ agentsession.Follower  = (*Store)(nil)
+	_ agentsession.Releaser  = (*Store)(nil)
 )

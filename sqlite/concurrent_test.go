@@ -47,7 +47,9 @@ func TestSessionHold(t *testing.T) {
 	if _, err := a.Open(ctx, "shared"); err != nil {
 		t.Errorf("a.Open of its own session: %v", err)
 	}
-	a.Release("shared")
+	if err := a.Release("shared"); err != nil {
+		t.Fatal(err)
+	}
 	if holder, _ := a.LockHolder(ctx, "shared"); holder != nil {
 		t.Errorf("holder after Release = %+v", holder)
 	}
@@ -88,9 +90,13 @@ func TestHoldLost(t *testing.T) {
 	if _, err := a.Append(ctx, "shared", agentsession.NewItemEntry(openresponses.UserText("again"))); !errors.Is(err, sqlite.ErrSessionLocked) {
 		t.Errorf("second a.Append = %v, want still refused", err)
 	}
-	b.Release("shared")
+	if err := b.Release("shared"); err != nil {
+		t.Fatal(err)
+	}
 	// After an explicit reload a sees b's entry and continues.
-	a.Release("shared")
+	if err := a.Release("shared"); err != nil {
+		t.Fatal(err)
+	}
 	reloaded, err := a.Open(ctx, "shared")
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +200,9 @@ func TestReadOnlyStore(t *testing.T) {
 	if _, err := writer.Append(ctx, "held", &agentsession.InfoEntry{Name: "still writing"}); err != nil {
 		t.Errorf("the holder's append after a read-only open: %v", err)
 	}
-	reader.Release("held")
+	if err := reader.Release("held"); err != nil {
+		t.Fatal(err)
+	}
 	again, err := reader.Open(ctx, "held")
 	if err != nil {
 		t.Fatal(err)

@@ -7,6 +7,138 @@ versions may break the API.
 
 ## Unreleased
 
+- **The universal root (RFC 0001 Terminology; RFC 0002 Sessions,
+  Append, Head; RFC 0003 Writing).** Every session hangs from one root,
+  shared by all, which `parent: null` spells on the wire; a session is
+  one tree, an entry with a null parent is a first entry, and what was a
+  second root is a branch at the root. The head may rest on the root,
+  the empty context, which replaces "no head": `HeadStore.SetHead`
+  takes `""` for the root as expected and as target in every store and
+  the remote client, a session with a base excepted (`ErrNoEntry`), and
+  the next append with no parent continues from it. A file store records
+  it as a `leaf` label whose `target` is `null`, which a reader honours
+  (RFC 0001 0.14); `LabelEntry` writes an empty `Target` as `null`. Over
+  the wire `null` is the root in a head move's `expected` and `to`; a
+  move with no `to` is still `head_target`. No line and no hash moves.
+
+- **A branch leaves the head in place across a reopen in `jsonl` and
+  `sqlite` (RFC 0002, Head).** Both keep a session's head only in its
+  lines, which a reader resolves to the newest line under the `leaf`
+  label in force or the last line, so a branch, a root among them, read
+  back as the head. After such an append they now append a `leaf` label
+  for the head, in the entry's write and sync (jsonl, the label ahead of
+  the entry, so a torn tail loses the entry and not the label) or its
+  transaction (sqlite). **Added:
+  `Session.LeafMarkNeeded`**, the label a store of lines appends, or nil.
+  A follower of such a store sees the label after the branch.
+  (#201, #256)
+
+- **Added: `Releaser`**, the root interface for a store that holds the
+  sessions it opens, implemented by `jsonl.Store`, `cas.Store`,
+  `sqlite.Store` and `remote.Client`; the remote server lets a store's
+  hold go through it when a lease ends. **Changed: `sqlite.Store.Release`
+  returns an error (breaking)**, the failure to delete the hold, which
+  it dropped; its old signature missed the server's assertion, so a
+  server over SQLite never let a session's hold go when a lease ended.
+  `sqlite.Store` now asserts `agentsession.Follower`, which it
+  implemented. (#257)
+- `jsonl.Store.Append` and `sqlite.Store.Append` say that the session
+  holds the caller's entry itself once they return. (#255)
+
+- **Fixed: a member the format does not define inside a `parents`
+  element survives a commit.** `EntryRef` keeps such members and writes
+  them back, as RFC 0001 requires of every object it defines, so an
+  extension entry whose `parents` element carried one no longer lost it
+  on `Commit`, `Append` or a migration, which changed its `id`. The
+  conformance fixture `parents-extra` holds an extension entry and a
+  core entry with one, and RFC 0001's Conformance list names the case.
+  (#239)
+
+- **A session continues once, and continuing a named session follows
+  its chain (RFC 0002, Refs and continuation; RFC 0001, `link`).** A
+  session holds at most one `continued_in` link, and a writer continues
+  the session at the end of the chain from a ref's target, moving the
+  ref by compare-and-swap from its literal target. **Changed:**
+  `Continue` refuses a session that already holds a `continued_in` link
+  with `ErrSuperseded`, and every store refuses a second `continued_in`
+  link naming another successor with it, checked in `Session.Prepare`
+  under the lock the store appends under, so two concurrent `Continue`
+  calls land one link and the loser deletes its successor;
+  `MemoryStore` now serialises its appends to make that one step. And
+  `ContinueRef` continues the session
+  `ResolveCurrent` finds rather than the ref's target, which forked the
+  chain when the ref was behind. **Added: `remote.CodeSuperseded`**
+  (`superseded`, 409), RFC 0003's code for that refusal, which was a
+  `store_fault`. (#222)
+
+- **Every store offers the head compare-and-swap, durable on request
+  (RFC 0002, Head; RFC 0003, Writing).** RFC 0002 asked it of every
+  store while RFC 0003 let a store without a durable head refuse
+  `durable: true` as `unsupported`; that carve-out is gone. A store that
+  keeps sessions as RFC 0001 files, or its head only in its entries,
+  moves the head by appending a `leaf` label for the target under its
+  lock after the compare. **Added: `HeadStore`**, with `ErrHeadMoved`
+  and `ErrHeadTarget`, implemented by `MemoryStore`, `jsonl.Store`,
+  `sqlite.Store`, `cas.Store` and `remote.Client`, and
+  `Session.HeadLabel`, the compare and the label a file store appends.
+  A store set to hold only redacted entries offers it too: redaction is
+  a property of what was run over an entry's content, and RFC 0002's
+  Redacted sessions now applies a redacted-only store's check to
+  entries carrying content, not to a `leaf` label holding nothing beyond
+  its target, which must name an entry of the session. **Added:
+  `HeadMove`**, which `CheckRedacted` passes, and `CheckRedactedIn`,
+  which checks an entry against the session it joins; a redacted-only
+  store now takes such a label by `Append` too. The store
+  suite gains a `Head` case. **Changed:** `cas.ErrHeadMoved`, `cas.ErrHeadTarget`,
+  `remote.ErrHeadMoved` and `remote.ErrHeadTarget` are the root's
+  sentinels, so one `errors.Is` matches every store; `cas.SetHead`
+  refuses a leaf label with `ErrHeadTarget`. A remote `PUT …/head`
+  without `durable` moves the live head only, as RFC 0003 allows, over
+  every store; over `cas` it was durable whatever was asked, and the
+  client's own head moves before an append ask for none. (#201, #202)
+- **A root appended to a session with a head is a branch, and the head
+  does not move (RFC 0002, Append; RFC 0003, Writing).** RFC 0003 had
+  the server put the head to none first, so the root continued, against
+  RFC 0002. A writer that wants the head on the root moves it by the
+  compare-and-swap. **Changed:** an entry whose ID the caller set and
+  whose parent is empty is a root: `Session.Append`, `Prepare` and every
+  store no longer fill its parent from the leaf, which refused it as
+  `ErrBadID`; an entry without an ID is still filled from the leaf. The
+  remote server no longer resets its head before a root, and the remote
+  client, whose writer continued a root by resetting its leaf, moves the
+  server's head onto it after the append. (#256)
+
+- **Security: every request to the store protocol is authorized against
+  the session it names, a resumed follow included.** RFC 0003 says so
+  under Following and Security considerations: an event ID, like a hash,
+  is not a capability, and a refused session is answered `no_session`. A
+  follow resumed from `Last-Event-ID` or `after` went straight to the
+  session's shared follower without reading the store, so a program that
+  authorized sessions in a store wrapper served any reader who held
+  another principal's event ID. **Added: `remote.WithAuthorize`** and
+  its `Authorizer`, asked on every route under `/v1/sessions/{id}`, on a
+  create (and a fork's origin, and its base, which must be reachable
+  through a session the caller may read), on a ref update or pushed ref
+  for the session it moves to and for its current and expected targets
+  (refused as `no_ref`, naming neither), on a ref's resolve, log, follow
+  and listing for the session its target names (a refused ref is
+  `no_ref`), for each session in a listing, and for each session an
+  object is reached through. Without it a scope still covers every
+  session, as before. (#221)
+
+- **Dependencies:** `openresponses` v0.0.17, from v0.0.13, in the root
+  and the `sqlite` and `otel` modules. It never takes a member the
+  request type declares from `Request.Extra`, and its struct drops a
+  declared member recorded empty (`"stream":false`, `"include":[]`) and
+  cannot hold some values (`"metadata":{"n":1}`). So the request hash
+  no longer goes through it: **Added: `Settings.RequestJSON` and
+  `Context.RequestJSON`**, the rebuilt request as JSON with every
+  recorded member exactly as recorded, which `Verify`, `RequestHashFor`
+  and `SetRequestHash` hash, and `Continue` builds the successor's
+  config from the settings directly. `Settings.Request` decodes a
+  declared member such as `temperature` into its field, and errors on
+  one its field cannot hold. No request hash and no fixture moves.
+
 - **RFC 0001 defines `host` and `instance` in `env`'s `workspace`
   (0.14, unreleased).** `host` names the machine the file system is on,
   `instance` which file system among those the rest of `workspace`

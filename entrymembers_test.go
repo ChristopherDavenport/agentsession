@@ -305,6 +305,11 @@ func fillValue(t *testing.T, v reflect.Value, name string) {
 	case reflect.Struct:
 		fillStruct(t, v)
 	case reflect.Interface:
+		if v.Type().NumMethod() == 0 {
+			// An Extra value: a string decodes back as itself.
+			v.Set(reflect.ValueOf(fillString(name)))
+			return
+		}
 		t.Fatalf("fillValue: no filler for interface field %s (%s)", name, v.Type())
 	default:
 		t.Fatalf("fillValue: no filler for field %s of kind %s", name, v.Kind())

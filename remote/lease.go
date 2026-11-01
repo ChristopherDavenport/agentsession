@@ -122,7 +122,7 @@ func (h *Handler) end(st *held) {
 // releaseHold lets the store's hold on a session go, for a store that
 // keeps one.
 func (h *Handler) releaseHold(id string) {
-	if r, ok := h.store.(interface{ Release(string) error }); ok {
+	if r, ok := h.store.(agentsession.Releaser); ok {
 		if err := r.Release(id); err != nil {
 			h.logError(err)
 		}
