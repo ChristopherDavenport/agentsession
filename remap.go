@@ -230,7 +230,10 @@ func specialsOf(e Entry) []special {
 // names one predecessor and so must name what stands in the left-out
 // entry's place (RFC 0001, Leaving entries out): a target, a from, a
 // first_kept, images' before or an omitted part's of. A leaf label's
-// target is not refused: it names the universal root, as parent does.
+// target is not refused: it names the universal root, as parent does. A
+// cancel notice's target is refused too, and a writer leaves the notice
+// out with the link it names, since nothing standing in a link's place
+// is a link.
 var ErrNoPlace = errors.New("agentsession: a member naming one entry has nothing in the place of the entry left out")
 
 // Remap says where the references [RemapRefs] meets now point. A

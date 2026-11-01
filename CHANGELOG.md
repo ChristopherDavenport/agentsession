@@ -68,25 +68,26 @@ versions may break the API.
 - **What leaving entries out means, member by member (RFC 0001 0.14,
   Leaving entries out).** A left-out entry's place is the placeholder
   covering it, or else the nearest entry kept above it; a member naming
-  one predecessor (`parent`, a `target`, `from`, `first_kept`, `images`'
-  `before`, `of`) names that place, and a member naming one element of
-  a set (a `parents` element, an `omit` or `outputs` item, `queued_from`,
-  `from_link`) loses the element. A call's dispatches, decisions and
-  outputs go with it, a drained `queued` entry with its item, a run end
-  is recomputed or left out, and a pin follows its source. Two rules
+  one predecessor (`parent`, a label's, an outcome's or a `judged_by`
+  link's `target`, `from`, `of`) names that place, and `first_kept` and
+  `images`' `before`, which bound a range from below, name the first
+  entry written after it. A member listing entries, or recording where
+  an item came from (a `parents` element, an `omit` or `outputs` item,
+  `queued_from`, `from_link`), loses the entry. A call's dispatches,
+  decisions, outputs and links go with it, a cancel notice with the
+  link it names, a drained `queued` entry with its item, a run end is
+  recomputed or left out, and a pin follows its source. Two rules
   tighten: a redactor that changes a pin's source changes the pin, and
   `first_kept` names an entry before its compaction, with a placeholder
   written when a redaction leaves every entry from it out. **Added:
   `ErrNoPlace`, `Remapped.Dropped` and `Remap.Bound`**; a `Remap`
   callback that returns an empty ID says the entry was left out with
-  nothing in its place, and `RemapRefs` removes the set members that
-  named it, removes a list it empties and an `omit` left naming nothing
-  (an empty one would clear what is in force), points `parent`, and a
-  `leaf` label's `target`, at the root, and refuses any other member
-  with `ErrNoPlace`. `first_kept` and `images`' `before` bound a range
-  from below, so a left-out entry is replaced there by the first entry
-  written after it, which `Remap.Bound` returns, and not by the entry
-  above it that `Entry` returns. (#253)
+  nothing in its place, and `RemapRefs` removes the members listing it,
+  removes a list it empties and an `omit` left naming nothing (an empty
+  one would clear what is in force), points `parent`, and a `leaf`
+  label's `target`, at the root, and refuses any other member with
+  `ErrNoPlace`. `Remap.Bound` maps `first_kept` and `before`, so they
+  never name the entry above a left-out one that `Entry` returns. (#253)
 
 - **Which form a sidecar session's request hash covers (RFC 0001 0.14,
   Request hash).** The request as recorded, each `sidecar:` URL as the

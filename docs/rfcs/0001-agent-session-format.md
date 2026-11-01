@@ -2092,8 +2092,8 @@ the redaction wrote, or the universal root when it wrote none. A member
 that named the left-out entry then follows the rule for its kind:
 
 - A member naming one predecessor names what stands in the left-out
-  entry's place: `parent`; the `target` of a `label`, an `outcome`, a
-  `judged_by` link and a cancel notice; a `branch_summary`'s `from`;
+  entry's place: `parent`; the `target` of a `label`, an `outcome` and a
+  `judged_by` link; a `branch_summary`'s `from`;
   and `instructions_omitted`'s `of`. A compaction's `first_kept` and
   `images`' `before` bound a range from below and have a place of their
   own, below. A redactor MUST NOT remove such a member. Where the
@@ -2113,11 +2113,16 @@ that named the left-out entry then follows the rule for its kind:
   adding nothing. An `outputs` whose `items` is removed keeps its
   `text`, which it still sets.
 - An entry of a call goes with the call: a redactor that leaves out a
-  `function_call`'s entry leaves out every `dispatch`, `decision` and
-  `function_call_output` entry of that call, a withdrawal and an output
-  marked `failed` among them, since each says what became of a call the
+  `function_call`'s entry leaves out every `dispatch`, `decision`,
+  `function_call_output` and `link` entry of that call, the links that
+  carry its `call_id`, a withdrawal, an output marked `failed` and a
+  cancel notice among them, since each says what became of a call the
   file no longer holds. A withdrawal also goes with the `dispatch` it
-  follows, which it would otherwise not follow.
+  follows, which it would otherwise not follow, and a cancel notice
+  with the link its `target` names: neither a placeholder nor an entry
+  above the link is a link, and `link` forbids a notice naming one, so
+  a notice's `target` is never re-pointed to what stands in a link's
+  place.
 - A member that bounds a range from below, a compaction's `first_kept`
   and `images`' `before` in a `config` and in a compaction's
   checkpoint, names the entry it bounds from and none above it: the
