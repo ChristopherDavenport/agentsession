@@ -358,7 +358,13 @@ func redact(t *testing.T, orig *Session, f func(string) string, profile string, 
 	h.Base = ""
 	h.Redacted = true
 	h.RedactedFrom = &RedactedFrom{Session: oh.ID, Profile: profile}
-	red := New(h)
+	// The entries are committed to a session with no base, so a fork's
+	// prefix is committed as entries of its own; the promise of records,
+	// which covers own entries alone, is the written header's, with the
+	// base, and not the one the commits are checked under.
+	building := h
+	building.Records = nil
+	red := New(building)
 	rw := NewRewriter(f).Alongside(func(session string) bool { _, ok := with[session]; return ok })
 	var order []string
 	for i, e := range orig.Entries() {
@@ -417,6 +423,11 @@ func redact(t *testing.T, orig *Session, f func(string) string, profile string, 
 	}
 	if back.Len() != orig.Len() {
 		t.Errorf("%d entries, original %d", back.Len(), orig.Len())
+	}
+	if orig.VerifyRecords(orig.Leaf()) == nil {
+		if err := back.VerifyRecords(back.Leaf()); err != nil {
+			t.Errorf("the redaction's records do not verify: %v", err)
+		}
 	}
 	if bh := back.Header(); !bh.Redacted || bh.RedactedFrom == nil || bh.RedactedFrom.Session != oh.ID || bh.RedactedFrom.Profile != profile || bh.Base != h.Base {
 		t.Errorf("header %+v", bh)

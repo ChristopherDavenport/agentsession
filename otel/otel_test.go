@@ -1066,31 +1066,30 @@ func TestCopiedCallHasNoSpan(t *testing.T) {
 func TestHandOffEndsAtItsResult(t *testing.T) {
 	sr, tracer := recorder()
 	s := agentsession.New(agentsession.Header{ID: "returned", Records: agentsession.AllRecords})
-	if _, err := s.Append(agentsession.NewRunStart("r1", agentsession.SourceInput, "")); err != nil {
-		t.Fatal(err)
-	}
-	var targets []string
-	for _, id := range []string{"a", "b"} {
-		target, err := s.Append(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_" + id, CallID: id, Name: "fetch_" + id, Arguments: "{}"}})
+	// Fixed times, a minute apart, so the result's and the output's
+	// differ whatever the clock does.
+	at := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	add := func(e agentsession.Entry) string {
+		t.Helper()
+		at = at.Add(time.Minute)
+		e.Base().Timestamp = at
+		id, err := s.Append(e)
 		if err != nil {
 			t.Fatal(err)
 		}
-		targets = append(targets, target)
+		return id
 	}
-	for _, e := range []agentsession.Entry{
-		agentsession.NewDispatch("a", targets[0]),
-		agentsession.NewDispatch("b", targets[1]),
-		agentsession.NewResult("a", targets[0], openresponses.NewFunctionCallOutput("a", "ok")),
-		agentsession.NewResult("b", targets[1], openresponses.NewFunctionCallOutput("b", "ok")),
-	} {
-		if _, err := s.Append(e); err != nil {
-			t.Fatal(err)
-		}
+	add(agentsession.NewRunStart("r1", agentsession.SourceInput, ""))
+	var targets []string
+	for _, id := range []string{"a", "b"} {
+		targets = append(targets, add(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_" + id, CallID: id, Name: "fetch_" + id, Arguments: "{}"}}))
 	}
-	result := s.Entries()[len(s.Entries())-2].Base().Timestamp
-	if _, err := s.Append(agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("a", "ok"))); err != nil {
-		t.Fatal(err)
-	}
+	add(agentsession.NewDispatch("a", targets[0]))
+	add(agentsession.NewDispatch("b", targets[1]))
+	add(agentsession.NewResult("a", targets[0], openresponses.NewFunctionCallOutput("a", "ok")))
+	result := at
+	add(agentsession.NewResult("b", targets[1], openresponses.NewFunctionCallOutput("b", "ok")))
+	add(agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("a", "ok")))
 	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
 		t.Fatal(err)
 	}

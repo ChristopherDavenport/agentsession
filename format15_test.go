@@ -178,10 +178,10 @@ func copiedAnswerFixture(t *testing.T) (origin, fork *Session) {
 	omust(NewSubsessionLink(copiedAnswerChildID, "call_agent"))
 	out := omust(NewItemEntry(openresponses.NewFunctionCallOutput("call_agent", "TestFollow races the poller.")))
 
-	// The fork promises no records: a redaction that writes its prefix
-	// as entries of its own, as TestRedactionVerifies does, would make
-	// the prefix call one the promise covers, with no dispatch.
-	fork, err := Fork(origin, base, Header{ID: copiedAnswerForkID, CreatedAt: origin.Header().CreatedAt.Add(time.Hour), Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj"})
+	// The fork promises dispatch and decision records, as a harness's
+	// fork does; the prefix call is its origin's, which the promise does
+	// not cover, so the answer needs no dispatch here.
+	fork, err := Fork(origin, base, Header{ID: copiedAnswerForkID, CreatedAt: origin.Header().CreatedAt.Add(time.Hour), Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: AllRecords})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,6 +429,9 @@ func TestCopiedAnswerFixture(t *testing.T) {
 	checkBuilt(t, "copied-answer")
 	origin, _ := copiedAnswerFixture(t)
 	s := loadFixture(t, "copied-answer")
+	if !s.Header().HasRecord(TypeDispatch) || !s.Header().HasRecord(TypeDecision) {
+		t.Errorf("the fork promises %v", s.Header().Records)
+	}
 	if err := s.VerifyRecords(s.Leaf()); err != nil {
 		t.Errorf("VerifyRecords: %v", err)
 	}
