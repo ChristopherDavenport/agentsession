@@ -66,6 +66,10 @@ type special struct {
 	// element is: 1 for a parents element, whose entry is a member of it.
 	set bool
 	up  int
+	// bound marks an entry reference that bounds a range from below,
+	// first_kept and images' before, whose left-out entry is replaced by
+	// the first entry written after it, not by one above it: [Remap.Bound].
+	bound bool
 }
 
 // applies reports whether sp names the member that holder holds.
@@ -146,7 +150,7 @@ var bodyMembers = map[string][]special{
 	TypeConfig: {
 		{path: memberPath("omit", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*ConfigEntry).Omit != nil }},
 		{path: memberPath("omit", "outputs", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { o := e.(*ConfigEntry).Omit; return o != nil && o.Outputs != nil }},
-		{path: memberPath("omit", "images", "before"), role: roleEntry, when: func(e Entry) bool {
+		{path: memberPath("omit", "images", "before"), role: roleEntry, bound: true, when: func(e Entry) bool {
 			o := e.(*ConfigEntry).Omit
 			return o != nil && o.Images != nil && o.Images.Before != ""
 		}},
@@ -154,10 +158,10 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("instructions_parts", "[]", "hash"), role: roleHash},
 	},
 	TypeCompaction: {
-		{path: memberPath("first_kept"), role: roleEntry},
+		{path: memberPath("first_kept"), role: roleEntry, bound: true},
 		{path: memberPath("config", "omit", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return !e.(*CompactionEntry).Config.Omit.IsZero() }},
 		{path: memberPath("config", "omit", "outputs", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*CompactionEntry).Config.Omit.Outputs != nil }},
-		{path: memberPath("config", "omit", "images", "before"), role: roleEntry, when: func(e Entry) bool { i := e.(*CompactionEntry).Config.Omit.Images; return i != nil && i.Before != "" }},
+		{path: memberPath("config", "omit", "images", "before"), role: roleEntry, bound: true, when: func(e Entry) bool { i := e.(*CompactionEntry).Config.Omit.Images; return i != nil && i.Before != "" }},
 		{path: memberPath("config", "instructions_parts", "[]", "hash"), role: roleHash},
 		{path: memberPath("pinned", "[]", "call_id"), role: roleCallID},
 	},
@@ -251,6 +255,17 @@ type Remap struct {
 	// predecessor and must name what stands in the place, is refused
 	// with [ErrNoPlace].
 	Entry func(session, entry string) (string, bool)
+	// Bound maps a reference that bounds a range from below, a
+	// compaction's first_kept and images' before in a config or a
+	// checkpoint, which RFC 0001 gives a place of its own: a left-out
+	// entry is replaced there by the first entry written after it on its
+	// path, since naming one above it would put that entry back into
+	// every later request, or send its images. An empty ID and true say
+	// nothing was written after it, which is refused with [ErrNoPlace].
+	// When Bound is nil, Entry maps those members too, which is right
+	// only while every entry they name was kept: a writer that leaves
+	// entries out sets it.
+	Bound func(entry string) (string, bool)
 	// Session maps a reference to a session by its ID.
 	Session func(id string) (string, bool)
 }
@@ -355,13 +370,21 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 	for _, sp := range specialsOf(e) {
 		var mapped func(at string, s string, holder map[string]any) (string, bool)
 		switch {
-		case sp.role == roleEntry && m.Entry != nil:
+		case sp.role == roleEntry && (m.Entry != nil || sp.bound && m.Bound != nil):
 			mapped = func(at, s string, holder map[string]any) (string, bool) {
 				session := ""
 				if sp.session != "" && holder != nil {
 					session, _ = holder[sp.session].(string)
 				}
-				id, ok := m.Entry(session, s)
+				var (
+					id string
+					ok bool
+				)
+				if sp.bound && m.Bound != nil {
+					id, ok = m.Bound(s)
+				} else {
+					id, ok = m.Entry(session, s)
+				}
 				switch {
 				case !ok:
 					out.Unmapped = append(out.Unmapped, Reference{At: at, Session: session, Entry: s})

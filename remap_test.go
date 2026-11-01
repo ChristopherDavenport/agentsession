@@ -868,3 +868,45 @@ func TestRemapRefsLeafLabelToRoot(t *testing.T) {
 		t.Errorf("another label: err %v, want ErrNoPlace", err)
 	}
 }
+
+// TestRemapRefsBound: a left-out entry has two places (RFC 0001, Leaving
+// entries out). parent and a target name the entry kept above it; a
+// compaction's first_kept and images' before, which bound a range from
+// below, name the first entry written after it, through Remap.Bound, or
+// the entry above would be put back into every later request. A, B
+// (left out), C, then a compaction keeping from B: first_kept is C, not
+// A.
+func TestRemapRefsBound(t *testing.T) {
+	m := Remap{
+		Entry: func(_, entry string) (string, bool) {
+			return map[string]string{"o-a": "n-a", "o-b": "n-a", "o-c": "n-c"}[entry], true
+		},
+		Bound: func(entry string) (string, bool) {
+			return map[string]string{"o-a": "n-a", "o-b": "n-c", "o-c": "n-c"}[entry], true
+		},
+	}
+	msg := `{"type":"message","role":"user","content":[]}`
+	for _, tt := range []struct{ line, want string }{
+		{
+			`{"type":"compaction","id":"x","parent":"o-b",` + tsLine + `,"first_kept":"o-b","summary":` + msg + `,"config":{"model":"m","omit":{"images":{"before":"o-b","placeholder":"p"}}}}`,
+			`{"type":"compaction","id":"x","parent":"n-a",` + tsLine + `,"first_kept":"n-c","summary":` + msg + `,"config":{"model":"m","omit":{"images":{"before":"n-c","placeholder":"p"}}}}`,
+		},
+		{
+			`{"type":"config","id":"x","parent":"o-b",` + tsLine + `,"omit":{"images":{"before":"o-b","placeholder":"p"}}}`,
+			`{"type":"config","id":"x","parent":"n-a",` + tsLine + `,"omit":{"images":{"before":"n-c","placeholder":"p"}}}`,
+		},
+	} {
+		r, err := RemapRefs(entryOf(t, tt.line), m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := canonicalEntry(t, r.Entry), withValues(t, tt.want, nil); got != want {
+			t.Errorf("remapped\n got %s\nwant %s", got, want)
+		}
+	}
+	// Nothing written after it: refused.
+	m.Bound = func(string) (string, bool) { return "", true }
+	if _, err := RemapRefs(entryOf(t, `{"type":"compaction","id":"x","parent":"o-a",`+tsLine+`,"first_kept":"o-b","summary":`+msg+`,"config":{"model":"m"}}`), m); !errors.Is(err, ErrNoPlace) {
+		t.Errorf("err %v, want ErrNoPlace", err)
+	}
+}
