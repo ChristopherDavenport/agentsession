@@ -544,11 +544,11 @@ func (c *Call) takenUpIn(in map[string]bool) bool {
 //
 // It is the shape the segment shows, which is not always what the
 // writer meant: a run started to take up a call and ended before it did
-// has an empty segment, which computes as an input. Format 0.11
-// accepts such a run written [SourceResume] as it is written, and
-// [Session.VerifyRecords] does not report it; a writer still computes
-// the source it writes at start from what it knows then, and need not
-// change.
+// has a segment that takes nothing up, which computes as an input. The
+// format accepts such a run written [SourceResume] as it is written, as
+// [Run.Empty] says, and [Session.VerifyRecords] does not report it; a
+// writer still computes the source it writes at start from what it
+// knows then, and need not change.
 func ComputeSource(r *Run) string {
 	path := r.Path
 	if path == nil {
@@ -595,18 +595,24 @@ func ComputeSource(r *Run) string {
 	return SourceInput
 }
 
-// Empty reports whether the run's segment holds no entry but its start
-// and its end, or, for a run that was cut, none after its start: a run
-// refused, or killed, before it did anything. Such a run written
-// [SourceResume] is the shape of [SourceInput], and format 0.11
-// accepts it as written, since all it shows is that its writer meant to
-// take up a call and took up nothing: [Session.VerifyRecords] does not
-// report it with [ErrSourceMismatch]. Empty tells it from a resume that
-// adds a message or an output and takes up nothing, which is still
-// reported.
+// Empty reports whether the run's segment, between its start and its
+// end, or after its start for a run that was cut, holds no entry in
+// context (an item, a config, a compaction or a branch summary) and no
+// dispatch or decision: a run refused, or killed, before it took
+// anything up, though a writer may have replayed a link onto its branch
+// or a hook annotated it. Such a run written [SourceResume] is the shape
+// of [SourceInput], and the format accepts it as written, since all it
+// shows is that its writer meant to take up a call and took up nothing:
+// [Session.VerifyRecords] does not report it with [ErrSourceMismatch].
+// Format 0.11 accepted a segment holding nothing; 0.14 accepts record
+// entries in it, in a file of any minor. Empty tells it from a resume
+// that adds a message, a setting or an output and takes up nothing,
+// which is still reported. A response, which is no entry in context,
+// does not make a segment other than empty.
 func (r *Run) Empty() bool {
 	for _, e := range r.Segment {
-		if e != Entry(r.Start) && (r.End == nil || e != Entry(r.End)) {
+		switch e.(type) {
+		case *ItemEntry, *ConfigEntry, *CompactionEntry, *BranchSummaryEntry, *DispatchEntry, *DecisionEntry:
 			return false
 		}
 	}
@@ -879,7 +885,7 @@ var ErrCallIDEmpty = errors.New("agentsession: function call has no call ID")
 // ErrSourceMismatch is returned by [Session.VerifyRecords] for a run
 // start whose source is not the shape of its segment; see
 // [ComputeSource]. A run written resume over a segment that holds
-// nothing is not one, as [Run.Empty] says.
+// record entries at most is not one, as [Run.Empty] says.
 var ErrSourceMismatch = errors.New("agentsession: run source disagrees with its segment")
 
 // ErrRejectDispatched is returned when a reject is appended for a call
@@ -926,8 +932,9 @@ var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 // no reject a dispatch but a withdrawal, every item's from_link names a
 // peer link before it, and, when the header names dispatch in records,
 // no answer ends a call with no dispatch and every call that ran has a
-// dispatch. A run written resume over a segment that holds nothing
-// agrees with it, as format 0.11 has it, in a file of any minor. The
+// dispatch. A run written resume over a segment that takes nothing up,
+// holding record entries at most, agrees with it, as [Run.Empty] says,
+// in a file of any minor. The
 // rules that rest on records apply to what the session wrote, the
 // entries after its base: a fork's prefix is another session's record,
 // kept to that session's promise. It returns the first problem found.

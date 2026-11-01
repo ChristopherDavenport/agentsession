@@ -1031,16 +1031,22 @@ Why a run started and how it ended. Two entries per run, paired by
   message the run adds before or after it, such as the approval a person
   typed, does not change that. The shape is what the writer knows when
   it writes `start`: it started the run to take up a call. A run written
-  `resume` whose segment holds no entry between its `start` and its
-  `end`, or none after its `start` when the run was cut, is accepted as
-  written: the writer started it to take up a call and the run ended
+  `resume` whose segment, between its `start` and its `end`, or after
+  its `start` to the end of the path when the run was cut, holds no
+  entry that is in context and no `dispatch` or `decision`, is accepted
+  as written: the writer started it to take up a call and the run ended
   before it did, a refusal by a subscriber to the run's start and a
-  kill among the causes, and `resume` records what it meant to do, which
-  an empty segment cannot contradict. A `resume` over a segment that
-  adds a message or an output and takes up no call is not that, and a
-  reader reports it. A reader of 0.11 applies the rule to every file it
-  reads, those of 0.9 and 0.10 included, as 0.10 applied its relaxation
-  of the `answer` rule to 0.9 files. `input`:
+  kill among the causes, and `resume` records what it meant to do,
+  which such a segment cannot contradict. Record entries (`link`,
+  `custom`, `env`, `info`, `label`, `outcome`, `queued`) do not make a
+  segment the shape of `input`: a writer that resumes may replay a
+  child's link onto a new branch, or a hook may annotate the run,
+  before the run takes its call up. A `resume` over a segment that adds
+  a message, a setting or an output and takes up no call is not that,
+  and a reader reports it. A reader of 0.14 applies the rule to every
+  file it reads, as a reader of 0.11 applied its narrower form, a
+  segment holding nothing, to files of 0.9 and 0.10, since the rule
+  only accepts what an earlier reader reported. `input`:
   otherwise, including a run that answers nothing and adds nothing, such
   as a retry after an error, which `ref` names. `ref` on `start` names
   what triggered the input (a cron name, a channel message ID). How an
@@ -2245,7 +2251,8 @@ withdrawal follows after another call's `dispatch`, read as never
 started at its run's end and dispatched again by the next, beside an
 output marked `failed`, a `run` written `resume`
 whose segment holds nothing, beside one that adds a message and is
-reported, a hand-back naming every instructions part by `hash`, those
+reported, and runs written `resume` whose segments hold record entries
+alone, one refused and one cut, a hand-back naming every instructions part by `hash`, those
 out of force among them, and its omitted list by `of`, a two-model session
 whose `omit` is written at each switch, every response hashed and
 verifying, beside the same session written as 0.10 does, and one whose
@@ -2358,6 +2365,14 @@ reader of 0.13 refuses those files until it is upgraded.
   a 0.13 file that held one under another meaning, which it was free
   to, rebuilds requests differently under 0.14, and no writer of this
   library wrote one.
+
+- A run written `resume` whose segment holds record entries alone, no
+  entry in context and no `dispatch` or `decision`, is accepted as
+  written, as 0.11 accepted one whose segment held nothing. A writer
+  that replays a child's link, or a hook that annotates the run, before
+  the run takes its call up no longer writes a run a reader reports.
+  The rule accepts only what a reader of 0.13 reported, so a reader of
+  0.14 applies it to a file of any minor.
 
 ## Changes since 0.12
 

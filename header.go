@@ -369,7 +369,8 @@ func (h *Header) fill(now time.Time) {
 // members of an env entry's workspace, an output's failed member, an
 // item's from_link, a reject's withdrawn member, which withdraws the
 // dispatch it directly follows, and omit's outputs and images, which
-// send placeholders. A 0.13 file is a 0.14 file that holds none of them, and each
+// send placeholders; and it accepts a run written resume whose segment
+// holds record entries alone. A 0.13 file is a 0.14 file that holds none of them, and each
 // is read by its form in a file of any minor.
 const FormatMinor = 14
 

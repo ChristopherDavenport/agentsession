@@ -1931,6 +1931,7 @@ var fixtures014 = map[string]func(t *testing.T) *Session{
 	"late-report":     func(t *testing.T) *Session { return lateReportFixture(t, false) },
 	"bad-late-report": func(t *testing.T) *Session { return lateReportFixture(t, true) },
 	"placeholders":    placeholdersFixture,
+	"record-resume":   recordResumeFixture,
 }
 
 // checkBuilt fails the test when testdata/sessions/<name>.jsonl is not
@@ -2326,5 +2327,105 @@ func TestPlaceholdersFixture(t *testing.T) {
 	h2, _ := contextHash(bare)
 	if h1 == h2 {
 		t.Error("the placeholders do not change the request")
+	}
+}
+
+// recordResumeFixture builds the session record-resume.jsonl holds, the
+// 0.14 sibling of empty-resume.jsonl. A charge call is held at the end
+// of the first run. The second run is written resume; the writer
+// replays the link to a subsession the call's policy check started and
+// a hook annotates the run, and then a subscriber refuses it before it
+// takes the call up. The third is written resume too, records its
+// environment and a label, and is cut; the restart closes it error. The
+// fourth takes the call up.
+func recordResumeFixture(t *testing.T) *Session {
+	t.Helper()
+	at, _ := time.Parse(time.RFC3339, "2026-11-01T12:00:00Z")
+	id := "01995b2a-0000-7000-8000-000000000024"
+	s := New(Header{ID: id, CreatedAt: at, Harness: &Harness{Name: "fixture", Version: "1"}, CWD: "/home/u/proj", Records: AllRecords})
+	s.setClock(func() time.Time { at = at.Add(time.Second); return at })
+	must, say := fixtureAppender(t, s)
+	end := func(reason, ref string) {
+		t.Helper()
+		e, err := s.EndRun(reason, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		must(e)
+	}
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewRunStart("run-1", SourceInput, ""))
+	must(NewItemEntry(openresponses.UserText("Charge the card.")))
+	sent := fixtureHash(t, s)
+	call := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_charge", Name: "charge", Arguments: "{}"}, ResponseID: "resp_1"})
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+	must(NewSubsessionLink(SubsessionID(id, "call_charge"), "call_charge"))
+	must(NewDecision("call_charge", call, VerdictHold, ByPolicy))
+	end(ReasonInputRequired, "")
+	must(NewRunStart("run-2", SourceResume, ""))
+	must(NewSubsessionLink(SubsessionID(id, "call_charge"), "call_charge"))
+	must(&CustomEntry{NS: "hook", Data: json.RawMessage(`{"note":"resume requested by the operator"}`), CallID: "call_charge"})
+	end(ReasonError, "a run_start subscriber refused the run")
+	must(NewRunStart("run-3", SourceResume, ""))
+	env := &EnvEntry{CWD: "/home/u/proj"}
+	env.SetWorkspace(WorkspaceLocal, "").Host = "laptop"
+	must(env)
+	must(NewLabelEntry(call, "resuming"))
+	end(ReasonError, "the harness stopped before the run took anything up")
+	must(NewRunStart("run-4", SourceResume, ""))
+	must(NewDecision("call_charge", call, VerdictProceed, ByHuman))
+	must(NewDispatch("call_charge", call))
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_charge", "charged")))
+	say("resp_2", "Charged.")
+	end(ReasonDone, "")
+	return s
+}
+
+// TestRecordResumeFixture reads the 0.14 conformance fixture for a
+// resume whose segment holds record entries alone: it verifies, in a
+// file of 0.13 too, its two such runs are Empty, and every run agrees
+// with its end; a resume whose segment adds a setting is still reported
+// (#229).
+func TestRecordResumeFixture(t *testing.T) {
+	raw := checkBuilt(t, "record-resume")
+	for _, format := range []string{Format, "agentsession/0.13", "agentsession/0.11"} {
+		s, err := Read(bytes.NewReader(bytes.Replace(raw, []byte(`"format":"`+Format+`"`), []byte(`"format":"`+format+`"`), 1)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.VerifyRecords(s.Leaf()); err != nil {
+			t.Errorf("%s: VerifyRecords: %v", format, err)
+		}
+		runs, err := s.Runs(s.Leaf())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var empty int
+		for _, r := range runs {
+			if r.Start.Source == SourceResume && r.Empty() {
+				empty++
+				if ComputeSource(r) != SourceInput {
+					t.Errorf("%s: run %s computes %s", format, r.RunID(), ComputeSource(r))
+				}
+			}
+		}
+		if empty != 2 || len(runs) != 4 {
+			t.Errorf("%s: %d empty resumes in %d runs, want 2 in 4", format, empty, len(runs))
+		}
+	}
+	// A setting is in context: a resume that writes one and takes
+	// nothing up is the shape of an input, and reported.
+	s := loadFixture(t, "record-resume")
+	held, _ := s.Runs(s.Leaf())
+	if err := s.Branch(held[0].End.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []Entry{NewRunStart("run-x", SourceResume, ""), &ConfigEntry{Model: "gpt-5-mini"}} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrSourceMismatch) {
+		t.Errorf("a resume that adds a setting: VerifyRecords = %v, want ErrSourceMismatch", err)
 	}
 }

@@ -7,6 +7,16 @@ versions may break the API.
 
 ## Unreleased
 
+- **A resume that wrote only record entries is accepted as written
+  (RFC 0001 0.14, `run`).** 0.11 accepted a run written `resume` whose
+  segment held nothing; a resume that replayed a child's link or a
+  hook's annotation and was then refused or cut still read as the shape
+  of an input, and `VerifyRecords` reported `ErrSourceMismatch`. Now a
+  segment holding no entry in context and no dispatch or decision is
+  accepted, in a file of any minor. **Changed: `Run.Empty`** reports
+  that shape: record entries and a response no longer make a segment
+  other than empty. Conformance fixture `record-resume.jsonl`. (#229)
+
 - **Placeholders for a tool output or a screenshot (RFC 0001 0.14,
   Items left out of the context and Context building).** `omit` gains
   `outputs`, `{"text": t, "items": [ids]}`, which sends each listed
