@@ -245,7 +245,11 @@ func (c *Client) Append(ctx context.Context, sessionID string, e agentsession.En
 // client's session, so it goes as a complete line, the same entry on a
 // retry; the server's head is first moved to the client's leaf when the
 // two differ, so the append lands where the writer's session says; and
-// the client's session takes the entry once the server has.
+// the client's session takes the entry once the server has. An entry
+// naming a sidecar blob the server cannot find for the caller is
+// refused with [ErrMissingObject], which matches [agentsession.ErrNoBlob]
+// too, and nothing is appended: the caller uploads the blob with
+// [Client.PutBlob] first.
 func (c *Client) Write(ctx context.Context, sessionID string, e agentsession.Entry) (agentsession.Result, error) {
 	if c.redactedOnly {
 		if _, ok := agentsession.RedactedOf(e); !ok {
@@ -285,6 +289,11 @@ func (c *Client) Write(ctx context.Context, sessionID string, e agentsession.Ent
 	}
 	header.Set("Content-Type", "application/x-ndjson")
 	resp, err := c.do(ctx, http.MethodPost, "/sessions/"+url.PathEscape(sessionID)+"/entries", nil, header, append(line, '\n'))
+	if errors.Is(err, ErrMissingObject) {
+		// A sidecar blob the server cannot find for the caller: upload
+		// it (PutBlob) and append again.
+		return agentsession.Result{}, fmt.Errorf("remote: append to %s: %w: %w", sessionID, agentsession.ErrNoBlob, err)
+	}
 	if err != nil {
 		return agentsession.Result{}, err
 	}

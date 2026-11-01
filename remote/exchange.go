@@ -158,6 +158,40 @@ func (h *Handler) reachable(ctx context.Context, who string, keys []objKey) (map
 	return out, nil
 }
 
+// unreachedMedia returns which of the sidecar blobs a write names the
+// caller cannot reach, in missing's shape, or nil when it reaches every
+// one. Naming a blob grants nothing (RFC 0003, Security
+// considerations): a session reaches a blob only when its writer could,
+// having uploaded it or being able to read a session that holds it, so
+// a write that names one the caller cannot reach is refused with
+// missing_object, exactly as one naming a blob the server does not hold
+// at all. The check reads no blob and asks the store nothing of one, so
+// the two answers cannot be told apart. A server whose store holds no
+// media has none to reach, and checks nothing.
+func (h *Handler) unreachedMedia(ctx context.Context, who string, names []string) (*Objects, error) {
+	if len(names) == 0 || !h.holdsMedia() {
+		return nil, nil
+	}
+	keys := make([]objKey, 0, len(names))
+	for _, b := range names {
+		keys = append(keys, objKey{cas.SpaceMedia, b})
+	}
+	ok, err := h.reachable(ctx, who, keys)
+	if err != nil {
+		return nil, err
+	}
+	missing := &Objects{Entries: []string{}, Contents: []string{}, Media: []string{}}
+	for _, k := range keys {
+		if !ok[k] {
+			missing.add(k.space, k.hash)
+		}
+	}
+	if missing.empty() {
+		return nil, nil
+	}
+	return missing, nil
+}
+
 // reachSets is the objects each of the store's sessions holds, by
 // session ID, each rebuilt when the listing's size or modified time for
 // it has changed.

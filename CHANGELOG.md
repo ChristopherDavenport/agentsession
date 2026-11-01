@@ -7,6 +7,22 @@ versions may break the API.
 
 ## Unreleased
 
+- **Naming a blob grants nothing (RFC 0002, Media; RFC 0003, Objects,
+  Writing, Import and Security considerations).** The remote server
+  counted every `sidecar:` URL in a session as a blob that session
+  reached, so a caller who appended `sidecar:<hash>` to a session of
+  his own, or imported a file with no sidecar header naming it, could
+  then `GET` another tenant's blob, and on `cas` an append's
+  `unresolved` said whether the store held a hash. Now an append, an
+  import (whatever the file's `media`) and a push that name a blob the
+  caller did not upload and cannot read through a session are refused
+  with `missing_object`, exactly as for a blob nobody holds, decided
+  without asking the store about the blob, over every store the server
+  takes (memory, jsonl, sqlite and cas). Over the wire an append naming
+  a blob the caller cannot reach is refused where it was accepted with
+  the blob unresolved: upload it first. `remote.Client`'s append then
+  matches `ErrMissingObject` and `agentsession.ErrNoBlob`.
+
 - **An import endpoint, and a push that asks first (RFC 0003, Import
   and Exchange).** `POST /v1/sessions/import` takes an RFC 0001 file
   with exchange scope, authorized as a create of its session, and hands

@@ -196,6 +196,13 @@ Media).
   as held, only objects reachable by the caller. A hash is a name, not a
   capability. Where the server's store shares one lookup table between
   contents and media (RFC 0002, Entries), the check is still per space.
+  A session reaches a media blob by naming it only because every write
+  that names one is held to the caller's reach first (RFC 0002, Media):
+  an append, an import or a push that names a blob, in an item of any
+  session whatever its `media`, is refused with `missing_object` unless
+  the caller uploaded it or may read a session that names it, so no
+  session names a blob its writer could not reach. A server whose store
+  holds no sidecar media has no blob to reach and checks none.
 - A `PUT` (exchange scope, or write scope for a `media` object) uploads
   an object. Write scope uploads media so that a writer appending a
   sidecar item can upload the blob it names, as RFC 0002's Media
@@ -615,14 +622,25 @@ later one, as RFC 0002's Sessions say.
     `leaf_moved` or `leaf_not_moved`. These name what an append did;
     they are not error codes. (`head_moved` is the compare-and-swap's
     refusal and is a different thing.)
+  - A line naming a sidecar blob the caller cannot reach (Objects,
+    Reach), one it did not upload and no session it may read names, is
+    refused with `missing_object`, its `missing` member the hashes in
+    `missing`'s shape, exactly as a line naming a blob the server does
+    not hold at all: the server decides from the caller's reach alone
+    and asks its store nothing of the blob first, so the refusal says
+    nothing of another's sessions. Where a local store accepts an
+    append naming a blob it lacks and reports it unresolved (RFC 0002,
+    Media), the wire refuses it, since the writer can upload the blob
+    (write scope uploads media) and append again.
   - `unresolved` lists references the server could not resolve: a
-    sidecar blob it lacks, or a convergence into a session it does not
-    hold. The entry is accepted, as the library accepts one, and the
-    server reports what is missing. A session with an unresolved blob
-    cannot be pushed or projected until it arrives.
+    sidecar blob the caller reaches through a session that names it and
+    the store lacks, or a convergence into a session it does not hold.
+    The entry is accepted, as the library accepts one, and the server
+    reports what is missing. A session with an unresolved blob cannot
+    be pushed or projected until it arrives.
   - Refusals are `bad_entry` family codes (below), `no_entry` for a
-    parent the session does not hold, `format`, and `mirror` on a
-    session held as a mirror.
+    parent the session does not hold, `missing_object` (above),
+    `format`, and `mirror` on a session held as a mirror.
   - **Retries.** An entry line the client builds completely, `id`,
     `parent` and `ts` set, is the same entry on a retry: the second
     append is `held`, and a `held` response with `?commit=true` still
@@ -875,9 +893,10 @@ alone can take a session whole this way, a redacted one among them.
   origin as a read and the base as reachable by the caller, as Create
   says.
 - A sidecar session's blobs are uploaded first, as `media` objects
-  (Objects). Every blob an item names that the server cannot find for
-  the caller is `missing_object`, its `missing` member the hashes in
-  `missing`'s shape. Where a local import takes the session and reports
+  (Objects). Every blob an item names that the caller cannot reach
+  (Objects, Reach), in a file of any `media`, is `missing_object`, its
+  `missing` member the hashes in `missing`'s shape, the same answer
+  whether another's session holds the blob or none does. Where a local import takes the session and reports
   such a blob unresolved (RFC 0002, Projection to JSONL), the wire
   refuses it, since the client holds the directory and can upload what
   it lacks. A server whose store holds no sidecar media refuses a
@@ -931,7 +950,7 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | `base_rule` | 422 | a parent that is not the base, an own entry, or null; a null parent in a session with a base |
 | `bad_base` | 422 | a fork whose base is a `leaf` label, or whose `media` differs from the origin's |
 | `bad_object` | 422 | bytes that do not hash to the name, an uploaded object's or an imported sidecar blob's |
-| `missing_object` | 409 | a push names objects, or an import sidecar blobs, the server cannot find for the caller; body has the hashes |
+| `missing_object` | 409 | a push names objects, or an import or an append sidecar blobs, the caller cannot reach; body has the hashes |
 | `bad_ref_target` | 422 | a pushed ref whose `next` is not the pushed session |
 | `format` | 422 | a format the server does not read, or earlier than the session's; also an append or push that would raise a header RFC 0001 forbids raising, one before 0.13 holding `redacted_from`, or whose entries hold `redacted` |
 | `not_redacted` | 403 | a create, append, push or fetch that would bring a session whose header does not carry `redacted`, or an entry that carries no `redacted`, into a store that holds only redacted entries |
@@ -1003,7 +1022,13 @@ Not carried, because they are a local operator's or a file's:
   that holds it (`missing`, `GET`, `HEAD`), a push must upload every
   object not so reachable, a fork's `base` and a `path`'s `leaf` are
   authorized against the sessions holding them, and an object response
-  is `private`. A push, and its check, hold a fork only to an origin
+  is `private`. Naming an object or a blob in a write grants nothing
+  either: an append, an import or a push whose entries name a blob the
+  caller cannot reach is refused with `missing_object`, the answer for
+  a blob nobody holds, decided from the caller's reach without asking
+  the store whether the blob exists, so the write confers no reach on
+  its session and its answer is no existence oracle (RFC 0002, Media).
+  A push, and its check, hold a fork only to an origin
   the caller may read: one it may not is as one the server does not
   hold, so `bad_base` cannot tell a caller that another's session holds
   a hash, or in which `media`. A dedup that answered "already stored" to anyone would

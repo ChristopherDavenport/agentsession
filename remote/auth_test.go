@@ -2,6 +2,7 @@ package remote_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,10 +10,12 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
+	"github.com/ChristopherDavenport/agentsession/jsonl"
 	"github.com/ChristopherDavenport/agentsession/remote"
 )
 
@@ -428,5 +431,161 @@ func TestPushRevealsNoUnreadableBase(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Errorf("a push of a fork of alice's entry: %d %s, want 200 as for an origin not held", resp.StatusCode, b)
+	}
+}
+
+// TestNamingABlobGrantsNothing is RFC 0003's rule that a hash is a name,
+// not a capability, for sidecar media, over each store that holds
+// blobs: mallory names alice's blob in an append, in an import of a
+// file with no sidecar header and in a push, and each is refused with
+// missing_object exactly as naming a blob nobody holds is, and his
+// session reaches nothing by it. A blob he uploaded himself he may
+// name, and alice still reads hers.
+func TestNamingABlobGrantsNothing(t *testing.T) {
+	stores := []struct {
+		name string
+		open func(t *testing.T) agentsession.Store
+	}{
+		{"memory", func(t *testing.T) agentsession.Store { return agentsession.NewMemoryStore() }},
+		{"jsonl", func(t *testing.T) agentsession.Store {
+			st, err := jsonl.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		}},
+		{"cas", func(t *testing.T) agentsession.Store {
+			st, err := cas.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		}},
+	}
+	for _, tc := range stores {
+		t.Run(tc.name, func(t *testing.T) { testNamingABlobGrantsNothing(t, tc.open(t)) })
+	}
+}
+
+func testNamingABlobGrantsNothing(t *testing.T, st agentsession.Store) {
+	ctx := context.Background()
+	secret := []byte("alice's picture")
+	h, err := st.(agentsession.BlobWriter).PutBlob(ctx, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "alices", Media: agentsession.MediaSidecar}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, "alices", user("see sidecar:"+h)); err != nil {
+		t.Fatal(err)
+	}
+	all := []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeExchange}
+	url := server(t, st,
+		remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{
+			"alice":   {Name: "alice", Scopes: all},
+			"mallory": {Name: "mallory", Scopes: all},
+		})),
+		remote.WithAuthorize(owners(map[string]string{"alices": "alice", "mallorys": "mallory", "imported": "mallory", "plain": "mallory", "pushed": "mallory"})),
+	)
+	m := dial(t, url, withToken("mallory", nil))
+	mallory := map[string]string{"Authorization": "Bearer mallory"}
+	media := url + "/v1/objects/" + cas.SpaceMedia + "/"
+	unreached := func(when string) {
+		t.Helper()
+		if p := problemOf(t, get(t, media+h, mallory)); p.Code != remote.CodeNoObject {
+			t.Errorf("%s: mallory reads alice's blob: %s, want no_object", when, p.Code)
+		}
+	}
+	absent := agentsession.HashBytes([]byte("a blob nobody holds"))
+	// Each refusal is the one for a blob nobody holds.
+	same := func(what string, try func(hash string) error) {
+		t.Helper()
+		for _, hash := range []string{h, absent} {
+			if err := try(hash); !errors.Is(err, remote.ErrMissingObject) || !errors.Is(err, agentsession.ErrNoBlob) {
+				t.Errorf("%s naming %s: %v, want ErrMissingObject and ErrNoBlob", what, hash, err)
+			}
+		}
+		unreached("after " + what)
+	}
+	unreached("at the start")
+
+	if _, err := m.Create(ctx, agentsession.Header{ID: "mallorys", Media: agentsession.MediaSidecar}); err != nil {
+		t.Fatal(err)
+	}
+	same("an append", func(hash string) error {
+		_, err := m.Append(ctx, "mallorys", user("see sidecar:"+hash))
+		return err
+	})
+	same("an import with no sidecar header", func(hash string) error {
+		s := agentsession.New(agentsession.Header{ID: "plain"})
+		if _, err := s.Append(user("see sidecar:" + hash)); err != nil {
+			t.Fatal(err)
+		}
+		_, err := m.Import(ctx, bytes.NewReader(fileOfSession(t, s)), true)
+		return err
+	})
+	same("a sidecar import", func(hash string) error {
+		s := agentsession.New(agentsession.Header{ID: "imported", Media: agentsession.MediaSidecar})
+		if _, err := s.Append(user("see sidecar:" + hash)); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := m.ImportMedia(ctx, bytes.NewReader(fileOfSession(t, s)), fstest.MapFS{}, true)
+		return err
+	})
+	if _, ok := st.(*cas.Store); ok {
+		local, err := cas.Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { local.Close() })
+		if _, err := local.Create(ctx, agentsession.Header{ID: "pushed", Media: agentsession.MediaSidecar}); err != nil {
+			t.Fatal(err)
+		}
+		e, err := local.Append(ctx, "pushed", user("see sidecar:"+h))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Mallory holds the entry and not the blob: he uploads what he
+		// has and pushes.
+		env, _ := local.Object(ctx, cas.SpaceEntries, e)
+		ch, _ := cas.ContentOf(env)
+		body, _ := local.Object(ctx, cas.SpaceContents, ch)
+		if err := m.PutObject(ctx, cas.SpaceEntries, e, env); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.PutObject(ctx, cas.SpaceContents, ch, body); err != nil {
+			t.Fatal(err)
+		}
+		pushed, _ := local.Open(ctx, "pushed")
+		hdr, _ := json.Marshal(pushed.Header())
+		req, _ := http.NewRequest(http.MethodPost, url+"/v1/sessions/pushed/push", strings.NewReader(`{"header":`+string(hdr)+`,"entries":["`+e+`"],"prefix":[],"head":{"expected":null,"to":"`+e+`"},"mark":"mirror"}`))
+		req.Header.Set("Authorization", "Bearer mallory")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p := problemOf(t, resp); p.Code != remote.CodeMissingObject || p.Missing == nil || len(p.Missing.Media) != 1 || p.Missing.Media[0] != h {
+			t.Errorf("a push naming alice's blob: %+v, want missing_object naming it", p)
+		}
+		resp.Body.Close()
+		unreached("after a push")
+	}
+
+	// A blob mallory uploads he may name, and read; alice reads hers.
+	mine, err := m.PutBlob(ctx, []byte("mallory's picture"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Append(ctx, "mallorys", user("see sidecar:"+mine)); err != nil {
+		t.Errorf("an append naming mallory's own upload: %v", err)
+	}
+	if resp := get(t, media+mine, mallory); resp.StatusCode != http.StatusOK {
+		t.Errorf("mallory reads his own blob: %d", resp.StatusCode)
+	}
+	if resp := get(t, media+h, map[string]string{"Authorization": "Bearer alice"}); resp.StatusCode != http.StatusOK {
+		t.Errorf("alice reads her blob: %d", resp.StatusCode)
 	}
 }

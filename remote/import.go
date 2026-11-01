@@ -66,37 +66,28 @@ func (h *Handler) importSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if hdr.Media == agentsession.MediaSidecar {
-		if !h.holdsMedia() {
-			h.fail(w, fmt.Errorf("%w: %s", agentsession.ErrNoBlobWriter, hdr.ID))
-			return
-		}
-		blobs, err := agentsession.SessionBlobs(file)
-		if err != nil {
-			h.fail(w, err)
-			return
-		}
-		var keys []objKey
-		for _, b := range blobs {
-			keys = append(keys, objKey{cas.SpaceMedia, b})
-		}
-		ok, err := h.reachable(ctx, who.Name, keys)
-		if err != nil {
-			h.fail(w, err)
-			return
-		}
-		missing := &Objects{Entries: []string{}, Contents: []string{}, Media: []string{}}
-		for _, k := range keys {
-			if !ok[k] {
-				missing.add(k.space, k.hash)
-			}
-		}
-		if !missing.empty() {
-			p := problem(CodeMissingObject, "the import names sidecar blobs the server cannot find", "")
-			p.Missing = missing
-			h.fail(w, p)
-			return
-		}
+	if hdr.Media == agentsession.MediaSidecar && !h.holdsMedia() {
+		h.fail(w, fmt.Errorf("%w: %s", agentsession.ErrNoBlobWriter, hdr.ID))
+		return
+	}
+	// Every sidecar blob a line names, whatever the header's media, must
+	// be one the caller reaches, as for an append: naming one is no way
+	// to reach it.
+	blobs, err := agentsession.SessionBlobs(file)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	missing, err := h.unreachedMedia(ctx, who.Name, blobs)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	if missing != nil {
+		p := problem(CodeMissingObject, "the import names sidecar blobs the server cannot find", "")
+		p.Missing = missing
+		h.fail(w, p)
+		return
 	}
 	st := h.state(hdr.ID)
 	st.mu.Lock()

@@ -780,8 +780,23 @@ each put the blob where the session's items find it. A store that
 cannot MUST refuse to create or import a session whose `media` is
 `sidecar`, rather than hold items that name blobs it can never serve.
 An append naming a blob the store lacks is accepted, and the blob is
-reported unresolved, as RFC 0003's Writing says; a session with an
-unresolved blob cannot be pushed or projected until the blob arrives.
+reported unresolved; a session with an unresolved blob cannot be pushed
+or projected until the blob arrives.
+
+Naming an object or a blob grants nothing. A store that serves more
+than one principal, as RFC 0003's server does, decides reach per
+caller: a caller's write, an append, an import or a push, reaches an
+object or a blob it names only if the caller uploaded it for this
+write, or could already read a session holding it. A write that names
+one the caller cannot reach MUST be answered exactly as a write naming
+one the store does not hold at all, by the same code and in the same
+class of time, so the answer is no oracle of what another principal's
+sessions hold, and the session the write lands in reaches nothing by
+the name. Since a session holds a blob only through a write whose
+caller could reach it, a session that names a blob reaches it. RFC 0003
+answers such a write with `missing_object` (Writing, Import, Exchange).
+A store's own caller, with no principals, reaches everything the store
+holds, and these rules ask nothing of it.
 
 ## Redacted sessions
 

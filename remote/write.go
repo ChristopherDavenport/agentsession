@@ -442,6 +442,23 @@ func (h *Handler) appendLine(ctx context.Context, st *held, line []byte) (append
 		p.Reason = "parse"
 		return appended{}, p
 	}
+	// A sidecar blob the entry names must be one the caller reaches, or
+	// the append is missing_object, as for one the server lacks: naming
+	// a blob is no way to reach it (RFC 0003, Writing).
+	names, err := agentsession.SidecarBlobs(e)
+	if err != nil {
+		return appended{}, problem(CodeBadEntry, "the entry does not encode", err.Error())
+	}
+	who, _ := PrincipalFrom(ctx)
+	missing, err := h.unreachedMedia(ctx, who.Name, names)
+	if err != nil {
+		return appended{}, err
+	}
+	if missing != nil {
+		p := problem(CodeMissingObject, "the entry names sidecar blobs the server cannot find", "")
+		p.Missing = missing
+		return appended{}, p
+	}
 	res, err := h.write(ctx, st, e)
 	if err != nil {
 		return appended{}, err
