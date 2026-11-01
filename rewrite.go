@@ -76,31 +76,89 @@ type Rewriter struct {
 	unmet []UnmetPart
 }
 
-// UnmetPart is an instruction part a [Rewriter] wrote under the hash
-// the original gave it, since the text that hash names is in no entry
-// the Rewriter was given before the part's: the original's hash, which
-// a redacted session MUST NOT keep, as it neither verifies there nor
-// hides the text (RFC 0001, Every redacted entry). A redactor writes
-// such a part as text of its own, such as fixed placeholder text, and
-// gives the responses after it no request_hash or a recomputed one, or
-// it does not redact the entry. The part's hash and text are not
-// carried, since a hash of the original can confirm a guessed text.
+// UnmetPart is an instruction part a [Rewriter] wrote that the path it
+// is on cannot rebuild in the redacted session: a part named by a hash
+// whose text no part in force on its path holds, as the Rewriter
+// replays the entries it was given and not those it was told were left
+// out, or a keep naming parts no entry on its path put in force. The
+// first keeps the original's hash, which a redacted session MUST NOT
+// keep, as it neither verifies there nor hides the text, and a hash
+// rewritten from a text met elsewhere resolves nowhere on the path;
+// the second names parts the redacted path lacks (RFC 0001, Every
+// redacted entry). A redactor writes such a part as text of its own,
+// such as fixed placeholder text, and gives the responses after it no
+// request_hash or a recomputed one, or it does not redact the entry.
+//
+// The part's hash and text are not carried. Entry and ID are values of
+// the original, an entry's hash and a part's id as written there, for
+// the redactor's own use: a hash of the original can confirm a guessed
+// text, and an id may hold what is redacted, so neither is to be logged
+// or published.
 type UnmetPart struct {
 	// Entry is the ID, in the original, of the entry holding the part.
 	Entry string
-	// At is the part's hash member in that entry, an RFC 6901 JSON
-	// Pointer such as /instructions_parts/2/hash.
+	// At is the part's member in that entry, an RFC 6901 JSON Pointer
+	// such as /instructions_parts/2/hash, or /instructions_parts/0/keep
+	// for a keep.
 	At string
-	// ID is the part's id, empty when it has none.
+	// ID is the part's id as the original wrote it, empty for a keep
+	// and for a part with none.
 	ID string
 }
 
 // Unmet returns, in the order met, every part the Rewriter has written
-// under a hash whose text it had not met (see [UnmetPart]). A redactor
-// reads it after each [Rewriter.Rewrite], before it commits the entry;
-// an entry's parts are added to it by the Rewrite that wrote them.
+// that its path cannot rebuild (see [UnmetPart]). A redactor reads it
+// after each [Rewriter.Rewrite], before it commits the entry; an
+// entry's parts are added to it by the Rewrite that wrote them.
 func (r *Rewriter) Unmet() []UnmetPart {
 	return slices.Clone(r.unmet)
+}
+
+// LeftOut tells the Rewriter that the redactor leaves e out of what it
+// writes. A redactor gives the Rewriter every entry of the file, in file
+// order: each it writes to Rewrite, and each it leaves out here, in
+// place of Rewrite or after it. The entries under e then read the
+// settings in force above it, as the redacted path does, so a part
+// whose text only e put in force, or a keep counting parts e put in
+// force, is reported by Unmet.
+func (r *Rewriter) LeftOut(e Entry) {
+	if e == nil || e.Base().ID == "" {
+		return
+	}
+	r.settings[e.Base().ID], _ = r.settingsAt(e.Base().Parent)
+}
+
+// checkParts adds to unmet each part of a config delta that the
+// settings in force on its path, as the Rewriter replays them, cannot
+// rebuild: a part named by a hash alone whose text none of them holds,
+// and a keep over parts they do not hold.
+func (r *Rewriter) checkParts(c *ConfigEntry) {
+	if len(c.InstructionsParts) == 0 {
+		return
+	}
+	prev, _ := r.settingsAt(c.Parent)
+	applied := prev.Apply(c).InstructionsParts
+	report := func(i int, member, id string) {
+		r.unmet = append(r.unmet, UnmetPart{Entry: c.ID, At: "/instructions_parts/" + strconv.Itoa(i) + "/" + member, ID: id})
+	}
+	// A delta element is one part in force, but a keep, which is as
+	// many as it keeps when it resolves and one when it does not.
+	j := 0
+	for i, p := range c.InstructionsParts {
+		if p.ID == "" && p.Keep > 0 {
+			if j < len(applied) && applied[j].ID == "" && applied[j].Keep == p.Keep && applied[j].Unresolved() {
+				report(i, "keep", "")
+				j++
+			} else {
+				j += p.Keep
+			}
+			continue
+		}
+		if p.Text == "" && p.Hash != "" && j < len(applied) && applied[j].Unresolved() {
+			report(i, "hash", p.ID)
+		}
+		j++
+	}
 }
 
 // NewRewriter returns a Rewriter applying f, under the contract
@@ -263,6 +321,9 @@ func (r *Rewriter) Rewrite(e Entry) (Entry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agentsession: entry %s: %w", e.Base().ID, err)
 	}
+	if c, ok := e.(*ConfigEntry); ok {
+		r.checkParts(c)
+	}
 	r.record(e)
 	return out, nil
 }
@@ -289,7 +350,7 @@ func (r *Rewriter) rewriteCore(e Entry) (Entry, error) {
 		return nil, err
 	}
 	if hasParts {
-		r.rewriteParts(e.Base().ID, root, out, lists[0])
+		r.rewriteParts(root, out, lists[0])
 		if rebuilt {
 			if obj, ok := lookup(out, lists[1][:len(lists[1])-1]).(map[string]any); ok {
 				obj[lists[1][len(lists[1])-1]] = instr
@@ -847,7 +908,7 @@ func (r *Rewriter) rewriteAt(at string, root map[string]any, specials []special,
 // and a hash has the hash recomputed when the text changed, and one
 // named by a hash alone takes the hash of the rewritten text it names
 // when an earlier entry's part held that text.
-func (r *Rewriter) rewriteParts(entry string, before, after map[string]any, partsPath []string) {
+func (r *Rewriter) rewriteParts(before, after map[string]any, partsPath []string) {
 	oldList, _ := lookup(before, partsPath).([]any)
 	newList, _ := lookup(after, partsPath).([]any)
 	if oldList == nil || len(oldList) != len(newList) {
@@ -874,13 +935,6 @@ func (r *Rewriter) rewriteParts(entry string, before, after map[string]any, part
 		if h, ok := n["hash"].(string); ok {
 			if to, ok := r.parts[h]; ok {
 				n["hash"] = to
-			} else {
-				at := ""
-				for _, step := range partsPath {
-					at += "/" + pointerToken(step)
-				}
-				id, _ := n["id"].(string)
-				r.unmet = append(r.unmet, UnmetPart{Entry: entry, At: at + "/" + strconv.Itoa(i) + "/hash", ID: id})
 			}
 		}
 	}

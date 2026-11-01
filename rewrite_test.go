@@ -795,3 +795,62 @@ func TestRewriteStringsKeepsFormatNamesInData(t *testing.T) {
 		t.Errorf("extra %s", x)
 	}
 }
+
+// TestRewriterUnmetOnPath: a part is met only when a part in force on
+// its own path holds its text, as the Rewriter replays the entries it
+// was given less those it was told were left out: a hash whose text came
+// from a config the redactor left out, or from another branch, and a
+// keep over parts a left-out config put in force, are reported, though
+// the Rewriter met the text (RFC 0001, Every redacted entry).
+func TestRewriterUnmetOnPath(t *testing.T) {
+	first := entryOf(t, `{"type":"config","id":"x","parent":null,`+tsLine+`,"instructions_parts":[{"id":"a","text":"one"},{"id":"b","text":"two"}]}`)
+	byHash := entryOf(t, `{"type":"config","id":"y","parent":"x",`+tsLine+`,"instructions_parts":[{"id":"a","hash":"`+HashText("one")+`"},{"id":"b","text":"new"}]}`)
+	byKeep := entryOf(t, `{"type":"config","id":"y","parent":"x",`+tsLine+`,"instructions_parts":[{"keep":2},{"id":"c","text":"three"}]}`)
+
+	for _, tt := range []struct {
+		name  string
+		later Entry
+		want  []UnmetPart
+	}{
+		{"by hash", byHash, []UnmetPart{{Entry: "y", At: "/instructions_parts/0/hash", ID: "a"}}},
+		{"by keep", byKeep, []UnmetPart{{Entry: "y", At: "/instructions_parts/0/keep"}}},
+	} {
+		t.Run(tt.name+", kept", func(t *testing.T) {
+			r := NewRewriter(hideSecret)
+			for _, e := range []Entry{first, tt.later} {
+				if _, err := r.Rewrite(e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := r.Unmet(); len(got) != 0 {
+				t.Errorf("Unmet = %+v, want none", got)
+			}
+		})
+		t.Run(tt.name+", left out", func(t *testing.T) {
+			r := NewRewriter(hideSecret)
+			if _, err := r.Rewrite(first); err != nil {
+				t.Fatal(err)
+			}
+			r.LeftOut(first)
+			if _, err := r.Rewrite(tt.later); err != nil {
+				t.Fatal(err)
+			}
+			if got := r.Unmet(); !slices.Equal(got, tt.want) {
+				t.Errorf("Unmet = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+
+	// The text met on another branch is in force on neither path of the
+	// other.
+	r := NewRewriter(hideSecret)
+	other := entryOf(t, `{"type":"config","id":"z","parent":null,`+tsLine+`,"instructions_parts":[{"id":"a","hash":"`+HashText("one")+`"}]}`)
+	for _, e := range []Entry{first, other} {
+		if _, err := r.Rewrite(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := r.Unmet(), []UnmetPart{{Entry: "z", At: "/instructions_parts/0/hash", ID: "a"}}; !slices.Equal(got, want) {
+		t.Errorf("another branch: Unmet = %+v, want %+v", got, want)
+	}
+}

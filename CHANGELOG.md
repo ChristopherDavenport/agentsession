@@ -50,10 +50,15 @@ versions may break the API.
   entry it cannot resolve on the path; it writes the part as text of its
   own, such as placeholder text, and the responses after it carry no
   `request_hash` or a recomputed one, or it does not redact the entry.
-  **Added: `Rewriter.Unmet` and `UnmetPart`**, which name each part a
-  `Rewriter` wrote under a hash whose text it never met, by entry,
-  pointer and part ID, never by hash, so a redactor refuses before it
-  commits rather than finding the part with `ContextAt` afterwards. An
+  **Added: `Rewriter.Unmet`, `UnmetPart` and `Rewriter.LeftOut`**:
+  `Unmet` names each part a `Rewriter` wrote that its path cannot
+  rebuild, a hash whose text no part in force on the path holds or a
+  keep over parts none put in force, by entry, pointer and part ID,
+  never by hash or text, so a redactor refuses before it commits rather
+  than finding the part with `ContextAt` afterwards. A redactor tells
+  the `Rewriter` which entries it leaves out with `LeftOut`, so a text
+  only a left-out entry held is not taken as met. The entry and part ID
+  are the original's, not to be logged. An
   unmapped `of` is in `RemapRefs`' `Unmapped`, as before. (#251)
 
 - **A header's text, rewritten from one table (RFC 0001 0.14, The
