@@ -387,6 +387,8 @@ type Store struct {
 	// indexed says it is.
 	entries *entryIndex
 	indexed bool
+	// scans counts the index's builds, under idx.
+	scans int
 	// faulty records sessions the index could not read, with why, so
 	// one fault is reported at that session's Open and hides no other.
 	faulty map[string]error
@@ -1780,6 +1782,7 @@ func (s *Store) index(force bool) error {
 	defer s.idx.Unlock()
 	deltas := s.deltas
 	s.building, s.deltas = false, nil
+	s.scans++
 	if err != nil {
 		return err
 	}
@@ -2270,14 +2273,17 @@ func (s *Store) forkOrigin(base, named string, readable func(string) bool) (stri
 		slices.Sort(c.OnPrefix)
 	}
 	gather()
-	if len(c.Owners)+len(c.OnPrefix) == 0 {
-		// Another process may have committed it since the index was
-		// built; look again before saying no.
-		if err := s.index(true); err != nil {
-			return "", err
-		}
-		gather()
+	if id := c.Pick(once); id != "" {
+		return id, nil
 	}
+	// Another process may have committed it since the index was built;
+	// look again before saying no. A base held only where the caller may
+	// not read is looked for again too, so it takes the path an unheld
+	// one takes.
+	if err := s.index(true); err != nil {
+		return "", err
+	}
+	gather()
 	return c.Pick(once), nil
 }
 

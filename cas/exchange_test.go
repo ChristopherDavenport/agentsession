@@ -380,3 +380,40 @@ func TestExchangeNoRaise(t *testing.T) {
 		t.Errorf("after the refusal: %v, %v", s, err)
 	}
 }
+
+// TestForkOriginSamePathHeldOrNot: looking for a fork's origin among the
+// sessions a caller may read takes the same path whether the base is
+// held only by a session the caller may not read or by none: both look
+// in the store again, so neither a refusal nor the time to it tells
+// them apart.
+func TestForkOriginSamePathHeldOrNot(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.Create(ctx, agentsession.Header{ID: "alices"})
+	x := mustAppend(t, st, "alices", item("alice's base"))
+	if err := st.ensureIndex(); err != nil {
+		t.Fatal(err)
+	}
+	notAlices := agentsession.WithReadable(ctx, func(id string) bool { return id != "alices" })
+	unheld := agentsession.HashBytes([]byte("no entry"))
+	rescans := func(base string) int {
+		t.Helper()
+		st.idx.Lock()
+		before := st.scans
+		st.idx.Unlock()
+		h := agentsession.New(agentsession.Header{ID: "m", Base: base}).Header()
+		if err := st.CheckPush(notAlices, h, []string{base}); err != nil {
+			t.Fatalf("CheckPush of a fork of %s: %v", base, err)
+		}
+		st.idx.Lock()
+		defer st.idx.Unlock()
+		return st.scans - before
+	}
+	if held, none := rescans(x), rescans(unheld); held != none {
+		t.Errorf("a base held only where the caller may not read rescanned %d times, an unheld one %d", held, none)
+	}
+}
