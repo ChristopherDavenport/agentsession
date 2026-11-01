@@ -55,7 +55,9 @@ versions may break the API.
   and `ReadableIn`**, a
   context the server gives the store, which `MemoryStore`, `jsonl`,
   `sqlite` and `cas` consult when they look for an origin, passing over
-  a session the caller may not read; so an import of a fork of a base
+  a session the caller may not read, and ask it holding none of their
+  own locks, so an authorizer that reads the store does not deadlock;
+  so an import of a fork of a base
   held only in another's session is taken as one of a base nobody
   holds, its refusal never names that session, and a created fork's
   `parent_session` never does either. A fork whose base only a prefix

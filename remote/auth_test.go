@@ -787,3 +787,89 @@ func testForkOriginUnreadable(t *testing.T, st agentsession.Store) {
 		}
 	}
 }
+
+// TestAuthorizerReadsTheStore: the read check a store asks while it
+// finds a fork's origin is the program's Authorizer, which may read the
+// store it guards, here a session's owner from its header. The store
+// asks it holding none of its own locks, so a create, an import and a
+// push of a fork complete, over every store, rather than deadlock.
+func TestAuthorizerReadsTheStore(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func(t *testing.T) agentsession.Store
+	}{
+		{"memory", func(t *testing.T) agentsession.Store { return agentsession.NewMemoryStore() }},
+		{"jsonl", func(t *testing.T) agentsession.Store {
+			st, err := jsonl.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		}},
+		{"cas", func(t *testing.T) agentsession.Store {
+			st, err := cas.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testAuthorizerReadsTheStore(t, tc.open(t)) })
+	}
+}
+
+// headerOwners is an Authorizer that reads the store: a session is the
+// owner's its header's cwd names, /home/<owner>, and one the store does
+// not hold is anyone's.
+func headerOwners(st agentsession.Store) remote.Authorizer {
+	return func(ctx context.Context, p remote.Principal, _ remote.Scope, session string) error {
+		s, err := st.Open(ctx, session)
+		if errors.Is(err, agentsession.ErrNoSession) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if o, ok := strings.CutPrefix(s.Header().CWD, "/home/"); ok && o != p.Name {
+			return errors.New("not the owner")
+		}
+		return nil
+	}
+}
+
+func testAuthorizerReadsTheStore(t *testing.T, st agentsession.Store) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := st.Create(ctx, agentsession.Header{ID: "alices", CWD: "/home/alice"}); err != nil {
+		t.Fatal(err)
+	}
+	x, err := st.Append(ctx, "alices", user("alice's base"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	alices, err := st.(agentsession.Reader).Read(ctx, "alices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := server(t, st,
+		remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{
+			"mallory": {Name: "mallory", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeExchange}},
+		})),
+		remote.WithAuthorize(headerOwners(st)),
+	)
+	m := dial(t, url, withToken("mallory", nil))
+	if _, err := m.Import(ctx, bytes.NewReader(forkFile(t, alices, x, "m1", agentsession.MediaSidecar)), true); err != nil {
+		t.Fatalf("an import of a fork: %v", err)
+	}
+	if _, err := m.Create(ctx, agentsession.Header{ID: "m2", Base: x}); err != nil {
+		t.Fatalf("a create of a fork: %v", err)
+	}
+	if _, ok := st.(*cas.Store); ok {
+		fork := agentsession.New(agentsession.Header{ID: "m3", Base: x}).Header()
+		if err := m.CheckPush(ctx, fork, nil, []string{x}); !errors.Is(err, agentsession.ErrMediaDiffers) {
+			t.Errorf("CheckPush of an inline fork of m1's prefix: %v, want ErrMediaDiffers", err)
+		}
+	}
+}

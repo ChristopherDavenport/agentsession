@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
+	"github.com/ChristopherDavenport/agentsession/internal/origin"
 	"github.com/ChristopherDavenport/agentsession/internal/wake"
 )
 
@@ -411,11 +412,15 @@ func (m *MemoryStore) Create(ctx context.Context, h Header) (*Session, error) {
 	if err := CheckCreate(h, m.redactedOnly); err != nil {
 		return nil, err
 	}
+	var originID string
+	if h.Base != "" {
+		originID = m.pickOrigin(ctx, h.ParentSession, h.Base)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := New(h)
 	if h.Base != "" {
-		origin := m.forkOrigin(h.ParentSession, h.Base, ReadableIn(ctx))
+		origin := m.heldOrigin(originID, h.Base)
 		if origin == nil {
 			return nil, fmt.Errorf("%w: base %s is not held by this store", ErrNoEntry, h.Base)
 		}
@@ -462,13 +467,17 @@ func (m *MemoryStore) Import(ctx context.Context, r io.Reader, asRecord bool) (*
 			return nil, err
 		}
 	}
+	var originID string
+	if h.Base != "" {
+		originID = m.pickOrigin(ctx, h.ParentSession, h.Base)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, exists := m.sessions[h.ID]; exists {
 		return nil, fmt.Errorf("%w: %s", ErrSessionExists, h.ID)
 	}
 	if h.Base != "" {
-		if err := CheckImportMedia(h, m.forkOrigin(h.ParentSession, h.Base, ReadableIn(ctx))); err != nil {
+		if err := CheckImportMedia(h, m.heldOrigin(originID, h.Base)); err != nil {
 			return nil, err
 		}
 	}
@@ -478,18 +487,21 @@ func (m *MemoryStore) Import(ctx context.Context, r io.Reader, asRecord bool) (*
 	return s, nil
 }
 
-// forkOrigin returns the session a fork at base continues from: named, when
-// the named session's own entries include base, or the session up its
-// parent_session line that owns it when named holds it on its prefix,
-// else one whose own entries include it,
-// else one that holds it on its prefix, the first by ID when several
-// do. A session readable does not admit is passed over, as one the
-// store does not hold. The caller holds m.mu.
-func (m *MemoryStore) forkOrigin(named, base string, readable func(string) bool) *Session {
+// pickOrigin returns the ID of the session a fork at base continues
+// from: named, when the named session's own entries include base, or the
+// session up its parent_session line that owns it when named holds it on
+// its prefix, else one whose own entries include it, else one that holds
+// it on its prefix, the first by ID when several do; among the sessions
+// [ReadableIn] admits, "" when none is. The holders are gathered under
+// the store's lock and the read check asked after it is let go, since
+// the check may read the store. The caller holds no lock of the store's.
+func (m *MemoryStore) pickOrigin(ctx context.Context, named, base string) string {
+	m.mu.RLock()
+	var c origin.Candidates
 	// Named on its prefix, the base is its own origin's: parent_session
 	// is followed up to the session whose own entries include it, as
 	// cas finds it, since an import holds a fork to that one's media.
-	for seen := 0; named != "" && readable(named) && seen < 64; seen++ {
+	for seen := 0; named != "" && seen < 64; seen++ {
 		s, ok := m.sessions[named]
 		if !ok {
 			break
@@ -497,8 +509,10 @@ func (m *MemoryStore) forkOrigin(named, base string, readable func(string) bool)
 		if _, ok := s.Entry(base); !ok {
 			break
 		}
+		c.Chain = append(c.Chain, named)
 		if !s.Prefix(base) || s.Header().ParentSession == "" {
-			return s
+			c.Ends = true
+			break
 		}
 		named = s.Header().ParentSession
 	}
@@ -507,20 +521,33 @@ func (m *MemoryStore) forkOrigin(named, base string, readable func(string) bool)
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	var onPrefix *Session
 	for _, id := range ids {
 		s := m.sessions[id]
-		if _, ok := s.Entry(base); !ok || !readable(id) {
+		if _, ok := s.Entry(base); !ok {
 			continue
 		}
-		if !s.Prefix(base) {
-			return s
-		}
-		if onPrefix == nil {
-			onPrefix = s
+		if s.Prefix(base) {
+			c.OnPrefix = append(c.OnPrefix, id)
+		} else {
+			c.Owners = append(c.Owners, id)
 		}
 	}
-	return onPrefix
+	m.mu.RUnlock()
+	return c.Pick(ReadableIn(ctx))
+}
+
+// heldOrigin returns the session pickOrigin chose, id, if the store
+// still holds it and it still holds base, else nil: a session deleted
+// since is as one the store does not hold. The caller holds m.mu.
+func (m *MemoryStore) heldOrigin(id, base string) *Session {
+	s, ok := m.sessions[id]
+	if !ok {
+		return nil
+	}
+	if _, ok := s.Entry(base); !ok {
+		return nil
+	}
+	return s
 }
 
 // Open implements Store.

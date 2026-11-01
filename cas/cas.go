@@ -170,6 +170,7 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/internal/ijson"
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
+	"github.com/ChristopherDavenport/agentsession/internal/origin"
 	"github.com/ChristopherDavenport/agentsession/internal/wake"
 	"github.com/ChristopherDavenport/openresponses"
 )
@@ -2196,9 +2197,12 @@ func before013(format string) bool {
 // else the first by ID that holds it on its prefix, whose media is its
 // own origin's. A session readable does not admit is passed over, as
 // one the store does not hold, so the answer is the one the store would
-// give without it. "" when no admitted session holds the base.
+// give without it; readable is asked holding none of the store's locks,
+// and of no session after the first it admits. "" when no admitted
+// session holds the base.
 func (s *Store) forkOrigin(base, named string, readable func(string) bool) (string, error) {
-	for seen := 0; named != "" && readable(named) && seen < 64; seen++ {
+	var c origin.Candidates
+	for seen := 0; named != "" && seen < 64; seen++ {
 		dir, err := s.sessionDir(named)
 		if err != nil {
 			break
@@ -2208,7 +2212,8 @@ func (s *Store) forkOrigin(base, named string, readable func(string) bool) (stri
 			break
 		}
 		if slices.Contains(heldEntries(l.recs), base) {
-			return named, nil
+			c.Chain, c.Ends = append(c.Chain, named), true
+			break
 		}
 		hdr, err := readHeader(dir)
 		if err != nil || hdr.Base == "" {
@@ -2217,45 +2222,52 @@ func (s *Store) forkOrigin(base, named string, readable func(string) bool) (stri
 		if on, err := s.onPath(base, hdr.Base); err != nil || !on {
 			break
 		}
+		c.Chain = append(c.Chain, named)
 		if hdr.ParentSession == "" {
-			return named, nil
+			c.Ends = true
+			break
 		}
 		named = hdr.ParentSession
 	}
+	// A chain that reaches the origin needs no index, which is built only
+	// when a lookup needs it. A chain the check stops on is done with:
+	// the pick goes on to the index's sessions, as Pick would.
+	if c.Ends {
+		if id := c.Pick(readable); id != "" {
+			return id, nil
+		}
+	}
+	c.Chain, c.Ends = nil, false
 	if err := s.ensureIndex(); err != nil {
 		return "", err
 	}
-	pick := func() string {
+	// The index is read under its lock and the read check asked after,
+	// since the check may read the store.
+	gather := func() {
 		s.idx.Lock()
 		defer s.idx.Unlock()
-		var owners, onPrefix []string
+		c.Owners, c.OnPrefix = c.Owners[:0], c.OnPrefix[:0]
 		for id := range s.entries.owners[base] {
-			if readable(id) {
-				owners = append(owners, id)
-			}
-		}
-		if len(owners) > 0 {
-			return slices.Min(owners)
+			c.Owners = append(c.Owners, id)
 		}
 		for id, path := range s.entries.paths {
-			if readable(id) && slices.Contains(path, base) {
-				onPrefix = append(onPrefix, id)
+			if slices.Contains(path, base) {
+				c.OnPrefix = append(c.OnPrefix, id)
 			}
 		}
-		if len(onPrefix) > 0 {
-			return slices.Min(onPrefix)
+		slices.Sort(c.Owners)
+		slices.Sort(c.OnPrefix)
+	}
+	gather()
+	if len(c.Owners)+len(c.OnPrefix) == 0 {
+		// Another process may have committed it since the index was
+		// built; look again before saying no.
+		if err := s.index(true); err != nil {
+			return "", err
 		}
-		return ""
+		gather()
 	}
-	if o := pick(); o != "" {
-		return o, nil
-	}
-	// Another process may have committed it since the index was built;
-	// look again before saying no.
-	if err := s.index(true); err != nil {
-		return "", err
-	}
-	return pick(), nil
+	return c.Pick(readable), nil
 }
 
 // prefixHolder returns a session that holds base on its prefix, owning

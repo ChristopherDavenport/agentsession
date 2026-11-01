@@ -220,7 +220,11 @@ A session is created with a header and optionally a base.
   sessions the caller may read: one it may not read is as one the store
   does not hold, so neither a refusal nor what the store fills in a
   fork's header from its origin (`parent_session`, `media`, `payload`)
-  tells the caller anything of a session it may not read. A session created with a base has that base as its
+  tells the caller anything of a session it may not read. The question
+  whether the caller may read a session is the program's, and may read
+  the store; a store asks it holding none of its own locks, gathering
+  the sessions that hold the base first and checking what it relies on
+  again once it takes them back. A session created with a base has that base as its
   head. A store MUST commit the log that holds the base, through the
   base, before it creates the fork: a fork's recovery reads only its own
   log, and a base a crash took from its origin's working state would

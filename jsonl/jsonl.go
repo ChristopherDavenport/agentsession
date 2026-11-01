@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/internal/origin"
 	"github.com/ChristopherDavenport/agentsession/internal/wake"
 	"github.com/ChristopherDavenport/openresponses"
 )
@@ -267,15 +268,19 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 	if err := agentsession.CheckCreate(h, s.redactedOnly); err != nil {
 		return nil, err
 	}
+	var from *agentsession.Session
+	if h.Base != "" {
+		var err error
+		if from, err = s.forkOrigin(ctx, h.ParentSession, h.Base); err != nil {
+			return nil, err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess := agentsession.New(h)
 	if h.Base != "" {
-		origin, err := s.forkOrigin(ctx, h.ParentSession, h.Base)
-		if err != nil {
-			return nil, err
-		}
-		if sess, err = agentsession.Fork(origin, h.Base, h); err != nil {
+		var err error
+		if sess, err = agentsession.Fork(from, h.Base, h); err != nil {
 			return nil, err
 		}
 		if s.redactedOnly {
@@ -316,17 +321,17 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 			return nil, err
 		}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if h.Base != "" {
-		origin, err := s.forkOrigin(ctx, h.ParentSession, h.Base)
+		from, err := s.forkOrigin(ctx, h.ParentSession, h.Base)
 		if err != nil && !errors.Is(err, agentsession.ErrNoEntry) {
 			return nil, err
 		}
-		if err := agentsession.CheckImportMedia(h, origin); err != nil {
+		if err := agentsession.CheckImportMedia(h, from); err != nil {
 			return nil, err
 		}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	// Each sidecar blob the file names starts its grace again before the
 	// session lands, as an append's does, so a sweep that found it old
 	// and unnamed spares it.
@@ -473,8 +478,28 @@ func syncDir(dir string) {
 // else one that holds it on its prefix, among the sessions
 // [agentsession.ReadableIn] admits. Finding it without a name reads
 // every session under the root. A session not open here is read without
-// taking its lock. The caller holds s.mu.
+// taking its lock. The holders are gathered under s.mu and the read
+// check asked after it is let go, since the check may read the store,
+// so the caller does not hold s.mu; it forks from the session returned
+// under s.mu.
 func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsession.Session, error) {
+	c, held, err := s.originCandidates(ctx, named, base)
+	if err != nil {
+		return nil, err
+	}
+	if id := c.Pick(agentsession.ReadableIn(ctx)); id != "" {
+		return held[id], nil
+	}
+	return nil, fmt.Errorf("%w: base %s is not held by this store", agentsession.ErrNoEntry, base)
+}
+
+// originCandidates gathers, under s.mu, the sessions that hold base in
+// forkOrigin's order, and each as read.
+func (s *Store) originCandidates(ctx context.Context, named, base string) (origin.Candidates, map[string]*agentsession.Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var c origin.Candidates
+	held := map[string]*agentsession.Session{}
 	read := func(id, path string) *agentsession.Session {
 		if h, ok := s.open[id]; ok {
 			return h.session
@@ -485,13 +510,10 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 		}
 		return h.session
 	}
-	// A session the caller may not read is as one the store does not
-	// hold (agentsession.WithReadable).
-	readable := agentsession.ReadableIn(ctx)
 	// Named on its prefix, the base is its own origin's: parent_session
 	// is followed up to the session whose own entries include it, as
 	// cas finds it, since an import holds a fork to that one's media.
-	for seen := 0; named != "" && readable(named) && seen < 64; seen++ {
+	for seen := 0; named != "" && seen < 64; seen++ {
 		path, err := s.find(named)
 		if err != nil {
 			break
@@ -503,24 +525,25 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 		if _, ok := sess.Entry(base); !ok {
 			break
 		}
+		c.Chain, held[named] = append(c.Chain, named), sess
 		if !sess.Prefix(base) || sess.Header().ParentSession == "" {
-			return sess, nil
+			c.Ends = true
+			break
 		}
 		named = sess.Header().ParentSession
 	}
 	matches, err := filepath.Glob(filepath.Join(s.root, "*", "*.jsonl"))
 	if err != nil {
-		return nil, fmt.Errorf("jsonl: glob: %w", err)
+		return c, nil, fmt.Errorf("jsonl: glob: %w", err)
 	}
 	sort.Strings(matches)
-	var onPrefix *agentsession.Session
 	for _, path := range matches {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return c, nil, err
 		}
 		name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 		_, id, ok := strings.Cut(name, "_")
-		if !ok || !readable(id) {
+		if !ok {
 			continue
 		}
 		sess := read(id, path)
@@ -530,17 +553,16 @@ func (s *Store) forkOrigin(ctx context.Context, named, base string) (*agentsessi
 		if _, ok := sess.Entry(base); !ok {
 			continue
 		}
-		if !sess.Prefix(base) {
-			return sess, nil
+		if _, ok := held[id]; !ok {
+			held[id] = sess
 		}
-		if onPrefix == nil {
-			onPrefix = sess
+		if sess.Prefix(base) {
+			c.OnPrefix = append(c.OnPrefix, id)
+		} else {
+			c.Owners = append(c.Owners, id)
 		}
 	}
-	if onPrefix == nil {
-		return nil, fmt.Errorf("%w: base %s is not held by this store", agentsession.ErrNoEntry, base)
-	}
-	return onPrefix, nil
+	return c, held, nil
 }
 
 // Open implements agentsession.Store. A session already open in this

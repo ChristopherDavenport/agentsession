@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/remote"
@@ -72,6 +73,17 @@ func TestNamingABlobGrantsNothingOverSQLite(t *testing.T) {
 // owner's alone, and dials it as mallory.
 func mallorysServer(t *testing.T, st *sqlite.Store, owner map[string]string) (*httptest.Server, *remote.Client) {
 	t.Helper()
+	return mallorysServerAuthorized(t, st, func(_ context.Context, p remote.Principal, _ remote.Scope, session string) error {
+		if o, ok := owner[session]; ok && o != p.Name {
+			return errors.New("not the owner")
+		}
+		return nil
+	})
+}
+
+// mallorysServerAuthorized is mallorysServer with the authorizer given.
+func mallorysServerAuthorized(t *testing.T, st *sqlite.Store, authorize remote.Authorizer) (*httptest.Server, *remote.Client) {
+	t.Helper()
 	handler := remote.NewHandler(st,
 		remote.WithAuthenticator(func(r *http.Request) (remote.Principal, error) {
 			name, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -80,12 +92,7 @@ func mallorysServer(t *testing.T, st *sqlite.Store, owner map[string]string) (*h
 			}
 			return remote.Principal{Name: name, Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeExchange}}, nil
 		}),
-		remote.WithAuthorize(func(_ context.Context, p remote.Principal, _ remote.Scope, session string) error {
-			if o, ok := owner[session]; ok && o != p.Name {
-				return errors.New("not the owner")
-			}
-			return nil
-		}),
+		remote.WithAuthorize(authorize),
 	)
 	srv := httptest.NewServer(handler)
 	t.Cleanup(func() {
@@ -145,5 +152,58 @@ func TestForkOriginUnreadableOverSQLite(t *testing.T) {
 	}
 	if g.Header().ParentSession == "alices" {
 		t.Error("mallory's fork names alice's session as its parent")
+	}
+}
+
+// An authorizer that reads this store, a session's owner from its
+// header, is asked while a create or an import looks for a fork's
+// origin, and the store holds none of its locks then: both complete
+// rather than deadlock.
+func TestAuthorizerReadsTheStoreOverSQLite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	st, err := sqlite.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if _, err := st.Create(ctx, agentsession.Header{ID: "alices", CWD: "/home/alice"}); err != nil {
+		t.Fatal(err)
+	}
+	x, err := st.Append(ctx, "alices", agentsession.NewItemEntry(openresponses.UserText("alice's base")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	alices, err := st.Read(ctx, "alices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, m := mallorysServerAuthorized(t, st, func(ctx context.Context, p remote.Principal, _ remote.Scope, session string) error {
+		s, err := st.Open(ctx, session)
+		if errors.Is(err, agentsession.ErrNoSession) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if o, ok := strings.CutPrefix(s.Header().CWD, "/home/"); ok && o != p.Name {
+			return errors.New("not the owner")
+		}
+		return nil
+	})
+	f, err := agentsession.Fork(alices, x, agentsession.Header{ID: "m1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := agentsession.Write(&buf, f); err != nil {
+		t.Fatal(err)
+	}
+	file := strings.Replace(buf.String(), `"parent_session":"alices",`, ``, 1)
+	if _, err := m.Import(ctx, strings.NewReader(file), true); err != nil {
+		t.Fatalf("an import of a fork: %v", err)
+	}
+	if _, err := m.Create(ctx, agentsession.Header{ID: "m2", Base: x}); err != nil {
+		t.Fatalf("a create of a fork: %v", err)
 	}
 }

@@ -11,7 +11,10 @@ type readableKey struct{}
 // import or a push, considers only sessions readable admits: one it does
 // not admit is as one the store does not hold, so a refusal, or a header
 // the store fills from the origin, says nothing of a session the caller
-// may not read. A context without it admits every session.
+// may not read. A store asks readable holding none of its own locks, so
+// readable may read the store it guards, as an authorizer that finds a
+// session's owner in its header does. A context without it admits every
+// session.
 func WithReadable(ctx context.Context, readable func(session string) bool) context.Context {
 	return context.WithValue(ctx, readableKey{}, readable)
 }
