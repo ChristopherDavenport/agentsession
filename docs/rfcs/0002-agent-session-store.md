@@ -1045,7 +1045,15 @@ store offers a repair that restarts a damaged ref log from the ref's
 current target, the target the ref held until the damage: the new log
 begins with one record that sets the ref to that target and says it
 was recovered, and the damaged log is kept, and reported, until an
-operator removes it, since it is the ref's only history.
+operator removes it, since it is the ref's only history. The current
+target is the one resolving the ref reads, never the stored value
+alone: where the stored value lags the log, because the log's last
+record moves the ref from that value to another (an update, a creation
+among them, recorded and not yet made), the record's target is the
+current one, and the repair makes the stored value hold it. A repair
+MUST NOT move, revert or delete a ref that a resolve before it would
+have read whole; where the stored value does not read, the last record
+that does names the target.
 
 `request_hash` is unchanged; RFC 0001 says how the two hashes divide
 the work.

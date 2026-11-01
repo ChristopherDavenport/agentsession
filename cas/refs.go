@@ -855,13 +855,16 @@ type RefRepair struct {
 }
 
 // RepairRef restarts a damaged ref's log from the ref's current target,
-// RFC 0002's repair of a ref. The current target is what the ref's file
-// holds, which was the ref's until the damaged record, or, when the file
-// does not read, what the log's last readable record names. The damaged
+// RFC 0002's repair of a ref. The current target is the one ResolveRef
+// reads: what the ref's file holds, unless the log's last record moves
+// the ref from there to another target, an update recorded and not made,
+// whose target it is; or, when the file does not read, what the log's
+// last readable record names. The damaged
 // log is kept in logs/refs under a name no ref has, %damaged-<ref>-<time>,
 // which Verify reports until someone removes it, and the new log holds
 // one record, from no target to the current one, whose reason says it
-// was recovered; the ref file is written again when it did not read. The
+// was recovered; the ref file is written again when it did not read or
+// lagged the log. The
 // ref's history up to the damage is in the kept log alone.
 //
 // It holds the ref's lock, refuses a read-only or stopped store, and
@@ -899,15 +902,26 @@ func (s *Store) RepairRef(ctx context.Context, name string) (RefRepair, error) {
 	if len(damage) == 0 {
 		return rep, fmt.Errorf("%w: %s", ErrRefNotDamaged, name)
 	}
+	// The current target is the one ResolveRef reads: the file's, unless
+	// the log's last whole record moves the ref from it to another, an
+	// update recorded and not made (a creation among them), whose target
+	// is the ref's. A file that does not read gives way to the last
+	// record that does.
+	whole := data[:bytes.LastIndexByte(data, '\n')+1]
+	lines := bytes.Split(bytes.TrimRight(whole, "\n"), []byte{'\n'})
 	cur := file
-	if ferr != nil {
+	switch {
+	case ferr != nil:
 		cur = refVal{}
-		lines := bytes.Split(bytes.TrimRight(data, "\n"), []byte{'\n'})
 		for i := len(lines) - 1; i >= 0; i-- {
 			if rec, err := decodeRefRecord(lines[i]); err == nil {
 				cur = rec.nextVal()
 				break
 			}
+		}
+	case len(whole) > 0:
+		if rec, err := decodeRefRecord(lines[len(lines)-1]); err == nil && rec.oldVal().same(file) && !rec.nextVal().same(file) {
+			cur = rec.nextVal()
 		}
 	}
 	rep.Target = cur.RefTarget
@@ -930,7 +944,7 @@ func (s *Store) RepairRef(ctx context.Context, name string) (RefRepair, error) {
 	if err := s.writeRefFile(s.refLogPath(name), fresh); err != nil {
 		return rep, fmt.Errorf("cas: ref %s log: %w", name, err)
 	}
-	if ferr != nil {
+	if ferr != nil || cur != file {
 		if err := s.placeRef(name, cur); err != nil {
 			return rep, err
 		}

@@ -56,7 +56,9 @@ versions may break the API.
   **`Problem.Ref`**. **Added: `Store.RepairRef`** (and
   `agentsession repair <cas-root> -ref <name>`), which keeps the
   damaged log as `logs/refs/%damaged-<ref>-<time>`, reported by
-  `Verify` until removed, and restarts the log from the ref's target.
+  `Verify` until removed, and restarts the log from the ref's target
+  as `ResolveRef` reads it: an update or a creation the log records and
+  the file never caught up with stands, where it was reverted or lost.
   `Sweep` removes the `%tmp-*` files a crash leaves in `refs/` and
   `logs/refs/` once older than its grace, and `Verify` reports them as
   leftovers. (#218, #219)

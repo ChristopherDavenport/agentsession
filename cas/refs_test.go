@@ -1036,3 +1036,69 @@ func TestRefDebrisSwept(t *testing.T) {
 		t.Errorf("a young temporary file did not survive a sweep: %v", err)
 	}
 }
+
+// TestRepairRefFromCurrentTarget: a repair restarts the log from the
+// target the ref holds as ResolveRef reads it, the file and the log's
+// last record together, not from the file alone. An update recorded and
+// not made, the file lagging it, and a creation recorded whose file was
+// never made each stand after damage earlier in the log.
+func TestRepairRefFromCurrentTarget(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	a, b := newRefSession(t, st), newRefSession(t, st)
+	recorded := func(name string, old, next agentsession.RefTarget) {
+		t.Helper()
+		rec, err := newRefRecord(name, old, next, time.Now(), "crashed").encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		appendRaw(t, st, name, rec)
+	}
+	damageFirst := func(name string) {
+		t.Helper()
+		data, _ := os.ReadFile(st.refLogPath(name))
+		at := bytes.Index(data, []byte(`"new_session":"`)) + len(`"new_session":"`)
+		data[at] ^= 1
+		if err := os.WriteFile(st.refLogPath(name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// An update a to b, recorded; the file still holds a.
+	if err := st.UpdateRef(ctx, "moved", agentsession.RefTarget{}, refTarget(a), ""); err != nil {
+		t.Fatal(err)
+	}
+	recorded("moved", refTarget(a), refTarget(b))
+	// A creation of b, recorded after a deletion; no file.
+	if err := st.UpdateRef(ctx, "made", agentsession.RefTarget{}, refTarget(a), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateRef(ctx, "made", refTarget(a), agentsession.RefTarget{}, ""); err != nil {
+		t.Fatal(err)
+	}
+	recorded("made", agentsession.RefTarget{}, refTarget(b))
+
+	for _, name := range []string{"moved", "made"} {
+		damageFirst(name)
+		rep, err := st.RepairRef(ctx, name)
+		if err != nil {
+			t.Fatalf("RepairRef %s: %v", name, err)
+		}
+		if rep.Target != refTarget(b) {
+			t.Errorf("RepairRef %s: target %v, want %s, the recorded update's", name, rep.Target, b)
+		}
+		if got, err := st.ResolveRef(ctx, name); err != nil || got != refTarget(b) {
+			t.Errorf("after repair, ResolveRef %s = %v, %v; want %s", name, got, err, b)
+		}
+		if got := refFileHolds(t, st, name); got != b {
+			t.Errorf("after repair, the file of %s holds %q, want %s", name, got, b)
+		}
+		if got := logOf(t, st, name); len(got) != 1 || got[0].New != refTarget(b) {
+			t.Errorf("after repair, the log of %s: %+v", name, got)
+		}
+	}
+}
