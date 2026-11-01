@@ -23,7 +23,8 @@ versions may break the API.
   The 0.14 members project too: `failed` and `from_link` under
   `extra.agentsession`, a withdrawal's `withdrawn` in its decision
   record, and a placeholder as `replaced` with the item as `sent`, which
-  `Items` reads. **Added: `CustomEntry.Calls`, `PathRequestContext`,
+  `Items` reads; each placeholder record carries the text its request
+  sent. **Added: `CustomEntry.Calls`, `PathRequestContext`,
   `ExtraRequestOmitted`, `ExtraRequestReplaced` and `ExtraReplaced`.**
   ATIF goldens for `withdrawn`, `late-report` and `placeholders`.
 

@@ -101,15 +101,17 @@ const (
 	// entry_id and a reason, where ExtraOmitted says what the request at
 	// the leaf leaves out; ExtraRequestReplaced does the same for the
 	// items that request sent with a placeholder, with the parts
-	// replaced for an image. Both are written only when the trajectory
-	// has its Path and the list is not empty.
+	// replaced for an image, each with the placeholder text that request
+	// sent. Both are written only when the trajectory has its Path, since
+	// a step's request is rebuilt from it, and the list is not empty.
 	ExtraRequestOmitted  = "request_omitted"
 	ExtraRequestReplaced = "request_replaced"
 	// ExtraReplaced carries, under ExtraAgentSession in the extra of the
 	// step, or of the observation result, that holds an item entry, the
 	// placeholders the request at the leaf sends for its item: an object
-	// with the entry_id, the reason, "outputs" or "images", and for
-	// images the number of parts. The item as sent rides beside the item
+	// with the entry_id, the reason, "outputs" or "images", the
+	// placeholder text, and for images the number of parts. The item as
+	// sent rides beside the item
 	// as recorded, as "sent" under extra.openresponses, and [Items] reads
 	// it.
 	ExtraReplaced = "replaced"
@@ -126,7 +128,7 @@ func ToATIF(t Trajectory, opts Options) (*atif.Trajectory, error) {
 		b.omitted[o.Entry.ID] = o.Reason
 	}
 	for _, r := range t.Context.ReplacedItems {
-		b.replaced[r.Entry.ID] = append(b.replaced[r.Entry.ID], replacedRecord(r))
+		b.replaced[r.Entry.ID] = append(b.replaced[r.Entry.ID], replacedRecord(r, t.Context.Settings.Omit))
 	}
 	for i, e := range t.Context.ItemEntries {
 		if ie, ok := e.(*agentsession.ItemEntry); ok && len(b.replaced[ie.ID]) > 0 && i < len(t.Context.Items) {
@@ -227,10 +229,19 @@ type builder struct {
 
 // replacedRecord is one placeholder a request sends for an item entry,
 // as ExtraReplaced and ExtraRequestReplaced write it.
-func replacedRecord(r agentsession.ReplacedItem) map[string]any {
+// The placeholder text is the request's, from the omit in force for it,
+// which a later entry may change, so each request's record carries its
+// own.
+func replacedRecord(r agentsession.ReplacedItem, omit agentsession.Omit) map[string]any {
 	rec := map[string]any{"entry_id": r.Entry.ID, "reason": r.Reason}
 	if r.Parts > 0 {
 		rec["parts"] = r.Parts
+	}
+	switch {
+	case r.Reason == agentsession.OmitOutputsReason && omit.Outputs != nil:
+		rec["text"] = omit.Outputs.Text
+	case r.Reason == agentsession.OmitImagesReason && omit.Images != nil:
+		rec["text"] = omit.Images.Placeholder
 	}
 	return rec
 }
@@ -283,7 +294,7 @@ func (b *builder) requestRecords(resp *agentsession.ResponseEntry) (omitted, rep
 		omitted = append(omitted, map[string]any{"entry_id": o.Entry.ID, "reason": o.Reason})
 	}
 	for _, r := range ctx.ReplacedItems {
-		replaced = append(replaced, replacedRecord(r))
+		replaced = append(replaced, replacedRecord(r, ctx.Settings.Omit))
 	}
 	return omitted, replaced
 }

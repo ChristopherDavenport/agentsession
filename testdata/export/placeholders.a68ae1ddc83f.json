@@ -79,7 +79,8 @@
                 "replaced": [
                   {
                     "entry_id": "sha256:40cfcc3137dfeb2e90d28e2dd8668094cb9d36be5754f40968380d38e55ac54e",
-                    "reason": "outputs"
+                    "reason": "outputs",
+                    "text": "[cleared earlier]"
                   }
                 ]
               },
@@ -175,7 +176,8 @@
                   {
                     "entry_id": "sha256:33a4dd27e87e379ef111ec8c1f97beb98016fc995a13e6ca0bda8cb67f0edb70",
                     "parts": 1,
-                    "reason": "images"
+                    "reason": "images",
+                    "text": "[older screenshot]"
                   }
                 ]
               },
@@ -223,7 +225,8 @@
             {
               "entry_id": "sha256:a7a6d74acae9bb451c4318aa6cad0e54a21de7084d3ec9237224a38502c94bae",
               "parts": 1,
-              "reason": "images"
+              "reason": "images",
+              "text": "[screenshot removed]"
             }
           ]
         },
@@ -290,7 +293,8 @@
                   {
                     "entry_id": "sha256:2d577dad17b7e6eded0b497fdcfb8abb59c191f835a1bfa93d32bc4e8d1cc75e",
                     "parts": 1,
-                    "reason": "images"
+                    "reason": "images",
+                    "text": "[older screenshot]"
                   }
                 ]
               },
@@ -337,12 +341,14 @@
           "request_replaced": [
             {
               "entry_id": "sha256:a7a6d74acae9bb451c4318aa6cad0e54a21de7084d3ec9237224a38502c94bae",
-              "reason": "outputs"
+              "reason": "outputs",
+              "text": "[cleared]"
             },
             {
               "entry_id": "sha256:11ce22cf1a92de9bf2a106aa335a7e4c0737c7fc19c54557ddbf21a6784b39c3",
               "parts": 1,
-              "reason": "images"
+              "reason": "images",
+              "text": "[screenshot removed]"
             }
           ]
         },
@@ -433,7 +439,8 @@
             {
               "entry_id": "sha256:40cfcc3137dfeb2e90d28e2dd8668094cb9d36be5754f40968380d38e55ac54e",
               "parts": 1,
-              "reason": "images"
+              "reason": "images",
+              "text": "[screenshot removed]"
             }
           ]
         },
@@ -520,17 +527,20 @@
           "request_replaced": [
             {
               "entry_id": "sha256:40cfcc3137dfeb2e90d28e2dd8668094cb9d36be5754f40968380d38e55ac54e",
-              "reason": "outputs"
+              "reason": "outputs",
+              "text": "[cleared earlier]"
             },
             {
               "entry_id": "sha256:33a4dd27e87e379ef111ec8c1f97beb98016fc995a13e6ca0bda8cb67f0edb70",
               "parts": 1,
-              "reason": "images"
+              "reason": "images",
+              "text": "[older screenshot]"
             },
             {
               "entry_id": "sha256:2d577dad17b7e6eded0b497fdcfb8abb59c191f835a1bfa93d32bc4e8d1cc75e",
               "parts": 1,
-              "reason": "images"
+              "reason": "images",
+              "text": "[older screenshot]"
             }
           ]
         },
@@ -574,17 +584,20 @@
           "request_replaced": [
             {
               "entry_id": "sha256:40cfcc3137dfeb2e90d28e2dd8668094cb9d36be5754f40968380d38e55ac54e",
-              "reason": "outputs"
+              "reason": "outputs",
+              "text": "[cleared earlier]"
             },
             {
               "entry_id": "sha256:33a4dd27e87e379ef111ec8c1f97beb98016fc995a13e6ca0bda8cb67f0edb70",
               "parts": 1,
-              "reason": "images"
+              "reason": "images",
+              "text": "[older screenshot]"
             },
             {
               "entry_id": "sha256:2d577dad17b7e6eded0b497fdcfb8abb59c191f835a1bfa93d32bc4e8d1cc75e",
               "parts": 1,
-              "reason": "images"
+              "reason": "images",
+              "text": "[older screenshot]"
             }
           ]
         },

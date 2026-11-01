@@ -2291,8 +2291,9 @@ not as absent. An `item` entry the request at the leaf sends with a
 placeholder, by `omit`'s `outputs` or `images`, is in its step, or its
 observation result, as recorded, and that `extra` lists it under
 `agentsession` as `replaced`, an object with the `entry_id`, the
-`reason`, `outputs` or `images`, and for `images` the number of
-`parts` replaced, one object per member that reaches it; the item as
+`reason`, `outputs` or `images`, the placeholder `text` sent, and for
+`images` the number of `parts` replaced, one object per member that
+reaches it; the item as
 sent travels beside the raw item as `sent`, so the projection rebuilds
 both. `omitted` and `replaced` describe the leaf's request. Each agent
 step's `extra` also lists, under `agentsession`, the item entries its
@@ -2300,7 +2301,11 @@ own request left out, as `request_omitted`, and those it sent with a
 placeholder, as `request_replaced`, each with its reason, from the
 request context of the step's `response`, since a model switch or a
 later `omit` makes the leaf's request a different prompt from the one
-an earlier step was sent. Both are absent when empty.
+an earlier step was sent; each `request_replaced` object carries the
+placeholder `text` that request sent, which a later `omit` may change.
+Both are absent when empty, and when the projection is built from the
+context alone, without the path it was built over, since a step's
+request is rebuilt from the path.
 
 An output's entry marked `failed` carries `failed: true` under
 `agentsession` in the `extra` of the observation result, or step, it

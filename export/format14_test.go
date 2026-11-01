@@ -120,3 +120,35 @@ func TestCustomTravelsWithItsCall(t *testing.T) {
 		t.Errorf("the next step carries custom %v, want the two that name no call in the document", next)
 	}
 }
+
+// TestReplacedCarriesText: each request's placeholder record carries the
+// text that request sent, which a later omit may change, so a reader
+// rebuilds an earlier step's prompt and not the leaf's (RFC 0001,
+// Projections/ATIF). The placeholders fixture clears outputs as
+// "[cleared]" and later as "[cleared earlier]".
+func TestReplacedCarriesText(t *testing.T) {
+	s := loadFixture(t, "placeholders")
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDoc(t, tr)
+	texts := map[string]bool{}
+	for _, step := range doc.Steps {
+		as, _ := step.Extra[ExtraAgentSession].(map[string]any)
+		list, _ := as[ExtraRequestReplaced].([]any)
+		for _, r := range list {
+			rec := r.(map[string]any)
+			text, ok := rec["text"].(string)
+			if !ok {
+				t.Errorf("step %d: request_replaced %v carries no text", step.StepID, rec)
+			}
+			texts[rec["reason"].(string)+":"+text] = true
+		}
+	}
+	for _, want := range []string{"outputs:[cleared]", "outputs:[cleared earlier]"} {
+		if !texts[want] {
+			t.Errorf("no step's request sent %s; texts %v", want, texts)
+		}
+	}
+}
