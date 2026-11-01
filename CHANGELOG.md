@@ -68,6 +68,14 @@ versions may break the API.
   `ErrBadResult`, `ErrCallReturned`, `ErrResultMismatch`; otel
   `EventResult`, `AttrResultFailed`.**
 
+- **Leaving a call out takes its custom entries (RFC 0001 0.15,
+  Redaction, Leaving entries out; agentturn#261).** A redactor that
+  leaves out a call leaves out every `custom` entry whose `call_id`
+  names it, as it does the call's dispatches, decisions, results and
+  links; nested calls recorded as `custom` entries, such as
+  `agentturn:nested_call`, go with the call that made them. The rule
+  binds redactors; nothing in this library leaves entries out.
+
 ## v0.0.31 - 2026-11-01
 
 - **ATIF: what each step's own request left out, cost with subagents,

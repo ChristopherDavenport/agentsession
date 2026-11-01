@@ -2256,8 +2256,9 @@ that named the left-out entry then follows the rule for its kind:
   `function_call`'s entry leaves out every `dispatch`, `decision`,
   `result`, `function_call_output` and `link` entry of that call, the links that
   carry its `call_id`, a withdrawal, an output marked `failed` and a
-  cancel notice among them, since each says what became of a call the
-  file no longer holds. A withdrawal also goes with the `dispatch` it
+  cancel notice among them, and, since 0.15, every `custom` entry whose
+  `call_id` names it, since each says what became of a call the file
+  no longer holds. A withdrawal also goes with the `dispatch` it
   follows, which it would otherwise not follow, and a cancel notice
   with the link its `target` names: neither a placeholder nor an entry
   above the link is a link, and `link` forbids a notice naming one, so
@@ -2736,6 +2737,15 @@ is upgraded.
   read a call settled inside a parallel batch cut by a crash as in
   flight. Redaction: a `result` goes with its call, and its `item` is
   redacted in step with its output.
+
+- Redaction: a `custom` entry carrying a call's `call_id` goes with the
+  call, as its `dispatch`, `decision` and `link` entries do. A
+  redaction of 0.14 that left a call out could keep such an entry,
+  which then named a call the file no longer held. The rule tightens
+  redactors alone; no file reads differently. A call a tool makes from
+  inside another, which no `function_call` item holds, stays a harness's
+  extension (a `custom` entry carrying the parent call's `call_id`), so
+  it too goes with the call that made it.
 
 ## Changes since 0.13
 
