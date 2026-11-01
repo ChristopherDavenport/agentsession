@@ -21,7 +21,10 @@ const HashPrefix = "sha256:"
 // serialised with the JSON Canonicalization Scheme (RFC 8785) and
 // digested with SHA-256, rendered as "sha256:" plus lowercase hex. The
 // input must be the request as it was sent, passthrough members
-// included, because those reached the model.
+// included, because those reached the model; in a sidecar session, the
+// request with each sidecar: URL as the item records it, which is the
+// form a reader rebuilds, and not with the bytes the writer resolved it
+// to before sending.
 func RequestHash(req openresponses.Request) (string, error) {
 	data, err := json.Marshal(req)
 	if err != nil {

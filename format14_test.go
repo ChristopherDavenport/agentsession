@@ -402,3 +402,40 @@ func TestPlaceholderDivergence(t *testing.T) {
 		t.Errorf("Verify = %v, want ErrOmitDivergence", err)
 	}
 }
+
+// TestSidecarRequestHash: in a sidecar session the request hash covers
+// the request as the path rebuilds it, each sidecar: URL as recorded,
+// and not the request with the blob's bytes the writer sends (#5).
+func TestSidecarRequestHash(t *testing.T) {
+	ref := "sidecar:sha256:" + strings.Repeat("ab", 32)
+	s := New(Header{Media: MediaSidecar})
+	if _, err := s.Append(NewItemEntry(&openresponses.Message{Role: openresponses.RoleUser, Content: openresponses.Contents{&openresponses.InputImage{ImageURL: ref}}})); err != nil {
+		t.Fatal(err)
+	}
+	recorded := fixtureHash(t, s)
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := ctx.RequestJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(ref)) {
+		t.Fatalf("the rebuilt request does not carry the reference: %s", data)
+	}
+	sent, err := HashRequestJSON(bytes.Replace(data, []byte(ref), []byte("data:image/png;base64,AA"), 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.Append(&ResponseEntry{ResponseID: "r", Status: openresponses.ResponseStatusCompleted, RequestHash: recorded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Verify(id); err != nil {
+		t.Errorf("the reference-form hash: %v", err)
+	}
+	if sent == recorded {
+		t.Error("the resolved request hashes as the recorded one")
+	}
+}

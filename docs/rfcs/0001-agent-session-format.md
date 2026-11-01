@@ -1831,7 +1831,8 @@ separately agree without sharing code.
 
 - The input is the request object of step 5 as it was sent, including
   any passthrough keys the payload profile allows, because those reached
-  the model.
+  the model, with one exception, below: in a sidecar session the input
+  holds each `sidecar:` URL as the item records it.
 - The object is serialised with the JSON Canonicalization Scheme (RFC
   8785): members sorted by UTF-16 code units, no insignificant
   whitespace, numbers and strings in their canonical forms.
@@ -1840,6 +1841,18 @@ separately agree without sharing code.
 
 A writer that records `request_hash` MUST compute it this way. A reader
 MAY verify it by rebuilding the request from the path and comparing.
+
+In a sidecar session, since 0.14, the canonical request is built from
+items as recorded, `sidecar:` URLs included, and `request_hash` covers
+that form, which is the only form a reader can rebuild without the
+blobs. A writer resolves each `sidecar:` URL to its blob's bytes before
+it sends the request, as the payload profile carries media, and MUST
+NOT send a `sidecar:` URL to a provider, which cannot resolve it. A
+reader that resolves the references, to replay a call against a model,
+resolves them after it rebuilds and hashes the request. Converting an
+item's media between the two forms is the writer's, before it records
+the item: a store MUST NOT, as RFC 0002 says, since the item's bytes
+are hashed.
 
 `request_hash` and an entry's hashes have different jobs. The entry
 hash identifies a record, `ts` included, so a replay never collides
@@ -2369,6 +2382,12 @@ reader of 0.13 refuses those files until it is upgraded.
   a 0.13 file that held one under another meaning, which it was free
   to, rebuilds requests differently under 0.14, and no writer of this
   library wrote one.
+
+- Request hash says which form a sidecar session hashes: the request
+  with each `sidecar:` URL as recorded, while the provider is sent the
+  blob's bytes. 0.13 said the request "as it was sent", which no reader
+  of a sidecar session can rebuild. No writer of this library wrote a
+  sidecar session's hash any other way.
 
 - A run written `resume` whose segment holds record entries alone, no
   entry in context and no `dispatch` or `decision`, is accepted as

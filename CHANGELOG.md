@@ -7,6 +7,13 @@ versions may break the API.
 
 ## Unreleased
 
+- **Which form a sidecar session's request hash covers (RFC 0001 0.14,
+  Request hash).** The request as recorded, each `sidecar:` URL as the
+  item holds it, which is the only form a reader can rebuild; a writer
+  resolves the URLs to the blobs' bytes before sending and never sends
+  one to a provider. This is what the library already computed;
+  `RequestHash` says so, and a test holds it. (#5)
+
 - **Two conformance fixtures for rules nothing measured (RFC 0001,
   Conformance).** `refold.jsonl` has two compactions on a path, the
   second restating one pin and dropping the other, so a reader that
