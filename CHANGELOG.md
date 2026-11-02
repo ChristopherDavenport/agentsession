@@ -47,6 +47,29 @@ versions may break the API.
   `MaxMediaTypeLen`, `ErrBadMediaType`, `BlobMediaType`,
   `SidecarTypeName`, `ReadSidecarType`, `cas.Closure.BlobTypes`.**
 
+  A type is held per session too (RFC 0002, Media), and a store serving
+  several principals holds it only so, since a type per blob let one
+  principal learn whether another held some bytes and fix the type
+  another's sessions resolve to. `SessionBlobTyper` sets and reads a
+  session's types, the first kept and deleted with the session (memory;
+  jsonl `media/sessions/<id>/<hex>.type`; sqlite `session_blob_types`;
+  cas `sessions/<id>/mediatypes/<hex>`), and `SessionBlobReader`
+  (`ReadSessionBlob`) reads a blob as a session holds it, falling back
+  to the store's type for a library store. An import, a cas push and a
+  fetch give the session the types they carry and leave the store's
+  own. RFC 0003's server keeps an upload's type for its uploader, gives
+  it to the session an append or an import naming the blob lands in, a
+  fork its origin's, and a push's `media_types`, held blobs included;
+  `GET /v1/objects/media/{hash}?session={id}` (`Client.SessionBlob`)
+  answers that session's type, a plain `GET` the caller's own upload's,
+  and every media `GET` carries `X-Content-Type-Options: nosniff`,
+  `Content-Disposition: attachment` and `Content-Security-Policy:
+  sandbox; default-src 'none'`. A type is what an RFC 2397 data URL
+  carries: tokens, `;attribute=value` parameters, no space, quote or
+  comma. sqlite checks a stored type on read. **Added:
+  `SessionBlobTyper`, `SessionBlobReader`, `ReadSessionBlob`,
+  `CheckBlobTypes`, `Client.SessionBlob`.**
+
 ## v0.0.32 - 2026-11-02
 
 - **Format 0.15 (RFC 0001, draft 0.15).** `Format` and `FormatMinor`
