@@ -230,6 +230,7 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 	for _, o := range opts {
 		o(h)
 	}
+	h.uploads.grace = h.uploadGrace
 	h.ctx, h.cancel = context.WithCancel(context.Background())
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/{$}", h.guard("", h.capabilities))

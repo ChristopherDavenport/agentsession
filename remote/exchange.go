@@ -83,6 +83,10 @@ func validSpace(s string) bool {
 type uploads struct {
 	mu sync.Mutex
 	by map[string]map[objKey]upload
+	// grace is the longest grace a read has asked about, and pruned when
+	// every principal's uploads were last looked at for it.
+	grace  time.Duration
+	pruned time.Time
 }
 
 // upload is when a principal last uploaded an object, and the media type
@@ -95,6 +99,7 @@ type upload struct {
 func (u *uploads) put(who string, k objKey, mediaType string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.prune()
 	if u.by == nil {
 		u.by = map[string]map[objKey]upload{}
 	}
@@ -126,12 +131,34 @@ func (u *uploads) typeOf(who, hash string, grace time.Duration) string {
 func (u *uploads) get(who string, k objKey, grace time.Duration) (upload, bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.grace = max(u.grace, grace)
+	u.prune()
 	up, ok := u.by[who][k]
 	if ok && time.Since(up.at) > grace {
 		delete(u.by[who], k)
 		return upload{}, false
 	}
 	return up, ok
+}
+
+// prune drops every principal's uploads past the grace, at most once a
+// quarter grace, so what the server holds of uploads, their types among
+// it, is bounded by what arrives within a grace. The caller holds mu.
+func (u *uploads) prune() {
+	if u.grace <= 0 || time.Since(u.pruned) < u.grace/4 {
+		return
+	}
+	u.pruned = time.Now()
+	for who, ups := range u.by {
+		for k, up := range ups {
+			if time.Since(up.at) > u.grace {
+				delete(ups, k)
+			}
+		}
+		if len(ups) == 0 {
+			delete(u.by, who)
+		}
+	}
 }
 
 // bindTypes gives session the types who uploaded the blobs a write that
