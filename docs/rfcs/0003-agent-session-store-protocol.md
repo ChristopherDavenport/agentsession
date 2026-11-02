@@ -676,7 +676,11 @@ later one, as RFC 0002's Sessions say.
   - A line naming a sidecar blob the caller uploaded with a type, within
     `upload_grace_ms`, gives the session that type for the blob, unless
     the session holds one (RFC 0002, Media). A create of a fork gives it
-    the types its origin holds for the blobs its prefix names.
+    the types its origin holds for the blobs its prefix names, then and
+    never after: a blob a later append names takes its writer's type
+    alone, so a fork's type never tells its writers, who may not read
+    the origin, what the origin holds for a blob it named after the fork
+    point.
   - `unresolved` lists references the server could not resolve: a
     sidecar blob the caller reaches through a session that names it and
     the store lacks, or a convergence into a session it does not hold.

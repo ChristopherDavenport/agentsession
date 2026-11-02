@@ -181,11 +181,8 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	if fresh && sess.Header().Base != "" {
-		// A fork takes its origin's types for the blobs its prefix names.
-		if names, err := agentsession.SessionBlobs(sess); err == nil {
-			h.bindTypes(r.Context(), h.principal(r).Name, sess, names)
-		}
+	if fresh {
+		h.inheritTypes(r.Context(), sess)
 	}
 	resp := createResponse{Header: sess.Header(), Incarnation: incarnation(sess.Header())}
 	if resp.Session, err = snapshotOf(sess); err != nil {

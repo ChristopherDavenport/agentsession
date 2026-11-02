@@ -529,6 +529,61 @@ func TestMediaTypesPerPrincipal(t *testing.T) {
 	}
 }
 
+// TestForkTypesAtCreation: a fork takes its origin's types when it is
+// created, for the blobs its prefix names, and never after: a blob its
+// own append names takes its writer's type, not the one the origin
+// holds for a blob it named after the fork point, which would tell the
+// fork's writer what the origin holds.
+func TestForkTypesAtCreation(t *testing.T) {
+	ctx := context.Background()
+	// A jsonl store, whose listing changes with an append, so the server
+	// sees what the fork's later append names.
+	st, err := jsonl.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	rw := []remote.Scope{remote.ScopeRead, remote.ScopeWrite}
+	url := server(t, st, remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{
+		"alice": {Name: "alice", Scopes: rw},
+		"bob":   {Name: "bob", Scopes: rw},
+	})))
+	a, b := dial(t, url, withToken("alice", nil)), dial(t, url, withToken("bob", nil))
+	x, err := a.PutTypedBlob(ctx, []byte("before the fork"), "image/png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Create(ctx, agentsession.Header{ID: "origin", Media: agentsession.MediaSidecar}); err != nil {
+		t.Fatal(err)
+	}
+	at, err := a.Append(ctx, "origin", user("see sidecar:"+x))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Create(ctx, agentsession.Header{ID: "fork", Media: agentsession.MediaSidecar, Base: at, ParentSession: "origin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, mt, err := b.SessionBlob(ctx, "fork", x); err != nil || mt != "image/png" {
+		t.Errorf("a blob the fork's prefix names: %q, %v; want the origin's image/png", mt, err)
+	}
+	y, err := a.PutTypedBlob(ctx, []byte("after the fork"), "image/gif")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Append(ctx, "origin", user("see sidecar:"+y)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.PutBlob(ctx, []byte("after the fork")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Append(ctx, "fork", user("see sidecar:"+y)); err != nil {
+		t.Fatal(err)
+	}
+	if _, mt, err := b.SessionBlob(ctx, "fork", y); err != nil || mt != "" {
+		t.Errorf("a blob the fork's own append names: %q, %v; want none, its writer's, not the origin's", mt, err)
+	}
+}
+
 // noBlobs is a store with nothing but the Store interface: no blobs.
 type noBlobs struct{ agentsession.Store }
 

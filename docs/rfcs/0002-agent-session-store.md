@@ -837,7 +837,8 @@ read of the blob for that session returns, and what the session's
 projection writes beside the blob. It comes with the write that names
 the blob: the type the writer stored the blob with, the type a push
 carries for it, the type an import's directory gives it, and, for a
-fork, the type its origin held for a blob its prefix names. A type once
+fork, as it is created and never after, the type its origin held for a
+blob its prefix names. A type once
 held for a session and a blob never changes, so what a reference
 resolves to never changes while the session holds it; a write giving
 another type, or none, succeeds and keeps it, and a session that holds

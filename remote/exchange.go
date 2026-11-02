@@ -136,33 +136,58 @@ func (u *uploads) get(who string, k objKey, grace time.Duration) (upload, bool) 
 
 // bindTypes gives session the types who uploaded the blobs a write that
 // landed in it names with, as RFC 0003's Writing and Import have the
-// session take them, and, for a fork, the types its origin holds for
-// the blobs it names, each unless the session holds one. A failure is
+// session take them, each unless the session holds one. A failure is
 // logged: the write has landed, and the session resolves the blob with
 // no type until a write gives it one.
 func (h *Handler) bindTypes(ctx context.Context, who string, sess *agentsession.Session, names []string) {
-	typer, ok := h.store.(agentsession.SessionBlobTyper)
-	if !ok || len(names) == 0 {
-		return
-	}
-	id := sess.Header().ID
 	types := map[string]string{}
 	for _, b := range names {
 		if mt := h.uploads.typeOf(who, b, h.uploadGrace); mt != "" {
 			types[b] = mt
 		}
 	}
-	if origin := sess.Header().ParentSession; sess.Header().Base != "" && origin != "" && origin != id {
-		held, err := typer.SessionBlobTypes(ctx, origin)
-		if err == nil {
-			for _, b := range names {
-				if _, ok := types[b]; !ok && held[b] != "" {
-					types[b] = held[b]
-				}
+	h.setTypes(ctx, sess.Header().ID, types)
+}
+
+// inheritTypes gives a fork, as it is created or imported, the types its
+// origin holds for the blobs its prefix names, and no others: a blob the
+// origin names after the fork point is none of the fork's, and a type
+// the fork took for it later would tell the fork's writers, who may not
+// read the origin, what the origin holds. The caller was authorized to
+// read the origin for the create.
+func (h *Handler) inheritTypes(ctx context.Context, sess *agentsession.Session) {
+	hdr := sess.Header()
+	typer, ok := h.store.(agentsession.SessionBlobTyper)
+	if !ok || hdr.Base == "" || hdr.ParentSession == "" || hdr.ParentSession == hdr.ID {
+		return
+	}
+	held, err := typer.SessionBlobTypes(ctx, hdr.ParentSession)
+	if err != nil || len(held) == 0 {
+		return
+	}
+	types := map[string]string{}
+	for _, e := range sess.Entries() {
+		if !sess.Prefix(e.Base().ID) {
+			continue
+		}
+		names, err := agentsession.SidecarBlobs(e)
+		if err != nil {
+			return
+		}
+		for _, b := range names {
+			if held[b] != "" {
+				types[b] = held[b]
 			}
 		}
 	}
-	if len(types) == 0 {
+	h.setTypes(ctx, hdr.ID, types)
+}
+
+// setTypes gives a session types unless it holds one for a blob,
+// logging a failure.
+func (h *Handler) setTypes(ctx context.Context, id string, types map[string]string) {
+	typer, ok := h.store.(agentsession.SessionBlobTyper)
+	if !ok || len(types) == 0 {
 		return
 	}
 	if err := typer.SetSessionBlobTypes(ctx, id, types); err != nil {
