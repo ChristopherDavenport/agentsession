@@ -5,6 +5,15 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Format 0.16 (RFC 0001, draft 0.16).** `Format` and `FormatMinor`
+  name 0.16, so a writer raises every file it appends to and a reader
+  of 0.15 refuses it; a 0.5 to 0.15 file reads as it stands and no
+  entry hash moves. The generated fixtures and export goldens carry the
+  new header. 0.16 changes nothing in the file: it adds the type file
+  beside a sidecar blob.
+
 ## v0.0.32 - 2026-11-02
 
 - **Format 0.15 (RFC 0001, draft 0.15).** `Format` and `FormatMinor`

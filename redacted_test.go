@@ -251,7 +251,8 @@ func TestNoRaise(t *testing.T) {
 		{"0.10, in Extra, to 0.12", Header{Format: "agentsession/0.10", Extra: map[string]json.RawMessage{"redacted_from": json.RawMessage(`{}`)}}, "agentsession/0.12", true},
 		{"0.12, without", Header{Format: "agentsession/0.12", Extra: map[string]json.RawMessage{"x.y": json.RawMessage(`1`)}}, Format, true},
 		{"0.13, typed, to 0.14", Header{Format: "agentsession/0.13", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o"}}, "agentsession/0.14", true},
-		{"0.14, typed, to 0.15", Header{Format: "agentsession/0.14", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o"}}, Format, true},
+		{"0.14, typed, to 0.15", Header{Format: "agentsession/0.14", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o"}}, "agentsession/0.15", true},
+		{"0.15, typed, to 0.16", Header{Format: "agentsession/0.15", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o"}}, Format, true},
 	} {
 		h := tt.h
 		err := h.Raise(tt.to)
