@@ -627,3 +627,51 @@ func TestKeptHeadSharesTheBranchTransaction(t *testing.T) {
 		t.Errorf("the database holds %d entries, want the 2 before the refused branch", n)
 	}
 }
+
+// TestMigrateAddsBlobType opens a database whose blobs table v0.0.32
+// wrote, without the media_type column, and expects the column added,
+// the blob it held read back with no type, and a type then given to it
+// kept.
+func TestMigrateAddsBlobType(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+	st, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("a blob v0.0.32 stored")
+	h := agentsession.HashBytes(data)
+	for _, q := range []string{
+		`DROP TABLE blobs`,
+		`CREATE TABLE blobs (hash TEXT PRIMARY KEY, data BLOB NOT NULL, stored INTEGER NOT NULL DEFAULT 0) STRICT`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO blobs (hash, data, stored) VALUES (?, ?, 1)`, h, data); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err = sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if got, mt, err := st.TypedBlob(ctx, h); err != nil || string(got) != string(data) || mt != "" {
+		t.Fatalf("the earlier blob: %q of type %q, %v", got, mt, err)
+	}
+	if _, err := st.PutTypedBlob(ctx, data, "image/avif"); err != nil {
+		t.Fatal(err)
+	}
+	if _, mt, err := st.TypedBlob(ctx, h); err != nil || mt != "image/avif" {
+		t.Errorf("the earlier blob given a type: %q, %v", mt, err)
+	}
+}

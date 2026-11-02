@@ -901,12 +901,76 @@ func (s *Store) Sweep(ctx context.Context, grace time.Duration) (int, error) {
 		}
 		lk.release()
 	}
+	if err := s.sweepMediaTypes(ctx, young); err != nil {
+		return dropped, err
+	}
 	s.cleanPackDir(young)
 	s.cleanStaging(young)
 	if err := s.objs.prune(); err != nil {
 		return dropped, err
 	}
 	return dropped, nil
+}
+
+// sweepMediaTypes removes the type of each blob the store no longer
+// holds, as RFC 0002 has a blob's type go with it, so bytes stored again
+// take the type they are then given; and a type write's temporary file
+// a crash left, once older than young. A type is written under the
+// sweep's lock shared, after its blob, so under the lock exclusive a
+// type whose blob is not held is one whose blob this sweep, or an
+// earlier one, took, or one a crash left between a blob's going and its
+// type's.
+func (s *Store) sweepMediaTypes(ctx context.Context, young time.Time) error {
+	dir := filepath.Join(s.root, mediaTypesDir)
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var names []string
+	for _, e := range ents {
+		name := e.Name()
+		if strings.HasPrefix(name, ".tmp-") {
+			if info, err := e.Info(); err == nil && info.ModTime().Before(young) {
+				os.Remove(filepath.Join(dir, name))
+			}
+			continue
+		}
+		if agentsession.ValidHash(agentsession.HashPrefix + name) {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	lk, err := s.sweepLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer lk.release()
+	if err := s.objs.reloadPacks(true); err != nil {
+		return err
+	}
+	removed := false
+	for _, name := range names {
+		held, err := s.HasObject(ctx, SpaceMedia, agentsession.HashPrefix+name)
+		if err != nil {
+			return err
+		}
+		if held {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		removed = true
+	}
+	if removed {
+		return s.objs.fsyncDir(dir)
+	}
+	return nil
 }
 
 // cleanStaging removes what a crash left staged or discarded: a session

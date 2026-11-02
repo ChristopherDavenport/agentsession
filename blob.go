@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"mime"
 	"regexp"
 	"strings"
 	"time"
@@ -30,6 +31,84 @@ type BlobWriter interface {
 // [ErrNoBlob] for one it does not hold.
 type BlobReader interface {
 	Blob(ctx context.Context, hash string) ([]byte, error)
+}
+
+// TypedBlobWriter is implemented by a store that keeps a blob's media
+// type beside it, as RFC 0002's Media section has every store that
+// holds sidecar media do: PutTypedBlob stores the blob as PutBlob does,
+// with mediaType, the type of the data URL the blob replaced. The type
+// is outside every hash: the hash returned, and the sidecar: URL that
+// names the blob, are of the bytes alone.
+//
+// A type once held never changes. Storing bytes the store holds with
+// another type, or with none, keeps the type held; storing them with a
+// type where the store holds none gives them that one. An empty
+// mediaType, or [DefaultMediaType] with no parameters, is none, and
+// PutBlob is PutTypedBlob with none. A type that is not a media type is
+// refused with [ErrBadMediaType]. A sweep that removes the blob removes
+// its type.
+//
+// It is an interface of its own, beside [BlobWriter], so a writer
+// declared against BlobWriter, or an interface of the same shape
+// declared elsewhere, is satisfied as it was.
+type TypedBlobWriter interface {
+	BlobWriter
+	PutTypedBlob(ctx context.Context, data []byte, mediaType string) (string, error)
+}
+
+// TypedBlobReader is implemented by a store that returns a blob with its
+// media type: TypedBlob returns the bytes and the type they were stored
+// with, as given, and "" for a blob held with none, which a reader that
+// needs a type reads as [DefaultMediaType]. A blob the store does not
+// hold is an error wrapping [ErrNoBlob].
+type TypedBlobReader interface {
+	BlobReader
+	TypedBlob(ctx context.Context, hash string) (data []byte, mediaType string, err error)
+}
+
+// DefaultMediaType is the type a reader gives a blob held with none, as
+// RFC 0002's Media section says: a writer resolving a sidecar: URL to a
+// data URL for a provider uses it for such a blob. Given to a store as
+// a blob's type with no parameters, it says no more than none, and the
+// store holds the blob with none.
+const DefaultMediaType = "application/octet-stream"
+
+// MaxMediaTypeLen is the longest media type a store of this library
+// keeps; it refuses a longer one with [ErrBadMediaType], as RFC 0002
+// lets a store, rather than shorten it.
+const MaxMediaTypeLen = 1024
+
+// ErrBadMediaType is returned for a blob's media type that is not one:
+// a store refuses to keep it, and an import refuses a sidecar directory
+// whose type file holds one.
+var ErrBadMediaType = errors.New("agentsession: not a media type")
+
+// BlobMediaType checks a blob's media type as a store keeps it, RFC
+// 6838's type/subtype with any parameters, and returns what the store
+// holds for it: the type as given, or "" for none, which an empty type
+// and [DefaultMediaType] with no parameters both are. A type that is
+// not printable US-ASCII, has no subtype, does not parse, or is longer
+// than [MaxMediaTypeLen] is [ErrBadMediaType].
+func BlobMediaType(t string) (string, error) {
+	if t == "" || strings.EqualFold(t, DefaultMediaType) {
+		return "", nil
+	}
+	if len(t) > MaxMediaTypeLen {
+		return "", fmt.Errorf("%w: %d bytes, longer than %d", ErrBadMediaType, len(t), MaxMediaTypeLen)
+	}
+	for i := 0; i < len(t); i++ {
+		if t[i] < 0x20 || t[i] > 0x7e {
+			return "", fmt.Errorf("%w: %q", ErrBadMediaType, t)
+		}
+	}
+	base, _, err := mime.ParseMediaType(t)
+	if err != nil || strings.TrimSpace(t) != t {
+		return "", fmt.Errorf("%w: %q", ErrBadMediaType, t)
+	}
+	if typ, sub, ok := strings.Cut(base, "/"); !ok || typ == "" || sub == "" {
+		return "", fmt.Errorf("%w: %q has no subtype", ErrBadMediaType, t)
+	}
+	return t, nil
 }
 
 // BlobSweeper is implemented by a store whose blobs RFC 0002's sweep
@@ -136,20 +215,67 @@ func ReadSidecarBlob(media fs.FS, hash string) ([]byte, error) {
 	return data, nil
 }
 
+// SidecarTypeName is the name RFC 0001 gives, since format 0.16, the
+// file in a session's sidecar directory that holds the media type of
+// the blob named hash: its hex digest and ".type".
+func SidecarTypeName(hash string) string {
+	return strings.TrimPrefix(hash, HashPrefix) + ".type"
+}
+
+// ReadSidecarType reads the media type of the blob named hash from a
+// session's sidecar directory, the file [SidecarTypeName] names, one
+// trailing LF ignored, and returns it as [BlobMediaType] does: "" for a
+// blob whose directory holds no type file, as one a 0.15 writer
+// projected. A file that holds no media type is [ErrBadMediaType].
+func ReadSidecarType(media fs.FS, hash string) (string, error) {
+	if !ValidHash(hash) {
+		return "", fmt.Errorf("agentsession: blob %q: not a hash", hash)
+	}
+	if media == nil {
+		return "", nil
+	}
+	data, err := fs.ReadFile(media, SidecarTypeName(hash))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	t, err := BlobMediaType(strings.TrimSuffix(string(data), "\n"))
+	if err != nil {
+		return "", fmt.Errorf("agentsession: blob %s: its type file: %w", hash, err)
+	}
+	return t, nil
+}
+
+// putBlobTyped stores a blob through bw with mediaType: by
+// [TypedBlobWriter] when bw is one, and by PutBlob, the type left
+// behind, when it is not.
+func putBlobTyped(ctx context.Context, bw BlobWriter, data []byte, mediaType string) (string, error) {
+	if tw, ok := bw.(TypedBlobWriter); ok {
+		return tw.PutTypedBlob(ctx, data, mediaType)
+	}
+	return bw.PutBlob(ctx, data)
+}
+
 // ImportMedia imports an RFC 0001 file into st with the session's
 // sidecar directory, media, as RFC 0002's import of a projection does:
 // it verifies each blob the session's items name against its name and
-// stores it, and returns the hashes of those the directory lacks and the
-// store does not hold, unresolved, as an append reports one. The session
+// stores it, with the media type the directory gives it beside it
+// ([ReadSidecarType]), and returns the hashes of those the directory
+// lacks and the store does not hold, unresolved, as an append reports
+// one. The session
 // is imported either way; one with an unresolved blob cannot be pushed
 // or projected until the blob arrives. A blob that fails its name refuses
-// the import with [ErrBlobMismatch]. A session whose media is not
+// the import with [ErrBlobMismatch], and a type file that holds no media
+// type with [ErrBadMediaType]. A session whose media is not
 // sidecar is imported as [Importer.Import] does, and media is not read.
 //
 // A store that implements [MediaImporter] does the whole of it. For one
 // that does not, a sidecar session needs a [BlobWriter], or it is
-// refused with [ErrNoBlobWriter]; the file is imported first and the
-// blobs stored after, so a refused import stores nothing, and a failure
+// refused with [ErrNoBlobWriter], and its types are kept when it is a
+// [TypedBlobWriter]; the file is imported first and the blobs stored
+// after, so a refused import stores nothing, and a failure
 // between the two leaves the blobs unresolved, which another call to
 // PutBlob resolves. Where the store is no [BlobReader] either, a blob
 // the directory lacks is reported unresolved though the store may hold
@@ -179,12 +305,16 @@ func ImportMedia(ctx context.Context, st Importer, r io.Reader, media fs.FS, asR
 		return nil, nil, err
 	}
 	blobs := make(map[string][]byte, len(hashes))
+	types := map[string]string{}
 	var unresolved []string
 	for _, h := range hashes {
 		b, err := ReadSidecarBlob(media, h)
 		switch {
 		case err == nil:
 			blobs[h] = b
+			if types[h], err = ReadSidecarType(media, h); err != nil {
+				return nil, nil, err
+			}
 		case errors.Is(err, fs.ErrNotExist):
 			if br, ok := st.(BlobReader); ok {
 				if _, err := br.Blob(ctx, h); err == nil {
@@ -205,7 +335,7 @@ func ImportMedia(ctx context.Context, st Importer, r io.Reader, media fs.FS, asR
 		if !ok {
 			continue
 		}
-		if _, err := bw.PutBlob(ctx, b); err != nil {
+		if _, err := putBlobTyped(ctx, bw, b, types[h]); err != nil {
 			return sess, unresolved, fmt.Errorf("agentsession: import: the session is imported, and blob %s could not be stored: %w", h, err)
 		}
 	}

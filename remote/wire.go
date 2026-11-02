@@ -387,6 +387,8 @@ func problemOf(err error) *Problem {
 		return problem(CodeBadObject, "the bytes do not hash to the name", "")
 	case errors.Is(err, agentsession.ErrNoBlob):
 		return problem(CodeNoObject, "no such object", "")
+	case errors.Is(err, agentsession.ErrBadMediaType):
+		return problem(CodeBadRequest, "not a media type", err.Error())
 	}
 	for reason, sentinel := range reasons {
 		if errors.Is(err, sentinel) {

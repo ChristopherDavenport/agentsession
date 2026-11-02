@@ -962,27 +962,42 @@ func TestMediaDefault(t *testing.T) {
 }
 
 // TestSidecarMedia: a blob is held once, kept by the sweep while a
-// content names it, and written beside a sidecar session's projection.
+// content names it, and written beside a sidecar session's projection,
+// its media type beside it; a blob the sweep takes takes its type, so
+// its bytes stored again take the type they are then given.
 func TestSidecarMedia(t *testing.T) {
 	ctx := context.Background()
 	st, _ := Open(t.TempDir())
 	defer st.Close()
 	st.Create(ctx, agentsession.Header{ID: "s", Media: agentsession.MediaSidecar})
-	blob, err := st.PutBlob(ctx, []byte("PNG bytes"))
+	blob, err := st.PutTypedBlob(ctx, []byte("PNG bytes"), "image/png")
 	if err != nil {
 		t.Fatal(err)
 	}
-	item := agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputImage{ImageURL: "sidecar:" + blob}))
+	untyped, err := st.PutBlob(ctx, []byte("bytes of no type"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputImage{ImageURL: "sidecar:" + blob}, &openresponses.InputImage{ImageURL: "sidecar:" + untyped}))
 	mustAppend(t, st, "s", item)
-	orphan, _ := st.PutBlob(ctx, []byte("nothing names this"))
+	orphan, _ := st.PutTypedBlob(ctx, []byte("nothing names this"), "text/x-before")
 	if n, err := st.Sweep(ctx, 0); err != nil || n != 1 {
 		t.Errorf("sweep = %d, %v; want the orphan blob alone", n, err)
 	}
-	if _, err := st.Blob(ctx, blob); err != nil {
-		t.Errorf("the named blob was swept: %v", err)
+	if _, mt, err := st.TypedBlob(ctx, blob); err != nil || mt != "image/png" {
+		t.Errorf("the named blob after a sweep: type %q, %v", mt, err)
 	}
 	if _, err := st.Blob(ctx, orphan); err == nil {
 		t.Error("the orphan blob survived")
+	}
+	if _, err := os.Stat(st.mediaTypePath(orphan)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the orphan blob's type survived it: %v", err)
+	}
+	if _, err := st.PutTypedBlob(ctx, []byte("nothing names this"), "text/x-after"); err != nil {
+		t.Fatal(err)
+	}
+	if _, mt, err := st.TypedBlob(ctx, orphan); err != nil || mt != "text/x-after" {
+		t.Errorf("the orphan's bytes stored again: type %q, %v; want text/x-after", mt, err)
 	}
 	dir := t.TempDir()
 	path, err := st.ProjectDir(ctx, dir, "s")
@@ -995,6 +1010,26 @@ func TestSidecarMedia(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "s", strings.TrimPrefix(blob, agentsession.HashPrefix)))
 	if err != nil || string(data) != "PNG bytes" {
 		t.Errorf("blob beside the file: %q, %v", data, err)
+	}
+	if mt, err := agentsession.ReadSidecarType(os.DirFS(filepath.Join(dir, "s")), blob); err != nil || mt != "image/png" {
+		t.Errorf("type beside the blob: %q, %v", mt, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "s", agentsession.SidecarTypeName(untyped))); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a type file beside a blob with none: %v", err)
+	}
+	// The projection imports into another store with its types.
+	other, _ := Open(t.TempDir())
+	defer other.Close()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, unresolved, err := other.ImportMedia(ctx, f, os.DirFS(filepath.Join(dir, "s")), true); err != nil || len(unresolved) != 0 {
+		t.Fatalf("import of the projection: %v, unresolved %v", err, unresolved)
+	}
+	if _, mt, err := other.TypedBlob(ctx, blob); err != nil || mt != "image/png" {
+		t.Errorf("the imported blob: type %q, %v", mt, err)
 	}
 }
 

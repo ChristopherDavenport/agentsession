@@ -12,25 +12,39 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 )
 
-// PutBlob implements [agentsession.BlobWriter]: it stores the blob in
-// the blobs table under its hash, held once for every session that
-// names it, as RFC 0002's Media section has a store hold one. A blob the
-// store holds keeps its bytes, and its grace for [Store.SweepBlobs]
-// starts again. The write is a transaction, durable as the database's
-// other commits are.
+// PutBlob implements [agentsession.BlobWriter]: it is PutTypedBlob
+// with no media type.
 func (s *Store) PutBlob(ctx context.Context, data []byte) (string, error) {
+	return s.PutTypedBlob(ctx, data, "")
+}
+
+// PutTypedBlob implements [agentsession.TypedBlobWriter]: it stores the
+// blob in the blobs table under its hash, held once for every session
+// that names it, as RFC 0002's Media section has a store hold one, with
+// its media type in the row's media_type, ” for none. A blob the store
+// holds keeps its bytes and a type it has, takes the type given when it
+// has none, and its grace for [Store.SweepBlobs] starts again. The
+// write is a transaction, durable as the database's other commits are.
+func (s *Store) PutTypedBlob(ctx context.Context, data []byte, mediaType string) (string, error) {
 	if s.readOnly {
 		return "", agentsession.ErrReadOnly
 	}
+	mt, err := agentsession.BlobMediaType(mediaType)
+	if err != nil {
+		return "", err
+	}
 	hash := agentsession.HashBytes(data)
-	if _, err := s.w.ExecContext(ctx, `INSERT INTO blobs (hash, data, stored) VALUES (?, ?, ?) ON CONFLICT (hash) DO UPDATE SET stored = excluded.stored`, hash, data, time.Now().UnixNano()); err != nil {
+	if _, err := s.w.ExecContext(ctx, `INSERT INTO blobs (hash, data, stored, media_type) VALUES (?, ?, ?, ?)
+ON CONFLICT (hash) DO UPDATE SET stored = excluded.stored,
+	media_type = CASE WHEN blobs.media_type = '' THEN excluded.media_type ELSE blobs.media_type END`, hash, data, time.Now().UnixNano(), mt); err != nil {
 		return "", fmt.Errorf("sqlite: blob %s: %w", hash, err)
 	}
 	return hash, nil
 }
 
 // SweepBlobs implements [agentsession.BlobSweeper]: it removes each blob
-// stored longer than grace ago that no session's entries name, in one
+// stored longer than grace ago that no session's entries name, its type
+// with it, since the type is a column of its row, in one
 // write transaction, so no write names a blob between the sweep's
 // reading the entries and its removing one.
 func (s *Store) SweepBlobs(ctx context.Context, grace time.Duration) (int, error) {
@@ -101,19 +115,28 @@ var sidecarRef = regexp.MustCompile(`sidecar:sha256:[0-9a-f]{64}`)
 
 // Blob implements [agentsession.BlobReader].
 func (s *Store) Blob(ctx context.Context, hash string) ([]byte, error) {
+	data, _, err := s.TypedBlob(ctx, hash)
+	return data, err
+}
+
+// TypedBlob implements [agentsession.TypedBlobReader].
+func (s *Store) TypedBlob(ctx context.Context, hash string) ([]byte, string, error) {
 	var data []byte
-	err := s.r.QueryRowContext(ctx, `SELECT data FROM blobs WHERE hash = ?`, hash).Scan(&data)
+	var mt string
+	err := s.r.QueryRowContext(ctx, `SELECT data, media_type FROM blobs WHERE hash = ?`, hash).Scan(&data, &mt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoBlob, hash)
+		return nil, "", fmt.Errorf("%w: %s", agentsession.ErrNoBlob, hash)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("sqlite: blob %s: %w", hash, err)
+		return nil, "", fmt.Errorf("sqlite: blob %s: %w", hash, err)
 	}
-	return data, nil
+	return data, mt, nil
 }
 
 var (
-	_ agentsession.BlobWriter  = (*Store)(nil)
-	_ agentsession.BlobReader  = (*Store)(nil)
-	_ agentsession.BlobSweeper = (*Store)(nil)
+	_ agentsession.BlobWriter      = (*Store)(nil)
+	_ agentsession.BlobReader      = (*Store)(nil)
+	_ agentsession.TypedBlobWriter = (*Store)(nil)
+	_ agentsession.TypedBlobReader = (*Store)(nil)
+	_ agentsession.BlobSweeper     = (*Store)(nil)
 )

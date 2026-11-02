@@ -13,10 +13,14 @@ import (
 	"github.com/ChristopherDavenport/agentsession/cas"
 )
 
-// objectCache keeps the objects a client read, by space and hash. An
-// object never changes under its hash, so nothing in it goes stale.
+// objectCache keeps the objects a client read, by space and hash, and
+// the media types of the blobs among them that have one. An object
+// never changes under its hash, and nor does a type once held, so
+// nothing in it goes stale; a blob read with no type may be given one,
+// so its type is read again when asked for.
 type objectCache struct {
 	objects map[objKey][]byte
+	types   map[string]string
 }
 
 // Object reads an object the server holds and the caller may read: an
@@ -24,35 +28,56 @@ type objectCache struct {
 // blob (cas.SpaceMedia). The bytes are checked against the hash, and
 // kept, so each object is fetched once.
 func (c *Client) Object(ctx context.Context, space, hash string) ([]byte, error) {
+	data, _, err := c.object(ctx, space, hash, false)
+	return data, err
+}
+
+// object is Object, with a media blob's type, the Content-Type the
+// server sent, "" for none. With typed set, a blob the cache holds with
+// no type is read again, since a later upload may have given it one.
+func (c *Client) object(ctx context.Context, space, hash string, typed bool) ([]byte, string, error) {
 	k := objKey{space, hash}
 	c.mu.Lock()
 	data, ok := c.cache.objects[k]
+	mt, hasType := c.cache.types[hash]
 	c.mu.Unlock()
-	if ok {
-		return data, nil
+	if ok && (!typed || hasType || space != cas.SpaceMedia) {
+		return data, mt, nil
 	}
 	if !validSpace(space) || !agentsession.ValidHash(hash) {
-		return nil, fmt.Errorf("%w: %s %q", cas.ErrNoObject, space, hash)
+		return nil, "", fmt.Errorf("%w: %s %q", cas.ErrNoObject, space, hash)
 	}
 	resp, err := c.get(ctx, "/objects/"+space+"/"+hash, nil, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	data, err = io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
-		return nil, fmt.Errorf("remote: object %s: %w", hash, err)
+		return nil, "", fmt.Errorf("remote: object %s: %w", hash, err)
 	}
 	if agentsession.HashBytes(data) != hash {
-		return nil, fmt.Errorf("remote: object %s: %w", hash, cas.ErrBadObject)
+		return nil, "", fmt.Errorf("remote: object %s: %w", hash, cas.ErrBadObject)
+	}
+	mt = ""
+	if space == cas.SpaceMedia {
+		if mt, err = agentsession.BlobMediaType(resp.Header.Get("Content-Type")); err != nil {
+			return nil, "", fmt.Errorf("remote: object %s: %w", hash, err)
+		}
 	}
 	c.mu.Lock()
 	if c.cache.objects == nil {
 		c.cache.objects = map[objKey][]byte{}
 	}
 	c.cache.objects[k] = data
+	if mt != "" {
+		if c.cache.types == nil {
+			c.cache.types = map[string]string{}
+		}
+		c.cache.types[hash] = mt
+	}
 	c.mu.Unlock()
-	return data, nil
+	return data, mt, nil
 }
 
 // Missing asks which of the objects the server lacks for this caller:
@@ -75,9 +100,20 @@ func (c *Client) Missing(ctx context.Context, o Objects) (Objects, error) {
 	return out, nil
 }
 
-// PutObject uploads an object a push will name.
+// PutObject uploads an object a push will name. A media object goes
+// with no type; [Client.PutTypedBlob] uploads one with its type.
 func (c *Client) PutObject(ctx context.Context, space, hash string, data []byte) error {
-	resp, err := c.do(ctx, http.MethodPut, "/objects/"+space+"/"+hash, nil, http.Header{"Content-Type": {"application/octet-stream"}}, data)
+	return c.putObject(ctx, space, hash, data, "")
+}
+
+// putObject is PutObject, with a media object's type, "" for none, as
+// its Content-Type.
+func (c *Client) putObject(ctx context.Context, space, hash string, data []byte, mediaType string) error {
+	ctype := agentsession.DefaultMediaType
+	if space == cas.SpaceMedia && mediaType != "" {
+		ctype = mediaType
+	}
+	resp, err := c.do(ctx, http.MethodPut, "/objects/"+space+"/"+hash, nil, http.Header{"Content-Type": {ctype}}, data)
 	if err != nil {
 		return err
 	}
@@ -85,13 +121,24 @@ func (c *Client) PutObject(ctx context.Context, space, hash string, data []byte)
 	return nil
 }
 
-// PutBlob implements [agentsession.BlobWriter]: it uploads a sidecar
-// blob as a media object, which write scope may do, so a writer can
-// upload what the sidecar items it appends name. A server whose store
-// holds no sidecar media refuses it with [ErrUnsupported].
+// PutBlob implements [agentsession.BlobWriter]: it is PutTypedBlob with
+// no media type.
 func (c *Client) PutBlob(ctx context.Context, data []byte) (string, error) {
+	return c.PutTypedBlob(ctx, data, "")
+}
+
+// PutTypedBlob implements [agentsession.TypedBlobWriter]: it uploads a
+// sidecar blob as a media object, its media type the request's
+// Content-Type, which write scope may do, so a writer can upload what
+// the sidecar items it appends name. A server whose store holds no
+// sidecar media refuses it with [ErrUnsupported].
+func (c *Client) PutTypedBlob(ctx context.Context, data []byte, mediaType string) (string, error) {
+	mt, err := agentsession.BlobMediaType(mediaType)
+	if err != nil {
+		return "", err
+	}
 	hash := agentsession.HashBytes(data)
-	if err := c.PutObject(ctx, cas.SpaceMedia, hash, data); err != nil {
+	if err := c.putObject(ctx, cas.SpaceMedia, hash, data, mt); err != nil {
 		return "", err
 	}
 	return hash, nil
@@ -108,9 +155,22 @@ func (c *Client) Blob(ctx context.Context, hash string) ([]byte, error) {
 	return data, err
 }
 
+// TypedBlob implements [agentsession.TypedBlobReader]: Blob, with the
+// media type the server sent as the object's Content-Type, "" for
+// application/octet-stream.
+func (c *Client) TypedBlob(ctx context.Context, hash string) ([]byte, string, error) {
+	data, mt, err := c.object(ctx, cas.SpaceMedia, hash, true)
+	if errors.Is(err, cas.ErrNoObject) {
+		return nil, "", fmt.Errorf("%w: %w", agentsession.ErrNoBlob, err)
+	}
+	return data, mt, err
+}
+
 var (
-	_ agentsession.BlobWriter = (*Client)(nil)
-	_ agentsession.BlobReader = (*Client)(nil)
+	_ agentsession.BlobWriter      = (*Client)(nil)
+	_ agentsession.BlobReader      = (*Client)(nil)
+	_ agentsession.TypedBlobWriter = (*Client)(nil)
+	_ agentsession.TypedBlobReader = (*Client)(nil)
 )
 
 // DeclareRecord makes the server the record for a session it holds as a
@@ -257,7 +317,7 @@ func Push(ctx context.Context, local *cas.Store, c *Client, id string, opts cas.
 			upErr = fmt.Errorf("remote: push: the server asked for %s %s, which the push does not name", space, hash)
 			return
 		}
-		upErr = c.PutObject(ctx, space, hash, data)
+		upErr = c.putObject(ctx, space, hash, data, cl.BlobTypes[hash])
 	})
 	if upErr != nil {
 		return cas.Exchange{}, upErr

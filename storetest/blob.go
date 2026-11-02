@@ -159,3 +159,180 @@ func testBlobSweep(t *testing.T, opts Options) {
 		t.Errorf("a sweep after the blob was stored again: %d, %v; want 0", n, err)
 	}
 }
+
+// typed returns st as a store that keeps blob types, failing the test
+// for a store that holds blobs and keeps none, since RFC 0002's Media
+// section has every store that holds sidecar media keep a blob's type,
+// and false for one that holds no blobs.
+func typed(t *testing.T, st agentsession.Store) (agentsession.TypedBlobWriter, agentsession.TypedBlobReader, bool) {
+	t.Helper()
+	if _, ok := st.(agentsession.BlobWriter); !ok {
+		return nil, nil, false
+	}
+	tw, okw := st.(agentsession.TypedBlobWriter)
+	tr, okr := st.(agentsession.TypedBlobReader)
+	if !okw || !okr {
+		t.Errorf("a store that holds blobs keeps no types: TypedBlobWriter %v, TypedBlobReader %v", okw, okr)
+		return nil, nil, false
+	}
+	return tw, tr, true
+}
+
+// wantType reads the blob named h and checks its bytes and its type.
+func wantType(t *testing.T, tr agentsession.TypedBlobReader, what, h string, data []byte, mediaType string) {
+	t.Helper()
+	got, mt, err := tr.TypedBlob(context.Background(), h)
+	if err != nil {
+		t.Errorf("%s: %v", what, err)
+		return
+	}
+	if !bytes.Equal(got, data) || mt != mediaType {
+		t.Errorf("%s: %q of type %q; want %q of type %q", what, got, mt, data, mediaType)
+	}
+}
+
+// testBlobTypes holds a store to RFC 0002's rule for a blob's media
+// type: kept beside the blob, outside its hash, and returned as given;
+// once held never changed, by another type or by none; given to a blob
+// held with none; none for an empty type and for
+// application/octet-stream; and a type that is not one refused.
+func testBlobTypes(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	tw, tr, ok := typed(t, st)
+	if !ok {
+		return
+	}
+	png := []byte("png bytes")
+	const pngType = `image/png; name="a b"`
+	h, err := tw.PutTypedBlob(ctx, png, pngType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := agentsession.HashBytes(png); h != want {
+		t.Errorf("PutTypedBlob: %s, want %s, the hash of the bytes alone", h, want)
+	}
+	wantType(t, tr, "a typed blob", h, png, pngType)
+	if b, err := st.(agentsession.BlobReader).Blob(ctx, h); err != nil || !bytes.Equal(b, png) {
+		t.Errorf("Blob of a typed blob: %q, %v", b, err)
+	}
+	if again, err := tw.PutTypedBlob(ctx, png, "image/jpeg"); err != nil || again != h {
+		t.Errorf("PutTypedBlob again with another type: %s, %v", again, err)
+	}
+	wantType(t, tr, "a typed blob stored again with another type", h, png, pngType)
+	if _, err := tw.PutBlob(ctx, png); err != nil {
+		t.Fatal(err)
+	}
+	wantType(t, tr, "a typed blob stored again with none", h, png, pngType)
+
+	raw := []byte("bytes of no known type")
+	hr, err := tw.PutBlob(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantType(t, tr, "a blob stored with none", hr, raw, "")
+	if _, err := tw.PutTypedBlob(ctx, raw, agentsession.DefaultMediaType); err != nil {
+		t.Fatal(err)
+	}
+	wantType(t, tr, "a blob stored with application/octet-stream", hr, raw, "")
+	if _, err := tw.PutTypedBlob(ctx, raw, "text/plain;charset=utf-8"); err != nil {
+		t.Fatal(err)
+	}
+	wantType(t, tr, "a blob held with none given a type", hr, raw, "text/plain;charset=utf-8")
+
+	for _, bad := range []string{"png", "image/", "image/png\r\nX-Evil: 1", "image/png; =", " image/png", strings.Repeat("a", 600) + "/" + strings.Repeat("b", 600)} {
+		_, err := tw.PutTypedBlob(ctx, []byte("refused "+bad), bad)
+		wantErr(t, "PutTypedBlob with "+strconvQuote(bad), err, agentsession.ErrBadMediaType)
+	}
+	_, _, err = tr.TypedBlob(ctx, agentsession.HashBytes([]byte("never stored")))
+	wantErr(t, "TypedBlob of one never stored", err, agentsession.ErrNoBlob)
+}
+
+// strconvQuote quotes s for a test's message.
+func strconvQuote(s string) string {
+	if len(s) > 40 {
+		s = s[:40] + "…"
+	}
+	return "\"" + strings.ReplaceAll(s, "\r\n", `\r\n`) + "\""
+}
+
+// testImportBlobTypes holds an import of a sidecar session to RFC 0002:
+// each blob is stored with the type its directory gives it beside it,
+// one with no type file with none, and a type file that holds no media
+// type refuses the import, which leaves nothing.
+func testImportBlobTypes(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	_, tr, ok := typed(t, st)
+	if !ok {
+		return
+	}
+	im, ok := st.(agentsession.Importer)
+	if !ok {
+		t.Skip("the store does not import")
+	}
+	gif, plain := []byte("gif bytes"), []byte("bytes with no type file")
+	hg, hp := agentsession.HashBytes(gif), agentsession.HashBytes(plain)
+	sess := agentsession.New(agentsession.Header{ID: "typed-imp", Media: agentsession.MediaSidecar})
+	for _, b := range []string{hg, hp} {
+		if _, err := sess.Append(user("see sidecar:" + b)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file := fileOf(t, sess)
+	hex := func(h string) string { return strings.TrimPrefix(h, agentsession.HashPrefix) }
+
+	bad := fstest.MapFS{
+		hex(hg):                          {Data: gif},
+		agentsession.SidecarTypeName(hg): {Data: []byte("not a type\n")},
+		hex(hp):                          {Data: plain},
+	}
+	_, _, err := agentsession.ImportMedia(ctx, im, bytes.NewReader(file), bad, true)
+	wantErr(t, "an import whose type file holds no media type", err, agentsession.ErrBadMediaType)
+	if _, err := st.Open(ctx, "typed-imp"); err == nil {
+		t.Error("an import refused for its type file left its session")
+	}
+
+	dir := fstest.MapFS{
+		hex(hg):                          {Data: gif},
+		agentsession.SidecarTypeName(hg): {Data: []byte("image/gif\n")},
+		hex(hp):                          {Data: plain},
+	}
+	if _, unresolved, err := agentsession.ImportMedia(ctx, im, bytes.NewReader(file), dir, true); err != nil || len(unresolved) != 0 {
+		t.Fatalf("an import with its directory: %v, unresolved %v", err, unresolved)
+	}
+	wantType(t, tr, "an imported blob with a type file", hg, gif, "image/gif")
+	wantType(t, tr, "an imported blob with none", hp, plain, "")
+}
+
+// testBlobTypeSweep holds a store that sweeps its blobs to RFC 0002's
+// rule that a blob's type goes with it: bytes swept and stored again
+// take the type they are then given, not the one they had.
+func testBlobTypeSweep(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	sw, ok := st.(agentsession.BlobSweeper)
+	if !ok {
+		t.Skip("the store does not sweep its blobs")
+	}
+	tw, tr, ok := typed(t, st)
+	if !ok {
+		return
+	}
+	data := []byte("swept and stored again")
+	h, err := tw.PutTypedBlob(ctx, data, "text/x-before")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if n, err := sw.SweepBlobs(ctx, time.Millisecond); err != nil || n != 1 {
+		t.Fatalf("a sweep past the grace: %d, %v; want 1", n, err)
+	}
+	if _, _, err := tr.TypedBlob(ctx, h); !errors.Is(err, agentsession.ErrNoBlob) {
+		t.Errorf("the swept blob: %v, want ErrNoBlob", err)
+	}
+	if _, err := tw.PutTypedBlob(ctx, data, "text/x-after"); err != nil {
+		t.Fatal(err)
+	}
+	wantType(t, tr, "bytes swept and stored again", h, data, "text/x-after")
+}

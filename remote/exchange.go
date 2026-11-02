@@ -255,7 +255,11 @@ func (h *Handler) principal(r *http.Request) Principal {
 
 // objectGet serves an object's canonical bytes, to a caller it is
 // reachable by; HEAD answers the same without the body. A server over a
-// store that keeps no objects but holds sidecar blobs serves media.
+// store that keeps no objects but holds sidecar blobs serves media. A
+// media object's Content-Type is the blob's media type, and
+// application/octet-stream for one with none, which is not marked
+// immutable, since a later upload may give it a type (RFC 0003,
+// Objects).
 func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
 	k := objKey{r.PathValue("space"), r.PathValue("hash")}
 	if h.ex == nil && (k.space != cas.SpaceMedia || h.blobReader == nil) {
@@ -276,17 +280,30 @@ func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var data []byte
-	if h.ex != nil {
+	var mt string
+	tr, typed := h.blobReader.(agentsession.TypedBlobReader)
+	switch {
+	case k.space == cas.SpaceMedia && typed:
+		data, mt, err = tr.TypedBlob(r.Context(), k.hash)
+	case h.ex != nil:
 		data, err = h.ex.Object(r.Context(), k.space, k.hash)
-	} else {
+	default:
 		data, err = h.blobReader.Blob(r.Context(), k.hash)
 	}
 	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	if mt == "" {
+		w.Header().Set("Content-Type", agentsession.DefaultMediaType)
+	} else {
+		w.Header().Set("Content-Type", mt)
+	}
+	if k.space == cas.SpaceMedia && mt == "" {
+		w.Header().Set("Cache-Control", "private, no-cache")
+	} else {
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(data)
@@ -302,7 +319,9 @@ func (h *Handler) holdsMedia() bool { return h.ex != nil || h.blobs != nil }
 // succeeds and says nothing of it. Exchange scope uploads any object;
 // write scope uploads media, which a writer's sidecar items name (RFC
 // 0003, Objects). A server over a store that keeps no objects but holds
-// sidecar blobs takes media alone.
+// sidecar blobs takes media alone. A media upload's Content-Type is the
+// blob's media type, application/octet-stream or none being no type,
+// and the store keeps it as RFC 0002's Media section says.
 func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
 	k := objKey{r.PathValue("space"), r.PathValue("hash")}
 	who := h.principal(r)
@@ -327,11 +346,26 @@ func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, problem(CodeBadRequest, "the object is larger than the server takes", ""))
 		return
 	}
-	if h.ex != nil {
+	media := k.space == cas.SpaceMedia
+	var mt string
+	if media {
+		if mt, err = agentsession.BlobMediaType(r.Header.Get("Content-Type")); err != nil {
+			h.writeProblem(w, problem(CodeBadRequest, "the Content-Type is not a media type", err.Error()))
+			return
+		}
+	}
+	tw, typed := h.blobs.(agentsession.TypedBlobWriter)
+	switch {
+	case h.ex != nil && !(media && typed):
 		err = h.ex.PutObject(r.Context(), k.space, k.hash, data)
-	} else if agentsession.HashBytes(data) != k.hash {
+	case agentsession.HashBytes(data) != k.hash:
 		err = problem(CodeBadObject, "the bytes do not hash to the name", k.hash)
-	} else {
+	case typed:
+		if h.ex == nil {
+			h.sweepUploads(r.Context())
+		}
+		_, err = tw.PutTypedBlob(r.Context(), data, mt)
+	default:
 		h.sweepUploads(r.Context())
 		_, err = h.blobs.PutBlob(r.Context(), data)
 	}

@@ -84,9 +84,10 @@ CREATE TABLE IF NOT EXISTS ref_log (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS ref_log_name ON ref_log(name, id);
 CREATE TABLE IF NOT EXISTS blobs (
-	hash   TEXT    PRIMARY KEY,
-	data   BLOB    NOT NULL,
-	stored INTEGER NOT NULL DEFAULT 0
+	hash       TEXT    PRIMARY KEY,
+	data       BLOB    NOT NULL,
+	stored     INTEGER NOT NULL DEFAULT 0,
+	media_type TEXT    NOT NULL DEFAULT ''
 ) STRICT;
 `
 
@@ -304,6 +305,15 @@ func applySchema(w *sql.DB) error {
 // alone, so columns added later are added here and filled from the
 // stored entries.
 func migrate(tx *sql.Tx) error {
+	blobCols, _, err := columns(tx, "blobs")
+	if err != nil {
+		return err
+	}
+	if !blobCols["media_type"] {
+		if _, err := tx.Exec(`ALTER TABLE blobs ADD COLUMN media_type TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("sqlite: migrate: add media_type: %w", err)
+		}
+	}
 	cols, _, err := columns(tx, "sessions")
 	if err != nil {
 		return err

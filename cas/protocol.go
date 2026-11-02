@@ -146,7 +146,8 @@ func BlobsNamedBy(content []byte) []string { return blobsNamedBy(content) }
 
 // Closure is what an exchange carries: one session's header, mark and
 // head, its prefix (the path to its base, root first), its own entries
-// in log order, and the media blobs their contents name, by hash.
+// in log order, and the media blobs their contents name, by hash, with
+// the media types of those that have one.
 type Closure struct {
 	Header agentsession.Header
 	Mark   string
@@ -154,6 +155,10 @@ type Closure struct {
 	Prefix []agentsession.Entry
 	Own    []agentsession.Entry
 	Blobs  map[string][]byte
+	// BlobTypes are the blobs' media types by hash; a blob absent from
+	// it has none. A receiver gives a blob it holds the type sent unless
+	// it holds one already (RFC 0002, Media).
+	BlobTypes map[string]string
 }
 
 // Closure reads a session's closure as a push sends it, after committing
@@ -163,7 +168,7 @@ func (s *Store) Closure(ctx context.Context, id string) (Closure, error) {
 	if err != nil {
 		return Closure{}, err
 	}
-	return Closure{Header: b.header, Mark: b.mark, Head: b.head, Prefix: b.prefix, Own: b.own, Blobs: b.blobs}, nil
+	return Closure{Header: b.header, Mark: b.mark, Head: b.head, Prefix: b.prefix, Own: b.own, Blobs: b.blobs, BlobTypes: b.types}, nil
 }
 
 // ReceiveOptions are a received push's compare-and-swap and handover,
@@ -216,7 +221,12 @@ func (s *Store) Receive(ctx context.Context, c Closure, o ReceiveOptions) (Excha
 			return Exchange{}, fmt.Errorf("%w: media %s", ErrBadObject, h)
 		}
 	}
-	b := &bundle{header: c.Header, mark: MarkRecord, head: c.Head, prefix: c.Prefix, own: c.Own, blobs: c.Blobs}
+	for h, t := range c.BlobTypes {
+		if _, err := agentsession.BlobMediaType(t); err != nil {
+			return Exchange{}, fmt.Errorf("cas: exchange: media %s: %w", h, err)
+		}
+	}
+	b := &bundle{header: c.Header, mark: MarkRecord, head: c.Head, prefix: c.Prefix, own: c.Own, blobs: c.Blobs, types: c.BlobTypes}
 	if b.blobs == nil {
 		b.blobs = map[string][]byte{}
 	}

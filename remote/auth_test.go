@@ -360,6 +360,90 @@ func TestWriteScopeUploadsMedia(t *testing.T) {
 	}
 }
 
+// TestMediaTypeOnTheWire: a media upload's Content-Type is the blob's
+// media type, which the server's store keeps, and a GET returns it as
+// Content-Type, application/octet-stream for a blob with none, which
+// is not marked immutable, since a later upload may give it a type. A
+// Content-Type that is not a media type is bad_request, and an object
+// of another space is served as application/octet-stream as before.
+func TestMediaTypeOnTheWire(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		st   func(t *testing.T) agentsession.Store
+	}{
+		{"memory", func(t *testing.T) agentsession.Store { return agentsession.NewMemoryStore() }},
+		{"cas", func(t *testing.T) agentsession.Store {
+			st, err := cas.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			return st
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := tc.st(t)
+			base := server(t, st, remote.WithInsecureNoAuth())
+			put := func(data []byte, ctype string) *http.Response {
+				t.Helper()
+				req, err := http.NewRequestWithContext(ctx, http.MethodPut, base+"/v1/objects/media/"+agentsession.HashBytes(data), bytes.NewReader(data))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ctype != "" {
+					req.Header.Set("Content-Type", ctype)
+				}
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				return resp
+			}
+			get := func(data []byte) *http.Response {
+				t.Helper()
+				resp, err := http.Get(base + "/v1/objects/media/" + agentsession.HashBytes(data))
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				return resp
+			}
+			// A GET answers only for a blob the caller reaches; with no
+			// auth the server's one principal reaches its own uploads.
+			png := []byte("png bytes on the wire")
+			if resp := put(png, "image/png; q=1"); resp.StatusCode != http.StatusNoContent {
+				t.Fatalf("a typed upload: %s", resp.Status)
+			}
+			if _, mt, err := st.(agentsession.TypedBlobReader).TypedBlob(ctx, agentsession.HashBytes(png)); err != nil || mt != "image/png; q=1" {
+				t.Errorf("the store's type: %q, %v", mt, err)
+			}
+			resp := get(png)
+			if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "image/png; q=1" || !strings.Contains(resp.Header.Get("Cache-Control"), "immutable") {
+				t.Errorf("GET of a typed blob: %s, Content-Type %q, Cache-Control %q", resp.Status, resp.Header.Get("Content-Type"), resp.Header.Get("Cache-Control"))
+			}
+			raw := []byte("raw bytes on the wire")
+			if resp := put(raw, "application/octet-stream"); resp.StatusCode != http.StatusNoContent {
+				t.Fatalf("an untyped upload: %s", resp.Status)
+			}
+			resp = get(raw)
+			if resp.Header.Get("Content-Type") != agentsession.DefaultMediaType || strings.Contains(resp.Header.Get("Cache-Control"), "immutable") {
+				t.Errorf("GET of an untyped blob: Content-Type %q, Cache-Control %q", resp.Header.Get("Content-Type"), resp.Header.Get("Cache-Control"))
+			}
+			if resp := put(raw, "text/plain"); resp.StatusCode != http.StatusNoContent {
+				t.Fatalf("a typed upload of an untyped blob: %s", resp.Status)
+			}
+			if resp := get(raw); resp.Header.Get("Content-Type") != "text/plain" {
+				t.Errorf("GET of a blob given a type: Content-Type %q", resp.Header.Get("Content-Type"))
+			}
+			if resp := put([]byte("badly typed"), "not a type"); resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("an upload whose Content-Type is not a media type: %s, want 400", resp.Status)
+			}
+		})
+	}
+}
+
 // noBlobs is a store with nothing but the Store interface: no blobs.
 type noBlobs struct{ agentsession.Store }
 

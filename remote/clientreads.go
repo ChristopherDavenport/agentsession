@@ -429,7 +429,7 @@ func fetch(ctx context.Context, local *cas.Store, c *Client, id string) (cas.Exc
 			prefix = append(prefix, e.ID)
 		}
 	}
-	blobs := map[string][]byte{}
+	blobs, types := map[string][]byte{}, map[string]string{}
 	seen := map[string]bool{}
 	for _, r := range lg.Records {
 		if r.Entry == "" || seen[r.Entry] {
@@ -452,8 +452,12 @@ func fetch(ctx context.Context, local *cas.Store, c *Client, id string) (cas.Exc
 			if _, ok := blobs[h]; ok {
 				continue
 			}
-			if blobs[h], err = c.Object(ctx, cas.SpaceMedia, h); err != nil {
+			var mt string
+			if blobs[h], mt, err = c.object(ctx, cas.SpaceMedia, h, true); err != nil {
 				return cas.Exchange{}, "", fmt.Errorf("remote: fetch %s: %w", id, err)
+			}
+			if mt != "" {
+				types[h] = mt
 			}
 		}
 		line, err := cas.JoinLine(r.Entry, env, body)
@@ -484,7 +488,7 @@ func fetch(ctx context.Context, local *cas.Store, c *Client, id string) (cas.Exc
 		}
 		return out, nil
 	}
-	cl := cas.Closure{Header: lg.Header, Mark: lg.Mark, Head: lg.Head, Blobs: blobs}
+	cl := cas.Closure{Header: lg.Header, Mark: lg.Mark, Head: lg.Head, Blobs: blobs, BlobTypes: types}
 	if cl.Prefix, err = pick(prefix); err != nil {
 		return cas.Exchange{}, "", err
 	}

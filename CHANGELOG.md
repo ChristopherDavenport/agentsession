@@ -12,7 +12,40 @@ versions may break the API.
   of 0.15 refuses it; a 0.5 to 0.15 file reads as it stands and no
   entry hash moves. The generated fixtures and export goldens carry the
   new header. 0.16 changes nothing in the file: it adds the type file
-  beside a sidecar blob.
+  beside a sidecar blob, below.
+
+- **A sidecar blob keeps its media type (RFC 0001 0.16, File; RFC
+  0002, Media; RFC 0003, Objects).** A writer that turned a data URL
+  into a blob recorded `sidecar:sha256:<hex>` and lost the type, so a
+  writer resuming the session could not rebuild the data URL its
+  request must send. A blob is now stored with its type, outside every
+  hash: the reference and every hash are as they were.
+  `TypedBlobWriter.PutTypedBlob` stores a blob with its type and
+  `TypedBlobReader.TypedBlob` returns it, as given, `""` for none; a
+  reader uses `DefaultMediaType`, `application/octet-stream`, for a
+  blob with none, and a store holds a blob given that type with none.
+  A type once held never changes: the same bytes stored again with
+  another type, or none, keep it, and a blob held with none takes the
+  first type given. A type that is not one is `ErrBadMediaType`
+  (`BlobMediaType` checks one, at most `MaxMediaTypeLen` bytes). The
+  memory, jsonl, sqlite, cas and remote stores implement both
+  interfaces: jsonl keeps `media/<hex>.type`, sqlite a `media_type`
+  column on `blobs` (added on open), cas `mediatypes/<hex>`, and each
+  sweep removes a type with its blob, so bytes stored again take the
+  type they are then given. A projection writes `<hex>.type` beside the
+  blob (`SidecarTypeName`), `ImportMedia` reads it
+  (`ReadSidecarType`) and a type file that holds no type refuses the
+  import, a cas push and fetch carry each blob's type
+  (`cas.Closure.BlobTypes`), and over RFC 0003 a media upload's
+  `Content-Type` is the type and a `GET` returns it, a blob with none
+  as `application/octet-stream` and not marked immutable. The new
+  interfaces sit beside `BlobWriter` and `BlobReader`, which are
+  unchanged, so a writer typed against them, agentturn's `WithMedia`
+  among them, and an interface of the same shape declared elsewhere, as
+  agentredact's `BlobWriter` is, are satisfied as before. **Added:
+  `TypedBlobWriter`, `TypedBlobReader`, `DefaultMediaType`,
+  `MaxMediaTypeLen`, `ErrBadMediaType`, `BlobMediaType`,
+  `SidecarTypeName`, `ReadSidecarType`, `cas.Closure.BlobTypes`.**
 
 ## v0.0.32 - 2026-11-02
 

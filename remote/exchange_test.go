@@ -156,15 +156,27 @@ func TestAPushThroughTheServerIsRFC0002sPush(t *testing.T) {
 	mustAppend(t, local, "f", user("fork"))
 	both("fork", "f", cas.PushOptions{Expected: ids[1]})
 
-	blob, err := local.PutBlob(ctx, []byte("image bytes"))
+	blob, err := local.PutTypedBlob(ctx, []byte("image bytes"), "image/webp")
 	if err != nil {
 		t.Fatal(err)
 	}
 	mustCreate(t, local, agentsession.Header{ID: "m", Media: agentsession.MediaSidecar})
 	mustAppend(t, local, "m", user("see sidecar:"+blob))
 	both("media", "m", cas.PushOptions{})
-	if data, err := served.Blob(ctx, blob); err != nil || string(data) != "image bytes" {
-		t.Errorf("the blob at the server: %q, %v", data, err)
+	if data, mt, err := served.TypedBlob(ctx, blob); err != nil || string(data) != "image bytes" || mt != "image/webp" {
+		t.Errorf("the blob at the server: %q of type %q, %v", data, mt, err)
+	}
+	// A fetch from the server carries the type back.
+	fetcher, err := cas.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fetcher.Close()
+	if _, err := remote.Fetch(ctx, fetcher, c, "m"); err != nil {
+		t.Fatal(err)
+	}
+	if _, mt, err := fetcher.TypedBlob(ctx, blob); err != nil || mt != "image/webp" {
+		t.Errorf("the blob fetched from the server: type %q, %v", mt, err)
 	}
 
 	// A handover makes the receiver the record and the sender a mirror.
