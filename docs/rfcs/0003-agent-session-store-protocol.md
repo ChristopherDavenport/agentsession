@@ -124,7 +124,8 @@ from RFC 0001 and RFC 0002 keep their meanings.
   store that keeps no commit or mark (the reference memory, JSONL and
   SQLite stores) offers a subset.
 - Request and response bodies are JSON, except object bodies, which are
-  their canonical bytes (`application/octet-stream`), and streams.
+  their canonical bytes (`application/octet-stream`, or a media blob's
+  own type, Objects), and streams.
 - Streams are NDJSON (`application/x-ndjson`) or server-sent events
   (`text/event-stream`), and every stream that is not a follow ends with
   an explicit terminal frame: `{"end":true}` as the last NDJSON line, an
@@ -185,7 +186,12 @@ Media).
 - A `GET` returns the object's canonical bytes. An object never changes
   under its hash, so a server SHOULD mark the response
   `Cache-Control: private, max-age=31536000, immutable`, and a client
-  SHOULD cache it for good. It is `private`, never `public`: the
+  SHOULD cache it for good. A `media` object's `Content-Type` is the
+  blob's media type as the store holds it (RFC 0002, Media), and
+  `application/octet-stream` for a blob with none; a type once held
+  never changes, but a blob with none may be given one by a later
+  upload, so a server MUST NOT mark a `media` response with no type
+  immutable, and SHOULD mark it `Cache-Control: private, no-cache`. It is `private`, never `public`: the
   response is authorized for this caller, and a shared cache must not
   serve it to another. A missing object, or one the caller may not read
   (below), is 404 `no_object`.
@@ -214,7 +220,13 @@ Media).
   create or import a session whose `media` is `sidecar` with
   `unsupported`. The server MUST verify
   that the bytes hash to the name and refuse them with `bad_object`
-  otherwise. Uploading an object it holds is a no-op that succeeds, and
+  otherwise. A `media` upload's `Content-Type` is the blob's media
+  type, which the server's store keeps under RFC 0002's Media rule: a
+  type it holds stays, and one it lacks is taken. A `Content-Type` of
+  `application/octet-stream` with no parameters, or none, uploads the
+  blob with no type; one that is not a media type is `bad_request`.
+  Every other space's `Content-Type` is `application/octet-stream`, and
+  the server does not read it. Uploading an object it holds is a no-op that succeeds, and
   the response does not say whether it was held. An uploaded object is
   reachable from nothing but its uploader until a push names it: the
   uploader may name it in a push, an import or an append, and is told
@@ -878,7 +890,8 @@ A **fetch** needs nothing new. The fetcher reads the log with
 and head from one committed view, and reads the **closure**: the
 session's own entries from the log, and its prefix from `path` (the
 entries from the first entry to the base, first entry first, which `header.base`
-marks), with their contents, and the media the contents name. It
+marks), with their contents, and the media the contents name, each
+blob with the type its `GET` gives as `Content-Type` (Objects). It
 admits them in its own store, and moves its head and refs under RFC
 0002's fetch rules (Exchange), which hold the head for a record. The
 fetch creates a mirror. The server does not know a fetch happened,
@@ -913,7 +926,8 @@ alone can take a session whole this way, a redacted one among them.
   way, and the header it fills from the origin names none the caller
   may not read.
 - A sidecar session's blobs are uploaded first, as `media` objects
-  (Objects). Every blob an item names that the caller cannot reach
+  (Objects), each with the type its directory gives it as its
+  `Content-Type`. Every blob an item names that the caller cannot reach
   (Objects, Reach), in a file of any `media`, is `missing_object`, its
   `missing` member the hashes in `missing`'s shape, the same answer
   whether another's session holds the blob or none does. Where a local import takes the session and reports

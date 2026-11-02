@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.15
+Status: draft 0.16
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -163,6 +163,20 @@ RFC 2119.
   file named `<hex>` alone in the session's directory, since a colon is
   not a legal file name everywhere; a reference names its bytes and a
   reader verifies the blob against its hash, as it verifies a content.
+- A blob's media type, since 0.16, is the file named `<hex>.type`
+  beside the blob in the session's directory: the type the data URL the
+  reference replaced carried, an RFC 6838 `type/subtype` with any
+  parameters as the data URL had them, in US-ASCII and nothing else in
+  the file, a reader ignoring one trailing LF. The type is outside every
+  hash: the reference names the bytes alone, a reader verifies the blob
+  against its hash as before and verifies nothing of the type, and no
+  entry, context, request or blob hash covers it. A blob with no type
+  file has no type, as one a 0.15 writer projected has none; a reader
+  that needs one, as a writer resolving a reference to a data URL does
+  (Request hash), uses `application/octet-stream`, as RFC 0002's Media
+  section says. A type file that does not hold a media type is
+  malformed, and a reader importing the directory MUST refuse it rather
+  than guess.
 - Entry order and `parent` links are the ordering, and they order
   different things: `parent` orders a path, since an ancestor precedes
   every entry below it, and says nothing between two children of one
@@ -212,7 +226,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.15","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.16","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -2050,7 +2064,11 @@ items as recorded, `sidecar:` URLs included, and `request_hash` covers
 that form, which is the only form a reader can rebuild without the
 blobs. A writer resolves each `sidecar:` URL to its blob's bytes before
 it sends the request, as the payload profile carries media, and MUST
-NOT send a `sidecar:` URL to a provider, which cannot resolve it. A
+NOT send a `sidecar:` URL to a provider, which cannot resolve it. Since
+0.16 it resolves one to a data URL of the blob's media type, as the
+store holding the blob returns it (RFC 0002, Media), or as the type
+file beside the blob gives it (File), and of `application/octet-stream`
+for a blob with none. A
 reader that resolves the references, to replay a call against a model,
 resolves them after it rebuilds and hashes the request. Converting an
 item's media between the two forms is the writer's, before it records
@@ -2201,7 +2219,8 @@ A redactor:
   the record too, decoding `raw` to find it;
 - MUST keep media in its form: an inline item stays inline and a sidecar
   item stays sidecar. A sidecar blob it replaces is stored under the
-  replacement's hash, and the item's `sidecar:` URL names that;
+  replacement's hash, with the replacement's media type, and the item's
+  `sidecar:` URL names that;
 - MUST leave a reference into another session as it was, since it names
   that session's original entries, unless it holds that session's
   redaction, made by the same redaction. Then it rewrites the reference
@@ -2630,13 +2649,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.15 reads a 0.5 to 0.14 file
-as it stands, since 0.6 to 0.15 add optional members, elements and
-relations, and 0.15 a record entry type, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
+it begins at 1.0. A reader of 0.16 reads a 0.5 to 0.15 file
+as it stands, since 0.6 to 0.16 add optional members, elements and
+relations, 0.15 a record entry type and 0.16 a file beside a sidecar blob, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.15 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.16 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -2766,6 +2785,32 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.15
+
+A sidecar blob's media type. A 0.15 session is a 0.16 session whose
+blobs have no type. No hash changes, and the file holds nothing new:
+the minor changes the session's directory, which RFC 0001 counts as
+part of the session (File), and what a writer does with it, so it is
+a minor's and not a clarification. A writer of 0.16 raises every file it
+appends to, as Versioning says, so every reader of 0.15 refuses those
+files until it is upgraded.
+
+- A blob's media type is the file `<hex>.type` beside the blob (File).
+  A 0.15 session lost the type when a writer converted a data URL to a
+  blob, and a writer resuming it could not rebuild the data URL its
+  request must send, since a `sidecar:` URL MUST NOT reach a provider.
+  The reference `sidecar:sha256:<hex>` is as it was, and the type is
+  outside every hash.
+- A writer resolves a `sidecar:` URL to a data URL of the blob's type,
+  and of `application/octet-stream` for a blob with none (Request hash).
+  A 0.15 writer had no type to resolve one to.
+- A reader of 0.15 given a 0.16 directory reads every blob as before,
+  verified against its hash, and loses only the types; a reader of 0.16
+  given a 0.15 directory finds no type file and reads each blob as one
+  with none.
+- Redaction: a blob a redactor replaces is stored with the
+  replacement's type.
 
 ## Changes since 0.14
 
@@ -3532,7 +3577,8 @@ which the `run` entry cannot name and which 0.3 adopts beside the
   Open Responses and rely on converters.
 - Sidecar media layout and naming. Answered in the file section: a
   `sidecar:` URL carrying the blob's hash, and a file named by the hex
-  digest in the session's directory. Whether a store's projection may
+  digest in the session's directory, and, since 0.16, its media type in
+  the file `<hex>.type` beside it. Whether a store's projection may
   share one directory across sessions is still open.
 - The venue: this repository, a standalone repository, or a proposal to
   openresponses.org as a companion document.
