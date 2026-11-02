@@ -1028,8 +1028,8 @@ func TestSidecarMedia(t *testing.T) {
 	if _, unresolved, err := other.ImportMedia(ctx, f, os.DirFS(filepath.Join(dir, "s")), true); err != nil || len(unresolved) != 0 {
 		t.Fatalf("import of the projection: %v, unresolved %v", err, unresolved)
 	}
-	if _, mt, err := other.TypedBlob(ctx, blob); err != nil || mt != "image/png" {
-		t.Errorf("the imported blob: type %q, %v", mt, err)
+	if _, mt, err := other.SessionBlob(ctx, "s", blob); err != nil || mt != "image/png" {
+		t.Errorf("the imported blob: type %q in its session, %v", mt, err)
 	}
 }
 

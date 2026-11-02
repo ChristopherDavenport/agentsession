@@ -89,6 +89,12 @@ CREATE TABLE IF NOT EXISTS blobs (
 	stored     INTEGER NOT NULL DEFAULT 0,
 	media_type TEXT    NOT NULL DEFAULT ''
 ) STRICT;
+CREATE TABLE IF NOT EXISTS session_blob_types (
+	session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+	hash       TEXT NOT NULL,
+	media_type TEXT NOT NULL,
+	PRIMARY KEY (session_id, hash)
+) STRICT;
 `
 
 // ErrSessionLocked is returned by Create, Open and Append when another

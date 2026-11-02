@@ -453,7 +453,7 @@ func fetch(ctx context.Context, local *cas.Store, c *Client, id string) (cas.Exc
 				continue
 			}
 			var mt string
-			if blobs[h], mt, err = c.object(ctx, cas.SpaceMedia, h, true); err != nil {
+			if blobs[h], mt, err = c.object(ctx, cas.SpaceMedia, h, id, true); err != nil {
 				return cas.Exchange{}, "", fmt.Errorf("remote: fetch %s: %w", id, err)
 			}
 			if mt != "" {

@@ -361,11 +361,12 @@ func TestWriteScopeUploadsMedia(t *testing.T) {
 }
 
 // TestMediaTypeOnTheWire: a media upload's Content-Type is the blob's
-// media type, which the server's store keeps, and a GET returns it as
-// Content-Type, application/octet-stream for a blob with none, which
-// is not marked immutable, since a later upload may give it a type. A
-// Content-Type that is not a media type is bad_request, and an object
-// of another space is served as application/octet-stream as before.
+// media type, which the server holds for the uploader and never gives
+// the store's blob, and a GET returns it to the uploader as
+// Content-Type, application/octet-stream for none. A media GET is never
+// immutable without a session, and always carries nosniff, attachment
+// and a sandboxing policy. A Content-Type a data URL cannot carry is
+// bad_request.
 func TestMediaTypeOnTheWire(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -410,37 +411,121 @@ func TestMediaTypeOnTheWire(t *testing.T) {
 				resp.Body.Close()
 				return resp
 			}
-			// A GET answers only for a blob the caller reaches; with no
-			// auth the server's one principal reaches its own uploads.
+			guarded := func(what string, resp *http.Response) {
+				t.Helper()
+				if resp.Header.Get("X-Content-Type-Options") != "nosniff" || resp.Header.Get("Content-Disposition") != "attachment" || resp.Header.Get("Content-Security-Policy") != "sandbox; default-src 'none'" {
+					t.Errorf("%s: X-Content-Type-Options %q, Content-Disposition %q, Content-Security-Policy %q", what, resp.Header.Get("X-Content-Type-Options"), resp.Header.Get("Content-Disposition"), resp.Header.Get("Content-Security-Policy"))
+				}
+				if strings.Contains(resp.Header.Get("Cache-Control"), "immutable") {
+					t.Errorf("%s: a media GET with no session is marked immutable: %q", what, resp.Header.Get("Cache-Control"))
+				}
+			}
 			png := []byte("png bytes on the wire")
-			if resp := put(png, "image/png; q=1"); resp.StatusCode != http.StatusNoContent {
+			if resp := put(png, "image/png;q=1"); resp.StatusCode != http.StatusNoContent {
 				t.Fatalf("a typed upload: %s", resp.Status)
 			}
-			if _, mt, err := st.(agentsession.TypedBlobReader).TypedBlob(ctx, agentsession.HashBytes(png)); err != nil || mt != "image/png; q=1" {
-				t.Errorf("the store's type: %q, %v", mt, err)
+			if _, mt, err := st.(agentsession.TypedBlobReader).TypedBlob(ctx, agentsession.HashBytes(png)); err != nil || mt != "" {
+				t.Errorf("the store's type for the blob: %q, %v; want none, the type being the uploader's", mt, err)
 			}
 			resp := get(png)
-			if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "image/png; q=1" || !strings.Contains(resp.Header.Get("Cache-Control"), "immutable") {
-				t.Errorf("GET of a typed blob: %s, Content-Type %q, Cache-Control %q", resp.Status, resp.Header.Get("Content-Type"), resp.Header.Get("Cache-Control"))
+			if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "image/png;q=1" {
+				t.Errorf("GET of a typed upload: %s, Content-Type %q", resp.Status, resp.Header.Get("Content-Type"))
 			}
+			guarded("GET of a typed upload", resp)
+			html := []byte("<script>alert(1)</script>")
+			if resp := put(html, "text/html"); resp.StatusCode != http.StatusNoContent {
+				t.Fatalf("an html upload: %s", resp.Status)
+			}
+			guarded("GET of an html upload", get(html))
 			raw := []byte("raw bytes on the wire")
 			if resp := put(raw, "application/octet-stream"); resp.StatusCode != http.StatusNoContent {
 				t.Fatalf("an untyped upload: %s", resp.Status)
 			}
 			resp = get(raw)
-			if resp.Header.Get("Content-Type") != agentsession.DefaultMediaType || strings.Contains(resp.Header.Get("Cache-Control"), "immutable") {
-				t.Errorf("GET of an untyped blob: Content-Type %q, Cache-Control %q", resp.Header.Get("Content-Type"), resp.Header.Get("Cache-Control"))
+			if resp.Header.Get("Content-Type") != agentsession.DefaultMediaType {
+				t.Errorf("GET of an untyped blob: Content-Type %q", resp.Header.Get("Content-Type"))
 			}
+			guarded("GET of an untyped upload", resp)
 			if resp := put(raw, "text/plain"); resp.StatusCode != http.StatusNoContent {
 				t.Fatalf("a typed upload of an untyped blob: %s", resp.Status)
 			}
 			if resp := get(raw); resp.Header.Get("Content-Type") != "text/plain" {
 				t.Errorf("GET of a blob given a type: Content-Type %q", resp.Header.Get("Content-Type"))
 			}
-			if resp := put([]byte("badly typed"), "not a type"); resp.StatusCode != http.StatusBadRequest {
-				t.Errorf("an upload whose Content-Type is not a media type: %s, want 400", resp.Status)
+			for _, bad := range []string{"not a type", "image/png; q=1", `image/png;name="a b"`} {
+				if resp := put([]byte("badly typed"), bad); resp.StatusCode != http.StatusBadRequest {
+					t.Errorf("an upload whose Content-Type is %q: %s, want 400", bad, resp.Status)
+				}
 			}
 		})
+	}
+}
+
+// TestMediaTypesPerPrincipal is RFC 0002's rule for a store serving
+// several principals: a type is held per uploader and per session, never
+// per blob. Alice and bob upload the same bytes under two types; each
+// GET without a session answers the caller's own type, an upload's
+// answer is the same whether the other uploaded first, each session the
+// bytes are named in holds its writer's type, and a session read
+// answers that session's type to a caller that may read it and nothing
+// to one that may not.
+func TestMediaTypesPerPrincipal(t *testing.T) {
+	ctx := context.Background()
+	st := agentsession.NewMemoryStore()
+	rw := []remote.Scope{remote.ScopeRead, remote.ScopeWrite}
+	url := server(t, st,
+		remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{
+			"alice": {Name: "alice", Scopes: rw},
+			"bob":   {Name: "bob", Scopes: rw},
+		})),
+		remote.WithAuthorize(owners(map[string]string{"alices": "alice", "bobs": "bob"})),
+	)
+	a, b := dial(t, url, withToken("alice", nil)), dial(t, url, withToken("bob", nil))
+	data := []byte("the same picture")
+	h, err := a.PutTypedBlob(ctx, data, "image/png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.PutTypedBlob(ctx, data, "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		who  string
+		cl   *remote.Client
+		want string
+	}{{"alice", a, "image/png"}, {"bob", b, "text/plain"}} {
+		if _, mt, err := c.cl.TypedBlob(ctx, h); err != nil || mt != c.want {
+			t.Errorf("%s's GET of its upload: %q, %v; want %q", c.who, mt, err, c.want)
+		}
+	}
+	for _, s := range []struct {
+		id string
+		cl *remote.Client
+	}{{"alices", a}, {"bobs", b}} {
+		if _, err := s.cl.Create(ctx, agentsession.Header{ID: s.id, Media: agentsession.MediaSidecar}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.cl.Append(ctx, s.id, user("see sidecar:"+h)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, mt, err := a.SessionBlob(ctx, "alices", h); err != nil || mt != "image/png" {
+		t.Errorf("alice's session's blob: %q, %v; want image/png", mt, err)
+	}
+	if _, mt, err := b.SessionBlob(ctx, "bobs", h); err != nil || mt != "text/plain" {
+		t.Errorf("bob's session's blob: %q, %v; want text/plain, his own, though alice uploaded the bytes first", mt, err)
+	}
+	if _, _, err := b.SessionBlob(ctx, "alices", h); !errors.Is(err, agentsession.ErrNoBlob) {
+		t.Errorf("bob's read of alice's session's blob: %v, want ErrNoBlob", err)
+	}
+	if _, mt, err := st.TypedBlob(ctx, h); err != nil || mt != "" {
+		t.Errorf("the store's own type for the blob: %q, %v; want none", mt, err)
+	}
+	hdr := map[string]string{"Authorization": "Bearer bob"}
+	resp := get(t, url+"/v1/objects/media/"+h+"?session=bobs", hdr)
+	resp.Body.Close()
+	if resp.Header.Get("Content-Type") != "text/plain" || !strings.Contains(resp.Header.Get("Cache-Control"), "immutable") || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("bob's session read: Content-Type %q, Cache-Control %q, X-Content-Type-Options %q", resp.Header.Get("Content-Type"), resp.Header.Get("Cache-Control"), resp.Header.Get("X-Content-Type-Options"))
 	}
 }
 

@@ -163,8 +163,27 @@ func TestAPushThroughTheServerIsRFC0002sPush(t *testing.T) {
 	mustCreate(t, local, agentsession.Header{ID: "m", Media: agentsession.MediaSidecar})
 	mustAppend(t, local, "m", user("see sidecar:"+blob))
 	both("media", "m", cas.PushOptions{})
-	if data, mt, err := served.TypedBlob(ctx, blob); err != nil || string(data) != "image bytes" || mt != "image/webp" {
+	if data, mt, err := served.SessionBlob(ctx, "m", blob); err != nil || string(data) != "image bytes" || mt != "image/webp" {
 		t.Errorf("the blob at the server: %q of type %q, %v", data, mt, err)
+	}
+	// A blob the server holds with no type in a session takes the type a
+	// later push carries, though that push uploads nothing.
+	raw, err := local.PutBlob(ctx, []byte("held with no type"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCreate(t, local, agentsession.Header{ID: "u", Media: agentsession.MediaSidecar})
+	uh := mustAppend(t, local, "u", user("see sidecar:"+raw))
+	both("untyped media", "u", cas.PushOptions{})
+	if _, mt, err := served.SessionBlob(ctx, "u", raw); err != nil || mt != "" {
+		t.Fatalf("the untyped blob at the server: %q, %v", mt, err)
+	}
+	if err := local.SetSessionBlobTypes(ctx, "u", map[string]string{raw: "image/avif"}); err != nil {
+		t.Fatal(err)
+	}
+	both("typed later", "u", cas.PushOptions{Expected: uh})
+	if _, mt, err := served.SessionBlob(ctx, "u", raw); err != nil || mt != "image/avif" {
+		t.Errorf("the held blob after a push carrying its type: %q, %v; want image/avif", mt, err)
 	}
 	// A fetch from the server carries the type back.
 	fetcher, err := cas.Open(t.TempDir())
@@ -175,7 +194,7 @@ func TestAPushThroughTheServerIsRFC0002sPush(t *testing.T) {
 	if _, err := remote.Fetch(ctx, fetcher, c, "m"); err != nil {
 		t.Fatal(err)
 	}
-	if _, mt, err := fetcher.TypedBlob(ctx, blob); err != nil || mt != "image/webp" {
+	if _, mt, err := fetcher.SessionBlob(ctx, "m", blob); err != nil || mt != "image/webp" {
 		t.Errorf("the blob fetched from the server: type %q, %v", mt, err)
 	}
 

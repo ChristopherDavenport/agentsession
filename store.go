@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -290,6 +291,9 @@ type MemoryStore struct {
 	redactedOnly bool
 	// blobs are the sidecar media blobs the store holds, by hash.
 	blobs map[string]memBlob
+	// blobTypes are each session's types for its blobs, by session and
+	// hash.
+	blobTypes map[string]map[string]string
 }
 
 // memBlob is a blob a MemoryStore holds, its media type, "" for none,
@@ -744,8 +748,67 @@ func (m *MemoryStore) Delete(_ context.Context, id string) error {
 	}
 	delete(m.sessions, id)
 	delete(m.gens, id)
+	delete(m.blobTypes, id)
 	m.hub.Notify(id)
 	return nil
+}
+
+// SetSessionBlobTypes implements [SessionBlobTyper].
+func (m *MemoryStore) SetSessionBlobTypes(ctx context.Context, session string, types map[string]string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	set, err := CheckBlobTypes(types)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.sessions[session]; !ok {
+		return fmt.Errorf("%w: %s", ErrNoSession, session)
+	}
+	if m.blobTypes == nil {
+		m.blobTypes = map[string]map[string]string{}
+	}
+	held := m.blobTypes[session]
+	if held == nil {
+		held = map[string]string{}
+		m.blobTypes[session] = held
+	}
+	for h, t := range set {
+		if _, ok := held[h]; !ok {
+			held[h] = t
+		}
+	}
+	return nil
+}
+
+// SessionBlobTypes implements [SessionBlobTyper].
+func (m *MemoryStore) SessionBlobTypes(ctx context.Context, session string) (map[string]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.sessions[session]; !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNoSession, session)
+	}
+	return maps.Clone(m.blobTypes[session]), nil
+}
+
+// SessionBlob implements [SessionBlobReader]: the blob, with the
+// session's type for it, or the store's where the session holds none.
+func (m *MemoryStore) SessionBlob(ctx context.Context, session, hash string) ([]byte, string, error) {
+	data, mt, err := m.TypedBlob(ctx, hash)
+	if err != nil {
+		return nil, "", err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if t, ok := m.blobTypes[session][hash]; ok {
+		mt = t
+	}
+	return data, mt, nil
 }
 
 var (
@@ -759,4 +822,7 @@ var (
 	_ TypedBlobWriter = (*MemoryStore)(nil)
 	_ TypedBlobReader = (*MemoryStore)(nil)
 	_ BlobSweeper     = (*MemoryStore)(nil)
+
+	_ SessionBlobTyper  = (*MemoryStore)(nil)
+	_ SessionBlobReader = (*MemoryStore)(nil)
 )

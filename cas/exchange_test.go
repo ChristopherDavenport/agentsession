@@ -304,8 +304,9 @@ func TestPushFork(t *testing.T) {
 }
 
 // TestPushCarriesBlobs sends the media a sidecar session's entries
-// name, each with its type, which a fetch carries too; a receiver that
-// holds a type keeps it, and one that holds none takes the one sent.
+// name, each with its type, which a fetch carries too; the receiver's
+// session holds the sender's type, and the receiver's own type for a
+// blob it held is left as it was.
 func TestPushCarriesBlobs(t *testing.T) {
 	ctx := context.Background()
 	a, b := twoStores(t)
@@ -325,18 +326,21 @@ func TestPushCarriesBlobs(t *testing.T) {
 	if _, err := a.Push(ctx, b, "m", PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if data, mt, err := b.TypedBlob(ctx, blob); err != nil || string(data) != "image bytes" || mt != "image/webp" {
+	if data, mt, err := b.SessionBlob(ctx, "m", blob); err != nil || string(data) != "image bytes" || mt != "image/webp" {
 		t.Errorf("blob at the receiver: %q of type %q, %v", data, mt, err)
 	}
+	if _, mt, err := b.SessionBlob(ctx, "m", held); err != nil || mt != "image/gif" {
+		t.Errorf("a blob the receiver held typed: type %q in the session, %v; want the sender's", mt, err)
+	}
 	if _, mt, err := b.TypedBlob(ctx, held); err != nil || mt != "image/x-receivers" {
-		t.Errorf("a blob the receiver held typed: type %q, %v; want its own", mt, err)
+		t.Errorf("a blob the receiver held typed: its own type %q, %v; want unchanged", mt, err)
 	}
 	c, _ := Open(t.TempDir())
 	defer c.Close()
 	if _, err := c.Fetch(ctx, a, "m"); err != nil {
 		t.Fatal(err)
 	}
-	if _, mt, err := c.TypedBlob(ctx, blob); err != nil || mt != "image/webp" {
+	if _, mt, err := c.SessionBlob(ctx, "m", blob); err != nil || mt != "image/webp" {
 		t.Errorf("blob at the fetcher: type %q, %v", mt, err)
 	}
 }

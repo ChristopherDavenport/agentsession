@@ -165,9 +165,14 @@ RFC 2119.
   reader verifies the blob against its hash, as it verifies a content.
 - A blob's media type, since 0.16, is the file named `<hex>.type`
   beside the blob in the session's directory: the type the data URL the
-  reference replaced carried, an RFC 6838 `type/subtype` with any
-  parameters as the data URL had them, in US-ASCII and nothing else in
-  the file, a reader ignoring one trailing LF. The type is outside every
+  reference replaced carried, in US-ASCII and nothing else in the file,
+  a reader ignoring one trailing LF. It is what an RFC 2397 data URL
+  carries before `;base64`: an RFC 6838 `type/subtype` and any
+  parameters, each `;attribute=value`, where the type, the subtype, an
+  attribute and a value are each an RFC 2045 token, so a type holds no
+  space, no quoted value and no comma, and resolves to a data URL as it
+  is. The session's type is the session's: two sessions may give the
+  same bytes two types (RFC 0002, Media). The type is outside every
   hash: the reference names the bytes alone, a reader verifies the blob
   against its hash as before and verifies nothing of the type, and no
   entry, context, request or blob hash covers it. A blob with no type
@@ -2805,10 +2810,11 @@ files until it is upgraded.
 - A writer resolves a `sidecar:` URL to a data URL of the blob's type,
   and of `application/octet-stream` for a blob with none (Request hash).
   A 0.15 writer had no type to resolve one to.
-- A reader of 0.15 given a 0.16 directory reads every blob as before,
-  verified against its hash, and loses only the types; a reader of 0.16
-  given a 0.15 directory finds no type file and reads each blob as one
-  with none.
+- A reader of 0.15 refuses a 0.16 file by its header, as it does any
+  later minor (Versioning), so no reader of 0.15 reads a 0.16 session
+  and drops its types, and no writer of 0.15 appends to one and writes
+  a blob without its type. A reader of 0.16 given a 0.15 directory finds
+  no type file and reads each blob as one with none.
 - Redaction: a blob a redactor replaces is stored with the
   replacement's type.
 

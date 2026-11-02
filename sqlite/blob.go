@@ -130,6 +130,95 @@ func (s *Store) TypedBlob(ctx context.Context, hash string) ([]byte, string, err
 	if err != nil {
 		return nil, "", fmt.Errorf("sqlite: blob %s: %w", hash, err)
 	}
+	if mt, err = agentsession.BlobMediaType(mt); err != nil {
+		return nil, "", fmt.Errorf("sqlite: blob %s: type: %w", hash, err)
+	}
+	return data, mt, nil
+}
+
+// SetSessionBlobTypes implements [agentsession.SessionBlobTyper]: each
+// type is a row of session_blob_types, inserted unless the session holds
+// one for the blob, and deleted with the session.
+func (s *Store) SetSessionBlobTypes(ctx context.Context, session string, types map[string]string) error {
+	if s.readOnly {
+		return agentsession.ErrReadOnly
+	}
+	set, err := agentsession.CheckBlobTypes(types)
+	if err != nil {
+		return err
+	}
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: begin: %w", err)
+	}
+	defer tx.Rollback()
+	var one int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM sessions WHERE id = ?`, session).Scan(&one); errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %s", agentsession.ErrNoSession, session)
+	} else if err != nil {
+		return fmt.Errorf("sqlite: session %s: %w", session, err)
+	}
+	for h, t := range set {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO session_blob_types (session_id, hash, media_type) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, session, h, t); err != nil {
+			return fmt.Errorf("sqlite: session %s: blob %s: type: %w", session, h, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: session %s: types: %w", session, err)
+	}
+	return nil
+}
+
+// SessionBlobTypes implements [agentsession.SessionBlobTyper].
+func (s *Store) SessionBlobTypes(ctx context.Context, session string) (map[string]string, error) {
+	var one int
+	if err := s.r.QueryRowContext(ctx, `SELECT 1 FROM sessions WHERE id = ?`, session).Scan(&one); errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, session)
+	} else if err != nil {
+		return nil, fmt.Errorf("sqlite: session %s: %w", session, err)
+	}
+	rows, err := s.r.QueryContext(ctx, `SELECT hash, media_type FROM session_blob_types WHERE session_id = ?`, session)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: session %s: types: %w", session, err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var h, t string
+		if err := rows.Scan(&h, &t); err != nil {
+			return nil, fmt.Errorf("sqlite: session %s: types: %w", session, err)
+		}
+		mt, err := agentsession.BlobMediaType(t)
+		if err != nil {
+			return nil, fmt.Errorf("sqlite: session %s: blob %s: type: %w", session, h, err)
+		}
+		out[h] = mt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: session %s: types: %w", session, err)
+	}
+	return out, nil
+}
+
+// SessionBlob implements [agentsession.SessionBlobReader]: the blob,
+// with the session's type for it, or the store's where the session
+// holds none.
+func (s *Store) SessionBlob(ctx context.Context, session, hash string) ([]byte, string, error) {
+	data, mt, err := s.TypedBlob(ctx, hash)
+	if err != nil {
+		return nil, "", err
+	}
+	var t string
+	err = s.r.QueryRowContext(ctx, `SELECT media_type FROM session_blob_types WHERE session_id = ? AND hash = ?`, session, hash).Scan(&t)
+	if errors.Is(err, sql.ErrNoRows) {
+		return data, mt, nil
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("sqlite: session %s: blob %s: type: %w", session, hash, err)
+	}
+	if mt, err = agentsession.BlobMediaType(t); err != nil {
+		return nil, "", fmt.Errorf("sqlite: session %s: blob %s: type: %w", session, hash, err)
+	}
 	return data, mt, nil
 }
 
@@ -138,5 +227,8 @@ var (
 	_ agentsession.BlobReader      = (*Store)(nil)
 	_ agentsession.TypedBlobWriter = (*Store)(nil)
 	_ agentsession.TypedBlobReader = (*Store)(nil)
-	_ agentsession.BlobSweeper     = (*Store)(nil)
+
+	_ agentsession.SessionBlobTyper  = (*Store)(nil)
+	_ agentsession.SessionBlobReader = (*Store)(nil)
+	_ agentsession.BlobSweeper       = (*Store)(nil)
 )

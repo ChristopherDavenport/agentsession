@@ -1103,6 +1103,15 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		}
 	}
 	defer s.hub.Notify(id)
+	// The session's types go first, so a crash between the two leaves
+	// a session without its types rather than types a session created
+	// again under the ID would take for its own.
+	if validSessionID(id) {
+		if err := os.RemoveAll(s.sessionTypesDir(id)); err != nil {
+			releaseLock(path)
+			return fmt.Errorf("jsonl: remove %s's types: %w", id, err)
+		}
+	}
 	if err := os.Remove(path); err != nil {
 		releaseLock(path)
 		if errors.Is(err, os.ErrNotExist) {

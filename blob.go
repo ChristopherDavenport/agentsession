@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"mime"
 	"regexp"
 	"strings"
 	"time"
@@ -40,9 +39,13 @@ type BlobReader interface {
 // is outside every hash: the hash returned, and the sidecar: URL that
 // names the blob, are of the bytes alone.
 //
-// A type once held never changes. Storing bytes the store holds with
-// another type, or with none, keeps the type held; storing them with a
-// type where the store holds none gives them that one. An empty
+// It is the type a store of one principal holds for a blob, as RFC 0002
+// lets such a store hold one: a type once held never changes, storing
+// bytes the store holds with another type, or with none, keeps it, and
+// storing them with a type where the store holds none gives them that
+// one. A session's own type is held apart ([SessionBlobTyper]); a store
+// that serves several principals, as RFC 0003's server does, holds no
+// type per blob and keeps an upload's for its uploader alone. An empty
 // mediaType, or [DefaultMediaType] with no parameters, is none, and
 // PutBlob is PutTypedBlob with none. A type that is not a media type is
 // refused with [ErrBadMediaType]. A sweep that removes the blob removes
@@ -66,6 +69,72 @@ type TypedBlobReader interface {
 	TypedBlob(ctx context.Context, hash string) (data []byte, mediaType string, err error)
 }
 
+// SessionBlobTyper is implemented by a store that holds a blob's media
+// type per session, as RFC 0002's Media section has every store hold a
+// session's types, and a store that serves several principals hold them
+// only so: one principal's type never reaches another's. RFC 0003's
+// server holds the types the writes it takes give through it.
+//
+// SetSessionBlobTypes gives each blob of types, by hash, its type in the
+// session, unless the session holds one for it already, which never
+// changes; an empty type, or [DefaultMediaType], gives none. A type that
+// is not one is [ErrBadMediaType]. SessionBlobTypes returns the types the
+// session holds, by hash: its own, never the type the store holds for a
+// blob. A session's types are deleted with it.
+type SessionBlobTyper interface {
+	SetSessionBlobTypes(ctx context.Context, session string, types map[string]string) error
+	SessionBlobTypes(ctx context.Context, session string) (map[string]string, error)
+}
+
+// SessionBlobReader is implemented by a store that reads a blob as a
+// session holds it: SessionBlob returns the bytes and the session's type
+// for the blob, "" for none. A store of this library, which has one
+// principal, gives the type it holds for the blob where the session
+// holds none, as RFC 0002 lets such a store; RFC 0003's client reads the
+// blob scoped to the session, and the server answers the session's type
+// alone. A blob the store does not hold, or the caller may not read for
+// the session, is an error wrapping [ErrNoBlob].
+type SessionBlobReader interface {
+	SessionBlob(ctx context.Context, session, hash string) (data []byte, mediaType string, err error)
+}
+
+// CheckBlobTypes checks the types a write gives a session's blobs, by
+// hash, as [SessionBlobTyper.SetSessionBlobTypes] takes them, and
+// returns those that give a type: each hash a hash, each type one
+// [BlobMediaType] keeps, none left out. A store sets what it returns.
+func CheckBlobTypes(types map[string]string) (map[string]string, error) {
+	out := make(map[string]string, len(types))
+	for h, t := range types {
+		if !ValidHash(h) {
+			return nil, fmt.Errorf("agentsession: blob %q: not a hash", h)
+		}
+		mt, err := BlobMediaType(t)
+		if err != nil {
+			return nil, fmt.Errorf("agentsession: blob %s: %w", h, err)
+		}
+		if mt != "" {
+			out[h] = mt
+		}
+	}
+	return out, nil
+}
+
+// ReadSessionBlob reads the blob named hash as session holds it, with its
+// media type, "" for none: by [SessionBlobReader] when br is one, by
+// [TypedBlobReader] when it is one, and by Blob, with no type, when it
+// is neither. A writer resuming a sidecar session resolves each
+// sidecar: URL with it, [DefaultMediaType] standing for none.
+func ReadSessionBlob(ctx context.Context, br BlobReader, session, hash string) ([]byte, string, error) {
+	switch r := br.(type) {
+	case SessionBlobReader:
+		return r.SessionBlob(ctx, session, hash)
+	case TypedBlobReader:
+		return r.TypedBlob(ctx, hash)
+	}
+	data, err := br.Blob(ctx, hash)
+	return data, "", err
+}
+
 // DefaultMediaType is the type a reader gives a blob held with none, as
 // RFC 0002's Media section says: a writer resolving a sidecar: URL to a
 // data URL for a provider uses it for such a blob. Given to a store as
@@ -83,12 +152,16 @@ const MaxMediaTypeLen = 1024
 // whose type file holds one.
 var ErrBadMediaType = errors.New("agentsession: not a media type")
 
-// BlobMediaType checks a blob's media type as a store keeps it, RFC
-// 6838's type/subtype with any parameters, and returns what the store
-// holds for it: the type as given, or "" for none, which an empty type
-// and [DefaultMediaType] with no parameters both are. A type that is
-// not printable US-ASCII, has no subtype, does not parse, or is longer
-// than [MaxMediaTypeLen] is [ErrBadMediaType].
+// BlobMediaType checks a blob's media type as a store keeps it and
+// returns what the store holds for it: the type as given, or "" for
+// none, which an empty type and [DefaultMediaType] with no parameters
+// both are. A type is what an RFC 2397 data URL carries before
+// ";base64", as RFC 0001's File section allows it: type/subtype, then
+// any parameters, each ";attribute=value", where the type, the subtype,
+// an attribute and a value are each an RFC 2045 token, so it holds no
+// space, no quoted value and no comma, and resolves to a data URL as it
+// is. Any other, or one longer than [MaxMediaTypeLen], is
+// [ErrBadMediaType].
 func BlobMediaType(t string) (string, error) {
 	if t == "" || strings.EqualFold(t, DefaultMediaType) {
 		return "", nil
@@ -96,19 +169,33 @@ func BlobMediaType(t string) (string, error) {
 	if len(t) > MaxMediaTypeLen {
 		return "", fmt.Errorf("%w: %d bytes, longer than %d", ErrBadMediaType, len(t), MaxMediaTypeLen)
 	}
-	for i := 0; i < len(t); i++ {
-		if t[i] < 0x20 || t[i] > 0x7e {
+	parts := strings.Split(t, ";")
+	typ, sub, ok := strings.Cut(parts[0], "/")
+	if !ok || !isToken(typ) || !isToken(sub) {
+		return "", fmt.Errorf("%w: %q", ErrBadMediaType, t)
+	}
+	for _, p := range parts[1:] {
+		attr, val, ok := strings.Cut(p, "=")
+		if !ok || !isToken(attr) || !isToken(val) {
 			return "", fmt.Errorf("%w: %q", ErrBadMediaType, t)
 		}
 	}
-	base, _, err := mime.ParseMediaType(t)
-	if err != nil || strings.TrimSpace(t) != t {
-		return "", fmt.Errorf("%w: %q", ErrBadMediaType, t)
-	}
-	if typ, sub, ok := strings.Cut(base, "/"); !ok || typ == "" || sub == "" {
-		return "", fmt.Errorf("%w: %q has no subtype", ErrBadMediaType, t)
-	}
 	return t, nil
+}
+
+// isToken reports whether s is an RFC 2045 token: one or more printable
+// US-ASCII characters, none a space or a tspecial.
+func isToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c <= 0x20 || c >= 0x7f || strings.IndexByte(`()<>@,;:\"/[]?=`, c) >= 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // BlobSweeper is implemented by a store whose blobs RFC 0002's sweep
@@ -273,8 +360,9 @@ func putBlobTyped(ctx context.Context, bw BlobWriter, data []byte, mediaType str
 //
 // A store that implements [MediaImporter] does the whole of it. For one
 // that does not, a sidecar session needs a [BlobWriter], or it is
-// refused with [ErrNoBlobWriter], and its types are kept when it is a
-// [TypedBlobWriter]; the file is imported first and the blobs stored
+// refused with [ErrNoBlobWriter], and its types are kept as the
+// session's when it is a [SessionBlobTyper], and as the blobs' when it
+// is only a [TypedBlobWriter]; the file is imported first and the blobs stored
 // after, so a refused import stores nothing, and a failure
 // between the two leaves the blobs unresolved, which another call to
 // PutBlob resolves. Where the store is no [BlobReader] either, a blob
@@ -330,13 +418,25 @@ func ImportMedia(ctx context.Context, st Importer, r io.Reader, media fs.FS, asR
 	if err != nil {
 		return nil, nil, err
 	}
+	typer, perSession := st.(SessionBlobTyper)
 	for _, h := range hashes {
 		b, ok := blobs[h]
 		if !ok {
 			continue
 		}
-		if _, err := putBlobTyped(ctx, bw, b, types[h]); err != nil {
+		var err error
+		if perSession {
+			_, err = bw.PutBlob(ctx, b)
+		} else {
+			_, err = putBlobTyped(ctx, bw, b, types[h])
+		}
+		if err != nil {
 			return sess, unresolved, fmt.Errorf("agentsession: import: the session is imported, and blob %s could not be stored: %w", h, err)
+		}
+	}
+	if perSession {
+		if err := typer.SetSessionBlobTypes(ctx, sess.Header().ID, types); err != nil {
+			return sess, unresolved, fmt.Errorf("agentsession: import: the session is imported, and its blobs' types could not be stored: %w", err)
 		}
 	}
 	return sess, unresolved, nil

@@ -204,7 +204,7 @@ func testBlobTypes(t *testing.T, opts Options) {
 		return
 	}
 	png := []byte("png bytes")
-	const pngType = `image/png; name="a b"`
+	const pngType = `image/png;name=a.png`
 	h, err := tw.PutTypedBlob(ctx, png, pngType)
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +240,7 @@ func testBlobTypes(t *testing.T, opts Options) {
 	}
 	wantType(t, tr, "a blob held with none given a type", hr, raw, "text/plain;charset=utf-8")
 
-	for _, bad := range []string{"png", "image/", "image/png\r\nX-Evil: 1", "image/png; =", " image/png", strings.Repeat("a", 600) + "/" + strings.Repeat("b", 600)} {
+	for _, bad := range []string{"png", "image/", "image/png\r\nX-Evil: 1", "image/png; =", " image/png", "image/png; q=1", `image/png;name="a b"`, "image/png;a=b,c", "image/png/x", "image/png;base64", strings.Repeat("a", 600) + "/" + strings.Repeat("b", 600)} {
 		_, err := tw.PutTypedBlob(ctx, []byte("refused "+bad), bad)
 		wantErr(t, "PutTypedBlob with "+strconvQuote(bad), err, agentsession.ErrBadMediaType)
 	}
@@ -263,7 +263,7 @@ func strconvQuote(s string) string {
 func testImportBlobTypes(t *testing.T, opts Options) {
 	ctx := context.Background()
 	st := opts.New(t)
-	_, tr, ok := typed(t, st)
+	_, _, ok := typed(t, st)
 	if !ok {
 		return
 	}
@@ -301,8 +301,85 @@ func testImportBlobTypes(t *testing.T, opts Options) {
 	if _, unresolved, err := agentsession.ImportMedia(ctx, im, bytes.NewReader(file), dir, true); err != nil || len(unresolved) != 0 {
 		t.Fatalf("an import with its directory: %v, unresolved %v", err, unresolved)
 	}
-	wantType(t, tr, "an imported blob with a type file", hg, gif, "image/gif")
-	wantType(t, tr, "an imported blob with none", hp, plain, "")
+	wantSessionType(t, st, "typed-imp", "an imported blob with a type file", hg, gif, "image/gif")
+	wantSessionType(t, st, "typed-imp", "an imported blob with none", hp, plain, "")
+}
+
+// wantSessionType reads the blob named h for a session, as a writer
+// resuming the session does, and checks its bytes and its type.
+func wantSessionType(t *testing.T, st agentsession.Store, session, what, h string, data []byte, mediaType string) {
+	t.Helper()
+	got, mt, err := agentsession.ReadSessionBlob(context.Background(), st.(agentsession.BlobReader), session, h)
+	if err != nil {
+		t.Errorf("%s: %v", what, err)
+		return
+	}
+	if !bytes.Equal(got, data) || mt != mediaType {
+		t.Errorf("%s: %q of type %q; want %q of type %q", what, got, mt, data, mediaType)
+	}
+}
+
+// testSessionBlobTypes holds a store that keeps types per session to
+// RFC 0002's rule: each session holds its own type for a blob, the
+// first it is given, read back for that session alone and before the
+// store's type for the blob; and a session's types go with it, so a
+// session created again under its ID holds none.
+func testSessionBlobTypes(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	typer, ok := st.(agentsession.SessionBlobTyper)
+	if !ok {
+		if _, holds := st.(agentsession.BlobWriter); holds {
+			if _, wire := st.(agentsession.SessionBlobReader); !wire {
+				t.Error("a store that holds blobs keeps no types per session")
+			}
+		}
+		t.Skip("the store keeps no types per session for its caller to set")
+	}
+	tw := st.(agentsession.TypedBlobWriter)
+	data := []byte("one picture, two sessions")
+	h, err := tw.PutTypedBlob(ctx, data, "image/x-store")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"sa", "sb", "sc"} {
+		if _, err := st.Create(ctx, agentsession.Header{ID: id, Media: agentsession.MediaSidecar}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Append(ctx, id, user("see sidecar:"+h)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := typer.SetSessionBlobTypes(ctx, "sa", map[string]string{h: "image/png"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := typer.SetSessionBlobTypes(ctx, "sb", map[string]string{h: "text/plain"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := typer.SetSessionBlobTypes(ctx, "sa", map[string]string{h: "image/jpeg"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := typer.SetSessionBlobTypes(ctx, "sa", map[string]string{h: "bad type"}); !errors.Is(err, agentsession.ErrBadMediaType) {
+		t.Errorf("SetSessionBlobTypes with a bad type: %v, want ErrBadMediaType", err)
+	}
+	wantSessionType(t, st, "sa", "session a's blob", h, data, "image/png")
+	wantSessionType(t, st, "sb", "session b's blob", h, data, "text/plain")
+	wantSessionType(t, st, "sc", "a session that holds no type for the blob", h, data, "image/x-store")
+	if got, err := typer.SessionBlobTypes(ctx, "sc"); err != nil || len(got) != 0 {
+		t.Errorf("SessionBlobTypes of a session holding none: %v, %v; want none, never the store's", got, err)
+	}
+	if got, err := typer.SessionBlobTypes(ctx, "sa"); err != nil || len(got) != 1 || got[h] != "image/png" {
+		t.Errorf("SessionBlobTypes of session a: %v, %v", got, err)
+	}
+	if err := st.Delete(ctx, "sa"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Create(ctx, agentsession.Header{ID: "sa", Media: agentsession.MediaSidecar}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := typer.SessionBlobTypes(ctx, "sa"); err != nil || len(got) != 0 {
+		t.Errorf("a session created again under a deleted one's ID holds %v, %v; want none", got, err)
+	}
 }
 
 // testBlobTypeSweep holds a store that sweeps its blobs to RFC 0002's

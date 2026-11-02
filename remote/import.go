@@ -100,6 +100,7 @@ func (h *Handler) importSession(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, importProblem(err))
 		return
 	}
+	h.bindTypes(ctx, who.Name, sess, blobs)
 	info := sessionInfo{Header: sess.Header(), Head: headOut(sess.Leaf()), Length: sess.Len(), Incarnation: incarnation(sess.Header())}
 	info.Mark = h.markOf(ctx, hdr.ID)
 	w.Header().Set("Incarnation", info.Incarnation)

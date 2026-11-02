@@ -1486,37 +1486,134 @@ func (s *Store) mediaTypeOf(hash string) (string, error) {
 	return mt, nil
 }
 
-// setMediaTypes gives each blob of types the store holds its type,
-// unless it has one, under the sweep's shared lock: the types an import
-// or an exchange carried with blobs it admitted.
-func (s *Store) setMediaTypes(ctx context.Context, types map[string]string) error {
-	if len(types) == 0 {
-		return nil
+// sessionTypesDir is where a session keeps its types for its blobs,
+// each a file named by the blob's hex digest, in the session's directory,
+// so a delete, which renames the directory away, takes them with it.
+const sessionTypesDir = "mediatypes"
+
+// SetSessionBlobTypes implements [agentsession.SessionBlobTyper]: each
+// type is a file of the session's mediatypes directory, placed by a
+// link that never replaces one, so the session's first type for a blob
+// is kept, written durably.
+func (s *Store) SetSessionBlobTypes(ctx context.Context, session string, types map[string]string) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	guard, err := s.writeGuard(ctx)
+	if err := s.writable(); err != nil {
+		return err
+	}
+	set, err := agentsession.CheckBlobTypes(types)
 	if err != nil {
 		return err
 	}
-	defer guard.release()
-	for h, t := range types {
-		mt, err := agentsession.BlobMediaType(t)
-		if err != nil {
-			return fmt.Errorf("cas: blob %s: %w", h, err)
+	sd, err := s.sessionDir(session)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(sd, "header")); errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: %s", agentsession.ErrNoSession, session)
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	dir := filepath.Join(sd, sessionTypesDir)
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("cas: session %s: types: %w", session, err)
 		}
-		if mt == "" {
-			continue
-		}
-		if ok, err := s.HasObject(ctx, SpaceMedia, h); err != nil || !ok {
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		if err := s.putMediaType(h, mt); err != nil {
-			return fmt.Errorf("cas: blob %s: type: %w", h, err)
+		if err := s.objs.fsyncDir(sd); err != nil {
+			return err
 		}
 	}
-	return nil
+	for h, t := range set {
+		path := filepath.Join(dir, strings.TrimPrefix(h, agentsession.HashPrefix))
+		if _, err := os.Stat(path); err == nil {
+			continue
+		}
+		_, err := writeFileWith(path, []byte(t), func(f *os.File) error { return s.objs.fsync(f.Name(), f, syncFile) }, false)
+		if errors.Is(err, errNoLink) {
+			_, err = s.objs.writeFile(path, []byte(t), true)
+		}
+		if err != nil && !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("cas: session %s: blob %s: type: %w", session, h, err)
+		}
+	}
+	return s.objs.fsyncDir(dir)
+}
+
+// SessionBlobTypes implements [agentsession.SessionBlobTyper].
+func (s *Store) SessionBlobTypes(ctx context.Context, session string) (map[string]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	sd, err := s.sessionDir(session)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, session)
+	}
+	if _, err := os.Stat(filepath.Join(sd, "header")); errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, session)
+	}
+	out := map[string]string{}
+	ents, err := os.ReadDir(filepath.Join(sd, sessionTypesDir))
+	if errors.Is(err, os.ErrNotExist) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cas: session %s: types: %w", session, err)
+	}
+	for _, e := range ents {
+		h := agentsession.HashPrefix + e.Name()
+		if !agentsession.ValidHash(h) {
+			continue
+		}
+		mt, err := s.sessionTypeOf(sd, h)
+		if err != nil {
+			return nil, fmt.Errorf("cas: session %s: %w", session, err)
+		}
+		if mt != "" {
+			out[h] = mt
+		}
+	}
+	return out, nil
+}
+
+// sessionTypeOf reads a session's type for a blob from the session's
+// directory, "" for none.
+func (s *Store) sessionTypeOf(sessionDir, hash string) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(sessionDir, sessionTypesDir, strings.TrimPrefix(hash, agentsession.HashPrefix)))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("blob %s: type: %w", hash, err)
+	}
+	mt, err := agentsession.BlobMediaType(string(raw))
+	if err != nil {
+		return "", fmt.Errorf("blob %s: type: %w", hash, err)
+	}
+	return mt, nil
+}
+
+// SessionBlob implements [agentsession.SessionBlobReader]: the blob,
+// with the session's type for it, or the store's where the session
+// holds none.
+func (s *Store) SessionBlob(ctx context.Context, session, hash string) ([]byte, string, error) {
+	data, mt, err := s.TypedBlob(ctx, hash)
+	if err != nil {
+		return nil, "", err
+	}
+	sd, err := s.sessionDir(session)
+	if err != nil {
+		return data, mt, nil
+	}
+	st, err := s.sessionTypeOf(sd, hash)
+	if err != nil {
+		return nil, "", fmt.Errorf("cas: session %s: %w", session, err)
+	}
+	if st != "" {
+		mt = st
+	}
+	return data, mt, nil
 }
 
 // TypedBlob implements [agentsession.TypedBlobReader]: a media blob by
@@ -3732,7 +3829,7 @@ func (s *Store) ProjectDir(ctx context.Context, dir, sessionID string) (string, 
 			return "", err
 		}
 		for _, b := range blobsNamedBy(body) {
-			data, mt, err := s.TypedBlob(ctx, b)
+			data, mt, err := s.SessionBlob(ctx, sessionID, b)
 			if err != nil {
 				return "", err
 			}
@@ -3858,7 +3955,7 @@ func (s *Store) ImportMedia(ctx context.Context, r io.Reader, media fs.FS, asRec
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.setMediaTypes(ctx, types); err != nil {
+	if err := s.SetSessionBlobTypes(ctx, out.Header().ID, types); err != nil {
 		return out, unresolved, fmt.Errorf("cas: import: the session is imported, and its blobs' types could not be stored: %w", err)
 	}
 	return out, unresolved, nil
@@ -4006,5 +4103,8 @@ var (
 	_ agentsession.BlobReader      = (*Store)(nil)
 	_ agentsession.TypedBlobWriter = (*Store)(nil)
 	_ agentsession.TypedBlobReader = (*Store)(nil)
-	_ agentsession.MediaImporter   = (*Store)(nil)
+
+	_ agentsession.SessionBlobTyper  = (*Store)(nil)
+	_ agentsession.SessionBlobReader = (*Store)(nil)
+	_ agentsession.MediaImporter     = (*Store)(nil)
 )

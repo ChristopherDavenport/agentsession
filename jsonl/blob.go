@@ -308,6 +308,114 @@ func (s *Store) SweepBlobs(ctx context.Context, grace time.Duration) (int, error
 	return n, err
 }
 
+// sessionTypesDir is the directory holding a session's types for its
+// blobs, each in the file [agentsession.SidecarTypeName] names, as RFC
+// 0001 lays out a session's directory: under the media directory, apart
+// from the store's own type for a blob, and removed with the session.
+func (s *Store) sessionTypesDir(id string) string {
+	return filepath.Join(s.root, mediaDir, "sessions", id)
+}
+
+// SetSessionBlobTypes implements [agentsession.SessionBlobTyper]: each
+// type is a file of the session's types directory, placed by a link that
+// never replaces one, so the session's first type for a blob is kept.
+func (s *Store) SetSessionBlobTypes(ctx context.Context, session string, types map[string]string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.readOnly {
+		return agentsession.ErrReadOnly
+	}
+	set, err := agentsession.CheckBlobTypes(types)
+	if err != nil {
+		return err
+	}
+	if !validSessionID(session) {
+		return fmt.Errorf("%w: session %q", ErrBadName, session)
+	}
+	if _, err := s.Path(session); err != nil {
+		return err
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	dir := s.sessionTypesDir(session)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("jsonl: session %s: types: %w", session, err)
+	}
+	for h, t := range set {
+		if err := linkNew(filepath.Join(dir, agentsession.SidecarTypeName(h)), []byte(t)); err != nil {
+			return fmt.Errorf("jsonl: session %s: blob %s: type: %w", session, h, err)
+		}
+	}
+	syncDir(filepath.Dir(dir))
+	return nil
+}
+
+// SessionBlobTypes implements [agentsession.SessionBlobTyper].
+func (s *Store) SessionBlobTypes(ctx context.Context, session string) (map[string]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := s.Path(session); err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	if !validSessionID(session) {
+		return out, nil
+	}
+	dir := s.sessionTypesDir(session)
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("jsonl: session %s: types: %w", session, err)
+	}
+	for _, e := range ents {
+		hex, ok := strings.CutSuffix(e.Name(), typeSuffix)
+		if !ok || !agentsession.ValidHash(agentsession.HashPrefix+hex) {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("jsonl: session %s: types: %w", session, err)
+		}
+		mt, err := agentsession.BlobMediaType(string(raw))
+		if err != nil {
+			return nil, fmt.Errorf("jsonl: session %s: blob %s: type: %w", session, hex, err)
+		}
+		if mt != "" {
+			out[agentsession.HashPrefix+hex] = mt
+		}
+	}
+	return out, nil
+}
+
+// SessionBlob implements [agentsession.SessionBlobReader]: the blob,
+// with the session's type for it, or the store's where the session
+// holds none.
+func (s *Store) SessionBlob(ctx context.Context, session, hash string) ([]byte, string, error) {
+	data, mt, err := s.TypedBlob(ctx, hash)
+	if err != nil {
+		return nil, "", err
+	}
+	if !validSessionID(session) {
+		return data, mt, nil
+	}
+	raw, err := os.ReadFile(filepath.Join(s.sessionTypesDir(session), agentsession.SidecarTypeName(hash)))
+	if errors.Is(err, os.ErrNotExist) {
+		return data, mt, nil
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("jsonl: session %s: blob %s: type: %w", session, hash, err)
+	}
+	if mt, err = agentsession.BlobMediaType(string(raw)); err != nil {
+		return nil, "", fmt.Errorf("jsonl: session %s: blob %s: type: %w", session, hash, err)
+	}
+	return data, mt, nil
+}
+
 // sweepTypes removes, under the media guard, each type file among names
 // whose blob the directory does not hold and that is older than grace,
 // as old says: one a crash left between a sweep's removing a type and
@@ -340,5 +448,8 @@ var (
 	_ agentsession.BlobReader      = (*Store)(nil)
 	_ agentsession.TypedBlobWriter = (*Store)(nil)
 	_ agentsession.TypedBlobReader = (*Store)(nil)
-	_ agentsession.BlobSweeper     = (*Store)(nil)
+
+	_ agentsession.SessionBlobTyper  = (*Store)(nil)
+	_ agentsession.SessionBlobReader = (*Store)(nil)
+	_ agentsession.BlobSweeper       = (*Store)(nil)
 )
