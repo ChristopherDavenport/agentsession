@@ -139,10 +139,17 @@ var envelopeMembers = []special{
 // A call_id inside data the format does not define, a decision's args,
 // a custom entry's data, an outcome's details or a member it does not
 // define, is the writer's text and body.
+//
+// A trust member's labels, on an item, a result, a compaction and a
+// branch summary, are the format's vocabulary and not text, so a rewrite
+// leaves them as they are (RFC 0001, Every redacted entry).
 var bodyMembers = map[string][]special{
 	TypeItem: {
 		{path: memberPath("queued_from"), role: roleEntry, set: true},
 		{path: memberPath("from_link"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*ItemEntry).FromLink != "" }},
+		{path: memberPath("copied_from", "entry"), role: roleEntry, session: "session", set: true, when: func(e Entry) bool { return e.(*ItemEntry).CopiedFrom != nil }},
+		{path: memberPath("copied_from", "session"), role: roleSession, when: func(e Entry) bool { return e.(*ItemEntry).CopiedFrom != nil }},
+		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*ItemEntry).Trust != nil }},
 		{path: memberPath("item", "call_id"), role: roleCallID},
 	},
 	TypeQueued:   {{path: memberPath("item", "call_id"), role: roleCallID}},
@@ -164,13 +171,23 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("config", "omit", "images", "before"), role: roleEntry, bound: true, when: func(e Entry) bool { i := e.(*CompactionEntry).Config.Omit.Images; return i != nil && i.Before != "" }},
 		{path: memberPath("config", "instructions_parts", "[]", "hash"), role: roleHash},
 		{path: memberPath("pinned", "[]", "call_id"), role: roleCallID},
+		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*CompactionEntry).Trust != nil }},
 	},
-	TypeBranchSummary: {{path: memberPath("from"), role: roleEntry}},
-	TypeRun:           {{path: memberPath("pending", "[]"), role: roleCallID}},
-	TypeDispatch:      {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
-	TypeDecision:      {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
-	TypeLabel:         {{path: memberPath("target"), role: roleEntry}},
-	TypeOutcome:       {{path: memberPath("target"), role: roleEntry}},
+	TypeBranchSummary: {
+		{path: memberPath("from"), role: roleEntry},
+		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*BranchSummaryEntry).Trust != nil }},
+	},
+	TypeRun:      {{path: memberPath("pending", "[]"), role: roleCallID}},
+	TypeDispatch: {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
+	TypeDecision: {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
+	TypeResult: {
+		{path: memberPath("target"), role: roleEntry},
+		{path: memberPath("call_id"), role: roleCallID},
+		{path: memberPath("item", "call_id"), role: roleCallID},
+		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*ResultEntry).Trust != nil }},
+	},
+	TypeLabel:   {{path: memberPath("target"), role: roleEntry}},
+	TypeOutcome: {{path: memberPath("target"), role: roleEntry}},
 	TypeLink: {
 		{path: memberPath("target"), role: roleEntry, when: func(e Entry) bool { return e.(*LinkEntry).Target != "" }},
 		{path: memberPath("session"), role: roleSession},
@@ -235,6 +252,13 @@ func specialsOf(e Entry) []special {
 // out with the link it names, since nothing standing in a link's place
 // is a link.
 var ErrNoPlace = errors.New("agentsession: a member naming one entry has nothing in the place of the entry left out")
+
+// ErrUnmappedCopy is returned by [RemapRefs] for a copied item whose
+// copied_from session the remap re-points while it leaves the entry as
+// written: the session is redacted alongside, so the entry names an
+// entry of the original inside the redaction, which neither verifies
+// there nor hides what was redacted (RFC 0001, Every redacted entry).
+var ErrUnmappedCopy = errors.New("agentsession: copied_from's session is redacted alongside and its entry is not mapped")
 
 // Remap says where the references [RemapRefs] meets now point. A
 // callback returns the ID a reference is to name instead, or false to
@@ -442,6 +466,11 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 	}
 	if noPlace != nil {
 		return Remapped{}, noPlace
+	}
+	if it, ok := e.(*ItemEntry); ok && it.CopiedFrom != nil && it.CopiedFrom.Entry != "" && m.Session != nil {
+		if _, alongside := m.Session(it.CopiedFrom.Session); alongside && slices.ContainsFunc(out.Unmapped, func(r Reference) bool { return r.At == "/copied_from/entry" }) {
+			return Remapped{}, fmt.Errorf("%w: %s names %s in %s", ErrUnmappedCopy, it.ID, it.CopiedFrom.Entry, it.CopiedFrom.Session)
+		}
 	}
 	if root0 && m.Base != "" {
 		root["parent"] = m.Base

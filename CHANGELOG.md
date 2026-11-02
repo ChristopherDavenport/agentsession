@@ -5,6 +5,105 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Format 0.15 (RFC 0001, draft 0.15).** `Format` and `FormatMinor`
+  name 0.15, so a writer raises every file it appends to and a reader
+  of 0.14 refuses it; a 0.5 to 0.14 file reads as it stands and no
+  entry hash moves. The generated fixtures and export goldens carry the
+  new header. 0.15 takes in the members, the record entry type and the
+  rules below.
+
+- **Copied context (RFC 0001 0.15, `item`; agentturn#237, #243).** An
+  item entry may carry `copied_from` (`ItemEntry.CopiedFrom`, a
+  `*CopiedFrom` with `Session` and an optional `Entry`): the item was
+  taken from another session's conversation. A function call carrying
+  it is a copied call (`Call.Copied`): no call of this session, never
+  one of a run's calls, never pending (`PendingCalls` leaves it out),
+  `CallUnknown` rather than `CallNeverStarted` with no output, and no
+  records promise covers it. `Append` refuses a dispatch or a decision
+  naming one (`ErrCopiedCall`), an output for one that is not marked
+  copied, an item copied from its own session, and a copied item
+  carrying `response` (`ErrBadCopiedFrom`);
+  `VerifyRecords` reports each. The context hash leaves the member out;
+  `RemapRefs` maps its `entry` as a reference into its `session`, and a
+  `Rewriter` that changes a copied item removes its `entry` unless
+  `Rewriter.Alongside` says the source session is redacted alongside,
+  when the remap points it at the source's redaction. ATIF marks
+  copied steps `is_copied_context` with no `model_name`, metrics or
+  `llm_call_count`, carries `copied_from` under `extra.agentsession`, and
+  counts no copied step in `total_steps`; otel gives a copied call no
+  tool span. Fixtures `copied`, `copied-answer` and `bad-copied-*`, with
+  ATIF goldens. A copied item naming an entry carries that entry's
+  `trust`, and `Session.VerifyCopies`, given the source session, reports
+  a copy whose item or trust differs from the entry it names
+  (`ErrCopyMismatch`). **Added: `CopiedFrom`, `ItemEntry.CopiedFrom`,
+  `Call.Copied`, `ErrCopiedCall`, `ErrBadCopiedFrom`,
+  `Session.VerifyCopies`, `ErrCopyMismatch`, `Rewriter.Alongside`,
+  `ErrUnmappedCopy`.** `RemapRefs` refuses a copy whose session it
+  re-points and whose entry it leaves as written (`ErrUnmappedCopy`).
+  `VerifyCopies` resolves each source session once, and its resolver
+  must apply the caller's read rights.
+
+- **Delivered inputs (RFC 0001 0.15, `queued`; agentturn#244).** A
+  `queued` steer may carry `deliver: true` (`QueuedEntry.Deliver`): an
+  input that arrived on its own time and must reach the model, for
+  which a harness starts a run when none takes it. `PendingQueued`
+  returns an owed delivery with the field set, so a resume can tell it
+  from a plain steer. A writer refuses `deliver` on a follow-up; a
+  reader keeps one there, or not `true`, as written. `NewDelivery`
+  builds one, and `QueuedEntry.Requeue` writes an input again after a
+  run end closed it, `deliver` included. ATIF carries `deliver` in the
+  `queued` record; the CLI describes the entry as delivered. Fixture
+  `delivered`, with its ATIF golden. **Added: `QueuedEntry.Deliver`,
+  `NewDelivery`, `QueuedEntry.Requeue`.**
+
+- **A call's result before its output (RFC 0001 0.15, `result`;
+  agentturn#273).** A new record entry, `result` (`ResultEntry`,
+  `TypeResult`), records that a call's tool returned before its output
+  could join the path, as inside a parallel batch appended in the
+  model's order. A call with a result after its last dispatch and no
+  output has returned: `Call.Returned`, `CallReturned` ("returned"),
+  `Call.Result`; `InFlight` is false for it, so a resume after a crash
+  appends `ResultEntry.Output()` and runs nothing again. `Append`
+  refuses a result that follows no open hand-off of its call
+  (`ErrBadResult`), a dispatch or a decision other than an answer after
+  one (`ErrCallReturned`), and an output after one, with no answer
+  between, that differs from its item (`ErrResultMismatch`);
+  `VerifyRecords` reports each. ATIF carries the result under
+  `calls[call_id].result`, with its item when the document holds no
+  output for the call; otel ends a hand-off's span at its result and
+  reads a cut call as returned. Fixtures `returned` and `bad-result-*`,
+  with an ATIF golden. **Added: `ResultEntry`, `TypeResult`,
+  `NewResult`, `Call.Result`, `Call.Returned`, `CallReturned`,
+  `ErrBadResult`, `ErrCallReturned`, `ErrResultMismatch`; otel
+  `EventResult`, `AttrResultFailed`.**
+
+- **Leaving a call out takes its custom entries (RFC 0001 0.15,
+  Redaction, Leaving entries out; agentturn#261).** A redactor that
+  leaves out a call leaves out every `custom` entry whose `call_id`
+  names it, as it does the call's dispatches, decisions, results and
+  links; nested calls recorded as `custom` entries, such as
+  `agentturn:nested_call`, go with the call that made them. The rule
+  binds redactors; nothing in this library leaves entries out.
+
+- **Trust (RFC 0001 0.15, `item`, `result`, `compaction`,
+  `branch_summary`; #263).** An item, a result, a compaction and a
+  branch summary may carry `trust` (`*Trust` with `Reads`; labels
+  `TrustUntrusted` and `TrustPrivate`, others kept as written and read
+  as untrusted by `Trust.Untrusted`). A path's trust is the union over
+  it, items left out or sent as placeholders included and folds
+  included: `PathTrust`, `UnionTrust`, and `Context.Trust`, so the
+  context after a fold still reports an untrusted output the fold
+  replaced. `ResultEntry.Output` carries the result's trust. The context
+  hash leaves the member out; `RewriteStrings` leaves its labels as they
+  are. ATIF carries it under `extra.agentsession` on the step or
+  observation, the fold's system step and the result record. Fixture
+  `trust`, with its ATIF golden. **Added: `Trust`, `TrustUntrusted`,
+  `TrustPrivate`, `UnionTrust`, `PathTrust`, `Context.Trust` and the
+  `Trust` fields of `ItemEntry`, `ResultEntry`, `CompactionEntry` and
+  `BranchSummaryEntry`.**
+
 ## v0.0.31 - 2026-11-01
 
 - **ATIF: what each step's own request left out, cost with subagents,

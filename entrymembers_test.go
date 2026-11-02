@@ -156,6 +156,13 @@ func entryVariants(e Entry) []variant {
 			{"message", func(e Entry) { e.(*ItemEntry).Failed = false }},
 		}
 	}
+	if _, ok := e.(*ResultEntry); ok {
+		// A result's item is its call's output.
+		return []variant{{"output", func(e Entry) {
+			r := e.(*ResultEntry)
+			r.Item = openresponses.NewFunctionCallOutput(r.CallID, "Error: failed")
+		}}}
+	}
 	return []variant{{"default", func(Entry) {}}}
 }
 

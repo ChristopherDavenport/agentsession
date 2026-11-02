@@ -1,0 +1,138 @@
+package export
+
+import (
+	"testing"
+
+	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/atif"
+)
+
+// TestCopiedSteps: the copied fixture's child exports the parent's user
+// message as a copied user step and the parent's reasoning and helper
+// call as one copied agent step, with no model_name, metrics or
+// llm_call_count, the placeholder output as that step's observation,
+// and copied_from under extra.agentsession; total_steps counts the
+// child's own response alone (RFC 0001, Projections/ATIF, 0.15).
+func TestCopiedSteps(t *testing.T) {
+	s := loadFixture(t, "copied")
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDoc(t, tr)
+	if len(doc.Steps) != 4 {
+		t.Fatalf("steps = %d", len(doc.Steps))
+	}
+	user, agent := doc.Steps[0], doc.Steps[1]
+	if user.Source != atif.SourceUser || user.IsCopiedContext == nil || !*user.IsCopiedContext {
+		t.Errorf("the copied user step is %+v", user)
+	}
+	if agent.Source != atif.SourceAgent || agent.IsCopiedContext == nil || !*agent.IsCopiedContext ||
+		agent.ModelName != "" || agent.LLMCallCount != nil || agent.Metrics != nil || len(agent.ToolCalls) != 1 {
+		t.Errorf("the copied agent step is %+v", agent)
+	}
+	if agent.Observation == nil || len(agent.Observation.Results) != 1 || agent.Observation.Results[0].SourceCallID != "call_helper" {
+		t.Errorf("the copied call's observation is %+v", agent.Observation)
+	}
+	// copied_from is a list in item order on every step, one item's or
+	// several's, so a reader reads it one way.
+	for i, want := range []int{1, 2} {
+		as, _ := doc.Steps[i].Extra[ExtraAgentSession].(map[string]any)
+		if list, ok := as["copied_from"].([]any); !ok || len(list) != want {
+			t.Errorf("step %d carries copied_from %v, want a list of %d", i+1, as["copied_from"], want)
+		}
+	}
+	own := doc.Steps[3]
+	if own.IsCopiedContext != nil || own.ModelName == "" || own.LLMCallCount == nil {
+		t.Errorf("the child's own step is %+v", own)
+	}
+	if *doc.FinalMetrics.TotalSteps != 1 {
+		t.Errorf("total_steps = %d, want the child's one response", *doc.FinalMetrics.TotalSteps)
+	}
+}
+
+// TestResultTravelsWithItsCall: a call's result travels under
+// calls[call_id].result with its time and failed, and with its item only
+// when the document holds no output for the call, so a document cut
+// before the append still says the tool returned (RFC 0001,
+// Projections/ATIF, 0.15).
+func TestResultTravelsWithItsCall(t *testing.T) {
+	s := loadFixture(t, "returned")
+	runs, err := s.Runs(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := func(doc *atif.Trajectory, callID string) map[string]any {
+		for _, step := range doc.Steps {
+			calls, _ := step.Extra[ExtraCalls].(map[string]any)
+			if call, ok := calls[callID].(map[string]any); ok {
+				r, _ := call["result"].(map[string]any)
+				return r
+			}
+		}
+		return nil
+	}
+	tr, err := At(s, runs[0].End.Parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut := mustDoc(t, tr)
+	if r := result(cut, "call_a"); r == nil || r["item"] == nil || r["ts"] == nil || r["failed"] != nil {
+		t.Errorf("at the cut call_a's result is %v", r)
+	}
+	if r := result(cut, "call_c"); r == nil || r["failed"] != true || r["item"] == nil {
+		t.Errorf("at the cut call_c's result is %v", r)
+	}
+	if r := result(cut, "call_b"); r != nil {
+		t.Errorf("call_b, still in flight, carries a result %v", r)
+	}
+	tr, err = At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := result(mustDoc(t, tr), "call_a"); r == nil || r["item"] != nil {
+		t.Errorf("at the leaf, which holds the output, call_a's result is %v", r)
+	}
+}
+
+// TestTrustTravels: an output's trust travels under extra.agentsession
+// in its observation result, and a fold's on its system step (RFC 0001,
+// Projections/ATIF, 0.15).
+func TestTrustTravels(t *testing.T) {
+	s := loadFixture(t, "trust")
+	var before, fold string
+	for _, e := range s.Entries() {
+		if c, ok := e.(*agentsession.CompactionEntry); ok {
+			fold, before = c.ID, c.Parent
+		}
+	}
+	tr, err := At(s, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reads := map[string]bool{}
+	for _, step := range mustDoc(t, tr).Steps {
+		if step.Observation == nil {
+			continue
+		}
+		for _, r := range step.Observation.Results {
+			as, _ := r.Extra[ExtraAgentSession].(map[string]any)
+			if tr, ok := as["trust"].(*agentsession.Trust); ok {
+				for _, l := range tr.Reads {
+					reads[l] = true
+				}
+			}
+		}
+	}
+	if !reads[agentsession.TrustUntrusted] || !reads[agentsession.TrustPrivate] {
+		t.Errorf("the observations carry %v", reads)
+	}
+	tr, err = At(s, fold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	as, _ := mustDoc(t, tr).Steps[0].Extra[ExtraAgentSession].(map[string]any)
+	if got, _ := as["trust"].(*agentsession.Trust); got == nil || len(got.Reads) != 3 {
+		t.Errorf("the fold's step carries %v", as["trust"])
+	}
+}

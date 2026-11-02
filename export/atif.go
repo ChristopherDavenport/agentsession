@@ -225,6 +225,19 @@ type builder struct {
 	// unembedded counts the subsession links whose child was not
 	// embedded, whose cost the root's total_cost_usd leaves out.
 	unembedded int
+	// results are the result records written under calls, each with the
+	// entry it was made from, and outputs the calls whose output the
+	// document holds: a result carries its item when the document holds
+	// no output for its call, so a document cut before the append still
+	// says the tool returned.
+	results []resultRecord
+	outputs map[string]bool
+}
+
+// resultRecord is one call's result record and the entry it came from.
+type resultRecord struct {
+	rec map[string]any
+	e   *agentsession.ResultEntry
 }
 
 // replacedRecord is one placeholder a request sends for an item entry,
@@ -328,6 +341,10 @@ type agentGroup struct {
 	responseID string
 	entries    []*agentsession.ItemEntry
 	copied     bool // opened inside the kept window after a compaction
+	// taken is set for a group of items carrying copied_from: model
+	// output another session produced, which is no model call of this
+	// path (RFC 0001, Projections/ATIF, since 0.15).
+	taken bool
 }
 
 func (b *builder) run() error {
@@ -375,7 +392,7 @@ func (b *builder) setAgentDefaults() {
 				b.settings = b.settings.Apply(v)
 				continue
 			case *agentsession.EnvEntry, *agentsession.InfoEntry, *agentsession.LabelEntry, *agentsession.CustomEntry,
-				*agentsession.RunEntry, *agentsession.DispatchEntry, *agentsession.DecisionEntry:
+				*agentsession.RunEntry, *agentsession.DispatchEntry, *agentsession.DecisionEntry, *agentsession.ResultEntry:
 				continue
 			}
 			break
@@ -448,6 +465,9 @@ func (b *builder) entry(e agentsession.Entry) error {
 			step.Extra["tokens_before"] = v.TokensBefore
 		}
 		b.foldUsage(v.ID, step.Extra, v.Config.Model, v.Usage)
+		if v.Trust != nil {
+			agentSessionExtra(step.Extra)["trust"] = v.Trust
+		}
 		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.BranchSummaryEntry:
@@ -462,6 +482,9 @@ func (b *builder) entry(e agentsession.Entry) error {
 			},
 		}
 		b.foldUsage(v.ID, step.Extra, b.inForce(b.copied).Model, v.Usage)
+		if v.Trust != nil {
+			agentSessionExtra(step.Extra)["trust"] = v.Trust
+		}
 		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.LabelEntry:
@@ -544,6 +567,18 @@ func (b *builder) entry(e agentsession.Entry) error {
 		call := b.callExtra(v.CallID)
 		list, _ := call["decisions"].([]any)
 		call["decisions"] = append(list, rec)
+	case *agentsession.ResultEntry:
+		// A call's result travels with its call, as its dispatches do.
+		rec := map[string]any{"entry_id": v.ID, "ts": v.Timestamp.UTC().Format(time.RFC3339Nano)}
+		if v.Failed {
+			rec["failed"] = true
+		}
+		if v.Trust != nil {
+			rec["trust"] = v.Trust
+		}
+		copyUnknown(rec, v.Unknown)
+		b.callExtra(v.CallID)["result"] = rec
+		b.results = append(b.results, resultRecord{rec: rec, e: v})
 	case *agentsession.QueuedEntry:
 		rec := map[string]any{"entry_id": v.ID, "mode": v.Mode, "item": rawItem(v.Item)}
 		if v.Trigger != nil {
@@ -551,6 +586,9 @@ func (b *builder) entry(e agentsession.Entry) error {
 		}
 		if v.Ref != "" {
 			rec["ref"] = v.Ref
+		}
+		if v.Deliver {
+			rec["deliver"] = true
 		}
 		copyUnknown(rec, v.Unknown)
 		b.addPendingList(ExtraQueued, rec)
@@ -563,8 +601,21 @@ func (b *builder) entry(e agentsession.Entry) error {
 }
 
 func (b *builder) item(e *agentsession.ItemEntry) error {
+	taken := e.CopiedFrom != nil
+	if taken && isModelOutput(e.Item) {
+		// Copied model output that follows one another forms one step,
+		// whatever response it names: no response of this path made it.
+		if b.group != nil && !b.group.taken {
+			b.flushGroup(nil)
+		}
+		if b.group == nil {
+			b.group = &agentGroup{copied: b.copied, taken: true}
+		}
+		b.group.entries = append(b.group.entries, e)
+		return nil
+	}
 	if e.ResponseID != "" || isModelOutput(e.Item) {
-		if b.group != nil && b.group.responseID != "" && e.ResponseID != "" && b.group.responseID != e.ResponseID {
+		if b.group != nil && (b.group.taken || b.group.responseID != "" && e.ResponseID != "" && b.group.responseID != e.ResponseID) {
 			b.flushGroup(nil)
 		}
 		if b.group == nil {
@@ -587,8 +638,15 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 		if v.Role != openresponses.RoleUser {
 			step.Extra["role"] = string(v.Role)
 		}
+		if taken {
+			step.IsCopiedContext = atif.Ptr(true)
+		}
 		b.addStep(step, e)
 	case *openresponses.FunctionCallOutput:
+		if b.outputs == nil {
+			b.outputs = map[string]bool{}
+		}
+		b.outputs[v.CallID] = true
 		if len(e.Parents) > 0 {
 			// Where the answer came from, which the subsession
 			// reference needs and which nothing else on the path says.
@@ -618,6 +676,9 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 			Extra:       b.itemExtra(e),
 		}
 		step.Extra["orphan_call_id"] = v.CallID
+		if taken {
+			step.IsCopiedContext = atif.Ptr(true)
+		}
 		b.addStep(step, e)
 	default:
 		// Extension items, item references and anything else that is
@@ -625,6 +686,9 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 		// declares one.
 		step := atif.Step{Source: atif.SourceSystem, Message: atif.Text(itemText(v)), Extra: b.itemExtra(e)}
 		step.Extra["item_type"] = v.ItemType()
+		if taken {
+			step.IsCopiedContext = atif.Ptr(true)
+		}
 		if u, ok := v.(*openresponses.UnknownItem); ok {
 			var probe struct {
 				Role string `json:"role"`
@@ -664,6 +728,13 @@ func (b *builder) itemExtra(e *agentsession.ItemEntry) map[string]any {
 	if e.FromLink != "" {
 		agentSessionExtra(extra)["from_link"] = e.FromLink
 	}
+	if e.CopiedFrom != nil {
+		// A list, as on a step made of several copied items.
+		agentSessionExtra(extra)["copied_from"] = []any{e.CopiedFrom}
+	}
+	if e.Trust != nil {
+		agentSessionExtra(extra)["trust"] = e.Trust
+	}
 	if r := b.replaced[e.ID]; len(r) > 0 {
 		agentSessionExtra(extra)[ExtraReplaced] = r
 	}
@@ -681,8 +752,9 @@ func (b *builder) flushGroup(resp *agentsession.ResponseEntry) {
 	if g == nil {
 		g = &agentGroup{responseID: resp.ResponseID, copied: b.copied}
 	}
-	if resp != nil && g.responseID != "" && g.responseID != resp.ResponseID {
-		// The group belongs to another call; close it on its own first.
+	if resp != nil && (g.taken || g.responseID != "" && g.responseID != resp.ResponseID) {
+		// The group belongs to another call, or to none of this path's;
+		// close it on its own first.
 		b.flushGroupItems(g, nil)
 		g = &agentGroup{responseID: resp.ResponseID, copied: b.copied}
 	}
@@ -737,6 +809,12 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 		calls = resp.Calls()
 	}
 	step := atif.Step{Source: atif.SourceAgent, ModelName: b.modelName(settings.Model), LLMCallCount: atif.Ptr(calls)}
+	if g.taken {
+		// Another session's model output: no model call of this path,
+		// so no model, no call count and no metrics.
+		step.ModelName, step.LLMCallCount, resp = "", nil, nil
+		step.IsCopiedContext = atif.Ptr(true)
+	}
 	if g.copied {
 		// Marked from the group, not from where the flush happens: a
 		// group the first entry after the compaction flushes is still
@@ -798,6 +876,20 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 	}
 	if len(ids) > 0 {
 		step.Extra["item_entry_ids"] = ids
+	}
+	trusts := make([]*agentsession.Trust, 0, len(g.entries))
+	for _, e := range g.entries {
+		trusts = append(trusts, e.Trust)
+	}
+	if t := agentsession.UnionTrust(trusts...); t != nil {
+		agentSessionExtra(step.Extra)["trust"] = t
+	}
+	if g.taken {
+		from := make([]any, 0, len(g.entries))
+		for _, e := range g.entries {
+			from = append(from, e.CopiedFrom)
+		}
+		agentSessionExtra(step.Extra)["copied_from"] = from
 	}
 	var left []map[string]any
 	for _, e := range g.entries {
@@ -1105,6 +1197,11 @@ func (b *builder) outcome(o *agentsession.OutcomeEntry) {
 // finish writes the root extras, final metrics, subagent links and
 // anything still pending.
 func (b *builder) finish() {
+	for _, r := range b.results {
+		if !b.outputs[r.e.CallID] {
+			r.rec["item"] = rawItem(r.e.Item)
+		}
+	}
 	b.markRedacted()
 	root := b.rootExtra()
 	root[ExtraOpenResponses] = map[string]any{"payload": b.t.Header.Payload}

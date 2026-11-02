@@ -1,0 +1,270 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000035",
+  "trajectory_id": "sha256:c15195ae0290e507f361d8379b085aa58e072a0f7984339b5974790a9b65bdf3",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-01T12:00:03Z",
+      "source": "user",
+      "message": "Start the build in the background.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:45f8511d7fe1ce05a5c7f770afeb48175c090d093e7fe34e8a60148bdd0ef773"
+        },
+        "config_entries": [
+          "sha256:7ce27e2f24ba83eb5ca5388ff134c1a3e9a8a7b7ff3adf2c4431a6bc65f6e00a"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Start the build in the background."
+              }
+            ]
+          }
+        },
+        "run": [
+          {
+            "end_entry_id": "sha256:5b48cd7ce0f5d53754380258f94d155e45791ee8af203701d60352eddb380635",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-1",
+            "source": "input",
+            "start_entry_id": "sha256:bb5ce15b0228823e60a7c4ebea9fe822d7130e928a00e77a3bd073b852314d50"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-01T12:00:05Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "The build is running.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:534f4c164351aa0f6d255b1ff8c2a804affd4d21d9ad43e8603ea5fd663ddcda"
+        },
+        "item_entry_ids": [
+          "sha256:d126afa194897540a5f93a1cd40e73c37f788ca58950bcb65f491370958b45ba"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "The build is running.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:534f4c164351aa0f6d255b1ff8c2a804affd4d21d9ad43e8603ea5fd663ddcda",
+            "model": "gpt-5",
+            "request_hash": "sha256:072f66b19bcbc87fdc400a72c247e8f02026b621adc52b53aa8bef850b4835f4",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-11-01T12:00:05Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-01T12:00:10Z",
+      "source": "user",
+      "message": "Background task build-7 finished: 2 warnings.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:ce7648b0ddeda1a0dcbbf0e8326af57490ec360d6208359ef90887fd613ca07f"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Background task build-7 finished: 2 warnings."
+              }
+            ]
+          }
+        },
+        "queued": [
+          {
+            "deliver": true,
+            "entry_id": "sha256:ae65295a91b35e769a552fd57644e777254d23ee6050662040d8d87a7d073a7a",
+            "item": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Background task build-7 finished: 2 warnings."
+                }
+              ]
+            },
+            "mode": "steer",
+            "ref": "inbox-1",
+            "trigger": {
+              "kind": "task",
+              "ref": "build-7",
+              "source": "background"
+            }
+          },
+          {
+            "deliver": true,
+            "entry_id": "sha256:0a4dd48cfbe5fc4e768927325369637a39eac56a0e7a1145bd0a230a21f18e91",
+            "item": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Background task build-7 finished: 2 warnings."
+                }
+              ]
+            },
+            "mode": "steer",
+            "ref": "inbox-1",
+            "trigger": {
+              "kind": "task",
+              "ref": "build-7",
+              "source": "background"
+            }
+          }
+        ],
+        "queued_from": "sha256:0a4dd48cfbe5fc4e768927325369637a39eac56a0e7a1145bd0a230a21f18e91",
+        "run": [
+          {
+            "run_id": "run-2",
+            "source": "input",
+            "start_entry_id": "sha256:d2e148842bfcfa996541e353425ba5e02e96ecad1aa5a7cff5941448563136d7"
+          }
+        ],
+        "source": {
+          "kind": "task",
+          "ref": "build-7",
+          "source": "background"
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-11-01T12:00:12Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_fix",
+          "function_name": "bash",
+          "arguments": {
+            "cmd": "make fix-warnings"
+          }
+        }
+      ],
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:eccd138f898c2b002f1b35ed6e72855bf71e7f0a325be29f7f84e5259800d2af"
+        },
+        "calls": {
+          "call_fix": {
+            "decisions": [
+              {
+                "by": "policy",
+                "entry_id": "sha256:9fa8754f95f56b55af5777a4a329c3a626db8813d31f1320a168191d1a694d84",
+                "reason": "asks a person",
+                "verdict": "hold"
+              }
+            ]
+          }
+        },
+        "item_entry_ids": [
+          "sha256:578b7a1be01dbaf44cd0498db4ff444af1d2c94a284a94ee78af9d8dc711871a"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "id": "fc_1",
+              "call_id": "call_fix",
+              "name": "bash",
+              "arguments": "{\"cmd\":\"make fix-warnings\"}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:eccd138f898c2b002f1b35ed6e72855bf71e7f0a325be29f7f84e5259800d2af",
+            "model": "gpt-5",
+            "request_hash": "sha256:53391e4bd21bb4c9e5e5a7f0647096a06f8adb752de63840102b2c20bfd4506c",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-11-01T12:00:12Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 2 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 4 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 2
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.15",
+      "leaf": "sha256:c15195ae0290e507f361d8379b085aa58e072a0f7984339b5974790a9b65bdf3",
+      "main": true,
+      "records": [
+        "run",
+        "dispatch",
+        "decision"
+      ]
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    },
+    "queued": [
+      {
+        "deliver": true,
+        "entry_id": "sha256:c15195ae0290e507f361d8379b085aa58e072a0f7984339b5974790a9b65bdf3",
+        "item": {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Background task lint-3 finished: clean."
+            }
+          ]
+        },
+        "mode": "steer",
+        "trigger": {
+          "kind": "task",
+          "ref": "lint-3",
+          "source": "background"
+        }
+      }
+    ]
+  }
+}

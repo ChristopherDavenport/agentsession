@@ -205,6 +205,12 @@ func describeEntry(e agentsession.Entry, full bool) string {
 			return v.CallID + " to tool, key " + describeText(v.IdempotencyKey)
 		}
 		return v.CallID + " to tool"
+	case *agentsession.ResultEntry:
+		s := v.CallID + " returned " + describeItem(v.Item)
+		if v.Failed {
+			s += ", failed"
+		}
+		return s
 	case *agentsession.DecisionEntry:
 		parts := []string{v.Verdict, v.CallID}
 		if v.By != "" {
@@ -219,6 +225,9 @@ func describeEntry(e agentsession.Entry, full bool) string {
 		return strings.Join(parts, " ")
 	case *agentsession.QueuedEntry:
 		s := v.Mode + " " + describeItem(v.Item)
+		if v.Deliver {
+			s = "delivered " + s
+		}
 		if v.Trigger != nil {
 			s += " from " + describeTrigger(v.Trigger)
 		}

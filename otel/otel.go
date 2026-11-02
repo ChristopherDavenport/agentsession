@@ -88,7 +88,10 @@ const (
 	AttrVerdict        = "agentsession.decision.verdict"
 	// AttrWithdrawn marks a decision event for a reject that withdrew the
 	// hand-off it follows (RFC 0001 0.14): the tool never ran.
-	AttrWithdrawn     = "agentsession.decision.withdrawn"
+	AttrWithdrawn = "agentsession.decision.withdrawn"
+	// AttrResultFailed marks a result event whose result is failed (RFC
+	// 0001 0.15).
+	AttrResultFailed  = "agentsession.result.failed"
 	AttrOutcomeKind   = "agentsession.outcome.kind"
 	AttrOutcomeTarget = "agentsession.outcome.target"
 	AttrOutcomeScore  = "agentsession.outcome.score"
@@ -136,6 +139,9 @@ const (
 	// EventCancel is a cancel notice: the caller told a callee it no
 	// longer wanted the work, which says nothing of whether it stopped.
 	EventCancel = "cancel"
+	// EventResult is a call's result (RFC 0001 0.15): its tool returned,
+	// before the output joined the path. The hand-off's span ends here.
+	EventResult = "result"
 )
 
 // Export replays the path to leaf into tracer as spans, with the
@@ -369,6 +375,20 @@ type callState struct {
 	// callee holds the span attributes a subsession or peer link
 	// names, for the span the call's next hand-off opens.
 	callee []attribute.KeyValue
+	// returned reports that a result follows the call's last dispatch
+	// (RFC 0001 0.15): the tool returned at returnedAt, which is where
+	// the hand-off's span ends, the output's append being no tool time.
+	returned   bool
+	returnedAt time.Time
+}
+
+// endAt is when the call's current span ends for an event at ts: at its
+// result, when the tool returned, and at ts otherwise.
+func (c *callState) endAt(ts time.Time) time.Time {
+	if c.returned && !c.returnedAt.IsZero() {
+		return c.returnedAt
+	}
+	return ts
 }
 
 // CallStateWithdrawn is the call state a tool span carries when a
@@ -390,6 +410,8 @@ func (t *tracker) pendingState(c *callState) agentsession.CallState {
 		return agentsession.CallAnswered
 	case c.rejected:
 		return agentsession.CallRejected
+	case c.returned:
+		return agentsession.CallReturned
 	case c.held:
 		return agentsession.CallHeld
 	case c.dispatched:
@@ -418,7 +440,7 @@ func (t *tracker) dispatchedElsewhere(c *callState) bool {
 // withdrawal of it would restore.
 func (c *callState) noteDispatch(d *agentsession.DispatchEntry) {
 	c.heldBefore, c.lastBefore = c.held, c.lastDispatch
-	c.dispatched, c.held = true, false
+	c.dispatched, c.held, c.returned = true, false, false
 	c.dispatches++
 	c.lastDispatch = d.ID
 	c.lastIsDispatch = true
@@ -510,12 +532,32 @@ func (t *tracker) prime(path []agentsession.Entry) {
 			if c := t.callFor(v.CallID, v.Target); c != nil {
 				c.noteDispatch(v)
 			}
+		case *agentsession.ResultEntry:
+			if c := t.callFor(v.CallID, v.Target); c != nil {
+				c.noteResult(v)
+			}
 		}
 	}
 }
 
+// noteResult records that the call's tool returned, with what the
+// result says.
+func (c *callState) noteResult(r *agentsession.ResultEntry) {
+	if c.dispatches == 0 {
+		return // a result with no hand-off, which the format forbids
+	}
+	c.returned, c.returnedAt = true, r.Timestamp
+	c.lastIsDispatch = false
+}
+
 func (t *tracker) register(e *agentsession.ItemEntry, fc *openresponses.FunctionCall) {
 	if _, ok := t.byEntry[e.ID]; ok {
+		return
+	}
+	if e.CopiedFrom != nil {
+		// A copied call was made in another session, which traces it:
+		// it has no tool span here (RFC 0001 0.15), and its output,
+		// finding no call, opens none.
 		return
 	}
 	c := &callState{name: fc.Name, callID: fc.CallID, entryID: e.ID, responseID: e.ResponseID, seen: e.Timestamp}
@@ -616,6 +658,17 @@ func (t *tracker) entry(e agentsession.Entry) {
 		t.decision(v, ts)
 	case *agentsession.DispatchEntry:
 		t.dispatch(v, ts)
+	case *agentsession.ResultEntry:
+		if c := t.callFor(v.CallID, v.Target); c != nil {
+			c.noteResult(v)
+			if c.span != nil && c.returned {
+				attrs := []attribute.KeyValue{attribute.String(AttrEntryID, v.ID)}
+				if v.Failed {
+					attrs = append(attrs, attribute.Bool(AttrResultFailed, true))
+				}
+				c.span.AddEvent(EventResult, trace.WithTimestamp(ts), trace.WithAttributes(attrs...))
+			}
+		}
 	case *agentsession.CompactionEntry:
 		if v.Config.Model != "" {
 			t.model = v.Config.Model
@@ -721,7 +774,7 @@ func (t *tracker) endRun(r *agentsession.RunEntry, ts time.Time) {
 		if state == agentsession.CallInFlight {
 			c.span.SetStatus(codes.Error, "no output before the run ended")
 		}
-		c.span.End(trace.WithTimestamp(ts))
+		c.span.End(trace.WithTimestamp(c.endAt(ts)))
 		c.span, c.closed, c.closedState = nil, true, state
 	}
 	t.run.End(trace.WithTimestamp(ts))
@@ -966,7 +1019,7 @@ func (t *tracker) output(callID string, e *agentsession.ItemEntry, ts time.Time)
 		c.span.SetStatus(codes.Error, "the call failed")
 	}
 	t.spans[e.ID] = c.span.SpanContext()
-	c.span.End(trace.WithTimestamp(ts))
+	c.span.End(trace.WithTimestamp(c.endAt(ts)))
 	t.forget(c)
 }
 
@@ -999,7 +1052,7 @@ func (t *tracker) finish(ts time.Time) {
 		if state == agentsession.CallInFlight {
 			c.span.SetStatus(codes.Error, "no output before the record stopped")
 		}
-		c.span.End(trace.WithTimestamp(ts))
+		c.span.End(trace.WithTimestamp(c.endAt(ts)))
 		t.forget(c)
 	}
 	if t.run != nil {

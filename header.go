@@ -13,7 +13,7 @@ import (
 )
 
 // Format is the session format version this package writes.
-const Format = "agentsession/0.14"
+const Format = "agentsession/0.15"
 
 // FormatMajor is the major version of the format this package reads.
 // Any minor version of it is accepted; files are migrated in memory.
@@ -371,8 +371,12 @@ func (h *Header) fill(now time.Time) {
 // dispatch it directly follows, and omit's outputs and images, which
 // send placeholders; and it accepts a run written resume whose segment
 // holds record entries alone. A 0.13 file is a 0.14 file that holds none of them, and each
+// is read by its form in a file of any minor. 0.15 defines an item's
+// copied_from, a queued steer's deliver, the result record entry and
+// the trust member of an item, a result, a compaction and a branch
+// summary. A 0.14 file is a 0.15 file that holds none of them, and each
 // is read by its form in a file of any minor.
-const FormatMinor = 14
+const FormatMinor = 15
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.
 // A file below it is rehashed on read.

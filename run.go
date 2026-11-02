@@ -1,10 +1,13 @@
 package agentsession
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 
+	"github.com/ChristopherDavenport/agentsession/internal/jcs"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -34,6 +37,11 @@ type Call struct {
 	// neither is in Dispatches or Decisions, and the call is what it was
 	// before the dispatch.
 	Withdrawn []Withdrawal
+	// Result is the call's latest result entry on the path (format
+	// 0.15): its tool returned, and Result.Item is the output the
+	// harness will append. A call with one after its last dispatch and
+	// no output has returned; see [Call.Returned].
+	Result *ResultEntry
 
 	// inPrefix is set by the session for a call made in a fork's
 	// prefix, which its header's promise does not cover, and
@@ -68,6 +76,18 @@ type Call struct {
 	// output, which it forbids too.
 	dispatchAfterOutput                                           *DispatchEntry
 	afterAnswer, afterReject, endAfterOutput, rejectAfterDispatch *DecisionEntry
+	// resultAfterLast reports whether Result follows the last dispatch,
+	// and answeredSinceResult whether an answer follows Result.
+	resultAfterLast, answeredSinceResult bool
+	// badResult is the first result that follows no dispatch of its call
+	// that nothing else ended: none, or one an output, an answer, a
+	// reject or another result follows. afterResult is the first
+	// dispatch or decision but an answer that follows a result, and
+	// outputMismatch the output after a result, with no answer between,
+	// that does not hold the result's item. The format forbids all three.
+	badResult      *ResultEntry
+	afterResult    Entry
+	outputMismatch *ItemEntry
 }
 
 // Withdrawal is one hand-off withdrawn before the tool ran: the
@@ -90,6 +110,15 @@ func (c *Call) Failed() bool { return c.Output != nil && c.Output.Failed }
 // Pending reports whether the call has no output on the path.
 func (c *Call) Pending() bool { return c.Output == nil }
 
+// Copied reports whether the call is a copied call (RFC 0001, item,
+// since 0.15): its entry carries copied_from, so another session made
+// the call and this one holds it as context alone. A copied call is no
+// call of this session: it is never one of a run's calls, never pending
+// here, no records promise covers it, and no dispatch or decision may
+// name it. Its output, whether or not that entry carries copied_from, is
+// copied too.
+func (c *Call) Copied() bool { return c.Entry.CopiedFrom != nil }
+
 // Held reports whether the call is waiting on an answer: its latest
 // decision is a hold and no dispatch follows it. A hold after a
 // dispatch is a call that may have run and waits on someone to say
@@ -98,11 +127,21 @@ func (c *Call) Pending() bool { return c.Output == nil }
 func (c *Call) Held() bool { return c.latestIs(VerdictHold) }
 
 // InFlight reports whether the call was handed to its tool when the
-// record stopped: it has a dispatch and no output, and no decision
-// after its last dispatch holds it or answers it. Its side effect may
-// have happened.
+// record stopped: it has a dispatch and no output, no decision after
+// its last dispatch holds it or answers it, and no result follows that
+// dispatch. Its side effect may have happened.
 func (c *Call) InFlight() bool {
-	return c.Output == nil && len(c.Dispatches) > 0 && !c.latestIs(VerdictHold) && !c.latestIs(VerdictAnswer)
+	return c.Output == nil && len(c.Dispatches) > 0 && !c.latestIs(VerdictHold) && !c.latestIs(VerdictAnswer) && !c.Returned()
+}
+
+// Returned reports whether the call's tool returned before the record
+// stopped and its output is not on the path (format 0.15): a result
+// follows its last dispatch, and it has no output. It is not in flight:
+// the harness that continues the path appends the result's item as the
+// output, and writes no dispatch and no decision for the call, save an
+// answer when it withholds the result.
+func (c *Call) Returned() bool {
+	return c.Output == nil && c.Result != nil && c.resultAfterLast
 }
 
 // latestIs reports whether the latest decision has the verdict and no
@@ -219,6 +258,12 @@ const (
 	// continues the path writes the output, carrying the reject's
 	// reason, and nothing else for the call.
 	CallRejected
+	// CallReturned: a result follows the call's last dispatch and its
+	// output is not on the path yet (format 0.15): the tool ran and
+	// returned. The harness that continues the path appends the result's
+	// item as the output and writes nothing else for the call, save an
+	// answer when it withholds the result.
+	CallReturned
 )
 
 // String names the state.
@@ -238,6 +283,8 @@ func (s CallState) String() string {
 		return "answered"
 	case CallRejected:
 		return "rejected"
+	case CallReturned:
+		return "returned"
 	}
 	return fmt.Sprintf("CallState(%d)", int(s))
 }
@@ -264,11 +311,13 @@ func (c *Call) State(h Header) CallState {
 		return CallAnswered
 	case c.Rejected():
 		return CallRejected
+	case c.Returned():
+		return CallReturned
 	case c.Held():
 		return CallHeld
 	case c.Dispatch != nil:
 		return CallInFlight
-	case h.HasRecord(TypeDispatch) && !c.inPrefix && !c.dispatchedElsewhere:
+	case h.HasRecord(TypeDispatch) && !c.inPrefix && !c.dispatchedElsewhere && !c.Copied():
 		return CallNeverStarted
 	}
 	return CallUnknown
@@ -307,9 +356,24 @@ func Calls(path []Entry) []*Call {
 				out = append(out, c)
 			case *openresponses.FunctionCallOutput:
 				if c, ok := byID[it.CallID]; ok && c.Output == nil {
+					if c.Returned() && !c.answeredSinceResult && c.outputMismatch == nil && !sameItem(c.Result.Item, v.Item) {
+						c.outputMismatch = v
+					}
 					c.Output = v
 					c.lastIsDispatch = false
 				}
+			}
+		case *ResultEntry:
+			if c := bind(v.CallID, v.Target); c != nil {
+				// A result belongs to the latest dispatch before it, and
+				// follows it with nothing that ended the call between.
+				if c.badResult == nil && (len(c.Dispatches) == 0 || c.Output != nil || c.resultAfterLast || c.Answered() || c.Rejected()) {
+					c.badResult = v
+				}
+				c.Result = v
+				c.resultAfterLast = len(c.Dispatches) > 0
+				c.answeredSinceResult = false
+				c.lastIsDispatch = false
 			}
 		case *DecisionEntry:
 			if c := bind(v.CallID, v.Target); c != nil {
@@ -327,6 +391,13 @@ func Calls(path []Entry) []*Call {
 					continue
 				}
 				c.lastIsDispatch = false
+				if c.Returned() {
+					if v.Verdict == VerdictAnswer {
+						c.answeredSinceResult = true
+					} else if c.afterResult == nil {
+						c.afterResult = v
+					}
+				}
 				if c.afterAnswer == nil && c.Answered() {
 					c.afterAnswer = v
 				}
@@ -347,6 +418,10 @@ func Calls(path []Entry) []*Call {
 				if c.dispatchAfterOutput == nil && c.Output != nil {
 					c.dispatchAfterOutput = v
 				}
+				if c.afterResult == nil && c.Returned() {
+					c.afterResult = v
+				}
+				c.resultAfterLast = false
 				if c.Dispatch == nil {
 					c.Dispatch = v
 				}
@@ -365,6 +440,19 @@ func Calls(path []Entry) []*Call {
 		}
 	}
 	return out
+}
+
+// sameItem reports whether two items are equal member for member, in
+// canonical form.
+func sameItem(a, b openresponses.Item) bool {
+	ja, err1 := json.Marshal(a)
+	jb, err2 := json.Marshal(b)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	ca, err1 := jcs.Transform(ja)
+	cb, err2 := jcs.Transform(jb)
+	return err1 == nil && err2 == nil && bytes.Equal(ca, cb)
 }
 
 // withdraws reports whether d withdraws the call's last dispatch: a
@@ -404,7 +492,9 @@ func (s *Session) Calls(leaf string) ([]*Call, error) {
 }
 
 // PendingCalls returns the calls on the path to leaf that have no
-// output, which is what a resume answers.
+// output, which is what a resume answers. A copied call is never
+// pending in this session, since nothing here may run it, so none is
+// among them.
 func (s *Session) PendingCalls(leaf string) ([]*Call, error) {
 	calls, err := s.Calls(leaf)
 	if err != nil {
@@ -412,7 +502,7 @@ func (s *Session) PendingCalls(leaf string) ([]*Call, error) {
 	}
 	var out []*Call
 	for _, c := range calls {
-		if c.Pending() {
+		if c.Pending() && !c.Copied() {
 			out = append(out, c)
 		}
 	}
@@ -490,8 +580,9 @@ func (r *Run) Calls() []*Call { return runCalls(r.Path, r.Segment) }
 
 // runCalls returns the calls of the run whose segment ends the path:
 // the calls on the path whose function call, or a decision, dispatch
-// or output bound to them, is on the segment. A nil path means the
-// segment stands for the path.
+// or output bound to them, is on the segment, copied calls excepted,
+// since another session made them. A nil path means the segment
+// stands for the path.
 func runCalls(path, segment []Entry) []*Call {
 	if path == nil {
 		path = segment
@@ -504,7 +595,7 @@ func runCalls(path, segment []Entry) []*Call {
 	}
 	var out []*Call
 	for _, c := range Calls(path) {
-		if c.takenUpIn(in) {
+		if !c.Copied() && c.takenUpIn(in) {
 			out = append(out, c)
 		}
 	}
@@ -532,7 +623,7 @@ func (c *Call) takenUpIn(in map[string]bool) bool {
 			return true
 		}
 	}
-	return false
+	return c.Result != nil && in[c.Result.ID]
 }
 
 // ComputeSource returns the source a run's start names, by the
@@ -562,6 +653,10 @@ func ComputeSource(r *Run) string {
 	// part names the call each output, decision and dispatch is for.
 	part := map[string]*Call{}
 	for _, c := range Calls(path) {
+		if c.Copied() {
+			// No call of this session, so its output takes up nothing.
+			continue
+		}
 		if c.Output != nil {
 			part[c.Output.ID] = c
 		}
@@ -574,6 +669,9 @@ func ComputeSource(r *Run) string {
 		for _, w := range c.Withdrawn {
 			part[w.Dispatch.ID] = c
 			part[w.Reject.ID] = c
+		}
+		if c.Result != nil {
+			part[c.Result.ID] = c
 		}
 	}
 	for _, e := range r.Segment {
@@ -613,7 +711,7 @@ func ComputeSource(r *Run) string {
 func (r *Run) Empty() bool {
 	for _, e := range r.Segment {
 		switch e.(type) {
-		case *ItemEntry, *ConfigEntry, *CompactionEntry, *BranchSummaryEntry, *ResponseEntry, *DispatchEntry, *DecisionEntry:
+		case *ItemEntry, *ConfigEntry, *CompactionEntry, *BranchSummaryEntry, *ResponseEntry, *DispatchEntry, *DecisionEntry, *ResultEntry:
 			return false
 		}
 	}
@@ -784,9 +882,10 @@ func lastResponse(entries []Entry) *ResponseEntry {
 }
 
 // madeCalls reports whether any of the calls is output of the response.
+// A copied call is no response's output in this session.
 func madeCalls(calls []*Call, resp *ResponseEntry) bool {
 	for _, c := range calls {
-		if c.Entry.ResponseID == resp.ResponseID {
+		if !c.Copied() && c.Entry.ResponseID == resp.ResponseID {
 			return true
 		}
 	}
@@ -795,7 +894,7 @@ func madeCalls(calls []*Call, resp *ResponseEntry) bool {
 
 // stoppedOnPath is the format's stopped shape: the last response on
 // the path before the segment's end has calls, every call on the path
-// has an output, and the segment holds at least one output or
+// but a copied one has an output, and the segment holds at least one output or
 // decision, so the run finished what an earlier or its own model call
 // asked for and the harness chose not to call the model again. No
 // response follows, since the response is the last one on the path.
@@ -808,7 +907,7 @@ func stoppedOnPath(calls []*Call, path, segment []Entry) bool {
 		return false
 	}
 	for _, c := range calls {
-		if c.Pending() {
+		if c.Pending() && !c.Copied() {
 			return false
 		}
 	}
@@ -901,6 +1000,27 @@ var ErrRejectDispatched = errors.New("agentsession: reject for a call that was d
 // one found elsewhere as a reject without the member.
 var ErrBadWithdrawal = errors.New("agentsession: withdrawal does not follow a dispatch of its call")
 
+// ErrBadResult is returned when a result is appended that follows no
+// dispatch of its call on the path that no withdrawal follows, or
+// follows one that an output, an answer, a reject or another result
+// already follows, and by [Session.VerifyRecords] for a path that holds
+// one: a result records the return of the hand-off it follows (RFC
+// 0001, result, since 0.15).
+var ErrBadResult = errors.New("agentsession: result follows no open hand-off of its call")
+
+// ErrCallReturned is returned when a dispatch, or a decision other than
+// an answer, is appended for a call that a result says has returned,
+// and by [Session.VerifyRecords] for a path that holds one: the tool
+// ran, so nothing runs it again, and what follows is its output, or an
+// answer when the harness withholds it.
+var ErrCallReturned = errors.New("agentsession: call has returned")
+
+// ErrResultMismatch is returned when an output is appended for a call
+// that has returned, with no answer after the result, that does not
+// hold the result's item, and by [Session.VerifyRecords] for a path
+// that holds one: the result is the output as the harness appends it.
+var ErrResultMismatch = errors.New("agentsession: output differs from its call's result")
+
 // ErrCallAnswered is returned when a dispatch or a decision is
 // appended for a call that an answer decision on the path already
 // ended: what follows an answer is the call's output and nothing else.
@@ -931,7 +1051,9 @@ var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 // the segment, no dispatch or decision follows a reject or an answer
 // on the same call, no answer, reject or dispatch follows an output and
 // no reject a dispatch but a withdrawal, every item's from_link names a
-// peer link before it, and, when the header names dispatch in records,
+// peer link before it, no copied_from names this session, no dispatch or
+// decision names a copied call and every output of one is marked copied,
+// and, when the header names dispatch in records,
 // no answer ends a call with no dispatch and every call that ran has a
 // dispatch. A run written resume over a segment that takes nothing up,
 // holding record entries at most, agrees with it, as [Run.Empty] says,
@@ -960,6 +1082,9 @@ func (s *Session) VerifyRecords(leaf string) error {
 	if err := verifyFromLinks(path); err != nil {
 		return err
 	}
+	if err := verifyCopied(s.ID(), path); err != nil {
+		return err
+	}
 	calls := Calls(path)
 	on := onPath(path)
 	for _, r := range Runs(path) {
@@ -980,6 +1105,11 @@ func (s *Session) VerifyRecords(leaf string) error {
 	// the run.
 	promised := func(id string) bool { return h.HasRecord(TypeDispatch) && !s.Prefix(id) }
 	for _, c := range calls {
+		if c.Copied() {
+			// No call of this session: no promise covers it, and
+			// verifyCopied has refused a dispatch or decision naming it.
+			continue
+		}
 		if c.ended != nil {
 			if c.ended.Verdict == VerdictAnswer {
 				return fmt.Errorf("%w: dispatch %s follows an answer to call %s", ErrCallAnswered, c.endedBy.ID, c.ID())
@@ -991,6 +1121,15 @@ func (s *Session) VerifyRecords(leaf string) error {
 		}
 		if c.afterReject != nil {
 			return fmt.Errorf("%w: decision %s follows a reject of call %s", ErrCallRejected, c.afterReject.ID, c.ID())
+		}
+		if c.badResult != nil {
+			return fmt.Errorf("%w: result %s of call %s", ErrBadResult, c.badResult.ID, c.ID())
+		}
+		if c.afterResult != nil {
+			return fmt.Errorf("%w: %s %s follows a result of call %s", ErrCallReturned, c.afterResult.EntryType(), c.afterResult.Base().ID, c.ID())
+		}
+		if c.outputMismatch != nil {
+			return fmt.Errorf("%w: output %s of call %s", ErrResultMismatch, c.outputMismatch.ID, c.ID())
 		}
 		if c.rejectAfterDispatch != nil {
 			return fmt.Errorf("%w: reject %s follows a dispatch of call %s", ErrRejectDispatched, c.rejectAfterDispatch.ID, c.ID())
@@ -1136,6 +1275,63 @@ var ErrCalleeLink = errors.New("agentsession: callee link is not one the format 
 // notice included, since a cancel notice names no callee.
 var ErrBadFromLink = errors.New("agentsession: from_link names no peer link before the item")
 
+// ErrCopiedCall is returned when a dispatch, a decision or a result is
+// appended whose target is a copied call, and by [Session.VerifyRecords] for a
+// path that holds one: a copied call was made in another session, and
+// nothing in this one may hand it to its tool or decide its fate (RFC
+// 0001, item, since 0.15).
+var ErrCopiedCall = errors.New("agentsession: dispatch or decision names a copied call")
+
+// ErrBadCopiedFrom is returned when an item is appended whose
+// copied_from names this session, or that carries copied_from and
+// response, or an output for a copied call that does not carry
+// copied_from, and by [Session.VerifyRecords] for a path
+// that holds either: an item copied from a session is copied from
+// another, and a writer marks every output it gives a copied call.
+var ErrBadCopiedFrom = errors.New("agentsession: copied_from names this session, or a copied call's output is not marked")
+
+// verifyCopied checks the copied items of a path: none names the
+// session self or carries response, no dispatch, decision or result
+// names a copied call, and every output of a copied call carries
+// copied_from, as Append has them.
+func verifyCopied(self string, path []Entry) error {
+	copied := map[string]bool{} // function call entry ID -> copied
+	byCallID := map[string]bool{}
+	for _, e := range path {
+		switch v := e.(type) {
+		case *ItemEntry:
+			if v.CopiedFrom != nil && v.CopiedFrom.Session == self {
+				return fmt.Errorf("%w: item %s names %s", ErrBadCopiedFrom, v.ID, self)
+			}
+			if v.CopiedFrom != nil && v.ResponseID != "" {
+				return fmt.Errorf("%w: copied item %s names response %s", ErrBadCopiedFrom, v.ID, v.ResponseID)
+			}
+			switch it := v.Item.(type) {
+			case *openresponses.FunctionCall:
+				copied[v.ID] = v.CopiedFrom != nil
+				byCallID[it.CallID] = v.CopiedFrom != nil
+			case *openresponses.FunctionCallOutput:
+				if byCallID[it.CallID] && v.CopiedFrom == nil {
+					return fmt.Errorf("%w: output %s of copied call %s", ErrBadCopiedFrom, v.ID, it.CallID)
+				}
+			}
+		case *DecisionEntry:
+			if copied[v.Target] {
+				return fmt.Errorf("%w: decision %s names %s", ErrCopiedCall, v.ID, v.Target)
+			}
+		case *DispatchEntry:
+			if copied[v.Target] {
+				return fmt.Errorf("%w: dispatch %s names %s", ErrCopiedCall, v.ID, v.Target)
+			}
+		case *ResultEntry:
+			if copied[v.Target] {
+				return fmt.Errorf("%w: result %s names %s", ErrCopiedCall, v.ID, v.Target)
+			}
+		}
+	}
+	return nil
+}
+
 // verifyFromLinks checks every item's from_link on a path against the
 // peer links before it.
 func verifyFromLinks(path []Entry) error {
@@ -1217,6 +1413,69 @@ func verifyTargets(path []Entry) error {
 			if err := check(v, v.CallID, v.Target); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// sameTrust reports whether two trust members carry the same labels,
+// both absent counting as the same.
+func sameTrust(a, b *Trust) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return slices.Equal(UnionTrust(a).Reads, UnionTrust(b).Reads)
+}
+
+// ErrCopyMismatch is returned by [Session.VerifyCopies] for a copied
+// item whose copied_from names an entry of its source that does not
+// hold an equal item, carrying the same trust, or that the source does
+// not hold (RFC 0001, item, since 0.15).
+var ErrCopyMismatch = errors.New("agentsession: copied item differs from the entry it names")
+
+// VerifyCopies checks every item of the session whose copied_from names
+// an entry against that entry, in the session copied_from names, read
+// through resolve: the entry holds the same item, member for member, and
+// the same trust. A session resolve does not find, returned as (nil,
+// nil), is not checked; an error from resolve is returned. With a nil
+// resolve it checks nothing. Each session is resolved once. It returns
+// the first problem found.
+//
+// resolve MUST apply the read rights of whoever asks for the check, and
+// return (nil, nil) for a session that caller may not read. A resolve
+// that reads more than the caller makes VerifyCopies an oracle: a copy
+// the caller writes, naming an entry it cannot read, would learn from
+// the answer whether that entry holds a given item and trust.
+func (s *Session) VerifyCopies(resolve func(id string) (*Session, error)) error {
+	if resolve == nil {
+		return nil
+	}
+	sources := map[string]*Session{}
+	for _, e := range s.Entries() {
+		it, ok := e.(*ItemEntry)
+		if !ok || it.CopiedFrom == nil || it.CopiedFrom.Entry == "" {
+			continue
+		}
+		src, seen := sources[it.CopiedFrom.Session]
+		if !seen {
+			var err error
+			if src, err = resolve(it.CopiedFrom.Session); err != nil {
+				return fmt.Errorf("agentsession: item %s: %w", it.ID, err)
+			}
+			sources[it.CopiedFrom.Session] = src
+		}
+		if src == nil {
+			continue
+		}
+		held, ok := src.Entry(it.CopiedFrom.Entry)
+		from, isItem := held.(*ItemEntry)
+		switch {
+		case !ok || !isItem:
+			return fmt.Errorf("%w: item %s names %s, which %s holds no item entry under", ErrCopyMismatch, it.ID, it.CopiedFrom.Entry, it.CopiedFrom.Session)
+		case !sameItem(from.Item, it.Item):
+			return fmt.Errorf("%w: item %s is not the item of %s", ErrCopyMismatch, it.ID, from.ID)
+		case !sameTrust(from.Trust, it.Trust):
+			return fmt.Errorf("%w: item %s does not carry the trust of %s", ErrCopyMismatch, it.ID, from.ID)
 		}
 	}
 	return nil

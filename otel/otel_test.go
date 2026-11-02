@@ -1034,3 +1034,74 @@ func TestWithdrawalRestoresTheCall(t *testing.T) {
 		t.Error("the next hand-off links to the withdrawn one as a hand-off it repeats")
 	}
 }
+
+// TestCopiedCallHasNoSpan: a copied call was made in another session,
+// which traces it, so it has no tool span here, nor does its output open
+// one (RFC 0001 0.15, OpenTelemetry).
+func TestCopiedCallHasNoSpan(t *testing.T) {
+	sr, tracer := recorder()
+	s := agentsession.New(agentsession.Header{ID: "child", Records: agentsession.AllRecords})
+	from := &agentsession.CopiedFrom{Session: "parent"}
+	for _, e := range []agentsession.Entry{
+		agentsession.NewRunStart("r1", agentsession.SourceInput, ""),
+		&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc", CallID: "c", Name: "helper", Arguments: "{}"}, CopiedFrom: from},
+		&agentsession.ItemEntry{Item: openresponses.NewFunctionCallOutput("c", "placeholder"), CopiedFrom: from},
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	if tool := spans(sr.Ended()).named(OpTool + " helper"); len(tool) != 0 {
+		t.Errorf("the copied call has %d tool spans", len(tool))
+	}
+}
+
+// TestHandOffEndsAtItsResult: a hand-off's span ends at its result, the
+// tool's time, and not at the output's append; at a cut before the
+// append the call reads returned, not in flight, and its span carries
+// no error (RFC 0001 0.15, OpenTelemetry).
+func TestHandOffEndsAtItsResult(t *testing.T) {
+	sr, tracer := recorder()
+	s := agentsession.New(agentsession.Header{ID: "returned", Records: agentsession.AllRecords})
+	// Fixed times, a minute apart, so the result's and the output's
+	// differ whatever the clock does.
+	at := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	add := func(e agentsession.Entry) string {
+		t.Helper()
+		at = at.Add(time.Minute)
+		e.Base().Timestamp = at
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	add(agentsession.NewRunStart("r1", agentsession.SourceInput, ""))
+	var targets []string
+	for _, id := range []string{"a", "b"} {
+		targets = append(targets, add(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_" + id, CallID: id, Name: "fetch_" + id, Arguments: "{}"}}))
+	}
+	add(agentsession.NewDispatch("a", targets[0]))
+	add(agentsession.NewDispatch("b", targets[1]))
+	add(agentsession.NewResult("a", targets[0], openresponses.NewFunctionCallOutput("a", "ok")))
+	result := at
+	add(agentsession.NewResult("b", targets[1], openresponses.NewFunctionCallOutput("b", "ok")))
+	add(agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("a", "ok")))
+	if _, err := Export(context.Background(), tracer, s, s.Leaf()); err != nil {
+		t.Fatal(err)
+	}
+	a := spans(sr.Ended()).named(OpTool + " fetch_a")
+	if len(a) != 1 || !a[0].EndTime().Equal(result) || len(a[0].Events()) == 0 {
+		t.Fatalf("fetch_a spans = %d, end %v, want %v", len(a), a, result)
+	}
+	b := spans(sr.Ended()).named(OpTool + " fetch_b")
+	if len(b) != 1 || b[0].Status().Code == codes.Error || len(b[0].Attributes()) == 0 {
+		t.Fatalf("fetch_b spans = %v", b)
+	}
+	if got := b.withAttr(AttrCallState, agentsession.CallReturned.String()); len(got) != 1 {
+		t.Errorf("fetch_b at the cut is not returned")
+	}
+}

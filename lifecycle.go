@@ -12,13 +12,14 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 )
 
-// Record entry types added in format 0.2, and queued in 0.3. They are
-// never in context.
+// Record entry types added in format 0.2, queued in 0.3 and result in
+// 0.15. They are never in context.
 const (
 	TypeRun      = "run"
 	TypeDispatch = "dispatch"
 	TypeDecision = "decision"
 	TypeQueued   = "queued"
+	TypeResult   = "result"
 )
 
 // Modes a [QueuedEntry] may carry: an input that joins the run in
@@ -176,6 +177,50 @@ func NewDispatch(callID, target string) *DispatchEntry {
 func (e *DispatchEntry) WithIdempotencyKey(key string) *DispatchEntry {
 	e.IdempotencyKey = key
 	return e
+}
+
+// ResultEntry records, in format 0.15, that a call's tool returned
+// before its output joined the path: a harness that appends outputs in
+// an order other than the one its calls settle in, as one running a
+// batch in parallel and appending the outputs in the model's order
+// does, writes it durably when the tool returns. Target is the item
+// entry holding the function call, as on a dispatch, and Item is the
+// output as the harness will append it. A call with a result after its
+// last dispatch and no output has returned ([CallReturned]): it is not
+// in flight, and the harness that continues the path appends Item as
+// its output and runs nothing again. The entry is a record entry: its
+// item is not in context and reaches no request.
+type ResultEntry struct {
+	EntryBase `json:"-"`
+	CallID    string `json:"call_id"`
+	Target    string `json:"target"`
+	// Item is the function call output as the harness will append it,
+	// after whatever the harness does to what the tool returned.
+	Item openresponses.Item `json:"item"`
+	// Failed has the meaning it has on an output's entry: the tool
+	// reported failure, or the harness gave the call up. The output's
+	// entry carries the same. A failed member that is not true is kept
+	// as written in Unknown and Failed is false.
+	Failed bool `json:"-" member:"failed"`
+	// Trust has the meaning it has on the output's entry, which carries
+	// the same; see [Trust].
+	Trust *Trust `json:"-" member:"trust"`
+}
+
+// EntryType returns "result".
+func (*ResultEntry) EntryType() string { return TypeResult }
+
+// NewResult builds the result of the call callID held by the item
+// entry target: out is the output as the harness will append it.
+func NewResult(callID, target string, out *openresponses.FunctionCallOutput) *ResultEntry {
+	return &ResultEntry{CallID: callID, Target: target, Item: out}
+}
+
+// Output returns the item entry that appends the result as the call's
+// output, carrying Failed and Trust as the result does: what the harness that
+// continues a path holding a returned call writes for it.
+func (e *ResultEntry) Output() *ItemEntry {
+	return &ItemEntry{Item: e.Item, Failed: e.Failed, Trust: e.Trust}
 }
 
 // DecisionEntry records that a call's fate was decided outside the
@@ -369,6 +414,18 @@ type QueuedEntry struct {
 	// Ref names the queued input in the harness's own terms, for a
 	// caller that holds a handle to it.
 	Ref string `json:"ref,omitempty"`
+	// Deliver marks, in format 0.15, a steer that arrived on its own
+	// time, as a background task's result does, and must reach the
+	// model whether or not a run is in flight to take it: it joins a
+	// run in flight as any steer does, and when none takes it the
+	// harness starts a run that does, once the run in flight has ended,
+	// unless calls are pending, when it waits for the resume. One owed
+	// when a harness resumes the path is handed back as a delivery and
+	// starts a run when nothing else does. It is defined on a steer
+	// alone: a deliver member on a follow-up, or one that is not true, is
+	// kept as written in Unknown and Deliver is false. See [NewDelivery]
+	// and [QueuedEntry.Requeue].
+	Deliver bool `json:"-" member:"deliver"`
 }
 
 // EntryType returns "queued".
@@ -378,6 +435,24 @@ func (*QueuedEntry) EntryType() string { return TypeQueued }
 // [ModeSteer] or [ModeFollowUp].
 func NewQueued(item openresponses.Item, mode string) *QueuedEntry {
 	return &QueuedEntry{Item: item, Mode: mode}
+}
+
+// NewDelivery builds a queued entry for an input delivered on its own
+// time: a steer carrying deliver, which a harness starts a run for when
+// no run takes it.
+func NewDelivery(item openresponses.Item) *QueuedEntry {
+	return &QueuedEntry{Item: item, Mode: ModeSteer, Deliver: true}
+}
+
+// Requeue returns the entry that queues this input again, as a harness
+// that still wants it writes one after a run end closed this one: the
+// same item, mode, trigger, ref and deliver, members the format does
+// not define included, and no ID. The trigger is copied whole, as
+// [QueuedEntry.Drain] copies it.
+func (e *QueuedEntry) Requeue() *QueuedEntry {
+	out := &QueuedEntry{Item: e.Item, Mode: e.Mode, Trigger: e.Trigger.Clone(), Ref: e.Ref, Deliver: e.Deliver}
+	out.Unknown = cloneRaw(e.Unknown)
+	return out
 }
 
 // WithTrigger records what brought the input in and returns the
@@ -577,12 +652,26 @@ func validateLifecycle(e Entry) error {
 		if v.Withdrawn && v.Verdict != VerdictReject {
 			return errors.New("agentsession: withdrawn is defined on a reject alone")
 		}
+	case *ResultEntry:
+		if v.CallID == "" || v.Target == "" {
+			return errors.New("agentsession: result entry needs call_id and target")
+		}
+		out, ok := v.Item.(*openresponses.FunctionCallOutput)
+		if !ok {
+			return errors.New("agentsession: a result's item is a function call output")
+		}
+		if out.CallID != v.CallID {
+			return fmt.Errorf("agentsession: a result's item is the output of call %s, not %s", out.CallID, v.CallID)
+		}
 	case *QueuedEntry:
 		if v.Item == nil {
 			return errors.New("agentsession: queued entry has no item")
 		}
 		if v.Mode == "" {
 			return errors.New("agentsession: queued entry has no mode")
+		}
+		if v.Deliver && v.Mode != ModeSteer {
+			return errors.New("agentsession: deliver is defined on a steer alone")
 		}
 	}
 	return nil
@@ -593,6 +682,7 @@ var (
 	dispatchKeys = jsonx.Keys[DispatchEntry]()
 	decisionKeys = jsonx.Keys[DecisionEntry]()
 	queuedKeys   = jsonx.Keys[QueuedEntry]()
+	resultKeys   = jsonx.Keys[ResultEntry]()
 )
 
 // MarshalJSON emits the entry as one JSON object. Which members are
@@ -746,7 +836,16 @@ func (e *QueuedEntry) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	type plain QueuedEntry
-	return marshalEntry(TypeQueued, &e.EntryBase, (*plain)(e))
+	if !e.Deliver {
+		return marshalEntry(TypeQueued, &e.EntryBase, (*plain)(e))
+	}
+	if _, dup := e.Unknown["deliver"]; dup {
+		return nil, errors.New("agentsession: queued entry has deliver both typed and unknown")
+	}
+	return marshalEntry(TypeQueued, &e.EntryBase, struct {
+		*plain
+		Deliver bool `json:"deliver"`
+	}{(*plain)(e), true})
 }
 
 // UnmarshalJSON decodes the entry, dispatching the item through the
@@ -780,10 +879,74 @@ func (e *QueuedEntry) decodeMembers(data []byte, all map[string]json.RawMessage)
 	e.Mode = aux.Mode
 	e.Trigger = aux.Trigger
 	e.Ref = aux.Ref
+	// deliver is taken where 0.15 defines it, true on a steer, in a file
+	// of any minor; anything else is kept as written.
+	e.Deliver = false
+	if e.Mode == ModeSteer {
+		promote(&e.EntryBase, "deliver", &e.Deliver)
+	}
+	return validateLifecycle(e)
+}
+
+// MarshalJSON emits the entry as one JSON object.
+func (e *ResultEntry) MarshalJSON() ([]byte, error) {
+	if err := validateLifecycle(e); err != nil {
+		return nil, err
+	}
+	type plain ResultEntry
+	if !e.Failed && e.Trust == nil {
+		return marshalEntry(TypeResult, &e.EntryBase, (*plain)(e))
+	}
+	for _, m := range []struct {
+		key string
+		set bool
+	}{{"failed", e.Failed}, {"trust", e.Trust != nil}} {
+		if _, dup := e.Unknown[m.key]; dup && m.set {
+			return nil, fmt.Errorf("agentsession: result entry has %s both typed and unknown", m.key)
+		}
+	}
+	return marshalEntry(TypeResult, &e.EntryBase, struct {
+		*plain
+		Failed bool   `json:"failed,omitempty"`
+		Trust  *Trust `json:"trust,omitempty"`
+	}{(*plain)(e), e.Failed, e.Trust})
+}
+
+// UnmarshalJSON decodes the entry, dispatching the item through the
+// openresponses item registry.
+func (e *ResultEntry) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	return finishDecode(e, data, all)
+}
+
+func (e *ResultEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
+	var aux struct {
+		CallID string          `json:"call_id"`
+		Target string          `json:"target"`
+		Item   json.RawMessage `json:"item"`
+	}
+	if err := unmarshalEntry(data, all, &e.EntryBase, &aux, resultKeys); err != nil {
+		return err
+	}
+	if len(aux.Item) == 0 || isNull(aux.Item) {
+		return errors.New("item is required")
+	}
+	item, err := openresponses.UnmarshalItem(aux.Item)
+	if err != nil {
+		return err
+	}
+	e.CallID, e.Target, e.Item = aux.CallID, aux.Target, item
+	e.Failed = false
+	promote(&e.EntryBase, "failed", &e.Failed)
+	promoteTrust(&e.EntryBase, &e.Trust)
 	return validateLifecycle(e)
 }
 
 var (
+	_ Entry = (*ResultEntry)(nil)
 	_ Entry = (*RunEntry)(nil)
 	_ Entry = (*DispatchEntry)(nil)
 	_ Entry = (*DecisionEntry)(nil)

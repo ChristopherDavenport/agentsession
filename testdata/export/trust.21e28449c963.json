@@ -1,0 +1,151 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000038",
+  "trajectory_id": "sha256:21e28449c963a690c0164e07246a3531419277acd618ad27fc4388f5e7e0a774",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-01T15:00:17Z",
+      "source": "system",
+      "message": "Summary: the release page says v2 ships Friday; the inbox holds one bank mail.",
+      "observation": {
+        "results": [
+          {
+            "content": "Summary: the release page says v2 ships Friday; the inbox holds one bank mail."
+          }
+        ]
+      },
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:605530cecd8a9d0ed06974770e60b064b2717e7447bb2784d12afd3e46818f70",
+          "trust": {
+            "reads": [
+              "private",
+              "untrusted",
+              "x:quarantined"
+            ]
+          }
+        },
+        "context_management": {
+          "boundary": "replace",
+          "type": "compaction"
+        },
+        "first_kept": "sha256:9e5ced9c57eb0f2c953df251de50e67f677f36134178393ede8b0a956b3611a8",
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "system",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Summary: the release page says v2 ships Friday; the inbox holds one bank mail."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-01T15:00:16Z",
+      "source": "user",
+      "message": "Summarise what you read.",
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:9e5ced9c57eb0f2c953df251de50e67f677f36134178393ede8b0a956b3611a8"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Summarise what you read."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-01T15:00:19Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "v2 ships Friday, and the bank wrote once.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:1703af974688da40e3b9d2367cf0be640e98b009d3d9469ae9e2163992961c60"
+        },
+        "item_entry_ids": [
+          "sha256:e0eb6bb0465537a8d3117549e4b94d6824ea399ba1e8118c45e3abef17ff0afa"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_4",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "v2 ships Friday, and the bank wrote once.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:1703af974688da40e3b9d2367cf0be640e98b009d3d9469ae9e2163992961c60",
+            "model": "gpt-5",
+            "request_hash": "sha256:8b0f815cfd2cd43cdb028deaa181350c8ee1079e7edc5b945c5b4309f7073a54",
+            "response_id": "resp_4",
+            "status": "completed",
+            "ts": "2026-11-01T15:00:19Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 5 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 3 steps. The steps are the context after compaction and leave out 3 model call(s) that were folded away; final_metrics totals the whole path.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 5
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "format": "agentsession/0.15",
+      "leaf": "sha256:21e28449c963a690c0164e07246a3531419277acd618ad27fc4388f5e7e0a774",
+      "main": true,
+      "records": [
+        "run",
+        "dispatch",
+        "decision"
+      ]
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    },
+    "run": [
+      {
+        "end_entry_id": "sha256:21e28449c963a690c0164e07246a3531419277acd618ad27fc4388f5e7e0a774",
+        "pending": [],
+        "reason": "done",
+        "run_id": "run-1"
+      }
+    ]
+  }
+}
