@@ -230,7 +230,7 @@
           "type": "response"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:b60548d358de6046365d5013aca7896ab46474e4c5561e9a042259a79a3be440",
       "main": true
     },

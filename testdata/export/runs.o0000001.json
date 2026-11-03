@@ -602,7 +602,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:6f45dcf88ab8ca856b214bcdf8ce4fc02b88cff40ab66f7d33d7761248717fd5",
       "main": true,
       "records": [

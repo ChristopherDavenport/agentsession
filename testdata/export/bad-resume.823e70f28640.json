@@ -286,7 +286,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:823e70f28640a61b4154cc6fb0d38e1462afb481072864061bb430068aef1d5e",
       "main": true,
       "records": [

@@ -464,7 +464,7 @@
           "type": "config"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:5bbae4ba3cefc186f1c24fe7c8082522b7dba945e800146b7196e340828dfae2",
       "main": true
     },

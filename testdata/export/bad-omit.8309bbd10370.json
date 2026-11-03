@@ -520,7 +520,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:8309bbd1037070de2f93e7a3724d8477e090997d431923d4ad9d742755c0ab37",
       "main": true
     },

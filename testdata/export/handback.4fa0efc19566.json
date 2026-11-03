@@ -730,7 +730,7 @@
           "type": "config"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:4fa0efc1956679c1dca8fe4730fbd7a5001c1078a3bf7e4ed5318a3387f241db",
       "main": true
     },

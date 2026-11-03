@@ -485,7 +485,7 @@
           "type": "decision"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:1684f62f14ac206f65c9312666aed8b6533e99701b7e0e67cdb6e9754d073445",
       "main": true,
       "records": [

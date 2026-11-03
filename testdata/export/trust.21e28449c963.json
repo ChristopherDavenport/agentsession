@@ -187,7 +187,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:21e28449c963a690c0164e07246a3531419277acd618ad27fc4388f5e7e0a774",
       "main": true,
       "records": [

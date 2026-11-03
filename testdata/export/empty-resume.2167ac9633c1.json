@@ -373,7 +373,7 @@
           "type": "response"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:2167ac9633c1b25672daad93e07dce37a964c7fea801d93e1f9684fb3ac23129",
       "main": true,
       "records": [

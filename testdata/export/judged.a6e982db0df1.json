@@ -133,7 +133,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:a6e982db0df1962051a580fd220da3a19791967e8acb60fa49b6a35ff9508ebc",
       "main": true
     },

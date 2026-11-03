@@ -256,7 +256,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:d2bbf2d8634169180190b7350d154a736c767c51d101d63e9d3093ac02f82efb",
       "main": true,
       "trust": {

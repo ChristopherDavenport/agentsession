@@ -476,7 +476,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:08044d1f94662b07c714d9566fec2bc79fc3d7503f16c0e9d4dce1a22bdd87be",
       "main": true,
       "redacted": true,

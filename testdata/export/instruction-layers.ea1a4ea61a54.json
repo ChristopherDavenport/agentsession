@@ -218,7 +218,7 @@
           "type": "run"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:ea1a4ea61a54634f8a7e65c791dd7b57038ede371ebd39f116e5fc816fb98fff",
       "main": true,
       "records": [

@@ -7,6 +7,14 @@ versions may break the API.
 
 ## Unreleased
 
+- **Breaking (format): Format 0.18 (RFC 0001, draft 0.18).** `Format`
+  and `FormatMinor` name 0.18, so a writer raises every file it appends
+  to and a reader of 0.17 refuses it; a 0.5 to 0.17 file reads as it
+  stands and no entry hash moves. The generated fixtures, the otel
+  copies and the export goldens carry the new header. 0.18 lets an
+  item's `instructions_part` be a list of layers, and tightens the rules
+  for a converter rebuilding a session from an ATIF document, below.
+
 - **ATIF: a partly priced child is left out of the cost (RFC 0001,
   `link`, Cost across sessions).** The export added the calls of a
   delegated session it could price and counted the session as priced
