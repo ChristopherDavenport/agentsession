@@ -5,6 +5,17 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Format 0.17 (RFC 0001, draft 0.17).** `Format` and `FormatMinor`
+  name 0.17, so a writer raises every file it appends to and a reader
+  of 0.16 refuses it; a 0.5 to 0.16 file reads as it stands and no
+  entry hash moves. The generated fixtures and export goldens carry the
+  new header. 0.17 adds an item's `instructions_part`, defines four
+  instruction `source` values, classes `legacy_id`, `normalised` and
+  `redacted` as history members, and adds rules for converters and
+  readers, below.
+
 ## v0.0.33 - 2026-11-02
 
 - **Format 0.16 (RFC 0001, draft 0.16).** `Format` and `FormatMinor`

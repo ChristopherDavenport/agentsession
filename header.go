@@ -13,7 +13,7 @@ import (
 )
 
 // Format is the session format version this package writes.
-const Format = "agentsession/0.16"
+const Format = "agentsession/0.17"
 
 // FormatMajor is the major version of the format this package reads.
 // Any minor version of it is accepted; files are migrated in memory.
@@ -379,8 +379,12 @@ func (h *Header) fill(now time.Time) {
 // blob's media type in the file beside it in the session's directory
 // ([SidecarTypeName]), and lets omit's outputs carry groups of their own
 // placeholder texts ([OmitOutputs.Groups]); a 0.15 session is a 0.16
-// session whose blobs have no type and whose omit holds no groups.
-const FormatMinor = 16
+// session whose blobs have no type and whose omit holds no groups. 0.17
+// defines an item's instructions_part and four instruction source
+// values (product, agentsmd, agentskill, agentmemory); a 0.16 file is a
+// 0.17 file that holds no instructions_part, which is read by its form
+// in a file of any minor.
+const FormatMinor = 17
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.
 // A file below it is rehashed on read.
