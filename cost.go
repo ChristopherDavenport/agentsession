@@ -95,7 +95,10 @@ type Delegated struct {
 	// for each link naming it that names another: the one the entry
 	// carrying the call's output names in its parents, or, when none
 	// does, the leaf a reader resuming the child takes, and then Named is
-	// false, which a reader reporting cost says.
+	// false, which a reader reporting cost says. For a child the host
+	// started, which no output answers, the entry naming it is the first
+	// after the link on the path whose parents names an entry of the
+	// child (RFC 0001, link, since 0.19).
 	Leaves []DelegatedLeaf
 	// Calls are the model calls on the union of the child's paths to its
 	// Leaves, each entry once, each priced at the model that served it in
@@ -135,7 +138,9 @@ var ErrChildElsewhere = errors.New("agentsession: delegated session held in anot
 // link on the path names, cancel notices excepted, counted once however
 // many links name it, over the union of its paths to the leaf each link
 // counts, each entry once: the leaf the call's output names in parents,
-// or else the child's resume leaf. Its own children are counted by the
+// or, for a child the host started (a link carrying a spawn_id, or, from
+// before 0.19, neither member), the leaf the first entry after the link
+// on the path names in parents, or else the child's resume leaf. Its own children are counted by the
 // same rule. A child resolve cannot read, or that holds no entry by the leaf
 // named, is reported in unread and left out ([ErrChildNotFound]). A
 // subsession link carrying a url names a callee in another system: it is
@@ -169,7 +174,7 @@ func DelegatedWork(path []Entry, resolve func(id string) (*Session, error)) (chi
 		}
 		read := map[string]bool{}
 		for _, p := range paths {
-			for _, e := range p {
+			for i, e := range p {
 				l, ok := e.(*LinkEntry)
 				if !ok || l.Rel != RelSubsession || l.Cancel != "" || l.Session == "" || read[l.ID] || failed[l.Session] {
 					continue
@@ -197,12 +202,27 @@ func DelegatedWork(path []Entry, resolve func(id string) (*Session, error)) (chi
 					order = append(order, l.Session)
 				}
 				leaf := DelegatedLeaf{Entry: n.session.Leaf()}
-				if out := outputs[l.CallID]; out != nil {
-					for _, r := range out.Parents {
-						if r.Session == l.Session {
-							leaf = DelegatedLeaf{Entry: r.Entry, Named: true}
+				// The entry naming the child's leaf: the call's output,
+				// or, for a child the host started, which no output
+				// answers, the first entry after the link whose
+				// parents names an entry of the child (since 0.19).
+				var taken []EntryRef
+				if l.CallID != "" {
+					if out := outputs[l.CallID]; out != nil {
+						taken = out.Parents
+					}
+				} else {
+					for _, later := range p[i+1:] {
+						if slices.ContainsFunc(later.Base().Parents, func(r EntryRef) bool { return r.Session == l.Session }) {
+							taken = later.Base().Parents
 							break
 						}
+					}
+				}
+				for _, r := range taken {
+					if r.Session == l.Session {
+						leaf = DelegatedLeaf{Entry: r.Entry, Named: true}
+						break
 					}
 				}
 				at := slices.IndexFunc(n.d.Leaves, func(x DelegatedLeaf) bool { return x.Entry == leaf.Entry })

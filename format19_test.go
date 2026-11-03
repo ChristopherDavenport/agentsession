@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // pseudonymVectors is testdata/pseudonym.json: the keyed pseudonym's
@@ -253,5 +255,327 @@ func TestURLLinkSessionIsText(t *testing.T) {
 	}
 	if out, _ := RewriteStrings(local, upper); out.(*LinkEntry).Session != "local-child" {
 		t.Errorf("a local link's session was rewritten as text: %s", out.(*LinkEntry).Session)
+	}
+}
+
+// fixtures019 are the 0.19 conformance fixtures, each built natively by
+// its function, as for fixtures018.
+var fixtures019 = map[string]func(t *testing.T) *Session{
+	"host-child":              func(t *testing.T) *Session { return hostChildFixture(t)[0] },
+	"host-child-spawned":      func(t *testing.T) *Session { return hostChildFixture(t)[1] },
+	"host-child-legacy":       func(t *testing.T) *Session { return hostChildLegacyFixture(t)[0] },
+	"host-child-legacy-child": func(t *testing.T) *Session { return hostChildLegacyFixture(t)[1] },
+	"bad-spawn-link":          func(t *testing.T) *Session { return badSpawnFixture(t, false) },
+	"bad-spawn-repeated":      func(t *testing.T) *Session { return badSpawnFixture(t, true) },
+	"bad-spawned-by":          badSpawnedByFixture,
+}
+
+// writeFixtures019 writes the 0.19 fixtures, positive and negative.
+func writeFixtures019(t *testing.T) {
+	t.Helper()
+	for name, build := range fixtures019 {
+		var buf bytes.Buffer
+		if err := Write(&buf, build(t)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join("testdata", "sessions", name+".jsonl"), buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The sessions of the host-child fixtures: a parent and the child the
+// host started for it, by a link carrying hostSpawnID.
+const (
+	hostParent  = "01995b2a-0000-7000-8000-000000000060"
+	hostSpawnID = "0199a000-0000-7000-8000-000000000001"
+	hostLegacy  = "01995b2a-0000-7000-8000-000000000061"
+	hostLegacyC = "01995b2a-0000-7000-8000-000000000062"
+)
+
+// answerWith appends an assistant message and its response at model,
+// recording usage of n input tokens.
+func answerWith(must func(Entry) string, resp, model, text string, n int) {
+	must(&ItemEntry{Item: &openresponses.Message{ID: "msg_" + resp, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: text, Annotations: []openresponses.Annotation{}}}}, ResponseID: resp})
+	must(&ResponseEntry{ResponseID: resp, Model: model, Status: openresponses.ResponseStatusCompleted, Usage: &openresponses.Usage{InputTokens: n, TotalTokens: n}})
+}
+
+// hostChildFixture builds host-child.jsonl and host-child-spawned.jsonl
+// (RFC 0001, link, 0.19): after a turn the host starts a pass that
+// consolidates memory, which no function call asked for. The parent's
+// link carries spawn_id, the child's header carries it in spawned_by
+// and its ID is derived over ["spawn",parent,spawn_id], and a custom
+// note after the link takes the child's work in, naming its leaf in
+// parents, then the person speaks again. The parent's calls record 2 and
+// 1 input tokens at "priced", the child's one call 7.
+func hostChildFixture(t *testing.T) [2]*Session {
+	t.Helper()
+	childID := SpawnedSessionID(hostParent, hostSpawnID)
+	child, cmust, _ := fixtureSession(t, Header{ID: childID, ParentSession: hostParent, SpawnedBy: hostSpawnID}, "2026-11-03T15:00:10Z")
+	cmust(&ConfigEntry{Model: "priced"})
+	cmust(NewItemEntry(openresponses.UserText("Consolidate what this session learned.")))
+	answerWith(cmust, "resp_c1", "priced", "Noted: the build uses make.", 7)
+
+	parent, must, _ := fixtureSession(t, Header{ID: hostParent, Records: AllRecords}, "2026-11-03T15:00:00Z")
+	must(&ConfigEntry{Model: "priced"})
+	must(NewRunStart("run-1", SourceInput, ""))
+	must(NewItemEntry(openresponses.UserText("Fix the build.")))
+	answerWith(must, "resp_1", "priced", "Fixed.", 2)
+	e, err := parent.EndRun(ReasonDone, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(e)
+	must(NewSpawnLink(childID, hostSpawnID))
+	note := &CustomEntry{NS: "x.memory", Data: json.RawMessage(`{"note":"consolidated"}`)}
+	note.Parents = []EntryRef{{Session: childID, Entry: child.Leaf()}}
+	must(note)
+	must(NewRunStart("run-2", SourceInput, ""))
+	must(NewItemEntry(openresponses.UserText("Thanks.")))
+	answerWith(must, "resp_2", "priced", "You're welcome.", 1)
+	if e, err = parent.EndRun(ReasonDone, ""); err != nil {
+		t.Fatal(err)
+	}
+	must(e)
+	return [2]*Session{parent, child}
+}
+
+// hostChildLegacyFixture builds host-child-legacy.jsonl and its child:
+// a subsession link with neither call_id nor spawn_id, as a writer
+// before 0.19 may have written for a child the host started, committed
+// as read, since a writer of 0.19 no longer appends one; its child names
+// the parent and carries no spawned_by, and a note after the link names
+// its leaf.
+func hostChildLegacyFixture(t *testing.T) [2]*Session {
+	t.Helper()
+	child, cmust, _ := fixtureSession(t, Header{ID: hostLegacyC, ParentSession: hostLegacy}, "2026-11-03T16:00:10Z")
+	cmust(NewItemEntry(openresponses.UserText("Summarise the day.")))
+	answerWith(cmust, "resp_l1", "priced", "A quiet day.", 5)
+
+	parent, must, _ := fixtureSession(t, Header{ID: hostLegacy}, "2026-11-03T16:00:00Z")
+	must(NewItemEntry(openresponses.UserText("Good night.")))
+	if _, err := parent.Commit(NewLinkEntry(RelSubsession, hostLegacyC)); err != nil {
+		t.Fatal(err)
+	}
+	note := &CustomEntry{NS: "x.memory", Data: json.RawMessage(`{"note":"summarised"}`)}
+	note.Parents = []EntryRef{{Session: hostLegacyC, Entry: child.Leaf()}}
+	must(note)
+	return [2]*Session{parent, child}
+}
+
+// badSpawnFixture builds bad-spawn-link.jsonl, a subsession link
+// carrying both call_id and spawn_id, and, repeated, bad-spawn-repeated:
+// two links carrying one spawn_id on two branches, the second's member
+// written as one the writer did not take, which a reader takes by its
+// form. Neither can be appended; both are committed as a store would
+// take them from a foreign file, and VerifyRecords reports each.
+func badSpawnFixture(t *testing.T, repeated bool) *Session {
+	t.Helper()
+	id := "01995b2a-0000-7000-8000-000000000063"
+	if repeated {
+		id = "01995b2a-0000-7000-8000-000000000064"
+	}
+	s, must, _ := fixtureSession(t, Header{ID: id}, "2026-11-03T17:00:00Z")
+	root := must(NewItemEntry(openresponses.UserText("Start.")))
+	commit := func(e Entry) {
+		t.Helper()
+		if _, err := s.Commit(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !repeated {
+		commit(&LinkEntry{Rel: RelSubsession, Session: SubsessionID(id, "call_1"), CallID: "call_1", SpawnID: "spawn-1"})
+		return s
+	}
+	must(NewSpawnLink(SpawnedSessionID(id, "spawn-1"), "spawn-1"))
+	if err := s.Branch(root); err != nil {
+		t.Fatal(err)
+	}
+	again := NewLinkEntry(RelSubsession, SpawnedSessionID(id, "spawn-1"))
+	again.Unknown = map[string]json.RawMessage{"spawn_id": json.RawMessage(`"spawn-1"`)}
+	commit(again)
+	return s
+}
+
+// badSpawnedByFixture builds bad-spawned-by.jsonl: the host-child
+// fixture's child, its spawned_by naming another spawn, which
+// VerifyLinks reports against host-child.jsonl's link.
+func badSpawnedByFixture(t *testing.T) *Session {
+	t.Helper()
+	s, must, _ := fixtureSession(t, Header{ID: SpawnedSessionID(hostParent, hostSpawnID), ParentSession: hostParent, SpawnedBy: "another-spawn"}, "2026-11-03T15:00:10Z")
+	must(NewItemEntry(openresponses.UserText("Consolidate what this session learned.")))
+	return s
+}
+
+// TestSpawnIDForms: spawn_id is taken on a subsession link as a
+// non-empty string of letters, digits, _ and -, in a file of any minor,
+// and kept as written on another relation or in another form; either
+// is written back as read.
+func TestSpawnIDForms(t *testing.T) {
+	for _, tt := range []struct {
+		rel, member string
+		typed       bool
+	}{
+		{RelSubsession, `"0199a000-0000-7000-8000-000000000001"`, true},
+		{RelSubsession, `"memory_pass-2"`, true},
+		{RelSubsession, `"has space"`, false},
+		{RelSubsession, `""`, false},
+		{RelSubsession, `7`, false},
+		{RelSubsession, `"é"`, false},
+		{RelPeer, `"spawn-1"`, false},
+		{RelForkOf, `"spawn-1"`, false},
+	} {
+		line := `{"type":"link","id":"x","parent":null,"ts":"2026-11-03T10:00:00Z","rel":"` + tt.rel + `","session":"s","spawn_id":` + tt.member + `}`
+		e, err := UnmarshalEntry([]byte(reparent(t, line, "")))
+		if err != nil {
+			t.Fatalf("%s %s: %v", tt.rel, tt.member, err)
+		}
+		l := e.(*LinkEntry)
+		_, kept := l.Unknown["spawn_id"]
+		if (l.SpawnID != "") != tt.typed || kept == tt.typed {
+			t.Errorf("%s %s: typed %q, kept %v", tt.rel, tt.member, l.SpawnID, kept)
+		}
+		back, err := MarshalEntry(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sameJSON(t, members(t, back)["spawn_id"], []byte(tt.member)) {
+			t.Errorf("%s %s: written back as %s", tt.rel, tt.member, back)
+		}
+	}
+}
+
+// TestSpawnLinkWriter: a writer appends a subsession link carrying one
+// of call_id and spawn_id, refuses one carrying both or neither, a
+// spawn_id another link of the session carries on any branch, and
+// spawn_id on another relation; a cancel notice of a host-started child
+// carries its spawn_id and names its link.
+func TestSpawnLinkWriter(t *testing.T) {
+	s := New(Header{ID: "p"})
+	root, err := s.Append(NewItemEntry(openresponses.UserText("hi")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := NewSpawnLink(SpawnedSessionID("p", "s1"), "s1")
+	if _, err := s.Append(link); err != nil {
+		t.Fatalf("a spawn link: %v", err)
+	}
+	if _, err := s.Append(NewCancelSentLink(link)); err != nil {
+		t.Errorf("a cancel notice of a spawn link: %v", err)
+	}
+	if err := s.Branch(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		e    *LinkEntry
+		want error
+	}{
+		{"both", &LinkEntry{Rel: RelSubsession, Session: "c", CallID: "call_1", SpawnID: "s2"}, ErrSpawnLink},
+		{"neither", NewLinkEntry(RelSubsession, "c"), ErrSpawnLink},
+		{"repeated on another branch", NewSpawnLink("c", "s1"), ErrSpawnIDRepeated},
+		{"on a peer", &LinkEntry{Rel: RelPeer, Session: "c", CallID: "call_1", SpawnID: "s3"}, nil},
+		{"a cancel naming a call link with the spawn's id", &LinkEntry{Rel: RelSubsession, Session: "c", SpawnID: "s9", Target: link.ID, Cancel: CancelSent}, ErrCalleeLink},
+	} {
+		_, err := s.Append(tt.e)
+		switch {
+		case tt.want == nil && err == nil:
+			t.Errorf("%s: appended", tt.name)
+		case tt.want != nil && !errors.Is(err, tt.want):
+			t.Errorf("%s: %v, want %v", tt.name, err, tt.want)
+		}
+	}
+	if _, err := s.Append(NewSpawnLink("c2", "s2")); err != nil {
+		t.Errorf("a second spawn: %v", err)
+	}
+	if err := s.VerifyRecords(s.Leaf()); err != nil {
+		t.Errorf("VerifyRecords: %v", err)
+	}
+}
+
+// TestHostChildFixture reads the host-child fixtures: the link carries
+// spawn_id and no call_id, the records verify, the child's header agrees
+// with the link, and DelegatedWork counts the child at the leaf the note
+// after the link names; the legacy link with neither member counts its
+// child the same way and is checked by parent_session alone.
+func TestHostChildFixture(t *testing.T) {
+	for _, name := range []string{"host-child", "host-child-spawned", "host-child-legacy", "host-child-legacy-child"} {
+		checkBuilt(t, name)
+	}
+	parent, child := loadFixture(t, "host-child"), loadFixture(t, "host-child-spawned")
+	var link *LinkEntry
+	for _, e := range parent.Entries() {
+		if l, ok := e.(*LinkEntry); ok {
+			link = l
+		}
+	}
+	if link == nil || link.SpawnID != hostSpawnID || link.CallID != "" || link.Session != child.ID() {
+		t.Fatalf("the link: %+v", link)
+	}
+	if err := parent.VerifyRecords(parent.Leaf()); err != nil {
+		t.Errorf("VerifyRecords: %v", err)
+	}
+	resolve := func(m map[string]*Session) func(string) (*Session, error) {
+		return func(id string) (*Session, error) { return m[id], nil }
+	}
+	if err := parent.VerifyLinks(resolve(map[string]*Session{child.ID(): child})); err != nil {
+		t.Errorf("VerifyLinks: %v", err)
+	}
+	if turns, _ := PathInputs(parent.Path(parent.Leaf())); len(turns) != 2 {
+		t.Errorf("the runs' inputs: %+v", turns)
+	}
+	if calls := Calls(parent.Path(parent.Leaf())); len(calls) != 0 {
+		t.Errorf("the spawn link reads as a call: %+v", calls)
+	}
+	work, unread := DelegatedWork(parent.Path(parent.Leaf()), resolve(map[string]*Session{child.ID(): child}))
+	if len(unread) != 0 || len(work) != 1 || len(work[0].Leaves) != 1 || !work[0].Leaves[0].Named || work[0].Leaves[0].Entry != child.Leaf() || len(work[0].Calls) != 1 {
+		t.Errorf("delegated %+v, unread %+v", work, unread)
+	}
+
+	legacy, lchild := loadFixture(t, "host-child-legacy"), loadFixture(t, "host-child-legacy-child")
+	if err := legacy.VerifyRecords(legacy.Leaf()); err != nil {
+		t.Errorf("legacy VerifyRecords: %v", err)
+	}
+	if err := legacy.VerifyLinks(resolve(map[string]*Session{hostLegacyC: lchild})); err != nil {
+		t.Errorf("legacy VerifyLinks: %v", err)
+	}
+	work, unread = DelegatedWork(legacy.Path(legacy.Leaf()), resolve(map[string]*Session{hostLegacyC: lchild}))
+	if len(unread) != 0 || len(work) != 1 || !work[0].Leaves[0].Named || len(work[0].Calls) != 1 {
+		t.Errorf("legacy delegated %+v, unread %+v", work, unread)
+	}
+	// A child of a link with neither member that carries a spawned_by
+	// disagrees with it.
+	h := lchild.Header()
+	h.SpawnedBy = "spawn-x"
+	other := New(h)
+	if err := legacy.VerifyLinks(resolve(map[string]*Session{hostLegacyC: other})); !errors.Is(err, ErrLinkMismatch) {
+		t.Errorf("legacy child with spawned_by: %v", err)
+	}
+}
+
+// TestBadSpawnFixtures: a link carrying both members, and a spawn_id
+// two links carry, are reported by VerifyRecords; a child whose
+// spawned_by is not its link's spawn_id by VerifyLinks.
+func TestBadSpawnFixtures(t *testing.T) {
+	for _, name := range []string{"bad-spawn-link", "bad-spawn-repeated", "bad-spawned-by"} {
+		checkBuilt(t, name)
+	}
+	both := loadFixture(t, "bad-spawn-link")
+	if err := both.VerifyRecords(both.Leaf()); !errors.Is(err, ErrSpawnLink) {
+		t.Errorf("both members: %v", err)
+	}
+	rep := loadFixture(t, "bad-spawn-repeated")
+	if err := rep.VerifyRecords(rep.Leaf()); !errors.Is(err, ErrSpawnIDRepeated) {
+		t.Errorf("repeated: %v", err)
+	}
+	parent, bad := loadFixture(t, "host-child"), loadFixture(t, "bad-spawned-by")
+	err := parent.VerifyLinks(func(id string) (*Session, error) {
+		if id == bad.ID() {
+			return bad, nil
+		}
+		return nil, nil
+	})
+	if !errors.Is(err, ErrLinkMismatch) {
+		t.Errorf("spawned_by: %v", err)
 	}
 }

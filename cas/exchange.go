@@ -258,19 +258,43 @@ func callIDsMeet(held []agentsession.Entry, b *bundle, fresh []agentsession.Entr
 		}
 	}
 	at := map[string]string{}
+	spawnAt := map[string]string{}
 	for _, e := range held {
-		if c := callIDOf(e); c != "" && !sent[e.Base().ID] {
+		if sent[e.Base().ID] {
+			continue
+		}
+		if c := callIDOf(e); c != "" {
 			at[c] = e.Base().ID
 		}
+		if sp := spawnIDOf(e); sp != "" {
+			spawnAt[sp] = e.Base().ID
+		}
 	}
+	const after = "the stores no longer exchange this session until one pushes its line as a fork, its subsessions re-derived under the fork's ID and its links pointed at them, and deletes it"
 	for _, e := range fresh {
 		if c := callIDOf(e); c != "" {
 			if other, ok := at[c]; ok {
-				return fmt.Errorf("%w: exchange: %s at %s here and %s sent; the stores no longer exchange this session until one pushes its line as a fork, its subsessions re-derived under the fork's ID and its links pointed at them, and deletes it", agentsession.ErrCallIDRepeated, c, other, e.Base().ID)
+				return fmt.Errorf("%w: exchange: %s at %s here and %s sent; %s", agentsession.ErrCallIDRepeated, c, other, e.Base().ID, after)
+			}
+		}
+		// A spawn_id names one host-started child, as a call ID names
+		// one call (RFC 0002, Exchange, since 0.19).
+		if sp := spawnIDOf(e); sp != "" {
+			if other, ok := spawnAt[sp]; ok {
+				return fmt.Errorf("%w: exchange: %s at %s here and %s sent; %s", agentsession.ErrSpawnIDRepeated, sp, other, e.Base().ID, after)
 			}
 		}
 	}
 	return nil
+}
+
+// spawnIDOf is the spawn_id of a subsession link naming a child the host
+// started, cancel notices excepted, or empty.
+func spawnIDOf(e agentsession.Entry) string {
+	if l, ok := e.(*agentsession.LinkEntry); ok && l.Rel == agentsession.RelSubsession && l.Cancel == "" {
+		return l.SpawnID
+	}
+	return ""
 }
 
 // callIDOf is the call ID of a function call item, or empty.

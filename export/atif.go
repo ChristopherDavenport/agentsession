@@ -225,6 +225,15 @@ type builder struct {
 	// totals.
 	priced map[string]price
 	links  []*agentsession.LinkEntry
+	// spawns are the subsession links with a spawn_id on the path, for
+	// children the host started (RFC 0001, link, since 0.19), each with
+	// the record it travels as under subsessions, which finish gives its
+	// reference, and the child's leaf the first entry after it naming
+	// the child in parents names, empty while none has.
+	spawns []*spawnRec
+	// pendingSubs are the spawn records for the next step's
+	// extra.agentsession.subsessions.
+	pendingSubs []any
 	// callFrom is what each call's output entry converged, by call ID:
 	// for a call a subagent answered, the leaf of the child the answer
 	// came from. It is what lets a subsession reference name a point in
@@ -436,7 +445,28 @@ func (b *builder) setAgentDefaults() {
 	b.settings = agentsession.Settings{}
 }
 
+// spawnRec is a subsession link with a spawn_id and its record.
+type spawnRec struct {
+	link *agentsession.LinkEntry
+	rec  map[string]any
+	leaf string
+}
+
 func (b *builder) entry(e agentsession.Entry) error {
+	// A host-started child's leaf is named by the first entry after its
+	// link whose parents names an entry of the child, as the call's
+	// output names a subagent's.
+	for _, sp := range b.spawns {
+		if sp.leaf != "" {
+			continue
+		}
+		for _, r := range e.Base().Parents {
+			if r.Session == sp.link.Session {
+				sp.leaf = r.Entry
+				break
+			}
+		}
+	}
 	switch v := e.(type) {
 	case *agentsession.ItemEntry:
 		return b.item(v)
@@ -551,6 +581,22 @@ func (b *builder) entry(e agentsession.Entry) error {
 	case *agentsession.OutcomeEntry:
 		b.outcome(v)
 	case *agentsession.LinkEntry:
+		if v.Rel == agentsession.RelSubsession && v.SpawnID != "" && v.Cancel == "" && v.Session != "" {
+			// A child the host started has no observation to carry its
+			// reference, so it travels under subsessions on the next
+			// step, as a custom entry does (RFC 0001, Projections/ATIF,
+			// since 0.19).
+			rec := map[string]any{"entry_id": v.ID, "spawn_id": v.SpawnID, "session": v.Session}
+			for _, m := range [][2]string{{"url", v.URL}, {"task", v.Task}, {"context", v.Context}} {
+				if m[1] != "" {
+					rec[m[0]] = m[1]
+				}
+			}
+			copyUnknown(rec, v.Unknown)
+			b.spawns = append(b.spawns, &spawnRec{link: v, rec: rec})
+			b.pendingSubs = append(b.pendingSubs, rec)
+			break
+		}
 		b.links = append(b.links, v)
 	case *agentsession.RunEntry:
 		b.runEntry(v)
@@ -1085,6 +1131,10 @@ func (b *builder) addStep(step atif.Step, e agentsession.Entry) int {
 		step.Extra[k] = v
 	}
 	b.pending = nil
+	if len(b.pendingSubs) > 0 {
+		agentSessionExtra(step.Extra)["subsessions"] = b.pendingSubs
+		b.pendingSubs = nil
+	}
 	b.doc.Steps = append(b.doc.Steps, step)
 	idx := len(b.doc.Steps) - 1
 	b.stepByEntry[e.Base().ID] = idx
@@ -1275,6 +1325,10 @@ func (b *builder) finish() {
 	}
 	if entries := b.entryRecords(); len(entries) > 0 {
 		as[ExtraEntries] = entries
+	}
+	if len(b.pendingSubs) > 0 {
+		as["subsessions"] = b.pendingSubs
+		b.pendingSubs = nil
 	}
 	// The path's trust, an instructions part's labels among them, which
 	// otherwise travel only in a config's body under entries.
@@ -1562,6 +1616,9 @@ func (b *builder) subsessions() {
 		if l.CallID != "" {
 			rec["call_id"] = l.CallID
 		}
+		if l.SpawnID != "" {
+			rec["spawn_id"] = l.SpawnID // a cancel notice of a host-started child
+		}
 		if l.Target != "" {
 			rec["target"] = l.Target
 		}
@@ -1577,33 +1634,7 @@ func (b *builder) subsessions() {
 			others = append(others, rec)
 			continue
 		}
-		ref := atif.SubagentTrajectoryRef{SessionID: l.Session, Extra: map[string]any{"entry_id": l.ID}}
-		// The link names the session; the output entry names the point
-		// in it the answer was taken from. With the second, the
-		// document says which of a branched child's leaves was used;
-		// without it, the projection takes the leaf a reader resuming
-		// the child takes, as RFC 0001's link rule counts its cost, and
-		// says it took it: child_leaf_named is false.
-		leaf := b.answeredFrom(l)
-		if leaf != "" {
-			ref.Extra["child_leaf"] = leaf
-			ref.Extra["child_leaf_named"] = true
-			ref.TrajectoryID = trajectoryID(l.Session, leaf)
-		}
-		if embedded, taken := b.embed(l.Session, leaf); embedded != nil {
-			ref.TrajectoryID = embedded.TrajectoryID
-			if leaf == "" {
-				ref.Extra["child_leaf"] = taken
-				ref.Extra["child_leaf_named"] = false
-			}
-		} else {
-			// Nothing was embedded, and when the record named a leaf
-			// no other trajectory is put in its place. trajectory_id
-			// still says which leaf the record named; the path is where
-			// the session's document would be, which is all a document
-			// that could not load the child can offer.
-			ref.TrajectoryPath = MainDocumentName(l.Session)
-		}
+		ref := b.subagentRef(l, b.answeredFrom(l))
 		if !b.attachRef(l.CallID, ref) {
 			rec["subagent_trajectory_ref"] = ref
 			others = append(others, rec)
@@ -1612,6 +1643,43 @@ func (b *builder) subsessions() {
 	if len(others) > 0 {
 		b.rootExtra()["links"] = others
 	}
+	for _, sp := range b.spawns {
+		sp.rec["subagent_trajectory_ref"] = b.subagentRef(sp.link, sp.leaf)
+	}
+}
+
+// subagentRef is the reference to the child a subsession link names,
+// at leaf, the entry of the child the parent named in parents, or ""
+// when it named none.
+func (b *builder) subagentRef(l *agentsession.LinkEntry, leaf string) atif.SubagentTrajectoryRef {
+	ref := atif.SubagentTrajectoryRef{SessionID: l.Session, Extra: map[string]any{"entry_id": l.ID}}
+	// The link names the session; the output entry, or for a child the
+	// host started the first entry after the link that converges it,
+	// names the point in it the work was taken from. With the second,
+	// the document says which of a branched child's leaves was used;
+	// without it, the projection takes the leaf a reader resuming the
+	// child takes, as RFC 0001's link rule counts its cost, and says it
+	// took it: child_leaf_named is false.
+	if leaf != "" {
+		ref.Extra["child_leaf"] = leaf
+		ref.Extra["child_leaf_named"] = true
+		ref.TrajectoryID = trajectoryID(l.Session, leaf)
+	}
+	if embedded, taken := b.embed(l.Session, leaf); embedded != nil {
+		ref.TrajectoryID = embedded.TrajectoryID
+		if leaf == "" {
+			ref.Extra["child_leaf"] = taken
+			ref.Extra["child_leaf_named"] = false
+		}
+	} else {
+		// Nothing was embedded, and when the record named a leaf
+		// no other trajectory is put in its place. trajectory_id
+		// still says which leaf the record named; the path is where
+		// the session's document would be, which is all a document
+		// that could not load the child can offer.
+		ref.TrajectoryPath = MainDocumentName(l.Session)
+	}
+	return ref
 }
 
 // answeredFrom returns the entry in the link's session that the call's

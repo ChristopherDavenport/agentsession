@@ -15,6 +15,30 @@ versions may break the API.
   `subsession` link name a child the host started by `spawn_id`, and
   names a redacted session's original by a keyed pseudonym, below.
 
+- **A child the host started (RFC 0001 0.19, `link`; agentkit#109).** A
+  `subsession` link may carry `spawn_id` in place of `call_id`, for a
+  child no function call asked for, such as a memory pass after a turn:
+  `LinkEntry.SpawnID`, `NewSpawnLink(session, spawnID)`, `NewSpawnID`
+  (a UUIDv7) and `SpawnedSessionID(parent, spawnID)`, a UUIDv5 over
+  `["spawn",<parent>,<spawn_id>]`. It is taken on a subsession link as a
+  non-empty string of ASCII letters, digits, `_` and `-`, in a file of
+  any minor, and kept as written otherwise. **Breaking:**
+  `Session.Append` and `Prepare` refuse a subsession link carrying both
+  members or neither (`ErrSpawnLink`), and `Append`, `Prepare` and
+  `Commit` a `spawn_id` another link of the session carries
+  (`ErrSpawnIDRepeated`); `VerifyRecords` reports both. A link with
+  neither, as an earlier writer may have written, still reads and
+  verifies. `VerifyLinks` compares the child's `spawned_by` with the
+  link's `call_id` or `spawn_id`, and holds it absent for a link with
+  neither; a cancel notice carries the link's `spawn_id`.
+  `DelegatedWork` counts a host-started child at the leaf the first
+  entry after its link names in `parents`. The ATIF export carries such
+  a link under `agentsession.subsessions` in the next step's `extra`, or
+  the top-level one, with its `subagent_trajectory_ref`, and counts its
+  cost. The cas exchange refuses a `spawn_id` the two stores' lines
+  both carry, as it refuses a `call_id`. A rewrite leaves `spawn_id` as
+  it leaves a `call_id`.
+
 - **Breaking (format, API): a redaction names sessions by a keyed
   pseudonym (RFC 0001 0.19, The redacted session).** 0.18 derived a
   redacted session's `id`, and every reference a redaction rewrote, as

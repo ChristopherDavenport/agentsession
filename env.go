@@ -311,6 +311,39 @@ func NewSubsessionLink(session, callID string) *LinkEntry {
 	return &LinkEntry{Rel: RelSubsession, Session: session, CallID: callID}
 }
 
+// NewSpawnLink builds the link the format prescribes for a child the
+// host started for this session, and not a function call, such as a
+// pass that consolidates memory after a turn (RFC 0001, link, since
+// 0.19): a subsession link carrying spawnID, which the host chose, in
+// place of a call_id. It is written at the point the host starts the
+// child, before the child's header exists, and the child's header
+// carries parent_session and spawned_by equal to spawnID; its ID is
+// [SpawnedSessionID] of the parent and spawnID. spawnID differs from
+// every other spawn_id in the session, which [Session.Append] holds a
+// writer to; [NewSpawnID] gives one.
+func NewSpawnLink(session, spawnID string) *LinkEntry {
+	return &LinkEntry{Rel: RelSubsession, Session: session, SpawnID: spawnID}
+}
+
+// NewSpawnID returns a spawn_id for [NewSpawnLink]: a UUIDv7, which the
+// format suggests, in its canonical text form.
+func NewSpawnID() string { return NewSessionID() }
+
+// validSpawnID reports whether id is a spawn_id in the form the format
+// defines: a non-empty string of ASCII letters, digits, _ and -.
+func validSpawnID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // NewJudgedByLink builds the link entry a judged session records for
 // the session of its judge: judge is the judge's session ID, and target,
 // when it is not empty, the entry of the judged session the judgement is
@@ -362,7 +395,7 @@ func NewCalleeSubsessionLink(callID string, c Callee) *LinkEntry {
 
 // NewCancelSentLink builds the notice a caller records when it tells
 // the callee link names that it no longer wants the work: a link of the
-// same relation and call, carrying [CancelSent], whose Target is link's
+// same relation and call, or spawn_id, carrying [CancelSent], whose Target is link's
 // entry ID, so link must have been appended, on the path the notice is
 // appended to. It records that the caller asked, not that the work
 // stopped; the caller does not wait for the callee's answer. It names
@@ -371,7 +404,7 @@ func NewCalleeSubsessionLink(callID string, c Callee) *LinkEntry {
 // links, onto a new branch or into another store, re-points the notice
 // with them.
 func NewCancelSentLink(link *LinkEntry) *LinkEntry {
-	return &LinkEntry{Rel: link.Rel, Session: link.Session, CallID: link.CallID, Target: link.ID, Cancel: CancelSent}
+	return &LinkEntry{Rel: link.Rel, Session: link.Session, CallID: link.CallID, SpawnID: link.SpawnID, Target: link.ID, Cancel: CancelSent}
 }
 
 // CalleeLink is one callee of a call as a path records it: a

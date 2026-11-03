@@ -142,7 +142,9 @@ var envelopeMembers = []special{
 // links, and a subsession's ID is derived from it, so a rewrite of the
 // body leaves it where the format defines it: on an item (and so on a
 // queued entry's item and a compaction's pinned items), on a dispatch, a
-// decision, a link and a custom entry, and in a run end's pending list.
+// decision, a link and a custom entry, and in a run end's pending list;
+// and so does a subsession link's spawn_id, since 0.19, which pairs a
+// child the host started with its header's spawned_by.
 // A call_id inside data the format does not define, a decision's args,
 // a custom entry's data, an outcome's details or a member it does not
 // define, is the writer's text and body.
@@ -222,6 +224,7 @@ var bodyMembers = map[string][]special{
 		// is text since 0.19 (RFC 0001, Every redacted entry).
 		{path: memberPath("session"), role: roleSession, when: func(e Entry) bool { return e.(*LinkEntry).URL == "" }},
 		{path: memberPath("call_id"), role: roleCallID},
+		{path: memberPath("spawn_id"), role: roleCallID, when: func(e Entry) bool { return e.(*LinkEntry).SpawnID != "" }},
 	},
 	TypeCustom: {{path: memberPath("call_id"), role: roleCallID}},
 	TypeEnv: {
