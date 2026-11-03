@@ -84,8 +84,13 @@ versions may break the API.
   nothing. `OmitDelta` writes what a group adds, `OmitOutputs.TextFor`
   gives an output's text (ATIF's `replaced` record uses it), a
   checkpoint carries the groups, and leaving entries out removes a
-  group it empties, then an emptied `groups`, `outputs` and `omit`.
-  Fixtures `outputs-groups` and `bad-outputs-overlap`. **Added:
+  group it empties, then an emptied `groups`, `outputs` and `omit`,
+  and leaves a malformed `outputs` as written. A `text` present writes
+  the default group, `""` beside `groups` included; a `groups` element
+  holding anything but `text` and `items` is malformed; a `replace`
+  starts the groups afresh, so it may move an entry to another group.
+  Fixtures `outputs-groups` and `bad-outputs-overlap`, the latter with a
+  hashed response after its bad line. **Added:
   `OmitOutputs.Groups`, `OmitOutputGroup`, `OmitOutputs.TextFor`,
   `ErrOmitOverlap`.**
 

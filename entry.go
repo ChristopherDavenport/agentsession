@@ -662,6 +662,56 @@ type OmitOutputs struct {
 	Text   string            `json:"text"`
 	Items  []string          `json:"items,omitempty"`
 	Groups []OmitOutputGroup `json:"groups,omitempty"`
+
+	// textSet records a text present, which writes the default group
+	// whatever it holds, the empty string beside groups included.
+	textSet bool
+}
+
+// UnmarshalJSON takes text, items and groups, recording whether text
+// is present, and each groups element only as an object holding a
+// string text and a list items and nothing else: anything else is an
+// error, so the [Omit] holding it keeps the member as written and it
+// changes nothing.
+func (o *OmitOutputs) UnmarshalJSON(data []byte) error {
+	all, err := splitMembers(data)
+	if err != nil {
+		return err
+	}
+	*o = OmitOutputs{}
+	if raw, ok := all["text"]; ok {
+		if json.Unmarshal(raw, &o.Text) != nil || isNull(raw) {
+			return errors.New("omit outputs: text is a string")
+		}
+		o.textSet = true
+	}
+	if raw, ok := all["items"]; ok {
+		if err := json.Unmarshal(raw, &o.Items); err != nil {
+			return err
+		}
+	}
+	raw, ok := all["groups"]
+	if !ok {
+		return nil
+	}
+	var elems []json.RawMessage
+	if json.Unmarshal(raw, &elems) != nil || isNull(raw) {
+		return errors.New("omit outputs: groups is a list")
+	}
+	for _, el := range elems {
+		m, err := splitMembers(el)
+		text, hasText := m["text"]
+		items, hasItems := m["items"]
+		if err != nil || len(m) != 2 || !hasText || !hasItems || isNull(text) || isNull(items) {
+			return errors.New("omit outputs: a group is text and items alone")
+		}
+		var g OmitOutputGroup
+		if json.Unmarshal(text, &g.Text) != nil || json.Unmarshal(items, &g.Items) != nil {
+			return errors.New("omit outputs: a group's text is a string and its items a list")
+		}
+		o.Groups = append(o.Groups, g)
+	}
+	return nil
 }
 
 // OmitOutputGroup is one element of [OmitOutputs.Groups]: the entries
@@ -686,7 +736,7 @@ func (g OmitOutputGroup) MarshalJSON() ([]byte, error) {
 // hasDefault reports whether the member writes the default group: a
 // text or items, or no groups, as every member before 0.16 is.
 func (o OmitOutputs) hasDefault() bool {
-	return o.Text != "" || len(o.Items) > 0 || len(o.Groups) == 0
+	return o.textSet || o.Text != "" || len(o.Items) > 0 || len(o.Groups) == 0
 }
 
 // MarshalJSON writes the default group's text and items when the member
@@ -783,7 +833,7 @@ func outputsOverlap(held, d *OmitOutputs) bool {
 
 // clone returns a copy that shares no slice with o.
 func (o OmitOutputs) clone() *OmitOutputs {
-	out := &OmitOutputs{Text: o.Text, Items: slices.Clone(o.Items)}
+	out := &OmitOutputs{Text: o.Text, Items: slices.Clone(o.Items), textSet: o.textSet}
 	for _, g := range o.Groups {
 		out.Groups = append(out.Groups, OmitOutputGroup{Text: g.Text, Items: slices.Clone(g.Items)})
 	}
@@ -799,7 +849,7 @@ func mergedOutputs(held, d *OmitOutputs) *OmitOutputs {
 		out = held.clone()
 	}
 	if d.hasDefault() {
-		out.Text, out.Items = d.Text, union(out.Items, d.Items)
+		out.Text, out.Items, out.textSet = d.Text, union(out.Items, d.Items), true
 	}
 	for _, g := range d.Groups {
 		i := slices.IndexFunc(out.Groups, func(h OmitOutputGroup) bool { return h.Text == g.Text })

@@ -632,7 +632,7 @@ func pointerUp(at string, n int) string {
 // removed only added to it. An outputs group whose items it empties is
 // removed whole, since a group sets nothing else, then groups emptied,
 // an outputs left with no member, and its omit if that leaves it none
-// (RFC 0001, Leaving entries out).
+// (RFC 0001, Leaving entries out); nothing it did not empty is touched.
 func removeAll(root map[string]any, pointers []string) {
 	var emptied []string
 	for i := len(pointers) - 1; i >= 0; i-- {
@@ -652,63 +652,67 @@ func removeAll(root map[string]any, pointers []string) {
 		emptied = append(emptied, up)
 	}
 	slices.Sort(emptied)
+	// groups are the outputs groups, by the pointer of their list, whose
+	// items this removal emptied: each goes whole, since a group sets
+	// nothing else. A group that held no items before is a form the
+	// format does not define, which no removal reaches, and is left as
+	// written.
+	groups := map[string][]int{}
 	for _, up := range slices.Compact(emptied) {
-		if list, ok := pointerValue(root, up).([]any); ok && len(list) == 0 {
-			holder := pointerUp(up, 1)
-			if obj, ok := pointerValue(root, holder).(map[string]any); ok {
-				delete(obj, unescapeToken(up[len(holder)+1:]))
-				if len(obj) == 0 && strings.HasSuffix(holder, "/omit") {
-					if h, ok := pointerValue(root, pointerUp(holder, 1)).(map[string]any); ok {
-						delete(h, "omit")
-					}
-				}
-			}
+		list, ok := pointerValue(root, up).([]any)
+		if !ok || len(list) > 0 {
+			continue
 		}
-	}
-	for _, at := range []string{"/omit", "/config/omit"} {
-		pruneOutputGroups(root, at)
-	}
-}
-
-// pruneOutputGroups removes from the omit at the pointer at each outputs
-// group left without items, groups so emptied, the outputs left with no
-// member, and the omit itself when that leaves it with none.
-func pruneOutputGroups(root map[string]any, at string) {
-	omit, ok := pointerValue(root, at).(map[string]any)
-	if !ok {
-		return
-	}
-	outputs, ok := omit["outputs"].(map[string]any)
-	if !ok {
-		return
-	}
-	groups, ok := outputs["groups"].([]any)
-	if !ok {
-		return
-	}
-	kept := groups[:0]
-	for _, g := range groups {
-		if obj, ok := g.(map[string]any); ok {
-			if _, has := obj["items"]; !has {
+		holder := pointerUp(up, 1)
+		if strings.HasSuffix(up, "/items") && strings.HasSuffix(pointerUp(holder, 1), "/outputs/groups") {
+			if k, err := strconv.Atoi(holder[len(pointerUp(holder, 1))+1:]); err == nil {
+				groups[pointerUp(holder, 1)] = append(groups[pointerUp(holder, 1)], k)
 				continue
 			}
 		}
-		kept = append(kept, g)
+		if obj, ok := pointerValue(root, holder).(map[string]any); ok {
+			delete(obj, unescapeToken(up[len(holder)+1:]))
+			dropEmptyOmit(root, holder, obj)
+		}
 	}
-	if len(kept) == len(groups) {
-		return
+	for at, ks := range groups {
+		list, ok := pointerValue(root, at).([]any)
+		if !ok {
+			continue
+		}
+		slices.Sort(ks)
+		for i := len(ks) - 1; i >= 0; i-- {
+			if ks[i] < len(list) {
+				list = slices.Delete(list, ks[i], ks[i]+1)
+			}
+		}
+		if len(list) > 0 {
+			setPointer(root, at, list)
+			continue
+		}
+		outputsAt := pointerUp(at, 1)
+		outputs, ok := pointerValue(root, outputsAt).(map[string]any)
+		if !ok {
+			continue
+		}
+		delete(outputs, "groups")
+		if len(outputs) > 0 {
+			continue
+		}
+		omitAt := pointerUp(outputsAt, 1)
+		if omit, ok := pointerValue(root, omitAt).(map[string]any); ok {
+			delete(omit, "outputs")
+			dropEmptyOmit(root, omitAt, omit)
+		}
 	}
-	if len(kept) > 0 {
-		outputs["groups"] = kept
-		return
-	}
-	delete(outputs, "groups")
-	if len(outputs) > 0 {
-		return
-	}
-	delete(omit, "outputs")
-	if len(omit) == 0 {
-		if h, ok := pointerValue(root, pointerUp(at, 1)).(map[string]any); ok {
+}
+
+// dropEmptyOmit removes the omit object obj at the pointer holder when
+// it is an omit left with no member: an empty omit clears the one in
+// force, where what was removed only added to it.
+func dropEmptyOmit(root map[string]any, holder string, obj map[string]any) {
+	if len(obj) == 0 && strings.HasSuffix(holder, "/omit") {
+		if h, ok := pointerValue(root, pointerUp(holder, 1)).(map[string]any); ok {
 			delete(h, "omit")
 		}
 	}

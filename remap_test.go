@@ -807,6 +807,12 @@ func TestRemapRefsLeftOut(t *testing.T) {
 			[]string{"/omit/outputs/groups/0/items/0", "/omit/outputs/groups/1/items/0"},
 		},
 		{
+			"config: a malformed outputs is left as written",
+			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"items":["gone-1"],"outputs":{"groups":[{"text":"q"}]}}}`,
+			`{"type":"config","id":"x","parent":"n-p",` + tsLine + `,"omit":{"outputs":{"groups":[{"text":"q"}]}}}`,
+			[]string{"/omit/items/0"},
+		},
+		{
 			"config: an omit that clears stays",
 			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{}}`,
 			`{"type":"config","id":"x","parent":"n-p",` + tsLine + `,"omit":{}}`,

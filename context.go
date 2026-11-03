@@ -769,7 +769,7 @@ func outputsDelta(have, want *OmitOutputs) (*OmitOutputs, bool) {
 			}
 		}
 		if have == nil || !have.hasDefault() || have.Text != want.Text || len(d.Items) > 0 {
-			d.Text = want.Text
+			d.Text, d.textSet = want.Text, true
 		} else {
 			d.Items = nil
 		}

@@ -105,6 +105,27 @@ func badOutputsOverlapLines(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	buf.WriteString(reparent(t, string(line), s.Leaf()) + "\n")
+	// The model is asked after it, under the request a reader rebuilds,
+	// which the bad line changes nothing in.
+	read, err := Read(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := fixtureHash(t, read)
+	at := time.Date(2026, 11, 2, 10, 31, 0, 0, time.UTC)
+	answer := &ItemEntry{Item: &openresponses.Message{ID: "msg_1", Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: "One page was cleared.", Annotations: []openresponses.Annotation{}}}}, ResponseID: "resp_answer"}
+	answer.Timestamp = at
+	resp := &ResponseEntry{ResponseID: "resp_answer", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent}
+	resp.Timestamp = at.Add(time.Second)
+	for _, e := range []Entry{answer, resp} {
+		if _, err := read.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	buf.Reset()
+	if err := Write(&buf, read); err != nil {
+		t.Fatal(err)
+	}
 	return buf.Bytes()
 }
 
@@ -184,6 +205,87 @@ func TestBadOutputsOverlapFixture(t *testing.T) {
 	outs := outputIDs(s)
 	if got := sentOutputs(t, s, outs); !slices.Equal(got, []string{"[cleared]", "", ""}) {
 		t.Errorf("sent %q, want the overlapping outputs to change nothing", got)
+	}
+	if err := s.Verify(s.Leaf()); err != nil {
+		t.Errorf("Verify: %v", err)
+	}
+}
+
+// readOutputsLine reads the shared path with the default group clearing
+// the first output and then a hand-written config line whose omit is
+// omit, and returns the text each output is sent with.
+func readOutputsLine(t *testing.T, omit string) []string {
+	t.Helper()
+	s, must, _ := fixtureSession(t, Header{ID: "r"}, "2026-11-02T12:00:00Z")
+	outs := groupsPath(t, must)
+	must(&ConfigEntry{Omit: &Omit{Outputs: &OmitOutputs{Text: "[cleared]", Items: []string{outs[0]}}}})
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	omit = strings.NewReplacer("X0", outs[0], "X1", outs[1], "X2", outs[2]).Replace(omit)
+	line := `{"type":"config","ts":"2026-11-02T12:30:00Z","omit":` + omit + `}`
+	buf.WriteString(reparent(t, line, s.Leaf()) + "\n")
+	read, err := Read(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sentOutputs(t, read, outs)
+}
+
+// TestOutputsLinesAReaderTakes: a text present beside groups writes the
+// default group, the empty string included; an outputs listing one
+// entry in two of its own groups, or a group element with a member the
+// format does not define, changes nothing; and a group re-listing what
+// it lists, or the default group re-listing its own, is no conflict.
+func TestOutputsLinesAReaderTakes(t *testing.T) {
+	for _, tt := range []struct {
+		name, omit string
+		want       []string
+	}{
+		{"empty default text beside groups", `{"outputs":{"text":"","groups":[{"text":"[q]","items":["X1"]}]}}`, []string{"", "[q]", ""}},
+		{"one entry in two of its groups", `{"outputs":{"groups":[{"text":"a","items":["X1"]},{"text":"b","items":["X1"]}]}}`, []string{"[cleared]", "", ""}},
+		{"a group element with an extra member", `{"outputs":{"groups":[{"text":"[q]","items":["X1"],"x":1}]}}`, []string{"[cleared]", "", ""}},
+		{"the default group re-listing its own", `{"outputs":{"text":"[cleared2]","items":["X0","X2"]}}`, []string{"[cleared2]", "", "[cleared2]"}},
+		{"a group re-listing its own", `{"outputs":{"groups":[{"text":"[q]","items":["X1","X1"]}]}}`, []string{"[cleared]", "[q]", ""}},
+	} {
+		if got := readOutputsLine(t, tt.omit); !slices.Equal(got, tt.want) {
+			t.Errorf("%s: sent %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+// TestOutputsGroupsReplace: a replace starts the groups afresh, so it
+// may put an entry the default group held into a group of its own.
+func TestOutputsGroupsReplace(t *testing.T) {
+	s, must, _ := fixtureSession(t, Header{ID: "rp"}, "2026-11-02T13:00:00Z")
+	outs := groupsPath(t, must)
+	must(&ConfigEntry{Omit: &Omit{Outputs: &OmitOutputs{Text: "[cleared]", Items: []string{outs[0]}}}})
+	if _, err := s.Append(&ConfigEntry{Replace: true, Model: "gpt-5", Omit: &Omit{Outputs: &OmitOutputs{Groups: []OmitOutputGroup{{Text: "[q]", Items: []string{outs[0]}}}}}}); err != nil {
+		t.Fatalf("a replace moving an entry to a group of its own: %v", err)
+	}
+	if got := sentOutputs(t, s, outs); !slices.Equal(got, []string{"[q]", "", ""}) {
+		t.Errorf("sent %q", got)
+	}
+}
+
+// TestOutputsDeltaToEmptyText: OmitDelta writes a change of the default
+// group's text to the empty string beside groups, as the text present.
+func TestOutputsDeltaToEmptyText(t *testing.T) {
+	have := Settings{Omit: Omit{Outputs: &OmitOutputs{Text: "[cleared]", Items: []string{"x"}}}}
+	d, ok := have.OmitDelta(Omit{Outputs: &OmitOutputs{Text: "", Items: []string{"x"}, Groups: []OmitOutputGroup{{Text: "[q]", Items: []string{"y"}}}}})
+	if !ok || d == nil || d.Outputs == nil {
+		t.Fatalf("OmitDelta = %+v, %v", d, ok)
+	}
+	data, err := json.Marshal(d.Outputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"text":""`)) {
+		t.Errorf("delta %s writes no empty text", data)
+	}
+	if got := have.Omit.merged(*d).Outputs; got.Text != "" || !got.hasDefault() {
+		t.Errorf("in force after the delta: %+v", *got)
 	}
 }
 

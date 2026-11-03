@@ -355,14 +355,16 @@ func (s *Session) checkNew(e Entry) error {
 // checkOutputs refuses a config entry whose omit outputs would put an
 // entry in two groups with the outputs in force where it is appended
 // (RFC 0001, Items left out of the context): a reader would take it as
-// a form the format does not define, so a writer does not write it.
+// a form the format does not define, so a writer does not write it. A
+// replace starts the groups afresh, as a reader does, and is checked
+// against nothing before it.
 func (s *Session) checkOutputs(c *ConfigEntry) error {
 	parent := c.Parent
 	if parent == "" {
 		parent = s.Leaf()
 	}
 	var held *OmitOutputs
-	if parent != "" {
+	if parent != "" && !c.Replace {
 		ctx, err := s.ContextAt(parent)
 		if err != nil {
 			return nil // the append reports the parent it cannot hang from
