@@ -1217,7 +1217,8 @@ not by any later leaf:
   request, so two sessions whose model saw the same output share a key
   whether or not their harnesses marked the call failed. `trust` is
   removed from an `item`, a `compaction` and a `branch_summary` where
-  RFC 0001 defines it, since 0.15, for the same reason. For every type, `legacy_id`, `normalised`, `redacted`, and on an `item`
+  RFC 0001 defines it, since 0.15, and `instructions_part` from an
+  `item` where RFC 0001 defines it, since 0.17, for the same reason. For every type, `legacy_id`, `normalised`, `redacted`, and on an `item`
   `response` and `source` are removed as well, since each is provenance
   a provider or a harness minted per run and none reaches the model;
   `response` above all, which a provider mints anew for every call, so
