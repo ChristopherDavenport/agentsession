@@ -2556,9 +2556,12 @@ A redactor:
   as written, matched as a substring. A redactor SHOULD also rewrite
   each other spelling of a session ID that the original's converter
   names (Conformance), writing the new ID in the same spelling. It MUST
-  NOT rewrite `redacted_from` or a history member (Entry envelope) by
-  this rule: `redacted_from` is the redaction's to write, and
-  `legacy_id` is kept as written;
+  NOT rewrite `redacted_from`, `legacy_id` or `redacted` by this rule:
+  `redacted_from` is the redaction's to write, `legacy_id` is kept as
+  written, and `redacted` names positions, not text. Every other
+  history member is reached: a `normalised` record is rewritten with the
+  member it describes, its `was` and its decoded `raw`, as above, so
+  the original's ID does not survive there;
 - MUST reach data the format keeps in member names: a member name is
   data, and a redactor reaches it as it reaches a string value, in the
   objects keyed by data, an `env` entry's `files` maps and `tools` map,

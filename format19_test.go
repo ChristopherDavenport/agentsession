@@ -897,3 +897,24 @@ func TestRedactionNamesPerID(t *testing.T) {
 		t.Errorf("parent_session re-pointed to %s", h.ParentSession)
 	}
 }
+
+// TestIDTextExemption: RFC 0001's rule that rewrites session IDs in
+// text exempts redacted_from, legacy_id and redacted alone, and says a
+// normalised record is rewritten with the member it describes, as
+// RewriteStrings does; a port reading "every history member" would keep
+// the original's ID in a was or a raw.
+func TestIDTextExemption(t *testing.T) {
+	rfc, err := os.ReadFile(filepath.Join("docs", "rfcs", "0001-agent-session-format.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(strings.Fields(string(rfc)), " ")
+	for _, want := range []string{
+		"It MUST NOT rewrite `redacted_from`, `legacy_id` or `redacted` by this rule",
+		"a `normalised` record is rewritten with the member it describes",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("RFC 0001 does not say %q", want)
+		}
+	}
+}
