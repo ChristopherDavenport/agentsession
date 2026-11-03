@@ -844,10 +844,10 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.18",
+      "format": "agentsession/0.19",
       "leaf": "sha256:a68ae1ddc83f38e7fbbbeeb8672f38f977f811c07d5d63674772334043388f10",
       "main": true,
-      "visible": "sha256:fb20ead28cf2aaff820012c076628c6ce676293745eeecc199f3e255ca1f909e"
+      "visible": "sha256:a59179e3737fa5f4af9372865783613fbebd9f942400f95afc41ec9f4a0cc2be"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

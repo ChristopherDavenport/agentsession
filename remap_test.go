@@ -597,6 +597,7 @@ var rfcNames = func() map[string][]rfcMember {
 		"parent_session":       {{"header", "parent_session", roleSession}},
 		"session":              session,
 		"link":                 session,
+		"url":                  nil, // "a `link` without `url`"
 	}
 }()
 
@@ -626,7 +627,7 @@ func TestRewriteTableCoversRFC(t *testing.T) {
 	for _, span := range [][2]string{
 		{"Wherever this document has a member name an entry", "it names it by `id`"},
 		{"rewrite `parent` and every entry-naming member", "A member of one of those names"},
-		{"Then it rewrites the reference to it:", "A redaction of a whole store"},
+		{"MUST rewrite every reference into another session to name that session's redaction", "An entry such a reference names"},
 	} {
 		i := strings.Index(text, span[0])
 		j := strings.Index(text[max(i, 0):], span[1])

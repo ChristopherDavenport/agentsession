@@ -445,3 +445,22 @@ func TestVerifyRedacted(t *testing.T) {
 		t.Errorf("the first step, from the user item at position 2, does not carry [2]:\n%s", doc)
 	}
 }
+
+// TestVerifyRedactedID: verify of a redacted file whose id is not the
+// one its redacted_from derives says so, under the line naming the
+// original, and fails nothing over it, since the derivation is
+// recommended (RFC 0001, The redacted session); a derived id says
+// nothing. The 0.19 fixtures hold one of each.
+func TestVerifyRedactedID(t *testing.T) {
+	note := "note: the id is not the one redacted_from derives (RFC 0001, The redacted session)"
+	for _, tt := range []struct {
+		name string
+		note bool
+	}{{"redacted-ids", false}, {"bad-redacted-id", true}} {
+		got, code := verifyOut(t, filepath.Join("..", "..", "testdata", "sessions", tt.name+".jsonl"))
+		lines := strings.Split(got, "\n")
+		if code != 0 || len(lines) < 3 || strings.Contains(got, note) != tt.note || tt.note && lines[2] != note {
+			t.Errorf("verify of %s: exit %d\n%s", tt.name, code, got)
+		}
+	}
+}

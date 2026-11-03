@@ -41,6 +41,10 @@ type Session struct {
 	// callIDs holds the call ID of every function call the session
 	// holds, on any branch: a call ID names one call in a session.
 	callIDs map[string]bool
+	// spawnIDs holds the spawn_id of every subsession link that names a
+	// child the host started (RFC 0001, link, since 0.19), cancel
+	// notices excepted, on any branch: a spawn_id names one child.
+	spawnIDs map[string]bool
 	// copied holds the call ID of every copied call the session holds
 	// (RFC 0001, item, since 0.15), whose outputs are copied too.
 	copied map[string]bool
@@ -94,6 +98,7 @@ func New(h Header) *Session {
 	s.declared = h.Format
 	s.byID = map[string]Entry{}
 	s.callIDs = map[string]bool{}
+	s.spawnIDs = map[string]bool{}
 	s.children = map[string][]string{}
 	return s
 }
@@ -334,6 +339,19 @@ func (s *Session) checkNew(e Entry) error {
 	}
 	if l.Rel == RelPeer && l.Cancel == "" && (l.CallID == "" || l.URL == "" && l.Session == "") {
 		return fmt.Errorf("%w: a peer link names its call and a url or a session", ErrCalleeLink)
+	}
+	if l.Rel == RelSubsession {
+		// A subsession link is anchored by its call or, for a child the
+		// host started, by its spawn_id: one of the two, and a spawn_id
+		// names one child in the session (RFC 0001, link, since 0.19).
+		// A link with neither, which an earlier writer may have
+		// written, is read but no longer written.
+		switch {
+		case l.CallID != "" && l.SpawnID != "":
+			return fmt.Errorf("%w: link carries call_id %s and spawn_id %s", ErrSpawnLink, l.CallID, l.SpawnID)
+		case l.CallID == "" && l.SpawnID == "":
+			return fmt.Errorf("%w: link carries neither call_id nor spawn_id", ErrSpawnLink)
+		}
 	}
 	if l.Cancel == "" {
 		return nil
@@ -749,9 +767,15 @@ func (s *Session) prepareEntry(e Entry) (Result, error) {
 // the dispatch it withdraws and is written nowhere else. No dispatch
 // follows the output, which ends the call. An item copied from a
 // session is copied from another; a copied call's output is marked
-// copied, and no dispatch or decision names a copied call.
+// copied, and no dispatch or decision names a copied call. A spawn_id
+// names one host-started child in the session, as a call ID names one
+// call.
 func (s *Session) checkCallRules(e Entry, parent string) error {
 	switch v := e.(type) {
+	case *LinkEntry:
+		if v.Rel == RelSubsession && v.SpawnID != "" && v.Cancel == "" && s.spawnIDs[v.SpawnID] {
+			return fmt.Errorf("%w: %s", ErrSpawnIDRepeated, v.SpawnID)
+		}
 	case *ItemEntry:
 		if v.CopiedFrom != nil && v.CopiedFrom.Session == s.header.ID {
 			return fmt.Errorf("%w: %s", ErrBadCopiedFrom, v.CopiedFrom.Session)
@@ -1514,6 +1538,9 @@ func validateEntry(e Entry) error {
 		// takes a member only where the format defines it, so a stored
 		// link is never refused on read; what a reader may still meet
 		// in a foreign file is VerifyRecords' to report.
+		if v.SpawnID != "" && (v.Rel != RelSubsession || !validSpawnID(v.SpawnID)) {
+			return fmt.Errorf("agentsession: a link's spawn_id is defined for the %s relation alone, as letters, digits, _ and -, not %q on %q", RelSubsession, v.SpawnID, v.Rel)
+		}
 		if v.Target != "" && v.Rel != RelJudgedBy && (!v.callee() || v.Cancel == "") {
 			return fmt.Errorf("agentsession: a link target is defined for the %s relation and a cancel notice alone, not %q", RelJudgedBy, v.Rel)
 		}
@@ -1664,6 +1691,10 @@ func (s *Session) add(e Entry) {
 	s.byID[b.ID] = e
 	s.children[b.Parent] = append(s.children[b.Parent], b.ID)
 	switch v := e.(type) {
+	case *LinkEntry:
+		if v.Rel == RelSubsession && v.SpawnID != "" && v.Cancel == "" {
+			s.spawnIDs[v.SpawnID] = true
+		}
 	case *ItemEntry:
 		if fc, ok := v.Item.(*openresponses.FunctionCall); ok {
 			s.callIDs[fc.CallID] = true

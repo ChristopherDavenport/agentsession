@@ -97,19 +97,20 @@ const (
 	CodeBadRequest      = "bad_request"
 
 	// The write side's.
-	CodeSessionExists  = "session_exists"
-	CodeHeadMoved      = "head_moved"
-	CodeHeadTarget     = "head_target"
-	CodeLeaseLost      = "lease_lost"
-	CodeMirror         = "mirror"
-	CodeCallIDRepeated = "call_id_repeated"
-	CodeSuperseded     = "superseded"
-	CodeSynthetic      = "synthetic"
-	CodeBadEntry       = "bad_entry"
-	CodeBaseRule       = "base_rule"
-	CodeBadBase        = "bad_base"
-	CodeRefMoved       = "ref_moved"
-	CodeNotRedacted    = "not_redacted"
+	CodeSessionExists   = "session_exists"
+	CodeHeadMoved       = "head_moved"
+	CodeHeadTarget      = "head_target"
+	CodeLeaseLost       = "lease_lost"
+	CodeMirror          = "mirror"
+	CodeCallIDRepeated  = "call_id_repeated"
+	CodeSpawnIDRepeated = "spawn_id_repeated"
+	CodeSuperseded      = "superseded"
+	CodeSynthetic       = "synthetic"
+	CodeBadEntry        = "bad_entry"
+	CodeBaseRule        = "base_rule"
+	CodeBadBase         = "bad_base"
+	CodeRefMoved        = "ref_moved"
+	CodeNotRedacted     = "not_redacted"
 
 	// Exchange's.
 	CodeNoObject      = "no_object"
@@ -204,19 +205,20 @@ var codes = map[string]struct {
 	CodeOverflow:      {http.StatusServiceUnavailable, ErrOverflow},
 	CodeBadRequest:    {http.StatusBadRequest, ErrBadRequest},
 
-	CodeSessionExists:  {http.StatusConflict, agentsession.ErrSessionExists},
-	CodeHeadMoved:      {http.StatusConflict, ErrHeadMoved},
-	CodeHeadTarget:     {http.StatusUnprocessableEntity, ErrHeadTarget},
-	CodeLeaseLost:      {http.StatusConflict, ErrLeaseLost},
-	CodeMirror:         {http.StatusConflict, ErrMirror},
-	CodeCallIDRepeated: {http.StatusConflict, agentsession.ErrCallIDRepeated},
-	CodeSuperseded:     {http.StatusConflict, agentsession.ErrSuperseded},
-	CodeSynthetic:      {http.StatusUnprocessableEntity, ErrSynthetic},
-	CodeBadEntry:       {http.StatusUnprocessableEntity, ErrBadEntry},
-	CodeBaseRule:       {http.StatusUnprocessableEntity, agentsession.ErrBaseRule},
-	CodeBadBase:        {http.StatusUnprocessableEntity, agentsession.ErrNoEntry},
-	CodeRefMoved:       {http.StatusConflict, agentsession.ErrRefMoved},
-	CodeNotRedacted:    {http.StatusForbidden, agentsession.ErrNotRedacted},
+	CodeSessionExists:   {http.StatusConflict, agentsession.ErrSessionExists},
+	CodeHeadMoved:       {http.StatusConflict, ErrHeadMoved},
+	CodeHeadTarget:      {http.StatusUnprocessableEntity, ErrHeadTarget},
+	CodeLeaseLost:       {http.StatusConflict, ErrLeaseLost},
+	CodeMirror:          {http.StatusConflict, ErrMirror},
+	CodeCallIDRepeated:  {http.StatusConflict, agentsession.ErrCallIDRepeated},
+	CodeSpawnIDRepeated: {http.StatusConflict, agentsession.ErrSpawnIDRepeated},
+	CodeSuperseded:      {http.StatusConflict, agentsession.ErrSuperseded},
+	CodeSynthetic:       {http.StatusUnprocessableEntity, ErrSynthetic},
+	CodeBadEntry:        {http.StatusUnprocessableEntity, ErrBadEntry},
+	CodeBaseRule:        {http.StatusUnprocessableEntity, agentsession.ErrBaseRule},
+	CodeBadBase:         {http.StatusUnprocessableEntity, agentsession.ErrNoEntry},
+	CodeRefMoved:        {http.StatusConflict, agentsession.ErrRefMoved},
+	CodeNotRedacted:     {http.StatusForbidden, agentsession.ErrNotRedacted},
 
 	CodeNoObject:      {http.StatusNotFound, cas.ErrNoObject},
 	CodeBadObject:     {http.StatusUnprocessableEntity, cas.ErrBadObject},
@@ -246,6 +248,7 @@ var reasons = map[string]error{
 	"answer_not_dispatched": agentsession.ErrAnswerNotDispatched,
 	"reason_mismatch":       agentsession.ErrReasonMismatch,
 	"link_mismatch":         agentsession.ErrLinkMismatch,
+	"spawn_link":            agentsession.ErrSpawnLink,
 	"bad_normalisation":     agentsession.ErrBadNormalisation,
 	// A header's: a redacted_from without redacted, or naming the
 	// session itself, in a pushed header.
@@ -363,6 +366,8 @@ func problemOf(err error) *Problem {
 		return problem(CodeRefMoved, "the ref is not at the expected target", "")
 	case errors.Is(err, agentsession.ErrCallIDRepeated):
 		return problem(CodeCallIDRepeated, "the entry repeats a call_id", err.Error())
+	case errors.Is(err, agentsession.ErrSpawnIDRepeated):
+		return problem(CodeSpawnIDRepeated, "the entry repeats a spawn_id", err.Error())
 	case errors.Is(err, agentsession.ErrSuperseded):
 		return problem(CodeSuperseded, "the session was continued in another successor", "")
 	case errors.Is(err, cas.ErrHeadMoved):

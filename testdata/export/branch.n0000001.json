@@ -326,14 +326,14 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.18",
+      "format": "agentsession/0.19",
       "labels": {
         "sha256:d5fb4724d28690ce84fa6970b57ec286c645d3493939c71e0b2e07509573a0d2": "fork"
       },
       "leaf": "sha256:1dea6d6be55ab38ba0901a9e6aeadbb4187d5919c9e47a41ef9b262ba3f6e8d2",
       "main": true,
       "name": "Branching demo",
-      "visible": "sha256:98b1f32dbd42ba306ce435426d3e33354a8e674892e2dc176bfc9cfa68daa1a4"
+      "visible": "sha256:012093fc2975462463ad84705f128f475c51543ba6dc31d82edbebe489724031"
     },
     "info": [
       {

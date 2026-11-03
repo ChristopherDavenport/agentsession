@@ -4,7 +4,7 @@
   "trajectory_id": "sha256:d31d9c2c2d584e86ffa9dbb04a94646f46d6400c0f4474522b06515d235ff9e7",
   "agent": {
     "name": "agentsession",
-    "version": "agentsession/0.18",
+    "version": "agentsession/0.19",
     "model_name": "gpt-5"
   },
   "steps": [
@@ -165,10 +165,10 @@
           "type": "config"
         }
       },
-      "format": "agentsession/0.18",
+      "format": "agentsession/0.19",
       "leaf": "sha256:d31d9c2c2d584e86ffa9dbb04a94646f46d6400c0f4474522b06515d235ff9e7",
       "main": true,
-      "visible": "sha256:23f56d5587f5f7d264b57c18ca0a6a952ef6d572407070f1c51ce91c4178fdc1"
+      "visible": "sha256:d875cf8b8536516cb97e417c0bf57fad765805907786b2f4e17b22a4a7de95d4"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"
@@ -599,7 +599,7 @@
               "type": "item"
             }
           },
-          "format": "agentsession/0.18",
+          "format": "agentsession/0.19",
           "leaf": "sha256:1bee2b136e9cfde9316d43d07c09e822b14118db88898ba9edc914310473792a",
           "main": true,
           "redacted": true,
@@ -607,7 +607,7 @@
             "profile": "test/v1",
             "session": "01995b2a-0000-7000-8000-000000000001"
           },
-          "visible": "sha256:863ff96bb81759e98f1e3f2b90b7309d7acb0ded7ed8255f3c59bfd65e907897"
+          "visible": "sha256:907020aec81c7027fe4d9f3d6f6e4fa6e4d2575f2d681181bee542f4c555f65d"
         },
         "openresponses": {
           "payload": "openresponses/2026-04-24"

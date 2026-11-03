@@ -468,7 +468,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.18",
+      "format": "agentsession/0.19",
       "leaf": "sha256:06ce3e510c451f2e99e05cc116becfe0ce1d295194db45cf5bea6d417b49c5b7",
       "main": true,
       "records": [
@@ -476,7 +476,7 @@
         "dispatch",
         "decision"
       ],
-      "visible": "sha256:2b3540e7604dfc967dcb53b0c4fdc6b1669e2690065a4636e37e953731fd5612"
+      "visible": "sha256:d58516ce2a05dbeff21a0918608f415d2ca95a8fccb9a08f0a96a237c531139f"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

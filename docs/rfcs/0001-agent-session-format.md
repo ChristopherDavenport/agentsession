@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.18
+Status: draft 0.19
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -231,7 +231,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.17","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.19","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -242,7 +242,7 @@ RFC 2119.
 |---|---|---|
 | `type` | MUST | the string `session` |
 | `format` | MUST | `agentsession/<major>.<minor>`; raised by a later writer, never lowered, as Versioning says |
-| `id` | MUST | globally unique; UUIDv7 RECOMMENDED. For a subsession, a UUIDv5 under the nil namespace over `<parent session id>/<call_id>` is RECOMMENDED, so a reader can compute the child's ID from the parent's `link` or `function_call` alone. A retry of the call is another session, derived the same way over `<parent session id>/<call_id>/<n>` for the n-th attempt after the first. A redacted session's is new, and derived as Redaction says |
+| `id` | MUST | globally unique; UUIDv7 RECOMMENDED. For a subsession, a UUIDv5 under the nil namespace over `<parent session id>/<call_id>` is RECOMMENDED, so a reader can compute the child's ID from the parent's `link` or `function_call` alone. A retry of the call is another session, derived the same way over `<parent session id>/<call_id>/<n>` for the n-th attempt after the first. A child the host started (`link`), since 0.19, is derived the same way over the canonical form of `["spawn","<parent session id>","<spawn_id>"]`, which no `/`-joined name equals. A redacted session's is new, and derived as Redaction says |
 | `created_at` | MUST | RFC 3339 |
 | `payload` | MUST | payload profile; `openresponses/<spec-date>` is the only profile this RFC defines |
 | `harness` | SHOULD | name and version of the writer |
@@ -250,10 +250,10 @@ RFC 2119.
 | `cwd` | MAY | working directory at creation; a reader MAY take it as the working directory only before the first `env` entry on the path, as `env` says |
 | `parent_session` | MAY | session ID this was forked or spawned from. Provenance, not validated for a fork: one made at an entry on another fork's prefix may name either session, and a `fork_of` link records the one it was made from, and it is the session a reader resolves a prefix call's `dispatch` through, as `dispatch` says. For a subsession it is the session holding the `subsession` link that names this one, and a verifier MAY check the two agree, as `link` says |
 | `base` | MAY | hash of the entry this session continues from, never a `leaf` label, since the base is a fork's first leaf; `parent_session` names a session holding it, as provenance. Absent for a session that starts fresh. When present the file opens with the path to it, and the session's own entries hang from it |
-| `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it, which is the `call_id` of the parent's `subsession` link naming this session. A session a `subsession` link names carries it and `parent_session` both, since the check `link` describes compares each; a subsession's header without one reads as disagreeing with the link |
+| `spawned_by` | MAY | for a subsession, the `call_id` of the parent's function call that spawned it, or, since 0.19, the `spawn_id` of the link by which the host started it: the one of the two that the parent's `subsession` link naming this session carries. A session a `subsession` link names carries it and `parent_session` both, since the check `link` describes compares each; a subsession's header without one reads as disagreeing with the link |
 | `media` | MAY | `inline` (default) or `sidecar`. Fixed when the session is created: an item's bytes are hashed, so a rewriter MUST NOT convert media from one form to the other |
 | `redacted` | MAY | `true` for a redacted session: one that holds entries a redactor made from another session, its original, as Redaction says. Its hashes verify it and not the original. It may grow and be resumed; an entry appended natively is not redacted, and each redacted entry carries `redacted` |
-| `redacted_from` | MAY | for a redacted session, the session it was made from: `{"session":"<original id>","profile":"…"}`; `profile` names the redaction, as Redaction says. A redactor SHOULD write it, and it MUST NOT appear without `redacted` |
+| `redacted_from` | MAY | for a redacted session, the session it was made from: `{"session":"<the original's pseudonym>","profile":"…"}`, the pseudonym since 0.19 and the original's ID before it; `profile` names the redaction, as Redaction says. A redactor SHOULD write it, and it MUST NOT appear without `redacted` |
 
 Unknown header fields MUST be preserved by any tool that rewrites the
 file.
@@ -1925,6 +1925,8 @@ A reference to another session, for subagents and forks.
  "target":"entry-id","url":"…","task":"…","context":"…"}
 {"type":"link","id":"…","parent":"…","ts":"…",
  "rel":"subsession","session":"…","call_id":"…","target":"link-entry-id","cancel":"sent"}
+{"type":"link","id":"…","parent":"…","ts":"…",
+ "rel":"subsession","session":"…","spawn_id":"…"}
 ```
 
 `call_id` ties a subsession to the function call that spawned it. A
@@ -1934,14 +1936,48 @@ before the `dispatch` entry and before the child's header exists, so a
 link whose session cannot be found means the child never started
 rather than a child that was never linked.
 
+A child the host started for this session, and not a function call,
+such as a pass that consolidates memory after a turn, is a
+`subsession` too, since 0.19: the host started it, and its work
+belongs to this session. Its link carries no `call_id`, and carries
+instead `spawn_id`, a non-empty string the host chooses, drawn from
+ASCII letters, digits, `_` and `-`, which MUST differ from every other
+`spawn_id` in the session, on any branch; a UUIDv7 serves. A
+`subsession` link carries exactly one of `call_id` and `spawn_id`, and
+a writer MUST NOT write `spawn_id` on a link of any other relation. A
+reader takes `spawn_id` on a `subsession` link in that form, in a file
+of any minor, as 0.12's members are taken below, and keeps it as
+written on another relation or in another form. The link is written
+on the path at the point the host started the child, as a record entry
+under the leaf, and SHOULD be written before the child's header exists,
+as a call's is. The child's header carries `parent_session` and
+`spawned_by` equal to the link's `spawn_id`, and its ID is derived over
+`["spawn",…]` as the header table says. A link with neither member, as
+a writer before 0.19 may have written, is a child the host started
+with no anchor: a reader counts it as any `subsession`, and a verifier
+checks its child by `parent_session` alone and holds the child's
+`spawned_by` absent; a writer of 0.19 MUST NOT write one.
+
+A link with `spawn_id` belongs to no call: it is none of a call's
+links, belongs to no `dispatch`, and no output answers it, so the
+rules below that read a call's output, its `dispatch` or an `answer` do
+not apply to it, and it is neither pending nor one of a run's calls. It
+may carry `url`, `task` and `context` for a child in another system. A
+cancel notice for it carries its `spawn_id` and no `call_id`, and its
+`target` names the link. A host that takes the child's work into this
+session, as a note or a message the child wrote, SHOULD name the
+child's leaf in that entry's `parents`, as the entry carrying a call's
+output does.
+
 A `subsession` link and the child's header are two records of one
 spawn, written by the parent and by the child, and they agree: the
 named session's header, when it exists, has `parent_session` equal to
 the linking session's `id` and `spawned_by` equal to the link's
-`call_id`. This is the exception to `parent_session` being provenance
+`call_id`, or its `spawn_id`, whichever it carries. This is the exception to `parent_session` being provenance
 alone. A verifier that can read the named session MAY check it, and a
 session it cannot find is not a failure, since the link says the child
-never started. A link on a fork's prefix was the origin's, checked
+never started, or, in a redacted session, that the child was not
+published with it (The redacted session). A link on a fork's prefix was the origin's, checked
 there against the origin's `id`. The check is what finds a line moved
 to a fork after a `call_id` collision (RFC 0002) with a level of its
 subsessions left under the old IDs: two stores derive one ID for the
@@ -1950,7 +1986,9 @@ subagent, and only that session's header says whose it is.
 
 `judged_by` is written into the session that was judged and names the
 session of the judge, with an optional `target` naming the entry the
-judgement is about, the entry the judge's `outcome` names. A judge is a
+judgement is about, the entry the judge's `outcome` names. A judge of a
+redacted session writes no `judged_by` link into it; it records its
+judgement in a fork, as The redacted session says. A judge is a
 session of its own, since the agent that scores another's work holds a
 conversation with a model, and its header says only which session it
 was derived from: `parent_session` holds a judge, a subagent and a fork
@@ -2024,7 +2062,7 @@ of any minor.
 
 A caller that gives up a call whose callee it linked, and tells the
 callee it no longer wants the work, MAY record that it did by a cancel
-notice: a later link of the same `rel` and `call_id` carrying `cancel:
+notice: a later link of the same `rel` and `call_id`, or `spawn_id`, carrying `cancel:
 "sent"` and `target`, the ID of the link entry, on the same path, of the
 callee the cancel was sent to. That `target` names an entry of this
 session, as a `dispatch`'s does: migration and redaction rewrite it
@@ -2038,9 +2076,11 @@ the members of the link it names. `cancel` is defined for the
 `subsession` and `peer` relations, with the value `sent` and a `target`
 beside it; any other value, one with no `target`, or the member on
 another relation, a reader keeps as written. A writer MUST NOT append a
-`peer` link with no `call_id` or with neither `url` nor `session`, or a
+`peer` link with no `call_id` or with neither `url` nor `session`, a
 cancel notice whose `target` is not a `subsession` or `peer` link of
-the same `rel` and `call_id` before it on its path. A reader reads
+the same `rel` and `call_id`, or `spawn_id`, before it on its path, or,
+since 0.19, a `subsession` link carrying both `call_id` and `spawn_id`,
+or neither, or a `spawn_id` another link of the session carries. A reader reads
 either as written and does not refuse the file; a verifier reports the
 ones that carry a member this section defines (`url`, or `cancel` and
 its `target`), and holds a link that carries none of them, which an
@@ -2070,7 +2110,9 @@ cost of each session that a `subsession` link on the path names, the
 prefix included and cancel notices excepted. A session that several
 links name is counted once. A child's cost is the cost of the child's
 path to the leaf named in `parents` by the entry that carries the
-call's output. When no leaf is named, it is the cost of the path to the
+call's output, or, for a child the host started, by the first entry
+after its link on the path whose `parents` names an entry of that
+child. When no leaf is named, it is the cost of the path to the
 leaf a reader resuming the child would take (File; in a store, its
 head). When the links naming one child count it at different leaves,
 its cost is that of the union of those paths, each entry once, so the
@@ -2392,8 +2434,9 @@ This section fixes what makes redacted entries valid and linked, not
 how to redact. Which values are replaced and with what, which entries
 are left out or merged, and what a redaction records about itself are
 the redactor's, and redactions of different kinds may be made of one
-original. A converter's list of identity members (Conformance) names
-values a redactor of its output looks for.
+original. A converter's list of identity members (Conformance), and
+the spellings it names for them, name values a redactor of its output
+looks for.
 
 ### Redacted entries
 
@@ -2477,22 +2520,48 @@ A redactor:
   item stays sidecar. A sidecar blob it replaces is stored under the
   replacement's hash, with the replacement's media type, and the item's
   `sidecar:` URL names that;
-- MUST leave a reference into another session as it was, since it names
-  that session's original entries, unless it holds that session's
-  redaction, made by the same redaction. Then it rewrites the reference
-  to it: `parent_session`, a `parents` entry into that session, a
-  `link`'s `session` and an item's `copied_from`. A redactor MUST NOT
-  remove `copied_from` from a copied call or its output, since without
-  it the call reads as this session's and fails the record rules. When
-  it changes an item that carries one and does not hold the source
-  session's redaction, made by the same redaction, it removes the
-  member's entry, which then no longer names an equal item, and keeps
-  its session; when it holds it, the entry named was changed alike,
-  and it rewrites both members to that redaction, as above. A
-  link's `target` names an entry of this session,
-  so it is rewritten as the members above are. A redaction of a whole
-  store holds a redaction of every session in it, and so re-points
-  every reference that stays inside the store;
+- since 0.19, MUST rewrite every reference into another session to
+  name that session's redaction under the same key and profile, whether
+  or not it holds that redaction, as The redacted session says:
+  `parent_session`, a `parents` element's `session`, the `session` of a
+  `link` without `url` and an item's `copied_from` `session`. An entry
+  such a reference names in that session, a `parents` element's `entry`
+  or `copied_from`'s `entry`, is rewritten to the entry that session's
+  redaction made from it; a redactor that cannot compute that entry,
+  since it holds neither the session nor its redaction, leaves the
+  reference's entry out, as it leaves out a member naming a left-out
+  entry (Leaving entries out), or does not yet redact. A redactor MUST
+  NOT remove `copied_from` from a copied call or its output, since
+  without it the call reads as this session's and fails the record
+  rules: its `entry` is rewritten or left out as above, and its
+  `session` stays. The `session` of a link
+  carrying `url` is the callee's ID in another system, not one of this
+  format's, and is text, which the redactor's own rules reach. A link's
+  `target` names an entry of this session, so it is rewritten as the
+  members above are. 0.18 left a reference as it was unless the
+  redactor held that session's redaction, which named the native
+  session to anyone reading the redaction;
+- since 0.19, MUST rewrite as text each session ID it rewrites in a
+  reference wherever the ID appears in a string it reaches as text, an
+  entry's body, a header member and a member name among them: the
+  original's `id`, and each session ID a member of the original names a
+  session by (`parent_session`, a `parents` element's `session`, a
+  `link`'s `session` on a link without `url`, an item's `copied_from`
+  `session`). Each occurrence is replaced by the ID the redactor writes
+  for that session in a reference, the original's own `id` by the
+  redacted session's, so that text naming a session names its
+  redaction, as a reference does. The set is read from the original
+  alone, so the rewrite does not depend on which other sessions the
+  redactor holds or the order they arrived in. An occurrence is the ID
+  as written, matched as a substring. A redactor SHOULD also rewrite
+  each other spelling of a session ID that the original's converter
+  names (Conformance), writing the new ID in the same spelling. It MUST
+  NOT rewrite `redacted_from`, `legacy_id` or `redacted` by this rule:
+  `redacted_from` is the redaction's to write, `legacy_id` is kept as
+  written, and `redacted` names positions, not text. Every other
+  history member is reached: a `normalised` record is rewritten with the
+  member it describes, its `was` and its decoded `raw`, as above, so
+  the original's ID does not survive there;
 - MUST reach data the format keeps in member names: a member name is
   data, and a redactor reaches it as it reaches a string value, in the
   objects keyed by data, an `env` entry's `files` maps and `tools` map,
@@ -2540,9 +2609,11 @@ A redactor:
   redaction never certifies a request the original could not.
 
 Some strings tie entries together: a `call_id` pairs a call with its
-output, dispatch and links, and a subsession's ID is derived from its
-parent's. A redactor that changes one changes every one in step, and
-across sessions redacted alongside, or the pairs no longer hold. Inline
+output, dispatch and links, a `spawn_id` a host-started child's link
+with its header, a subsession's ID is derived from its parent's, and a
+session ID is tied to the text that quotes it. A redactor that changes
+one changes every one in step, and across sessions redacted alongside,
+or the pairs no longer hold. Inline
 media is a data URL whose payload is base64, so text inside an image's
 bytes is reached only by decoding it.
 
@@ -2654,8 +2725,9 @@ redacted session verifies as any session does.
 
 ### The redacted session
 
-`redacted_from` names the original's `session`, a non-empty string
-other than the redacted session's own `id`, and, as `profile`, which a
+`redacted_from` names the original's `session`, by its pseudonym since
+0.19 (below), a non-empty string other than the redacted session's own
+`id`, and, as `profile`, which a
 redactor SHOULD write, the redaction: its kind and its rules, at a
 version, so that two redactions of one original are told apart; it is a
 non-empty string. A redaction records what else it wants to say about
@@ -2665,18 +2737,82 @@ not, and `session` or `profile` in another form, as it does any member
 it does not know; the refusal of `redacted_from` without `redacted`
 binds the object that carries `session` as a non-empty string.
 
-The redacted session's `id` is new, since its entries are not the
+Since 0.19 a redaction names every session by its **pseudonym**. A
+session ID is in the format's ID space when a redaction wrote it, so
+that publishing it reveals nothing a redaction hides, and the pseudonym
+of such an ID is the ID itself. A redactor decides it of each ID apart,
+and takes an ID as in the format's ID space only when it verifies as a
+redacted session's derived ID: the redactor reads the header of the
+session the ID names, the original's own or one it can resolve, and
+that header's `id` is the ID, it carries `redacted`, its
+`redacted_from` carries a `profile`, and its `id` is the UUIDv5 that
+`redacted_from` derives, as below. A header's `redacted` flag alone is
+not enough, since anyone can write one, and nor is a member or an entry
+naming the ID, since an original that is not redacted can carry a
+`redacted` member it was never given. A redaction of a redacted session
+therefore derives what 0.18 derived for each ID it can so verify.
+Every other session ID is keyed, whether a native harness or a writer
+of this format minted it: a native original's own `id`, an ID named by
+an entry appended natively to a redacted session, such as the link to
+a child a resumed redacted session started, a subsession's derived ID,
+which is a hash of its parent's ID and a call ID, and a native ID a
+redaction before 0.19 left in a reference as written, which keyed
+loses its link to that session when the redactor cannot verify it, and
+keeps it hidden. The pseudonym of such an ID is the UUID of version 8 (RFC
+9562) whose bytes are the first 16 of HMAC-SHA-256 (RFC 2104) under the
+redaction's key over the UTF-8 bytes of the canonical form, as the
+entry hash writes it, of `["agentsession/pseudonym","<session id>","<profile>"]`,
+`<profile>` being `redacted_from`'s `profile` or the empty string when
+the redaction writes none, with the version and variant bits set as RFC
+9562 sets them, written in lowercase. The profile in the name makes the
+pseudonyms of one original under two profiles unrelated, so two
+publications of it cannot be linked by them, while every reference to
+one session under one profile derives one ID.
+
+The **key** is a secret of at least 32 random bytes held by whoever
+holds the originals, one for a store of them. It is no member of any
+session, profile, manifest or `redacted_from`, and a redactor uses the
+one key for every session it redacts from that store, so that every
+reference to a session, in every redacted session of one profile,
+derives one ID, and a redaction run again derives the same `id` and
+resumes. The key is not otherwise recoverable: a holder who loses it
+cannot resume what it redacted under it, and starts new redacted
+sessions under a new key.
+
+`redacted_from.session` is the original's pseudonym, and a redactor
+MUST NOT write there an ID that is not in the format's ID space. The
+redacted session's `id` is new, since its entries are not the
 original's and a store or dataset may hold both. A redactor that writes
 a `profile` SHOULD derive the ID as a UUIDv5 under the nil namespace
-over the name `["redacted","<original id>","<profile>"]`, written in
-the canonical form the entry hash uses. An array cannot be read two
-ways, as a `/`-joined name can when an ID holds a `/`, and it is not a
+over the name `["redacted","<pseudonym>","<profile>"]`, written in the
+canonical form the entry hash uses; it needs no key, so a reader can
+recompute a redacted session's `id` from its own `redacted_from` and
+MAY report one that differs, since a redactor that derives it as this
+section says writes no other. An array cannot be read two ways, as a
+`/`-joined name can when an ID holds a `/`, and it is not a
 subsession's name, which starts with a session ID, unless a session's
-ID is itself such an array. One original under one profile then has one
-redacted session, whose ID stays as it grows, and repeating a redaction
-over a store finds the session it made before and appends only what the
-original added since. Two sets of rules under one profile write into
-one session; a profile names one set.
+ID is itself such an array. One original under one profile and key
+then has one redacted session, whose ID stays as it grows, and
+repeating a redaction over a store finds the session it made before and
+appends only what the original added since. Two sets of rules under one
+profile write into one session; a profile names one set.
+
+A reference into another session names that session's redaction under
+the same profile and key: the UUIDv5 above, over that session's
+pseudonym, whether or not the redactor holds that redaction, so that
+what it writes does not depend on what it holds. One exception keeps a
+link to a published redaction whole: in a redaction of an original
+that is not itself a redacted session, a reference to a session whose
+ID the redactor verifies as a redacted session's derived ID, as above,
+as a fork of a redacted session names it in `parent_session`, names
+that session by its own `id`, since it is already a redaction. In a redacted session,
+a session that a reference names and that a reader cannot find was not
+published with it: a reader concludes nothing from its absence, and in
+particular not that a linked child never started. A holder of the
+originals finds what was made from one by computing its pseudonym under
+the key and looking it up in `redacted_from`; a `redacted_from` written
+before 0.19 names the original's ID as written, which a holder that
+finds no pseudonym looks up too.
 
 A redactor writes the redacted session's header from the original's,
 member by member, since 0.14 in these words:
@@ -2693,9 +2829,10 @@ member by member, since 0.14 in these words:
 - `id` is derived as below.
 - `base` and `parent_session` are references, under the rules for
   references above: `base` names an entry this file holds, and
-  `parent_session` stays as written unless the redaction holds that
-  session's redaction.
-- `spawned_by` is a `call_id`, which changes in step with the call IDs:
+  `parent_session`, since 0.19, names the redaction of the session it
+  named.
+- `spawned_by` is a `call_id` or a `spawn_id`, which changes in step
+  with the call IDs:
   a redactor that changes the call IDs of the parent session writes the
   one it gave the call that spawned this one, and otherwise leaves it as
   written.
@@ -2703,6 +2840,30 @@ member by member, since 0.14 in these words:
 A fork of a redacted session is a session of its own. Its header carries
 `redacted` only when a redactor made it, and its prefix entries carry
 their `redacted` as they did.
+
+A judgement of a redacted session that its redaction did not make,
+such as a scan's or a review's verdict on whether the session may be
+published, SHOULD NOT be appended to the redacted session, and a judge
+SHOULD NOT write a `judged_by` link into it: either would be an entry
+appended natively, which carries no `redacted`, and a store that holds
+only redacted entries (RFC 0002) would refuse the session it judged. A
+judge SHOULD write its judgement as an `outcome` in a fork of the
+redacted session, since 0.19 in these words: the fork's `base` is the
+last entry judged, or, when that entry is a `leaf` label, its nearest
+ancestor that is not one, its `parent_session` is the redacted
+session's `id`, and the `outcome`'s `target` names the base. A judge
+whose judgement is a conversation with a model, as a review is, holds
+that conversation in the fork after the base, and its `outcome` follows
+it. The fork carries no `redacted` in its header or on its own entries,
+as any fork of a redacted session does not, so a store that holds only
+redacted entries refuses it, and a verdict cannot be published with
+the session it judged. The judgement covers the path from the first
+entry to its `target` and no entry after it, so an entry the redacted
+session appends later is not judged by it. The `details` of such an
+`outcome` MUST NOT hold the text a finding is about, nor a hash of it,
+since a hash of a value that can be guessed confirms the guess (What a
+kept hash reveals); a finding names its kind, its count and the entries
+it was found in.
 
 ### What a kept hash reveals
 
@@ -2716,6 +2877,13 @@ position rather than by hash, so the one original hash it can keep is a
 reference into a session not redacted alongside it; a redactor that
 redacts those sessions too keeps none. Redaction alone does not hide a
 value that can be guessed.
+
+An ID derived from another without a key reveals it the same way: a
+holder of a candidate ID recomputes the derivation and compares. A
+native session ID is held by the native harness's records, and may be
+held by its vendor or anyone who has seen it, so since 0.19 a redaction
+derives what it writes from the pseudonym, under a key, and not from
+the ID.
 
 ## Projections
 
@@ -2743,7 +2911,15 @@ reference into the child session names the leaf the answer was taken
 from; where it does not, the projection takes the leaf a reader
 resuming the child would take, as `link` counts a child's cost, and the
 reference says the leaf was not named, since the document then depends
-on that choice rather than on the record. `run`,
+on that choice rather than on the record. A `subsession` link with
+`spawn_id`, since 0.19, is embedded or referenced as any subsession is.
+Having no observation to carry `subagent_trajectory_ref`, it travels
+under `agentsession` as `subsessions`, a list in path order of objects
+holding `entry_id`, `spawn_id`, `session` and, for a child the document
+embeds or references, `subagent_trajectory_ref`, in the `extra` of the
+next step, or of the top-level `extra` when no step follows, as a
+`custom` entry does, and the root's `total_cost_usd` counts it as
+delegated work, as `link` says. `run`,
 `dispatch`, `result`, `decision` and `queued` entries have no step of their own.
 A run's `source`, its start `ref` as `trigger`, its end `reason` and
 its end `ref` as `cause` travel under `run` in the `extra` of the first
@@ -3062,13 +3238,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.18 reads a 0.5 to 0.17 file
-as it stands, since 0.6 to 0.18 add optional members, elements and
-relations, 0.15 a record entry type and 0.16 a file beside a sidecar blob and an `omit` member, 0.17 an `item` member and defined `source` values, 0.18 a second form of that member, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
+it begins at 1.0. A reader of 0.19 reads a 0.5 to 0.18 file
+as it stands, since 0.6 to 0.19 add optional members, elements and
+relations, 0.15 a record entry type and 0.16 a file beside a sidecar blob and an `omit` member, 0.17 an `item` member and defined `source` values, 0.18 a second form of that member, 0.19 a link member and a second form of `subsession`, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.18 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.19 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -3105,7 +3281,14 @@ documents which native members it carries into the session that
 identify a person, an account or organisation, a machine or the native
 session (an email, an organisation ID, a login name, a home directory,
 a host name, a native session ID), and where each lands: the header, or
-an entry type and an RFC 6901 JSON Pointer into its body. A converter
+an entry type and an RFC 6901 JSON Pointer into its body. Since 0.19 it
+also names each other spelling in which the native format writes such
+a value into what the converter carries, such as a path written as a
+directory name with its separators replaced, an escaped module path or
+a percent-encoded URL, as a rule a redactor can apply to the value and
+never as a value, such as "each `/` and `.` replaced by `-`", so that a
+redactor of its output looks for each spelling as it looks for the
+value. A converter
 that reports on a conversion SHOULD list those members by path and
 count, and MUST NOT put their values in the report.
 
@@ -3207,7 +3390,20 @@ the embedded trajectory and its `leaf`, a parent whose three children
 are priced as `link` prices them: one with no model call at 0, one
 whose call that records no usage adds nothing, and one with a call the
 price source cannot price left out whole and reported, beside a path
-call that cannot be priced and is reported, and
+call that cannot be priced and is reported, the keyed pseudonym's test
+vectors, a key in hexadecimal, a profile and three IDs, a native UUIDv4,
+a writer's UUIDv7 and a redacted session's, each with its pseudonym and
+the redacted session's `id` derived from it, a redacted session whose
+text quoted its original's ID, a child's ID and its own ID in a scratch
+path of its `env`, each replaced by the ID the redaction writes, beside
+one whose `id` is not the one its `redacted_from` derives, which is
+reported, a verdict on a redacted session as an `outcome` in a fork of
+it at the judged entry, which a store holding only redacted entries
+refuses, a parent with a child the host started, linked by `spawn_id`,
+whose header carries it in `spawned_by` and whose leaf a later `custom`
+entry names in `parents`, counted as delegated work at that leaf and
+carried under `subsessions` in the ATIF document, beside a link with
+neither `call_id` nor `spawn_id`, checked by `parent_session` alone, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
@@ -3228,7 +3424,9 @@ group of its own, which a reader takes as changing nothing and the
 response after it is hashed so, an `instructions_part` on an output,
 one with no `source` and one naming `agentsmd` with no `id`, an empty
 `instructions_part` list and a list naming one `id` twice, each kept
-as a member the reader does not know, and a header
+as a member the reader does not know, a `subsession` link carrying both
+`call_id` and `spawn_id`, a `spawn_id` two links carry and a child whose
+`spawned_by` is not its link's `spawn_id`, each reported, and a header
 naming `dispatch` beside a call that has an output and no `dispatch`;
 and a fork naming `dispatch` whose prefix, from a session that promised
 nothing, holds such a call, and which verifies.
@@ -3250,6 +3448,60 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.18
+
+A link member, a second form of `subsession`, a keyed derivation for
+what a redaction names, and two redaction rules. A 0.18 file is a 0.19
+file whose `subsession` links all carry `call_id` and whose
+`redacted_from` names an original by its ID. No hash changes. A writer
+of 0.19 raises every file it appends to, as Versioning says, so every
+reader of 0.18 refuses those files until it is upgraded.
+
+- A `subsession` link MAY carry `spawn_id` in place of `call_id`, for a
+  child the host started rather than a function call (`link`). The
+  child's `spawned_by` holds it, its ID derives over
+  `["spawn",<parent>,<spawn_id>]`, it is counted as delegated work at
+  the leaf a later entry's `parents` names, and the ATIF projection
+  carries it under `subsessions`. A link with neither member, which
+  0.18 did not define, is read as such a child and checked by
+  `parent_session` alone. A reader takes `spawn_id` on a `subsession`
+  link by its form in a file of any minor, so an earlier file that held
+  one under an extension's meaning reads differently at that link; no
+  entry hash moves.
+- `redacted_from.session` names the original's pseudonym: its ID when
+  it is itself a redacted session, and otherwise an HMAC-SHA-256 of the
+  ID and the profile under a key the holder of the originals keeps,
+  written as a UUIDv8 (The redacted session). The redacted session's
+  `id` and every reference a redaction rewrites derive from the
+  pseudonym, and a reference names the other session's redaction
+  whether or not the redactor holds it, a subsession's derived ID and a
+  session not redacted alongside included. 0.18 derived them from the
+  original's ID without a key, which let anyone who held the native ID
+  confirm that a published redaction was made from it, and left a
+  reference into a session it did not hold the redaction of as written.
+  A redaction of a redacted session derives what 0.18 derived for each
+  ID it verifies as a redacted session's derived ID, and keys every
+  other, a native ID a 0.18 redaction left as written among them. A
+  reader
+  no longer concludes from a redacted session's link naming a session
+  it cannot find that the child never started.
+- A redactor rewrites, wherever it appears in text, each session ID it
+  rewrites in a reference, to the ID it writes there, and SHOULD
+  rewrite each other spelling the converter names (Every redacted
+  entry). The `session` of a link carrying `url`, another system's ID,
+  is text and no longer a reference a redaction re-points.
+
+Clarified, with no file reading differently:
+
+- A judge of a redacted session writes its verdict as an `outcome` in
+  a fork of it at the judged entry, never into it, so a store holding
+  only redacted entries refuses the verdict (The redacted session,
+  `link`).
+- A converter names the other spellings of each identity member's
+  value as rules, never as values (Conformance).
+- RFC 0002: a list of published redacted sessions names each by its
+  own `id` and entry and never an original (Redacted sessions).
 
 ## Changes since 0.17
 

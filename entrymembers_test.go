@@ -129,18 +129,20 @@ func entryVariants(e Entry) []variant {
 		}
 	}
 	if _, ok := e.(*LinkEntry); ok {
-		// A link's target is judged_by's and its callee members are
-		// subsession's and peer's, so each relation has to be
-		// exercised with the members it defines.
+		// A link's target is judged_by's, its callee members are
+		// subsession's and peer's, and its spawn_id subsession's alone,
+		// so each relation has to be exercised with the members it
+		// defines.
 		return []variant{
 			{"judged_by", func(e Entry) {
 				l := e.(*LinkEntry)
-				l.Rel, l.URL, l.Task, l.Context, l.Cancel = RelJudgedBy, "", "", "", ""
+				l.Rel, l.URL, l.Task, l.Context, l.Cancel, l.SpawnID = RelJudgedBy, "", "", "", "", ""
 			}},
 			{"peer", func(e Entry) {
 				l := e.(*LinkEntry)
-				l.Rel, l.Target, l.Cancel = RelPeer, "", ""
+				l.Rel, l.Target, l.Cancel, l.SpawnID = RelPeer, "", "", ""
 			}},
+
 			{"cancel notice", func(e Entry) {
 				// A cancel notice's target names the link it is about.
 				e.(*LinkEntry).Rel = RelSubsession

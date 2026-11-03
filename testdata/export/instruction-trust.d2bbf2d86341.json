@@ -260,7 +260,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.18",
+      "format": "agentsession/0.19",
       "leaf": "sha256:d2bbf2d8634169180190b7350d154a736c767c51d101d63e9d3093ac02f82efb",
       "main": true,
       "trust": {
@@ -269,7 +269,7 @@
           "untrusted"
         ]
       },
-      "visible": "sha256:2604648128faf9539fdbf21d74e040f0ebda2926f2cf87931e1e64eba4cd0e86"
+      "visible": "sha256:da05a53dd06fd8bca93c1c6223103799cf14e36cd564816c248f722ca1d0a47a"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

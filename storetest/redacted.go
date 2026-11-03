@@ -90,21 +90,34 @@ func original(t *testing.T, id string) *agentsession.Session {
 // again as the original grows, it appends the rest, so the redacted
 // session grows with it.
 type redactor struct {
-	orig string
-	red  *agentsession.Session
-	rw   *agentsession.Rewriter
-	ids  map[string]string
-	done int
+	orig  string
+	red   *agentsession.Session
+	names *agentsession.RedactionNames
+	rw    *agentsession.Rewriter
+	ids   map[string]string
+	done  int
 }
+
+// redactionKey is the key the redactions here are made under, as the
+// holder of the originals keeps one (RFC 0001, The redacted session).
+var redactionKey = []byte("storetest redaction key, 32 byte")
 
 func newRedactor(orig *agentsession.Session, profile string, h agentsession.Header) *redactor {
 	oh := orig.Header()
+	names, err := agentsession.NewRedactionNames(redactionKey, orig, profile)
+	if err != nil {
+		panic(err) // the key is long enough
+	}
 	if h.ID == "" {
-		h.ID = agentsession.RedactedSessionID(oh.ID, profile)
+		h.ID = names.ID()
 	}
 	h.CWD, h.Redacted = oh.CWD, true
-	h.RedactedFrom = &agentsession.RedactedFrom{Session: oh.ID, Profile: profile}
-	return &redactor{orig: oh.ID, red: agentsession.New(h), rw: agentsession.NewRewriter(hide), ids: map[string]string{}}
+	h.RedactedFrom = names.RedactedFrom()
+	// Text quoting a session the original names is rewritten to name
+	// that session's redaction, as a reference is.
+	ids := names.ReplaceIDs(agentsession.SessionIDsNamed(orig))
+	text := func(s string) string { return hide(ids(s)) }
+	return &redactor{orig: oh.ID, names: names, red: agentsession.New(h), rw: agentsession.NewRewriter(text), ids: map[string]string{}}
 }
 
 // redact redacts what orig holds past what was done and returns the
@@ -117,7 +130,7 @@ func (r *redactor) redact(t *testing.T, orig *agentsession.Session) []agentsessi
 		}
 		id, ok := r.ids[entry]
 		return id, ok
-	}}
+	}, Session: r.names.Session}
 	order := agentsession.FileOrder(orig)
 	var out []agentsession.Entry
 	for i := r.done; i < len(order); i++ {
@@ -461,10 +474,26 @@ func redactedOnly(t *testing.T, opts Options) {
 	if _, err := fork.Append(user("unredacted " + secret)); err != nil {
 		t.Fatal(err)
 	}
+	// A judge's verdict on the redacted session, an outcome in a fork of
+	// it at the judged entry (RFC 0001, The redacted session, 0.19), is
+	// not redacted, so a store holding only redacted entries refuses it
+	// by every path, and it stays where it was made.
+	judged := agentsession.FileOrder(r.red)[1].Base().ID
+	verdict, err := agentsession.Fork(r.red, judged, agentsession.Header{ID: "verdict-of-redacted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pass := false
+	if _, err := verdict.Append(&agentsession.OutcomeEntry{Kind: "test", Target: judged, Pass: &pass, Details: json.RawMessage(`{"x:findings":{"aws-key":1}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.Create(ctx, verdict.Header())
+	wantErr(t, "Create of a verdict fork", err, agentsession.ErrNotRedacted)
 	if take := importer(opts, st); take != nil {
 		wantErr(t, "import of an original", take(t, st, fileOf(t, orig)), agentsession.ErrNotRedacted)
 		wantErr(t, "import of a resumed redacted session", take(t, st, fileOf(t, resumed.red)), agentsession.ErrNotRedacted)
 		wantErr(t, "import of a fork of a redacted session", take(t, st, fileOf(t, fork)), agentsession.ErrNotRedacted)
+		wantErr(t, "import of a verdict fork", take(t, st, fileOf(t, verdict)), agentsession.ErrNotRedacted)
 		imported := newRedactor(orig, "test.imported@1", agentsession.Header{})
 		imported.redact(t, orig)
 		if err := take(t, st, fileOf(t, imported.red)); err != nil {
@@ -476,6 +505,7 @@ func redactedOnly(t *testing.T, opts Options) {
 		wantErr(t, "push of an original", opts.Push(t, st, fileOf(t, orig)), agentsession.ErrNotRedacted)
 		wantErr(t, "push of a resumed redacted session", opts.Push(t, st, fileOf(t, resumed.red)), agentsession.ErrNotRedacted)
 		wantErr(t, "push of a fork of a redacted session", opts.Push(t, st, fileOf(t, fork)), agentsession.ErrNotRedacted)
+		wantErr(t, "push of a verdict fork", opts.Push(t, st, fileOf(t, verdict)), agentsession.ErrNotRedacted)
 		pushed := newRedactor(orig, "test.pushed@1", agentsession.Header{})
 		pushed.redact(t, orig)
 		if err := opts.Push(t, st, fileOf(t, pushed.red)); err != nil {
@@ -593,9 +623,13 @@ func redactedOriginal(t *testing.T, opts Options) {
 	if _, err := st.Append(ctx, "orig", user("after the redaction")); err != nil {
 		t.Fatal(err)
 	}
-	got, m, err := agentsession.Original(ctx, st, r.red)
+	// The redaction names its original by a keyed pseudonym, which the
+	// store cannot resolve without the key.
+	_, _, err = agentsession.Original(ctx, st, r.red)
+	wantErr(t, "Original of a pseudonym without the key", err, agentsession.ErrNoSession)
+	got, m, err := agentsession.OriginalUnder(ctx, st, redactionKey, r.red)
 	if err != nil {
-		t.Fatalf("Original: %v", err)
+		t.Fatalf("OriginalUnder: %v", err)
 	}
 	if got.ID() != "orig" {
 		t.Errorf("Original is %s, want orig", got.ID())
@@ -623,11 +657,11 @@ func redactedOriginal(t *testing.T, opts Options) {
 	if _, err := beyond.red.Commit(far); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = agentsession.Original(ctx, st, beyond.red)
+	_, _, err = agentsession.OriginalUnder(ctx, st, redactionKey, beyond.red)
 	wantErr(t, "a position past the original held", err, agentsession.ErrStaleOriginal)
 
 	gone, _ := redaction(t, original(t, "not-held"), "test.secret@1")
-	_, _, err = agentsession.Original(ctx, st, gone)
+	_, _, err = agentsession.OriginalUnder(ctx, st, redactionKey, gone)
 	wantErr(t, "Original whose original the store lacks", err, agentsession.ErrNoSession)
 	_, _, err = agentsession.Original(ctx, st, orig)
 	wantErr(t, "Original of a session that is not redacted", err, agentsession.ErrNotRedacted)
@@ -635,7 +669,7 @@ func redactedOriginal(t *testing.T, opts Options) {
 
 // redactedOriginalFork: a redacted session that is a fork of another
 // redacted session shares its prefix, whose positions count in the
-// original of the session parent_session names: Original maps the
+// original of the session parent_session names: OriginalUnder maps the
 // fork's own entries in its own original and the prefix in that one,
 // through the redacted session the store holds. O is an original and RO
 // its redaction; F is a fork of O, and RF its redaction, made as a fork
@@ -689,7 +723,7 @@ func redactedOriginalFork(t *testing.T, opts Options) {
 		t.Fatalf("import the redacted fork: %v", err)
 	}
 	held := readBack(t, st, "fo-rf")
-	got, m, err := agentsession.Original(ctx, st, held)
+	got, m, err := agentsession.OriginalUnder(ctx, st, redactionKey, held)
 	if err != nil {
 		t.Fatalf("Original: %v", err)
 	}
@@ -742,7 +776,7 @@ func redactedOriginalFork(t *testing.T, opts Options) {
 		t.Fatalf("import the second redacted fork: %v", err)
 	}
 	held2 := readBack(t, st, "fo-rf2")
-	_, m2, err := agentsession.Original(ctx, st, held2)
+	_, m2, err := agentsession.OriginalUnder(ctx, st, redactionKey, held2)
 	if err != nil {
 		t.Fatalf("Original two hops away: %v", err)
 	}
@@ -767,7 +801,7 @@ func redactedOriginalFork(t *testing.T, opts Options) {
 			t.Fatal(err)
 		}
 	}
-	_, _, err = agentsession.Original(ctx, short, readBack(t, short, "fo-rf"))
+	_, _, err = agentsession.OriginalUnder(ctx, short, redactionKey, readBack(t, short, "fo-rf"))
 	wantErr(t, "Original whose ancestor's original is held short", err, agentsession.ErrStaleOriginal)
 }
 
@@ -795,14 +829,33 @@ func redactedRedactions(t *testing.T, opts Options) {
 		t.Fatal(err)
 	}
 	got := map[string]bool{}
-	for sum, err := range agentsession.Redactions(ctx, st, orig.ID()) {
+	for sum, err := range agentsession.RedactionsUnder(ctx, st, redactionKey, orig.ID()) {
 		if err != nil {
 			t.Fatal(err)
 		}
 		got[sum.Header.ID] = true
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Redactions of %s: %v, want %v", orig.ID(), got, want)
+		t.Errorf("RedactionsUnder %s: %v, want %v", orig.ID(), got, want)
+	}
+	// Each profile derives its own pseudonym, so the redactions under
+	// two profiles name the original by two values, and neither is its
+	// ID: without the key, a pseudonym finds its own profile's alone.
+	names, _ := agentsession.NewRedactionNames(redactionKey, orig, "test.secret@1")
+	for _, tt := range []struct {
+		id   string
+		want int
+	}{{orig.ID(), 0}, {names.RedactedFrom().Session, 1}} {
+		n := 0
+		for _, err := range agentsession.Redactions(ctx, st, tt.id) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			n++
+		}
+		if n != tt.want {
+			t.Errorf("Redactions of %s: %d, want %d", tt.id, n, tt.want)
+		}
 	}
 }
 

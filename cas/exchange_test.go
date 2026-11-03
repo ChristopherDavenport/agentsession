@@ -239,6 +239,39 @@ func TestExchangeCallIDMeets(t *testing.T) {
 	}
 }
 
+// TestExchangeSpawnIDMeets: two copies of a store each start a child by
+// a link carrying one spawn_id on a branch from a shared head; the push
+// that would merge them is refused, as one meeting a call ID is (RFC
+// 0002, Exchange, 0.19).
+func TestExchangeSpawnIDMeets(t *testing.T) {
+	ctx := context.Background()
+	a, _ := twoStores(t)
+	ids := fill(t, a, "s", 2)
+	a.Close()
+	root := t.TempDir()
+	if err := os.CopyFS(root, os.DirFS(a.Root())); err != nil {
+		t.Fatal(err)
+	}
+	a, err := Open(a.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	mustAppend(t, a, "s", agentsession.NewSpawnLink("child-a", "spawn-0"))
+	mustAppend(t, b, "s", agentsession.NewSpawnLink("child-b", "spawn-0"))
+	if _, err := a.Push(ctx, b, "s", PushOptions{Expected: ids[1]}); !errors.Is(err, agentsession.ErrSpawnIDRepeated) {
+		t.Fatalf("a push meeting a spawn_id: %v", err)
+	}
+	if _, err := b.Fetch(ctx, a, "s"); !errors.Is(err, agentsession.ErrSpawnIDRepeated) {
+		t.Errorf("a fetch meeting a spawn_id: %v", err)
+	}
+}
+
 // TestExchangeRefusals: a different session under the same ID, and an
 // own entry that does not hang from the union.
 func TestExchangeRefusals(t *testing.T) {

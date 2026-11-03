@@ -5,6 +5,118 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Breaking (format): Format 0.19 (RFC 0001, draft 0.19).** `Format`
+  and `FormatMinor` name 0.19, so a writer raises every file it appends
+  to and a reader of 0.18 refuses it; a 0.5 to 0.18 file reads as it
+  stands and no entry hash moves. The generated fixtures, the otel
+  copies and the export goldens carry the new header. 0.19 lets a
+  `subsession` link name a child the host started by `spawn_id`, and
+  names a redacted session's original by a keyed pseudonym, below.
+
+- **A child the host started (RFC 0001 0.19, `link`; agentkit#109).** A
+  `subsession` link may carry `spawn_id` in place of `call_id`, for a
+  child no function call asked for, such as a memory pass after a turn:
+  `LinkEntry.SpawnID`, `NewSpawnLink(session, spawnID)`, `NewSpawnID`
+  (a UUIDv7) and `SpawnedSessionID(parent, spawnID)`, a UUIDv5 over
+  `["spawn",<parent>,<spawn_id>]`. It is taken on a subsession link as a
+  non-empty string of ASCII letters, digits, `_` and `-`, in a file of
+  any minor, and kept as written otherwise. **Breaking:**
+  `Session.Append` and `Prepare` refuse a subsession link carrying both
+  members or neither (`ErrSpawnLink`), and `Append`, `Prepare` and
+  `Commit` a `spawn_id` another link of the session carries
+  (`ErrSpawnIDRepeated`); `VerifyRecords` reports both. A link with
+  neither, as an earlier writer may have written, still reads and
+  verifies. `VerifyLinks` compares the child's `spawned_by` with the
+  link's `call_id` or `spawn_id`, and holds it absent for a link with
+  neither; a cancel notice carries the link's `spawn_id`.
+  `Callees` lists no subsession link without a `call_id`, since it
+  belongs to no call.
+  `DelegatedWork` counts a host-started child at the leaf the first
+  entry after its link names in `parents`. The ATIF export carries such
+  a link under `agentsession.subsessions` in the next step's `extra`, or
+  the top-level one, with its `subagent_trajectory_ref`, and counts its
+  cost. The cas exchange refuses a `spawn_id` the two stores' lines
+  both carry, as it refuses a `call_id`. A rewrite leaves `spawn_id` as
+  it leaves a `call_id`. RFC 0003 and `remote` carry a repeated
+  `spawn_id` as `spawn_id_repeated` (409, `CodeSpawnIDRepeated`), and a
+  link with both members as `bad_entry` with the reason `spawn_link`.
+
+- **Breaking (format, API): a redaction names sessions by a keyed
+  pseudonym (RFC 0001 0.19, The redacted session).** 0.18 derived a
+  redacted session's `id`, and every reference a redaction rewrote, as
+  an unkeyed UUIDv5 over the original's ID, so anyone holding a native
+  session ID (the user's own `~/.claude` logs, the vendor) could confirm
+  which published redaction was made from it. Now `redacted_from.session`
+  is the original's pseudonym, the UUIDv8 of HMAC-SHA-256 under a key
+  the holder of the originals keeps over the canonical
+  `["agentsession/pseudonym","<id>","<profile>"]`, and the `id` and
+  every reference derive unkeyed from it, so a reader still recomputes
+  the `id` from the header. New: `Pseudonym(key, id, profile)`,
+  `RedactionKeySize` (32) and `ErrRedactionKey`, which refuses an absent
+  or short key: there is no default key and no unkeyed fallback.
+  `NewRedactionNames(key, original *Session, profile)` derives one redaction's
+  names: `ID`, `RedactedFrom`, `Redaction(id)` for any session it
+  references, `Session` as a `Remap.Session` callback that re-points
+  every reference whether or not its redaction is held, and
+  `ReplaceIDs(ids)` for text, with `SessionIDsNamed(s)` reading the IDs
+  to rewrite from the original alone. An ID is its own pseudonym only
+  when it verifies as a redacted session's derived ID
+  (`VerifiesAsRedacted`: the header under that ID carries `redacted`, a
+  `redacted_from` with a profile, and the ID that `redacted_from`
+  derives), the original's own by its header and any other through
+  `WithResolve`, so a redaction of a redaction derives what 0.18 did for
+  each ID it verifies. A `redacted` flag or a redacted entry naming an
+  ID proves nothing: every other ID is keyed, a child a resumed
+  redaction spawned natively and a native ID a 0.18 redaction left as
+  written among them (its link is lost unless verified). A native
+  original's reference to a verified redaction, as a fork of one names
+  it in `parent_session`, keeps its
+  ID. A `RedactionNames` never prints its key: `String`, `GoString` and
+  `LogValue` name the original and the profile. `RedactedSessionID(pseudonym, profile)` keeps its signature and
+  now takes the pseudonym: **redacted IDs change for every new
+  redaction, and a redaction resumed under 0.19 starts a new session**.
+  `CheckRedactedID` reports a redacted header whose `id` is not the one
+  its `redacted_from` derives (`ErrRedactedID`), and `agentsession
+  verify` notes such a file without failing it. `SpawnedSessionID`
+  derives a host-started child's ID. `Original` and `Redactions` match
+  `redacted_from` as written; `OriginalUnder(ctx, st, key, s)` and
+  `RedactionsUnder(ctx, st, key, id)` find an original named by its
+  pseudonym, under every profile, for the holder of the key. Losing the
+  key means a redaction under it cannot be resumed. The storetest
+  redactor redacts under a fixed key and rewrites quoted session IDs.
+  `testdata/pseudonym.json` holds test vectors computed apart from this
+  package, for another implementation to check against.
+
+- **Fixtures for 0.19's redaction rules (RFC 0001, The redacted
+  session, Every redacted entry).** `redacted-ids-original.jsonl` is a
+  native session whose `env` path, tool output and answer quote its own
+  ID and a derived child's; `redacted-ids.jsonl` is its redaction under
+  the pseudonym vectors' key and profile, naming neither ID anywhere,
+  its `id` and `redacted_from` the vectors', the link and the quoting
+  text naming the child's redaction though the child was not redacted
+  alongside, every response verifying; `bad-redacted-id.jsonl` is the
+  same under another `id`, which `CheckRedactedID` reports.
+  `verdict.jsonl` is a scan's verdict on it, an `outcome` in a fork at
+  the judged entry naming a finding's kind and count, which a store
+  holding only redacted entries refuses; storetest checks that by
+  create, import and push.
+
+- **Breaking (API): an entry reference into a re-pointed session must
+  be mapped (RFC 0001 0.19, Every redacted entry).** `RemapRefs` refused
+  only a `copied_from` entry left as written while its session was
+  re-pointed; a `parents` element's entry in the same state, or either
+  with no `Entry` callback, kept the original's entry hash inside the
+  redaction. Each is now refused with `ErrUnmappedCopy`, whose meaning
+  widens to cover them, an extension entry's `parents` included.
+
+- **Breaking (API): a url link's session is text (RFC 0001 0.19, Every
+  redacted entry).** The `session` of a `link` carrying `url` is the
+  callee's ID in another system, not a reference: `RemapRefs` no longer
+  re-points it or reports it unmapped, and `RewriteStrings` gives it to
+  the rewrite as body text.
+
 ## v0.0.35 - 2026-11-03
 
 - **Breaking (format): Format 0.18 (RFC 0001, draft 0.18).** `Format`

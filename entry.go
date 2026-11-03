@@ -1603,6 +1603,16 @@ type LinkEntry struct {
 	Session   string `json:"session"`
 	// CallID ties a subsession to the function call that spawned it.
 	CallID string `json:"call_id,omitempty"`
+	// SpawnID, on a [RelSubsession] link, ties a child the host started,
+	// and not a function call, to the link (RFC 0001, link, since 0.19):
+	// a token the host chose ([NewSpawnID]), which no other link of the
+	// session carries and the child's header carries in spawned_by. A
+	// subsession link carries it or CallID, never both. It is taken in
+	// the form the format defines, a non-empty string of ASCII letters,
+	// digits, _ and -, on a subsession link in a file of any minor; in
+	// another form, or on another relation, it is kept as written in
+	// Unknown and SpawnID is empty.
+	SpawnID string `json:"-" member:"spawn_id"`
 	// Target, on a [RelJudgedBy] link, names the entry of the judged
 	// session the judgement is about: the entry the judge's outcome
 	// names. On a cancel notice (Cancel set) it names the link, in this
@@ -3053,7 +3063,7 @@ func (e *OutcomeEntry) decodeMembers(data []byte, all map[string]json.RawMessage
 // MarshalJSON emits the entry as one JSON object.
 func (e *LinkEntry) MarshalJSON() ([]byte, error) {
 	type plain LinkEntry
-	for _, m := range [][2]string{{"target", e.Target}, {"url", e.URL}, {"task", e.Task}, {"context", e.Context}, {"cancel", e.Cancel}} {
+	for _, m := range [][2]string{{"target", e.Target}, {"url", e.URL}, {"task", e.Task}, {"context", e.Context}, {"cancel", e.Cancel}, {"spawn_id", e.SpawnID}} {
 		if m[1] == "" {
 			continue
 		}
@@ -3068,7 +3078,8 @@ func (e *LinkEntry) MarshalJSON() ([]byte, error) {
 		Task    string `json:"task,omitempty"`
 		Context string `json:"context,omitempty"`
 		Cancel  string `json:"cancel,omitempty"`
-	}{(*plain)(e), e.Target, e.URL, e.Task, e.Context, e.Cancel})
+		SpawnID string `json:"spawn_id,omitempty"`
+	}{(*plain)(e), e.Target, e.URL, e.Task, e.Context, e.Cancel, e.SpawnID})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -3082,9 +3093,12 @@ func (e *LinkEntry) UnmarshalJSON(data []byte) error {
 
 func (e *LinkEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain LinkEntry
-	e.Target, e.URL, e.Task, e.Context, e.Cancel = "", "", "", "", ""
+	e.Target, e.URL, e.Task, e.Context, e.Cancel, e.SpawnID = "", "", "", "", "", ""
 	if err := unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), linkKeys); err != nil {
 		return err
+	}
+	if e.Rel == RelSubsession {
+		promoteIf(&e.EntryBase, "spawn_id", &e.SpawnID, validSpawnID)
 	}
 	if e.Rel == RelJudgedBy {
 		promote(&e.EntryBase, "target", &e.Target)

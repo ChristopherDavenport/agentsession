@@ -1,0 +1,2 @@
+{"created_at":"2026-11-03T15:00:10Z","cwd":"/home/u/proj","format":"agentsession/0.19","harness":{"name":"fixture","version":"1"},"id":"d543e939-7819-53c9-9e7e-8835d5022de3","parent_session":"01995b2a-0000-7000-8000-000000000060","payload":"openresponses/2026-04-24","spawned_by":"another-spawn","type":"session"}
+{"id":"sha256:385a431c6bc7f1fd6908eb7c03682aa8b9f55dde719d655106d9faf122f37cbf","item":{"content":[{"text":"Consolidate what this session learned.","type":"input_text"}],"role":"user","type":"message"},"parent":null,"ts":"2026-11-03T15:00:11Z","type":"item"}

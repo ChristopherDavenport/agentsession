@@ -1073,6 +1073,9 @@ func (s *Session) VerifyRecords(leaf string) error {
 	if err := s.verifyCallIDs(); err != nil {
 		return err
 	}
+	if err := s.verifySpawnIDs(); err != nil {
+		return err
+	}
 	if err := verifyTargets(path); err != nil {
 		return err
 	}
@@ -1185,7 +1188,8 @@ func (e *LinkError) Unwrap() error { return e.Err }
 // VerifyLinks checks every subsession link the session wrote against
 // the header of the session it names, read through resolve: the
 // target's parent_session is this session's id and its spawned_by is
-// the link's call_id, as RFC 0001 says of a subsession. A target
+// the link's call_id, or its spawn_id for a child the host started, and
+// absent for a link with neither, as RFC 0001 says of a subsession. A target
 // resolve does not find, returned as (nil, nil), is a child that never
 // started, which a link written at dispatch records by design, and
 // passes; an error from resolve is reported for that link. A link on
@@ -1221,11 +1225,19 @@ func (s *Session) VerifyLinks(resolve func(id string) (*Session, error)) error {
 			continue
 		}
 		h := target.Header()
+		// The link's anchor is its call_id or, for a child the host
+		// started, its spawn_id; a link with neither, as a writer before
+		// 0.19 may have written, anchors nothing, and its child carries
+		// no spawned_by.
+		anchor, member := l.CallID, "call_id"
+		if l.SpawnID != "" {
+			anchor, member = l.SpawnID, "spawn_id"
+		}
 		switch {
 		case h.ParentSession != self:
 			return &LinkError{Entry: l.ID, Session: l.Session, Err: fmt.Errorf("%w: its parent_session is %q, not the linking session %q", ErrLinkMismatch, h.ParentSession, self)}
-		case h.SpawnedBy != l.CallID:
-			return &LinkError{Entry: l.ID, Session: l.Session, Err: fmt.Errorf("%w: its spawned_by is %q, not the link's call_id %q", ErrLinkMismatch, h.SpawnedBy, l.CallID)}
+		case h.SpawnedBy != anchor:
+			return &LinkError{Entry: l.ID, Session: l.Session, Err: fmt.Errorf("%w: its spawned_by is %q, not the link's %s %q", ErrLinkMismatch, h.SpawnedBy, member, anchor)}
 		}
 	}
 	return nil
@@ -1255,6 +1267,32 @@ func (s *Session) verifyCallIDs() error {
 	return nil
 }
 
+// verifySpawnIDs reports a subsession link carrying both a call_id and
+// a spawn_id, or a spawn_id two links of the session carry, on any
+// branch, cancel notices excepted.
+func (s *Session) verifySpawnIDs() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	seen := map[string]string{}
+	for _, e := range s.entries {
+		l, ok := e.(*LinkEntry)
+		if !ok || l.Rel != RelSubsession || l.SpawnID == "" {
+			continue
+		}
+		if l.CallID != "" {
+			return fmt.Errorf("%w: link %s carries call_id %s and spawn_id %s", ErrSpawnLink, l.ID, l.CallID, l.SpawnID)
+		}
+		if l.Cancel != "" {
+			continue
+		}
+		if first, dup := seen[l.SpawnID]; dup {
+			return fmt.Errorf("%w: %s at %s and %s", ErrSpawnIDRepeated, l.SpawnID, first, l.ID)
+		}
+		seen[l.SpawnID] = l.ID
+	}
+	return nil
+}
+
 // verifyTargets reports a decision or dispatch on the path whose target
 // is not a function call before it on the path, or names one with
 // another call ID.
@@ -1269,6 +1307,22 @@ func (s *Session) verifyCallIDs() error {
 // earlier file may hold under an extension's meaning, is not held to
 // them.
 var ErrCalleeLink = errors.New("agentsession: callee link is not one the format allows")
+
+// ErrSpawnLink is returned when a subsession link is appended that
+// carries both a call_id and a spawn_id, or neither, and by
+// [Session.VerifyRecords] for one in the session that carries both: a
+// subsession is anchored by the call that spawned it or, for a child the
+// host started, by its spawn_id, one or the other (RFC 0001, link, since
+// 0.19). A link with neither, which a writer before 0.19 may have
+// written, is read as a host-started child with no anchor and is not
+// reported.
+var ErrSpawnLink = errors.New("agentsession: a subsession link carries one of call_id and spawn_id")
+
+// ErrSpawnIDRepeated is returned when a subsession link is appended
+// whose spawn_id another link of the session carries, and by
+// [Session.VerifyRecords] for a session holding two, on any branch,
+// cancel notices excepted: a spawn_id names one child.
+var ErrSpawnIDRepeated = errors.New("agentsession: spawn ID repeated")
 
 // ErrBadFromLink is returned by [Session.VerifyRecords] for an item
 // whose from_link names no peer link before it on its path, a cancel
@@ -1376,8 +1430,8 @@ func verifyCallees(path []Entry) error {
 func checkCallee(l *LinkEntry, before func(id string) *LinkEntry) error {
 	if l.Cancel != "" {
 		to := before(l.Target)
-		if to == nil || to.CallID != l.CallID || to.Rel != l.Rel {
-			return fmt.Errorf("%w: cancel notice %s names %q, not a %s link of call %q before it", ErrCalleeLink, l.ID, l.Target, l.Rel, l.CallID)
+		if to == nil || to.CallID != l.CallID || to.SpawnID != l.SpawnID || to.Rel != l.Rel {
+			return fmt.Errorf("%w: cancel notice %s names %q, not a %s link of call %q or spawn %q before it", ErrCalleeLink, l.ID, l.Target, l.Rel, l.CallID, l.SpawnID)
 		}
 		return nil
 	}

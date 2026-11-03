@@ -466,3 +466,45 @@ func TestAHeadMoveToNullIsTheRoot(t *testing.T) {
 		t.Errorf("the store's head after a move to null: %v, %v; want the root", got.Leaf(), err)
 	}
 }
+
+// TestARepeatedSpawnIDIsItsOwnCode: a subsession link repeating a
+// spawn_id travels as RFC 0003's spawn_id_repeated (409), as a repeated
+// call_id does, and one carrying both call_id and spawn_id as bad_entry
+// with the reason spawn_link. The client refuses both before it sends,
+// so the server is asked directly.
+func TestARepeatedSpawnIDIsItsOwnCode(t *testing.T) {
+	ctx := context.Background()
+	st := agentsession.NewMemoryStore()
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, s.ID(), agentsession.NewSpawnLink("child-1", "spawn-1")); err != nil {
+		t.Fatal(err)
+	}
+	url := server(t, st, remote.WithInsecureNoAuth())
+	l := leaseOn(t, url, s.ID(), "w", time.Minute)
+	for _, tt := range []struct {
+		name   string
+		e      agentsession.Entry
+		code   string
+		status int
+		reason string
+	}{
+		{"a repeated spawn_id", agentsession.NewSpawnLink("child-2", "spawn-1"), remote.CodeSpawnIDRepeated, http.StatusConflict, ""},
+		{"a link with both members", &agentsession.LinkEntry{Rel: agentsession.RelSubsession, Session: "child-3", CallID: "call_1", SpawnID: "spawn-3"}, remote.CodeBadEntry, http.StatusUnprocessableEntity, "spawn_link"},
+	} {
+		b, err := agentsession.MarshalEntry(tt.e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := send(t, http.MethodPost, url+"/v1/sessions/"+s.ID()+"/entries", map[string]string{"Lease-Token": l.Token}, string(b)+"\n")
+		if p := problemOf(t, resp); p.Code != tt.code || p.Status != tt.status || p.Reason != tt.reason {
+			t.Errorf("%s: %+v, want %d %s %q", tt.name, p, tt.status, tt.code, tt.reason)
+		}
+	}
+	// A problem with the code matches the library's sentinel.
+	if !errors.Is(&remote.Problem{Code: remote.CodeSpawnIDRepeated}, agentsession.ErrSpawnIDRepeated) {
+		t.Error("spawn_id_repeated does not match ErrSpawnIDRepeated")
+	}
+}

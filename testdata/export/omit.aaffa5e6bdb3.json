@@ -528,10 +528,10 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.18",
+      "format": "agentsession/0.19",
       "leaf": "sha256:aaffa5e6bdb35b0cd90deb3ed2be8da1419db3fa80675b1daffedad0ea70b7a3",
       "main": true,
-      "visible": "sha256:43a8a5df9b1c18c5cd902f54b26b15d49282419ce1c888fbe59f6282bcb5d3d4"
+      "visible": "sha256:f87f4e1535dc9d1f6d53afadfeca8d11983eb2e5c1d2471a24844ed30a9200e2"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

@@ -1,0 +1,32 @@
+{
+  "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "profile": "example.redact@1",
+  "cases": [
+    {
+      "note": "a native session ID, a UUIDv4",
+      "id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+      "redacted": false,
+      "hmac_input": "[\"agentsession/pseudonym\",\"3f2504e0-4f89-41d3-9a0c-0305e82c3301\",\"example.redact@1\"]",
+      "pseudonym": "238049a1-ae4a-823e-8000-b19bb9a2be91",
+      "uuidv5_name": "[\"redacted\",\"238049a1-ae4a-823e-8000-b19bb9a2be91\",\"example.redact@1\"]",
+      "redacted_id": "f9cf49c3-f8ed-5a2e-9ff4-fffe8e9f7a1a"
+    },
+    {
+      "note": "a writer's session ID, a UUIDv7",
+      "id": "01995b2a-0000-7000-8000-000000000001",
+      "redacted": false,
+      "hmac_input": "[\"agentsession/pseudonym\",\"01995b2a-0000-7000-8000-000000000001\",\"example.redact@1\"]",
+      "pseudonym": "c9d4cfb7-38a5-8531-80bd-3c7c1a8be1ac",
+      "uuidv5_name": "[\"redacted\",\"c9d4cfb7-38a5-8531-80bd-3c7c1a8be1ac\",\"example.redact@1\"]",
+      "redacted_id": "a9c7e487-1a2f-566f-9ee8-e2a8991e6c78"
+    },
+    {
+      "note": "a redacted session's ID, its own pseudonym: the first case's redaction, redacted again",
+      "id": "f9cf49c3-f8ed-5a2e-9ff4-fffe8e9f7a1a",
+      "redacted": true,
+      "pseudonym": "f9cf49c3-f8ed-5a2e-9ff4-fffe8e9f7a1a",
+      "uuidv5_name": "[\"redacted\",\"f9cf49c3-f8ed-5a2e-9ff4-fffe8e9f7a1a\",\"example.redact@1\"]",
+      "redacted_id": "003062f0-c26c-55e4-bab4-af3e9776f8fa"
+    }
+  ]
+}
