@@ -117,7 +117,7 @@ func TestATIFGolden(t *testing.T) {
 	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge",
 		"empty-resume", "bad-resume", "handback", "bad-handback", "omit", "omit-absent", "bad-omit", "omit-folded", "bad-handback-folded", "judged", "peer",
 		"refold", "no-response-id", "withdrawn", "late-report", "placeholders",
-		"copied", "copied-answer", "delivered", "returned", "trust"} {
+		"copied", "copied-answer", "delivered", "returned", "trust", "instruction-layers", "instruction-trust"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			n := 0
@@ -1648,15 +1648,15 @@ func TestSubagentLeafFromTheRecord(t *testing.T) {
 		}
 	})
 
-	t.Run("without a record the projection chooses main", func(t *testing.T) {
+	t.Run("without a record the projection takes the resume leaf", func(t *testing.T) {
 		ref, doc := from(t, "", Options{Subsessions: resolver})
 		if ref.TrajectoryID != "child/"+main {
-			t.Errorf("trajectory_id = %q, want the main leaf child/%s", ref.TrajectoryID, main)
+			t.Errorf("trajectory_id = %q, want the resume leaf child/%s", ref.TrajectoryID, main)
 		}
-		if _, ok := ref.Extra["child_leaf"]; ok {
-			// Absence is what says the document turns on a choice
-			// rather than on the record.
-			t.Errorf("child_leaf is set for an output that recorded none: %v", ref.Extra["child_leaf"])
+		if ref.Extra["child_leaf"] != main || ref.Extra["child_leaf_named"] != false {
+			// child_leaf_named false is what says the document turns on
+			// a choice rather than on the record.
+			t.Errorf("an output that recorded no leaf: child_leaf %v, named %v", ref.Extra["child_leaf"], ref.Extra["child_leaf_named"])
 		}
 		sub := doc.SubagentTrajectories[0]
 		if last := sub.Steps[len(sub.Steps)-1]; last.Message.String() != "left it" {

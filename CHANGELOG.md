@@ -5,6 +5,130 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Format 0.17 (RFC 0001, draft 0.17).** `Format` and `FormatMinor`
+  name 0.17, so a writer raises every file it appends to and a reader
+  of 0.16 refuses it; a 0.5 to 0.16 file reads as it stands and no
+  entry hash moves. The generated fixtures and export goldens carry the
+  new header. 0.17 adds an item's `instructions_part`, defines four
+  instruction `source` values, classes `legacy_id`, `normalised` and
+  `redacted` as history members, and adds rules for converters and
+  readers, below.
+
+- **Instruction layers (RFC 0001 0.17, Instructions as parts and
+  `item`; RFC 0002, context hash).** `LayerProduct`, `LayerAgentsMD`,
+  `LayerAgentSkill` and `LayerAgentMemory` are the four `source` values
+  the format now defines (`KnownLayer`), read in a file of any minor;
+  an `agentsmd` part is one per file, its id naming the file.
+  `ItemEntry.InstructionsPart` (`LayerRef`, `{id, source}`) marks a
+  message the harness composed from a layer and sent as a message, as
+  Claude Code sends CLAUDE.md: taken in the form 0.17 defines on a
+  message's entry in a file of any minor, kept as written otherwise,
+  and refused by the writer on any other item, with no `source`, or
+  naming `agentsmd` with no `id`. It is a record member: the context
+  hash leaves it out, a rewrite keeps a defined `source` as written on a
+  part, an omitted part and an `instructions_part` (any other `source`,
+  and every `id`, is text), and ATIF carries it under
+  `extra.agentsession` on the item's step. Fixtures
+  `instruction-layers` (every response verifying, the context hash the
+  same session's without the member) and `bad-instructions-part`.
+  An instructions part may carry `trust` (`InstructionPart.Trust`, the
+  form an item's has): taken in that form in a file of any minor, kept
+  by the hash and keep forms as `source` is, written with its text by
+  `InstructionsDelta` when it changes, taken into `PathTrust` from every
+  config entry and checkpoint, left out of the context hash, and kept
+  as written by a rewrite. Fixture `instruction-trust`. The ATIF
+  document's root `extra.agentsession` carries the path's trust as
+  `trust`, so a part's labels survive `NoPassthrough`, as an item's do
+  in its step. `export.RewriteStrings` is the string rewrite `Secrets`
+  and `HomePaths` use, normalised records included, for a custom
+  `RedactorFunc`.
+
+- **History members (RFC 0001 0.17, Entry envelope and
+  Projections/ATIF).** `IsHistoryMember` names an entry's history
+  members, `legacy_id`, `normalised` and `redacted`, and
+  `IsHeaderHistoryMember` a header's, `redacted` and `redacted_from`: a
+  converter does not carry another entry's as its own, and keeps them,
+  if at all, under its own namespace, except on an entry it rebuilds to
+  the `id` the document names, header included, which is the exported
+  entry itself. The context hash leaves out exactly these. The ATIF
+  export already carried an entry's undefined members as written in the
+  extra of its step, observation result or record; a test now holds it
+  to that, with the meaning members under `extra.agentsession` and a
+  response's history members in its body. The document's root
+  `extra.agentsession.entries` (`ExtraEntries`) now maps each entry it
+  maps, by id, to its `type`, `ts`, `parent`, `parents` and history
+  members, and its `body`: every other member, but an item's `item`
+  and a response's, which the steps carry, so an item of an agent step
+  rebuilds too though its step merges its items' trust and undefined
+  members; an observation result names its output's `entry_id`, so a
+  converter can rebuild every entry to its id, check each hash, and
+  restore the header's `redacted` and `redacted_from` when every entry
+  verifies over the whole path (RFC 0001 0.17, #21 option B); a round
+  trip of a redacted session is the reference. `NoPassthrough` drops the
+  map and `Environment` drops env bodies and their `normalised`.
+  `Secrets` and `HomePaths` drop a `normalised` record whose `was`,
+  read as written or as JSON, or whose base64 `raw` bytes they would
+  change, anywhere in the document; that entry then does not rebuild. A redactor keeps an entry's
+  `legacy_id`, now a rule.
+
+- **A path's inputs (RFC 0001 0.17, `run`).** `PathInputs` returns the
+  inputs that drove a path, as a replay that sends them again rebuilds
+  them: per run whose source is `input`, the user messages before its
+  first response, leaving out a copied item, a peer's report and a
+  composed layer, and keeping an item drained from a followup, a steer
+  or a delivery before that response (one after it joined the run in
+  flight, `NotInputSteer`); a resume's user messages are its own. Each
+  turn's `LeftOut` says why (`NotInput*`), a message reaching the model
+  mid-run among them, so a reader that cannot reproduce one where it
+  stood can say so. On a path with no run entries it splits the turns at
+  responses and reports that it did. Fixture `inputs`.
+
+- **Cost across sessions (RFC 0001 0.17, `link`).** `ModelCalls`
+  returns the model calls a path records, each priced at the model
+  that served it or the one in force, as the ATIF export counts them
+  (the export now uses it). The ATIF `total_cost_usd` adds the
+  delegated work as `DelegatedWork` counts it, not the sum of the
+  embedded documents' totals, so a child embedded at two leaves counts
+  their shared prefix once; the notes say how many children were
+  counted, excluded, or counted at a resume leaf. With no leaf named, a
+  child is embedded at its resume leaf (`Session.Leaf`, which a branch
+  or a leaf label moves), no longer at its last appended entry, and the
+  reference's `extra` says `child_leaf` and `child_leaf_named`. `DelegatedWork` returns the sessions a
+  path's `subsession` links delegated work to, as a reader that reports
+  what the path cost counts them: once per session, cancel notices
+  excepted, over the union of its paths to the leaf each link counts
+  (`Leaves`): the leaf the call's output names in `parents`, or else
+  the child's resume leaf (`Named` false), each entry once, with the
+  child's own children by the same rule; a child it cannot read is `Unread`
+  (`ErrChildNotFound`) and left out, and a callee in another system it
+  does not hold is reported `Unread` too (`ErrChildElsewhere`). Peer callees, judges and forks are no
+  delegated work. Fixtures `cost-children`, `cost-children-child` and
+  `cost-children-grandchild`.
+
+- **An `env` entry is a whole snapshot (RFC 0001 0.17, `env`,
+  clarified).** `EnvInForce` returns the latest `env` on a path, whose
+  members are all that holds: one it leaves out is not carried forward.
+  `WorkingDir` takes its `cwd`, and the header's only before the first
+  `env`. `Substitutions` returns the `env` entries after a response
+  whose workspace differs from the one in force, the absent one
+  included, as the OpenTelemetry projection already marks them. A
+  `vcs.revision` that is an abbreviation is kept as written. Fixture
+  `env-snapshot`: a `cwd`-only `env` after a response is a substitution
+  to the absent workspace, one repeating every member is none.
+
+- **Rules for converters (RFC 0001 0.17, no library change).** A writer
+  that did not send the request it records, a converter among them,
+  writes `request_hash` only after checking the rebuilt request against
+  the source's record of it (Request hash). `failed` is written from
+  what the harness or native record says, never inferred from an
+  output's text or exit status (`item`). A converter documents the
+  native members it carries that identify a person, account, machine or
+  native session, and reports them by path and count without values
+  (Conformance). `vcs.revision` SHOULD be the full identifier, and a
+  reader resolves an abbreviation as the VCS does (`env`).
+
 ## v0.0.33 - 2026-11-02
 
 - **Format 0.16 (RFC 0001, draft 0.16).** `Format` and `FormatMinor`

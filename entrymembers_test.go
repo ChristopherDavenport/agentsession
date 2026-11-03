@@ -148,10 +148,12 @@ func entryVariants(e Entry) []variant {
 	}
 	if _, ok := e.(*ItemEntry); ok {
 		// failed is defined on an output's entry alone, so it is
-		// exercised on one, and left off any other item.
+		// exercised on one, and left off any other item; an
+		// instructions_part on a message's alone, so the other way.
 		return []variant{
 			{"output", func(e Entry) {
 				e.(*ItemEntry).Item = openresponses.NewFunctionCallOutput("call_1", "Error: failed")
+				e.(*ItemEntry).InstructionsPart = nil
 			}},
 			{"message", func(e Entry) { e.(*ItemEntry).Failed = false }},
 		}

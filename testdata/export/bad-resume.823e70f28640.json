@@ -184,7 +184,109 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.16",
+      "entries": {
+        "sha256:1b77d0ed2913bfb731c511d8483c9e2be73f2df0ba99fd37cccdf828ffbcd254": {
+          "body": {
+            "instructions": "Be brief.",
+            "model": "gpt-5"
+          },
+          "parent": null,
+          "ts": "2026-10-01T09:00:01Z",
+          "type": "config"
+        },
+        "sha256:1e3e3154337272b6dc6cdbb239d0f12ff054c74a802d6c5546aebf176779e99b": {
+          "body": {
+            "response": "resp_1"
+          },
+          "parent": "sha256:7840feb76752310d7ece87ee27e2ee33e15e1d452f26d2622889aad560eee4fe",
+          "ts": "2026-10-01T09:00:04Z",
+          "type": "item"
+        },
+        "sha256:2f1d74a489363f20cd47be7d930d7341e6f9966da6b3acb31c0f7a32ce4d2e07": {
+          "parent": "sha256:1e3e3154337272b6dc6cdbb239d0f12ff054c74a802d6c5546aebf176779e99b",
+          "ts": "2026-10-01T09:00:05Z",
+          "type": "response"
+        },
+        "sha256:3594c836045ec86f885101adc9941693e589811d93a9f0613d78baa77bc92ba9": {
+          "body": {
+            "by": "policy",
+            "call_id": "call_charge",
+            "target": "sha256:1e3e3154337272b6dc6cdbb239d0f12ff054c74a802d6c5546aebf176779e99b",
+            "verdict": "hold"
+          },
+          "parent": "sha256:2f1d74a489363f20cd47be7d930d7341e6f9966da6b3acb31c0f7a32ce4d2e07",
+          "ts": "2026-10-01T09:00:06Z",
+          "type": "decision"
+        },
+        "sha256:3d642afcf6640eb90d27a1ea8335674801213cdb47b4f6d43da3e7586f159832": {
+          "parent": "sha256:ac0ec26a5cc058d3558317df541ab680084d3e5289fcedcf96089c5a88b68ec4",
+          "ts": "2026-10-01T09:00:09Z",
+          "type": "item"
+        },
+        "sha256:4c2e6f5d30c0adbf5e304c1277f2199ebdc8a8aaf3ef685205375e8701a70c11": {
+          "body": {
+            "pending": [
+              "call_charge"
+            ],
+            "phase": "end",
+            "reason": "input_required",
+            "run_id": "run-1"
+          },
+          "parent": "sha256:3594c836045ec86f885101adc9941693e589811d93a9f0613d78baa77bc92ba9",
+          "ts": "2026-10-01T09:00:07Z",
+          "type": "run"
+        },
+        "sha256:5c072af1d1b3bef2cd189c11a46a0d5f6baee85337923060fc86992003e4cf0b": {
+          "parent": "sha256:d3d883c4dda44001dcfb6459b82c4e5e3331f3c628ad69a7c50e7e7e0d2bb67b",
+          "ts": "2026-10-01T09:00:11Z",
+          "type": "response"
+        },
+        "sha256:7840feb76752310d7ece87ee27e2ee33e15e1d452f26d2622889aad560eee4fe": {
+          "parent": "sha256:98fbf2e1822524a64f4f1445c9577c8d3bcd1a3542cc595fc9d971e068ca1488",
+          "ts": "2026-10-01T09:00:03Z",
+          "type": "item"
+        },
+        "sha256:823e70f28640a61b4154cc6fb0d38e1462afb481072864061bb430068aef1d5e": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "done",
+            "run_id": "run-2"
+          },
+          "parent": "sha256:5c072af1d1b3bef2cd189c11a46a0d5f6baee85337923060fc86992003e4cf0b",
+          "ts": "2026-10-01T09:00:12Z",
+          "type": "run"
+        },
+        "sha256:98fbf2e1822524a64f4f1445c9577c8d3bcd1a3542cc595fc9d971e068ca1488": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-1",
+            "source": "input"
+          },
+          "parent": "sha256:1b77d0ed2913bfb731c511d8483c9e2be73f2df0ba99fd37cccdf828ffbcd254",
+          "ts": "2026-10-01T09:00:02Z",
+          "type": "run"
+        },
+        "sha256:ac0ec26a5cc058d3558317df541ab680084d3e5289fcedcf96089c5a88b68ec4": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-2",
+            "source": "resume"
+          },
+          "parent": "sha256:4c2e6f5d30c0adbf5e304c1277f2199ebdc8a8aaf3ef685205375e8701a70c11",
+          "ts": "2026-10-01T09:00:08Z",
+          "type": "run"
+        },
+        "sha256:d3d883c4dda44001dcfb6459b82c4e5e3331f3c628ad69a7c50e7e7e0d2bb67b": {
+          "body": {
+            "response": "resp_2"
+          },
+          "parent": "sha256:3d642afcf6640eb90d27a1ea8335674801213cdb47b4f6d43da3e7586f159832",
+          "ts": "2026-10-01T09:00:10Z",
+          "type": "item"
+        }
+      },
+      "format": "agentsession/0.17",
       "leaf": "sha256:823e70f28640a61b4154cc6fb0d38e1462afb481072864061bb430068aef1d5e",
       "main": true,
       "records": [

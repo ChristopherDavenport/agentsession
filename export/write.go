@@ -67,7 +67,7 @@ func WriteDocument(path string, doc *atif.Trajectory) error {
 		// The raw items in the extras carry the same data URLs; point
 		// them at the files too so the document stays small and the
 		// bundle stays lossless.
-		err := rewriteStrings(doc, func(s string) string {
+		err := RewriteStrings(doc, func(s string) string {
 			if p, ok := spilled[s]; ok {
 				return p
 			}

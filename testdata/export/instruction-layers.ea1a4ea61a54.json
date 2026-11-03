@@ -1,0 +1,234 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000042",
+  "trajectory_id": "sha256:ea1a4ea61a54634f8a7e65c791dd7b57038ede371ebd39f116e5fc816fb98fff",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-02T12:00:03Z",
+      "source": "user",
+      "message": "\u003csystem-reminder\u003eContents of /repo/CLAUDE.md:\n\nUse tabs.\u003c/system-reminder\u003e",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:7797b3c13f6e4d583e7c169e21877df0f3ed5fcc94490f81673f15eaad6a950a",
+          "instructions_part": {
+            "id": "/repo/CLAUDE.md",
+            "source": "agentsmd"
+          }
+        },
+        "config_entries": [
+          "sha256:096ae61047ffef0b060d448e4888154cdca45690bce95c89e43303e25599b8ec"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "\u003csystem-reminder\u003eContents of /repo/CLAUDE.md:\n\nUse tabs.\u003c/system-reminder\u003e"
+              }
+            ]
+          }
+        },
+        "run": [
+          {
+            "end_entry_id": "sha256:ea1a4ea61a54634f8a7e65c791dd7b57038ede371ebd39f116e5fc816fb98fff",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-1",
+            "source": "input",
+            "start_entry_id": "sha256:305861d672a9d4c93206d5b7b75b44955e049a110fb8f722cc8d746ebe73e7f6"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-02T12:00:04Z",
+      "source": "user",
+      "message": "Fix the build.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:af47fbe71ee844d52d1ea728bef7a76a1c0c2fb0609990fc36239324953848e1"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Fix the build."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-02T12:00:06Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Fixed: the Makefile named a missing target.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:be512ef5642f9a5ef05e262790ab32edafdf07dda6e76eb24a573881a027575e"
+        },
+        "item_entry_ids": [
+          "sha256:cdac881fe7d765f730b174a8368ec78b778c1593cd2c0e1fd40ecccf6b5b3a79"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Fixed: the Makefile named a missing target.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:be512ef5642f9a5ef05e262790ab32edafdf07dda6e76eb24a573881a027575e",
+            "model": "gpt-5",
+            "request_hash": "sha256:333d4fad1c96519c933110bea55b794747fd5d2181d0d04c90286dd7b7cd4235",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-11-02T12:00:06Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 1 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 3 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 1
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:096ae61047ffef0b060d448e4888154cdca45690bce95c89e43303e25599b8ec": {
+          "body": {
+            "instructions_omitted": [
+              {
+                "id": "/repo/docs/AGENTS.md",
+                "reason": "budget",
+                "size": 9000,
+                "source": "agentsmd"
+              }
+            ],
+            "instructions_parts": [
+              {
+                "id": "product",
+                "text": "You are a coding agent.",
+                "source": "product"
+              },
+              {
+                "id": "/repo/AGENTS.md",
+                "text": "Run make check before you commit.",
+                "source": "agentsmd"
+              },
+              {
+                "id": "/repo/service/AGENTS.md",
+                "text": "The service speaks gRPC.",
+                "source": "agentsmd"
+              },
+              {
+                "id": "skills",
+                "text": "review: review a diff",
+                "source": "agentskill"
+              },
+              {
+                "id": "memory",
+                "text": "The user prefers short answers.",
+                "source": "agentmemory"
+              }
+            ],
+            "model": "gpt-5"
+          },
+          "parent": null,
+          "ts": "2026-11-02T12:00:01Z",
+          "type": "config"
+        },
+        "sha256:305861d672a9d4c93206d5b7b75b44955e049a110fb8f722cc8d746ebe73e7f6": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-1",
+            "source": "input"
+          },
+          "parent": "sha256:096ae61047ffef0b060d448e4888154cdca45690bce95c89e43303e25599b8ec",
+          "ts": "2026-11-02T12:00:02Z",
+          "type": "run"
+        },
+        "sha256:7797b3c13f6e4d583e7c169e21877df0f3ed5fcc94490f81673f15eaad6a950a": {
+          "body": {
+            "instructions_part": {
+              "id": "/repo/CLAUDE.md",
+              "source": "agentsmd"
+            }
+          },
+          "parent": "sha256:305861d672a9d4c93206d5b7b75b44955e049a110fb8f722cc8d746ebe73e7f6",
+          "ts": "2026-11-02T12:00:03Z",
+          "type": "item"
+        },
+        "sha256:af47fbe71ee844d52d1ea728bef7a76a1c0c2fb0609990fc36239324953848e1": {
+          "parent": "sha256:7797b3c13f6e4d583e7c169e21877df0f3ed5fcc94490f81673f15eaad6a950a",
+          "ts": "2026-11-02T12:00:04Z",
+          "type": "item"
+        },
+        "sha256:be512ef5642f9a5ef05e262790ab32edafdf07dda6e76eb24a573881a027575e": {
+          "parent": "sha256:cdac881fe7d765f730b174a8368ec78b778c1593cd2c0e1fd40ecccf6b5b3a79",
+          "ts": "2026-11-02T12:00:06Z",
+          "type": "response"
+        },
+        "sha256:cdac881fe7d765f730b174a8368ec78b778c1593cd2c0e1fd40ecccf6b5b3a79": {
+          "body": {
+            "response": "resp_1"
+          },
+          "parent": "sha256:af47fbe71ee844d52d1ea728bef7a76a1c0c2fb0609990fc36239324953848e1",
+          "ts": "2026-11-02T12:00:05Z",
+          "type": "item"
+        },
+        "sha256:ea1a4ea61a54634f8a7e65c791dd7b57038ede371ebd39f116e5fc816fb98fff": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "done",
+            "run_id": "run-1"
+          },
+          "parent": "sha256:be512ef5642f9a5ef05e262790ab32edafdf07dda6e76eb24a573881a027575e",
+          "ts": "2026-11-02T12:00:07Z",
+          "type": "run"
+        }
+      },
+      "format": "agentsession/0.17",
+      "leaf": "sha256:ea1a4ea61a54634f8a7e65c791dd7b57038ede371ebd39f116e5fc816fb98fff",
+      "main": true,
+      "records": [
+        "run",
+        "dispatch",
+        "decision"
+      ]
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

@@ -84,6 +84,9 @@
             "source_call_id": "call_a",
             "content": "page a: 3 links",
             "extra": {
+              "agentsession": {
+                "entry_id": "sha256:a06c8a232c0f1290f8fadab5d622cad3460974420fe9a8b893af4a45eeed3fdf"
+              },
               "openresponses": {
                 "item": {
                   "type": "function_call_output",
@@ -97,6 +100,9 @@
             "source_call_id": "call_b",
             "content": "The fetch of page b was cut off; its outcome is unknown.",
             "extra": {
+              "agentsession": {
+                "entry_id": "sha256:81321772ec0e8d19b2d34d3463a9e3801cb4dfe0ae2a2e19ce4ce822c85796de"
+              },
               "openresponses": {
                 "item": {
                   "type": "function_call_output",
@@ -110,6 +116,9 @@
             "source_call_id": "call_c",
             "content": "The result of page c was withheld.",
             "extra": {
+              "agentsession": {
+                "entry_id": "sha256:928537b4764705775cc2e34e18cf67aeb3dc1d1eb97ff154a9da6c3d01b54de3"
+              },
               "openresponses": {
                 "item": {
                   "type": "function_call_output",
@@ -273,7 +282,210 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.16",
+      "entries": {
+        "sha256:01d25890068de8e5794fab9c4120b8c35de16eb03544bb8f4cd31c210e560ebd": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-1",
+            "source": "input"
+          },
+          "parent": "sha256:c62af05477f421a44ab5f12edebb42c7e2cc29674621cb8868455769b98d305a",
+          "ts": "2026-11-01T13:00:02Z",
+          "type": "run"
+        },
+        "sha256:02c98c77586ddebf04bdca7fa2477bcd18ef5fe74a62332b93874ef3471949db": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-2",
+            "source": "resume"
+          },
+          "parent": "sha256:8915a9b2614ddd441da502add54029d32dcfa0d6bebf5b8db3bb2d1310efd92e",
+          "ts": "2026-11-01T13:00:14Z",
+          "type": "run"
+        },
+        "sha256:0b7f4fa6b2e4b9f5751e9991615bb907ca4ff7a080a5e560077aaf32896128db": {
+          "body": {
+            "response": "resp_1"
+          },
+          "parent": "sha256:bce413ec9d191f99546049ab685910bac2ed4eb0296ce613fd5e8e5c448914ab",
+          "ts": "2026-11-01T13:00:04Z",
+          "type": "item"
+        },
+        "sha256:1684f62f14ac206f65c9312666aed8b6533e99701b7e0e67cdb6e9754d073445": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "done",
+            "run_id": "run-2"
+          },
+          "parent": "sha256:6ef91e953bfd5a793252b86cbd48bbd6114bafffb69d4f059acd68ceb8dc70f6",
+          "ts": "2026-11-01T13:00:22Z",
+          "type": "run"
+        },
+        "sha256:209172e307eedda221c3a43fe0985b4fc289fc7bdb4fc31e5efd2059d1866384": {
+          "body": {
+            "call_id": "call_a",
+            "idempotency_key": "key-a",
+            "target": "sha256:0b7f4fa6b2e4b9f5751e9991615bb907ca4ff7a080a5e560077aaf32896128db"
+          },
+          "parent": "sha256:281f5e62beec1eff7be7ed9dad7e5a2074a89180fa48c9f3701701406c93a0b4",
+          "ts": "2026-11-01T13:00:08Z",
+          "type": "dispatch"
+        },
+        "sha256:281f5e62beec1eff7be7ed9dad7e5a2074a89180fa48c9f3701701406c93a0b4": {
+          "parent": "sha256:bd0c1e9bd1490494e49442fe6d2cd9ac5a96250bfd159f0c7d3e6e465b076934",
+          "ts": "2026-11-01T13:00:07Z",
+          "type": "response"
+        },
+        "sha256:36acd5605764f111d3462fe1a3f505767298a689ebf6f1ce8667a2879f8f3471": {
+          "body": {
+            "call_id": "call_a",
+            "item": {
+              "type": "function_call_output",
+              "call_id": "call_a",
+              "output": "page a: 3 links"
+            },
+            "target": "sha256:0b7f4fa6b2e4b9f5751e9991615bb907ca4ff7a080a5e560077aaf32896128db"
+          },
+          "parent": "sha256:8d80f13d836b63734fe0ffcc0e6a9a8e86aa383711edb1165ade58e1c87dd416",
+          "ts": "2026-11-01T13:00:11Z",
+          "type": "result"
+        },
+        "sha256:53893468a00b1e0579da63de6cdf58efa0ca4350c106b0d280ee8327e2fed60b": {
+          "body": {
+            "response": "resp_1"
+          },
+          "parent": "sha256:0b7f4fa6b2e4b9f5751e9991615bb907ca4ff7a080a5e560077aaf32896128db",
+          "ts": "2026-11-01T13:00:05Z",
+          "type": "item"
+        },
+        "sha256:6ef91e953bfd5a793252b86cbd48bbd6114bafffb69d4f059acd68ceb8dc70f6": {
+          "parent": "sha256:ad495e3fdaf7e1fce5288d13ac21a645735b27f0754457008ca60383d2957487",
+          "ts": "2026-11-01T13:00:21Z",
+          "type": "response"
+        },
+        "sha256:81321772ec0e8d19b2d34d3463a9e3801cb4dfe0ae2a2e19ce4ce822c85796de": {
+          "parent": "sha256:88275530c50c5f47c98f3496d8d38425f6be44754bef3c9740849413878d5063",
+          "ts": "2026-11-01T13:00:17Z",
+          "type": "item"
+        },
+        "sha256:88275530c50c5f47c98f3496d8d38425f6be44754bef3c9740849413878d5063": {
+          "body": {
+            "by": "policy",
+            "call_id": "call_b",
+            "reason": "in flight at the cut; fetch_page cannot say a second run is safe",
+            "target": "sha256:53893468a00b1e0579da63de6cdf58efa0ca4350c106b0d280ee8327e2fed60b",
+            "verdict": "answer"
+          },
+          "parent": "sha256:a06c8a232c0f1290f8fadab5d622cad3460974420fe9a8b893af4a45eeed3fdf",
+          "ts": "2026-11-01T13:00:16Z",
+          "type": "decision"
+        },
+        "sha256:88611836dadc452a6f5b67a36da3cff59ce7f4b615160d52790058e4e1b4e145": {
+          "body": {
+            "call_id": "call_c",
+            "failed": true,
+            "item": {
+              "type": "function_call_output",
+              "call_id": "call_c",
+              "output": "Error: page c: 404"
+            },
+            "target": "sha256:bd0c1e9bd1490494e49442fe6d2cd9ac5a96250bfd159f0c7d3e6e465b076934"
+          },
+          "parent": "sha256:36acd5605764f111d3462fe1a3f505767298a689ebf6f1ce8667a2879f8f3471",
+          "ts": "2026-11-01T13:00:12Z",
+          "type": "result"
+        },
+        "sha256:8915a9b2614ddd441da502add54029d32dcfa0d6bebf5b8db3bb2d1310efd92e": {
+          "body": {
+            "pending": [
+              "call_a",
+              "call_b",
+              "call_c"
+            ],
+            "phase": "end",
+            "reason": "error",
+            "ref": "cut: the process was killed",
+            "run_id": "run-1"
+          },
+          "parent": "sha256:88611836dadc452a6f5b67a36da3cff59ce7f4b615160d52790058e4e1b4e145",
+          "ts": "2026-11-01T13:00:13Z",
+          "type": "run"
+        },
+        "sha256:8d80f13d836b63734fe0ffcc0e6a9a8e86aa383711edb1165ade58e1c87dd416": {
+          "body": {
+            "call_id": "call_c",
+            "idempotency_key": "key-c",
+            "target": "sha256:bd0c1e9bd1490494e49442fe6d2cd9ac5a96250bfd159f0c7d3e6e465b076934"
+          },
+          "parent": "sha256:bce7543daadc14094060ed4ad1beb72ea3ca69f592fccad8a60a3886fd89373d",
+          "ts": "2026-11-01T13:00:10Z",
+          "type": "dispatch"
+        },
+        "sha256:928537b4764705775cc2e34e18cf67aeb3dc1d1eb97ff154a9da6c3d01b54de3": {
+          "parent": "sha256:d3e41b92fff4719dabd564fd835f5f2d8fab8ad34eb77085b6916f2536047153",
+          "ts": "2026-11-01T13:00:19Z",
+          "type": "item"
+        },
+        "sha256:a06c8a232c0f1290f8fadab5d622cad3460974420fe9a8b893af4a45eeed3fdf": {
+          "parent": "sha256:02c98c77586ddebf04bdca7fa2477bcd18ef5fe74a62332b93874ef3471949db",
+          "ts": "2026-11-01T13:00:15Z",
+          "type": "item"
+        },
+        "sha256:ad495e3fdaf7e1fce5288d13ac21a645735b27f0754457008ca60383d2957487": {
+          "body": {
+            "response": "resp_2"
+          },
+          "parent": "sha256:928537b4764705775cc2e34e18cf67aeb3dc1d1eb97ff154a9da6c3d01b54de3",
+          "ts": "2026-11-01T13:00:20Z",
+          "type": "item"
+        },
+        "sha256:bce413ec9d191f99546049ab685910bac2ed4eb0296ce613fd5e8e5c448914ab": {
+          "parent": "sha256:01d25890068de8e5794fab9c4120b8c35de16eb03544bb8f4cd31c210e560ebd",
+          "ts": "2026-11-01T13:00:03Z",
+          "type": "item"
+        },
+        "sha256:bce7543daadc14094060ed4ad1beb72ea3ca69f592fccad8a60a3886fd89373d": {
+          "body": {
+            "call_id": "call_b",
+            "idempotency_key": "key-b",
+            "target": "sha256:53893468a00b1e0579da63de6cdf58efa0ca4350c106b0d280ee8327e2fed60b"
+          },
+          "parent": "sha256:209172e307eedda221c3a43fe0985b4fc289fc7bdb4fc31e5efd2059d1866384",
+          "ts": "2026-11-01T13:00:09Z",
+          "type": "dispatch"
+        },
+        "sha256:bd0c1e9bd1490494e49442fe6d2cd9ac5a96250bfd159f0c7d3e6e465b076934": {
+          "body": {
+            "response": "resp_1"
+          },
+          "parent": "sha256:53893468a00b1e0579da63de6cdf58efa0ca4350c106b0d280ee8327e2fed60b",
+          "ts": "2026-11-01T13:00:06Z",
+          "type": "item"
+        },
+        "sha256:c62af05477f421a44ab5f12edebb42c7e2cc29674621cb8868455769b98d305a": {
+          "body": {
+            "instructions": "Be brief.",
+            "model": "gpt-5"
+          },
+          "parent": null,
+          "ts": "2026-11-01T13:00:01Z",
+          "type": "config"
+        },
+        "sha256:d3e41b92fff4719dabd564fd835f5f2d8fab8ad34eb77085b6916f2536047153": {
+          "body": {
+            "by": "policy",
+            "call_id": "call_c",
+            "reason": "a hook withheld the result",
+            "target": "sha256:bd0c1e9bd1490494e49442fe6d2cd9ac5a96250bfd159f0c7d3e6e465b076934",
+            "verdict": "answer"
+          },
+          "parent": "sha256:81321772ec0e8d19b2d34d3463a9e3801cb4dfe0ae2a2e19ce4ce822c85796de",
+          "ts": "2026-11-01T13:00:18Z",
+          "type": "decision"
+        }
+      },
+      "format": "agentsession/0.17",
       "leaf": "sha256:1684f62f14ac206f65c9312666aed8b6533e99701b7e0e67cdb6e9754d073445",
       "main": true,
       "records": [

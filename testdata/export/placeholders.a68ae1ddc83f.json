@@ -76,6 +76,7 @@
             ],
             "extra": {
               "agentsession": {
+                "entry_id": "sha256:40cfcc3137dfeb2e90d28e2dd8668094cb9d36be5754f40968380d38e55ac54e",
                 "replaced": [
                   {
                     "entry_id": "sha256:40cfcc3137dfeb2e90d28e2dd8668094cb9d36be5754f40968380d38e55ac54e",
@@ -172,6 +173,7 @@
             ],
             "extra": {
               "agentsession": {
+                "entry_id": "sha256:33a4dd27e87e379ef111ec8c1f97beb98016fc995a13e6ca0bda8cb67f0edb70",
                 "replaced": [
                   {
                     "entry_id": "sha256:33a4dd27e87e379ef111ec8c1f97beb98016fc995a13e6ca0bda8cb67f0edb70",
@@ -289,6 +291,7 @@
             ],
             "extra": {
               "agentsession": {
+                "entry_id": "sha256:2d577dad17b7e6eded0b497fdcfb8abb59c191f835a1bfa93d32bc4e8d1cc75e",
                 "replaced": [
                   {
                     "entry_id": "sha256:2d577dad17b7e6eded0b497fdcfb8abb59c191f835a1bfa93d32bc4e8d1cc75e",
@@ -410,6 +413,9 @@
               }
             ],
             "extra": {
+              "agentsession": {
+                "entry_id": "sha256:89c43b4a5fefc6d973522c1789174f071e4ecb8741fb784a8e2d9eaeb6210f5c"
+              },
               "openresponses": {
                 "item": {
                   "type": "function_call_output",
@@ -499,6 +505,9 @@
               }
             ],
             "extra": {
+              "agentsession": {
+                "entry_id": "sha256:0ca20a890239b6e9616fec5c2326bce2e645fbfdacc0dbf02f27fe6b03984682"
+              },
               "openresponses": {
                 "item": {
                   "type": "function_call_output",
@@ -642,7 +651,193 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.16",
+      "entries": {
+        "sha256:05f65b1d2427f18778a6f345bb6668b3ad5471e5079002119db4efe52e674bdd": {
+          "body": {
+            "response": "resp_5"
+          },
+          "parent": "sha256:6eee5ecfe7560e63899952bf9624fee5eaa0f5375ef3870c0b4dfa695897be79",
+          "ts": "2026-11-01T11:00:17Z",
+          "type": "item"
+        },
+        "sha256:0ca20a890239b6e9616fec5c2326bce2e645fbfdacc0dbf02f27fe6b03984682": {
+          "parent": "sha256:5fe4258066cdc38df6f486237e4b16acdd18a47c252cfba27778c7152145595a",
+          "ts": "2026-11-01T11:00:27Z",
+          "type": "item"
+        },
+        "sha256:0d81a2de6f69702043032da23046ccd25346c1f6c33e4a22792568e8a37d9948": {
+          "body": {
+            "config": {
+              "model": "gpt-5",
+              "instructions": "Drive the browser.",
+              "omit": {
+                "outputs": {
+                  "text": "[cleared]",
+                  "items": [
+                    "sha256:a7a6d74acae9bb451c4318aa6cad0e54a21de7084d3ec9237224a38502c94bae"
+                  ]
+                },
+                "images": {
+                  "keep": 2,
+                  "placeholder": "[screenshot removed]"
+                }
+              }
+            },
+            "first_kept": "sha256:e54256a3472e205c437e0e6f88bd114275dd5450603fcf66c59f142b60f509e1",
+            "summary": {
+              "type": "message",
+              "role": "system",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Summary: the cart page loaded; two steps taken."
+                }
+              ]
+            }
+          },
+          "parent": "sha256:2d577dad17b7e6eded0b497fdcfb8abb59c191f835a1bfa93d32bc4e8d1cc75e",
+          "ts": "2026-11-01T11:00:20Z",
+          "type": "compaction"
+        },
+        "sha256:1bcc199d8641acd348cae1b44d14bdab346fd6b77f1de0840de079c61eaf2f55": {
+          "parent": "sha256:e54256a3472e205c437e0e6f88bd114275dd5450603fcf66c59f142b60f509e1",
+          "ts": "2026-11-01T11:00:10Z",
+          "type": "response"
+        },
+        "sha256:26105b849214a044e55e68d63e62dc45ba3fcdd93deb204d7fdb57ac8f335186": {
+          "body": {
+            "response": "resp_4"
+          },
+          "parent": "sha256:81d04a27f4f117cd464808fd3ad55eae3f2e748c79164a32560a0665f1580234",
+          "ts": "2026-11-01T11:00:13Z",
+          "type": "item"
+        },
+        "sha256:2d577dad17b7e6eded0b497fdcfb8abb59c191f835a1bfa93d32bc4e8d1cc75e": {
+          "parent": "sha256:ad3cc166e632ad24e189e63e5880c8ad0ac9a53eabafbdae001ce3d57771cb7e",
+          "ts": "2026-11-01T11:00:19Z",
+          "type": "item"
+        },
+        "sha256:2e0008dc5261e397301291f54147fadda3310225fb7371343fcdd3c3c1aa6bc7": {
+          "body": {
+            "response": "resp_7"
+          },
+          "parent": "sha256:80fb21e3b435841dc4a341d37b00bfa7463cd6aa217b774bf7566751556fa184",
+          "ts": "2026-11-01T11:00:25Z",
+          "type": "item"
+        },
+        "sha256:33a4dd27e87e379ef111ec8c1f97beb98016fc995a13e6ca0bda8cb67f0edb70": {
+          "parent": "sha256:abfb027e403c6e9d27691444337c583200a11db80c66be8633038d7edf5e96d4",
+          "ts": "2026-11-01T11:00:15Z",
+          "type": "item"
+        },
+        "sha256:40cfcc3137dfeb2e90d28e2dd8668094cb9d36be5754f40968380d38e55ac54e": {
+          "parent": "sha256:1bcc199d8641acd348cae1b44d14bdab346fd6b77f1de0840de079c61eaf2f55",
+          "ts": "2026-11-01T11:00:11Z",
+          "type": "item"
+        },
+        "sha256:5fe4258066cdc38df6f486237e4b16acdd18a47c252cfba27778c7152145595a": {
+          "parent": "sha256:2e0008dc5261e397301291f54147fadda3310225fb7371343fcdd3c3c1aa6bc7",
+          "ts": "2026-11-01T11:00:26Z",
+          "type": "response"
+        },
+        "sha256:6eee5ecfe7560e63899952bf9624fee5eaa0f5375ef3870c0b4dfa695897be79": {
+          "body": {
+            "omit": {
+              "outputs": {
+                "text": "[cleared]",
+                "items": [
+                  "sha256:a7a6d74acae9bb451c4318aa6cad0e54a21de7084d3ec9237224a38502c94bae"
+                ]
+              }
+            }
+          },
+          "parent": "sha256:33a4dd27e87e379ef111ec8c1f97beb98016fc995a13e6ca0bda8cb67f0edb70",
+          "ts": "2026-11-01T11:00:16Z",
+          "type": "config"
+        },
+        "sha256:74b3c09d4cbde32cb848a70185c6c2cb9425a9351ce15cc523b4a7274c4dddcd": {
+          "body": {
+            "response": "resp_8"
+          },
+          "parent": "sha256:0ca20a890239b6e9616fec5c2326bce2e645fbfdacc0dbf02f27fe6b03984682",
+          "ts": "2026-11-01T11:00:28Z",
+          "type": "item"
+        },
+        "sha256:80fb21e3b435841dc4a341d37b00bfa7463cd6aa217b774bf7566751556fa184": {
+          "body": {
+            "omit": {
+              "outputs": {
+                "text": "[cleared earlier]",
+                "items": [
+                  "sha256:40cfcc3137dfeb2e90d28e2dd8668094cb9d36be5754f40968380d38e55ac54e"
+                ]
+              },
+              "images": {
+                "before": "sha256:89c43b4a5fefc6d973522c1789174f071e4ecb8741fb784a8e2d9eaeb6210f5c",
+                "placeholder": "[older screenshot]"
+              }
+            }
+          },
+          "parent": "sha256:89c43b4a5fefc6d973522c1789174f071e4ecb8741fb784a8e2d9eaeb6210f5c",
+          "ts": "2026-11-01T11:00:24Z",
+          "type": "config"
+        },
+        "sha256:81d04a27f4f117cd464808fd3ad55eae3f2e748c79164a32560a0665f1580234": {
+          "body": {
+            "omit": {
+              "images": {
+                "keep": 2,
+                "placeholder": "[screenshot removed]"
+              }
+            }
+          },
+          "parent": "sha256:40cfcc3137dfeb2e90d28e2dd8668094cb9d36be5754f40968380d38e55ac54e",
+          "ts": "2026-11-01T11:00:12Z",
+          "type": "config"
+        },
+        "sha256:89c43b4a5fefc6d973522c1789174f071e4ecb8741fb784a8e2d9eaeb6210f5c": {
+          "parent": "sha256:d7b623d8fb901ab61a1244366f69047a1d11df6af7d369bf03ac72b9bfa78277",
+          "ts": "2026-11-01T11:00:23Z",
+          "type": "item"
+        },
+        "sha256:a68ae1ddc83f38e7fbbbeeb8672f38f977f811c07d5d63674772334043388f10": {
+          "parent": "sha256:74b3c09d4cbde32cb848a70185c6c2cb9425a9351ce15cc523b4a7274c4dddcd",
+          "ts": "2026-11-01T11:00:29Z",
+          "type": "response"
+        },
+        "sha256:abfb027e403c6e9d27691444337c583200a11db80c66be8633038d7edf5e96d4": {
+          "parent": "sha256:26105b849214a044e55e68d63e62dc45ba3fcdd93deb204d7fdb57ac8f335186",
+          "ts": "2026-11-01T11:00:14Z",
+          "type": "response"
+        },
+        "sha256:ad3cc166e632ad24e189e63e5880c8ad0ac9a53eabafbdae001ce3d57771cb7e": {
+          "parent": "sha256:05f65b1d2427f18778a6f345bb6668b3ad5471e5079002119db4efe52e674bdd",
+          "ts": "2026-11-01T11:00:18Z",
+          "type": "response"
+        },
+        "sha256:b5f1e9f80561777265198533f11143fe86fb52509bdf69996bad522fb3a890d4": {
+          "body": {
+            "response": "resp_6"
+          },
+          "parent": "sha256:0d81a2de6f69702043032da23046ccd25346c1f6c33e4a22792568e8a37d9948",
+          "ts": "2026-11-01T11:00:21Z",
+          "type": "item"
+        },
+        "sha256:d7b623d8fb901ab61a1244366f69047a1d11df6af7d369bf03ac72b9bfa78277": {
+          "parent": "sha256:b5f1e9f80561777265198533f11143fe86fb52509bdf69996bad522fb3a890d4",
+          "ts": "2026-11-01T11:00:22Z",
+          "type": "response"
+        },
+        "sha256:e54256a3472e205c437e0e6f88bd114275dd5450603fcf66c59f142b60f509e1": {
+          "body": {
+            "response": "resp_3"
+          },
+          "parent": "sha256:11ce22cf1a92de9bf2a106aa335a7e4c0737c7fc19c54557ddbf21a6784b39c3",
+          "ts": "2026-11-01T11:00:09Z",
+          "type": "item"
+        }
+      },
+      "format": "agentsession/0.17",
       "leaf": "sha256:a68ae1ddc83f38e7fbbbeeb8672f38f977f811c07d5d63674772334043388f10",
       "main": true
     },

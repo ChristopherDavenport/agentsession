@@ -91,6 +91,13 @@ func keepOf(el map[string]any) bool {
 	return err == nil && k > 0
 }
 
+// knownSource reports whether a part, or an omitted part, holds a source
+// the format defines ([KnownLayer]), which a rewrite keeps as written.
+func knownSource(el map[string]any) bool {
+	s, _ := el["source"].(string)
+	return KnownLayer(s)
+}
+
 // memberPath is a path, for the table.
 func memberPath(steps ...string) []string { return steps }
 
@@ -142,7 +149,11 @@ var envelopeMembers = []special{
 //
 // A trust member's labels, on an item, a result, a compaction and a
 // branch summary, are the format's vocabulary and not text, so a rewrite
-// leaves them as they are (RFC 0001, Every redacted entry).
+// leaves them as they are (RFC 0001, Every redacted entry). So is a
+// source the format defines ([KnownLayer]) on an instructions part, an
+// omitted part and an item's instructions_part, since 0.17; any other
+// source, and every id, is text. A part's trust labels, since 0.17, are
+// the format's vocabulary too.
 var bodyMembers = map[string][]special{
 	TypeItem: {
 		{path: memberPath("queued_from"), role: roleEntry, set: true},
@@ -150,6 +161,10 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("copied_from", "entry"), role: roleEntry, session: "session", set: true, when: func(e Entry) bool { return e.(*ItemEntry).CopiedFrom != nil }},
 		{path: memberPath("copied_from", "session"), role: roleSession, when: func(e Entry) bool { return e.(*ItemEntry).CopiedFrom != nil }},
 		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*ItemEntry).Trust != nil }},
+		{path: memberPath("instructions_part", "source"), role: roleFixed, when: func(e Entry) bool {
+			p := e.(*ItemEntry).InstructionsPart
+			return p != nil && KnownLayer(p.Source)
+		}},
 		{path: memberPath("item", "call_id"), role: roleCallID},
 	},
 	TypeQueued:   {{path: memberPath("item", "call_id"), role: roleCallID}},
@@ -164,6 +179,9 @@ var bodyMembers = map[string][]special{
 		}},
 		{path: memberPath("instructions_omitted", "[]", "of"), role: roleEntry, holds: keepOf},
 		{path: memberPath("instructions_parts", "[]", "hash"), role: roleHash},
+		{path: memberPath("instructions_parts", "[]", "source"), role: roleFixed, holds: knownSource},
+		{path: memberPath("instructions_parts", "[]", "trust", "reads", "[]"), role: roleFixed},
+		{path: memberPath("instructions_omitted", "[]", "source"), role: roleFixed, holds: knownSource},
 	},
 	TypeCompaction: {
 		{path: memberPath("first_kept"), role: roleEntry, bound: true},
@@ -172,6 +190,9 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("config", "omit", "outputs", "groups", "[]", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*CompactionEntry).Config.Omit.Outputs != nil }},
 		{path: memberPath("config", "omit", "images", "before"), role: roleEntry, bound: true, when: func(e Entry) bool { i := e.(*CompactionEntry).Config.Omit.Images; return i != nil && i.Before != "" }},
 		{path: memberPath("config", "instructions_parts", "[]", "hash"), role: roleHash},
+		{path: memberPath("config", "instructions_parts", "[]", "source"), role: roleFixed, holds: knownSource},
+		{path: memberPath("config", "instructions_parts", "[]", "trust", "reads", "[]"), role: roleFixed},
+		{path: memberPath("config", "instructions_omitted", "[]", "source"), role: roleFixed, holds: knownSource},
 		{path: memberPath("pinned", "[]", "call_id"), role: roleCallID},
 		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*CompactionEntry).Trust != nil }},
 	},

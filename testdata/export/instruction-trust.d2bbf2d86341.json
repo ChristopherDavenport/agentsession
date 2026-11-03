@@ -1,0 +1,273 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000048",
+  "trajectory_id": "sha256:d2bbf2d8634169180190b7350d154a736c767c51d101d63e9d3093ac02f82efb",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-02T17:00:09Z",
+      "source": "system",
+      "message": "Summary: v2 ships Friday.",
+      "observation": {
+        "results": [
+          {
+            "content": "Summary: v2 ships Friday."
+          }
+        ]
+      },
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:42cafc4e28a62ab90fe65e371c8add259c64275c2c9ec585528237d746e3e9b6",
+          "trust": {
+            "reads": [
+              "private",
+              "untrusted"
+            ]
+          }
+        },
+        "context_management": {
+          "boundary": "replace",
+          "type": "compaction"
+        },
+        "first_kept": "sha256:240e956e7ad427950fad80cdf3a5c583c34001a252a46c5c05874be1541b6d67",
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "system",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Summary: v2 ships Friday."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-02T17:00:06Z",
+      "source": "user",
+      "message": "Tag it.",
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:240e956e7ad427950fad80cdf3a5c583c34001a252a46c5c05874be1541b6d67"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Tag it."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-02T17:00:08Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Asking first: tag v2?",
+      "is_copied_context": true,
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:083ade5f48a5fc55a5bc9eb55c7a2eff40b25d7d638961a33059d449f2883f6f"
+        },
+        "item_entry_ids": [
+          "sha256:ad5429f378194a001e1b9209d1096c11aedb2f846db22fc572ffe03aea26a308"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_2",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Asking first: tag v2?",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:083ade5f48a5fc55a5bc9eb55c7a2eff40b25d7d638961a33059d449f2883f6f",
+            "model": "gpt-5",
+            "request_hash": "sha256:a4046e7ea83fe83632318118b934d67e1727e757eb3166d817e5450ecae16d14",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-11-02T17:00:08Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-11-02T17:00:11Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Still waiting on the tag.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:d2bbf2d8634169180190b7350d154a736c767c51d101d63e9d3093ac02f82efb"
+        },
+        "item_entry_ids": [
+          "sha256:e10833b0b1d9854d1239b0690346eb3c51acd84d671d7cbece5110b83ca94aef"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_3",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Still waiting on the tag.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:d2bbf2d8634169180190b7350d154a736c767c51d101d63e9d3093ac02f82efb",
+            "model": "gpt-5",
+            "request_hash": "sha256:2796581957fd7aee1bce101e49c1939a1091f2e56b9d40a22dc3e5493ada382f",
+            "response_id": "resp_3",
+            "status": "completed",
+            "ts": "2026-11-02T17:00:11Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "The steps are the context after compaction and leave out 1 model call(s) that were folded away; final_metrics totals the whole path.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 4
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:083ade5f48a5fc55a5bc9eb55c7a2eff40b25d7d638961a33059d449f2883f6f": {
+          "parent": "sha256:ad5429f378194a001e1b9209d1096c11aedb2f846db22fc572ffe03aea26a308",
+          "ts": "2026-11-02T17:00:08Z",
+          "type": "response"
+        },
+        "sha256:240e956e7ad427950fad80cdf3a5c583c34001a252a46c5c05874be1541b6d67": {
+          "parent": "sha256:54f58c4cdb43652d126afc6ffc271584ad039f4a4d5ce93fc32c0197ef0ce78f",
+          "ts": "2026-11-02T17:00:06Z",
+          "type": "item"
+        },
+        "sha256:42cafc4e28a62ab90fe65e371c8add259c64275c2c9ec585528237d746e3e9b6": {
+          "body": {
+            "config": {
+              "model": "gpt-5",
+              "instructions": "You are a release agent.\n\nThe release page said v2 ships Friday.\n\nAsk before tagging.",
+              "instructions_parts": [
+                {
+                  "id": "product",
+                  "text": "You are a release agent.",
+                  "source": "product"
+                },
+                {
+                  "id": "memory",
+                  "text": "The release page said v2 ships Friday.",
+                  "source": "agentmemory",
+                  "trust": {
+                    "reads": [
+                      "untrusted"
+                    ]
+                  }
+                },
+                {
+                  "id": "/vault/AGENTS.md",
+                  "text": "Ask before tagging.",
+                  "source": "agentsmd",
+                  "trust": {
+                    "reads": [
+                      "private"
+                    ]
+                  }
+                }
+              ]
+            },
+            "first_kept": "sha256:240e956e7ad427950fad80cdf3a5c583c34001a252a46c5c05874be1541b6d67",
+            "summary": {
+              "type": "message",
+              "role": "system",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Summary: v2 ships Friday."
+                }
+              ]
+            },
+            "trust": {
+              "reads": [
+                "private",
+                "untrusted"
+              ]
+            }
+          },
+          "parent": "sha256:083ade5f48a5fc55a5bc9eb55c7a2eff40b25d7d638961a33059d449f2883f6f",
+          "ts": "2026-11-02T17:00:09Z",
+          "type": "compaction"
+        },
+        "sha256:ad5429f378194a001e1b9209d1096c11aedb2f846db22fc572ffe03aea26a308": {
+          "body": {
+            "response": "resp_2"
+          },
+          "parent": "sha256:240e956e7ad427950fad80cdf3a5c583c34001a252a46c5c05874be1541b6d67",
+          "ts": "2026-11-02T17:00:07Z",
+          "type": "item"
+        },
+        "sha256:d2bbf2d8634169180190b7350d154a736c767c51d101d63e9d3093ac02f82efb": {
+          "parent": "sha256:e10833b0b1d9854d1239b0690346eb3c51acd84d671d7cbece5110b83ca94aef",
+          "ts": "2026-11-02T17:00:11Z",
+          "type": "response"
+        },
+        "sha256:e10833b0b1d9854d1239b0690346eb3c51acd84d671d7cbece5110b83ca94aef": {
+          "body": {
+            "response": "resp_3"
+          },
+          "parent": "sha256:42cafc4e28a62ab90fe65e371c8add259c64275c2c9ec585528237d746e3e9b6",
+          "ts": "2026-11-02T17:00:10Z",
+          "type": "item"
+        }
+      },
+      "format": "agentsession/0.17",
+      "leaf": "sha256:d2bbf2d8634169180190b7350d154a736c767c51d101d63e9d3093ac02f82efb",
+      "main": true,
+      "trust": {
+        "reads": [
+          "private",
+          "untrusted"
+        ]
+      }
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

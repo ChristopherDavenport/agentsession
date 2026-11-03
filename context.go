@@ -138,7 +138,7 @@ func (h *partHistory) find(id, hash string) (InstructionPart, bool) {
 // force under p.ID with that text is p, source included.
 func (h *partHistory) has(p InstructionPart) bool {
 	q, ok := h.find(p.ID, HashText(p.Text))
-	return ok && q.Source == p.Source
+	return ok && q.Source == p.Source && sameTrust(q.Trust, p.Trust)
 }
 
 // UnmarshalJSON decodes a checkpoint, taking instructions_omitted only
@@ -362,7 +362,7 @@ func applyInstructionParts(prev, delta []InstructionPart, left *partHistory) []I
 		if i, ok := at[p.ID]; ok {
 			cursor = i + 1
 		}
-		next := InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source}
+		next := InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source, Trust: p.Trust}
 		if p.Text == "" && p.Hash != "" {
 			old, ok := byID[p.ID]
 			if !ok || !old.Unresolved() && HashText(old.Text) != p.Hash {
@@ -375,6 +375,11 @@ func applyInstructionParts(prev, delta []InstructionPart, left *partHistory) []I
 				next.Text = old.Text
 				if next.Source == "" {
 					next.Source = old.Source
+				}
+				if next.Trust == nil {
+					// The hash form keeps the trust it had, as it keeps
+					// its source.
+					next.Trust = old.Trust
 				}
 			default:
 				// No text of the id's on the path has the hash, or the
@@ -910,7 +915,7 @@ func (s Settings) InstructionsDelta(parts []InstructionPart) *ConfigEntry {
 		// "this part has no source now".
 		// A part in force the path could not rebuild is written out, so
 		// the delta resolves it rather than keeping what is missing.
-		if !ok || s.InstructionsParts[j].Unresolved() || s.InstructionsParts[j].Text != p.Text || s.InstructionsParts[j].Source != p.Source {
+		if !ok || s.InstructionsParts[j].Unresolved() || s.InstructionsParts[j].Text != p.Text || s.InstructionsParts[j].Source != p.Source || !sameTrust(s.InstructionsParts[j].Trust, p.Trust) {
 			flush()
 			// A hash resolves against the part in force first, and only
 			// when that has other text, or there is none, against what
@@ -921,7 +926,7 @@ func (s Settings) InstructionsDelta(parts []InstructionPart) *ConfigEntry {
 				// its hash resolves it, and a hash is all it costs.
 				out = append(out, InstructionPart{ID: p.ID, Hash: HashText(p.Text)})
 			} else {
-				out = append(out, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source})
+				out = append(out, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source, Trust: p.Trust})
 			}
 			if ok {
 				cursor = j + 1
@@ -1827,7 +1832,8 @@ func contributes(e Entry) bool {
 // contextContentHash is the content hash the context hash uses for one
 // contributing entry: the body with legacy_id, normalised and redacted,
 // in whatever form, removed for every type, response, source and queued_from removed from an
-// item, and from_link, failed, copied_from and trust where the format defines them, from removed from a branch_summary, trust
+// item, and from_link, failed, copied_from, trust and instructions_part where the format defines them, an
+// instructions part's trust from a config and a compaction's checkpoint, from removed from a branch_summary, trust
 // removed from a branch_summary and a compaction where defined, and a compaction's
 // first_kept replaced by [context hash, type] of the entry it names
 // when that entry is on the path and by null otherwise.
@@ -1842,14 +1848,13 @@ func contextContentHash(e Entry, at, types map[string]string) (string, error) {
 	}
 	body := make(map[string]json.RawMessage, len(all))
 	for k, v := range all {
-		if isEnvelopeKey(k) {
+		if isEnvelopeKey(k) || IsHistoryMember(k) {
+			// History members record how the line came to be written,
+			// in whatever form, and never reach a request.
 			continue
 		}
 		body[k] = v
 	}
-	delete(body, "legacy_id")
-	delete(body, "normalised")
-	delete(body, "redacted")
 	switch e.EntryType() {
 	case TypeItem:
 		delete(body, "response")
@@ -1869,6 +1874,15 @@ func contextContentHash(e Entry, at, types map[string]string) (string, error) {
 		if e.(*ItemEntry).Trust != nil {
 			delete(body, "trust")
 		}
+		if e.(*ItemEntry).InstructionsPart != nil {
+			// A record member that reaches no request (0.17).
+			delete(body, "instructions_part")
+		}
+	case TypeConfig:
+		// A part's trust, as an item's, reaches no request (0.17).
+		if raw, ok := body["instructions_parts"]; ok {
+			body["instructions_parts"] = withoutPartTrust(raw)
+		}
 	case TypeBranchSummary:
 		delete(body, "from")
 		if e.(*BranchSummaryEntry).Trust != nil {
@@ -1878,6 +1892,15 @@ func contextContentHash(e Entry, at, types map[string]string) (string, error) {
 	case TypeCompaction:
 		if e.(*CompactionEntry).Trust != nil {
 			delete(body, "trust")
+		}
+		var checkpoint map[string]json.RawMessage
+		if raw, ok := body["config"]; ok && json.Unmarshal(raw, &checkpoint) == nil {
+			if parts, ok := checkpoint["instructions_parts"]; ok {
+				checkpoint["instructions_parts"] = withoutPartTrust(parts)
+				if out, err := json.Marshal(checkpoint); err == nil {
+					body["config"] = out
+				}
+			}
 		}
 		var named string
 		if raw, ok := body["first_kept"]; ok {
@@ -1895,4 +1918,29 @@ func contextContentHash(e Entry, at, types map[string]string) (string, error) {
 		return "", err
 	}
 	return HashRequestJSON(bodyJSON)
+}
+
+// withoutPartTrust returns a list of instructions parts with each
+// element's trust removed where it is in the form the format defines
+// (0.17), for the context hash; anything else is returned as it is.
+func withoutPartTrust(raw json.RawMessage) json.RawMessage {
+	var parts []map[string]json.RawMessage
+	if json.Unmarshal(raw, &parts) != nil {
+		return raw
+	}
+	changed := false
+	for _, p := range parts {
+		if t, ok := p["trust"]; ok && trustForm(t) {
+			delete(p, "trust")
+			changed = true
+		}
+	}
+	if !changed {
+		return raw
+	}
+	out, err := json.Marshal(parts)
+	if err != nil {
+		return raw
+	}
+	return out
 }

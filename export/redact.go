@@ -1,6 +1,7 @@
 package export
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -40,7 +41,9 @@ const Replacement = "[REDACTED]"
 // nothing the declared fields do not. Use it for a judge's input or a
 // published document; keep the full document in the archive, because
 // the passthrough is what makes [Items] lossless, and without it Items
-// returns [ErrNoRawItems]. The root extra's payload profile name stays.
+// returns [ErrNoRawItems], and the entries' envelopes and bodies under
+// [ExtraEntries], without which a converter cannot rebuild the session to
+// its ids. The root extra's payload profile name stays.
 func NoPassthrough() Redactor {
 	return RedactorFunc(func(t *atif.Trajectory) error {
 		stripPassthrough(t)
@@ -49,6 +52,11 @@ func NoPassthrough() Redactor {
 }
 
 func stripPassthrough(t *atif.Trajectory) {
+	// The entries' envelopes and bodies rebuild the session with the raw
+	// items, and without them rebuild nothing.
+	if as, ok := t.Extra[ExtraAgentSession].(map[string]any); ok {
+		delete(as, ExtraEntries)
+	}
 	for i := range t.Steps {
 		step := &t.Steps[i]
 		delete(step.Extra, ExtraOpenResponses)
@@ -81,7 +89,7 @@ func Secrets(values ...string) Redactor {
 		if len(secrets) == 0 {
 			return nil
 		}
-		return rewriteStrings(t, func(s string) string {
+		return RewriteStrings(t, func(s string) string {
 			for _, secret := range secrets {
 				s = strings.ReplaceAll(s, secret, Replacement)
 			}
@@ -99,7 +107,7 @@ func HomePaths(home string) Redactor {
 		if home == "" || home == "." || home == "/" {
 			return nil
 		}
-		return rewriteStrings(t, func(s string) string {
+		return RewriteStrings(t, func(s string) string {
 			s = strings.ReplaceAll(s, home+"/", "~/")
 			s = strings.ReplaceAll(s, home+"\\", "~\\")
 			return strings.ReplaceAll(s, home, "~")
@@ -108,9 +116,10 @@ func HomePaths(home string) Redactor {
 }
 
 // Environment removes environment snapshots from the document: the
-// root and step extra.environment members and the working directory,
-// which name machines, paths and file hashes that are rarely meant to
-// travel.
+// root and step extra.environment members, the working directory and
+// each env entry's body under [ExtraEntries], which name machines, paths
+// and file hashes that are rarely meant to travel. An env entry so
+// stripped no longer rebuilds to its id.
 func Environment() Redactor {
 	return RedactorFunc(func(t *atif.Trajectory) error {
 		scrub := func(extra map[string]any) {
@@ -121,6 +130,18 @@ func Environment() Redactor {
 		}
 		if t.Extra != nil {
 			scrub(t.Extra)
+			// An env entry's body, which names the same, beside its
+			// envelope under ExtraEntries.
+			if as, ok := t.Extra[ExtraAgentSession].(map[string]any); ok {
+				entries, _ := as[ExtraEntries].(map[string]any)
+				for _, v := range entries {
+					rec, _ := v.(map[string]any)
+					if typ, _ := json.Marshal(rec["type"]); string(typ) == `"env"` {
+						delete(rec, "body")
+						delete(rec, "normalised")
+					}
+				}
+			}
 		}
 		for i := range t.Steps {
 			if t.Steps[i].Extra != nil {
@@ -138,10 +159,14 @@ func Environment() Redactor {
 	})
 }
 
-// rewriteStrings applies f to every string in the document, extras
-// included, by rewriting its JSON form. Numbers, booleans and member
-// names are untouched.
-func rewriteStrings(t *atif.Trajectory, f func(string) string) error {
+// RewriteStrings applies f to every string in the document, extras
+// included, by rewriting its JSON form, as [Secrets] and [HomePaths] do,
+// for a custom [RedactorFunc]. Numbers, booleans and member names are
+// untouched. It first drops each
+// normalised record f would change, which holds the member it describes
+// as source text and base64 bytes a rewrite of strings does not reach;
+// that entry then does not rebuild to its id.
+func RewriteStrings(t *atif.Trajectory, f func(string) string) error {
 	data, err := json.Marshal(t)
 	if err != nil {
 		return fmt.Errorf("encode for redaction: %w", err)
@@ -152,6 +177,7 @@ func rewriteStrings(t *atif.Trajectory, f func(string) string) error {
 	if err := dec.Decode(&tree); err != nil {
 		return fmt.Errorf("decode for redaction: %w", err)
 	}
+	dropNormalised(tree, f)
 	tree = walk(tree, f)
 	out, err := json.Marshal(tree)
 	if err != nil {
@@ -163,6 +189,62 @@ func rewriteStrings(t *atif.Trajectory, f func(string) string) error {
 	}
 	*t = back
 	return nil
+}
+
+// dropNormalised removes, anywhere in a document, a normalised record
+// that f would change: an entry's under [ExtraEntries], a response's in
+// its body. Each element holds the member it describes as source text,
+// was, and as original bytes, raw, in base64, which a rewrite of the
+// document's strings does not reach, so a redactor that would change
+// one drops the record (RFC 0001, Redaction); the entry then does not
+// rebuild to its id, which a converter lists.
+func dropNormalised(v any, f func(string) string) {
+	switch x := v.(type) {
+	case map[string]any:
+		if list, ok := x["normalised"].([]any); ok && normalisedTouched(list, f) {
+			delete(x, "normalised")
+		}
+		for _, c := range x {
+			dropNormalised(c, f)
+		}
+	case []any:
+		for _, c := range x {
+			dropNormalised(c, f)
+		}
+	}
+}
+
+// normalisedTouched reports whether f changes what a normalised record
+// holds: was, as written and as the JSON it is the source text of, or
+// raw's bytes.
+func normalisedTouched(list []any, f func(string) string) bool {
+	changes := func(s string) bool { return f(s) != s }
+	for _, el := range list {
+		m, _ := el.(map[string]any)
+		if was, ok := m["was"].(string); ok {
+			if changes(was) {
+				return true
+			}
+			var decoded any
+			if json.Unmarshal([]byte(was), &decoded) == nil {
+				var hit bool
+				walk(decoded, func(s string) string {
+					hit = hit || changes(s)
+					return s
+				})
+				if hit {
+					return true
+				}
+			}
+		}
+		if raw, ok := m["raw"].(string); ok {
+			b, err := base64.StdEncoding.DecodeString(raw)
+			if err != nil || changes(string(b)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func walk(v any, f func(string) string) any {

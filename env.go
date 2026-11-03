@@ -55,6 +55,56 @@ func HashFiles(dir string, paths ...string) (map[string]string, error) {
 	return out, nil
 }
 
+// EnvInForce returns the env entry in force at the end of a root-first
+// path: the latest on it, or nil before the first (RFC 0001, env). An
+// env entry is a whole snapshot since 0.17: a member it leaves out is
+// not carried from an earlier entry, and is absent from it on, the
+// workspace the absent one and any other member unsaid.
+func EnvInForce(path []Entry) *EnvEntry {
+	for i := len(path) - 1; i >= 0; i-- {
+		if e, ok := path[i].(*EnvEntry); ok {
+			return e
+		}
+	}
+	return nil
+}
+
+// WorkingDir returns the working directory at the end of a root-first
+// path: the cwd of the env entry in force, "" when it names none, and
+// the header's cwd only before the first env entry on the path (RFC
+// 0001, env, since 0.17).
+func WorkingDir(h Header, path []Entry) string {
+	if e := EnvInForce(path); e != nil {
+		return e.CWD
+	}
+	return h.CWD
+}
+
+// Substitutions returns the env entries of a root-first path that are
+// substitutions (RFC 0001, env): each after a response on the path whose
+// workspace is not the one in force before it ([SameWorkspace]), the
+// absent workspace before the first env entry, or after one that names
+// none, included. A change to any other member is none.
+func Substitutions(path []Entry) []*EnvEntry {
+	var (
+		out       []*EnvEntry
+		inForce   *Workspace
+		responded bool
+	)
+	for _, e := range path {
+		switch v := e.(type) {
+		case *ResponseEntry:
+			responded = true
+		case *EnvEntry:
+			if responded && !SameWorkspace(inForce, v.Workspace) {
+				out = append(out, v)
+			}
+			inForce = v.Workspace
+		}
+	}
+	return out
+}
+
 // NewEnvEntry starts an env entry for a working directory. Use
 // [EnvEntry.SetGit], [EnvEntry.AddRead] and [EnvEntry.AddWritten] to
 // fill it in.

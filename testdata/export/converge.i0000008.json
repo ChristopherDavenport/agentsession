@@ -103,11 +103,15 @@
                 "trajectory_path": "01995b2a-0000-7000-8000-0000000000c1.json",
                 "extra": {
                   "child_leaf": "a0000009",
+                  "child_leaf_named": true,
                   "entry_id": "sha256:88e14e23670b32af427cf8bb2f5295fe87fd662c99609d8f3d3e1dd412aab826"
                 }
               }
             ],
             "extra": {
+              "agentsession": {
+                "entry_id": "sha256:5df9e1329b6a60e8002ae0744a9f050d736902510c02935eeedab9147e419b42"
+              },
               "openresponses": {
                 "item": {
                   "type": "function_call_output",
@@ -127,11 +131,15 @@
                 "trajectory_path": "01995b2a-0000-7000-8000-0000000000c2.json",
                 "extra": {
                   "child_leaf": "b0000006",
+                  "child_leaf_named": true,
                   "entry_id": "sha256:66fafb31b5f2edbb74542526aa19516b862e4fa7bd5fff0c074228ce6c5594f8"
                 }
               }
             ],
             "extra": {
+              "agentsession": {
+                "entry_id": "sha256:dea317015143b78f6dc87c586a226b767ed0a649c96e71b5e75c402a9644a899"
+              },
               "openresponses": {
                 "item": {
                   "type": "function_call_output",
@@ -308,7 +316,177 @@
     "abandoned_at": "sha256:ba4196c4d873763cc8ba62b394ad7ca57a8d8c95b5b981cd01a12b991d9934ee",
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.16",
+      "entries": {
+        "sha256:03902ad5a64a0292895ada6b7bce992592e3a1aaa4802780b49bc61c3f47b450": {
+          "legacy_id": "r0000002",
+          "parent": "sha256:a04bfc29a047ff76c414f7d815370745b59d567920c3eb04e4fe41b5da0f9cf2",
+          "ts": "2026-09-25T09:00:23Z",
+          "type": "response"
+        },
+        "sha256:31b9e424257515f3485246cca675d2379afd6943a7bc547851e6b1f1c73c7cd7": {
+          "legacy_id": "r0000001",
+          "parent": "sha256:4c678a5f9c2c057f2ac32df036b9c1e79c78a82dcf9c91c8eab1ce960a5f3b53",
+          "ts": "2026-09-25T09:00:04Z",
+          "type": "response"
+        },
+        "sha256:4a816337bfe0031ad7a9b0dbb182de0c54e627015dd247ded1ad104064dec123": {
+          "body": {
+            "call_id": "call_b",
+            "target": "sha256:4c678a5f9c2c057f2ac32df036b9c1e79c78a82dcf9c91c8eab1ce960a5f3b53"
+          },
+          "legacy_id": "p0000002",
+          "parent": "sha256:d41382b0e44e1607ec5e96c22ccfe571d34423d43761ce376700011a6399104c",
+          "ts": "2026-09-25T09:00:06Z",
+          "type": "dispatch"
+        },
+        "sha256:4c678a5f9c2c057f2ac32df036b9c1e79c78a82dcf9c91c8eab1ce960a5f3b53": {
+          "body": {
+            "response": "resp_1"
+          },
+          "legacy_id": "i0000003",
+          "parent": "sha256:f9b41be453b152509e9ec496ac653a2d04c32fdbbc62fb9711ac15af0cc85bbc",
+          "ts": "2026-09-25T09:00:03Z",
+          "type": "item"
+        },
+        "sha256:5df9e1329b6a60e8002ae0744a9f050d736902510c02935eeedab9147e419b42": {
+          "legacy_id": "i0000004",
+          "parent": "sha256:4a816337bfe0031ad7a9b0dbb182de0c54e627015dd247ded1ad104064dec123",
+          "parents": [
+            {
+              "session": "01995b2a-0000-7000-8000-0000000000c1",
+              "entry": "a0000009"
+            }
+          ],
+          "ts": "2026-09-25T09:00:20Z",
+          "type": "item"
+        },
+        "sha256:66fafb31b5f2edbb74542526aa19516b862e4fa7bd5fff0c074228ce6c5594f8": {
+          "body": {
+            "call_id": "call_b",
+            "rel": "subsession",
+            "session": "01995b2a-0000-7000-8000-0000000000c2"
+          },
+          "legacy_id": "k0000002",
+          "parent": "sha256:88e14e23670b32af427cf8bb2f5295fe87fd662c99609d8f3d3e1dd412aab826",
+          "ts": "2026-09-25T09:00:05Z",
+          "type": "link"
+        },
+        "sha256:88e14e23670b32af427cf8bb2f5295fe87fd662c99609d8f3d3e1dd412aab826": {
+          "body": {
+            "call_id": "call_a",
+            "rel": "subsession",
+            "session": "01995b2a-0000-7000-8000-0000000000c1"
+          },
+          "legacy_id": "k0000001",
+          "parent": "sha256:31b9e424257515f3485246cca675d2379afd6943a7bc547851e6b1f1c73c7cd7",
+          "ts": "2026-09-25T09:00:05Z",
+          "type": "link"
+        },
+        "sha256:8e5a54eb79e95b974639834a08d411a5ff6cd5b3bd8231dbbb265e282d6e7342": {
+          "legacy_id": "i0000001",
+          "parent": "sha256:c4b07c33d3316c7349a39b8801da83df2592218ce6064670e11d23083a2872b7",
+          "ts": "2026-09-25T09:00:02Z",
+          "type": "item"
+        },
+        "sha256:96cf0a2bfec6eacdf7f4ad422c785d37cc49108d760983437521c4f1ec043b63": {
+          "body": {
+            "instructions": "Be brief.",
+            "model": "gpt-5",
+            "tools_added": [
+              {
+                "type": "function",
+                "name": "delegate",
+                "description": "Run a task in a subagent",
+                "parameters": {
+                  "properties": {
+                    "task": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "task"
+                  ],
+                  "type": "object"
+                }
+              }
+            ]
+          },
+          "legacy_id": "c0000001",
+          "parent": null,
+          "ts": "2026-09-25T09:00:00Z",
+          "type": "config"
+        },
+        "sha256:a04bfc29a047ff76c414f7d815370745b59d567920c3eb04e4fe41b5da0f9cf2": {
+          "body": {
+            "response": "resp_2"
+          },
+          "legacy_id": "i0000006",
+          "parent": "sha256:dea317015143b78f6dc87c586a226b767ed0a649c96e71b5e75c402a9644a899",
+          "ts": "2026-09-25T09:00:22Z",
+          "type": "item"
+        },
+        "sha256:ba4196c4d873763cc8ba62b394ad7ca57a8d8c95b5b981cd01a12b991d9934ee": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "done",
+            "run_id": "run-1"
+          },
+          "legacy_id": "u0000002",
+          "parent": "sha256:03902ad5a64a0292895ada6b7bce992592e3a1aaa4802780b49bc61c3f47b450",
+          "ts": "2026-09-25T09:00:24Z",
+          "type": "run"
+        },
+        "sha256:c4b07c33d3316c7349a39b8801da83df2592218ce6064670e11d23083a2872b7": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-1",
+            "source": "input"
+          },
+          "legacy_id": "u0000001",
+          "parent": "sha256:96cf0a2bfec6eacdf7f4ad422c785d37cc49108d760983437521c4f1ec043b63",
+          "ts": "2026-09-25T09:00:01Z",
+          "type": "run"
+        },
+        "sha256:c5867edf1c2ad1c0a9c6e2443b641118e4848dff8020f472d0a0f24fcd8555d5": {
+          "legacy_id": "i0000008",
+          "parent": "sha256:ba4196c4d873763cc8ba62b394ad7ca57a8d8c95b5b981cd01a12b991d9934ee",
+          "ts": "2026-09-25T09:00:31Z",
+          "type": "item"
+        },
+        "sha256:d41382b0e44e1607ec5e96c22ccfe571d34423d43761ce376700011a6399104c": {
+          "body": {
+            "call_id": "call_a",
+            "target": "sha256:f9b41be453b152509e9ec496ac653a2d04c32fdbbc62fb9711ac15af0cc85bbc"
+          },
+          "legacy_id": "p0000001",
+          "parent": "sha256:66fafb31b5f2edbb74542526aa19516b862e4fa7bd5fff0c074228ce6c5594f8",
+          "ts": "2026-09-25T09:00:06Z",
+          "type": "dispatch"
+        },
+        "sha256:dea317015143b78f6dc87c586a226b767ed0a649c96e71b5e75c402a9644a899": {
+          "legacy_id": "i0000005",
+          "parent": "sha256:5df9e1329b6a60e8002ae0744a9f050d736902510c02935eeedab9147e419b42",
+          "parents": [
+            {
+              "session": "01995b2a-0000-7000-8000-0000000000c2",
+              "entry": "b0000006"
+            }
+          ],
+          "ts": "2026-09-25T09:00:21Z",
+          "type": "item"
+        },
+        "sha256:f9b41be453b152509e9ec496ac653a2d04c32fdbbc62fb9711ac15af0cc85bbc": {
+          "body": {
+            "response": "resp_1"
+          },
+          "legacy_id": "i0000002",
+          "parent": "sha256:8e5a54eb79e95b974639834a08d411a5ff6cd5b3bd8231dbbb265e282d6e7342",
+          "ts": "2026-09-25T09:00:03Z",
+          "type": "item"
+        }
+      },
+      "format": "agentsession/0.17",
       "leaf": "sha256:c5867edf1c2ad1c0a9c6e2443b641118e4848dff8020f472d0a0f24fcd8555d5",
       "records": [
         "run",

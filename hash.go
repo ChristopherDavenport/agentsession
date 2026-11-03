@@ -173,6 +173,33 @@ func ValidHash(s string) bool {
 	return true
 }
 
+// IsHistoryMember reports whether name is one of an entry's history
+// members (RFC 0001, Entry envelope, since 0.17): legacy_id, normalised
+// and redacted, which record how a line came to be written and not what
+// the entry holds or says. A writer writes one only where its own
+// writing made it true, so a converter that makes an entry from another
+// does not carry the other's as its own; it may keep them under its own
+// namespace (<slug>:legacy_id). An entry rebuilt, every member restored,
+// to the id of the entry it was rebuilt from is that entry, and keeps
+// them. Every other member, one the format does not define included, is
+// a meaning member. The context hash leaves exactly these out (RFC
+// 0002).
+func IsHistoryMember(name string) bool {
+	switch name {
+	case "legacy_id", "normalised", "redacted":
+		return true
+	}
+	return false
+}
+
+// IsHeaderHistoryMember reports whether name is one of a header's
+// history members, redacted and redacted_from, which a converter does not
+// restore from a document it did not redact, as [IsHistoryMember] says of
+// an entry's.
+func IsHeaderHistoryMember(name string) bool {
+	return name == "redacted" || name == "redacted_from"
+}
+
 // isEnvelopeKey reports whether k is one of the envelope's names, which
 // are reserved: a body MUST NOT carry a top-level member by any of them.
 func isEnvelopeKey(k string) bool {

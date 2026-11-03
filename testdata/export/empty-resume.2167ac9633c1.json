@@ -65,6 +65,9 @@
             "source_call_id": "call_charge",
             "content": "charged",
             "extra": {
+              "agentsession": {
+                "entry_id": "sha256:9faecfd3b63eded1bb7195262e6b06a90f517295fdd701769fe0f2fe3556f36f"
+              },
               "openresponses": {
                 "item": {
                   "type": "function_call_output",
@@ -204,7 +207,173 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.16",
+      "entries": {
+        "sha256:1033052b6afd01fc778e20369b649ae6983e46acd59f4156a8a0b6449e3402cb": {
+          "body": {
+            "call_id": "call_charge",
+            "target": "sha256:1e3e3154337272b6dc6cdbb239d0f12ff054c74a802d6c5546aebf176779e99b"
+          },
+          "parent": "sha256:9459f4f9feb515e4efcc60853e0789a3e8deab9674abe12c93d3e78071bac84b",
+          "ts": "2026-10-01T09:00:14Z",
+          "type": "dispatch"
+        },
+        "sha256:1b77d0ed2913bfb731c511d8483c9e2be73f2df0ba99fd37cccdf828ffbcd254": {
+          "body": {
+            "instructions": "Be brief.",
+            "model": "gpt-5"
+          },
+          "parent": null,
+          "ts": "2026-10-01T09:00:01Z",
+          "type": "config"
+        },
+        "sha256:1e3e3154337272b6dc6cdbb239d0f12ff054c74a802d6c5546aebf176779e99b": {
+          "body": {
+            "response": "resp_1"
+          },
+          "parent": "sha256:7840feb76752310d7ece87ee27e2ee33e15e1d452f26d2622889aad560eee4fe",
+          "ts": "2026-10-01T09:00:04Z",
+          "type": "item"
+        },
+        "sha256:2167ac9633c1b25672daad93e07dce37a964c7fea801d93e1f9684fb3ac23129": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "done",
+            "run_id": "run-4"
+          },
+          "parent": "sha256:c1ca2e9314d2f5d57d2e791cd24bb99d30d9568d5f0d490b1f5cb3e671a010c7",
+          "ts": "2026-10-01T09:00:18Z",
+          "type": "run"
+        },
+        "sha256:2f1d74a489363f20cd47be7d930d7341e6f9966da6b3acb31c0f7a32ce4d2e07": {
+          "parent": "sha256:1e3e3154337272b6dc6cdbb239d0f12ff054c74a802d6c5546aebf176779e99b",
+          "ts": "2026-10-01T09:00:05Z",
+          "type": "response"
+        },
+        "sha256:35185bac8ca43e4781e7ae0f530389ec9ac6c30a3baaabe1886200fa39831fc3": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-3",
+            "source": "resume"
+          },
+          "parent": "sha256:8e84b3538705ac89747259871f088dc03968f28d3cfdb6d064cd6f099dbae850",
+          "ts": "2026-10-01T09:00:10Z",
+          "type": "run"
+        },
+        "sha256:3594c836045ec86f885101adc9941693e589811d93a9f0613d78baa77bc92ba9": {
+          "body": {
+            "by": "policy",
+            "call_id": "call_charge",
+            "target": "sha256:1e3e3154337272b6dc6cdbb239d0f12ff054c74a802d6c5546aebf176779e99b",
+            "verdict": "hold"
+          },
+          "parent": "sha256:2f1d74a489363f20cd47be7d930d7341e6f9966da6b3acb31c0f7a32ce4d2e07",
+          "ts": "2026-10-01T09:00:06Z",
+          "type": "decision"
+        },
+        "sha256:4c2e6f5d30c0adbf5e304c1277f2199ebdc8a8aaf3ef685205375e8701a70c11": {
+          "body": {
+            "pending": [
+              "call_charge"
+            ],
+            "phase": "end",
+            "reason": "input_required",
+            "run_id": "run-1"
+          },
+          "parent": "sha256:3594c836045ec86f885101adc9941693e589811d93a9f0613d78baa77bc92ba9",
+          "ts": "2026-10-01T09:00:07Z",
+          "type": "run"
+        },
+        "sha256:7840feb76752310d7ece87ee27e2ee33e15e1d452f26d2622889aad560eee4fe": {
+          "parent": "sha256:98fbf2e1822524a64f4f1445c9577c8d3bcd1a3542cc595fc9d971e068ca1488",
+          "ts": "2026-10-01T09:00:03Z",
+          "type": "item"
+        },
+        "sha256:7d602114c4f5d190735da82083be07084455cd3b885b8c2d93cb883960876d26": {
+          "body": {
+            "response": "resp_2"
+          },
+          "parent": "sha256:9faecfd3b63eded1bb7195262e6b06a90f517295fdd701769fe0f2fe3556f36f",
+          "ts": "2026-10-01T09:00:16Z",
+          "type": "item"
+        },
+        "sha256:8afb4461eca1d727b6759c8cc3721192b8fd254ee21b4c1d24f2acdcac4ff142": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-4",
+            "source": "resume"
+          },
+          "parent": "sha256:92d1d158602bdd563b5624528d5795081153cba0f4e93554f213880aefff64e2",
+          "ts": "2026-10-01T09:00:12Z",
+          "type": "run"
+        },
+        "sha256:8e84b3538705ac89747259871f088dc03968f28d3cfdb6d064cd6f099dbae850": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "error",
+            "ref": "a run_start subscriber refused the run",
+            "run_id": "run-2"
+          },
+          "parent": "sha256:ac0ec26a5cc058d3558317df541ab680084d3e5289fcedcf96089c5a88b68ec4",
+          "ts": "2026-10-01T09:00:09Z",
+          "type": "run"
+        },
+        "sha256:92d1d158602bdd563b5624528d5795081153cba0f4e93554f213880aefff64e2": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "error",
+            "ref": "the harness stopped before the run took anything up",
+            "run_id": "run-3"
+          },
+          "parent": "sha256:35185bac8ca43e4781e7ae0f530389ec9ac6c30a3baaabe1886200fa39831fc3",
+          "ts": "2026-10-01T09:00:11Z",
+          "type": "run"
+        },
+        "sha256:9459f4f9feb515e4efcc60853e0789a3e8deab9674abe12c93d3e78071bac84b": {
+          "body": {
+            "by": "policy",
+            "call_id": "call_charge",
+            "target": "sha256:1e3e3154337272b6dc6cdbb239d0f12ff054c74a802d6c5546aebf176779e99b",
+            "verdict": "proceed"
+          },
+          "parent": "sha256:8afb4461eca1d727b6759c8cc3721192b8fd254ee21b4c1d24f2acdcac4ff142",
+          "ts": "2026-10-01T09:00:13Z",
+          "type": "decision"
+        },
+        "sha256:98fbf2e1822524a64f4f1445c9577c8d3bcd1a3542cc595fc9d971e068ca1488": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-1",
+            "source": "input"
+          },
+          "parent": "sha256:1b77d0ed2913bfb731c511d8483c9e2be73f2df0ba99fd37cccdf828ffbcd254",
+          "ts": "2026-10-01T09:00:02Z",
+          "type": "run"
+        },
+        "sha256:9faecfd3b63eded1bb7195262e6b06a90f517295fdd701769fe0f2fe3556f36f": {
+          "parent": "sha256:1033052b6afd01fc778e20369b649ae6983e46acd59f4156a8a0b6449e3402cb",
+          "ts": "2026-10-01T09:00:15Z",
+          "type": "item"
+        },
+        "sha256:ac0ec26a5cc058d3558317df541ab680084d3e5289fcedcf96089c5a88b68ec4": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-2",
+            "source": "resume"
+          },
+          "parent": "sha256:4c2e6f5d30c0adbf5e304c1277f2199ebdc8a8aaf3ef685205375e8701a70c11",
+          "ts": "2026-10-01T09:00:08Z",
+          "type": "run"
+        },
+        "sha256:c1ca2e9314d2f5d57d2e791cd24bb99d30d9568d5f0d490b1f5cb3e671a010c7": {
+          "parent": "sha256:7d602114c4f5d190735da82083be07084455cd3b885b8c2d93cb883960876d26",
+          "ts": "2026-10-01T09:00:17Z",
+          "type": "response"
+        }
+      },
+      "format": "agentsession/0.17",
       "leaf": "sha256:2167ac9633c1b25672daad93e07dce37a964c7fea801d93e1f9684fb3ac23129",
       "main": true,
       "records": [

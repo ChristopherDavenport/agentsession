@@ -50,7 +50,9 @@ type Options struct {
 const (
 	ExtraOpenResponses = "openresponses"
 	// ExtraAgentSession carries, in the root extra, the session's facts:
-	// its format and the trajectory's leaf, and when present its cwd,
+	// its format and the trajectory's leaf, the path's trust
+	// ([agentsession.PathTrust]) when anything on it carries trust, and
+	// when present its cwd,
 	// parent_session, spawned_by, records, name, labels, main, and for
 	// a redacted session redacted and redacted_from, the latter the
 	// header's object with every member it holds. In a step's extra it
@@ -61,8 +63,15 @@ const (
 	// carries redacted_entries when any of them is redacted: an object
 	// from the ID of each redacted one, entry_id's among them, to its
 	// redacted member. A step built from native entries alone carries
-	// neither.
-	ExtraAgentSession  = "agentsession"
+	// neither. An observation result's carries its output's entry_id.
+	ExtraAgentSession = "agentsession"
+	// ExtraEntries carries, under ExtraAgentSession in the root extra,
+	// an object from the id of each entry the document maps to its
+	// type, ts, parent, parents and history members, and under "body"
+	// every other member but an item's item and a response's, which the
+	// steps carry, so a converter can rebuild each entry to its id
+	// ([agentsession.IsHistoryMember]).
+	ExtraEntries       = "entries"
 	ExtraEnvironment   = "environment"
 	ExtraOutcome       = "outcome"
 	ExtraPreferredOver = "preferred_over"
@@ -191,6 +200,10 @@ type builder struct {
 	window     agentsession.Settings
 	sawEnv     bool
 	currentRun map[string]any // the open run's record, shared with the step or root that holds it
+	// mapped are the entries the document maps, in the order it took
+	// them, whose envelopes and history members the root carries under
+	// ExtraEntries.
+	mapped []agentsession.Entry
 
 	prompt, completion, cached int
 	cost                       float64
@@ -222,9 +235,6 @@ type builder struct {
 	// anyOmit is whether a config entry or a checkpoint on Path sets
 	// omit, without which no request leaves anything out.
 	anyOmit bool
-	// unembedded counts the subsession links whose child was not
-	// embedded, whose cost the root's total_cost_usd leaves out.
-	unembedded int
 	// results are the result records written under calls, each with the
 	// entry it was made from, and outputs the calls whose output the
 	// document holds: a result carries its item when the document holds
@@ -372,10 +382,12 @@ func (b *builder) run() error {
 		if err := b.entry(e); err != nil {
 			return err
 		}
+		b.mapped = append(b.mapped, e)
 	}
 	b.flushGroup(nil)
 	for _, o := range b.t.Outcomes {
 		b.outcome(o)
+		b.mapped = append(b.mapped, o)
 	}
 	b.finish()
 	return nil
@@ -660,10 +672,14 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 			if step.Observation == nil {
 				step.Observation = &atif.Observation{}
 			}
+			extra := b.itemExtra(e)
+			// The output's own entry, as a step names the entry it
+			// was built from, so a reader finds its envelope.
+			agentSessionExtra(extra)["entry_id"] = e.ID
 			step.Observation.Results = append(step.Observation.Results, atif.ObservationResult{
 				SourceCallID: v.CallID,
 				Content:      outputContent(v.Output),
-				Extra:        b.itemExtra(e),
+				Extra:        extra,
 			})
 			b.stepByEntry[e.ID] = idx
 			b.stepFrom[idx] = append(b.stepFrom[idx], e)
@@ -736,6 +752,10 @@ func (b *builder) itemExtra(e *agentsession.ItemEntry) map[string]any {
 	}
 	if e.Trust != nil {
 		agentSessionExtra(extra)["trust"] = e.Trust
+	}
+	if e.InstructionsPart != nil {
+		// A composed layer, which a reader tells from a person's input.
+		agentSessionExtra(extra)["instructions_part"] = e.InstructionsPart
 	}
 	if r := b.replaced[e.ID]; len(r) > 0 {
 		agentSessionExtra(extra)[ExtraReplaced] = r
@@ -1235,6 +1255,18 @@ func (b *builder) finish() {
 	if b.t.Main {
 		as["main"] = true
 	}
+	if entries := b.entryRecords(); len(entries) > 0 {
+		as[ExtraEntries] = entries
+	}
+	// The path's trust, an instructions part's labels among them, which
+	// otherwise travel only in a config's body under entries.
+	path := b.t.Path
+	if len(path) == 0 {
+		path = b.t.Context.Entries
+	}
+	if t := agentsession.PathTrust(path); t != nil {
+		as["trust"] = t
+	}
 	root[ExtraAgentSession] = as
 	if len(b.t.PreferredOver) > 0 {
 		root[ExtraPreferredOver] = b.t.PreferredOver
@@ -1258,25 +1290,21 @@ func (b *builder) finish() {
 	fm.TotalCachedTokens = atif.Ptr(b.cached)
 	fm.TotalSteps = atif.Ptr(calls)
 	// ATIF's total_cost_usd includes subagents, where the token totals
-	// and total_steps are the steps': each embedded document's cost,
-	// which includes its own embedded children, is added to the path's.
+	// and total_steps are the steps': the delegated work is added to the
+	// path's cost as RFC 0001's link rule counts it, each session once
+	// over the union of the paths its links name.
 	var costNotes []string
 	if b.hasCost {
-		embedded, unpriced := 0, 0
-		for _, sub := range b.doc.SubagentTrajectories {
-			if sub.FinalMetrics != nil && sub.FinalMetrics.TotalCostUSD != nil {
-				b.cost += *sub.FinalMetrics.TotalCostUSD
-				embedded++
-			} else {
-				unpriced++
-			}
-		}
+		priced, excluded, resumed := b.delegatedCost()
 		fm.TotalCostUSD = atif.Ptr(b.cost)
-		if embedded > 0 {
-			costNotes = append(costNotes, fmt.Sprintf("total_cost_usd includes the total_cost_usd of %d embedded subagent trajectory(ies); the token totals and total_steps are this path's alone.", embedded))
+		if priced > 0 {
+			costNotes = append(costNotes, fmt.Sprintf("total_cost_usd includes the cost of %d delegated session(s), each counted once; the token totals and total_steps are this path's alone.", priced))
 		}
-		if unpriced+b.unembedded > 0 {
-			costNotes = append(costNotes, fmt.Sprintf("total_cost_usd excludes %d subagent(s) not embedded or not priced.", unpriced+b.unembedded))
+		if resumed > 0 {
+			costNotes = append(costNotes, fmt.Sprintf("%d delegated session(s) are counted at the leaf a resume takes, since no output named one.", resumed))
+		}
+		if excluded > 0 {
+			costNotes = append(costNotes, fmt.Sprintf("total_cost_usd excludes %d delegated session(s) not read or not priced.", excluded))
 		}
 	}
 	// total_steps is the path's model calls, which a reader can count
@@ -1301,6 +1329,99 @@ func (b *builder) finish() {
 		}
 		b.doc.Notes = note
 	}
+}
+
+// entryRecords is the root's ExtraEntries: for each entry the document
+// maps, by its id, its type, ts, parent and parents and its history
+// members, as the entry writes them, and under "body" every other member
+// but an item's item, which its step carries, and of a response, whose
+// body its step carries whole: so a converter can rebuild every entry to
+// its id (RFC 0001, Projections/ATIF, 0.17), an item of an agent step
+// too, whose step merges its items' trust and undefined members.
+func (b *builder) entryRecords() map[string]any {
+	out := make(map[string]any, len(b.mapped))
+	for _, e := range b.mapped {
+		data, err := agentsession.MarshalEntry(e)
+		if err != nil {
+			continue
+		}
+		var all map[string]json.RawMessage
+		if json.Unmarshal(data, &all) != nil {
+			continue
+		}
+		rec := map[string]any{}
+		body := map[string]json.RawMessage{}
+		for k, v := range all {
+			switch {
+			case k == "id":
+			case k == "type" || k == "ts" || k == "parent" || k == "parents" || agentsession.IsHistoryMember(k):
+				rec[k] = v
+			default:
+				body[k] = v
+			}
+		}
+		switch e.(type) {
+		case *agentsession.ResponseEntry:
+		case *agentsession.ItemEntry:
+			delete(body, "item")
+			if len(body) > 0 {
+				rec["body"] = body
+			}
+		default:
+			if len(body) > 0 {
+				rec["body"] = body
+			}
+		}
+		out[e.Base().ID] = rec
+	}
+	return out
+}
+
+// delegatedCost adds to the path's cost the cost of the work it
+// delegated, by [agentsession.DelegatedWork] over the resolver: each
+// child once, at the model that served each call. It returns how many
+// children it priced, how many it left out, unread or held elsewhere or
+// with no call priced, and how many it counted at a resume leaf.
+func (b *builder) delegatedCost() (priced, excluded, resumed int) {
+	resolve := b.opts.Subsessions
+	if resolve == nil {
+		resolve = func(string) (*agentsession.Session, error) { return nil, nil }
+	}
+	path := b.t.Path
+	if len(path) == 0 {
+		path = b.t.Context.Entries
+	}
+	children, unread := agentsession.DelegatedWork(path, resolve)
+	excluded = len(unread)
+	var walk func([]agentsession.Delegated)
+	walk = func(ds []agentsession.Delegated) {
+		for _, d := range ds {
+			paid := false
+			for _, c := range d.Calls {
+				if c.Usage == nil {
+					continue
+				}
+				if usd, ok := b.costOf(c.Entry.Base().ID, c.Model, *c.Usage); ok {
+					b.cost += usd
+					paid = true
+				}
+			}
+			if paid {
+				priced++
+			} else {
+				excluded++
+			}
+			for _, leaf := range d.Leaves {
+				if !leaf.Named {
+					resumed++
+					break
+				}
+			}
+			walk(d.Children)
+		}
+	}
+	walk(children)
+	return priced, excluded, resumed
 }
 
 // redactedFrom is a redacted session's redacted_from as the root
@@ -1361,15 +1482,13 @@ func (b *builder) markRedacted() {
 // document's steps are the context after compaction, so a run that
 // folded is described by its last summary and what followed; its cost
 // is not, or a leaderboard reads the tail's cost as the run's. The
-// model calls are what modelCall says. For a Trajectory built without
+// model calls are what [agentsession.ModelCalls] says. For a Trajectory built without
 // a Path, whose context is all there is, the totals the steps
 // accumulated stand and the calls are counted in the context.
 func (b *builder) pathTotals() (calls, hidden int) {
 	if len(b.t.Path) == 0 {
-		for _, e := range b.t.Context.Entries {
-			if _, _, n := modelCall(e, ""); n > 0 {
-				calls += n
-			}
+		for _, c := range agentsession.ModelCalls(b.t.Context.Entries) {
+			calls += c.Calls
 		}
 		return calls, 0
 	}
@@ -1378,82 +1497,26 @@ func (b *builder) pathTotals() (calls, hidden int) {
 		inContext[e.Base().ID] = true
 	}
 	b.prompt, b.completion, b.cached, b.cost, b.hasCost = 0, 0, 0, 0, false
-	model := ""
-	for _, e := range b.t.Path {
-		// The model in force, for a call that does not name its own:
-		// the same replay the steps use, so the two agree.
-		switch v := e.(type) {
-		case *agentsession.ConfigEntry:
-			if v.Replace {
-				model = ""
-			}
-			if v.Model != "" {
-				model = v.Model
-			}
-			continue
-		case *agentsession.CompactionEntry:
-			model = v.Config.Model
+	// Each call is priced at the model that served it, or the one in
+	// force: the same replay the steps use, so the two agree.
+	for _, c := range agentsession.ModelCalls(b.t.Path) {
+		calls += c.Calls
+		if !inContext[c.Entry.Base().ID] {
+			hidden += c.Calls
 		}
-		u, priced, n := modelCall(e, model)
-		if n == 0 {
-			continue
-		}
-		calls += n
-		if !inContext[e.Base().ID] {
-			hidden += n
-		}
+		u := c.Usage
 		if u == nil {
 			continue
 		}
 		b.prompt += u.InputTokens
 		b.completion += u.OutputTokens
 		b.cached += u.InputTokensDetails.CachedTokens
-		if usd, ok := b.costOf(e.Base().ID, priced, *u); ok {
+		if usd, ok := b.costOf(c.Entry.Base().ID, c.Model, *u); ok {
 			b.cost += usd
 			b.hasCost = true
 		}
 	}
 	return calls, hidden
-}
-
-// modelCall reports how many model calls e records, 0 for none, and
-// when it records any their usage, which may be nil, and the model they
-// are priced at: a response, as many as its attempts; a fold or a branch
-// summary, one; or a custom entry whose data is an object with a usage
-// member in the payload's shape, which RFC 0001 reads as calls the path
-// paid for that produced no response, a failed fold's summary calls for
-// one, as many as the attempts member beside the usage says, one when
-// it is absent; anything else such an entry carries is the writer's and
-// not read. A call that names no model is priced at inForce, the model
-// the config entries have in force.
-func modelCall(e agentsession.Entry, inForce string) (u *openresponses.Usage, priced string, n int) {
-	n = 1
-	switch v := e.(type) {
-	case *agentsession.ResponseEntry:
-		u, priced, n = v.Usage, inForce, v.Calls()
-		if v.Model != "" {
-			priced = v.Model
-		}
-	case *agentsession.CompactionEntry:
-		u, priced = v.Usage, v.Config.Model
-	case *agentsession.BranchSummaryEntry:
-		u, priced = v.Usage, inForce
-	case *agentsession.CustomEntry:
-		var paid struct {
-			Usage *openresponses.Usage `json:"usage"`
-			Model string               `json:"model"`
-		}
-		if json.Unmarshal(v.Data, &paid) != nil || paid.Usage == nil {
-			return nil, "", 0
-		}
-		u, priced, n = paid.Usage, inForce, v.Calls()
-		if paid.Model != "" {
-			priced = paid.Model
-		}
-	default:
-		return nil, "", 0
-	}
-	return u, priced, n
 }
 
 // subsessions resolves link entries: a subsession is embedded and
@@ -1485,15 +1548,21 @@ func (b *builder) subsessions() {
 		// The link names the session; the output entry names the point
 		// in it the answer was taken from. With the second, the
 		// document says which of a branched child's leaves was used;
-		// without it, the projection picks the child's main path and
-		// the document turns on that choice rather than on the record.
+		// without it, the projection takes the leaf a reader resuming
+		// the child takes, as RFC 0001's link rule counts its cost, and
+		// says it took it: child_leaf_named is false.
 		leaf := b.answeredFrom(l)
 		if leaf != "" {
 			ref.Extra["child_leaf"] = leaf
+			ref.Extra["child_leaf_named"] = true
 			ref.TrajectoryID = trajectoryID(l.Session, leaf)
 		}
-		if embedded := b.embed(l.Session, leaf); embedded != nil {
+		if embedded, taken := b.embed(l.Session, leaf); embedded != nil {
 			ref.TrajectoryID = embedded.TrajectoryID
+			if leaf == "" {
+				ref.Extra["child_leaf"] = taken
+				ref.Extra["child_leaf_named"] = false
+			}
 		} else {
 			// Nothing was embedded, and when the record named a leaf
 			// no other trajectory is put in its place. trajectory_id
@@ -1501,7 +1570,6 @@ func (b *builder) subsessions() {
 			// the session's document would be, which is all a document
 			// that could not load the child can offer.
 			ref.TrajectoryPath = MainDocumentName(l.Session)
-			b.unembedded++
 		}
 		if !b.attachRef(l.CallID, ref) {
 			rec["subagent_trajectory_ref"] = ref
@@ -1540,45 +1608,53 @@ func trajectoryID(sessionID, leaf string) string { return sessionID + "/" + leaf
 // leaf is the entry the parent recorded the answer as coming from. Given
 // one, that path is embedded and no other: a record naming a leaf this
 // export cannot resolve leaves the reference unembedded rather than
-// quietly substituting a different path. Given "", the child's main
-// path is chosen, which is the projection choosing where the record did
-// not say.
-func (b *builder) embed(sessionID, leaf string) *atif.Trajectory {
+// quietly substituting a different path. Given "", the leaf a reader
+// resuming the child takes is chosen ([agentsession.Session.Leaf], which
+// a branch or a leaf label moves off the last appended entry), the
+// projection choosing where the record did not say. It returns the leaf
+// it embedded at.
+func (b *builder) embed(sessionID, leaf string) (*atif.Trajectory, string) {
 	if b.opts.Subsessions == nil {
-		return nil
+		return nil, ""
 	}
 	sub, err := b.opts.Subsessions(sessionID)
 	if err != nil || sub == nil {
-		return nil
+		return nil, ""
+	}
+	if leaf == "" {
+		leaf = sub.Leaf()
 	}
 	var chosen *Trajectory
 	for t, err := range Trajectories(sub, b.opts.Preferences...) {
-		if err != nil {
-			continue
-		}
-		if (leaf == "" && t.Main) || (leaf != "" && t.LeafID == leaf) {
+		if err == nil && t.LeafID == leaf {
 			t := t
 			chosen = &t
 		}
 	}
 	if chosen == nil {
-		return nil
+		// An entry with children, such as an answer the child was
+		// continued past: its path, as At builds it.
+		t, err := At(sub, leaf, b.opts.Preferences...)
+		if err != nil {
+			return nil, ""
+		}
+		chosen = &t
 	}
 	opts := b.opts
 	opts.Redactors = nil // the parent's redactors run over the whole document
 	opts.Notes = ""
 	doc, err := ToATIF(*chosen, opts)
 	if err != nil {
-		return nil
+		return nil, ""
 	}
 	doc.TrajectoryID = trajectoryID(sessionID, chosen.LeafID)
 	for _, existing := range b.doc.SubagentTrajectories {
 		if existing.TrajectoryID == doc.TrajectoryID {
-			return existing
+			return existing, chosen.LeafID
 		}
 	}
 	b.doc.SubagentTrajectories = append(b.doc.SubagentTrajectories, doc)
-	return doc
+	return doc, chosen.LeafID
 }
 
 // attachRef adds the ref to the observation result of callID.

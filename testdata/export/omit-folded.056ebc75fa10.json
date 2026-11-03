@@ -334,7 +334,135 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
-      "format": "agentsession/0.16",
+      "entries": {
+        "sha256:056ebc75fa1090a41fdbd7a6684c267817e29c15015d961a29d46a5782418bac": {
+          "parent": "sha256:c5c4dae56da100e43c5caa0d37db9a9bf39861ab98c7d1e0b8e12fc5f50aca48",
+          "ts": "2026-10-01T14:00:26Z",
+          "type": "response"
+        },
+        "sha256:0ed1e3ad46c5f08133212301e8bdcacba4c1113c1b8cd4b51b9573ea14768e9d": {
+          "parent": "sha256:6ffa7fe593851b4ed4334b3b3dba1ea2b1df6991cdb9eb59cc330da756916afe",
+          "ts": "2026-10-01T14:00:12Z",
+          "type": "item"
+        },
+        "sha256:1a9316001e143ef9916160821689fbc7543bec209667d482ab175360bbcf265f": {
+          "parent": "sha256:221f568952bffc3d179a3e3d7fa1bd0c0eb30cc7f5a5bc20361de7744a2e6bdc",
+          "ts": "2026-10-01T14:00:17Z",
+          "type": "item"
+        },
+        "sha256:221f568952bffc3d179a3e3d7fa1bd0c0eb30cc7f5a5bc20361de7744a2e6bdc": {
+          "body": {
+            "omit": {
+              "items": [
+                "sha256:c5b17c66c1c979b9a90290d6b3c0ef05411cf666c6ee121338445600c676ff4f"
+              ]
+            }
+          },
+          "parent": "sha256:4d2709e194df6b0a9072b4d8c9afc7697f6f5ec9a1377cdb8c598389c121d501",
+          "ts": "2026-10-01T14:00:16Z",
+          "type": "config"
+        },
+        "sha256:35e4e4379af433b746698243d2bdfe161411e83180a8ff4a4c00160aa90dffc9": {
+          "body": {
+            "model": "gpt-5-mini"
+          },
+          "parent": "sha256:3b19846ddb1ca83ef3af8bebe4becc6b5f6a3b39a9a51c91a68f8eb1b10bc619",
+          "ts": "2026-10-01T14:00:22Z",
+          "type": "config"
+        },
+        "sha256:3b19846ddb1ca83ef3af8bebe4becc6b5f6a3b39a9a51c91a68f8eb1b10bc619": {
+          "body": {
+            "config": {
+              "model": "gpt-5",
+              "instructions": "Be brief.",
+              "omit": {
+                "reasoning": "other_models",
+                "items": [
+                  "sha256:c5b17c66c1c979b9a90290d6b3c0ef05411cf666c6ee121338445600c676ff4f"
+                ]
+              }
+            },
+            "first_kept": "sha256:0ed1e3ad46c5f08133212301e8bdcacba4c1113c1b8cd4b51b9573ea14768e9d",
+            "summary": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Summary of the migration so far."
+                }
+              ]
+            }
+          },
+          "parent": "sha256:aaffa5e6bdb35b0cd90deb3ed2be8da1419db3fa80675b1daffedad0ea70b7a3",
+          "ts": "2026-10-01T14:00:21Z",
+          "type": "compaction"
+        },
+        "sha256:446377d0e0b46b7175be1290693e63731f2cc09c4b184d212ef9e2da795bb86b": {
+          "body": {
+            "response": "resp_4"
+          },
+          "parent": "sha256:1a9316001e143ef9916160821689fbc7543bec209667d482ab175360bbcf265f",
+          "ts": "2026-10-01T14:00:18Z",
+          "type": "item"
+        },
+        "sha256:4d2709e194df6b0a9072b4d8c9afc7697f6f5ec9a1377cdb8c598389c121d501": {
+          "parent": "sha256:f5840bad3004d05b433c2a361e3678dea27974d0b36451b6d68c2ad7c4789e9c",
+          "ts": "2026-10-01T14:00:15Z",
+          "type": "response"
+        },
+        "sha256:979a1d8510b45e15541ec437fca762282508d4bb82317eaa719b31ddd8476d22": {
+          "body": {
+            "response": "resp_3"
+          },
+          "parent": "sha256:0ed1e3ad46c5f08133212301e8bdcacba4c1113c1b8cd4b51b9573ea14768e9d",
+          "ts": "2026-10-01T14:00:13Z",
+          "type": "item"
+        },
+        "sha256:aaffa5e6bdb35b0cd90deb3ed2be8da1419db3fa80675b1daffedad0ea70b7a3": {
+          "parent": "sha256:ce2f909961bce5ef70bde7c79954f24e9d0bc0dc7ed0fe01bd455e333aeb70ac",
+          "ts": "2026-10-01T14:00:20Z",
+          "type": "response"
+        },
+        "sha256:b676f0a02e34b8ead9a9c0b17d473661faa9e840b66dc04c54dcf4d8e4212c8e": {
+          "body": {
+            "response": "resp_5"
+          },
+          "parent": "sha256:d6d4842a83af26e4a82a6d813c974e15e746d9c22d9ed9ed605059d74b787a32",
+          "ts": "2026-10-01T14:00:24Z",
+          "type": "item"
+        },
+        "sha256:c5c4dae56da100e43c5caa0d37db9a9bf39861ab98c7d1e0b8e12fc5f50aca48": {
+          "body": {
+            "response": "resp_5"
+          },
+          "parent": "sha256:b676f0a02e34b8ead9a9c0b17d473661faa9e840b66dc04c54dcf4d8e4212c8e",
+          "ts": "2026-10-01T14:00:25Z",
+          "type": "item"
+        },
+        "sha256:ce2f909961bce5ef70bde7c79954f24e9d0bc0dc7ed0fe01bd455e333aeb70ac": {
+          "body": {
+            "response": "resp_4"
+          },
+          "parent": "sha256:446377d0e0b46b7175be1290693e63731f2cc09c4b184d212ef9e2da795bb86b",
+          "ts": "2026-10-01T14:00:19Z",
+          "type": "item"
+        },
+        "sha256:d6d4842a83af26e4a82a6d813c974e15e746d9c22d9ed9ed605059d74b787a32": {
+          "parent": "sha256:35e4e4379af433b746698243d2bdfe161411e83180a8ff4a4c00160aa90dffc9",
+          "ts": "2026-10-01T14:00:23Z",
+          "type": "item"
+        },
+        "sha256:f5840bad3004d05b433c2a361e3678dea27974d0b36451b6d68c2ad7c4789e9c": {
+          "body": {
+            "response": "resp_3"
+          },
+          "parent": "sha256:979a1d8510b45e15541ec437fca762282508d4bb82317eaa719b31ddd8476d22",
+          "ts": "2026-10-01T14:00:14Z",
+          "type": "item"
+        }
+      },
+      "format": "agentsession/0.17",
       "leaf": "sha256:056ebc75fa1090a41fdbd7a6684c267817e29c15015d961a29d46a5782418bac",
       "main": true
     },
