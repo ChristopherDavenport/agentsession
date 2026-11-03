@@ -38,6 +38,8 @@ versions may break the API.
   the same session's without the member) and
   `bad-instructions-part-list` (an empty list, an `id` named twice), an
   export golden, and the redaction round trip over the new fixture.
+  A layer carries no trust of its own: a writer carries each layer's
+  known trust in the item's `trust` (RFC 0001 0.18, `item`).
   `RewriteStrings` refuses with `ErrLayersMerged` a rewrite that would
   make two layers of a list one, or an `id` empty, since the item would
   then read as a person's input; a redactor keeps them distinct.

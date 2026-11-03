@@ -661,8 +661,13 @@ One conversation item in the payload profile.
   and the item is not an input of the run (`run`). A writer MUST NOT
   write it on any other item, or in another form, and a reader keeps
   one it cannot read this way as a member it does not know. A copy of
-  the item (`copied_from`) MAY carry it. The item's `trust`, if any,
-  labels the message whole, every layer composed into it included.
+  the item (`copied_from`) MAY carry it. An element carries no `trust`
+  of its own. A writer that knows a layer's trust, as an instructions
+  part's `trust` says it of a memory part, MUST carry those labels in
+  the item's `trust`, which labels the message whole: the union of the
+  labels of every layer composed into it, beside any the message has
+  for another reason. The path's trust then holds them, as it holds the
+  part's.
 - A `function_call` whose entry carries `copied_from` is a **copied
   call**: the call was made in the session named, and this session
   holds it only as context. A copied call is not a call of this
@@ -3218,8 +3223,9 @@ so every reader of 0.17 refuses those files until it is upgraded.
 
 Clarified, with no file reading differently:
 
-- An item's `trust` on a message composed from several layers labels
-  the message whole (`item`).
+- A writer carries each layer's known trust in the `trust` of the item
+  composed from it, which labels the message whole; an element of
+  `instructions_part` carries none of its own (`item`).
 - A child is priced when every call of it that records usage is
   priced, a child with no calls at 0, and a reader that reports cost
   leaves out one with a call it cannot price whole and says so, as it
