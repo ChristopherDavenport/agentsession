@@ -237,7 +237,7 @@
       "format": "agentsession/0.18",
       "leaf": "sha256:b60548d358de6046365d5013aca7896ab46474e4c5561e9a042259a79a3be440",
       "main": true,
-      "visible": "sha256:7ee075693a0b5554d249c6fe68bc9b5307f0dfcaccfafb5fc372e4a125f30915"
+      "visible": "sha256:c121595eb24bacd81b9b5f766ba349d2240d15a25d8e4c9f327cd7ffa4c6de76"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

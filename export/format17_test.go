@@ -413,17 +413,17 @@ func rebuildDocument(t *testing.T, raw []byte) rebuild {
 		got, err := VisibleHash(visible)
 		return err == nil && want != "" && got == want
 	}
-	whole := sealed(doc, DocumentVisible(doc))
+	docMatches := sealed(doc, DocumentVisible(doc)) && StepsInOrder(doc)
 	for _, sv := range steps {
 		step := obj(sv)
-		if whole && sealed(step, StepVisible(step)) {
+		if docMatches && sealed(step, StepVisible(step)) {
 			continue
 		}
 		for _, id := range stepEntries(step) {
 			r.verified[id] = false
 		}
 	}
-	if !whole {
+	if !docMatches {
 		for id := range r.verified {
 			r.verified[id] = false
 		}
@@ -617,6 +617,21 @@ func TestRebuildToTheDocumentsIDs(t *testing.T) {
 	})
 	if r := rebuildDocument(t, tools); r.restoresHeader() {
 		t.Error("a document changed in a tool definition alone restores the header")
+	}
+	// The steps are the export's in number and order: a step duplicated,
+	// or two swapped, each still hashing as written, does not match.
+	duplicated := edit(t, raw, func(doc map[string]any) {
+		steps := doc["steps"].([]any)
+		doc["steps"] = append(steps, steps[len(steps)-1])
+	})
+	swapped := edit(t, raw, func(doc map[string]any) {
+		steps := doc["steps"].([]any)
+		steps[0], steps[1] = steps[1], steps[0]
+	})
+	for name, changed := range map[string][]byte{"duplicated": duplicated, "swapped": swapped} {
+		if r := rebuildDocument(t, changed); r.restoresHeader() {
+			t.Errorf("a document with a step %s restores the header", name)
+		}
 	}
 	// A step appended after the export names no entry: it is not of the
 	// path, so the document does not hold the whole path (0.18).

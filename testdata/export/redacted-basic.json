@@ -493,7 +493,7 @@
         "profile": "test/v1",
         "session": "01995b2a-0000-7000-8000-000000000001"
       },
-      "visible": "sha256:2d59b3219343def15562b6983002d076f85a63dc5e84e3918fa8ba1374d88239"
+      "visible": "sha256:a8407bd1709f5652c6531ddfa8d84b7ed990f19963693d48236767e29e442487"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

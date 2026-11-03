@@ -249,7 +249,7 @@
       },
       "leaf": "sha256:0b9d4d6fb06c6ad39d8ebf31be35bde8f499a5fe45d976c556625edb12f7bf9c",
       "name": "Branching demo",
-      "visible": "sha256:992d9370b5a143c37a8a572592c984466e7f345f99eccceec78ba6ac106d4adc"
+      "visible": "sha256:fb0fb381777c8c08eeaf5765a9fe95c2a5d5a4cfe94fdabcfc07b3ddda9669cc"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

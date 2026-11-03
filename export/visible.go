@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/ChristopherDavenport/agentsession/atif"
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
@@ -51,19 +52,35 @@ func StepVisible(step map[string]any) map[string]any {
 }
 
 // DocumentVisible returns the visible fields of a document, the document
-// as JSON: every member but steps, subagent_trajectories and extra, with
-// extra removed from agent and from final_metrics. Among them are the
-// agent's name, version, model_name and tool_definitions, notes and the
-// final metrics. The steps are held to their own hashes, and an embedded
-// trajectory to its own.
+// as JSON: every member but subagent_trajectories and extra, with extra
+// removed from agent and from final_metrics, and steps replaced by their
+// number, so a step removed or added changes the hash. Among them are
+// the agent's name, version, model_name and tool_definitions, notes and
+// the final metrics. Each step is held to its own hash, and its step_id
+// to its position ([StepsInOrder]); an embedded trajectory to its own.
 func DocumentVisible(doc map[string]any) map[string]any {
 	out := clone(doc).(map[string]any)
-	delete(out, "steps")
+	out["steps"] = len(list(doc["steps"]))
 	delete(out, "subagent_trajectories")
 	delete(out, "extra")
 	dropExtra(out["agent"])
 	dropExtra(out["final_metrics"])
 	return out
+}
+
+// StepsInOrder reports whether the steps of a document, as JSON, are
+// numbered by their position, step_id 1 for the first: a step duplicated
+// or two swapped after the export, each still hashing as written, are
+// not, and the document then matches nothing.
+func StepsInOrder(doc map[string]any) bool {
+	for i, sv := range list(doc["steps"]) {
+		step, _ := sv.(map[string]any)
+		n, ok := step["step_id"].(json.Number)
+		if !ok || n.String() != strconv.Itoa(i+1) {
+			return false
+		}
+	}
+	return true
 }
 
 // VisibleHash is the hash ExtraVisible holds for visible fields v, a

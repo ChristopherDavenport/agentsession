@@ -2822,12 +2822,14 @@ the hash of the step's visible fields, and `visible` under
   `is_copied_context` and `llm_call_count`, as the step holds them, and
   any member ATIF does not define.
 - The **visible fields of a document** are the document as written
-  without `steps`, `subagent_trajectories` and `extra`, with `extra`
-  removed from `agent` and from `final_metrics`: `schema_version`,
-  `session_id`, `trajectory_id`, `agent` with its `name`, `version`,
-  `model_name` and `tool_definitions`, `notes`, `final_metrics` and
-  `continued_trajectory_ref`, as the document holds them, and any member
-  ATIF does not define.
+  without `subagent_trajectories` and `extra`, with `extra` removed from
+  `agent` and from `final_metrics`, and `steps` replaced by the number
+  of steps: `schema_version`, `session_id`, `trajectory_id`, `agent`
+  with its `name`, `version`, `model_name` and `tool_definitions`,
+  `notes`, `final_metrics`, `continued_trajectory_ref` and the count of
+  steps, as the document holds them, and any member ATIF does not
+  define. The projection numbers its steps by position, `step_id` 1 for
+  the first.
 - The hash is SHA-256 over the canonical JSON (RFC 8785) of those
   fields, in the format's notation, `sha256:` and lowercase
   hexadecimal. The projection writes the hashes last, over the document
@@ -2855,7 +2857,10 @@ with the `visible` the document records there. The comparison is
 equality of the two hash strings and nothing else. An entry matches
 only when its `id`, its step's hash and the document's hash all match;
 an entry that maps to no step, a record's, needs its `id` and the
-document's hash. A document without `visible` matches nothing. The
+document's hash. A document without `visible`, or whose steps are not
+the export's in number and order, each `step_id` its position from 1,
+matches nothing: a step duplicated or two swapped would each still hash
+as written. The
 `id` covers the raw item and not what a reader of the document sees,
 so a change made to the visible fields alone, as a redaction applied
 to the document's text and not to its raw items is, leaves every `id`

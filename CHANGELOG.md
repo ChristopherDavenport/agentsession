@@ -56,7 +56,9 @@ versions may break the API.
   covers the raw item, so a redaction made in the document's visible
   text alone, or an edit to a step's `model_name` or a tool definition,
   left every `id` matching and the rebuilt session read as redacted.
-  Every export golden gains the hashes. The whole path it
+  The document's hash counts its steps, and `StepsInOrder` holds each
+  `step_id` to its position, so a step duplicated, swapped or removed
+  matches nothing. Every export golden gains the hashes. The whole path it
   needs before it restores the header's `redacted` and `redacted_from`
   reaches the leaf `trajectory_id` names, and every step names an entry;
   a step appended after the export is listed. The reference rebuild in
