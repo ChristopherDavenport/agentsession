@@ -2741,22 +2741,24 @@ Since 0.19 a redaction names every session by its **pseudonym**. A
 session ID is in the format's ID space when a redaction wrote it, so
 that publishing it reveals nothing a redaction hides, and the pseudonym
 of such an ID is the ID itself. A redactor decides it of each ID apart,
-from the original and from what it can read: an ID is in the format's
-ID space when it is the `id` of an original that is itself a redacted
-session; when the header of such an original names it; when an entry
-of the original carrying `redacted` names it in a member that names a
-session;
-or when the redactor can read the session it names and that session's
-header carries `redacted`. A redaction of a redacted session therefore
-derives what 0.18 derived for what the redaction before it wrote. Every
-other session ID is keyed, whether a native harness or a writer of this
-format minted it: a native original's own `id`, an ID named only by an
-entry appended natively to a redacted session, such as the link to a
-child a resumed redacted session started, and a subsession's derived
-ID, which is a hash of its parent's ID and a call ID. A redacted
-session's natively appended entries were never redacted, so the IDs
-they alone name are not published as they stand. The pseudonym of such
-an ID is the UUID of version 8 (RFC
+and takes an ID as in the format's ID space only when it verifies as a
+redacted session's derived ID: the redactor reads the header of the
+session the ID names, the original's own or one it can resolve, and
+that header's `id` is the ID, it carries `redacted`, its
+`redacted_from` carries a `profile`, and its `id` is the UUIDv5 that
+`redacted_from` derives, as below. A header's `redacted` flag alone is
+not enough, since anyone can write one, and nor is a member or an entry
+naming the ID, since an original that is not redacted can carry a
+`redacted` member it was never given. A redaction of a redacted session
+therefore derives what 0.18 derived for each ID it can so verify.
+Every other session ID is keyed, whether a native harness or a writer
+of this format minted it: a native original's own `id`, an ID named by
+an entry appended natively to a redacted session, such as the link to
+a child a resumed redacted session started, a subsession's derived ID,
+which is a hash of its parent's ID and a call ID, and a native ID a
+redaction before 0.19 left in a reference as written, which keyed
+loses its link to that session when the redactor cannot verify it, and
+keeps it hidden. The pseudonym of such an ID is the UUID of version 8 (RFC
 9562) whose bytes are the first 16 of HMAC-SHA-256 (RFC 2104) under the
 redaction's key over the UTF-8 bytes of the canonical form, as the
 entry hash writes it, of `["agentsession/pseudonym","<session id>","<profile>"]`,
@@ -2800,10 +2802,10 @@ the same profile and key: the UUIDv5 above, over that session's
 pseudonym, whether or not the redactor holds that redaction, so that
 what it writes does not depend on what it holds. One exception keeps a
 link to a published redaction whole: in a redaction of an original
-that is not itself a redacted session, a reference to a session the
-redactor can read and whose header carries `redacted`, as a fork of a
-redacted session names it in `parent_session`, names that session by
-its own `id`, since it is already a redaction. In a redacted session,
+that is not itself a redacted session, a reference to a session whose
+ID the redactor verifies as a redacted session's derived ID, as above,
+as a fork of a redacted session names it in `parent_session`, names
+that session by its own `id`, since it is already a redaction. In a redacted session,
 a session that a reference names and that a reader cannot find was not
 published with it: a reader concludes nothing from its absence, and in
 particular not that a linked child never started. A holder of the
@@ -3478,7 +3480,10 @@ reader of 0.18 refuses those files until it is upgraded.
   original's ID without a key, which let anyone who held the native ID
   confirm that a published redaction was made from it, and left a
   reference into a session it did not hold the redaction of as written.
-  A redaction of a redacted session derives what 0.18 derived. A reader
+  A redaction of a redacted session derives what 0.18 derived for each
+  ID it verifies as a redacted session's derived ID, and keys every
+  other, a native ID a 0.18 redaction left as written among them. A
+  reader
   no longer concludes from a redacted session's link naming a session
   it cannot find that the child never started.
 - A redactor rewrites, wherever it appears in text, each session ID it

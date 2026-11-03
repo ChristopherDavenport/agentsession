@@ -61,15 +61,18 @@ versions may break the API.
   references, `Session` as a `Remap.Session` callback that re-points
   every reference whether or not its redaction is held, and
   `ReplaceIDs(ids)` for text, with `SessionIDsNamed(s)` reading the IDs
-  to rewrite from the original alone. Whether an ID is its own
-  pseudonym is decided of each ID: a redacted original's own ID, its
-  header's, and those its redacted entries name are, so a redaction of a
-  redaction derives what 0.18 did for what that redaction wrote; an ID
-  named only by an entry appended natively to a redacted session, such
-  as a child a resumed redaction started, is keyed. `WithResolve` lets
-  the redaction read the sessions it names: one whose header carries
-  `redacted` is its own pseudonym, and a native original's reference to
-  it, as a fork of a redaction names it in `parent_session`, keeps its
+  to rewrite from the original alone. An ID is its own pseudonym only
+  when it verifies as a redacted session's derived ID
+  (`VerifiesAsRedacted`: the header under that ID carries `redacted`, a
+  `redacted_from` with a profile, and the ID that `redacted_from`
+  derives), the original's own by its header and any other through
+  `WithResolve`, so a redaction of a redaction derives what 0.18 did for
+  each ID it verifies. A `redacted` flag or a redacted entry naming an
+  ID proves nothing: every other ID is keyed, a child a resumed
+  redaction spawned natively and a native ID a 0.18 redaction left as
+  written among them (its link is lost unless verified). A native
+  original's reference to a verified redaction, as a fork of one names
+  it in `parent_session`, keeps its
   ID. A `RedactionNames` never prints its key: `String`, `GoString` and
   `LogValue` name the original and the profile. `RedactedSessionID(pseudonym, profile)` keeps its signature and
   now takes the pseudonym: **redacted IDs change for every new

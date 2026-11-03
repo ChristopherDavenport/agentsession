@@ -84,7 +84,12 @@ func TestPseudonymVectors(t *testing.T) {
 				t.Errorf("%s: %s is not a UUIDv8", c.Note, p)
 			}
 		}
-		n, err := NewRedactionNames(key, New(Header{ID: c.ID, Redacted: c.Redacted}), v.Profile)
+		h := Header{ID: c.ID}
+		if c.Redacted {
+			// The first case's redaction, which verifies as derived.
+			h.Redacted, h.RedactedFrom = true, &RedactedFrom{Session: v.Cases[0].Pseudonym, Profile: v.Profile}
+		}
+		n, err := NewRedactionNames(key, New(h), v.Profile)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -836,66 +841,84 @@ func TestRemapRefsUnmappedIntoRepointedSession(t *testing.T) {
 	}
 }
 
-// TestRedactionNamesPerID: whether an ID is its own pseudonym is decided
-// of each ID apart (RFC 0001, The redacted session, 0.19). A resumed
-// redacted session names a child by a redacted link and another by a
-// link appended natively: a redaction of it derives the first unkeyed,
-// as 0.18 did, and keys the second, which was never published as it
-// stands. A native fork of a redacted session R names R in
-// parent_session: read through WithResolve, R is a redaction already and
-// the reference keeps R's ID; unread, it is keyed like any other.
+// TestRedactionNamesPerID: an ID is its own pseudonym only when it
+// verifies as a redacted session's derived ID (RFC 0001, The redacted
+// session, 0.19): its header, the original's or one WithResolve reads,
+// has that ID, carries redacted, a redacted_from with a profile, and the
+// ID that redacted_from derives. A verified redaction R's own ID is its
+// pseudonym, and a native fork of R keeps R's ID in parent_session. A
+// header claiming redacted for a native ID, or naming another ID, is
+// forged and keyed; so is a child a resumed redaction spawned natively,
+// a native ID a pre-0.19 redaction left as written though a redacted
+// entry names it, and the own ID of a redaction whose id is not derived.
 func TestRedactionNamesPerID(t *testing.T) {
 	key := testKey(t)
 	const p = "p@1"
-	r := New(Header{ID: "red-r", Redacted: true, RedactedFrom: &RedactedFrom{Session: "pseudo", Profile: p}})
-	first := NewSpawnLink("child-redacted", "s1")
-	if err := SetRedacted(first, []Span{{From: 1, To: 1}}); err != nil {
+	keyed := func(id string) string { k, _ := Pseudonym(key, id, p); return RedactedSessionID(k, p) }
+	rid := RedactedSessionID("pseudo", p)
+	r := New(Header{ID: rid, Redacted: true, RedactedFrom: &RedactedFrom{Session: "pseudo", Profile: p}})
+	left := NewSubsessionLink("native-child", "call_1") // a 0.18 redaction left it as written
+	if err := SetRedacted(left, []Span{{From: 1, To: 1}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Commit(first); err != nil {
+	if _, err := r.Commit(left); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Append(NewSpawnLink("child-native", "s2")); err != nil {
+	if _, err := r.Append(NewSpawnLink("spawned-child", "s2")); err != nil {
 		t.Fatal(err)
 	}
 	n, err := NewRedactionNames(key, r, p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyed := func(id string) string { k, _ := Pseudonym(key, id, p); return RedactedSessionID(k, p) }
-	if got := n.Redaction("child-redacted"); got != RedactedSessionID("child-redacted", p) {
-		t.Errorf("a child a redacted entry names: %s", got)
+	if n.ID() != RedactedSessionID(rid, p) || n.RedactedFrom().Session != rid {
+		t.Errorf("a verified redaction's own ID: %s, from %+v", n.ID(), n.RedactedFrom())
 	}
-	if got := n.Redaction("child-native"); got != keyed("child-native") {
-		t.Errorf("a child only a native entry names: %s, want it keyed %s", got, keyed("child-native"))
+	for _, id := range []string{"native-child", "spawned-child"} {
+		if got := n.Redaction(id); got != keyed(id) {
+			t.Errorf("%s: %s, want it keyed %s", id, got, keyed(id))
+		}
 	}
-	if n.ID() != RedactedSessionID("red-r", p) {
-		t.Errorf("the redacted original's own ID: %s", n.ID())
+	// A redacted header whose id is not the one its redacted_from
+	// derives proves nothing: its own ID is keyed.
+	fake := New(Header{ID: "native-id", Redacted: true, RedactedFrom: &RedactedFrom{Session: "pseudo", Profile: p}})
+	if nf, _ := NewRedactionNames(key, fake, p); nf.RedactedFrom().Session == "native-id" {
+		t.Errorf("an underived redacted id taken as published: %+v", nf.RedactedFrom())
 	}
 
-	fork := New(Header{ID: "fork-f", ParentSession: "red-r"})
+	fork := New(Header{ID: "fork-f", ParentSession: rid})
 	if _, err := fork.Append(NewItemEntry(openresponses.UserText("more"))); err != nil {
 		t.Fatal(err)
 	}
-	unread, _ := NewRedactionNames(key, fork, p)
-	if got := unread.Redaction("red-r"); got != keyed("red-r") {
-		t.Errorf("unread R: %s, want it keyed", got)
+	forged := map[string]*Session{
+		"native-x": New(Header{ID: "native-x", Redacted: true}),
+		"native-y": New(Header{ID: "native-y", Redacted: true, RedactedFrom: &RedactedFrom{Session: "pseudo", Profile: p}}),
+		"native-z": r, // a real redaction, under another ID
 	}
 	read, _ := NewRedactionNames(key, fork, p)
 	read.WithResolve(func(id string) (*Session, error) {
-		if id == "red-r" {
+		if id == rid {
 			return r, nil
 		}
-		return nil, nil
+		return forged[id], nil
 	})
-	if got := read.Redaction("red-r"); got != "red-r" {
-		t.Errorf("readable redacted R: %s, want R's own ID", got)
+	if got := read.Redaction(rid); got != rid {
+		t.Errorf("a verified redaction R: %s, want R's own ID", got)
 	}
-	if read.ID() != keyed("fork-f") || read.RedactedFrom().Session == "fork-f" {
+	for id := range forged {
+		if got := read.Redaction(id); got != keyed(id) {
+			t.Errorf("forged %s: %s, want it keyed", id, got)
+		}
+	}
+	unread, _ := NewRedactionNames(key, fork, p)
+	if got := unread.Redaction(rid); got != keyed(rid) {
+		t.Errorf("unread R: %s, want it keyed", got)
+	}
+	if read.ID() != keyed("fork-f") {
 		t.Errorf("the native fork's own ID: %s", read.ID())
 	}
 	h, _ := RemapHeaderRefs(fork.Header(), Remap{Session: read.Session})
-	if h.ParentSession != "red-r" {
+	if h.ParentSession != rid {
 		t.Errorf("parent_session re-pointed to %s", h.ParentSession)
 	}
 }
