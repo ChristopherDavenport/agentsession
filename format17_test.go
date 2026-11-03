@@ -22,6 +22,7 @@ var fixtures017 = map[string]func(t *testing.T) *Session{
 	"cost-children":            func(t *testing.T) *Session { p, _, _ := costChildrenFixture(t); return p },
 	"cost-children-child":      func(t *testing.T) *Session { _, c, _ := costChildrenFixture(t); return c },
 	"cost-children-grandchild": func(t *testing.T) *Session { _, _, g := costChildrenFixture(t); return g },
+	"env-snapshot":             envSnapshotFixture,
 }
 
 // badFixtures017 are the 0.17 negative fixtures: each a valid file whose
@@ -655,5 +656,78 @@ func TestCostChildrenFixture(t *testing.T) {
 	children, _ = DelegatedWork(bare, resolve)
 	if len(children) != 1 || children[0].LeafNamed || children[0].Leaf != childA.Leaf() || describe(children[0]) != "gpt-5-mini:50,gpt-5-mini:60,gpt-5-mini:70" {
 		t.Errorf("without parents child A is counted as %+v", children)
+	}
+}
+
+// envSnapshotFixture builds the session env-snapshot.jsonl holds (RFC
+// 0001, env, since 0.17): an env with cwd, an abbreviated git revision
+// and a local workspace on a host, then a turn; after it two branches,
+// one whose env names a new cwd alone, which leaves the workspace absent
+// and is a substitution, the vcs unsaid, and one whose env repeats every
+// member it still knows beside the new cwd, which is none.
+func envSnapshotFixture(t *testing.T) *Session {
+	t.Helper()
+	s, must, say := fixtureSession(t, Header{ID: "01995b2a-0000-7000-8000-000000000047"}, "2026-11-02T16:00:00Z")
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Work in the repo.")})
+	full := func(cwd string) *EnvEntry {
+		e := NewEnvEntry(cwd)
+		e.VCS = &VCS{System: "git", Revision: "a1b2c3d"}
+		e.SetWorkspace("local", "").Host = "laptop"
+		return e
+	}
+	must(full("/home/u/proj"))
+	must(NewItemEntry(openresponses.UserText("Build it.")))
+	say("resp_1", "Built.")
+	turn := s.Leaf()
+	must(NewEnvEntry("/home/u/proj/service"))
+	must(NewItemEntry(openresponses.UserText("Now the service.")))
+	say("resp_2", "Built the service.")
+	if err := s.Branch(turn); err != nil {
+		t.Fatal(err)
+	}
+	must(full("/home/u/proj/service"))
+	must(NewItemEntry(openresponses.UserText("Now the service.")))
+	say("resp_3", "Built the service.")
+	return s
+}
+
+// TestEnvSnapshotFixture reads the env-snapshot fixture: on the branch
+// whose env names a cwd alone that env is a substitution to the absent
+// workspace and says nothing of the vcs; on the branch that repeats every
+// member it is none; the abbreviated revision is kept as written; and the
+// header's cwd is the working directory only before the first env.
+func TestEnvSnapshotFixture(t *testing.T) {
+	checkBuilt(t, "env-snapshot")
+	s := loadFixture(t, "env-snapshot")
+	leaves := s.Leaves()
+	if len(leaves) != 2 {
+		t.Fatalf("%d leaves", len(leaves))
+	}
+	bare, whole := s.Path(leaves[0]), s.Path(leaves[1])
+	subs := Substitutions(bare)
+	if len(subs) != 1 || subs[0].Workspace != nil || subs[0].CWD != "/home/u/proj/service" {
+		t.Errorf("on the cwd-only branch the substitutions are %+v", subs)
+	}
+	if env := EnvInForce(bare); env == nil || env.VCS != nil || env.Workspace != nil {
+		t.Errorf("on the cwd-only branch the env in force is %+v", env)
+	}
+	if subs := Substitutions(whole); len(subs) != 0 {
+		t.Errorf("on the whole branch the substitutions are %+v", subs)
+	}
+	env := EnvInForce(whole)
+	if env == nil || env.VCS == nil || env.VCS.Revision != "a1b2c3d" || env.Workspace == nil || env.Workspace.Host != "laptop" {
+		t.Errorf("on the whole branch the env in force is %+v", env)
+	}
+	h := s.Header()
+	h.CWD = "/srv/elsewhere"
+	if got := WorkingDir(h, whole[:1]); got != "/srv/elsewhere" {
+		t.Errorf("before the first env the working directory is %q", got)
+	}
+	if got := WorkingDir(h, whole); got != "/home/u/proj/service" {
+		t.Errorf("after it the working directory is %q", got)
+	}
+	noCWD := append(append([]Entry(nil), whole...), &EnvEntry{VCS: &VCS{System: "git"}})
+	if got := WorkingDir(h, noCWD); got != "" {
+		t.Errorf("an env naming no cwd leaves the working directory %q, want unsaid", got)
 	}
 }

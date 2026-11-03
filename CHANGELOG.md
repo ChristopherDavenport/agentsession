@@ -72,6 +72,17 @@ versions may break the API.
   delegated work. Fixtures `cost-children`, `cost-children-child` and
   `cost-children-grandchild`.
 
+- **An `env` entry is a whole snapshot (RFC 0001 0.17, `env`,
+  clarified).** `EnvInForce` returns the latest `env` on a path, whose
+  members are all that holds: one it leaves out is not carried forward.
+  `WorkingDir` takes its `cwd`, and the header's only before the first
+  `env`. `Substitutions` returns the `env` entries after a response
+  whose workspace differs from the one in force, the absent one
+  included, as the OpenTelemetry projection already marks them. A
+  `vcs.revision` that is an abbreviation is kept as written. Fixture
+  `env-snapshot`: a `cwd`-only `env` after a response is a substitution
+  to the absent workspace, one repeating every member is none.
+
 ## v0.0.33 - 2026-11-02
 
 - **Format 0.16 (RFC 0001, draft 0.16).** `Format` and `FormatMinor`
