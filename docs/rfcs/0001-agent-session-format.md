@@ -2811,16 +2811,17 @@ sees, as hashes: `visible` under `agentsession` in each step's `extra`,
 the hash of the step's visible fields, and `visible` under
 `agentsession` in the top-level `extra`, the hash of the document's.
 
-- The **visible fields of a step** are the step as written with
-  `extra` removed from it, from each element of `tool_calls`, from
-  `metrics`, and from each element of `observation.results` and of each
-  result's `subagent_trajectory_ref`. They are its `step_id`,
+- The **visible fields of a step** are the step as written, its
+  `extra` included at every depth, but for `visible` under
+  `agentsession` in its `extra`, the hash itself: its `step_id`,
   `timestamp`, `source`, `model_name`, `reasoning_effort`, `message`,
-  `reasoning_content`, `tool_calls`, each with its `tool_call_id`,
-  `function_name` and `arguments`, `observation`, each result with its
-  `source_call_id`, `content` and `subagent_trajectory_ref`, `metrics`,
-  `is_copied_context` and `llm_call_count`, as the step holds them, and
-  any member ATIF does not define.
+  `reasoning_content`, `tool_calls`, `observation` with each result's
+  `source_call_id`, `content`, `subagent_trajectory_ref` and `extra`,
+  `metrics`, `is_copied_context`, `llm_call_count`, its `extra`, and any
+  member ATIF does not define. A step's `extra` holds copies of entry
+  text a reader sees, a queued input's item and a decision's `args`
+  among them, which no `id` covers there. A reader adds nothing to a
+  step it checks.
 - The **visible fields of a document** are the document as written
   without `subagent_trajectories` and `extra`, with `extra` removed from
   `agent` and from `final_metrics`, and `steps` replaced by the number

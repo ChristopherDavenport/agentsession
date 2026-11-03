@@ -16,7 +16,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:a59feae65ca6f16dddcb340b405e95dac8dc6832f958b57ed78fbd7f1ccaf4db",
-          "visible": "sha256:31b933f2a6867883029607ec8bbeebfd5005e3efa6587d95bb4114bdcf2960ed"
+          "visible": "sha256:ac5bffe6126211d675e20df8ae47018df7c44806e93f8d9ee9dce04cf41b377e"
         },
         "config_entries": [
           "sha256:ee58faaa90523b0450e520f0534d52dd870aa0e83b038a4af9b5e92f35d7dbc0"
@@ -49,7 +49,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:395c1309639ca3743698f2a9a789f71be3ec72680e24aa2b8ea2ab7cad4d0cee",
-          "visible": "sha256:e0adb8da970269eb7670aa2cb04a0674507ee440430ab33eee477046fbf57e1f"
+          "visible": "sha256:74103783c973cd91a05c0e2f1a42a331257c29104bd0f8afcec323cf5393bfb1"
         },
         "extensions": [
           {
@@ -101,7 +101,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:5114553995fe43b35aa5298320ed5379a1d20246e82cd3fb7aa8a60c3f052abb",
-          "visible": "sha256:92acbdb12de475646a8c72c799f60d47d1c3a89f494150ef5814f77ec2b941fa"
+          "visible": "sha256:aa99d39c34dea335587ac3032a1491f0c1ca76977e69bae6fa7a96f1ab873627"
         },
         "custom": [
           {
@@ -169,7 +169,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:7099cfd9ac3a8b30f64ae79e9abf5939620b4da41466b835e63da188f54932c5",
-          "visible": "sha256:05f7a23924455fe5aa18a1428f1291d7b95d8447fe5b98841bea91c7bacc6a21"
+          "visible": "sha256:024913d4f200815cfc79233166f43e355ba9077bffd30eff758e6c6aaf36c198"
         },
         "error": {
           "type": "server_error",

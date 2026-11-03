@@ -57,7 +57,9 @@ versions may break the API.
   covers the raw item, so a redaction made in the document's visible
   text alone, or an edit to a step's `model_name` or a tool definition,
   left every `id` matching and the rebuilt session read as redacted.
-  The document's hash counts its steps, and `StepsInOrder` holds each
+  A step's hash covers its `extra`, all but the hash itself, since it
+  holds copies of entry text, queued items and decision args, that no
+  `id` covers there. The document's hash counts its steps, and `StepsInOrder` holds each
   `step_id` to its position, so a step duplicated, swapped or removed
   matches nothing. Every export golden gains the hashes. The whole path it
   needs before it restores the header's `redacted` and `redacted_from`

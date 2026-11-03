@@ -24,7 +24,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:0d81a2de6f69702043032da23046ccd25346c1f6c33e4a22792568e8a37d9948",
-          "visible": "sha256:5f383a480d6ff19a15e86f9c93bb6558022795726a631cb205186ff2a1911ca2"
+          "visible": "sha256:159ff410dafa5aa6a88082626b3658f3f303b26503ad67e0d5e2d6269900dc32"
         },
         "context_management": {
           "boundary": "replace",
@@ -117,7 +117,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:1bcc199d8641acd348cae1b44d14bdab346fd6b77f1de0840de079c61eaf2f55",
-          "visible": "sha256:a0e124ae0be9839a5715f743c31405b0cc07c58fdba1a6164bb97e10719aacfa"
+          "visible": "sha256:c4ac576b0c0762fdb4701d60489baa41dea4016c0780c001eaae935fdc8c333e"
         },
         "item_entry_ids": [
           "sha256:e54256a3472e205c437e0e6f88bd114275dd5450603fcf66c59f142b60f509e1"
@@ -233,7 +233,7 @@
               "text": "[screenshot removed]"
             }
           ],
-          "visible": "sha256:2bb5362349efaea01fc36b8b733d2090e4cabeac0018cca0ddf172ad916089cc"
+          "visible": "sha256:6654d62d15f4f1579838f255d398376e957c143ac57d1d6cad07bfe2d78fba0d"
         },
         "config_entries": [
           "sha256:81d04a27f4f117cd464808fd3ad55eae3f2e748c79164a32560a0665f1580234"
@@ -357,7 +357,7 @@
               "text": "[screenshot removed]"
             }
           ],
-          "visible": "sha256:a2f2e5e2647c03b386a9dbbce30298c89074ff788e8d3631dbdf239583380fec"
+          "visible": "sha256:8ab0cece9511fe9403489acd2c487dd7f8a9e4d5cf12a615c0ae9c9db935e88b"
         },
         "config_entries": [
           "sha256:6eee5ecfe7560e63899952bf9624fee5eaa0f5375ef3870c0b4dfa695897be79"
@@ -453,7 +453,7 @@
               "text": "[screenshot removed]"
             }
           ],
-          "visible": "sha256:a682dba000371eeec57cc88175a273669a5a6457e3893b68974dce8c918d1b1f"
+          "visible": "sha256:16fb9c1cbaa3f2292d1c7c09f140f38df3fb26ea742898ad4a3c85469d980b9e"
         },
         "item_entry_ids": [
           "sha256:b5f1e9f80561777265198533f11143fe86fb52509bdf69996bad522fb3a890d4"
@@ -557,7 +557,7 @@
               "text": "[older screenshot]"
             }
           ],
-          "visible": "sha256:dda091c0a801d1287d6a578ef1ae9af7113b9e1838ad6851a9464416b9b4f9e0"
+          "visible": "sha256:413ff5f7314bdb101d33ab8064c0acfa370c17cea0aeb400e7b4fb0e644f401b"
         },
         "config_entries": [
           "sha256:80fb21e3b435841dc4a341d37b00bfa7463cd6aa217b774bf7566751556fa184"
@@ -615,7 +615,7 @@
               "text": "[older screenshot]"
             }
           ],
-          "visible": "sha256:2e538233d1531e106f71c41e10b008e08b2d71b92cec04059efde0c1d9a059ef"
+          "visible": "sha256:d1c987ff143ca99e864ec15c6646141669da247ab1bab64b4017e72d0ffeea01"
         },
         "item_entry_ids": [
           "sha256:74b3c09d4cbde32cb848a70185c6c2cb9425a9351ce15cc523b4a7274c4dddcd"

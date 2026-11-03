@@ -16,7 +16,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:a0c86c7f20b11565118856e619dfd4c738fe8be491b93f0651605987fd34e34a",
-          "visible": "sha256:546b7b3f8835d827ecb85a880c05d4f1a06f7a49e3d14ddf24a878ccd8f04dcc"
+          "visible": "sha256:3696570e3234d432804493d3d73dcc2e1956f40e9cfc674bbc39091ea272b527"
         },
         "config_entries": [
           "sha256:724acc124477e7cf308bbe7c95472f8c353221ce5d4af10a53a950ab3cb82722"
@@ -80,7 +80,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:ad63b85cb70fd5fd9fce166c812faadb3df7fa7e8c550c51980547d4109d58c8",
-          "visible": "sha256:512fae2bc15e2981a57e0e834b28dff4da0db754e7fdf626c17eb7fa9efb2326"
+          "visible": "sha256:2eed553d15ec2bf247500b5ebc4444d99de3f71d49d9569f74206fbbda555324"
         },
         "calls": {
           "call_agent": {
@@ -128,7 +128,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:0858ca14912a683a4ac1b8e208ca2511ca6b325ba60eb67bc221c43b10a35169",
-          "visible": "sha256:0735b540a0dfcb2bc62282bdc200a47ed4e80d0cb8275a9b3f590d88d489bab2"
+          "visible": "sha256:14e00a14b5af4103019afa1daa1c713b4e73c5c73e26f4840269577fbaff1b38"
         },
         "item_entry_ids": [
           "sha256:4067545727e092b516fc0e27a656beeadb63ee19dbd4f6f2ad6e0a785556109c"

@@ -16,7 +16,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:ee3b67f3af4e176d093978cbfa49154708ac27065612d76b3f837df2febe35ad",
-          "visible": "sha256:b96df6246ddf08568068faae34e305486b24d525520a4bac73b64104d9d324b3"
+          "visible": "sha256:8cac860b07bb23ac4180030ab840ad1d479532dec2da4c2587f4198de1357d10"
         },
         "config_entries": [
           "sha256:8bd68a5d5ae66b435170faa32b3d4e27e112af2697e50ec14bce7e8ba5b01fda"
@@ -97,7 +97,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:968fbad9b831134e939fd9711841c8bcdb113d9b87eee8322010c9e508108940",
-          "visible": "sha256:f11f6d1253489212016d019c418cc4d0307e4289fa0ecdb09973a3bdad83b77c"
+          "visible": "sha256:871cab92429a7909b60d461e9c9ce557803b381f4d798556c7a591f3737686a0"
         },
         "calls": {
           "call_billing": {

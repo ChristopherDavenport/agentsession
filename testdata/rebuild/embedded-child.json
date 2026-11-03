@@ -16,7 +16,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:434f9bd9d263044c19d3c14021290765e842795d7ebf17ec985157cd68545a57",
-          "visible": "sha256:3ab90152037618541daf23bdf0c519b7dab095f7c22e3bfb4aaef72916807e7a"
+          "visible": "sha256:6fe796987fc1eaf9daea1225579971bc5cba8bd9479ff12687f1320af7daddb5"
         },
         "config_entries": [
           "sha256:facbd561825719640fb5089d78e47f30e5c8e2b6ba87ff413b9a6cd8f0be65b4"
@@ -83,7 +83,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:5285eba3cf76084f6f4a7438bdaed07802d77d9ccdb5590a935aa4f8988897a4",
-          "visible": "sha256:cdd61aeb3011b33d15b2301b0268642f8b50f062e7cad891a0cb4a9949ff0901"
+          "visible": "sha256:6806568bf7271d88b7f1e261d541dbc057aa6c47222596d09e17116a5a22307c"
         },
         "item_entry_ids": [
           "sha256:4e244e3cec6c123ef6487c46bc2a7311bca9ef7b178cecc4deb78a5e3988816c"
@@ -216,7 +216,7 @@
               "redacted": [
                 2
               ],
-              "visible": "sha256:c1935cb25f7f3e38bfd250d77160dbe638553ca2229266c72b34135c26ce2f76"
+              "visible": "sha256:97a50c36feb0dd770767321d51f7e7a54fa1fa48775273106860b43dcfe82bf0"
             },
             "config_entries": [
               "sha256:bb6a29fddf1e5f2ee8bec26c70b704c2e1bb2716b8906c37830ec1b96595d8f5"
@@ -306,7 +306,7 @@
                   6
                 ]
               },
-              "visible": "sha256:99e3432fd5ef573f05f3ea5e01d20a8d806c389e7fc17d0da6aaed993909e8ce"
+              "visible": "sha256:a0daa437060602eee08c494d2e462645588c99d3ce7b4697eeb52bb82530a2f4"
             },
             "item_entry_ids": [
               "sha256:36a05597fb484070459b2226f64d2bbea7993b8331871643413c0c66b082bbae",
@@ -388,7 +388,7 @@
                   7
                 ]
               },
-              "visible": "sha256:4fdf33200f0be2f64af1c6ef8f3b3a8d63d7d7f926816655b188dce2e94c3d8d"
+              "visible": "sha256:e95f91189aff53bebf6d042570cddd46aa306de603815cf40aeff5dff66de9d8"
             },
             "item_entry_ids": [
               "sha256:ccef1b74716261c11c9bdbc07e81b25dd21d7723e8aa467c689a115b58457122"

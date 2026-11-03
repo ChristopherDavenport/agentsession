@@ -20,7 +20,7 @@
             "id": "/repo/CLAUDE.md",
             "source": "agentsmd"
           },
-          "visible": "sha256:ec6a0f9c4a623e3b6678f34892cfa33b6b40e52d6052f3898617c76a2ae2b4e5"
+          "visible": "sha256:7d8e0ec06e509d2c037ee11795ae0cf466192e21fa0b85988b135a187102e159"
         },
         "config_entries": [
           "sha256:096ae61047ffef0b060d448e4888154cdca45690bce95c89e43303e25599b8ec"
@@ -57,7 +57,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:af47fbe71ee844d52d1ea728bef7a76a1c0c2fb0609990fc36239324953848e1",
-          "visible": "sha256:8cb7c333ca0e5221e8b65f53dfc76e1f352d7502a7f1684edff05f4d18eb0bbb"
+          "visible": "sha256:84f839822ad0e701f644549aaa29b4ff382ca0717f0e8116cae7e6630a23bd6f"
         },
         "openresponses": {
           "item": {
@@ -83,7 +83,7 @@
       "extra": {
         "agentsession": {
           "entry_id": "sha256:be512ef5642f9a5ef05e262790ab32edafdf07dda6e76eb24a573881a027575e",
-          "visible": "sha256:82e8420553b076b25f5018df4efde6561c6c9e67eaa143f4d274fcc055c719a2"
+          "visible": "sha256:032944cd48197dad68d7012693c21589f7e50282d8f229860dce5f9f1887a785"
         },
         "item_entry_ids": [
           "sha256:cdac881fe7d765f730b174a8368ec78b778c1593cd2c0e1fd40ecccf6b5b3a79"

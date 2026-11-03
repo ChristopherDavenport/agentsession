@@ -365,3 +365,38 @@ func TestRedactorAtExportIsSeen(t *testing.T) {
 		t.Errorf("a redactor at export editing a message alone: verified %v", r.verified)
 	}
 }
+
+// TestStepExtraIsVisible: a step's extra holds copies of entry text, a
+// queued input's item among them, which a reader of the document sees,
+// so the step's hash covers it, all but the hash itself: the queued
+// copy edited alone leaves the step failing its hash (RFC 0001,
+// Projections/ATIF, 0.18).
+func TestStepExtraIsVisible(t *testing.T) {
+	s := loadFixture(t, "queued")
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := encode(t, mustDoc(t, tr))
+	if r := rebuildDocument(t, raw); !r.restoresHeader() {
+		t.Fatalf("the queued document as exported: whole %v, verified %v", r.whole, r.verified)
+	}
+	var edited string
+	changed := edit(t, raw, func(doc map[string]any) {
+		for _, sv := range doc["steps"].([]any) {
+			step := obj(t, sv)
+			queued, _ := obj(t, step["extra"])["queued"].([]any)
+			if len(queued) == 0 {
+				continue
+			}
+			content := obj(t, obj(t, queued[0])["item"])["content"].([]any)
+			obj(t, content[0])["text"] = "[redacted]"
+			edited, _ = obj(t, obj(t, step["extra"])[ExtraAgentSession])["entry_id"].(string)
+			return
+		}
+		t.Fatal("no step carries a queued input")
+	})
+	if r := rebuildDocument(t, changed); r.restoresHeader() || r.verified[edited] {
+		t.Errorf("a queued copy edited in a step's extra: verified %v", r.verified)
+	}
+}

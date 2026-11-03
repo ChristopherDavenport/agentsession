@@ -33,28 +33,16 @@ const ExtraVisible = "visible"
 const ExtraLeaf = "leaf"
 
 // StepVisible returns the visible fields of a step, the step as JSON:
-// the step as written with extra removed from it, from each element of
-// tool_calls, from metrics, and from each observation result and each
-// element of its subagent_trajectory_ref. Everything else is visible:
-// step_id, timestamp, source, model_name, reasoning_effort, message,
-// reasoning_content, tool_calls, observation, metrics,
-// is_copied_context, llm_call_count, and any member ATIF does not
-// define.
+// the step as written, its extra included at every depth, but for
+// extra.agentsession.visible, the hash itself. A step's extra holds
+// what a reader sees beside the ATIF fields, copies of entry text among
+// them, a queued input's item and a decision's args, so all of it is
+// held to the hash.
 func StepVisible(step map[string]any) map[string]any {
 	out := clone(step).(map[string]any)
-	delete(out, "extra")
-	for _, tc := range list(out["tool_calls"]) {
-		dropExtra(tc)
-	}
-	dropExtra(out["metrics"])
-	if o, ok := out["observation"].(map[string]any); ok {
-		for _, r := range list(o["results"]) {
-			dropExtra(r)
-			if rm, ok := r.(map[string]any); ok {
-				for _, ref := range list(rm["subagent_trajectory_ref"]) {
-					dropExtra(ref)
-				}
-			}
+	if extra, ok := out["extra"].(map[string]any); ok {
+		if as, ok := extra[ExtraAgentSession].(map[string]any); ok {
+			delete(as, ExtraVisible)
 		}
 	}
 	return out
