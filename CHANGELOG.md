@@ -70,7 +70,8 @@ versions may break the API.
   the redaction read the sessions it names: one whose header carries
   `redacted` is its own pseudonym, and a native original's reference to
   it, as a fork of a redaction names it in `parent_session`, keeps its
-  ID. `RedactedSessionID(pseudonym, profile)` keeps its signature and
+  ID. A `RedactionNames` never prints its key: `String`, `GoString` and
+  `LogValue` name the original and the profile. `RedactedSessionID(pseudonym, profile)` keeps its signature and
   now takes the pseudonym: **redacted IDs change for every new
   redaction, and a redaction resumed under 0.19 starts a new session**.
   `CheckRedactedID` reports a redacted header whose `id` is not the one

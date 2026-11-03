@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -937,5 +939,22 @@ func TestCalleesSkipHostStarted(t *testing.T) {
 	}
 	if got := Callees(s.Path(s.Leaf())); len(got) != 1 {
 		t.Errorf("a call's link: %+v", got)
+	}
+}
+
+// TestRedactionNamesHideTheKey: printing a RedactionNames, by %v, %+v,
+// %#v or through log/slog, never shows its key.
+func TestRedactionNamesHideTheKey(t *testing.T) {
+	key := []byte("a very secret redaction key, 32+")
+	n, err := NewRedactionNames(key, New(Header{ID: "orig"}), "p@1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("redacting", "names", n)
+	for _, out := range []string{fmt.Sprintf("%v", n), fmt.Sprintf("%+v", n), fmt.Sprintf("%#v", n), buf.String()} {
+		if strings.Contains(out, "secret") || strings.Contains(out, fmt.Sprint(key)) || !strings.Contains(out, "orig") {
+			t.Errorf("printed as %s", out)
+		}
 	}
 }

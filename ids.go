@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -187,7 +188,9 @@ func pseudonym(key []byte, id, profile string) string {
 // never published as it stands. A redaction of a redaction thus derives
 // what 0.18 derived for what the redaction before it wrote.
 //
-// A RedactionNames is safe for concurrent use.
+// A RedactionNames is safe for concurrent use. It never prints its key:
+// String, GoString and LogValue name the original and the profile alone;
+// use it by pointer, as NewRedactionNames returns it.
 type RedactionNames struct {
 	key      []byte
 	profile  string
@@ -301,6 +304,21 @@ func (n *RedactionNames) ID() string {
 // it is "".
 func (n *RedactionNames) RedactedFrom() *RedactedFrom {
 	return &RedactedFrom{Session: n.Pseudonym(n.original), Profile: n.profile}
+}
+
+// String names the redaction by its original and profile, never its
+// key.
+func (n *RedactionNames) String() string {
+	return "agentsession.RedactionNames{original: " + n.original + ", profile: " + n.profile + "}"
+}
+
+// GoString is String, so %#v does not print the key either.
+func (n *RedactionNames) GoString() string { return n.String() }
+
+// LogValue is the redaction for log/slog: its original and profile,
+// never its key.
+func (n *RedactionNames) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("original", n.original), slog.String("profile", n.profile))
 }
 
 // Session is a [Remap] Session callback: it re-points every reference
