@@ -217,7 +217,10 @@ var bodyMembers = map[string][]special{
 	TypeOutcome: {{path: memberPath("target"), role: roleEntry}},
 	TypeLink: {
 		{path: memberPath("target"), role: roleEntry, when: func(e Entry) bool { return e.(*LinkEntry).Target != "" }},
-		{path: memberPath("session"), role: roleSession},
+		// A link carrying a url names the callee's session in another
+		// system, an ID of that system's and not of this format's, which
+		// is text since 0.19 (RFC 0001, Every redacted entry).
+		{path: memberPath("session"), role: roleSession, when: func(e Entry) bool { return e.(*LinkEntry).URL == "" }},
 		{path: memberPath("call_id"), role: roleCallID},
 	},
 	TypeCustom: {{path: memberPath("call_id"), role: roleCallID}},
@@ -374,7 +377,9 @@ type Remapped struct {
 // outputs items and images before and the of of each omitted part that
 // is a keep, a positive keep and no id, and the target of a judged_by link and of a cancel notice,
 // which name an entry of this session. The session references are each
-// parents element's session and a link's session. A member of one of
+// parents element's session and the session of a link without a url;
+// a link carrying a url names a session of another system, which is
+// text (RFC 0001, Every redacted entry, since 0.19). A member of one of
 // those names in a form or place the format does not define it in, kept
 // as written by the decoder, such as an of beside an id, names nothing
 // and is left alone, as is an item's response, which is a provider's ID

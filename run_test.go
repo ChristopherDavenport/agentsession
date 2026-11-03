@@ -655,7 +655,7 @@ func TestRedactedSessionID(t *testing.T) {
 	}
 	// The name is the canonical JSON array, which for ASCII without
 	// escapes is the compact encoding.
-	if name, want := string(redactedName(original, "example.redact-home@1")), `["redacted","01995b2a-0000-7000-8000-000000000001","example.redact-home@1"]`; name != want {
+	if name, want := string(canonicalName("redacted", original, "example.redact-home@1")), `["redacted","01995b2a-0000-7000-8000-000000000001","example.redact-home@1"]`; name != want {
 		t.Errorf("name %s, want %s", name, want)
 	}
 	// Pinned so another implementation can check its derivation, each
@@ -671,7 +671,7 @@ func TestRedactedSessionID(t *testing.T) {
 		{original, "example.redact-home@1", `["redacted","01995b2a-0000-7000-8000-000000000001","example.redact-home@1"]`, "cfc636cd-f5a8-5ab4-845a-d172b9c5cc2b"},
 		{"o\u00e9\"\\\n<>\u2028", "p\u0001", "[\"redacted\",\"o\u00e9\\\"\\\\\\n<>\u2028\",\"p\\u0001\"]", "535d0fab-7e14-518f-8f22-45ee61302759"},
 	} {
-		if name := string(redactedName(tt.original, tt.profile)); name != tt.name {
+		if name := string(canonicalName("redacted", tt.original, tt.profile)); name != tt.name {
 			t.Errorf("name of (%q, %q) = %s, want %s", tt.original, tt.profile, name, tt.name)
 		}
 		if got := RedactedSessionID(tt.original, tt.profile); got != tt.want {

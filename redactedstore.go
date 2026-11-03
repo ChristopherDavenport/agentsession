@@ -1,6 +1,7 @@
 package agentsession
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -227,7 +228,50 @@ func readHeld(ctx context.Context, st Store, id string) (*Session, error) {
 // session that owns them, where st holds it and it is redacted, and are
 // left out of the mapping where it does not. The session returned is
 // s's own original.
+//
+// Original finds an original by the ID redacted_from names, as one
+// written before 0.19 names it, and as a redaction of a redacted
+// session names it since; since 0.19 a redaction of any other session
+// names its original by a keyed pseudonym, which [OriginalUnder] finds
+// with the key.
 func Original(ctx context.Context, st Store, s *Session) (*Session, map[string][]string, error) {
+	return original(ctx, st, nil, s)
+}
+
+// OriginalUnder is [Original] for the holder of the redaction key: an
+// original redacted_from names by its keyed pseudonym (RFC 0001, The
+// redacted session, since 0.19) is found as the session st holds, not
+// itself redacted, whose [Pseudonym] under key and redacted_from's
+// profile is the one named, after the ID as written is looked up, as
+// Original looks it up. The store needs no key and is not told it; the
+// lookup reads the headers st lists. A key shorter than
+// [RedactionKeySize] is refused with [ErrRedactionKey].
+func OriginalUnder(ctx context.Context, st Store, key []byte, s *Session) (*Session, map[string][]string, error) {
+	if len(key) < RedactionKeySize {
+		return nil, nil, ErrRedactionKey
+	}
+	return original(ctx, st, key, s)
+}
+
+// readOriginal reads the session from names, as [OriginalUnder] finds
+// it, and by its ID alone when key is nil.
+func readOriginal(ctx context.Context, st Store, key []byte, from *RedactedFrom) (*Session, error) {
+	orig, err := readHeld(ctx, st, from.Session)
+	if err == nil || key == nil || !errors.Is(err, ErrNoSession) {
+		return orig, err
+	}
+	for sum, lerr := range st.List(ctx, ListFilter{}) {
+		if lerr != nil {
+			return nil, lerr
+		}
+		if h := sum.Header; !h.Redacted && pseudonym(key, h.ID, from.Profile) == from.Session {
+			return readHeld(ctx, st, h.ID)
+		}
+	}
+	return nil, err
+}
+
+func original(ctx context.Context, st Store, key []byte, s *Session) (*Session, map[string][]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -238,7 +282,7 @@ func Original(ctx context.Context, st Store, s *Session) (*Session, map[string][
 	if h.RedactedFrom == nil {
 		return nil, nil, fmt.Errorf("%w: %s names no original in redacted_from", ErrNoSession, h.ID)
 	}
-	orig, err := readHeld(ctx, st, h.RedactedFrom.Session)
+	orig, err := readOriginal(ctx, st, key, h.RedactedFrom)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -271,7 +315,7 @@ func Original(ctx context.Context, st Store, s *Session) (*Session, map[string][
 			}
 		}
 		if ph := parent.Header(); ph.Redacted && ph.RedactedFrom != nil && len(mine) > 0 {
-			if po, err := readHeld(ctx, st, ph.RedactedFrom.Session); err == nil {
+			if po, err := readOriginal(ctx, st, key, ph.RedactedFrom); err == nil {
 				if err := mapPositions(m, mine, po); err != nil {
 					return nil, nil, err
 				}
@@ -312,17 +356,43 @@ func mapPositions(m map[string][]string, entries []Entry, orig *Session) error {
 // original about what was made from it, so this is how its holder
 // finds them. It reads every header the store lists; a header from
 // before 0.13 holds no redacted_from this package reads, and is not
-// one.
+// one. It matches id as redacted_from writes it: an original's ID
+// before 0.19, a redacted session's ID, or a pseudonym; the holder of
+// the key finds every redaction of an original by its ID with
+// [RedactionsUnder].
 func Redactions(ctx context.Context, st Store, id string) iter.Seq2[Summary, error] {
+	return redactions(st.List(ctx, ListFilter{}), func(from *RedactedFrom) bool { return from.Session == id })
+}
+
+// RedactionsUnder is [Redactions] for the holder of the redaction key:
+// it lists the sessions whose redacted_from names id as written or by
+// id's [Pseudonym] under key and that redacted_from's profile, so the
+// redactions of one original under every profile are found, each
+// profile deriving its own pseudonym (RFC 0001, The redacted session,
+// since 0.19). A key shorter than [RedactionKeySize] yields
+// [ErrRedactionKey] alone.
+func RedactionsUnder(ctx context.Context, st Store, key []byte, id string) iter.Seq2[Summary, error] {
+	if len(key) < RedactionKeySize {
+		return func(yield func(Summary, error) bool) { yield(Summary{}, ErrRedactionKey) }
+	}
+	key = bytes.Clone(key)
+	return redactions(st.List(ctx, ListFilter{}), func(from *RedactedFrom) bool {
+		return from.Session == id || from.Session == pseudonym(key, id, from.Profile)
+	})
+}
+
+// redactions yields the summaries of list that are redacted and whose
+// redacted_from match takes.
+func redactions(list iter.Seq2[Summary, error], match func(*RedactedFrom) bool) iter.Seq2[Summary, error] {
 	return func(yield func(Summary, error) bool) {
-		for sum, err := range st.List(ctx, ListFilter{}) {
+		for sum, err := range list {
 			if err != nil {
 				if !yield(Summary{}, err) {
 					return
 				}
 				continue
 			}
-			if from := sum.Header.RedactedFrom; from == nil || !sum.Header.Redacted || from.Session != id {
+			if from := sum.Header.RedactedFrom; from == nil || !sum.Header.Redacted || !match(from) {
 				continue
 			}
 			if !yield(sum, nil) {

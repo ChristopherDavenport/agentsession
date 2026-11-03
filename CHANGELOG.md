@@ -15,6 +15,46 @@ versions may break the API.
   `subsession` link name a child the host started by `spawn_id`, and
   names a redacted session's original by a keyed pseudonym, below.
 
+- **Breaking (format, API): a redaction names sessions by a keyed
+  pseudonym (RFC 0001 0.19, The redacted session).** 0.18 derived a
+  redacted session's `id`, and every reference a redaction rewrote, as
+  an unkeyed UUIDv5 over the original's ID, so anyone holding a native
+  session ID (the user's own `~/.claude` logs, the vendor) could confirm
+  which published redaction was made from it. Now `redacted_from.session`
+  is the original's pseudonym, the UUIDv8 of HMAC-SHA-256 under a key
+  the holder of the originals keeps over the canonical
+  `["agentsession/pseudonym","<id>","<profile>"]`, and the `id` and
+  every reference derive unkeyed from it, so a reader still recomputes
+  the `id` from the header. New: `Pseudonym(key, id, profile)`,
+  `RedactionKeySize` (32) and `ErrRedactionKey`, which refuses an absent
+  or short key: there is no default key and no unkeyed fallback.
+  `NewRedactionNames(key, original, profile)` derives one redaction's
+  names: `ID`, `RedactedFrom`, `Redaction(id)` for any session it
+  references, `Session` as a `Remap.Session` callback that re-points
+  every reference whether or not its redaction is held, and
+  `ReplaceIDs(ids)` for text, with `SessionIDsNamed(s)` reading the IDs
+  to rewrite from the original alone. A redacted original's IDs are
+  their own pseudonyms, so a redaction of a redaction derives what 0.18
+  did. `RedactedSessionID(pseudonym, profile)` keeps its signature and
+  now takes the pseudonym: **redacted IDs change for every new
+  redaction, and a redaction resumed under 0.19 starts a new session**.
+  `CheckRedactedID` reports a redacted header whose `id` is not the one
+  its `redacted_from` derives (`ErrRedactedID`). `SpawnedSessionID`
+  derives a host-started child's ID. `Original` and `Redactions` match
+  `redacted_from` as written; `OriginalUnder(ctx, st, key, s)` and
+  `RedactionsUnder(ctx, st, key, id)` find an original named by its
+  pseudonym, under every profile, for the holder of the key. Losing the
+  key means a redaction under it cannot be resumed. The storetest
+  redactor redacts under a fixed key and rewrites quoted session IDs.
+  `testdata/pseudonym.json` holds test vectors computed apart from this
+  package, for another implementation to check against.
+
+- **Breaking (API): a url link's session is text (RFC 0001 0.19, Every
+  redacted entry).** The `session` of a `link` carrying `url` is the
+  callee's ID in another system, not a reference: `RemapRefs` no longer
+  re-points it or reports it unmapped, and `RewriteStrings` gives it to
+  the rewrite as body text.
+
 ## v0.0.35 - 2026-11-03
 
 - **Breaking (format): Format 0.18 (RFC 0001, draft 0.18).** `Format`
