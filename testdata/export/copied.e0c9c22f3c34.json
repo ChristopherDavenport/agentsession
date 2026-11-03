@@ -305,7 +305,7 @@
           "type": "run"
         }
       },
-      "format": "agentsession/0.18",
+      "format": "agentsession/0.19",
       "leaf": "sha256:e0c9c22f3c34fe633e5826a337a2dd9ad214077739f6dd21b36b07e5765824b4",
       "main": true,
       "parent_session": "01995b2a-0000-7000-8000-000000000030",
@@ -315,7 +315,7 @@
         "decision"
       ],
       "spawned_by": "call_helper",
-      "visible": "sha256:abf83ccea15c55040c19e33b7eb04dddf6feedb8b9d94291efa88038bfbc2d8b"
+      "visible": "sha256:ff131fabd05434c0cac7e3192f1d716b291260a84975a91328ef71316fbe0e80"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"
