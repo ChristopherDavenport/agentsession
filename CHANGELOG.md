@@ -39,6 +39,21 @@ versions may break the API.
   `bad-instructions-part-list` (an empty list, an `id` named twice), an
   export golden, and the redaction round trip over the new fixture.
 
+- **ATIF read-back checks what a reader sees (RFC 0001 0.18,
+  Projections/ATIF).** A converter rebuilding an entry to the `id` the
+  document names now also compares the visible fields of its step or
+  observation result (`message`, `reasoning_content`, `tool_calls`, a
+  result's `content`) with what the rebuilt entries project, and the
+  entry matches only when both agree: the `id` covers the raw item, so a
+  redaction made in the document's visible text alone left every `id`
+  matching and the rebuilt session read as redacted. The whole path it
+  needs before it restores the header's `redacted` and `redacted_from`
+  reaches the leaf `trajectory_id` names, and every step names an entry;
+  a step appended after the export is listed. The reference rebuild in
+  `export`'s tests (`rebuildDocument`) does both, with cases for a
+  step's `message` edited alone, a step appended and a path short of its
+  leaf, for agentimport's converter to follow.
+
 - **ATIF: a partly priced child is left out of the cost (RFC 0001,
   `link`, Cost across sessions).** The export added the calls of a
   delegated session it could price and counted the session as priced

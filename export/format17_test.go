@@ -255,13 +255,18 @@ func TestEmbedTakesTheResumeLeaf(t *testing.T) {
 // envelope, history members and body under entries, an item's item
 // taken from its step (items[] by item_entry_ids position, or the item
 // of a step or observation result) and a response's body from its
-// step; whether its id is the one the document names; and whether
-// the document holds the whole path, from a first entry to the leaf.
+// step; whether it matches, its id the one the document names and,
+// since 0.18, the visible fields of its step what the rebuilt entries
+// project; and whether the document holds the whole path, from a first
+// entry to the leaf trajectory_id names, every step naming an entry.
 type rebuild struct {
 	order    []string
 	lines    map[string]map[string]any
 	verified map[string]bool
 	whole    bool
+	// strays are the step_ids of the steps that name no entry of the
+	// document, which a converter lists.
+	strays []any
 }
 
 // restoresHeader reports whether the converter restores the header's
@@ -371,7 +376,149 @@ func rebuildDocument(t *testing.T, raw []byte) rebuild {
 			break
 		}
 	}
+	// The path reaches the leaf trajectory_id names, not only each
+	// parent present (0.18): from the leaf up, every entry is held.
+	leaf, _ := doc["trajectory_id"].(string)
+	for id, n := leaf, 0; ; n++ {
+		line, ok := r.lines[id]
+		if !ok || n > len(r.lines) {
+			r.whole = false
+			break
+		}
+		p, _ := line["parent"].(string)
+		if p == "" {
+			break
+		}
+		id = p
+	}
+	// Every step names an entry of the document (0.18): one appended
+	// after the export is not of the path, and is listed.
+	named := func(step map[string]any) string {
+		id, _ := obj(obj(step["extra"])[ExtraAgentSession])["entry_id"].(string)
+		return id
+	}
+	for _, sv := range steps {
+		if _, ok := r.lines[named(obj(sv))]; !ok {
+			r.whole = false
+			r.strays = append(r.strays, obj(sv)["step_id"])
+		}
+	}
+	// An entry matches only when its step shows what the rebuilt entries
+	// project (0.18): the id covers the raw item, and not what a reader of
+	// the document sees.
+	projected := reproject(t, doc, r, leaf)
+	for _, sv := range steps {
+		step := obj(sv)
+		if want, ok := projected[named(step)]; ok && want == visibleFields(step) {
+			continue
+		}
+		for _, id := range stepEntries(step) {
+			r.verified[id] = false
+		}
+	}
 	return r
+}
+
+// reproject projects again the entries that rebuilt to their ids, those
+// whose parents did too, at the leaf the document names, and returns
+// each step's visible fields by the entry the step names. It returns nil
+// when the leaf did not rebuild: the reference then confirms no step,
+// where a converter would project what it rebuilt, ids and all.
+func reproject(t *testing.T, doc map[string]any, r rebuild, leaf string) map[string]string {
+	t.Helper()
+	obj := func(v any) map[string]any { m, _ := v.(map[string]any); return m }
+	closed := map[string]bool{}
+	var buf bytes.Buffer
+	header := map[string]any{"type": "session", "format": agentsession.Format, "id": doc["session_id"],
+		"created_at": "2026-01-01T00:00:00Z", "payload": agentsession.Payload}
+	root := obj(obj(doc["extra"])[ExtraAgentSession])
+	if root["redacted"] == true {
+		header["redacted"], header["redacted_from"] = true, root["redacted_from"]
+	}
+	lines := []any{header}
+	for _, id := range r.order {
+		p, _ := r.lines[id]["parent"].(string)
+		if r.verified[id] && (p == "" || closed[p]) {
+			closed[id] = true
+			lines = append(lines, r.lines[id])
+		}
+	}
+	if !closed[leaf] {
+		return nil
+	}
+	for _, l := range lines {
+		data, err := json.Marshal(l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buf.Write(append(data, '\n'))
+	}
+	s, err := agentsession.Read(&buf)
+	if err != nil {
+		t.Fatalf("the rebuilt entries do not read: %v", err)
+	}
+	tr, err := At(s, leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(encode(t, mustDoc(t, tr))))
+	dec.UseNumber()
+	var again map[string]any
+	if err := dec.Decode(&again); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	steps, _ := again["steps"].([]any)
+	for _, sv := range steps {
+		step := obj(sv)
+		id, _ := obj(obj(step["extra"])[ExtraAgentSession])["entry_id"].(string)
+		out[id] = visibleFields(step)
+	}
+	return out
+}
+
+// visibleFields is what a reader of a step sees that the projection
+// fills from its entries: message, reasoning_content, tool_calls and each
+// observation result's source_call_id and content, as canonical JSON.
+func visibleFields(step map[string]any) string {
+	v := map[string]any{"message": step["message"], "reasoning_content": step["reasoning_content"], "tool_calls": step["tool_calls"]}
+	if o, ok := step["observation"].(map[string]any); ok {
+		var results []any
+		rs, _ := o["results"].([]any)
+		for _, rv := range rs {
+			res, _ := rv.(map[string]any)
+			results = append(results, map[string]any{"source_call_id": res["source_call_id"], "content": res["content"]})
+		}
+		v["observation"] = results
+	}
+	data, _ := json.Marshal(v)
+	return string(data)
+}
+
+// stepEntries are the ids of the entries a step is made from: its own,
+// its items' and response's, and its observation results'.
+func stepEntries(step map[string]any) []string {
+	obj := func(v any) map[string]any { m, _ := v.(map[string]any); return m }
+	extra := obj(step["extra"])
+	var ids []string
+	add := func(v any) {
+		if id, ok := v.(string); ok && id != "" {
+			ids = append(ids, id)
+		}
+	}
+	add(obj(extra[ExtraAgentSession])["entry_id"])
+	items, _ := extra["item_entry_ids"].([]any)
+	for _, id := range items {
+		add(id)
+	}
+	add(obj(obj(extra[ExtraOpenResponses])["response"])["entry_id"])
+	if o := obj(step["observation"]); o != nil {
+		rs, _ := o["results"].([]any)
+		for _, rv := range rs {
+			add(obj(obj(obj(rv)["extra"])[ExtraAgentSession])["entry_id"])
+		}
+	}
+	return ids
 }
 
 func sortedKeys[V any](m map[string]V) []string {
@@ -392,7 +539,10 @@ func sortedKeys[V any](m map[string]V) []string {
 // header's redacted and redacted_from. A document a redactor changed
 // after the export, or one that does not hold the whole path, rebuilds
 // entries that do not verify, or no whole path, and the header is not
-// restored.
+// restored. Since 0.18 that holds of a document changed in a step's
+// visible message alone, whose ids all match, of one with a step
+// appended that names no entry, and of one whose path stops short of
+// its leaf.
 func TestRebuildToTheDocumentsIDs(t *testing.T) {
 	red := redaction(t, "basic", "test/v1", nil, func(v string) string {
 		if v == "4" {
@@ -477,6 +627,56 @@ func TestRebuildToTheDocumentsIDs(t *testing.T) {
 	if r := rebuildDocument(t, cutRaw); r.whole || r.restoresHeader() {
 		t.Error("a document without its first entry holds the whole path")
 	}
+
+	// Changed in a step's visible message alone (0.18), as a redaction
+	// applied to the document's text and not to its raw items is: every
+	// id still matches, and the entry whose step shows other text than it
+	// projects is not rebuilt to its id, so the header is not restored.
+	first := lid(t, s, "i0000001")
+	visible := edit(t, raw, func(doc map[string]any) {
+		for _, sv := range doc["steps"].([]any) {
+			step := obj(t, sv)
+			if obj(t, obj(t, step["extra"])[ExtraAgentSession])["entry_id"] == first {
+				step["message"] = "[redacted]"
+			}
+		}
+	})
+	if r := rebuildDocument(t, visible); r.restoresHeader() || r.verified[first] || !r.verified[lid(t, s, "i0000002")] {
+		t.Errorf("a document changed in a step's message alone: verified %v", r.verified)
+	}
+	// A step appended after the export names no entry: it is not of the
+	// path, so the document does not hold the whole path (0.18).
+	appended := edit(t, raw, func(doc map[string]any) {
+		doc["steps"] = append(doc["steps"].([]any), map[string]any{"step_id": json.Number("99"), "source": "user", "message": "appended"})
+	})
+	if r := rebuildDocument(t, appended); r.whole || r.restoresHeader() || len(r.strays) != 1 {
+		t.Errorf("a document with a step appended: whole %v, strays %v", r.whole, r.strays)
+	}
+	// Without the leaf every parent is present, and the path stops short
+	// of the leaf trajectory_id names (0.18).
+	short := edit(t, raw, func(doc map[string]any) {
+		delete(obj(t, obj(t, obj(t, doc["extra"])[ExtraAgentSession])["entries"]), s.Leaf())
+	})
+	if r := rebuildDocument(t, short); r.whole || r.restoresHeader() {
+		t.Error("a document without its leaf holds the whole path")
+	}
+}
+
+// edit returns the document raw holds changed by change, as JSON.
+func edit(t *testing.T, raw []byte, change func(doc map[string]any)) []byte {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	change(doc)
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // obj is v as a JSON object.
