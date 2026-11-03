@@ -3077,7 +3077,11 @@ so every reader of 0.16 refuses those files until it is upgraded.
   harness composed from an instruction layer and sent as a message. A
   reader of 0.16 read such an item as a user's input. It is a record
   member, removed from RFC 0002's context hash, and kept by a
-  redaction, its `id` as text.
+  redaction, its `id` as text. A reader takes it by its form in a file
+  of any minor, as 0.15's `trust`, so an earlier file that already held
+  an `instructions_part` in this form under an extension's meaning now
+  has its context key move at that entry and after it; no entry hash
+  moves.
 - `legacy_id`, `normalised` and `redacted` are history members (Entry
   envelope). A writer writes one only where its own writing made it
   true, and a converter does not carry another's as its own. 0.16
