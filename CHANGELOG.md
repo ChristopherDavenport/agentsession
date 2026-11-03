@@ -87,6 +87,14 @@ versions may break the API.
   holding only redacted entries refuses; storetest checks that by
   create, import and push.
 
+- **Breaking (API): an entry reference into a re-pointed session must
+  be mapped (RFC 0001 0.19, Every redacted entry).** `RemapRefs` refused
+  only a `copied_from` entry left as written while its session was
+  re-pointed; a `parents` element's entry in the same state, or either
+  with no `Entry` callback, kept the original's entry hash inside the
+  redaction. Each is now refused with `ErrUnmappedCopy`, whose meaning
+  widens to cover them, an extension entry's `parents` included.
+
 - **Breaking (API): a url link's session is text (RFC 0001 0.19, Every
   redacted entry).** The `session` of a `link` carrying `url` is the
   callee's ID in another system, not a reference: `RemapRefs` no longer

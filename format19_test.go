@@ -795,3 +795,40 @@ func TestVerdictFixture(t *testing.T) {
 		t.Errorf("a redacted-only store's create: %v", err)
 	}
 }
+
+// TestRemapRefsUnmappedIntoRepointedSession: a remap that re-points a
+// session and leaves an entry reference into it as written, a parents
+// element's entry or a copied_from's, whether its Entry callback leaves
+// it or there is none, would name an original's entry hash inside the
+// redaction, so RemapRefs refuses it, for an extension entry too; one
+// that maps or drops the entry, or leaves the session too, passes.
+func TestRemapRefsUnmappedIntoRepointedSession(t *testing.T) {
+	n, _ := NewRedactionNames(testKey(t), Header{ID: "o"}, "p")
+	core := NewItemEntry(openresponses.UserText("hi"))
+	core.ID, core.Parent, core.Timestamp = "x", "p1", fixedTime
+	core.Parents = []EntryRef{{Session: "S", Entry: "sha256:X"}}
+	copied := &ItemEntry{Item: openresponses.UserText("hi"), CopiedFrom: &CopiedFrom{Session: "S", Entry: "sha256:X"}}
+	copied.ID, copied.Timestamp = "y", fixedTime
+	ext, err := UnmarshalEntry([]byte(`{"type":"x:note","id":"z","parent":"p1","ts":"2026-11-03T10:00:00Z","parents":[{"entry":"sha256:X","session":"S"}],"text":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leave := func(string, string) (string, bool) { return "", false }
+	drop := func(string, string) (string, bool) { return "", true }
+	for _, e := range []Entry{core, copied, ext} {
+		for name, m := range map[string]Remap{
+			"entry left": {Entry: leave, Session: n.Session},
+			"no Entry":   {Session: n.Session},
+		} {
+			if _, err := RemapRefs(e, m); !errors.Is(err, ErrUnmappedCopy) {
+				t.Errorf("%s, %s: %v, want ErrUnmappedCopy", e.EntryType(), name, err)
+			}
+		}
+		if _, err := RemapRefs(e, Remap{Entry: leave}); err != nil {
+			t.Errorf("%s, session left too: %v", e.EntryType(), err)
+		}
+		if _, err := RemapRefs(e, Remap{Entry: drop, Session: n.Session}); err != nil {
+			t.Errorf("%s, entry dropped: %v", e.EntryType(), err)
+		}
+	}
+}

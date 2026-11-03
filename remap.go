@@ -286,12 +286,16 @@ func specialsOf(e Entry) []special {
 // is a link.
 var ErrNoPlace = errors.New("agentsession: a member naming one entry has nothing in the place of the entry left out")
 
-// ErrUnmappedCopy is returned by [RemapRefs] for a copied item whose
-// copied_from session the remap re-points while it leaves the entry as
-// written: the session is redacted alongside, so the entry names an
-// entry of the original inside the redaction, which neither verifies
-// there nor hides what was redacted (RFC 0001, Every redacted entry).
-var ErrUnmappedCopy = errors.New("agentsession: copied_from's session is redacted alongside and its entry is not mapped")
+// ErrUnmappedCopy is returned by [RemapRefs] for an entry reference
+// into another session, a copied item's copied_from entry or a parents
+// element's, whose session the remap re-points while it leaves the
+// entry as written, by its Entry callback or for want of one: the
+// session is named by its redaction, so the entry names an entry of the
+// original inside the redaction, which neither verifies there nor hides
+// what was redacted (RFC 0001, Every redacted entry). A redactor maps
+// such an entry to the one the session's redaction made from it, or
+// drops it.
+var ErrUnmappedCopy = errors.New("agentsession: an entry reference's session is re-pointed and its entry is not mapped")
 
 // Remap says where the references [RemapRefs] meets now point. A
 // callback returns the ID a reference is to name instead, or false to
@@ -333,7 +337,10 @@ type Remap struct {
 	// root, which would break the base rule (RFC 0001, Leaving entries
 	// out). Empty for a file without one.
 	Base string
-	// Session maps a reference to a session by its ID.
+	// Session maps a reference to a session by its ID. An entry
+	// reference into a session it re-points, a parents element's entry or
+	// a copied_from's, must then be mapped or dropped by Entry: one left
+	// as written, or with Entry nil, is refused with [ErrUnmappedCopy].
 	Session func(id string) (string, bool)
 }
 
@@ -502,9 +509,16 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 	if noPlace != nil {
 		return Remapped{}, noPlace
 	}
-	if it, ok := e.(*ItemEntry); ok && it.CopiedFrom != nil && it.CopiedFrom.Entry != "" && m.Session != nil {
-		if _, alongside := m.Session(it.CopiedFrom.Session); alongside && slices.ContainsFunc(out.Unmapped, func(r Reference) bool { return r.At == "/copied_from/entry" }) {
-			return Remapped{}, fmt.Errorf("%w: %s names %s in %s", ErrUnmappedCopy, it.ID, it.CopiedFrom.Entry, it.CopiedFrom.Session)
+	if m.Session != nil {
+		// An entry reference into a session the remap re-points, left as
+		// written, names the original's entry inside the redaction.
+		for _, r := range sessionEntryRefs(e) {
+			if _, repointed := m.Session(r.Session); !repointed {
+				continue
+			}
+			if m.Entry == nil || slices.ContainsFunc(out.Unmapped, func(u Reference) bool { return u.At == r.At }) {
+				return Remapped{}, fmt.Errorf("%w: %s %s names %s in %s", ErrUnmappedCopy, e.Base().ID, r.At, r.Entry, r.Session)
+			}
 		}
 	}
 	if root0 && m.Base != "" {
@@ -523,6 +537,22 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 		return Remapped{}, err
 	}
 	return out, nil
+}
+
+// sessionEntryRefs lists the entry references of e that name an entry
+// in a session, as the format defines them: each parents element naming
+// both, and a copied item's copied_from entry.
+func sessionEntryRefs(e Entry) []Reference {
+	var out []Reference
+	for i, r := range e.Base().Parents {
+		if r.Session != "" && r.Entry != "" {
+			out = append(out, Reference{At: "/parents/" + strconv.Itoa(i) + "/entry", Session: r.Session, Entry: r.Entry})
+		}
+	}
+	if it, ok := e.(*ItemEntry); ok && it.CopiedFrom != nil && it.CopiedFrom.Entry != "" {
+		out = append(out, Reference{At: "/copied_from/entry", Session: it.CopiedFrom.Session, Entry: it.CopiedFrom.Entry})
+	}
+	return out
 }
 
 // remapUnknown re-points an extension entry's envelope, which is all of
@@ -545,8 +575,10 @@ func remapUnknown(u *UnknownEntry, m Remap) (Remapped, error) {
 	kept := cp.Parents[:0:0]
 	for i, r := range cp.Parents {
 		at := "/parents/" + strconv.Itoa(i)
+		left := m.Entry == nil
 		if m.Entry != nil && r.Entry != "" {
 			if id, ok := m.Entry(r.Session, r.Entry); !ok {
+				left = true
 				out.Unmapped = append(out.Unmapped, Reference{At: at + "/entry", Session: r.Session, Entry: r.Entry})
 			} else if id == "" {
 				out.Dropped = append(out.Dropped, Reference{At: at + "/entry", Session: r.Session, Entry: r.Entry})
@@ -557,6 +589,9 @@ func remapUnknown(u *UnknownEntry, m Remap) (Remapped, error) {
 		}
 		if m.Session != nil && r.Session != "" {
 			if id, ok := m.Session(r.Session); ok {
+				if left && r.Entry != "" {
+					return Remapped{}, fmt.Errorf("%w: %s %s names %s in %s", ErrUnmappedCopy, u.ID, at+"/entry", r.Entry, r.Session)
+				}
 				r.Session = id
 			} else {
 				out.Unmapped = append(out.Unmapped, Reference{At: at + "/session", Session: r.Session})
