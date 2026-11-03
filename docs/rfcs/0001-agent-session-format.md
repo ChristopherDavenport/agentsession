@@ -373,8 +373,8 @@ verifies without the bodies, which is what lets a store hold or send
 history it does not hold in full, and a body is held once however many
 entries name it, which RFC 0002 builds on. Wherever this document has a
 member name an entry — `parent`, `parents`, `target`, `first_kept`,
-`from`, `queued_from`, `from_link`, `omit`'s `items`, `outputs`' `items`
-and `images`' `before` in a `config` and in a compaction's checkpoint, `instructions_omitted`'s `of` beside a positive
+`from`, `queued_from`, `from_link`, `omit`'s `items`, `outputs`' `items`,
+a `groups` element's `items` and `images`' `before` in a `config` and in a compaction's checkpoint, `instructions_omitted`'s `of` beside a positive
 `keep` and no `id`, where alone it is defined, and `copied_from`'s
 entry, naming an entry of the session its session member names — it
 names it by `id`.
@@ -986,6 +986,41 @@ it. A `config` entry MAY carry it and no setting. Its members:
   compaction's checkpoint, as for `items`, and `t` is the `text` of the
   latest `outputs` on the path. An id that names no such entry names
   nothing.
+
+  Since 0.16 `outputs` MAY also carry `groups`, a list of
+  `{"text": t, "items": [ids]}`, so that one request can send outputs
+  with different texts, as when a host clears old results and a harness
+  quarantines one it distrusts in the same request:
+
+  ```json
+  "outputs":{"groups":[{"text":"[cleared]","items":["sha256:…"]},
+                       {"text":"[quarantined]","items":["sha256:…"]}]}
+  ```
+
+  The `text` and `items` beside `groups` are the group the 0.14 form
+  writes, the *default group*, and are left out together when an
+  `outputs` writes none, while `items` without `text` stays a form this
+  document does not define. Each element of `groups` is a group named by
+  its `text`. An output is sent with the text of the group in force that
+  lists its entry. In force are the default group, read as above: the
+  union of every `items` beside a `text` since the last `replace` or
+  compaction's checkpoint, with the latest such `text`; and each named
+  group: the union of every `items` of a `groups` element of that `text`
+  since then. A named group's text never changes, so a later element
+  with the same `text` adds to it.
+
+  An entry is in at most one group in force. A writer MUST NOT write an
+  `outputs` that lists one id in two of its groups, the default among
+  them, that holds two `groups` elements of one `text`, or that lists an
+  id a group in force of another text, or the default group, already
+  lists; a writer refuses one rather than write it. A reader takes such
+  a member as a form this document does not define, and it changes
+  nothing. A `groups` that is not a list of objects each holding a
+  string `text` and a list `items` and nothing else is a form this
+  document does not define too. A file of 0.14 or 0.15 holds no
+  `groups`, and a reader of 0.16 reads its `outputs` as those minors
+  did; a writer of 0.16 MAY write either form, and writes `groups` for a
+  text other than the default group's.
 - `images`, since 0.14, takes one of two forms, each with a string
   `placeholder` `t`, and an `images` in a later delta replaces the one
   in force:
@@ -1016,8 +1051,9 @@ it. A `config` entry MAY carry it and no setting. Its members:
   `items` to those in force: the set in force is the union of every
   `items` on the path since the last `replace` or compaction's
   checkpoint, so a later entry adds to it and never has to repeat it.
-  Its `outputs` adds its `items` to those in force and sets the `text`,
-  and its `images` replaces the one in force; a delta without either
+  Its `outputs` adds its `items` to the default group and sets its
+  `text`, and adds each `groups` element's `items` to the group of that
+  `text`, as `outputs` says; its `images` replaces the one in force; a delta without either
   leaves it as it was. An object that names no `reasoning`, lists no
   id and carries neither `outputs` nor `images`, `{}` above all, clears
   all four. A writer that wants to drop one and keep the others writes
@@ -1108,7 +1144,9 @@ Replaces earlier context with a summary.
   omitted parts in force, every part written out and no `keep` and no
   `of`, and a checkpoint without it has none in force. `omit` is the
   object in force, its `items` and its `outputs`' `items` the unions so
-  far, its `outputs`' `text` and its `images` the latest, and a
+  far, its `outputs`' `text` and its `images` the latest, its
+  `outputs`' `groups` each named group in force with its `items` the
+  union so far, and a
   checkpoint without it has none in force. `tools` is the full list of tool
   definitions in force at the compaction, in the order the context
   algorithm would send them, not a delta; there are no `tools_added`, `tools_removed` or `replace`
@@ -2197,7 +2235,8 @@ A redactor:
   rewrite `parent` and every entry-naming member to the IDs of the
   entries it wrote — `parents` into this file, `target`, `first_kept`,
   `from`, `queued_from`, `from_link`, `omit`'s `items`, `outputs`'
-  `items` and `images`' `before` in a `config` and in a compaction's
+  `items`, a `groups` element's `items` and `images`' `before` in a
+  `config` and in a compaction's
   checkpoint, and `instructions_omitted`'s `of` where it
   is defined — and the header's `base`. A member of one of those names
   in a form or place this document does not define there is body text,
@@ -2328,14 +2367,18 @@ that named the left-out entry then follows the rule for its kind:
   whole instead.
 - A member that lists entries, or records where an item came from,
   loses the left-out entry: a `parents` element and an ID in `omit`'s
-  `items` and in `outputs`' `items`, in a `config` and in a compaction's
-  checkpoint, are removed from their lists, and an `item`'s
+  `items`, in `outputs`' `items` and in a `groups` element's `items`, in
+  a `config` and in a compaction's checkpoint, are removed from their
+  lists, and an `item`'s
   `queued_from` and `from_link`, provenance that names one entry and
   reaches no request, are removed whole. A list so emptied is
   removed, and an `omit` left with no member is removed with it, since
   an empty `omit` in a `config` clears what is in force rather than
   adding nothing. An `outputs` whose `items` is removed keeps its
-  `text`, which it still sets.
+  `text`, which it still sets. A `groups` element whose `items` is
+  emptied is removed, since a named group sets nothing else, a `groups`
+  so emptied is removed, and an `outputs` left with no member is
+  removed, and its `omit` with it when that leaves the `omit` with none.
 - An entry of a call goes with the call: a redactor that leaves out a
   `function_call`'s entry leaves out every `dispatch`, `decision`,
   `result`, `function_call_output` and `link` entry of that call, the links that
@@ -2656,7 +2699,7 @@ a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
 it begins at 1.0. A reader of 0.16 reads a 0.5 to 0.15 file
 as it stands, since 0.6 to 0.16 add optional members, elements and
-relations, 0.15 a record entry type and 0.16 a file beside a sidecar blob, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
+relations, 0.15 a record entry type and 0.16 a file beside a sidecar blob and an `omit` member, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
@@ -2793,11 +2836,12 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.15
 
-A sidecar blob's media type. A 0.15 session is a 0.16 session whose
-blobs have no type. No hash changes, and the file holds nothing new:
-the minor changes the session's directory, which RFC 0001 counts as
-part of the session (File), and what a writer does with it, so it is
-a minor's and not a clarification. A writer of 0.16 raises every file it
+A sidecar blob's media type, and groups of placeholder texts for
+outputs. A 0.15 session is a 0.16 session whose blobs have no type and
+whose `omit` holds no `groups`. No hash changes. The minor changes the
+session's directory, which RFC 0001 counts as part of the session
+(File), what a writer does with it, and what an `omit` may hold, so it
+is a minor's and not a clarification. A writer of 0.16 raises every file it
 appends to, as Versioning says, so every reader of 0.15 refuses those
 files until it is upgraded.
 
@@ -2817,6 +2861,17 @@ files until it is upgraded.
   no type file and reads each blob as one with none.
 - Redaction: a blob a redactor replaces is stored with the
   replacement's type.
+- `omit`'s `outputs` may carry `groups`, each a placeholder text and the
+  outputs sent with it (Items left out of the context). A 0.15 `outputs`
+  held one text for every output it listed, so a request that sent a
+  host's trim and a harness's quarantine under two texts could not be
+  described, and every response after it was written without a
+  `request_hash`. An entry is in one group at most; a writer refuses an
+  `outputs` that would put one in two, and a reader takes one as a form
+  this document does not define. A `groups` element's `items` joins the
+  members that name an entry, and Redaction says what leaving one out
+  does. The default group is read as 0.14 and 0.15 read `outputs`, so
+  no earlier file reads differently.
 
 ## Changes since 0.14
 
