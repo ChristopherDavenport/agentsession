@@ -175,11 +175,17 @@
           "type": "response"
         },
         "sha256:0949e2a4b11f3378f987a057c4459b7073bd196a79400ec665469a952c6ae3c0": {
+          "body": {
+            "response": "resp_o1"
+          },
           "parent": "sha256:a0c86c7f20b11565118856e619dfd4c738fe8be491b93f0651605987fd34e34a",
           "ts": "2026-11-01T11:00:03Z",
           "type": "item"
         },
         "sha256:4067545727e092b516fc0e27a656beeadb63ee19dbd4f6f2ad6e0a785556109c": {
+          "body": {
+            "response": "resp_f1"
+          },
           "parent": "sha256:a8726956eed491002cff0f2f54c89129acbdccf5f48b245aeb0399703c2c8c6a",
           "ts": "2026-11-01T12:00:03Z",
           "type": "item"
@@ -199,6 +205,12 @@
           "type": "item"
         },
         "sha256:a8726956eed491002cff0f2f54c89129acbdccf5f48b245aeb0399703c2c8c6a": {
+          "body": {
+            "copied_from": {
+              "session": "01995b2a-0000-7000-8000-000000000032",
+              "entry": "sha256:e6e3f259ab71b26418a6104552f6cf3f66cd0497de726bcc47867c091bdd4100"
+            }
+          },
           "parent": "sha256:c9668032918f987457628eebe4bdf3857ab35a9d7a58814588837776319d1e85",
           "ts": "2026-11-01T12:00:02Z",
           "type": "item"

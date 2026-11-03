@@ -65,9 +65,9 @@ const (
 	ExtraAgentSession = "agentsession"
 	// ExtraEntries carries, under ExtraAgentSession in the root extra,
 	// an object from the id of each entry the document maps to its
-	// type, ts, parent, parents and history members, and for an entry
-	// that is not an item or a response its body, under "body", so a
-	// converter can rebuild each entry to its id
+	// type, ts, parent, parents and history members, and under "body"
+	// every other member but an item's item and a response's, which the
+	// steps carry, so a converter can rebuild each entry to its id
 	// ([agentsession.IsHistoryMember]).
 	ExtraEntries       = "entries"
 	ExtraEnvironment   = "environment"
@@ -1322,10 +1322,11 @@ func (b *builder) finish() {
 
 // entryRecords is the root's ExtraEntries: for each entry the document
 // maps, by its id, its type, ts, parent and parents and its history
-// members, as the entry writes them, and for an entry that is not an
-// item or a response, whose body no step carries whole, its body under
-// "body", so a converter can rebuild every entry to its id (RFC 0001,
-// Projections/ATIF, 0.17).
+// members, as the entry writes them, and under "body" every other member
+// but an item's item, which its step carries, and of a response, whose
+// body its step carries whole: so a converter can rebuild every entry to
+// its id (RFC 0001, Projections/ATIF, 0.17), an item of an agent step
+// too, whose step merges its items' trust and undefined members.
 func (b *builder) entryRecords() map[string]any {
 	out := make(map[string]any, len(b.mapped))
 	for _, e := range b.mapped {
@@ -1349,7 +1350,12 @@ func (b *builder) entryRecords() map[string]any {
 			}
 		}
 		switch e.(type) {
-		case *agentsession.ItemEntry, *agentsession.ResponseEntry:
+		case *agentsession.ResponseEntry:
+		case *agentsession.ItemEntry:
+			delete(body, "item")
+			if len(body) > 0 {
+				rec["body"] = body
+			}
 		default:
 			if len(body) > 0 {
 				rec["body"] = body

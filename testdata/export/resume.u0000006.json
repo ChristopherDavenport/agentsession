@@ -373,6 +373,9 @@
           "type": "response"
         },
         "sha256:8cc4d99035499989867dc252ad9acad2adf499c5c931f686725aef5b94dde73e": {
+          "body": {
+            "response": "resp_1"
+          },
           "legacy_id": "i0000002",
           "parent": "sha256:c24a77cdd2b070f694edf181f46efc46dd3777b39bf1592dc0a7ae984e36340a",
           "ts": "2026-09-21T12:00:03Z",
@@ -385,6 +388,9 @@
           "type": "response"
         },
         "sha256:bd308cec0f3c2767776bd7e0f6f0db2564043715d4c18ba7c9f1c296464ec5a4": {
+          "body": {
+            "response": "resp_2"
+          },
           "legacy_id": "i0000005",
           "parent": "sha256:d7e4549217232a56cca4b4acf8227a1ab0e946b8c28ba098d03754297c40a1a1",
           "ts": "2026-09-21T12:00:13Z",

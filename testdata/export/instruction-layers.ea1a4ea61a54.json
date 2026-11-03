@@ -178,6 +178,12 @@
           "type": "run"
         },
         "sha256:7797b3c13f6e4d583e7c169e21877df0f3ed5fcc94490f81673f15eaad6a950a": {
+          "body": {
+            "instructions_part": {
+              "id": "/repo/CLAUDE.md",
+              "source": "agentsmd"
+            }
+          },
           "parent": "sha256:305861d672a9d4c93206d5b7b75b44955e049a110fb8f722cc8d746ebe73e7f6",
           "ts": "2026-11-02T12:00:03Z",
           "type": "item"
@@ -193,6 +199,9 @@
           "type": "response"
         },
         "sha256:cdac881fe7d765f730b174a8368ec78b778c1593cd2c0e1fd40ecccf6b5b3a79": {
+          "body": {
+            "response": "resp_1"
+          },
           "parent": "sha256:af47fbe71ee844d52d1ea728bef7a76a1c0c2fb0609990fc36239324953848e1",
           "ts": "2026-11-02T12:00:05Z",
           "type": "item"

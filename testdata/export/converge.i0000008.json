@@ -340,6 +340,9 @@
           "type": "dispatch"
         },
         "sha256:4c678a5f9c2c057f2ac32df036b9c1e79c78a82dcf9c91c8eab1ce960a5f3b53": {
+          "body": {
+            "response": "resp_1"
+          },
           "legacy_id": "i0000003",
           "parent": "sha256:f9b41be453b152509e9ec496ac653a2d04c32fdbbc62fb9711ac15af0cc85bbc",
           "ts": "2026-09-25T09:00:03Z",
@@ -414,6 +417,9 @@
           "type": "config"
         },
         "sha256:a04bfc29a047ff76c414f7d815370745b59d567920c3eb04e4fe41b5da0f9cf2": {
+          "body": {
+            "response": "resp_2"
+          },
           "legacy_id": "i0000006",
           "parent": "sha256:dea317015143b78f6dc87c586a226b767ed0a649c96e71b5e75c402a9644a899",
           "ts": "2026-09-25T09:00:22Z",
@@ -471,6 +477,9 @@
           "type": "item"
         },
         "sha256:f9b41be453b152509e9ec496ac653a2d04c32fdbbc62fb9711ac15af0cc85bbc": {
+          "body": {
+            "response": "resp_1"
+          },
           "legacy_id": "i0000002",
           "parent": "sha256:8e5a54eb79e95b974639834a08d411a5ff6cd5b3bd8231dbbb265e282d6e7342",
           "ts": "2026-09-25T09:00:03Z",

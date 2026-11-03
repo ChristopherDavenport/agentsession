@@ -210,6 +210,12 @@
       "cwd": "/home/u/proj",
       "entries": {
         "sha256:33652900ebfb8593e28d60cba34110e2ff89ee96c217bda620cf3bcf07ca03eb": {
+          "body": {
+            "copied_from": {
+              "session": "01995b2a-0000-7000-8000-000000000030",
+              "entry": "sha256:83e9c67f6c0ac58e09c3296bc8eadc5b0c216c2ada6b5e9cfadd23612d8c241b"
+            }
+          },
           "parent": "sha256:86c3a835b446d895d0e8993921a38bd4338d9a56085febd58cdbb86f17184e6e",
           "ts": "2026-11-01T10:01:04Z",
           "type": "item"
@@ -230,6 +236,12 @@
           "type": "item"
         },
         "sha256:86c3a835b446d895d0e8993921a38bd4338d9a56085febd58cdbb86f17184e6e": {
+          "body": {
+            "copied_from": {
+              "session": "01995b2a-0000-7000-8000-000000000030",
+              "entry": "sha256:f828a51f15df807e68ffb612cdec4d90df9f09e824a344e04fdb12bf69d715e7"
+            }
+          },
           "parent": "sha256:33fee0562596c9f871fd2dfab671a94e906f02cf69fc88abafda40bc2ca6a515",
           "ts": "2026-11-01T10:01:03Z",
           "type": "item"
@@ -244,6 +256,12 @@
           "type": "config"
         },
         "sha256:ae92d0561f3eef2dc5743dff4d6f553eac403462daf876dd73b42be2ec6ae19c": {
+          "body": {
+            "copied_from": {
+              "session": "01995b2a-0000-7000-8000-000000000030",
+              "entry": "sha256:71ecbe469f125677d5d4d2ef35cfe1c288e3bc52fafc35bee49fb49745782793"
+            }
+          },
           "parent": "sha256:33652900ebfb8593e28d60cba34110e2ff89ee96c217bda620cf3bcf07ca03eb",
           "ts": "2026-11-01T10:01:05Z",
           "type": "item"
@@ -254,11 +272,19 @@
           "type": "response"
         },
         "sha256:c038452a7b003af8d29f7bb3b248dfd8f166b8a4460839a1bd9b681191bc78c9": {
+          "body": {
+            "response": "resp_c1"
+          },
           "parent": "sha256:5ac854bb9bfa3577252e1c0e9227c645dd50a8075be51294a529398cf6f38ad8",
           "ts": "2026-11-01T10:01:08Z",
           "type": "item"
         },
         "sha256:c2f68023914e955881dbb2ce60ad65879280e1bdf76761b27081541d31efccc5": {
+          "body": {
+            "copied_from": {
+              "session": "01995b2a-0000-7000-8000-000000000030"
+            }
+          },
           "parent": "sha256:ae92d0561f3eef2dc5743dff4d6f553eac403462daf876dd73b42be2ec6ae19c",
           "ts": "2026-11-01T10:01:06Z",
           "type": "item"

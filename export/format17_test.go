@@ -250,10 +250,11 @@ func TestEmbedTakesTheResumeLeaf(t *testing.T) {
 
 // rebuild is what a converter rebuilding a session from a document this
 // package wrote finds, by the reference rule of RFC 0001,
-// Projections/ATIF (0.17): each entry's line, put together from the
-// body the document carries for it, its raw item and meaning members or
-// its body under entries, and its envelope and history members from
-// entries; whether its id is the one the document names; and whether
+// Projections/ATIF (0.17): each entry's line, put together from its
+// envelope, history members and body under entries, an item's item
+// taken from its step (items[] by item_entry_ids position, or the item
+// of a step or observation result) and a response's body from its
+// step; whether its id is the one the document names; and whether
 // the document holds the whole path, from a first entry to the leaf.
 type rebuild struct {
 	order    []string
@@ -290,24 +291,6 @@ func rebuildDocument(t *testing.T, raw []byte) rebuild {
 	root := obj(obj(doc["extra"])[ExtraAgentSession])
 	entries := obj(root["entries"])
 	bodies := map[string]map[string]any{}
-	itemBody := func(item any, extra map[string]any) map[string]any {
-		b := map[string]any{"item": item}
-		for _, k := range []string{"visible", "source", "queued_from"} {
-			if v, ok := extra[k]; ok {
-				b[k] = v
-			}
-		}
-		as := obj(extra[ExtraAgentSession])
-		for _, k := range []string{"failed", "from_link", "trust", "instructions_part"} {
-			if v, ok := as[k]; ok {
-				b[k] = v
-			}
-		}
-		if list, ok := as["copied_from"].([]any); ok && len(list) == 1 {
-			b["copied_from"] = list[0]
-		}
-		return b
-	}
 	steps, _ := doc["steps"].([]any)
 	for _, sv := range steps {
 		step := obj(sv)
@@ -315,9 +298,7 @@ func rebuildDocument(t *testing.T, raw []byte) rebuild {
 		or := obj(extra[ExtraOpenResponses])
 		if items, ok := or["items"].([]any); ok {
 			ids, _ := extra["item_entry_ids"].([]any)
-			respID, _ := extra["response_id"].(string)
 			if rb := obj(or["response"]); rb != nil {
-				respID, _ = rb["response_id"].(string)
 				body := map[string]any{}
 				for k, v := range rb {
 					if k != "entry_id" {
@@ -327,14 +308,10 @@ func rebuildDocument(t *testing.T, raw []byte) rebuild {
 				bodies[rb["entry_id"].(string)] = body
 			}
 			for i, it := range items {
-				b := map[string]any{"item": it}
-				if respID != "" {
-					b["response"] = respID
-				}
-				bodies[ids[i].(string)] = b
+				bodies[ids[i].(string)] = map[string]any{"item": it}
 			}
 		} else if item, ok := or["item"]; ok {
-			bodies[obj(extra[ExtraAgentSession])["entry_id"].(string)] = itemBody(item, extra)
+			bodies[obj(extra[ExtraAgentSession])["entry_id"].(string)] = map[string]any{"item": item}
 		}
 		if o := obj(step["observation"]); o != nil {
 			results, _ := o["results"].([]any)
@@ -342,7 +319,7 @@ func rebuildDocument(t *testing.T, raw []byte) rebuild {
 				rex := obj(obj(rv)["extra"])
 				if item, ok := obj(rex[ExtraOpenResponses])["item"]; ok {
 					id, _ := obj(rex[ExtraAgentSession])["entry_id"].(string)
-					bodies[id] = itemBody(item, rex)
+					bodies[id] = map[string]any{"item": item}
 				}
 			}
 		}
@@ -509,4 +486,41 @@ func obj(t *testing.T, v any) map[string]any {
 		t.Fatalf("%T is no object", v)
 	}
 	return m
+}
+
+// TestRebuildAgentStepItems: an agent step merges its items' trust and
+// their members the format does not define into one extra, and each item
+// still rebuilds to its id from its body under entries and its item from
+// the step's items, as do the output and the response (RFC 0001,
+// Projections/ATIF, 0.17).
+func TestRebuildAgentStepItems(t *testing.T) {
+	s := agentsession.New(agentsession.Header{ID: "s"})
+	probe := func(e agentsession.Entry, v string) agentsession.Entry {
+		e.Base().Unknown = map[string]json.RawMessage{"x:probe": json.RawMessage(`"` + v + `"`)}
+		return e
+	}
+	mustAppend(t, s, &agentsession.ConfigEntry{Model: "gpt-5"})
+	mustAppend(t, s, agentsession.NewItemEntry(openresponses.UserText("look it up")))
+	mustAppend(t, s, probe(&agentsession.ItemEntry{Item: &openresponses.ReasoningItem{ID: "rs_1", Summary: openresponses.Contents{&openresponses.SummaryText{Text: "search"}}}, ResponseID: "resp_1", Trust: &agentsession.Trust{Reads: []string{agentsession.TrustUntrusted}}}, "reasoning"))
+	call, err := s.Append(probe(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_1", Name: "search", Arguments: `{}`}, ResponseID: "resp_1", Trust: &agentsession.Trust{Reads: []string{agentsession.TrustPrivate}}}, "call"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, s, &agentsession.ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted})
+	mustAppend(t, s, agentsession.NewDispatch("call_1", call))
+	mustAppend(t, s, probe(&agentsession.ItemEntry{Item: openresponses.NewFunctionCallOutput("call_1", "found"), Failed: true}, "output"))
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := rebuildDocument(t, encode(t, mustDoc(t, tr)))
+	path := s.Path(s.Leaf())
+	if len(r.order) != len(path) || !r.whole {
+		t.Fatalf("rebuilt %d entries of %d, whole %v", len(r.order), len(path), r.whole)
+	}
+	for _, e := range path {
+		if !r.verified[e.Base().ID] {
+			t.Errorf("%T %s does not rebuild to its id: %v", e, e.Base().ID, r.lines[e.Base().ID])
+		}
+	}
 }

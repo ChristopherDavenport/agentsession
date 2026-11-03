@@ -2735,10 +2735,14 @@ Since 0.17 a document carries, under `agentsession` in its top-level
 maps, a step's, an observation result's and a record's, to that entry's
 envelope and history members as the entry writes them: `type`, `ts`,
 `parent`, `null` for a first entry, `parents` when it has them, and
-`legacy_id`, `normalised` and `redacted` when it has them. For an entry
-that is not an `item` or a `response`, whose body no step carries
-whole, the object also holds the body, every other member, under
-`body`. An observation result carries its output's `id` as `entry_id`
+`legacy_id`, `normalised` and `redacted` when it has them. It also
+holds the entry's body, every other member, under `body`: for an
+`item` every member but `item`, which its step carries, in the step's
+`items` by the position of its `id` in `item_entry_ids` or as the item
+of a step or an observation result, since an agent step merges its
+items' `trust` and the members this document does not define into one
+`extra`; and nothing for a `response`, whose body its step carries
+whole. An observation result carries its output's `id` as `entry_id`
 under `agentsession` in its `extra`, as a step does. A document of a
 redacted session MUST carry `entries`, and any other document MAY. A
 document stripped of its raw items, or of an entry's body, cannot be
@@ -2754,11 +2758,12 @@ wrote restores on each entry:
 - every member it does not know, as written.
 
 It SHOULD rebuild each entry to the `id` the document names for it
-when the document allows it: the body from the members the document
-carries for the entry, its raw item and meaning members or its `body`,
-and the envelope and history members from `entries`. It MUST compute
-each rebuilt entry's `id` (Entry hash) and compare it with the `id` the
-document names. An entry whose `id` matches is the exported entry
+when the document allows it: the envelope, the history members and the
+body from `entries`, an item's `item` from its step and a response's
+body from its step. It MUST compute each rebuilt entry's `id` (Entry
+hash) and compare it with the `id` the document names, and it MUST
+list each entry that did not rebuild to its `id`, so a partial rebuild
+never goes unreported. An entry whose `id` matches is the exported entry
 itself, not a new one, so its history members are true of it and are
 restored with it. Any other entry is a new one: the converter MUST NOT
 carry a history member on it as its own, as the entry envelope says,

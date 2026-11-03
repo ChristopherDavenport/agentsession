@@ -269,6 +269,9 @@
           "type": "response"
         },
         "sha256:578b7a1be01dbaf44cd0498db4ff444af1d2c94a284a94ee78af9d8dc711871a": {
+          "body": {
+            "response": "resp_2"
+          },
           "parent": "sha256:ce7648b0ddeda1a0dcbbf0e8326af57490ec360d6208359ef90887fd613ca07f",
           "ts": "2026-11-01T12:00:11Z",
           "type": "item"
@@ -365,11 +368,22 @@
           "type": "queued"
         },
         "sha256:ce7648b0ddeda1a0dcbbf0e8326af57490ec360d6208359ef90887fd613ca07f": {
+          "body": {
+            "queued_from": "sha256:0a4dd48cfbe5fc4e768927325369637a39eac56a0e7a1145bd0a230a21f18e91",
+            "source": {
+              "kind": "task",
+              "ref": "build-7",
+              "source": "background"
+            }
+          },
           "parent": "sha256:d2e148842bfcfa996541e353425ba5e02e96ecad1aa5a7cff5941448563136d7",
           "ts": "2026-11-01T12:00:10Z",
           "type": "item"
         },
         "sha256:d126afa194897540a5f93a1cd40e73c37f788ca58950bcb65f491370958b45ba": {
+          "body": {
+            "response": "resp_1"
+          },
           "parent": "sha256:45f8511d7fe1ce05a5c7f770afeb48175c090d093e7fe34e8a60148bdd0ef773",
           "ts": "2026-11-01T12:00:04Z",
           "type": "item"

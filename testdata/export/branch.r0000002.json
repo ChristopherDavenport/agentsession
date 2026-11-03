@@ -221,12 +221,18 @@
           "type": "response"
         },
         "sha256:dc47e900a9713b423c2ea06166d4be1be91959f4e465cd893728e92c2487d139": {
+          "body": {
+            "response": "resp_1"
+          },
           "legacy_id": "i0000002",
           "parent": "sha256:c7148fabb18d3d73e9ef655243727d80286d464eda2748efdc1b5e7db6147cd7",
           "ts": "2026-09-17T14:00:02Z",
           "type": "item"
         },
         "sha256:f6283049bf677a32357e2270a0a662d1731f1ee311bb8ef890542efa13189aec": {
+          "body": {
+            "response": "resp_2"
+          },
           "legacy_id": "i0000004",
           "parent": "sha256:9b1fa109a514566a682d2d8041515c505af3a62cff7c02e486720746e49c122e",
           "ts": "2026-09-17T14:00:04Z",

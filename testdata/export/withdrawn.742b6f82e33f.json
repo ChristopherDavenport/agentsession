@@ -244,6 +244,9 @@
           "type": "dispatch"
         },
         "sha256:09669c82b0d9475cadf24b4e2b3dc1a41cfdfedebfa08d677ed83ace4dd72c3f": {
+          "body": {
+            "failed": true
+          },
           "parent": "sha256:0da146452449290967414090de9fd14ed8fb7ad84f938736e7a7117c43dd6e6b",
           "ts": "2026-11-01T09:00:10Z",
           "type": "item"
@@ -262,11 +265,17 @@
           "type": "decision"
         },
         "sha256:14c7cb1fe58e3208759ad17ee32dae30b1a4b9da617b9eeacfcfbe46c5c36c32": {
+          "body": {
+            "response": "resp_1"
+          },
           "parent": "sha256:3da93a4f857f33f45229d4b4caab0977d29d1d417fe8d7222069e70cb4f18381",
           "ts": "2026-11-01T09:00:04Z",
           "type": "item"
         },
         "sha256:15ed2d0cabe1d8c037a4ebf5ab198238daaf05a3c54ff92edeca3b87c4ac00a8": {
+          "body": {
+            "response": "resp_1"
+          },
           "parent": "sha256:14c7cb1fe58e3208759ad17ee32dae30b1a4b9da617b9eeacfcfbe46c5c36c32",
           "ts": "2026-11-01T09:00:05Z",
           "type": "item"
@@ -322,6 +331,9 @@
           "type": "run"
         },
         "sha256:8711dc53e4e384fed1f0c1a2a5f756b23032eab338ec24b6220d138a56622c69": {
+          "body": {
+            "response": "resp_2"
+          },
           "parent": "sha256:e472c531d521ddb46d1108fad55699e9abf10298ca70800e5e5b0b85815542bc",
           "ts": "2026-11-01T09:00:15Z",
           "type": "item"

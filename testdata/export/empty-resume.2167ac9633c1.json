@@ -227,6 +227,9 @@
           "type": "config"
         },
         "sha256:1e3e3154337272b6dc6cdbb239d0f12ff054c74a802d6c5546aebf176779e99b": {
+          "body": {
+            "response": "resp_1"
+          },
           "parent": "sha256:7840feb76752310d7ece87ee27e2ee33e15e1d452f26d2622889aad560eee4fe",
           "ts": "2026-10-01T09:00:04Z",
           "type": "item"
@@ -287,6 +290,9 @@
           "type": "item"
         },
         "sha256:7d602114c4f5d190735da82083be07084455cd3b885b8c2d93cb883960876d26": {
+          "body": {
+            "response": "resp_2"
+          },
           "parent": "sha256:9faecfd3b63eded1bb7195262e6b06a90f517295fdd701769fe0f2fe3556f36f",
           "ts": "2026-10-01T09:00:16Z",
           "type": "item"

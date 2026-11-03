@@ -199,6 +199,9 @@
           "type": "item"
         },
         "sha256:a4623dbfa75135d30932d6427bda093b2ba65d3c9b98bc7d1dbcf07b13211f06": {
+          "body": {
+            "response": "resp_1"
+          },
           "parent": "sha256:5d083b4d8bc0e8f6227add972cd4f8a9b7e20fc640a35f0daf5b47ff012e0f5a",
           "ts": "2026-10-01T13:00:07Z",
           "type": "item"

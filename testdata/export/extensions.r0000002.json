@@ -205,6 +205,9 @@
       "cwd": "/home/u/proj",
       "entries": {
         "sha256:395c1309639ca3743698f2a9a789f71be3ec72680e24aa2b8ea2ab7cad4d0cee": {
+          "body": {
+            "visible": false
+          },
           "legacy_id": "i0000002",
           "parent": "sha256:ee03a1cf1c6b27980e4284e152f439884886435968210e15e419ab8baee1aae4",
           "ts": "2026-09-17T15:00:03Z",
@@ -228,6 +231,9 @@
           "type": "response"
         },
         "sha256:5d9fc9aadd2e2deda31bda70c13339e1f227a63eeb1e753b788ef0c049e6dfff": {
+          "body": {
+            "response": "resp_1"
+          },
           "legacy_id": "i0000003",
           "parent": "sha256:61ff74d9d2f54719242ee26ee8e709bf7cfdc51c929b0033aca48572eca40fd8",
           "ts": "2026-09-17T15:00:07Z",

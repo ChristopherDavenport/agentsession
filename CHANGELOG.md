@@ -48,8 +48,10 @@ versions may break the API.
   response's history members in its body. The document's root
   `extra.agentsession.entries` (`ExtraEntries`) now maps each entry it
   maps, by id, to its `type`, `ts`, `parent`, `parents` and history
-  members, and for an entry that is neither an item nor a response its
-  `body`, and an observation result names its output's `entry_id`, so a
+  members, and its `body`: every other member, but an item's `item`
+  and a response's, which the steps carry, so an item of an agent step
+  rebuilds too though its step merges its items' trust and undefined
+  members; an observation result names its output's `entry_id`, so a
   converter can rebuild every entry to its id, check each hash, and
   restore the header's `redacted` and `redacted_from` when every entry
   verifies over the whole path (RFC 0001 0.17, #21 option B); a round

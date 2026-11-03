@@ -379,6 +379,9 @@
           "type": "item"
         },
         "sha256:2909fa8eda24663d8cb8f7581fa4efa778233745c4b0573a85a451afca920168": {
+          "body": {
+            "response": "resp_1"
+          },
           "legacy_id": "i0000003",
           "parent": "sha256:36a05597fb484070459b2226f64d2bbea7993b8331871643413c0c66b082bbae",
           "redacted": [
@@ -388,6 +391,9 @@
           "type": "item"
         },
         "sha256:36a05597fb484070459b2226f64d2bbea7993b8331871643413c0c66b082bbae": {
+          "body": {
+            "response": "resp_1"
+          },
           "legacy_id": "i0000002",
           "parent": "sha256:2736b082b786e21a31a47b83e2a5b9e63e42e53063e2043e6ad176ffd9013130",
           "redacted": [
@@ -453,6 +459,9 @@
           "type": "config"
         },
         "sha256:ccef1b74716261c11c9bdbc07e81b25dd21d7723e8aa467c689a115b58457122": {
+          "body": {
+            "response": "resp_2"
+          },
           "legacy_id": "i0000005",
           "parent": "sha256:8969138eba9eaa0980dd23fe572576f841ee16dc0e600af13c3fce55724614ca",
           "redacted": [

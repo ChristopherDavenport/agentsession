@@ -320,6 +320,9 @@
           "type": "item"
         },
         "sha256:88ac12fd98b0945f81345103a1ab343c9d6d928adf85f918d664d5ada047238a": {
+          "body": {
+            "response": "resp_1"
+          },
           "legacy_id": "i0000002",
           "parent": "sha256:7151a5fd29c0e045d1e3b06892e80c6c6543c385d47076cc7780ec1d9de32ecb",
           "ts": "2026-09-21T10:00:02Z",
@@ -332,6 +335,9 @@
           "type": "item"
         },
         "sha256:e498a6735c07702f170cb7844061e42cf688317ba1b7266b56a97d2f3a1c96cb": {
+          "body": {
+            "response": "resp_2"
+          },
           "legacy_id": "i0000004",
           "parent": "sha256:c72b40e6517fcffd520100956d7a5976143b8f2fc65f8802eb4fe122f0e332c5",
           "ts": "2026-09-21T10:00:06Z",

@@ -210,6 +210,9 @@
       "cwd": "/home/u/proj",
       "entries": {
         "sha256:0e44f5ec70109adf08b4874a161cd39b36cb93ed753bb513c7bf814bf3ca0d94": {
+          "body": {
+            "response": "resp_3"
+          },
           "parent": "sha256:ab36a76bf36d939cfd345bb6fd95e12728eda9126974ece1f1c971afc7e4ce4c",
           "ts": "2026-11-01T14:00:08Z",
           "type": "item"
@@ -244,6 +247,9 @@
           "type": "response"
         },
         "sha256:943a8f2414e987b4a98258d7ce683184a1fcc818533d53a00f83d9e2be73a5c0": {
+          "body": {
+            "response": "resp_1"
+          },
           "parent": "sha256:79ac1af7267333eaa6efbd371648579a8ab6614b8efed0f8f0a28e30a493f53e",
           "ts": "2026-11-01T14:00:03Z",
           "type": "item"

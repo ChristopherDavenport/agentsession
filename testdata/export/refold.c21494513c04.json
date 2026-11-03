@@ -248,6 +248,9 @@
           "type": "compaction"
         },
         "sha256:ac79f3ac14ce94982f20d4b42045bef29ae7e758b7e32c3b97a15c97f472a923": {
+          "body": {
+            "response": "resp_3"
+          },
           "parent": "sha256:036ca725d4cf805b23796ce563155b51a464f6fd16f82518c0ed502233575065",
           "ts": "2026-11-01T13:00:12Z",
           "type": "item"
@@ -258,6 +261,9 @@
           "type": "response"
         },
         "sha256:d83b8071ae0b556306cb801957412026c43999b85df2be16e0db4e39592e3162": {
+          "body": {
+            "response": "resp_4"
+          },
           "parent": "sha256:8cfca7acce243ea183a3f0ba47fe869be6ff4f244c80671072a7f4e8262c6fa6",
           "ts": "2026-11-01T13:00:16Z",
           "type": "item"

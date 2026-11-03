@@ -653,6 +653,9 @@
       "cwd": "/home/u/proj",
       "entries": {
         "sha256:05f65b1d2427f18778a6f345bb6668b3ad5471e5079002119db4efe52e674bdd": {
+          "body": {
+            "response": "resp_5"
+          },
           "parent": "sha256:6eee5ecfe7560e63899952bf9624fee5eaa0f5375ef3870c0b4dfa695897be79",
           "ts": "2026-11-01T11:00:17Z",
           "type": "item"
@@ -702,6 +705,9 @@
           "type": "response"
         },
         "sha256:26105b849214a044e55e68d63e62dc45ba3fcdd93deb204d7fdb57ac8f335186": {
+          "body": {
+            "response": "resp_4"
+          },
           "parent": "sha256:81d04a27f4f117cd464808fd3ad55eae3f2e748c79164a32560a0665f1580234",
           "ts": "2026-11-01T11:00:13Z",
           "type": "item"
@@ -712,6 +718,9 @@
           "type": "item"
         },
         "sha256:2e0008dc5261e397301291f54147fadda3310225fb7371343fcdd3c3c1aa6bc7": {
+          "body": {
+            "response": "resp_7"
+          },
           "parent": "sha256:80fb21e3b435841dc4a341d37b00bfa7463cd6aa217b774bf7566751556fa184",
           "ts": "2026-11-01T11:00:25Z",
           "type": "item"
@@ -747,6 +756,9 @@
           "type": "config"
         },
         "sha256:74b3c09d4cbde32cb848a70185c6c2cb9425a9351ce15cc523b4a7274c4dddcd": {
+          "body": {
+            "response": "resp_8"
+          },
           "parent": "sha256:0ca20a890239b6e9616fec5c2326bce2e645fbfdacc0dbf02f27fe6b03984682",
           "ts": "2026-11-01T11:00:28Z",
           "type": "item"
@@ -804,6 +816,9 @@
           "type": "response"
         },
         "sha256:b5f1e9f80561777265198533f11143fe86fb52509bdf69996bad522fb3a890d4": {
+          "body": {
+            "response": "resp_6"
+          },
           "parent": "sha256:0d81a2de6f69702043032da23046ccd25346c1f6c33e4a22792568e8a37d9948",
           "ts": "2026-11-01T11:00:21Z",
           "type": "item"
@@ -814,6 +829,9 @@
           "type": "response"
         },
         "sha256:e54256a3472e205c437e0e6f88bd114275dd5450603fcf66c59f142b60f509e1": {
+          "body": {
+            "response": "resp_3"
+          },
           "parent": "sha256:11ce22cf1a92de9bf2a106aa335a7e4c0737c7fc19c54557ddbf21a6784b39c3",
           "ts": "2026-11-01T11:00:09Z",
           "type": "item"

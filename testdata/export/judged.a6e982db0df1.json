@@ -125,6 +125,9 @@
           "type": "response"
         },
         "sha256:dd5dfd5ea97c60a3f952e4b6f4694bbf65e42c4a5f5a774c20e6dd3cf0663a44": {
+          "body": {
+            "response": "resp_1"
+          },
           "parent": "sha256:a7c172ad245502c0b219fa2367b6f9c7dff3ae63dbdd62c95365616e7120ec4c",
           "ts": "2026-10-01T11:00:03Z",
           "type": "item"
