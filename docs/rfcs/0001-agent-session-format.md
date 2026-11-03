@@ -2840,6 +2840,15 @@ the hash of the step's visible fields, and `visible` under
   correct: that step no longer shows what the session's entries hold.
   An embedded trajectory carries its own, over its own steps and
   fields.
+- A document written with its media moved to files beside it, a part's
+  `path` then naming `images/` or `audio/` and a file named by the
+  SHA-256 of its bytes, moves only a data URL of the form
+  `data:<media_type>;base64,` and the bytes in standard base64 with
+  padding, `media_type` the part's own. A converter puts each such
+  media back inline, from the document's own files, wherever the
+  document holds that `path` as a string, the raw items in the extras
+  included, before it computes any hash; a `path` naming no such file
+  stays as it is, and the hashes that cover it fail.
 
 A converter that rebuilds a session from a document this projection
 wrote restores on each entry:
@@ -3188,8 +3197,9 @@ which restores them, the ATIF documents of 0.18's read-back, each step
 and each document carrying the hash of its visible fields: a redacted
 session's document as exported, which restores, the same changed in a
 step's `message` alone, with a step appended that names no entry, and
-without its leaf's entry, none of which restores, and a parent's
-document embedding a redacted child, whose own header is restored from
+without its leaf's entry, none of which restores, a document whose
+image was moved to a file beside it, which verifies once it is put back
+inline, and a parent's document embedding a redacted child, whose own header is restored from
 the embedded trajectory and its `leaf`, a parent whose three children
 are priced as `link` prices them: one with no model call at 0, one
 whose call that records no usage adds nothing, and one with a call the

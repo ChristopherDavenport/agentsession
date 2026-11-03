@@ -3,10 +3,17 @@ package export
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	pathpkg "path"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/ChristopherDavenport/agentsession/atif"
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
@@ -181,5 +188,110 @@ func list(v any) []any {
 func dropExtra(v any) {
 	if m, ok := v.(map[string]any); ok {
 		delete(m, "extra")
+	}
+}
+
+// InlineMedia puts back inline, in a document read as JSON, the media
+// [WriteDocument] moved to files beside it in dir, so a converter checks
+// the hashes against the document as the export built it (RFC 0001,
+// Projections/ATIF, since 0.18).
+//
+// A media part's path that names a file images/ or audio/ holds under
+// dir, its name the SHA-256 of its bytes, is the data URL
+// data:<media_type>;base64,<bytes in standard base64>, which is the one
+// form WriteDocument moves to a file; every string of the document equal
+// to such a path, the raw items' in the extras included, is replaced by
+// it. A path naming no such file is left as it is, and the hashes then
+// fail where it is held.
+func InlineMedia(doc map[string]any, dir string) error {
+	inline := map[string]string{}
+	var collect func(doc map[string]any) error
+	parts := func(content any) error {
+		for _, pv := range list(content) {
+			part, _ := pv.(map[string]any)
+			src, _ := part["source"].(map[string]any)
+			path, _ := src["path"].(string)
+			mediaType, _ := src["media_type"].(string)
+			if _, done := inline[path]; done || !spilledPath(path) {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(path)))
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("export: inline %s: %w", path, err)
+			}
+			sum := sha256.Sum256(data)
+			if name := pathpkg.Base(path); strings.TrimSuffix(name, pathpkg.Ext(name)) != hex.EncodeToString(sum[:]) {
+				continue
+			}
+			inline[path] = "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data)
+		}
+		return nil
+	}
+	collect = func(doc map[string]any) error {
+		for _, sv := range list(doc["steps"]) {
+			step, _ := sv.(map[string]any)
+			if err := parts(step["message"]); err != nil {
+				return err
+			}
+			obs, _ := step["observation"].(map[string]any)
+			for _, rv := range list(obs["results"]) {
+				res, _ := rv.(map[string]any)
+				if err := parts(res["content"]); err != nil {
+					return err
+				}
+			}
+		}
+		for _, sub := range list(doc["subagent_trajectories"]) {
+			if m, ok := sub.(map[string]any); ok {
+				if err := collect(m); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := collect(doc); err != nil {
+		return err
+	}
+	if len(inline) > 0 {
+		replaceStrings(doc, inline)
+	}
+	return nil
+}
+
+// spilledPath reports whether path is one WriteDocument gives a media
+// file: images/ or audio/ and a file name.
+func spilledPath(path string) bool {
+	dir, name, ok := strings.Cut(path, "/")
+	return ok && (dir == "images" || dir == "audio") && name != "" && !strings.Contains(name, "/")
+}
+
+// replaceStrings replaces, in place, every string of a JSON value that
+// is a key of by with its value.
+func replaceStrings(v any, by map[string]string) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			if s, ok := e.(string); ok {
+				if r, ok := by[s]; ok {
+					x[k] = r
+				}
+				continue
+			}
+			replaceStrings(e, by)
+		}
+	case []any:
+		for i, e := range x {
+			if s, ok := e.(string); ok {
+				if r, ok := by[s]; ok {
+					x[i] = r
+				}
+				continue
+			}
+			replaceStrings(e, by)
+		}
 	}
 }

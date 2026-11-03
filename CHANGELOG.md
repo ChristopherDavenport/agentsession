@@ -71,7 +71,13 @@ versions may break the API.
   converter to follow, which has to adopt these rules (**breaking for
   converters**: a 0.17 rebuild restores headers 0.18 forbids). The
   documents under `testdata/rebuild` are its fixtures: `verified`,
-  `visible-edit`, `appended-step`, `removed-leaf` and `embedded-child`.
+  `visible-edit`, `appended-step`, `removed-leaf`, `embedded-child` and
+  `media`, whose image `WriteDocument` moved to `images/`.
+  `WriteDocument` now moves only a data URL in the one form
+  `InlineMedia` writes back, `data:<media_type>;base64,` and padded
+  standard base64, and leaves any other inline; `InlineMedia` puts a
+  written document's media back inline from its files, as a converter
+  does before it checks the hashes.
 
 - **Breaking (ATIF cost totals and notes): a partly priced child is
   left out of the cost (RFC 0001, `link`, Cost across sessions).** A

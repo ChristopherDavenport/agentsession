@@ -287,11 +287,24 @@ func (r rebuild) restoresHeader() bool {
 // rebuildDocument rebuilds the entries of an ATIF document read as JSON.
 func rebuildDocument(t *testing.T, raw []byte) rebuild {
 	t.Helper()
+	return rebuildDocumentIn(t, raw, "")
+}
+
+// rebuildDocumentIn is rebuildDocument for a document read from dir,
+// whose media WriteDocument moved to files there: it is put back inline
+// first, as the export hashed it (0.18).
+func rebuildDocumentIn(t *testing.T, raw []byte, dir string) rebuild {
+	t.Helper()
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var doc map[string]any
 	if err := dec.Decode(&doc); err != nil {
 		t.Fatal(err)
+	}
+	if dir != "" {
+		if err := InlineMedia(doc, dir); err != nil {
+			t.Fatal(err)
+		}
 	}
 	obj := func(v any) map[string]any { m, _ := v.(map[string]any); return m }
 	root := obj(obj(doc["extra"])[ExtraAgentSession])

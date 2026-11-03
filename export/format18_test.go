@@ -400,3 +400,63 @@ func TestStepExtraIsVisible(t *testing.T) {
 		t.Errorf("a queued copy edited in a step's extra: verified %v", r.verified)
 	}
 }
+
+// mediaDocument is the document of a session whose person sends an
+// image inline, a base64 data URL that WriteDocument moves to a file.
+func mediaDocument(t *testing.T) *atif.Trajectory {
+	t.Helper()
+	at := time.Date(2026, 11, 3, 15, 0, 0, 0, time.UTC)
+	s := agentsession.New(agentsession.Header{ID: "01995b2a-0000-7000-8000-000000000055", CreatedAt: at})
+	add := func(e agentsession.Entry) {
+		t.Helper()
+		at = at.Add(time.Second)
+		e.Base().Timestamp = at
+		mustAppend(t, s, e)
+	}
+	png := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+	add(&agentsession.ConfigEntry{Model: "gpt-5"})
+	add(agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputText{Text: "What is this?"}, &openresponses.InputImage{ImageURL: png})))
+	add(&agentsession.ItemEntry{Item: openresponses.AssistantText("A pixel."), ResponseID: "resp_1"})
+	add(&agentsession.ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted})
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mustDoc(t, tr)
+}
+
+// TestRebuildSpilledMedia: WriteDocument moves inline media to files
+// after the hashes are computed, so a converter puts it back inline from
+// the document's own files before it checks them, and the media fixture,
+// untouched, then rebuilds every entry to its id (RFC 0001,
+// Projections/ATIF, 0.18).
+func TestRebuildSpilledMedia(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteDocument(filepath.Join(dir, "media.json"), mediaDocument(t)); err != nil {
+		t.Fatal(err)
+	}
+	written, err := os.ReadFile(filepath.Join(dir, "media.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join("..", "testdata", "rebuild")
+	if *update {
+		if err := WriteDocument(filepath.Join(fixture, "media.json"), mediaDocument(t)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(fixture, "media.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, written) {
+		t.Error("testdata/rebuild/media.json is not what WriteDocument writes; run go test -update")
+	}
+	if !bytes.Contains(data, []byte(`"path": "images/`)) {
+		t.Fatal("the media fixture holds no spilled image")
+	}
+	r := rebuildDocumentIn(t, data, fixture)
+	if !r.whole || !r.restoresHeader() {
+		t.Errorf("the media fixture: whole %v, verified %v", r.whole, r.verified)
+	}
+}
