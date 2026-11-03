@@ -1380,25 +1380,29 @@ Why a run started and how it ended. Two entries per run, paired by
   Of those, it leaves out each item that is not an input of this
   session's run:
 
-  - an item whose `queued_from` names a `queued` entry whose `mode` is
-    `steer`, a delivery among them, since it joined a run already in
-    flight;
   - an item carrying `copied_from`, which another session's
     conversation holds;
   - an item carrying `from_link`, which carries a peer's report;
   - an item carrying `instructions_part`, which the harness composed
     (`item`).
 
-  An item drained from a `followup` is an input of the run it starts. A
-  user message on a `resume` segment belongs to the resume, such as the
-  note a person typed with an approval. It is not an input.
+  An item drained from a `queued` entry before the segment's first
+  `response`, a steer, a delivery or a `followup`, is an input of the
+  run: a `followup` and a delivery that start a run are its inputs. An
+  item whose `queued_from` names a `queued` entry whose `mode` is
+  `steer`, a delivery among them, after the first `response` joined the
+  run in flight, and is not an input of a new turn. A user message on a
+  `resume` segment belongs to the resume, such as the note a person
+  typed with an approval. It is not an input.
 
-  A reader that cannot reproduce such an item where it stood, as a
-  steer mid-run or a delivery, MUST say so rather than send it as the
-  input of a new turn. On a path with no `run` entries, a reader takes
-  as one turn's inputs the user messages between one `response` and the
-  next, those before the first included, leaving out the same items. It
-  says that it could not tell a resume's note from an input.
+  A reader that cannot reproduce an item that joined a run in flight
+  where it stood MUST say so rather than send it as the input of a new
+  turn. On a path with no `run` entries, a reader takes as one turn's
+  inputs the user messages between one `response` and the next, those
+  before the first included, leaving out the same items and every item
+  drained from a steer, since it cannot tell one that started a turn
+  from one that joined it. It says that it could not tell a resume's
+  note, or a delivery that started a run, from an input.
 - A branch to an entry inside a run, such as a rewind to a checkpoint
   the run made, leaves that run open on the new path, since its `end`,
   if it has one, is on the branch left behind. The two shapes are one
@@ -2993,8 +2997,9 @@ part, an omitted `agentsmd` part, and a message carrying
 context hash the same session's without the member, `env` snapshots,
 a `cwd`-only entry after a response read as a substitution to the
 absent workspace and a whole one not, a path whose runs' inputs leave
-out a steer, a delivery, copied items, a peer's report, a composed
-layer and a resume's note, and keep a followup, a parent with two
+out a steer that joined a run in flight, copied items, a peer's report,
+a composed layer and a resume's note, and keep a followup and a
+delivery that starts a run, a parent with two
 children, one counted at the leaf its output's `parents` names with a
 grandchild of its own and a cancel notice counted once, and one
 missing and reported, and an ATIF document whose entries carry history
@@ -3094,8 +3099,9 @@ Clarified, with no file reading differently:
   an abbreviation (`env`).
 - A reader that reports cost adds delegated work by `subsession` links
   (`link`), and the ATIF rule points to it.
-- A reader that rebuilds a path's inputs leaves out steers, deliveries,
-  copied items, peer reports and composed layers (`run`).
+- A reader that rebuilds a path's inputs leaves out steers that joined a
+  run in flight, copied items, peer reports and composed layers, and
+  keeps a followup or a delivery that starts a run (`run`).
 - A converter documents the identity members it carries and reports
   them without values (Conformance).
 

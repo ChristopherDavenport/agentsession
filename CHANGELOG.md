@@ -50,9 +50,10 @@ versions may break the API.
 - **A path's inputs (RFC 0001 0.17, `run`).** `PathInputs` returns the
   inputs that drove a path, as a replay that sends them again rebuilds
   them: per run whose source is `input`, the user messages before its
-  first response, leaving out a steer (a delivery among them), a copied
-  item, a peer's report and a composed layer, and keeping an item
-  drained from a followup; a resume's user messages are its own. Each
+  first response, leaving out a copied item, a peer's report and a
+  composed layer, and keeping an item drained from a followup, a steer
+  or a delivery before that response (one after it joined the run in
+  flight, `NotInputSteer`); a resume's user messages are its own. Each
   turn's `LeftOut` says why (`NotInput*`), a message reaching the model
   mid-run among them, so a reader that cannot reproduce one where it
   stood can say so. On a path with no run entries it splits the turns at

@@ -399,7 +399,7 @@ func TestHistoryMembers(t *testing.T) {
 //     the deploy is held;
 //   - run-2 resumes the held call with the note a person typed;
 //   - run-3 starts from a followup queued after run-2 ended;
-//   - run-4 starts from a delivery;
+//   - run-4 starts from a delivery, which is its input;
 //   - run-5 asks a peer, which acknowledges;
 //   - run-6 starts with an item copied from the parent session and the
 //     peer's later report.
@@ -471,7 +471,10 @@ func inputsFixture(t *testing.T) *Session {
 
 // TestInputsFixture reads the inputs fixture: each run's inputs, and the
 // user messages each leaves out with why, and on the same path without
-// run entries the turns a reader takes up to each response.
+// run entries the turns a reader takes up to each response. A delivery
+// drained before its run's first response is that run's input; without
+// run entries a reader cannot tell it from a steer that joined a turn,
+// and leaves it out.
 func TestInputsFixture(t *testing.T) {
 	checkBuilt(t, "inputs")
 	s := loadFixture(t, "inputs")
@@ -499,7 +502,7 @@ func TestInputsFixture(t *testing.T) {
 		"Plan the release. | Use the checklist. / instructions_part: <memory>Releases ship on Tuesday.</memory> | steer: Also tag it.",
 		" / resume: Approved, go ahead.",
 		"Now write the notes. / ",
-		" / steer: Background task smoke-1 finished: green.",
+		"Background task smoke-1 finished: green. / ",
 		"Ask the reviewer. / ",
 		" / copied: From the lead: keep the notes short. | from_link: Review: approved.",
 	}

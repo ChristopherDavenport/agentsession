@@ -6,7 +6,9 @@ import "github.com/ChristopherDavenport/openresponses"
 // (RFC 0001, run, since 0.17), as [PathInputs] reports it.
 const (
 	// NotInputSteer is an item drained from a queued steer, a delivery
-	// among them: it joined a run already in flight.
+	// among them, after its run's first response: it joined the run in
+	// flight. On a path with no run entries every such item is one,
+	// since a reader cannot tell one that started a turn.
 	NotInputSteer = "steer"
 	// NotInputCopied is an item carrying copied_from, which another
 	// session's conversation holds.
@@ -50,16 +52,19 @@ type TurnInputs struct {
 // replay that sends them again rebuilds them (RFC 0001, run, since
 // 0.17), one TurnInputs per run, and byRuns true. A run whose source is
 // input takes as its inputs the user messages of its segment before its
-// first response, all of them when it has none, leaving out an item
-// drained from a queued steer (a delivery among them), one carrying
-// copied_from, from_link or instructions_part; an item drained from a
-// followup is an input of the run it starts. Every user message of a
-// resume run belongs to the resume and is left out.
+// first response, all of them when it has none, leaving out one
+// carrying copied_from, from_link or instructions_part. An item drained
+// from a queued entry before that response, a steer, a delivery or a
+// followup, is an input of the run: a delivery that starts a run is its
+// input. One drained after it joined the run in flight. Every user
+// message of a resume run belongs to the resume and is left out.
 //
 // On a path with no run entries, byRuns is false and each turn holds
 // the user messages up to a response, those after the last included,
-// leaving out the same items; the caller then says it could not tell a
-// resume's note from an input.
+// leaving out the same items and every item drained from a steer, which
+// it cannot tell from one that started a turn; the caller then says it
+// could not tell a resume's note, or a delivery that started a run,
+// from what it took.
 func PathInputs(path []Entry) (turns []TurnInputs, byRuns bool) {
 	queued := map[string]*QueuedEntry{}
 	for _, e := range path {
@@ -67,10 +72,12 @@ func PathInputs(path []Entry) (turns []TurnInputs, byRuns bool) {
 			queued[q.ID] = q
 		}
 	}
+	steered := func(it *ItemEntry) bool {
+		q := queued[it.QueuedFrom]
+		return it.QueuedFrom != "" && q != nil && q.Mode == ModeSteer
+	}
 	kind := func(it *ItemEntry) string {
 		switch {
-		case it.QueuedFrom != "" && queued[it.QueuedFrom] != nil && queued[it.QueuedFrom].Mode == ModeSteer:
-			return NotInputSteer
 		case it.CopiedFrom != nil:
 			return NotInputCopied
 		case it.FromLink != "":
@@ -97,6 +104,8 @@ func PathInputs(path []Entry) (turns []TurnInputs, byRuns bool) {
 				switch {
 				case r.Start.Source != SourceInput:
 					k = NotInputResume
+				case k == "" && answered && steered(it):
+					k = NotInputSteer
 				case k == "" && answered:
 					k = NotInputMidRun
 				}
@@ -123,7 +132,11 @@ func PathInputs(path []Entry) (turns []TurnInputs, byRuns bool) {
 		if it == nil {
 			continue
 		}
-		if k := kind(it); k != "" {
+		k := kind(it)
+		if k == "" && steered(it) {
+			k = NotInputSteer
+		}
+		if k != "" {
 			turn.LeftOut = append(turn.LeftOut, LeftOutInput{Entry: it, Kind: k})
 		} else {
 			turn.Inputs = append(turn.Inputs, it)
