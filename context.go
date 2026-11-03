@@ -1842,14 +1842,13 @@ func contextContentHash(e Entry, at, types map[string]string) (string, error) {
 	}
 	body := make(map[string]json.RawMessage, len(all))
 	for k, v := range all {
-		if isEnvelopeKey(k) {
+		if isEnvelopeKey(k) || IsHistoryMember(k) {
+			// History members record how the line came to be written,
+			// in whatever form, and never reach a request.
 			continue
 		}
 		body[k] = v
 	}
-	delete(body, "legacy_id")
-	delete(body, "normalised")
-	delete(body, "redacted")
 	switch e.EntryType() {
 	case TypeItem:
 		delete(body, "response")

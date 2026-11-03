@@ -346,3 +346,40 @@ func TestBadInstructionsPartFixture(t *testing.T) {
 		}
 	}
 }
+
+// TestHistoryMembers: legacy_id, normalised and redacted are an entry's
+// history members, redacted and redacted_from a header's, and no member
+// a later minor may define is one; the context hash leaves out exactly
+// an entry's (RFC 0001, Entry envelope; RFC 0002).
+func TestHistoryMembers(t *testing.T) {
+	for _, name := range []string{"legacy_id", "normalised", "redacted"} {
+		if !IsHistoryMember(name) {
+			t.Errorf("%s is not a history member", name)
+		}
+	}
+	for _, name := range []string{"failed", "trust", "copied_from", "from_link", "instructions_part", "x:legacy_id", "item", "id", "redacted_from"} {
+		if IsHistoryMember(name) {
+			t.Errorf("%s is a history member", name)
+		}
+	}
+	for _, name := range []string{"redacted", "redacted_from"} {
+		if !IsHeaderHistoryMember(name) {
+			t.Errorf("%s is not a header history member", name)
+		}
+	}
+	for _, name := range []string{"cwd", "parent_session", "legacy_id"} {
+		if IsHeaderHistoryMember(name) {
+			t.Errorf("%s is a header history member", name)
+		}
+	}
+	plain := New(Header{ID: "a"})
+	ida, _ := plain.Append(NewItemEntry(openresponses.UserText("hello")))
+	ha, _ := plain.ContextHash(ida)
+	marked := New(Header{ID: "b"})
+	e := NewItemEntry(openresponses.UserText("hello"))
+	e.LegacyID = "i0000001"
+	idb, _ := marked.Append(e)
+	if hb, _ := marked.ContextHash(idb); ha == "" || ha != hb {
+		t.Errorf("a history member moves the context hash: %s, %s", ha, hb)
+	}
+}

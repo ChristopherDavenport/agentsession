@@ -34,6 +34,19 @@ versions may break the API.
   `instruction-layers` (every response verifying, the context hash the
   same session's without the member) and `bad-instructions-part`.
 
+- **History members (RFC 0001 0.17, Entry envelope and
+  Projections/ATIF).** `IsHistoryMember` names an entry's history
+  members, `legacy_id`, `normalised` and `redacted`, and
+  `IsHeaderHistoryMember` a header's, `redacted` and `redacted_from`: a
+  converter does not carry another entry's as its own, and keeps them,
+  if at all, under its own namespace, except on an entry it rebuilds to
+  the `id` the document names, header included, which is the exported
+  entry itself. The context hash leaves out exactly these. The ATIF
+  export already carried an entry's undefined members as written in the
+  extra of its step, observation result or record; a test now holds it
+  to that, with the meaning members under `extra.agentsession` and a
+  response's history members in its body.
+
 ## v0.0.33 - 2026-11-02
 
 - **Format 0.16 (RFC 0001, draft 0.16).** `Format` and `FormatMinor`
