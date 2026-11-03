@@ -56,6 +56,11 @@ func verify(args []string, stdout, stderr io.Writer) error {
 	}
 	if redacted {
 		fmt.Fprintf(stdout, "redacted_from %s\n", describeRedactedFrom(s.Header()))
+		// The derivation is recommended, so a reader reports an id that
+		// differs and fails nothing over it.
+		if agentsession.CheckRedactedID(s.Header()) != nil {
+			fmt.Fprintln(stdout, "note: the id is not the one redacted_from derives (RFC 0001, The redacted session)")
+		}
 	}
 	if n, native := countRedacted(s, declared); redacted || n > 0 {
 		line := fmt.Sprintf("%d redacted entries, %d native", n, native)

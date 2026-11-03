@@ -75,7 +75,8 @@ versions may break the API.
   now takes the pseudonym: **redacted IDs change for every new
   redaction, and a redaction resumed under 0.19 starts a new session**.
   `CheckRedactedID` reports a redacted header whose `id` is not the one
-  its `redacted_from` derives (`ErrRedactedID`). `SpawnedSessionID`
+  its `redacted_from` derives (`ErrRedactedID`), and `agentsession
+  verify` notes such a file without failing it. `SpawnedSessionID`
   derives a host-started child's ID. `Original` and `Redactions` match
   `redacted_from` as written; `OriginalUnder(ctx, st, key, s)` and
   `RedactionsUnder(ctx, st, key, id)` find an original named by its
