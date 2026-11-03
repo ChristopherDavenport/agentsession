@@ -2854,7 +2854,11 @@ result's `extra`, a list of one.
 An entry's `trust` travels under `agentsession` in the `extra` of the
 step or observation result it maps to, an agent step carrying the union
 of its items', a fold's in its system step's `extra`, and a `result`'s
-in its record.
+in its record. Since 0.17 the trust of the path travels under
+`agentsession` in the top-level `extra` as `trust`, absent when nothing
+on the path carries trust, so an instructions part's labels, which no
+step carries, survive a document stripped of its raw items and of
+`entries`.
 
 A document's steps are the context the algorithm produces, so a run
 that compacted is described by its last summary and what followed it.

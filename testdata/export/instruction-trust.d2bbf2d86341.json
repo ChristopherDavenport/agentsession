@@ -258,7 +258,13 @@
       },
       "format": "agentsession/0.17",
       "leaf": "sha256:d2bbf2d8634169180190b7350d154a736c767c51d101d63e9d3093ac02f82efb",
-      "main": true
+      "main": true,
+      "trust": {
+        "reads": [
+          "private",
+          "untrusted"
+        ]
+      }
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

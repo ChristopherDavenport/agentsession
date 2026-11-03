@@ -194,7 +194,14 @@
         "run",
         "dispatch",
         "decision"
-      ]
+      ],
+      "trust": {
+        "reads": [
+          "private",
+          "untrusted",
+          "x:quarantined"
+        ]
+      }
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

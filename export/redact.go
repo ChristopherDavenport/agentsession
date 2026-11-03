@@ -89,7 +89,7 @@ func Secrets(values ...string) Redactor {
 		if len(secrets) == 0 {
 			return nil
 		}
-		return rewriteStrings(t, func(s string) string {
+		return RewriteStrings(t, func(s string) string {
 			for _, secret := range secrets {
 				s = strings.ReplaceAll(s, secret, Replacement)
 			}
@@ -107,7 +107,7 @@ func HomePaths(home string) Redactor {
 		if home == "" || home == "." || home == "/" {
 			return nil
 		}
-		return rewriteStrings(t, func(s string) string {
+		return RewriteStrings(t, func(s string) string {
 			s = strings.ReplaceAll(s, home+"/", "~/")
 			s = strings.ReplaceAll(s, home+"\\", "~\\")
 			return strings.ReplaceAll(s, home, "~")
@@ -159,10 +159,14 @@ func Environment() Redactor {
 	})
 }
 
-// rewriteStrings applies f to every string in the document, extras
-// included, by rewriting its JSON form. Numbers, booleans and member
-// names are untouched.
-func rewriteStrings(t *atif.Trajectory, f func(string) string) error {
+// RewriteStrings applies f to every string in the document, extras
+// included, by rewriting its JSON form, as [Secrets] and [HomePaths] do,
+// for a custom [RedactorFunc]. Numbers, booleans and member names are
+// untouched. It first drops each
+// normalised record f would change, which holds the member it describes
+// as source text and base64 bytes a rewrite of strings does not reach;
+// that entry then does not rebuild to its id.
+func RewriteStrings(t *atif.Trajectory, f func(string) string) error {
 	data, err := json.Marshal(t)
 	if err != nil {
 		return fmt.Errorf("encode for redaction: %w", err)

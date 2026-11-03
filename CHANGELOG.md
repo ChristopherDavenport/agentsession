@@ -38,7 +38,12 @@ versions may break the API.
   by the hash and keep forms as `source` is, written with its text by
   `InstructionsDelta` when it changes, taken into `PathTrust` from every
   config entry and checkpoint, left out of the context hash, and kept
-  as written by a rewrite. Fixture `instruction-trust`.
+  as written by a rewrite. Fixture `instruction-trust`. The ATIF
+  document's root `extra.agentsession` carries the path's trust as
+  `trust`, so a part's labels survive `NoPassthrough`, as an item's do
+  in its step. `export.RewriteStrings` is the string rewrite `Secrets`
+  and `HomePaths` use, normalised records included, for a custom
+  `RedactorFunc`.
 
 - **History members (RFC 0001 0.17, Entry envelope and
   Projections/ATIF).** `IsHistoryMember` names an entry's history

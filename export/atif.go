@@ -50,7 +50,9 @@ type Options struct {
 const (
 	ExtraOpenResponses = "openresponses"
 	// ExtraAgentSession carries, in the root extra, the session's facts:
-	// its format and the trajectory's leaf, and when present its cwd,
+	// its format and the trajectory's leaf, the path's trust
+	// ([agentsession.PathTrust]) when anything on it carries trust, and
+	// when present its cwd,
 	// parent_session, spawned_by, records, name, labels, main, and for
 	// a redacted session redacted and redacted_from, the latter the
 	// header's object with every member it holds. In a step's extra it
@@ -1255,6 +1257,15 @@ func (b *builder) finish() {
 	}
 	if entries := b.entryRecords(); len(entries) > 0 {
 		as[ExtraEntries] = entries
+	}
+	// The path's trust, an instructions part's labels among them, which
+	// otherwise travel only in a config's body under entries.
+	path := b.t.Path
+	if len(path) == 0 {
+		path = b.t.Context.Entries
+	}
+	if t := agentsession.PathTrust(path); t != nil {
+		as["trust"] = t
 	}
 	root[ExtraAgentSession] = as
 	if len(b.t.PreferredOver) > 0 {

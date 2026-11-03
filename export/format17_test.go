@@ -572,3 +572,24 @@ func TestRedactorsReachNormalised(t *testing.T) {
 		t.Errorf("the env entry keeps %v", rec)
 	}
 }
+
+// TestPartTrustSurvivesNoPassthrough: the path's trust travels under the
+// root's extra.agentsession, so an instructions part's labels, which
+// otherwise travel only in its config's body under entries, survive a
+// document stripped of its passthrough, as an item's do in its step
+// (RFC 0001, Projections/ATIF, 0.17).
+func TestPartTrustSurvivesNoPassthrough(t *testing.T) {
+	s := loadFixture(t, "instruction-trust")
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ToATIF(tr, Options{Redactors: []Redactor{NoPassthrough()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	as := obj(t, doc.Extra[ExtraAgentSession])
+	if !sameValue(t, as["trust"], `{"reads":["private","untrusted"]}`) {
+		t.Errorf("the root carries trust %v", as["trust"])
+	}
+}
