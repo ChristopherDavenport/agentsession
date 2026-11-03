@@ -5,6 +5,17 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **ATIF: a partly priced child is left out of the cost (RFC 0001,
+  `link`, Cost across sessions).** The export added the calls of a
+  delegated session it could price and counted the session as priced
+  when the price source could not price another of its calls, which
+  understated `total_cost_usd` and said nothing. A child with any call
+  the price source cannot price is now left out whole and counted in the
+  note's "not read or not priced", as the RFC's rule has said since
+  0.17. A call that records no usage adds nothing, as on the path.
+
 ## v0.0.34 - 2026-11-03
 
 - **Format 0.17 (RFC 0001, draft 0.17).** `Format` and `FormatMinor`

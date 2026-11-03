@@ -1380,8 +1380,9 @@ func (b *builder) entryRecords() map[string]any {
 // delegatedCost adds to the path's cost the cost of the work it
 // delegated, by [agentsession.DelegatedWork] over the resolver: each
 // child once, at the model that served each call. It returns how many
-// children it priced, how many it left out, unread or held elsewhere or
-// with no call priced, and how many it counted at a resume leaf.
+// children it priced, how many it left out, unread or held elsewhere,
+// with no call priced or with a call it could not price, and how many it
+// counted at a resume leaf.
 func (b *builder) delegatedCost() (priced, excluded, resumed int) {
 	resolve := b.opts.Subsessions
 	if resolve == nil {
@@ -1396,17 +1397,26 @@ func (b *builder) delegatedCost() (priced, excluded, resumed int) {
 	var walk func([]agentsession.Delegated)
 	walk = func(ds []agentsession.Delegated) {
 		for _, d := range ds {
-			paid := false
+			// A child is counted whole or not at all: one call the price
+			// source cannot price leaves the child out, since its priced
+			// calls alone would understate it (RFC 0001, link). A call
+			// recording no usage adds nothing, as on the path itself.
+			var usd float64
+			paid, whole := false, true
 			for _, c := range d.Calls {
 				if c.Usage == nil {
 					continue
 				}
-				if usd, ok := b.costOf(c.Entry.Base().ID, c.Model, *c.Usage); ok {
-					b.cost += usd
-					paid = true
+				v, ok := b.costOf(c.Entry.Base().ID, c.Model, *c.Usage)
+				if !ok {
+					whole = false
+					break
 				}
+				usd += v
+				paid = true
 			}
-			if paid {
+			if paid && whole {
+				b.cost += usd
 				priced++
 			} else {
 				excluded++
