@@ -441,7 +441,10 @@ them under its own namespace (`<slug>:legacy_id`). A redactor is the
 exception Redaction makes: an entry it makes by redaction keeps the
 `legacy_id` of the entry it made it from as written, and its
 `normalised` as Redaction says, since they name and describe the line
-the redaction rewrote, and carries a `redacted` of its own. An entry rebuilt,
+the redaction rewrote, and carries a `redacted` of its own. An entry
+it merges from several keeps the `legacy_id` of the first of them in
+the original's file order that has one, and an entry it adds, made
+from none, has none. An entry rebuilt,
 every member restored, to the `id` of the entry it was rebuilt from is
 that entry and not one made from it, so its history members are true
 of it (Projections, ATIF). Every other member is a **meaning member**.
@@ -2422,7 +2425,10 @@ A redactor:
   the redacted session rebuilds, as below;
 - MUST keep an entry's `legacy_id` as written, since 0.17 a rule and
   before it what writers did, so output named by the original's earlier
-  IDs still resolves in the redacted session;
+  IDs still resolves in the redacted session. An entry merged from
+  several keeps the `legacy_id` of the first of them, in the original's
+  file order, that has one; a placeholder or an entry the redaction
+  added has none of its own;
 - MUST treat a `normalised` record as holding the member it describes:
   `was` is that member's original source text and `raw` its original
   bytes, so what the redactor removes from the member it removes from
@@ -3135,6 +3141,10 @@ so every reader of 0.16 refuses those files until it is upgraded.
   true, and a converter does not carry another's as its own. 0.16
   forbade this for `redacted` alone. A member each minor defines is
   classed from now on; `instructions_part` is a meaning member.
+- A redactor MUST keep an entry's `legacy_id` as written, the one
+  exception to the rule above, and an entry it merges keeps the first
+  one in the original's file order (Redaction). Redactors already did;
+  0.16 did not say so.
 - The ATIF projection carries an entry's undefined members as written,
   `instructions_part`, and under `entries` each entry's envelope and
   history members, and the body of each entry that is not an `item` or
