@@ -47,6 +47,17 @@ versions may break the API.
   to that, with the meaning members under `extra.agentsession` and a
   response's history members in its body.
 
+- **A path's inputs (RFC 0001 0.17, `run`).** `PathInputs` returns the
+  inputs that drove a path, as a replay that sends them again rebuilds
+  them: per run whose source is `input`, the user messages before its
+  first response, leaving out a steer (a delivery among them), a copied
+  item, a peer's report and a composed layer, and keeping an item
+  drained from a followup; a resume's user messages are its own. Each
+  turn's `LeftOut` says why (`NotInput*`), a message reaching the model
+  mid-run among them, so a reader that cannot reproduce one where it
+  stood can say so. On a path with no run entries it splits the turns at
+  responses and reports that it did. Fixture `inputs`.
+
 ## v0.0.33 - 2026-11-02
 
 - **Format 0.16 (RFC 0001, draft 0.16).** `Format` and `FormatMinor`

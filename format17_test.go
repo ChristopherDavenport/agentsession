@@ -16,6 +16,7 @@ import (
 // its function, as for fixtures016.
 var fixtures017 = map[string]func(t *testing.T) *Session{
 	"instruction-layers": func(t *testing.T) *Session { return instructionLayersFixture(t, true) },
+	"inputs":             inputsFixture,
 }
 
 // badFixtures017 are the 0.17 negative fixtures: each a valid file whose
@@ -381,5 +382,140 @@ func TestHistoryMembers(t *testing.T) {
 	idb, _ := marked.Append(e)
 	if hb, _ := marked.ContextHash(idb); ha == "" || ha != hb {
 		t.Errorf("a history member moves the context hash: %s, %s", ha, hb)
+	}
+}
+
+// inputsFixture builds the session inputs.jsonl holds, one run per
+// shape of input (RFC 0001, run, since 0.17):
+//
+//   - run-1, an input, opens with two user messages and a composed
+//     memory layer, its model asks to deploy, a steer drains mid-run and
+//     the deploy is held;
+//   - run-2 resumes the held call with the note a person typed;
+//   - run-3 starts from a followup queued after run-2 ended;
+//   - run-4 starts from a delivery;
+//   - run-5 asks a peer, which acknowledges;
+//   - run-6 starts with an item copied from the parent session and the
+//     peer's later report.
+func inputsFixture(t *testing.T) *Session {
+	t.Helper()
+	s, must, say := fixtureSession(t, Header{ID: "01995b2a-0000-7000-8000-000000000044", Records: AllRecords}, "2026-11-02T14:00:00Z")
+	endAs := func(reason string) {
+		t.Helper()
+		e, err := s.EndRun(reason, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		must(e)
+	}
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Ship releases.")})
+
+	must(NewRunStart("run-1", SourceInput, ""))
+	must(NewItemEntry(openresponses.UserText("Plan the release.")))
+	must(NewItemEntry(openresponses.UserText("Use the checklist.")))
+	must(&ItemEntry{Item: openresponses.UserText("<memory>Releases ship on Tuesday.</memory>"), InstructionsPart: &LayerRef{Source: LayerAgentMemory}})
+	sent := fixtureHash(t, s)
+	deploy := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_deploy", Name: "deploy", Arguments: `{}`}, ResponseID: "resp_1"})
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+	steer := NewQueued(openresponses.UserText("Also tag it."), ModeSteer)
+	must(steer)
+	must(steer.Drain())
+	must(NewDecision("call_deploy", deploy, VerdictHold, ByPolicy).WithReason("asks a person"))
+	endAs(ReasonInputRequired)
+
+	must(NewRunStart("run-2", SourceResume, ""))
+	must(NewItemEntry(openresponses.UserText("Approved, go ahead.")))
+	must(NewDispatch("call_deploy", deploy))
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_deploy", "deployed v2")))
+	say("resp_2", "Deployed and tagged.")
+	endAs(ReasonDone)
+
+	followup := NewQueued(openresponses.UserText("Now write the notes."), ModeFollowUp)
+	must(followup)
+	must(NewRunStart("run-3", SourceInput, ""))
+	must(followup.Drain())
+	say("resp_3", "Notes written.")
+	endAs(ReasonDone)
+
+	delivery := NewDelivery(openresponses.UserText("Background task smoke-1 finished: green.")).WithTrigger("task", "smoke-1", "background")
+	must(delivery)
+	must(NewRunStart("run-4", SourceInput, ""))
+	must(delivery.Drain())
+	say("resp_4", "Smoke tests are green.")
+	endAs(ReasonDone)
+
+	must(NewRunStart("run-5", SourceInput, ""))
+	must(NewItemEntry(openresponses.UserText("Ask the reviewer.")))
+	sent = fixtureHash(t, s)
+	review := must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_2", CallID: "call_review", Name: "review", Arguments: `{}`}, ResponseID: "resp_5"})
+	must(&ResponseEntry{ResponseID: "resp_5", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted, RequestHash: sent})
+	must(NewDispatch("call_review", review))
+	link := must(NewPeerLink("call_review", Callee{URL: "https://review.example/a2a", Task: "task-1"}))
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_review", `{"status":"queued"}`)))
+	say("resp_6", "The reviewer has it.")
+	endAs(ReasonDone)
+
+	must(NewRunStart("run-6", SourceInput, ""))
+	must(&ItemEntry{Item: openresponses.UserText("From the lead: keep the notes short."), CopiedFrom: &CopiedFrom{Session: "01995b2a-0000-7000-8000-000000000045"}})
+	must(&ItemEntry{Item: openresponses.UserText("Review: approved."), FromLink: link, Source: &Trigger{Kind: "delivery", Ref: "task-1", Source: "a2a"}})
+	say("resp_7", "Approved; notes kept short.")
+	endAs(ReasonDone)
+	return s
+}
+
+// TestInputsFixture reads the inputs fixture: each run's inputs, and the
+// user messages each leaves out with why, and on the same path without
+// run entries the turns a reader takes up to each response.
+func TestInputsFixture(t *testing.T) {
+	checkBuilt(t, "inputs")
+	s := loadFixture(t, "inputs")
+	if err := s.VerifyRecords(s.Leaf()); err != nil {
+		t.Errorf("VerifyRecords: %v", err)
+	}
+	text := func(e *ItemEntry) string { return e.Item.(*openresponses.Message).Content.Text() }
+	describe := func(turns []TurnInputs) []string {
+		var out []string
+		for _, turn := range turns {
+			var in, left []string
+			for _, e := range turn.Inputs {
+				in = append(in, text(e))
+			}
+			for _, l := range turn.LeftOut {
+				left = append(left, l.Kind+": "+text(l.Entry))
+			}
+			out = append(out, strings.Join(in, " | ")+" / "+strings.Join(left, " | "))
+		}
+		return out
+	}
+	path := s.Path(s.Leaf())
+	turns, byRuns := PathInputs(path)
+	want := []string{
+		"Plan the release. | Use the checklist. / instructions_part: <memory>Releases ship on Tuesday.</memory> | steer: Also tag it.",
+		" / resume: Approved, go ahead.",
+		"Now write the notes. / ",
+		" / steer: Background task smoke-1 finished: green.",
+		"Ask the reviewer. / ",
+		" / copied: From the lead: keep the notes short. | from_link: Review: approved.",
+	}
+	if got := describe(turns); !byRuns || strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("by runs %v, the runs' inputs are\n%s\nwant\n%s", byRuns, strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	var bare []Entry
+	for _, e := range path {
+		if _, ok := e.(*RunEntry); !ok {
+			bare = append(bare, e)
+		}
+	}
+	turns, byRuns = PathInputs(bare)
+	want = []string{
+		"Plan the release. | Use the checklist. / instructions_part: <memory>Releases ship on Tuesday.</memory>",
+		"Approved, go ahead. / steer: Also tag it.",
+		"Now write the notes. / ",
+		" / steer: Background task smoke-1 finished: green.",
+		"Ask the reviewer. / ",
+		" / copied: From the lead: keep the notes short. | from_link: Review: approved.",
+	}
+	if got := describe(turns); byRuns || strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("by runs %v, the turns' inputs are\n%s\nwant\n%s", byRuns, strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
