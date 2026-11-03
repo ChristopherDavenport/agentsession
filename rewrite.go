@@ -44,6 +44,13 @@ var ErrInstructionsJoin = errors.New("agentsession: rewritten instructions canno
 // redaction to keep.
 var ErrKeyCollision = errors.New("agentsession: a rewrite makes two member names one")
 
+// ErrLayersMerged is returned by [RewriteStrings] for an item whose
+// instructions_part the rewrite would leave in no form the format
+// defines: two layers of a list made one, by their ids or by their
+// sources where they have none, or an id made empty. The item would then
+// read as a person's input; a redactor keeps the layers distinct.
+var ErrLayersMerged = errors.New("agentsession: a rewrite makes two instruction layers one")
+
 // Rewriter is [RewriteStrings] over the entries of one session file,
 // given to it in file order, prefix included: one Rewriter per file. It
 // carries what one entry cannot see. An instruction part a delta does
@@ -398,7 +405,17 @@ func (r *Rewriter) rewriteCore(e Entry) (Entry, error) {
 			}
 		}
 	}
-	return entryFromJSON(e, out)
+	back, err := entryFromJSON(e, out)
+	if err != nil {
+		return nil, err
+	}
+	// An instructions_part the rewrite leaves in no form the format
+	// defines would make the item a person's input: two layers made one,
+	// or an id made empty, are refused, as two member names made one are.
+	if it, ok := e.(*ItemEntry); ok && it.Layers() != nil && back.(*ItemEntry).Layers() == nil {
+		return nil, fmt.Errorf("%w: instructions_part %s", ErrLayersMerged, out["instructions_part"])
+	}
+	return back, nil
 }
 
 // dropCopiedEntry removes copied_from's entry from out when the rewrite

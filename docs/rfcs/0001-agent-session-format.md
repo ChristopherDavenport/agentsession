@@ -2518,7 +2518,13 @@ A redactor:
   value this document defines (`config`, Instructions as parts) as
   written, since 0.17, on an instructions part, an omitted part and an
   `item`'s `instructions_part`, each element of its list since 0.18;
-  any other `source`, and every `id`, is text;
+  any other `source`, and every `id`, is text. Two layers of one
+  `instructions_part` list that a redaction makes one, by their `id`s
+  or, where they have none, their `source`s, MUST NOT both be kept, as
+  two member names made one are not, nor an `id` made empty: the member
+  would then be in no form this document defines, and the item would
+  read as a person's input. A redactor keeps them distinct, as by
+  numbering its replacements;
 - MUST give each `response` it writes either no `request_hash` or the
   one the redacted session rebuilds for it, computed as Request hash
   says, and never another: a redacted session hashes independently, and
@@ -3191,7 +3197,8 @@ so every reader of 0.17 refuses those files until it is upgraded.
   layer once, and a reader reads a single object as a list of one. Like
   the single form, it is left out of RFC 0002's context hash, an item
   carrying it is no input of its run, a redaction keeps each element's
-  defined `source` and treats each `id` as text, and the ATIF
+  defined `source`, treats each `id` as text and keeps the layers
+  distinct, and the ATIF
   projection carries it as written. A reader takes it by its form in a
   file of any minor, as 0.17 took the single object, so an earlier file
   that held a list in this form under an extension's meaning has its

@@ -3,9 +3,11 @@ package agentsession
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -343,5 +345,40 @@ func TestBadInstructionsPartListFixture(t *testing.T) {
 				t.Errorf("response %s: %v", r.ID, err)
 			}
 		}
+	}
+}
+
+// TestRewriteKeepsLayersDistinct: a rewrite that would make two layers
+// of an instructions_part list one, or leave a layer with an empty id,
+// is refused, since the list would then be in no form the format
+// defines and the item would read as a person's input (RFC 0001,
+// Redaction, 0.18).
+func TestRewriteKeepsLayersDistinct(t *testing.T) {
+	at := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	redact := func(string) string { return "[REDACTED]" }
+	list := &ItemEntry{Item: openresponses.UserText("x"), InstructionsLayers: []LayerRef{
+		{ID: "/repo/AGENTS.md", Source: LayerAgentsMD}, {ID: "/repo/CLAUDE.md", Source: LayerAgentsMD},
+	}}
+	list.ID, list.Timestamp = "x", at
+	if out, err := RewriteStrings(list, redact); !errors.Is(err, ErrLayersMerged) {
+		t.Errorf("two ids made one: %v, %+v", err, out)
+	}
+	single := &ItemEntry{Item: openresponses.UserText("x"), InstructionsPart: &LayerRef{ID: "/repo/CLAUDE.md", Source: LayerAgentsMD}}
+	single.ID, single.Timestamp = "y", at
+	if out, err := RewriteStrings(single, func(string) string { return "" }); !errors.Is(err, ErrLayersMerged) {
+		t.Errorf("an id made empty: %v, %+v", err, out)
+	}
+	// Ids kept apart, as a redactor numbering its replacements does,
+	// rewrite.
+	n := 0
+	numbered := func(s string) string {
+		if strings.HasPrefix(s, "/repo") {
+			n++
+			return "[path " + strconv.Itoa(n) + "]"
+		}
+		return s
+	}
+	if out, err := RewriteStrings(list, numbered); err != nil || len(out.(*ItemEntry).InstructionsLayers) != 2 {
+		t.Errorf("distinct ids: %v, %+v", err, out)
 	}
 }
