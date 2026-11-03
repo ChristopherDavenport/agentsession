@@ -22,7 +22,8 @@
               "entry": "sha256:f828a51f15df807e68ffb612cdec4d90df9f09e824a344e04fdb12bf69d715e7"
             }
           ],
-          "entry_id": "sha256:86c3a835b446d895d0e8993921a38bd4338d9a56085febd58cdbb86f17184e6e"
+          "entry_id": "sha256:86c3a835b446d895d0e8993921a38bd4338d9a56085febd58cdbb86f17184e6e",
+          "visible": "sha256:b83fada23bbfcb0a6829716377ebab91572bf9fa2e3775aec2507eef292abdd8"
         },
         "config_entries": [
           "sha256:887426e3c434d924c12108098a9585b5728d60bdd707f01a27f15f590917bbb8"
@@ -104,7 +105,8 @@
               "entry": "sha256:71ecbe469f125677d5d4d2ef35cfe1c288e3bc52fafc35bee49fb49745782793"
             }
           ],
-          "entry_id": "sha256:33652900ebfb8593e28d60cba34110e2ff89ee96c217bda620cf3bcf07ca03eb"
+          "entry_id": "sha256:33652900ebfb8593e28d60cba34110e2ff89ee96c217bda620cf3bcf07ca03eb",
+          "visible": "sha256:1b0e437d257df376a89e6397867466de1a0be0fdc1b2373cbdaed771c3b55897"
         },
         "item_entry_ids": [
           "sha256:33652900ebfb8593e28d60cba34110e2ff89ee96c217bda620cf3bcf07ca03eb",
@@ -140,7 +142,8 @@
       "message": "Summarise the design doc in one line.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:5ac854bb9bfa3577252e1c0e9227c645dd50a8075be51294a529398cf6f38ad8"
+          "entry_id": "sha256:5ac854bb9bfa3577252e1c0e9227c645dd50a8075be51294a529398cf6f38ad8",
+          "visible": "sha256:0f6063fed8ac96e4c2b3cdaa8506ff5ac3819e96e47c866497ae59a416b8de2a"
         },
         "openresponses": {
           "item": {
@@ -165,7 +168,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:b872ab0a4dec4e500e26548f34f840408ef7021e083ed31941ed95dd6de55dd8"
+          "entry_id": "sha256:b872ab0a4dec4e500e26548f34f840408ef7021e083ed31941ed95dd6de55dd8",
+          "visible": "sha256:601d7547f9c579c1d56a4fae1ce2ed310e65640884c0a2e32ad63625804ac654"
         },
         "item_entry_ids": [
           "sha256:c038452a7b003af8d29f7bb3b248dfd8f166b8a4460839a1bd9b681191bc78c9"
@@ -301,7 +305,7 @@
           "type": "run"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:e0c9c22f3c34fe633e5826a337a2dd9ad214077739f6dd21b36b07e5765824b4",
       "main": true,
       "parent_session": "01995b2a-0000-7000-8000-000000000030",
@@ -310,7 +314,8 @@
         "dispatch",
         "decision"
       ],
-      "spawned_by": "call_helper"
+      "spawned_by": "call_helper",
+      "visible": "sha256:abf83ccea15c55040c19e33b7eb04dddf6feedb8b9d94291efa88038bfbc2d8b"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

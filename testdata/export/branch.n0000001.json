@@ -15,7 +15,8 @@
       "message": "Q",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:c7148fabb18d3d73e9ef655243727d80286d464eda2748efdc1b5e7db6147cd7"
+          "entry_id": "sha256:c7148fabb18d3d73e9ef655243727d80286d464eda2748efdc1b5e7db6147cd7",
+          "visible": "sha256:0f56e664442df29e70a139c7b979adddf8955ab7ca2d152311d3e9208ecceb09"
         },
         "config_entries": [
           "sha256:29edacce9dbf458831164efdb62dd61ec52152e8a30fecda25b99a5fdaf9b74b"
@@ -48,7 +49,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:d5fb4724d28690ce84fa6970b57ec286c645d3493939c71e0b2e07509573a0d2"
+          "entry_id": "sha256:d5fb4724d28690ce84fa6970b57ec286c645d3493939c71e0b2e07509573a0d2",
+          "visible": "sha256:406c27edc1a1a87ff7ea07339e7e77fa960b098b99426df6a95930bbe8bdda91"
         },
         "item_entry_ids": [
           "sha256:dc47e900a9713b423c2ea06166d4be1be91959f4e465cd893728e92c2487d139"
@@ -100,7 +102,8 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:8f8814dad9c878846d3bb523dd2299afad1ef4971b145dac21e9e32d4488380a"
+          "entry_id": "sha256:8f8814dad9c878846d3bb523dd2299afad1ef4971b145dac21e9e32d4488380a",
+          "visible": "sha256:3c1f58108c907ec6a549a9ea7b2ab2a6ef15c55e915743ff9043a88bcddd1fc9"
         },
         "branch_from": "sha256:0b9d4d6fb06c6ad39d8ebf31be35bde8f499a5fe45d976c556625edb12f7bf9c",
         "openresponses": {
@@ -124,7 +127,8 @@
       "message": "follow-up B",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:01b9cf298e2d61bb79d6703d69f2a158e05b4c68462904477ff7bea433f16253"
+          "entry_id": "sha256:01b9cf298e2d61bb79d6703d69f2a158e05b4c68462904477ff7bea433f16253",
+          "visible": "sha256:bfe1678ae40c28f8eac5229c2f12f9b6578837e4da280af6ca8562a103349bfb"
         },
         "openresponses": {
           "item": {
@@ -154,7 +158,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:d75bf9ea7c69185fc955f189756a67ec42ea077a3637402413db31178d1f7888"
+          "entry_id": "sha256:d75bf9ea7c69185fc955f189756a67ec42ea077a3637402413db31178d1f7888",
+          "visible": "sha256:b2e45fb2dd664a01625e7afa9cd5c3331d5e7e51650e2261e115389e8cf67062"
         },
         "item_entry_ids": [
           "sha256:8d6c93cf0e4d98e1d2d7b2c132e65b18aa3c8fcbfa23925c1e62fc544d4cbd07"
@@ -321,13 +326,14 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "labels": {
         "sha256:d5fb4724d28690ce84fa6970b57ec286c645d3493939c71e0b2e07509573a0d2": "fork"
       },
       "leaf": "sha256:1dea6d6be55ab38ba0901a9e6aeadbb4187d5919c9e47a41ef9b262ba3f6e8d2",
       "main": true,
-      "name": "Branching demo"
+      "name": "Branching demo",
+      "visible": "sha256:98b1f32dbd42ba306ce435426d3e33354a8e674892e2dc176bfc9cfa68daa1a4"
     },
     "info": [
       {

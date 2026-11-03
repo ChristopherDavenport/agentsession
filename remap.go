@@ -151,7 +151,8 @@ var envelopeMembers = []special{
 // branch summary, are the format's vocabulary and not text, so a rewrite
 // leaves them as they are (RFC 0001, Every redacted entry). So is a
 // source the format defines ([KnownLayer]) on an instructions part, an
-// omitted part and an item's instructions_part, since 0.17; any other
+// omitted part and an item's instructions_part, since 0.17, and each
+// element of an instructions_part list, since 0.18; any other
 // source, and every id, is text. A part's trust labels, since 0.17, are
 // the format's vocabulary too.
 var bodyMembers = map[string][]special{
@@ -164,6 +165,9 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("instructions_part", "source"), role: roleFixed, when: func(e Entry) bool {
 			p := e.(*ItemEntry).InstructionsPart
 			return p != nil && KnownLayer(p.Source)
+		}},
+		{path: memberPath("instructions_part", "[]", "source"), role: roleFixed, holds: knownSource, when: func(e Entry) bool {
+			return e.(*ItemEntry).InstructionsLayers != nil
 		}},
 		{path: memberPath("item", "call_id"), role: roleCallID},
 	},

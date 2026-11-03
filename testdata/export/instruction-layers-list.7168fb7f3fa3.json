@@ -1,0 +1,227 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-000000000049",
+  "trajectory_id": "sha256:7168fb7f3fa39b5ce0b07543f5605e979375de9177c049ef3ee9dc29318ea343",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-03T12:00:03Z",
+      "source": "user",
+      "message": "\u003csystem-reminder\u003eContents of /repo/CLAUDE.md:\n\nUse tabs.\n\nContents of ~/.claude/memory/MEMORY.md:\n\n- The user prefers short answers.\u003c/system-reminder\u003e",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:5e848f0aa81230e70b5104de30101fd66c453f7ad2045bee5671164b74301475",
+          "instructions_part": [
+            {
+              "id": "/repo/CLAUDE.md",
+              "source": "agentsmd"
+            },
+            {
+              "id": "~/.claude/memory/MEMORY.md",
+              "source": "agentmemory"
+            }
+          ],
+          "visible": "sha256:714b8241a9bd377e5d7c06a67efa2ca9c0d6604926ecb7044d4f34d385101209"
+        },
+        "config_entries": [
+          "sha256:58ef0582a30e835450497120170cb8743712b81065c5a8aeff263c8d76cdc57d"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "\u003csystem-reminder\u003eContents of /repo/CLAUDE.md:\n\nUse tabs.\n\nContents of ~/.claude/memory/MEMORY.md:\n\n- The user prefers short answers.\u003c/system-reminder\u003e"
+              }
+            ]
+          }
+        },
+        "run": [
+          {
+            "end_entry_id": "sha256:7168fb7f3fa39b5ce0b07543f5605e979375de9177c049ef3ee9dc29318ea343",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-1",
+            "source": "input",
+            "start_entry_id": "sha256:dc71b91e21b387fe9a0054d068ebaee2452ae594fcafdbc98400b4cd2ce0073c"
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-03T12:00:04Z",
+      "source": "user",
+      "message": "Fix the build.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:9321b984facf147ad63753d954c0b89df9a25bf68a12cf5096cc49e28e2fa4a6",
+          "visible": "sha256:8537e5abcd32f7a82d7c9ad40417701df1621c48472f21576a41224c68d7f85e"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Fix the build."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-03T12:00:06Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Fixed.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:3f85de85789abfe761811bf8270447af34ce2c18ddbe78b19a3604ae5c07b786",
+          "visible": "sha256:ad747cb4f5ac23f8f1793dc342cf19dbe4bce8c2650d829fb9170cc8828d9e9e"
+        },
+        "item_entry_ids": [
+          "sha256:c6b94927629bc3bf226a0bc75e51fd7091ee6351eaf887b72f3b428d07f0e70c"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Fixed.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:3f85de85789abfe761811bf8270447af34ce2c18ddbe78b19a3604ae5c07b786",
+            "model": "gpt-5",
+            "request_hash": "sha256:58a2e958e17020df658209f6c64cdaa37e80e440eb971c2bc344bcd582d20fd3",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-11-03T12:00:06Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 1 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 3 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 1
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:3f85de85789abfe761811bf8270447af34ce2c18ddbe78b19a3604ae5c07b786": {
+          "parent": "sha256:c6b94927629bc3bf226a0bc75e51fd7091ee6351eaf887b72f3b428d07f0e70c",
+          "ts": "2026-11-03T12:00:06Z",
+          "type": "response"
+        },
+        "sha256:58ef0582a30e835450497120170cb8743712b81065c5a8aeff263c8d76cdc57d": {
+          "body": {
+            "instructions_parts": [
+              {
+                "id": "product",
+                "text": "You are a coding agent.",
+                "source": "product"
+              },
+              {
+                "id": "/repo/AGENTS.md",
+                "text": "Run make check before you commit.",
+                "source": "agentsmd"
+              }
+            ],
+            "model": "gpt-5"
+          },
+          "parent": null,
+          "ts": "2026-11-03T12:00:01Z",
+          "type": "config"
+        },
+        "sha256:5e848f0aa81230e70b5104de30101fd66c453f7ad2045bee5671164b74301475": {
+          "body": {
+            "instructions_part": [
+              {
+                "id": "/repo/CLAUDE.md",
+                "source": "agentsmd"
+              },
+              {
+                "id": "~/.claude/memory/MEMORY.md",
+                "source": "agentmemory"
+              }
+            ]
+          },
+          "parent": "sha256:dc71b91e21b387fe9a0054d068ebaee2452ae594fcafdbc98400b4cd2ce0073c",
+          "ts": "2026-11-03T12:00:03Z",
+          "type": "item"
+        },
+        "sha256:7168fb7f3fa39b5ce0b07543f5605e979375de9177c049ef3ee9dc29318ea343": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "done",
+            "run_id": "run-1"
+          },
+          "parent": "sha256:3f85de85789abfe761811bf8270447af34ce2c18ddbe78b19a3604ae5c07b786",
+          "ts": "2026-11-03T12:00:07Z",
+          "type": "run"
+        },
+        "sha256:9321b984facf147ad63753d954c0b89df9a25bf68a12cf5096cc49e28e2fa4a6": {
+          "parent": "sha256:5e848f0aa81230e70b5104de30101fd66c453f7ad2045bee5671164b74301475",
+          "ts": "2026-11-03T12:00:04Z",
+          "type": "item"
+        },
+        "sha256:c6b94927629bc3bf226a0bc75e51fd7091ee6351eaf887b72f3b428d07f0e70c": {
+          "body": {
+            "response": "resp_1"
+          },
+          "parent": "sha256:9321b984facf147ad63753d954c0b89df9a25bf68a12cf5096cc49e28e2fa4a6",
+          "ts": "2026-11-03T12:00:05Z",
+          "type": "item"
+        },
+        "sha256:dc71b91e21b387fe9a0054d068ebaee2452ae594fcafdbc98400b4cd2ce0073c": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-1",
+            "source": "input"
+          },
+          "parent": "sha256:58ef0582a30e835450497120170cb8743712b81065c5a8aeff263c8d76cdc57d",
+          "ts": "2026-11-03T12:00:02Z",
+          "type": "run"
+        }
+      },
+      "format": "agentsession/0.18",
+      "leaf": "sha256:7168fb7f3fa39b5ce0b07543f5605e979375de9177c049ef3ee9dc29318ea343",
+      "main": true,
+      "records": [
+        "run",
+        "dispatch",
+        "decision"
+      ],
+      "visible": "sha256:5dabe359884d721bc8c74e046d21f37598538119d1bf730d919737390412d4ea"
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

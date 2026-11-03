@@ -255,13 +255,18 @@ func TestEmbedTakesTheResumeLeaf(t *testing.T) {
 // envelope, history members and body under entries, an item's item
 // taken from its step (items[] by item_entry_ids position, or the item
 // of a step or observation result) and a response's body from its
-// step; whether its id is the one the document names; and whether
-// the document holds the whole path, from a first entry to the leaf.
+// step; whether it matches, its id the one the document names and,
+// since 0.18, the visible fields of its step and of the document hashing
+// to the values recorded at the export; and whether the document holds the whole path, from a first
+// entry to the leaf trajectory_id names, every step naming an entry.
 type rebuild struct {
 	order    []string
 	lines    map[string]map[string]any
 	verified map[string]bool
 	whole    bool
+	// strays are the step_ids of the steps that name no entry of the
+	// document, which a converter lists.
+	strays []any
 }
 
 // restoresHeader reports whether the converter restores the header's
@@ -282,11 +287,24 @@ func (r rebuild) restoresHeader() bool {
 // rebuildDocument rebuilds the entries of an ATIF document read as JSON.
 func rebuildDocument(t *testing.T, raw []byte) rebuild {
 	t.Helper()
+	return rebuildDocumentIn(t, raw, "")
+}
+
+// rebuildDocumentIn is rebuildDocument for a document read from dir,
+// whose media WriteDocument moved to files there: it is put back inline
+// first, as the export hashed it (0.18).
+func rebuildDocumentIn(t *testing.T, raw []byte, dir string) rebuild {
+	t.Helper()
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var doc map[string]any
 	if err := dec.Decode(&doc); err != nil {
 		t.Fatal(err)
+	}
+	if dir != "" {
+		if err := InlineMedia(doc, dir); err != nil {
+			t.Fatal(err)
+		}
 	}
 	obj := func(v any) map[string]any { m, _ := v.(map[string]any); return m }
 	root := obj(obj(doc["extra"])[ExtraAgentSession])
@@ -371,7 +389,90 @@ func rebuildDocument(t *testing.T, raw []byte) rebuild {
 			break
 		}
 	}
+	// The path reaches the leaf the document names under
+	// extra.agentsession.leaf, not only each parent present (0.18): from
+	// the leaf up, every entry is held. An embedded trajectory's
+	// trajectory_id is session/leaf, so the root's is the fallback alone.
+	leaf, _ := root[ExtraLeaf].(string)
+	if leaf == "" {
+		leaf, _ = doc["trajectory_id"].(string)
+	}
+	for id, n := leaf, 0; ; n++ {
+		line, ok := r.lines[id]
+		if !ok || n > len(r.lines) {
+			r.whole = false
+			break
+		}
+		p, _ := line["parent"].(string)
+		if p == "" {
+			break
+		}
+		id = p
+	}
+	// Every step names an entry of the document (0.18): one appended
+	// after the export is not of the path, and is listed.
+	named := func(step map[string]any) string {
+		id, _ := obj(obj(step["extra"])[ExtraAgentSession])["entry_id"].(string)
+		return id
+	}
+	for _, sv := range steps {
+		if _, ok := r.lines[named(obj(sv))]; !ok {
+			r.whole = false
+			r.strays = append(r.strays, obj(sv)["step_id"])
+		}
+	}
+	// An entry matches only when what a reader sees is what was
+	// exported (0.18): the document's visible fields hash to the value
+	// its extra records, or no entry matches, and so do those of the
+	// step the entry maps to. The id covers the raw item, and not what a
+	// reader of the document sees.
+	sealed := func(v map[string]any, visible map[string]any) bool {
+		want, _ := obj(obj(v["extra"])[ExtraAgentSession])[ExtraVisible].(string)
+		got, err := VisibleHash(visible)
+		return err == nil && want != "" && got == want
+	}
+	docMatches := sealed(doc, DocumentVisible(doc)) && StepsInOrder(doc)
+	for _, sv := range steps {
+		step := obj(sv)
+		if docMatches && sealed(step, StepVisible(step)) {
+			continue
+		}
+		for _, id := range stepEntries(step) {
+			r.verified[id] = false
+		}
+	}
+	if !docMatches {
+		for id := range r.verified {
+			r.verified[id] = false
+		}
+	}
 	return r
+}
+
+// stepEntries are the ids of the entries a step is made from: its own,
+// its items' and response's, and its observation results'.
+func stepEntries(step map[string]any) []string {
+	obj := func(v any) map[string]any { m, _ := v.(map[string]any); return m }
+	extra := obj(step["extra"])
+	var ids []string
+	add := func(v any) {
+		if id, ok := v.(string); ok && id != "" {
+			ids = append(ids, id)
+		}
+	}
+	add(obj(extra[ExtraAgentSession])["entry_id"])
+	items, _ := extra["item_entry_ids"].([]any)
+	for _, id := range items {
+		add(id)
+	}
+	add(obj(obj(extra[ExtraOpenResponses])["response"])["entry_id"])
+	if o := obj(step["observation"]); o != nil {
+		rs, _ := o["results"].([]any)
+		for _, rv := range rs {
+			add(obj(obj(obj(rv)["extra"])[ExtraAgentSession])["entry_id"])
+		}
+	}
+	return ids
 }
 
 func sortedKeys[V any](m map[string]V) []string {
@@ -392,7 +493,10 @@ func sortedKeys[V any](m map[string]V) []string {
 // header's redacted and redacted_from. A document a redactor changed
 // after the export, or one that does not hold the whole path, rebuilds
 // entries that do not verify, or no whole path, and the header is not
-// restored.
+// restored. Since 0.18 that holds of a document changed in a step's
+// visible message alone, whose ids all match, of one with a step
+// appended that names no entry, and of one whose path stops short of
+// its leaf.
 func TestRebuildToTheDocumentsIDs(t *testing.T) {
 	red := redaction(t, "basic", "test/v1", nil, func(v string) string {
 		if v == "4" {
@@ -477,6 +581,109 @@ func TestRebuildToTheDocumentsIDs(t *testing.T) {
 	if r := rebuildDocument(t, cutRaw); r.whole || r.restoresHeader() {
 		t.Error("a document without its first entry holds the whole path")
 	}
+
+	// Changed in a step's visible message alone (0.18), as a redaction
+	// applied to the document's text and not to its raw items is: every
+	// id still matches, and the entry whose step shows other text than it
+	// projects is not rebuilt to its id, so the header is not restored.
+	first := lid(t, s, "i0000001")
+	visible := edit(t, raw, func(doc map[string]any) {
+		for _, sv := range doc["steps"].([]any) {
+			step := obj(t, sv)
+			if obj(t, obj(t, step["extra"])[ExtraAgentSession])["entry_id"] == first {
+				step["message"] = "[redacted]"
+			}
+		}
+	})
+	if r := rebuildDocument(t, visible); r.restoresHeader() || r.verified[first] || !r.verified[lid(t, s, "i0000002")] {
+		t.Errorf("a document changed in a step's message alone: verified %v", r.verified)
+	}
+	// Every step and the document carry the hash of their visible fields
+	// (0.18), and a field the old comparison left out, a step's
+	// model_name or the agent's tool_definitions, edited alone is caught.
+	var plain map[string]any
+	if err := json.Unmarshal(raw, &plain); err != nil {
+		t.Fatal(err)
+	}
+	for _, sv := range plain["steps"].([]any) {
+		if h, _ := obj(t, obj(t, obj(t, sv)["extra"])[ExtraAgentSession])["visible"].(string); !visibleHashForm(h) {
+			t.Errorf("step %v carries visible %q", obj(t, sv)["step_id"], h)
+		}
+	}
+	if h, _ := obj(t, obj(t, plain["extra"])[ExtraAgentSession])["visible"].(string); !visibleHashForm(h) {
+		t.Errorf("the document carries visible %q", h)
+	}
+	model := edit(t, raw, func(doc map[string]any) {
+		for _, sv := range doc["steps"].([]any) {
+			if step := obj(t, sv); step["model_name"] != nil {
+				step["model_name"] = "another-model"
+				return
+			}
+		}
+		t.Fatal("no step names a model")
+	})
+	if r := rebuildDocument(t, model); r.restoresHeader() {
+		t.Error("a document changed in a step's model_name alone restores the header")
+	}
+	tools := edit(t, raw, func(doc map[string]any) {
+		agent := obj(t, doc["agent"])
+		defs, _ := agent["tool_definitions"].([]any)
+		if len(defs) == 0 {
+			t.Fatal("the document defines no tool")
+		}
+		obj(t, defs[0])["description"] = "edited"
+	})
+	if r := rebuildDocument(t, tools); r.restoresHeader() {
+		t.Error("a document changed in a tool definition alone restores the header")
+	}
+	// The steps are the export's in number and order: a step duplicated,
+	// or two swapped, each still hashing as written, does not match.
+	duplicated := edit(t, raw, func(doc map[string]any) {
+		steps := doc["steps"].([]any)
+		doc["steps"] = append(steps, steps[len(steps)-1])
+	})
+	swapped := edit(t, raw, func(doc map[string]any) {
+		steps := doc["steps"].([]any)
+		steps[0], steps[1] = steps[1], steps[0]
+	})
+	for name, changed := range map[string][]byte{"duplicated": duplicated, "swapped": swapped} {
+		if r := rebuildDocument(t, changed); r.restoresHeader() {
+			t.Errorf("a document with a step %s restores the header", name)
+		}
+	}
+	// A step appended after the export names no entry: it is not of the
+	// path, so the document does not hold the whole path (0.18).
+	appended := edit(t, raw, func(doc map[string]any) {
+		doc["steps"] = append(doc["steps"].([]any), map[string]any{"step_id": json.Number("99"), "source": "user", "message": "appended"})
+	})
+	if r := rebuildDocument(t, appended); r.whole || r.restoresHeader() || len(r.strays) != 1 {
+		t.Errorf("a document with a step appended: whole %v, strays %v", r.whole, r.strays)
+	}
+	// Without the leaf every parent is present, and the path stops short
+	// of the leaf trajectory_id names (0.18).
+	short := edit(t, raw, func(doc map[string]any) {
+		delete(obj(t, obj(t, obj(t, doc["extra"])[ExtraAgentSession])["entries"]), s.Leaf())
+	})
+	if r := rebuildDocument(t, short); r.whole || r.restoresHeader() {
+		t.Error("a document without its leaf holds the whole path")
+	}
+}
+
+// edit returns the document raw holds changed by change, as JSON.
+func edit(t *testing.T, raw []byte, change func(doc map[string]any)) []byte {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	change(doc)
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // obj is v as a JSON object.
@@ -592,4 +799,19 @@ func TestPartTrustSurvivesNoPassthrough(t *testing.T) {
 	if !sameValue(t, as["trust"], `{"reads":["private","untrusted"]}`) {
 		t.Errorf("the root carries trust %v", as["trust"])
 	}
+}
+
+// visibleHashForm reports whether h is a hash in the format's notation,
+// sha256: and 64 lowercase hexadecimal digits.
+func visibleHashForm(h string) bool {
+	hex, ok := strings.CutPrefix(h, "sha256:")
+	if !ok || len(hex) != 64 {
+		return false
+	}
+	for _, c := range hex {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }

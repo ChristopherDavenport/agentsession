@@ -35,7 +35,8 @@
       "message": "Survey both options and report.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:8e5a54eb79e95b974639834a08d411a5ff6cd5b3bd8231dbbb265e282d6e7342"
+          "entry_id": "sha256:8e5a54eb79e95b974639834a08d411a5ff6cd5b3bd8231dbbb265e282d6e7342",
+          "visible": "sha256:9c85da12391513b6d22b19ea5fc44387ad330135781184d8ebdf83b484631646"
         },
         "config_entries": [
           "sha256:96cf0a2bfec6eacdf7f4ad422c785d37cc49108d760983437521c4f1ec043b63"
@@ -159,7 +160,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:31b9e424257515f3485246cca675d2379afd6943a7bc547851e6b1f1c73c7cd7"
+          "entry_id": "sha256:31b9e424257515f3485246cca675d2379afd6943a7bc547851e6b1f1c73c7cd7",
+          "visible": "sha256:8689202ad20fe88cb6332c463fddfd2373f6ea00a04a987fc79d80a786cd95c3"
         },
         "calls": {
           "call_a": {
@@ -235,7 +237,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:03902ad5a64a0292895ada6b7bce992592e3a1aaa4802780b49bc61c3f47b450"
+          "entry_id": "sha256:03902ad5a64a0292895ada6b7bce992592e3a1aaa4802780b49bc61c3f47b450",
+          "visible": "sha256:2530160cb714aa4179e42693a779e66bb9ddaba2ec80d4f49d4e9c6e57c5f5d6"
         },
         "item_entry_ids": [
           "sha256:a04bfc29a047ff76c414f7d815370745b59d567920c3eb04e4fe41b5da0f9cf2"
@@ -288,7 +291,8 @@
       "message": "Draft it as a table.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:c5867edf1c2ad1c0a9c6e2443b641118e4848dff8020f472d0a0f24fcd8555d5"
+          "entry_id": "sha256:c5867edf1c2ad1c0a9c6e2443b641118e4848dff8020f472d0a0f24fcd8555d5",
+          "visible": "sha256:1ee8ece9110589e8e0d8f0a2eb5c70bd57b5df961272a12b558ee4fd1f494175"
         },
         "openresponses": {
           "item": {
@@ -486,13 +490,14 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:c5867edf1c2ad1c0a9c6e2443b641118e4848dff8020f472d0a0f24fcd8555d5",
       "records": [
         "run",
         "dispatch",
         "decision"
-      ]
+      ],
+      "visible": "sha256:1ecfec37a6335b110fc5a50f89600538b9d74d5823036dea55ea34a8638049ec"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

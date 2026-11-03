@@ -29,7 +29,8 @@
               "private",
               "untrusted"
             ]
-          }
+          },
+          "visible": "sha256:6a06d195c01ec3fab32957001c8a32926271ee993c8d13393540bae5ae908783"
         },
         "context_management": {
           "boundary": "replace",
@@ -58,7 +59,8 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:240e956e7ad427950fad80cdf3a5c583c34001a252a46c5c05874be1541b6d67"
+          "entry_id": "sha256:240e956e7ad427950fad80cdf3a5c583c34001a252a46c5c05874be1541b6d67",
+          "visible": "sha256:c2d1aa707941cbf2ec7c41b1d8d0ea0432f00e2e82e1e6fa09e9a808d3ffb778"
         },
         "openresponses": {
           "item": {
@@ -84,7 +86,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:083ade5f48a5fc55a5bc9eb55c7a2eff40b25d7d638961a33059d449f2883f6f"
+          "entry_id": "sha256:083ade5f48a5fc55a5bc9eb55c7a2eff40b25d7d638961a33059d449f2883f6f",
+          "visible": "sha256:cc80a1b96e964705864653b04e1b2b805ce0e6f9256197fb36ecf4f9aec62792"
         },
         "item_entry_ids": [
           "sha256:ad5429f378194a001e1b9209d1096c11aedb2f846db22fc572ffe03aea26a308"
@@ -125,7 +128,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:d2bbf2d8634169180190b7350d154a736c767c51d101d63e9d3093ac02f82efb"
+          "entry_id": "sha256:d2bbf2d8634169180190b7350d154a736c767c51d101d63e9d3093ac02f82efb",
+          "visible": "sha256:57e4409306a3cb9602e6308893b09aa8fbed3aa5b9ea7d0ea23a32b8a6c5fc33"
         },
         "item_entry_ids": [
           "sha256:e10833b0b1d9854d1239b0690346eb3c51acd84d671d7cbece5110b83ca94aef"
@@ -256,7 +260,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:d2bbf2d8634169180190b7350d154a736c767c51d101d63e9d3093ac02f82efb",
       "main": true,
       "trust": {
@@ -264,7 +268,8 @@
           "private",
           "untrusted"
         ]
-      }
+      },
+      "visible": "sha256:2604648128faf9539fdbf21d74e040f0ebda2926f2cf87931e1e64eba4cd0e86"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

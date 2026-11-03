@@ -15,7 +15,8 @@
       "message": "Start the build in the background.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:45f8511d7fe1ce05a5c7f770afeb48175c090d093e7fe34e8a60148bdd0ef773"
+          "entry_id": "sha256:45f8511d7fe1ce05a5c7f770afeb48175c090d093e7fe34e8a60148bdd0ef773",
+          "visible": "sha256:9a4ca9b7f703b21ea59d7685f03fbe66184367e01f58178b4d41ccdf62096337"
         },
         "config_entries": [
           "sha256:7ce27e2f24ba83eb5ca5388ff134c1a3e9a8a7b7ff3adf2c4431a6bc65f6e00a"
@@ -53,7 +54,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:534f4c164351aa0f6d255b1ff8c2a804affd4d21d9ad43e8603ea5fd663ddcda"
+          "entry_id": "sha256:534f4c164351aa0f6d255b1ff8c2a804affd4d21d9ad43e8603ea5fd663ddcda",
+          "visible": "sha256:dbcd3310939992910d86fe0176b4ffbd01d19df09e2b39fc26a4cabb4207dd43"
         },
         "item_entry_ids": [
           "sha256:d126afa194897540a5f93a1cd40e73c37f788ca58950bcb65f491370958b45ba"
@@ -92,7 +94,8 @@
       "message": "Background task build-7 finished: 2 warnings.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:ce7648b0ddeda1a0dcbbf0e8326af57490ec360d6208359ef90887fd613ca07f"
+          "entry_id": "sha256:ce7648b0ddeda1a0dcbbf0e8326af57490ec360d6208359ef90887fd613ca07f",
+          "visible": "sha256:19b698da633feb483e45570e4e93630bb355c0efeac9f289766a9dddc09fd7cc"
         },
         "openresponses": {
           "item": {
@@ -183,7 +186,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:eccd138f898c2b002f1b35ed6e72855bf71e7f0a325be29f7f84e5259800d2af"
+          "entry_id": "sha256:eccd138f898c2b002f1b35ed6e72855bf71e7f0a325be29f7f84e5259800d2af",
+          "visible": "sha256:bdd219f9f77e01a6e2340da7f2162fc27e0a6455960558661ae563ae2a7e1639"
         },
         "calls": {
           "call_fix": {
@@ -404,14 +408,15 @@
           "type": "response"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:c15195ae0290e507f361d8379b085aa58e072a0f7984339b5974790a9b65bdf3",
       "main": true,
       "records": [
         "run",
         "dispatch",
         "decision"
-      ]
+      ],
+      "visible": "sha256:c916e6f51b72a55f1134b6cb5678d1fdcda8c1dd1de5d7fadaeb41df81ac2a03"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

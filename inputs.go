@@ -16,7 +16,7 @@ const (
 	// NotInputPeerReport is an item carrying from_link, a peer's report.
 	NotInputPeerReport = "from_link"
 	// NotInputComposed is an item carrying instructions_part, which the
-	// harness composed from an instruction layer.
+	// harness composed from one instruction layer or several.
 	NotInputComposed = "instructions_part"
 	// NotInputResume is a user message on a resume run's segment, such
 	// as the note a person typed with an approval.
@@ -82,7 +82,7 @@ func PathInputs(path []Entry) (turns []TurnInputs, byRuns bool) {
 			return NotInputCopied
 		case it.FromLink != "":
 			return NotInputPeerReport
-		case it.InstructionsPart != nil:
+		case it.Layers() != nil:
 			return NotInputComposed
 		}
 		return ""

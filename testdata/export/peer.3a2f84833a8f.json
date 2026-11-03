@@ -15,7 +15,8 @@
       "message": "Ask the billing agent, and have the search agent look too.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:ee3b67f3af4e176d093978cbfa49154708ac27065612d76b3f837df2febe35ad"
+          "entry_id": "sha256:ee3b67f3af4e176d093978cbfa49154708ac27065612d76b3f837df2febe35ad",
+          "visible": "sha256:8cac860b07bb23ac4180030ab840ad1d479532dec2da4c2587f4198de1357d10"
         },
         "config_entries": [
           "sha256:8bd68a5d5ae66b435170faa32b3d4e27e112af2697e50ec14bce7e8ba5b01fda"
@@ -95,7 +96,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:968fbad9b831134e939fd9711841c8bcdb113d9b87eee8322010c9e508108940"
+          "entry_id": "sha256:968fbad9b831134e939fd9711841c8bcdb113d9b87eee8322010c9e508108940",
+          "visible": "sha256:871cab92429a7909b60d461e9c9ce557803b381f4d798556c7a591f3737686a0"
         },
         "calls": {
           "call_billing": {
@@ -283,12 +285,13 @@
           "type": "link"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:3a2f84833a8fca655bca29f629b381d5648fce9120dc8a30fa21ccd8a51eddba",
       "main": true,
       "records": [
         "dispatch"
-      ]
+      ],
+      "visible": "sha256:656716392c78737751a65019bcbb87cd2910a022c36ca5fddcf3b230a769d5f2"
     },
     "links": [
       {

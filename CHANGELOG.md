@@ -5,6 +5,99 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Breaking (format): Format 0.18 (RFC 0001, draft 0.18).** `Format`
+  and `FormatMinor` name 0.18, so a writer raises every file it appends
+  to and a reader of 0.17 refuses it; a 0.5 to 0.17 file reads as it
+  stands and no entry hash moves. The generated fixtures, the otel
+  copies and the export goldens carry the new header. 0.18 lets an
+  item's `instructions_part` be a list of layers, and tightens the rules
+  for a converter rebuilding a session from an ATIF document, below.
+
+- **Instruction layers as a list (RFC 0001 0.18, `item`; RFC 0002,
+  context hash).** One message often carries several layers, as Claude
+  Code sends CLAUDE.md and MEMORY.md in one reminder, and 0.17's
+  `instructions_part` could name only one. It may now be a list of
+  `{id, source}`, the layers in the order their texts appear in the
+  message: `ItemEntry.InstructionsLayers`, beside the single object's
+  `InstructionsPart`, at most one of them set, the form the line holds.
+  `ItemEntry.Layers` reads either, the single object as a list of one. A
+  list is taken on a message's entry in a file of any minor when it is
+  not empty, each element is in the single form, and it names each layer
+  once (no `id` twice, no `source` twice among elements with no `id`);
+  any other list is kept whole as written, and the writer refuses one,
+  one on another item, or both forms at once. Like the single form it
+  is left out of the context hash, makes the item no input of its run
+  (`PathInputs`), keeps each element's defined `source` through a
+  rewrite with every `id` as text, and travels as written under
+  `extra.agentsession` on the item's ATIF step. **Breaking for
+  readers:** code that tells a composed layer by `InstructionsPart !=
+  nil` misses a list; use `Layers() != nil`. Fixtures
+  `instruction-layers-list` (every response verifying, the context hash
+  the same session's without the member) and
+  `bad-instructions-part-list` (an empty list, an `id` named twice), an
+  export golden, and the redaction round trip over the new fixture.
+  A layer carries no trust of its own: a writer carries each layer's
+  known trust in the item's `trust` (RFC 0001 0.18, `item`).
+  `RewriteStrings` refuses with `ErrLayersMerged` a rewrite that would
+  make two layers of a list one, or an `id` empty, since the item would
+  then read as a person's input; a redactor keeps them distinct.
+
+- **ATIF read-back checks what a reader sees (RFC 0001 0.18,
+  Projections/ATIF).** The export writes `extra.agentsession.visible`
+  (`ExtraVisible`) on every step and at the top level of every
+  document, embedded ones included: SHA-256 over the RFC 8785 canonical
+  JSON of the step's, or the document's, visible fields
+  (`StepVisible`, `DocumentVisible`, `VisibleHash`), computed over the
+  document as the export built it, before its own redactors run, so a
+  step a redactor at export changed fails its hash. A converter rebuilding an entry to the
+  `id` the document names takes it as matching only when its step's and
+  the document's hashes, recomputed, equal the recorded ones: the `id`
+  covers the raw item, so a redaction made in the document's visible
+  text alone, or an edit to a step's `model_name` or a tool definition,
+  left every `id` matching and the rebuilt session read as redacted.
+  A step's hash covers its `extra`, all but the hash itself, since it
+  holds copies of entry text, queued items and decision args, that no
+  `id` covers there. The document's hash covers its `extra` the same
+  way, since a converter restores `redacted_from` and history members
+  from it, and counts its steps, and `StepsInOrder` holds each
+  `step_id` to its position, so a step duplicated, swapped or removed
+  matches nothing. Every export golden gains the hashes. The whole path it
+  needs before it restores the header's `redacted` and `redacted_from`
+  reaches the leaf `extra.agentsession.leaf` names (`ExtraLeaf`; an
+  embedded trajectory's `trajectory_id` is `session/leaf`, so a redacted
+  child could never be restored by it), and every step names an entry;
+  a step appended after the export is listed. The reference rebuild in
+  `export`'s tests (`rebuildDocument`) does both, for agentimport's
+  converter to follow, which has to adopt these rules (**breaking for
+  converters**: a 0.17 rebuild restores headers 0.18 forbids). The
+  documents under `testdata/rebuild` are its fixtures: `verified`,
+  `visible-edit`, `appended-step`, `removed-leaf`, `embedded-child` and
+  `media`, whose image `WriteDocument` moved to `images/`.
+  `WriteDocument` now moves only a data URL in the one form
+  `InlineMedia` writes back, `data:<media_type>;base64,` and padded
+  standard base64, and leaves any other inline; `InlineMedia` puts a
+  written document's media back inline from its files, as a converter
+  does before it checks the hashes.
+
+- **Breaking (ATIF cost totals and notes): a partly priced child is
+  left out of the cost (RFC 0001, `link`, Cost across sessions).** A
+  document's `total_cost_usd` and its notes can differ from v0.0.34's
+  for the same session and price source. The export added the calls of a
+  delegated session it could price and counted the session as priced
+  when the price source could not price another of its calls, which
+  understated `total_cost_usd` and said nothing. A child is now
+  counted when every call of it that records usage is priced, as RFC
+  0001 0.18's `link` says: a child with a call the price source cannot
+  price is left out whole and counted in the note's "not read or not
+  priced", and a call that records no usage adds nothing, so a child
+  with no calls counts as 0 where it was left out. A call of the path
+  itself the price source cannot price is named in a note ("excludes N
+  model call(s) of this path") rather than skipped without a word.
+  Fixtures `cost-priced` and its children `cost-priced-empty`,
+  `cost-priced-partial` and `cost-priced-unpriced`.
+
 ## v0.0.34 - 2026-11-03
 
 - **Format 0.17 (RFC 0001, draft 0.17).** `Format` and `FormatMinor`

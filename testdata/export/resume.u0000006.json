@@ -35,7 +35,8 @@
       "message": "Delete the logs.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:c24a77cdd2b070f694edf181f46efc46dd3777b39bf1592dc0a7ae984e36340a"
+          "entry_id": "sha256:c24a77cdd2b070f694edf181f46efc46dd3777b39bf1592dc0a7ae984e36340a",
+          "visible": "sha256:4e0eef2adc5e2e11cea6942f26c33c537afc912cabd61de5156f72818b0077fe"
         },
         "config_entries": [
           "sha256:c76f5301c344a529d7f74bc9d493fbfb9c1c222a49a0377659bad6cdac880b4a"
@@ -114,7 +115,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:751f4d2ccf2b22247ba1681563319b0934eebd1e8b43d1554fb8feaa34e1d2cf"
+          "entry_id": "sha256:751f4d2ccf2b22247ba1681563319b0934eebd1e8b43d1554fb8feaa34e1d2cf",
+          "visible": "sha256:4cabdb0a4c6134a2b62e3564c145a3ce63e70c1097f284678651591692f23614"
         },
         "calls": {
           "call_1": {
@@ -180,7 +182,8 @@
       "message": "Fine, list them instead.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:d7e4549217232a56cca4b4acf8227a1ab0e946b8c28ba098d03754297c40a1a1"
+          "entry_id": "sha256:d7e4549217232a56cca4b4acf8227a1ab0e946b8c28ba098d03754297c40a1a1",
+          "visible": "sha256:54b5ae486936597e9bff2ce21b3f44aaa7f1a08475d9677d65b117c2eae61c34"
         },
         "openresponses": {
           "item": {
@@ -230,7 +233,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:952f064da1be551be6bd1db4a6980c298695a6237314dda364b135f0bbbba280"
+          "entry_id": "sha256:952f064da1be551be6bd1db4a6980c298695a6237314dda364b135f0bbbba280",
+          "visible": "sha256:fbf03361cf1bdc4ef5699abe495b57c38cef0df1a186cb1cb43d9fb119c307e3"
         },
         "item_entry_ids": [
           "sha256:bd308cec0f3c2767776bd7e0f6f0db2564043715d4c18ba7c9f1c296464ec5a4"
@@ -464,14 +468,15 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:06ce3e510c451f2e99e05cc116becfe0ce1d295194db45cf5bea6d417b49c5b7",
       "main": true,
       "records": [
         "run",
         "dispatch",
         "decision"
-      ]
+      ],
+      "visible": "sha256:2b3540e7604dfc967dcb53b0c4fdc6b1669e2690065a4636e37e953731fd5612"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

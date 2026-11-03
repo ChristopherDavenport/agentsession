@@ -354,8 +354,32 @@ type ItemEntry struct {
 	// request, and the item is no input of its run ([PathInputs]). An
 	// instructions_part on any other item, or in another form (see
 	// [LayerRef]), is kept as written in Unknown and InstructionsPart
-	// is nil.
+	// is nil. A list is held in InstructionsLayers instead; [Layers]
+	// reads either form.
 	InstructionsPart *LayerRef `json:"-" member:"instructions_part"`
+	// InstructionsLayers is instructions_part in the list form format
+	// 0.18 defines: the layers a message was composed from, in the order
+	// their texts appear in it, as Claude Code sends an instruction file
+	// and a memory block in one message. The list is not empty, each
+	// element is in the form InstructionsPart is, and it names each
+	// layer once: no id twice, and no source twice among elements with
+	// no id. At most one of InstructionsPart and InstructionsLayers is
+	// set, the one the line holds, since the two forms hash apart. A list
+	// in another form is kept whole as written in Unknown and
+	// InstructionsLayers is nil.
+	InstructionsLayers []LayerRef `json:"-" member:"instructions_part"`
+}
+
+// Layers returns the instruction layers the item names in its
+// instructions_part, in either form (RFC 0001, item, since 0.18): the
+// list, or the single object as a list of one. It is nil when the item
+// carries neither, and then the item was not composed from a layer, or
+// carries the member in a form the format does not define.
+func (e *ItemEntry) Layers() []LayerRef {
+	if e.InstructionsPart != nil {
+		return []LayerRef{*e.InstructionsPart}
+	}
+	return e.InstructionsLayers
 }
 
 // Instruction layers: the source values RFC 0001 defines, since 0.17,
@@ -419,6 +443,56 @@ func layerRefForm(raw json.RawMessage) bool {
 		}
 	}
 	return ref.valid()
+}
+
+// validLayers reports whether a list of layers is in the form 0.18
+// defines: not empty, each reference valid, and each layer named once,
+// by its id, or by its source when it has no id.
+func validLayers(refs []LayerRef) bool {
+	if len(refs) == 0 {
+		return false
+	}
+	ids, sources := map[string]bool{}, map[string]bool{}
+	for i := range refs {
+		r := &refs[i]
+		if !r.valid() {
+			return false
+		}
+		seen, key := ids, r.ID
+		if key == "" {
+			seen, key = sources, r.Source
+		}
+		if seen[key] {
+			return false
+		}
+		seen[key] = true
+	}
+	return true
+}
+
+// layerListForm reports whether raw holds an instructions_part in the
+// list form 0.18 defines: an array whose every element is in the form
+// [layerRefForm] takes, naming each layer once, and not empty.
+func layerListForm(raw json.RawMessage) bool {
+	var els []json.RawMessage
+	if json.Unmarshal(raw, &els) != nil || len(els) == 0 {
+		return false
+	}
+	refs := make([]LayerRef, len(els))
+	for i, el := range els {
+		if !layerRefForm(el) {
+			return false
+		}
+		var m struct {
+			ID     string `json:"id"`
+			Source string `json:"source"`
+		}
+		if json.Unmarshal(el, &m) != nil {
+			return false
+		}
+		refs[i] = LayerRef(m)
+	}
+	return validLayers(refs)
 }
 
 // Trust labels (RFC 0001, item, since 0.15).
@@ -2570,7 +2644,7 @@ func (e *ItemEntry) MarshalJSON() ([]byte, error) {
 		return nil, errors.New("agentsession: item entry has no item")
 	}
 	type plain ItemEntry
-	if !e.Failed && e.FromLink == "" && e.CopiedFrom == nil && e.Trust == nil && e.InstructionsPart == nil {
+	if !e.Failed && e.FromLink == "" && e.CopiedFrom == nil && e.Trust == nil && e.InstructionsPart == nil && e.InstructionsLayers == nil {
 		return marshalEntry(TypeItem, &e.EntryBase, (*plain)(e))
 	}
 	if _, ok := e.Item.(*openresponses.FunctionCallOutput); e.Failed && !ok {
@@ -2584,16 +2658,33 @@ func (e *ItemEntry) MarshalJSON() ([]byte, error) {
 			return nil, fmt.Errorf("agentsession: instructions_part %+v names no source, or an agentsmd layer with no id", *p)
 		}
 	}
+	if l := e.InstructionsLayers; l != nil {
+		if _, ok := e.Item.(*openresponses.Message); !ok {
+			return nil, errors.New("agentsession: instructions_part is defined on a message's entry alone")
+		}
+		if e.InstructionsPart != nil {
+			return nil, errors.New("agentsession: instructions_part is both a single layer and a list")
+		}
+		if !validLayers(l) {
+			return nil, fmt.Errorf("agentsession: instructions_part %+v is empty, names no source, an agentsmd layer with no id, or a layer twice", l)
+		}
+	}
 	if e.CopiedFrom != nil && e.CopiedFrom.Session == "" {
 		return nil, errors.New("agentsession: copied_from names no session")
 	}
 	for _, m := range []struct {
 		key string
 		set bool
-	}{{"failed", e.Failed}, {"from_link", e.FromLink != ""}, {"copied_from", e.CopiedFrom != nil}, {"trust", e.Trust != nil}, {"instructions_part", e.InstructionsPart != nil}} {
+	}{{"failed", e.Failed}, {"from_link", e.FromLink != ""}, {"copied_from", e.CopiedFrom != nil}, {"trust", e.Trust != nil}, {"instructions_part", e.InstructionsPart != nil || e.InstructionsLayers != nil}} {
 		if _, dup := e.Unknown[m.key]; dup && m.set {
 			return nil, fmt.Errorf("agentsession: item entry has %s both typed and unknown", m.key)
 		}
+	}
+	var layers any
+	if e.InstructionsPart != nil {
+		layers = e.InstructionsPart
+	} else if e.InstructionsLayers != nil {
+		layers = e.InstructionsLayers
 	}
 	return marshalEntry(TypeItem, &e.EntryBase, struct {
 		*plain
@@ -2601,8 +2692,8 @@ func (e *ItemEntry) MarshalJSON() ([]byte, error) {
 		FromLink         string      `json:"from_link,omitempty"`
 		CopiedFrom       *CopiedFrom `json:"copied_from,omitempty"`
 		Trust            *Trust      `json:"trust,omitempty"`
-		InstructionsPart *LayerRef   `json:"instructions_part,omitempty"`
-	}{(*plain)(e), e.Failed, e.FromLink, e.CopiedFrom, e.Trust, e.InstructionsPart})
+		InstructionsPart any         `json:"instructions_part,omitempty"`
+	}{(*plain)(e), e.Failed, e.FromLink, e.CopiedFrom, e.Trust, layers})
 }
 
 // UnmarshalJSON decodes the entry, dispatching the item through the
@@ -2673,13 +2764,18 @@ func (e *ItemEntry) decodeMembers(_ []byte, all map[string]json.RawMessage) erro
 		promote(&e.EntryBase, "copied_from", &e.CopiedFrom)
 	}
 	promoteTrust(&e.EntryBase, &e.Trust)
-	// instructions_part is taken in the form 0.17 defines, on a
-	// message's entry, in a file of any minor; anything else is kept as
-	// written.
-	e.InstructionsPart = nil
+	// instructions_part is taken in the forms 0.17 and 0.18 define, an
+	// object or a list of them, on a message's entry, in a file of any
+	// minor; anything else is kept as written.
+	e.InstructionsPart, e.InstructionsLayers = nil, nil
 	if _, ok := e.Item.(*openresponses.Message); ok {
-		if raw, ok := e.Unknown["instructions_part"]; ok && layerRefForm(raw) {
-			promote(&e.EntryBase, "instructions_part", &e.InstructionsPart)
+		if raw, ok := e.Unknown["instructions_part"]; ok {
+			switch {
+			case layerRefForm(raw):
+				promote(&e.EntryBase, "instructions_part", &e.InstructionsPart)
+			case layerListForm(raw):
+				promote(&e.EntryBase, "instructions_part", &e.InstructionsLayers)
+			}
 		}
 	}
 	return nil

@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.17
+Status: draft 0.18
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -643,12 +643,31 @@ One conversation item in the payload profile.
   does; `id`, when present, is a non-empty string. The item carries the
   layer's text as the harness composed it, wrapping included.
 
+  Since 0.18 it MAY instead be a list of such objects, for a message the
+  harness composed from several layers at once, as Claude Code sends an
+  instruction file and a block of memory in one message. The list names
+  the layers in the order their texts appear in the message. It is not
+  empty, each element is held to every rule the single object is, and
+  it names each layer once: no two elements have the same `id`, and no
+  two without an `id` the same `source`. A reader reads a single object
+  as a list of one, so the two forms mean the same thing for one layer,
+  and a writer MAY write either; they are different members as written,
+  so the entry's hash is that of the form the line holds. A list with
+  an element a reader cannot read as the single form, or that names a
+  layer twice, is a member in another form, kept whole.
+
   It is a record member, like `trust`, and a meaning member (Entry
   envelope). The item is sent as it is, the member reaches no request,
   and the item is not an input of the run (`run`). A writer MUST NOT
   write it on any other item, or in another form, and a reader keeps
   one it cannot read this way as a member it does not know. A copy of
-  the item (`copied_from`) MAY carry it.
+  the item (`copied_from`) MAY carry it. An element carries no `trust`
+  of its own. A writer that knows a layer's trust, as an instructions
+  part's `trust` says it of a memory part, MUST carry those labels in
+  the item's `trust`, which labels the message whole: the union of the
+  labels of every layer composed into it, beside any the message has
+  for another reason. The path's trust then holds them, as it holds the
+  part's.
 - A `function_call` whose entry carries `copied_from` is a **copied
   call**: the call was made in the session named, and this session
   holds it only as context. A copied call is not a call of this
@@ -778,8 +797,8 @@ A writer SHOULD use these values for those layers, and a reader MAY
 rely on them, in a file of any minor, since writers used them with these
 meanings before they were defined. Every other `source`
 is in the harness's own terms and opaque to a reader. The same values
-name the layer of an omitted part (`instructions_omitted`) and of an
-`item`'s `instructions_part`.
+name the layer of an omitted part (`instructions_omitted`) and each
+layer an `item`'s `instructions_part` names.
 
 - `instructions` remains valid, and a writer that composes nothing
   writes it alone. When both are present, `instructions` MUST equal
@@ -2060,6 +2079,14 @@ the child's own children. Each model call is priced as the reader
 prices the path's own calls, at the model that served it in the child
 and not at the parent's.
 
+Since 0.18 a child is priced when every model call of it that records
+usage is priced; a call that records no usage adds nothing, as on the
+path itself, so a child with no model calls is priced at 0. A child
+with a call that records usage the reader cannot price is not priced,
+and its priced calls are not added: they alone would understate it. A
+reader that leaves out a call of the path itself, recording usage it
+cannot price, says so as well.
+
 A reader MUST say when it could not read or price a child. It leaves
 that child out rather than guess, and it MUST say which leaf it took
 for a child that no `parents` names. A `subsession` callee in another
@@ -2495,8 +2522,14 @@ A redactor:
   a redactor MUST NOT narrow it. A redactor likewise keeps a `source`
   value this document defines (`config`, Instructions as parts) as
   written, since 0.17, on an instructions part, an omitted part and an
-  `item`'s `instructions_part`; any other `source`, and every `id`, is
-  text;
+  `item`'s `instructions_part`, each element of its list since 0.18;
+  any other `source`, and every `id`, is text. Two layers of one
+  `instructions_part` list that a redaction makes one, by their `id`s
+  or, where they have none, their `source`s, MUST NOT both be kept, as
+  two member names made one are not, nor an `id` made empty: the member
+  would then be in no form this document defines, and the item would
+  read as a person's input. A redactor keeps them distinct, as by
+  numbering its replacements;
 - MUST give each `response` it writes either no `request_hash` or the
   one the redacted session rebuilds for it, computed as Request hash
   says, and never another: a redacted session hashes independently, and
@@ -2773,6 +2806,53 @@ bytes, which a rewrite of the document's strings does not reach. One
 that would change what such a record holds removes the record, and that
 entry then does not rebuild to its `id`.
 
+Since 0.18 the projection also writes what a reader of the document
+sees, as hashes: `visible` under `agentsession` in each step's `extra`,
+the hash of the step's visible fields, and `visible` under
+`agentsession` in the top-level `extra`, the hash of the document's.
+
+- The **visible fields of a step** are the step as written, its
+  `extra` included at every depth, but for `visible` under
+  `agentsession` in its `extra`, the hash itself: its `step_id`,
+  `timestamp`, `source`, `model_name`, `reasoning_effort`, `message`,
+  `reasoning_content`, `tool_calls`, `observation` with each result's
+  `source_call_id`, `content`, `subagent_trajectory_ref` and `extra`,
+  `metrics`, `is_copied_context`, `llm_call_count`, its `extra`, and any
+  member ATIF does not define. A step's `extra` holds copies of entry
+  text a reader sees, a queued input's item and a decision's `args`
+  among them, which no `id` covers there. A reader adds nothing to a
+  step it checks.
+- The **visible fields of a document** are the document as written
+  without `subagent_trajectories`, its `extra` included at every depth
+  but for `visible` under `agentsession` in its `extra`, the hash
+  itself, and `steps` replaced by the number of steps:
+  `schema_version`, `session_id`, `trajectory_id`, `agent` with its
+  `name`, `version`, `model_name`, `tool_definitions` and `extra`,
+  `notes`, `final_metrics` with its `extra`, `continued_trajectory_ref`,
+  the count of steps, its `extra`, and any member ATIF does not define.
+  A converter restores the header's `redacted_from` and each entry's
+  history members from the document's `extra`, so an edit there after
+  the export is not restored as fact. The projection numbers its steps
+  by position, `step_id` 1 for the first.
+- The hash is SHA-256 over the canonical JSON (RFC 8785) of those
+  fields, in the format's notation, `sha256:` and lowercase
+  hexadecimal. The projection computes the hashes over the document as
+  it builds it from the session, its media inline, before any redaction
+  it makes at export and before it moves media to files. A redaction at
+  export then leaves each step it changed failing its hash, which is
+  correct: that step no longer shows what the session's entries hold.
+  An embedded trajectory carries its own, over its own steps and
+  fields.
+- A document written with its media moved to files beside it, a part's
+  `path` then naming `images/` or `audio/` and a file named by the
+  SHA-256 of its bytes, moves only a data URL of the form
+  `data:<media_type>;base64,` and the bytes in standard base64 with
+  padding, `media_type` the part's own. A converter puts each such
+  media back inline, from the document's own files, wherever the
+  document holds that `path` as a string, the raw items in the extras
+  included, before it computes any hash; a `path` naming no such file
+  stays as it is, and the hashes that cover it fail.
+
 A converter that rebuilds a session from a document this projection
 wrote restores on each entry:
 
@@ -2786,25 +2866,50 @@ It SHOULD rebuild each entry to the `id` the document names for it
 when the document allows it: the envelope, the history members and the
 body from `entries`, an item's `item` from its step and a response's
 body from its step. It MUST compute each rebuilt entry's `id` (Entry
-hash) and compare it with the `id` the document names, and it MUST
-list each entry that did not rebuild to its `id`, so a partial rebuild
-never goes unreported. An entry whose `id` matches is the exported entry
-itself, not a new one, so its history members are true of it and are
-restored with it. Any other entry is a new one: the converter MUST NOT
-carry a history member on it as its own, as the entry envelope says,
-and MAY keep them under its own namespace.
+hash) and compare it with the `id` the document names. Since 0.18 it
+MUST also compute the hash of the document's visible fields, and of
+the visible fields of the step the entry maps to, the step it names or
+whose items, response or observation result it is, and compare each
+with the `visible` the document records there. The comparison is
+equality of the two hash strings and nothing else. An entry matches
+only when its `id`, its step's hash and the document's hash all match;
+an entry that maps to no step, a record's, needs its `id` and the
+document's hash. A document without `visible`, or whose steps are not
+the export's in number and order, each `step_id` its position from 1,
+matches nothing: a step duplicated or two swapped would each still hash
+as written. The
+`id` covers the raw item and not what a reader of the document sees,
+so a change made to the visible fields alone, as a redaction applied
+to the document's text and not to its raw items is, leaves every `id`
+matching; without the hashes the session rebuilt from it would read as
+redacted while holding the text the redaction removed. It MUST list each entry that did not match, so a
+partial rebuild never goes unreported. An entry that matches is the
+exported entry itself, not a new one, so its history members are true
+of it and are restored with it. Any other entry is a new one: the
+converter MUST NOT carry a history member on it as its own, as the
+entry envelope says, and MAY keep them under its own namespace.
 
 The converter MUST restore the header's `redacted` and `redacted_from`
-exactly when every entry it rebuilt matches its `id` and the document
-holds the whole path, every entry from a first entry to the leaf with
-each `parent` an entry of the document or `null`. A document built
-after a compaction holds no entry before the fold's `first_kept`, and
-one without `entries` holds no envelope, so neither holds the whole
-path. Otherwise it MUST NOT restore them, since the converter is not
-the redactor, and it reports why. A file so rebuilt from a document of
-a redacted session is a projection of that session and not a
-conversion of it: its `id`s are the redacted session's, and it reads as
-redacted.
+exactly when every entry it rebuilt matches and the document holds the
+whole path: every entry from a first entry to the leaf the document
+names, each `parent` an entry of the document or `null`, and, since 0.18, every step naming under `agentsession` in its
+`extra` an entry of the document. Each `parent` being present is not
+enough: a path that stops short of the leaf does not reach it, and a
+step that names no entry, such as one appended to the document after
+the export, is not of the path, and the converter lists it. The leaf is
+`leaf` under `agentsession` in the document's top-level `extra`, the
+`id` of the entry the document was built at, which the projection
+writes in every document: the root's `trajectory_id` is that `id`, but
+an embedded trajectory's is `session/leaf`, so a converter rebuilding
+an embedded child reads `leaf`, and only a document without it falls
+back to `trajectory_id`. A document
+built after a compaction holds no entry before the fold's
+`first_kept`, and one without `entries` holds no envelope, so neither
+holds the whole path. Otherwise it MUST NOT restore them, since the
+converter is not the redactor, and it reports why. A file so rebuilt
+from a document of a redacted session is a projection of that session
+and not a conversion of it: its `id`s are the redacted session's, and
+it reads as redacted.
 
 An `item` entry that `omit` leaves out of the request at the trajectory's
 leaf is in the step that holds it, since the model produced it or the
@@ -2835,8 +2940,8 @@ An output's entry marked `failed` carries `failed: true` under
 maps to, and an `item` carrying `from_link` carries it there in its
 step's `extra`, so a reader tells a failed call and a peer's late
 report from any other. An `item` carrying `instructions_part` carries it
-there in its step's `extra` too, so a reader tells a composed layer from
-a person's input.
+there in its step's `extra` too, as written, an object or a list, so a
+reader tells a composed layer from a person's input.
 
 An `item` entry carrying `copied_from` maps to the step its item would
 map to, marked `is_copied_context: true`, with no `model_name`, no
@@ -2957,13 +3062,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.17 reads a 0.5 to 0.16 file
-as it stands, since 0.6 to 0.17 add optional members, elements and
-relations, 0.15 a record entry type and 0.16 a file beside a sidecar blob and an `omit` member, 0.17 an `item` member and defined `source` values, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
+it begins at 1.0. A reader of 0.18 reads a 0.5 to 0.17 file
+as it stands, since 0.6 to 0.18 add optional members, elements and
+relations, 0.15 a record entry type and 0.16 a file beside a sidecar blob and an `omit` member, 0.17 an `item` member and defined `source` values, 0.18 a second form of that member, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.17 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.18 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -3073,7 +3178,11 @@ configuration naming two instruction files by path under `source`
 `agentsmd`, beside a product prompt, a skill catalogue and a memory
 part, an omitted `agentsmd` part, and a message carrying
 `instructions_part`, every response hashed and verifying and the
-context hash the same session's without the member, `env` snapshots,
+context hash the same session's without the member, a message composed
+from an instruction file and a memory block carrying
+`instructions_part` as a list of the two layers in order, every
+response hashed and verifying and the context hash the same session's
+without the member, `env` snapshots,
 a `cwd`-only entry after a response read as a substitution to the
 absent workspace and a whole one not, a path whose runs' inputs leave
 out a steer that joined a run in flight, copied items, a peer's report,
@@ -3087,7 +3196,18 @@ each where this document puts it, and a redacted session's document
 rebuilt to its `id`s with its entries' `redacted` and its header's
 `redacted` and `redacted_from` restored, beside the same document
 changed after the export and one without its first entry, neither of
-which restores them, and
+which restores them, the ATIF documents of 0.18's read-back, each step
+and each document carrying the hash of its visible fields: a redacted
+session's document as exported, which restores, the same changed in a
+step's `message` alone, with a step appended that names no entry, and
+without its leaf's entry, none of which restores, a document whose
+image was moved to a file beside it, which verifies once it is put back
+inline, and a parent's document embedding a redacted child, whose own header is restored from
+the embedded trajectory and its `leaf`, a parent whose three children
+are priced as `link` prices them: one with no model call at 0, one
+whose call that records no usage adds nothing, and one with a call the
+price source cannot price left out whole and reported, beside a path
+call that cannot be priced and is reported, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
@@ -3106,7 +3226,8 @@ recorded hash is the request an `omit` in force leaves an item out of,
 an `outputs` that lists an entry the default group in force holds in a
 group of its own, which a reader takes as changing nothing and the
 response after it is hashed so, an `instructions_part` on an output,
-one with no `source` and one naming `agentsmd` with no `id`, each kept
+one with no `source` and one naming `agentsmd` with no `id`, an empty
+`instructions_part` list and a list naming one `id` twice, each kept
 as a member the reader does not know, and a header
 naming `dispatch` beside a call that has an output and no `dispatch`;
 and a fork naming `dispatch` whose prefix, from a session that promised
@@ -3129,6 +3250,62 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.17
+
+A second form of an existing member, two members of the ATIF
+projection, rules for converters that read a document back, a
+redaction rule and a rule for pricing delegated work. A 0.17 file is a 0.18 file whose
+`instructions_part` members are all single objects. No hash changes.
+A writer of 0.18 raises every file it appends to, as Versioning says,
+so every reader of 0.17 refuses those files until it is upgraded.
+
+- `instructions_part` may be a list of `{id, source}` objects, the
+  layers a message was composed from in the order their texts appear in
+  it (`item`). Most harnesses that send layers as messages send several
+  in one: Claude Code sends an instruction file and a block of memory
+  together, and 0.17 could name only one of them. Each element is held
+  to the single object's rules, the list is not empty and names each
+  layer once, and a reader reads a single object as a list of one. Like
+  the single form, it is left out of RFC 0002's context hash, an item
+  carrying it is no input of its run, a redaction keeps each element's
+  defined `source`, treats each `id` as text and keeps the layers
+  distinct, and the ATIF
+  projection carries it as written. A reader takes it by its form in a
+  file of any minor, as 0.17 took the single object, so an earlier file
+  that held a list in this form under an extension's meaning has its
+  context key move at that entry and after it; no entry hash moves.
+- The ATIF projection writes the hash of each step's visible fields,
+  and of the document's, under `visible` (Projections, ATIF), each field
+  listed. A converter rebuilding an entry to the `id` the document names
+  takes it as matching only when the hashes of its step's and of the
+  document's visible fields, recomputed over RFC 8785 JSON, equal the
+  recorded ones. 0.17 compared the `id` alone, which covers the raw
+  item, so a redaction made in a document's visible text alone left
+  every `id` matching and the rebuilt session read as redacted while
+  holding the text removed.
+- The whole path a converter needs before it restores the header's
+  `redacted` and `redacted_from` reaches the leaf the document names
+  under `agentsession` as `leaf`, an embedded trajectory's included,
+  whose `trajectory_id` is `session/leaf`, and every step names an
+  entry of the document. 0.17 asked only
+  that each `parent` be present, which a path stopping short of the
+  leaf, or a document with a step appended after the export, met.
+- A redactor keeps the layers of an `instructions_part` list distinct
+  (Redaction): two made one would leave the member in no defined form.
+- A child is priced when every call of it that records usage is
+  priced, a child with no calls at 0, and a reader that reports cost
+  leaves out one with a call it cannot price whole and says so, as it
+  says of a path call it cannot price (`link`). 0.17 said only that a
+  child it could not price is left out; the reference ATIF export
+  counted such a child at its priced calls, and left out a child with no
+  priced call, until 0.18.
+
+Clarified, with no file reading differently:
+
+- A writer carries each layer's known trust in the `trust` of the item
+  composed from it, which labels the message whole; an element of
+  `instructions_part` carries none of its own (`item`).
 
 ## Changes since 0.16
 

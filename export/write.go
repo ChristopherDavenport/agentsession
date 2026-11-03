@@ -47,7 +47,10 @@ func WriteATIF(dir string, docs iter.Seq[*atif.Trajectory]) error {
 // carried inline as data URLs is written beside it under images/ and
 // audio/, named by content hash, and the parts are rewritten to point
 // at those files, the raw items in the extras included, so the
-// document stays small and the bundle stays lossless; a document
+// document stays small and the bundle stays lossless. Only a data URL
+// in the one form [InlineMedia] writes back, data:<media_type>;base64,
+// and standard base64, is moved, since the document's hashes are over
+// its media inline; any other stays inline. A document
 // encoded with encoding/json alone keeps every image inline. The
 // document is validated before it is written, and the one in memory
 // is rewritten too.
@@ -171,8 +174,11 @@ func spillParts(dir string, parts []atif.ContentPart, spilled map[string]string)
 		if err != nil {
 			return fmt.Errorf("export: %s part: %w", p.Type, err)
 		}
-		if mediaType == "" {
-			mediaType = p.Source.MediaType
+		// Only a data URL a reader can write back from the file and the
+		// part's media_type, exactly, is moved: the document's hashes are
+		// over its media inline (InlineMedia), and any other stays inline.
+		if p.Source.Path != "data:"+p.Source.MediaType+";base64,"+base64.StdEncoding.EncodeToString(data) {
+			continue
 		}
 		sub := "images"
 		if p.Type == atif.PartAudio {
@@ -191,9 +197,6 @@ func spillParts(dir string, parts []atif.ContentPart, spilled map[string]string)
 		}
 		spilled[p.Source.Path] = sub + "/" + name
 		p.Source.Path = sub + "/" + name
-		if mediaType != "" {
-			p.Source.MediaType = mediaType
-		}
 	}
 	return nil
 }

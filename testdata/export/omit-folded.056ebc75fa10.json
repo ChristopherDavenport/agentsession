@@ -23,7 +23,8 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:3b19846ddb1ca83ef3af8bebe4becc6b5f6a3b39a9a51c91a68f8eb1b10bc619"
+          "entry_id": "sha256:3b19846ddb1ca83ef3af8bebe4becc6b5f6a3b39a9a51c91a68f8eb1b10bc619",
+          "visible": "sha256:52443bb8ad333c2bc0cc4f5bf2c9b173b302b41bcb1addb8eee74b00c4973fbf"
         },
         "context_management": {
           "boundary": "replace",
@@ -52,7 +53,8 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:0ed1e3ad46c5f08133212301e8bdcacba4c1113c1b8cd4b51b9573ea14768e9d"
+          "entry_id": "sha256:0ed1e3ad46c5f08133212301e8bdcacba4c1113c1b8cd4b51b9573ea14768e9d",
+          "visible": "sha256:e95fa3ea6eab3c4e0ba86e5648f23bb57eae5a0032ff24969fb765c8dd643d05"
         },
         "openresponses": {
           "item": {
@@ -85,7 +87,8 @@
               "entry_id": "sha256:21deadb6a350efaec8057a55d4133b1fea20b74d854db6ef02be340ed075e9e7",
               "reason": "other_models"
             }
-          ]
+          ],
+          "visible": "sha256:a387bd555a2d45d5a7cde401d771e1ccb944459462e723704d15fb1476a41229"
         },
         "item_entry_ids": [
           "sha256:979a1d8510b45e15541ec437fca762282508d4bb82317eaa719b31ddd8476d22",
@@ -143,7 +146,8 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:1a9316001e143ef9916160821689fbc7543bec209667d482ab175360bbcf265f"
+          "entry_id": "sha256:1a9316001e143ef9916160821689fbc7543bec209667d482ab175360bbcf265f",
+          "visible": "sha256:35588e2d5f42bae8dd72e0d3de00564dcf1c6b18a74c7108f990ac11230b19fd"
         },
         "config_entries": [
           "sha256:221f568952bffc3d179a3e3d7fa1bd0c0eb30cc7f5a5bc20361de7744a2e6bdc"
@@ -183,7 +187,8 @@
               "entry_id": "sha256:c5b17c66c1c979b9a90290d6b3c0ef05411cf666c6ee121338445600c676ff4f",
               "reason": "items"
             }
-          ]
+          ],
+          "visible": "sha256:f7a92dbba98a5774628f44d5b5cfe7869636c9094d63e4ec98d46ba7be808ee8"
         },
         "item_entry_ids": [
           "sha256:446377d0e0b46b7175be1290693e63731f2cc09c4b184d212ef9e2da795bb86b",
@@ -240,7 +245,8 @@
       "message": "Finish the migration.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:d6d4842a83af26e4a82a6d813c974e15e746d9c22d9ed9ed605059d74b787a32"
+          "entry_id": "sha256:d6d4842a83af26e4a82a6d813c974e15e746d9c22d9ed9ed605059d74b787a32",
+          "visible": "sha256:fb901cc066e1d715d684b6f8f09816faed4b0678106fad65374564dceaed75e0"
         },
         "config_entries": [
           "sha256:35e4e4379af433b746698243d2bdfe161411e83180a8ff4a4c00160aa90dffc9"
@@ -279,7 +285,8 @@
               "entry_id": "sha256:446377d0e0b46b7175be1290693e63731f2cc09c4b184d212ef9e2da795bb86b",
               "reason": "other_models"
             }
-          ]
+          ],
+          "visible": "sha256:a11d13cd3e8837b607a876757c365e4de6da366f9289def25f00e9bfeb62d044"
         },
         "item_entry_ids": [
           "sha256:b676f0a02e34b8ead9a9c0b17d473661faa9e840b66dc04c54dcf4d8e4212c8e",
@@ -462,9 +469,10 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:056ebc75fa1090a41fdbd7a6684c267817e29c15015d961a29d46a5782418bac",
-      "main": true
+      "main": true,
+      "visible": "sha256:f13d051110d2d92fa137b3e0c8097fed9635207327560f1a7e38090bb8928b60"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

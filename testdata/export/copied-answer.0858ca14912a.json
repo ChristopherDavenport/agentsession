@@ -15,7 +15,8 @@
       "message": "Find the flaky test.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:a0c86c7f20b11565118856e619dfd4c738fe8be491b93f0651605987fd34e34a"
+          "entry_id": "sha256:a0c86c7f20b11565118856e619dfd4c738fe8be491b93f0651605987fd34e34a",
+          "visible": "sha256:3696570e3234d432804493d3d73dcc2e1956f40e9cfc674bbc39091ea272b527"
         },
         "config_entries": [
           "sha256:724acc124477e7cf308bbe7c95472f8c353221ce5d4af10a53a950ab3cb82722"
@@ -78,7 +79,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:ad63b85cb70fd5fd9fce166c812faadb3df7fa7e8c550c51980547d4109d58c8"
+          "entry_id": "sha256:ad63b85cb70fd5fd9fce166c812faadb3df7fa7e8c550c51980547d4109d58c8",
+          "visible": "sha256:2eed553d15ec2bf247500b5ebc4444d99de3f71d49d9569f74206fbbda555324"
         },
         "calls": {
           "call_agent": {
@@ -125,7 +127,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:0858ca14912a683a4ac1b8e208ca2511ca6b325ba60eb67bc221c43b10a35169"
+          "entry_id": "sha256:0858ca14912a683a4ac1b8e208ca2511ca6b325ba60eb67bc221c43b10a35169",
+          "visible": "sha256:14e00a14b5af4103019afa1daa1c713b4e73c5c73e26f4840269577fbaff1b38"
         },
         "item_entry_ids": [
           "sha256:4067545727e092b516fc0e27a656beeadb63ee19dbd4f6f2ad6e0a785556109c"
@@ -233,7 +236,7 @@
           "type": "decision"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:0858ca14912a683a4ac1b8e208ca2511ca6b325ba60eb67bc221c43b10a35169",
       "main": true,
       "parent_session": "01995b2a-0000-7000-8000-000000000032",
@@ -241,7 +244,8 @@
         "run",
         "dispatch",
         "decision"
-      ]
+      ],
+      "visible": "sha256:907ff4c67dfc8ed74a483939c1a5d0f1a4d6cda977aca99f3f4fc7762e164935"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

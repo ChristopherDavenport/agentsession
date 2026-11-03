@@ -15,7 +15,8 @@
       "message": "hi",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:79ac1af7267333eaa6efbd371648579a8ab6614b8efed0f8f0a28e30a493f53e"
+          "entry_id": "sha256:79ac1af7267333eaa6efbd371648579a8ab6614b8efed0f8f0a28e30a493f53e",
+          "visible": "sha256:0e74886d7ac1269d0d19024054a17de8ab8d9676ec5053d1ab514cf9a77489f9"
         },
         "config_entries": [
           "sha256:66ad6dc2d82e7f0bf0ce376b8799b908262ae6d65d20a6b710761b0636833f84"
@@ -43,7 +44,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:4791e1f7743e4d319b8c3ddee540b0db4f4d2629abf4caf3be97419a30ad52e2"
+          "entry_id": "sha256:4791e1f7743e4d319b8c3ddee540b0db4f4d2629abf4caf3be97419a30ad52e2",
+          "visible": "sha256:dc3526618330b8f8353149741b5d811996e5b8b8ef9f65cae84a63229d618880"
         },
         "item_entry_ids": [
           "sha256:943a8f2414e987b4a98258d7ce683184a1fcc818533d53a00f83d9e2be73a5c0"
@@ -82,7 +84,8 @@
       "message": "What failed in the build?",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:e699c5f3811d6651dd28f0f600973fa48d517162ac2e1bb98be346a9a6432f82"
+          "entry_id": "sha256:e699c5f3811d6651dd28f0f600973fa48d517162ac2e1bb98be346a9a6432f82",
+          "visible": "sha256:431679f48e3defb15276034f1769b1b44529b3c835bf0f65aff2e503a30d1f94"
         },
         "openresponses": {
           "item": {
@@ -107,7 +110,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:5e847d2734aaecb63b103bc5360b69e552349af4bac47dabe7af1079552014fc"
+          "entry_id": "sha256:5e847d2734aaecb63b103bc5360b69e552349af4bac47dabe7af1079552014fc",
+          "visible": "sha256:9b2b8f234036482414e3422ae8bb14a672dbac0c0f7ce0e46f24cf249ad71be5"
         },
         "error": {
           "code": "server_error",
@@ -140,7 +144,8 @@
       "message": "Try again.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:ab36a76bf36d939cfd345bb6fd95e12728eda9126974ece1f1c971afc7e4ce4c"
+          "entry_id": "sha256:ab36a76bf36d939cfd345bb6fd95e12728eda9126974ece1f1c971afc7e4ce4c",
+          "visible": "sha256:9e1e8e526f8b403605a86741dd984338f1e00d11afd330d2a4913e85a2715ee5"
         },
         "openresponses": {
           "item": {
@@ -165,7 +170,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:8c806c0f2b796e372f47d892348ed02aab75ba0c41b7311bbe28673b5d754dd8"
+          "entry_id": "sha256:8c806c0f2b796e372f47d892348ed02aab75ba0c41b7311bbe28673b5d754dd8",
+          "visible": "sha256:586d548b9e0f13de5fc0c999a55fd4d754007787b4e8efbe046253985179b53b"
         },
         "item_entry_ids": [
           "sha256:0e44f5ec70109adf08b4874a161cd39b36cb93ed753bb513c7bf814bf3ca0d94"
@@ -265,9 +271,10 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.17",
+      "format": "agentsession/0.18",
       "leaf": "sha256:8c806c0f2b796e372f47d892348ed02aab75ba0c41b7311bbe28673b5d754dd8",
-      "main": true
+      "main": true,
+      "visible": "sha256:015378dd0fc47788c4fc3a390a33c6daba2216f3cf83ab1839a17879c3d04abf"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

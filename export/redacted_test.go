@@ -198,7 +198,15 @@ func TestExportRedacted(t *testing.T) {
 					}
 					continue
 				}
-				g, err := json.Marshal(m)
+				// The hash of the step's visible fields is held to its
+				// own rule (TestRebuildToTheDocumentsIDs).
+				marks := map[string]any{}
+				for k, v := range m {
+					if k != ExtraVisible {
+						marks[k] = v
+					}
+				}
+				g, err := json.Marshal(marks)
 				if err != nil {
 					t.Fatal(err)
 				}
