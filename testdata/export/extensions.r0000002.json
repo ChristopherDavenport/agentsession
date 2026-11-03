@@ -331,7 +331,7 @@
       "format": "agentsession/0.18",
       "leaf": "sha256:7099cfd9ac3a8b30f64ae79e9abf5939620b4da41466b835e63da188f54932c5",
       "main": true,
-      "visible": "sha256:5c6beb373e227951fddb515e0993923d9da1d6d04d0c6a87236a78ab4622fd6a"
+      "visible": "sha256:fee051f78e889f6a0259ec55086509a8eee7706fd1a6dd032276d96e468a71d0"
     },
     "environment": {
       "cwd": "/home/u/proj",

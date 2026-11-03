@@ -2823,14 +2823,17 @@ the hash of the step's visible fields, and `visible` under
   among them, which no `id` covers there. A reader adds nothing to a
   step it checks.
 - The **visible fields of a document** are the document as written
-  without `subagent_trajectories` and `extra`, with `extra` removed from
-  `agent` and from `final_metrics`, and `steps` replaced by the number
-  of steps: `schema_version`, `session_id`, `trajectory_id`, `agent`
-  with its `name`, `version`, `model_name` and `tool_definitions`,
-  `notes`, `final_metrics`, `continued_trajectory_ref` and the count of
-  steps, as the document holds them, and any member ATIF does not
-  define. The projection numbers its steps by position, `step_id` 1 for
-  the first.
+  without `subagent_trajectories`, its `extra` included at every depth
+  but for `visible` under `agentsession` in its `extra`, the hash
+  itself, and `steps` replaced by the number of steps:
+  `schema_version`, `session_id`, `trajectory_id`, `agent` with its
+  `name`, `version`, `model_name`, `tool_definitions` and `extra`,
+  `notes`, `final_metrics` with its `extra`, `continued_trajectory_ref`,
+  the count of steps, its `extra`, and any member ATIF does not define.
+  A converter restores the header's `redacted_from` and each entry's
+  history members from the document's `extra`, so an edit there after
+  the export is not restored as fact. The projection numbers its steps
+  by position, `step_id` 1 for the first.
 - The hash is SHA-256 over the canonical JSON (RFC 8785) of those
   fields, in the format's notation, `sha256:` and lowercase
   hexadecimal. The projection computes the hashes over the document as

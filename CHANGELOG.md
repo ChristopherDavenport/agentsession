@@ -59,7 +59,9 @@ versions may break the API.
   left every `id` matching and the rebuilt session read as redacted.
   A step's hash covers its `extra`, all but the hash itself, since it
   holds copies of entry text, queued items and decision args, that no
-  `id` covers there. The document's hash counts its steps, and `StepsInOrder` holds each
+  `id` covers there. The document's hash covers its `extra` the same
+  way, since a converter restores `redacted_from` and history members
+  from it, and counts its steps, and `StepsInOrder` holds each
   `step_id` to its position, so a step duplicated, swapped or removed
   matches nothing. Every export golden gains the hashes. The whole path it
   needs before it restores the header's `redacted` and `redacted_from`

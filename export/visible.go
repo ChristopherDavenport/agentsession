@@ -56,19 +56,22 @@ func StepVisible(step map[string]any) map[string]any {
 }
 
 // DocumentVisible returns the visible fields of a document, the document
-// as JSON: every member but subagent_trajectories and extra, with extra
-// removed from agent and from final_metrics, and steps replaced by their
-// number, so a step removed or added changes the hash. Among them are
-// the agent's name, version, model_name and tool_definitions, notes and
-// the final metrics. Each step is held to its own hash, and its step_id
-// to its position ([StepsInOrder]); an embedded trajectory to its own.
+// as JSON: every member but subagent_trajectories, its extra included at
+// every depth but for extra.agentsession.visible, the hash itself, and
+// steps replaced by their number, so a step removed or added changes the
+// hash. A converter restores the header's redacted_from and each entry's
+// history members from the document's extra, so all of it is held to
+// the hash. Each step is held to its own hash, and its step_id to its
+// position ([StepsInOrder]); an embedded trajectory to its own.
 func DocumentVisible(doc map[string]any) map[string]any {
 	out := clone(doc).(map[string]any)
 	out["steps"] = len(list(doc["steps"]))
 	delete(out, "subagent_trajectories")
-	delete(out, "extra")
-	dropExtra(out["agent"])
-	dropExtra(out["final_metrics"])
+	if extra, ok := out["extra"].(map[string]any); ok {
+		if as, ok := extra[ExtraAgentSession].(map[string]any); ok {
+			delete(as, ExtraVisible)
+		}
+	}
 	return out
 }
 
@@ -182,13 +185,6 @@ func clone(v any) any {
 func list(v any) []any {
 	l, _ := v.([]any)
 	return l
-}
-
-// dropExtra removes extra from v when v is a JSON object.
-func dropExtra(v any) {
-	if m, ok := v.(map[string]any); ok {
-		delete(m, "extra")
-	}
 }
 
 // InlineMedia puts back inline, in a document read as JSON, the media

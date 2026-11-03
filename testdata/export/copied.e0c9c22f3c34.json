@@ -315,7 +315,7 @@
         "decision"
       ],
       "spawned_by": "call_helper",
-      "visible": "sha256:faa80fc2daad7789defd661023068ec16eb3b95f645149cee5efee5ef5f05487"
+      "visible": "sha256:abf83ccea15c55040c19e33b7eb04dddf6feedb8b9d94291efa88038bfbc2d8b"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

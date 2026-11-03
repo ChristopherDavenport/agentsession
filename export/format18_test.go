@@ -460,3 +460,30 @@ func TestRebuildSpilledMedia(t *testing.T) {
 		t.Errorf("the media fixture: whole %v, verified %v", r.whole, r.verified)
 	}
 }
+
+// TestDocumentExtraIsVisible: the converter restores the header's
+// redacted_from and each entry's history members from the document's
+// extra, so the document's hash covers it, all but the hash itself: a
+// stronger profile, or another legacy_id, written after the export is
+// not restored as fact (RFC 0001, Projections/ATIF, 0.18).
+func TestDocumentExtraIsVisible(t *testing.T) {
+	red := redaction(t, "basic", "test/v1", nil, func(v string) string { return v })
+	tr, err := At(red, red.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := encode(t, mustDoc(t, tr))
+	if r := rebuildDocument(t, raw); !r.restoresHeader() {
+		t.Fatalf("the document as exported: whole %v, verified %v", r.whole, r.verified)
+	}
+	first := lid(t, red, "i0000001")
+	for name, change := range map[string]func(root map[string]any){
+		"profile":   func(root map[string]any) { obj(t, root["redacted_from"])["profile"] = "test/strict" },
+		"legacy_id": func(root map[string]any) { obj(t, obj(t, root[ExtraEntries])[first])["legacy_id"] = "i9999999" },
+	} {
+		changed := edit(t, raw, func(doc map[string]any) { change(obj(t, obj(t, doc["extra"])[ExtraAgentSession])) })
+		if r := rebuildDocument(t, changed); r.restoresHeader() || r.verified[first] {
+			t.Errorf("%s edited in the document's extra: verified %v", name, r.verified)
+		}
+	}
+}

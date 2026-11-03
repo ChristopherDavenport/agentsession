@@ -162,7 +162,7 @@
         "profile": "test/v1",
         "session": "01995b2a-0000-7000-8000-000000000001"
       },
-      "visible": "sha256:b64a13c94d4a680341b0e45f417d7ff3c195a1d552a8757449e1f9d1dbdbd070"
+      "visible": "sha256:4f9bfbfbad8388ecedbbfb3de533c6ca45da93a03993bf7967b5ddf8a82c6c0b"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

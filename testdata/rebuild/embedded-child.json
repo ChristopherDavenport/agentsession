@@ -168,7 +168,7 @@
       "format": "agentsession/0.18",
       "leaf": "sha256:d31d9c2c2d584e86ffa9dbb04a94646f46d6400c0f4474522b06515d235ff9e7",
       "main": true,
-      "visible": "sha256:1df5641cc66bd459e2fe23a8129cbba03322dda6ddd43fd3d3ce21c7f57c3f15"
+      "visible": "sha256:23f56d5587f5f7d264b57c18ca0a6a952ef6d572407070f1c51ce91c4178fdc1"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"
@@ -607,7 +607,7 @@
             "profile": "test/v1",
             "session": "01995b2a-0000-7000-8000-000000000001"
           },
-          "visible": "sha256:b91408e8f0c22003a134f10edb721d611319e28a466539d21ee1408c196e4559"
+          "visible": "sha256:863ff96bb81759e98f1e3f2b90b7309d7acb0ded7ed8255f3c59bfd65e907897"
         },
         "openresponses": {
           "payload": "openresponses/2026-04-24"
