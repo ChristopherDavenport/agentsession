@@ -1000,7 +1000,9 @@ it. A `config` entry MAY carry it and no setting. Its members:
   The `text` and `items` beside `groups` are the group the 0.14 form
   writes, the *default group*, and are left out together when an
   `outputs` writes none, while `items` without `text` stays a form this
-  document does not define. Each element of `groups` is a group named by
+  document does not define. A `text` present writes the default group
+  whatever it holds, so `"text":""` beside `groups` sets the default
+  group's text to the empty string, as it would alone. Each element of `groups` is a group named by
   its `text`. An output is sent with the text of the group in force that
   lists its entry. In force are the default group, read as above: the
   union of every `items` beside a `text` since the last `replace` or
@@ -1011,11 +1013,22 @@ it. A `config` entry MAY carry it and no setting. Its members:
 
   An entry is in at most one group in force. A writer MUST NOT write an
   `outputs` that lists one id in two of its groups, the default among
-  them, that holds two `groups` elements of one `text`, or that lists an
-  id a group in force of another text, or the default group, already
-  lists; a writer refuses one rather than write it. A reader takes such
-  a member as a form this document does not define, and it changes
-  nothing. A `groups` that is not a list of objects each holding a
+  them, that holds two `groups` elements of one `text`, or that lists in
+  one of its groups an id that a group in force other than that group
+  already lists; a writer refuses one rather than write it. The default
+  group and a named group are different groups whatever their texts, and
+  a group listing an id it already lists is no conflict, as a 0.14
+  `outputs` listing an id the default group holds was none. A reader
+  takes such a member as a form this document does not define, and it
+  changes nothing. A `replace`, or a compaction's checkpoint, starts the
+  groups afresh, so what it writes is checked against nothing before
+  it.
+
+  An entry leaves its group only when the groups start afresh: a writer
+  that moves an output to another text, or sends it as recorded again,
+  writes `{}`, which clears the `omit` in force, and then the `omit` it
+  wants whole, or a `replace` carrying it, and every request after
+  rebuilds from that. A `groups` that is not a list of objects each holding a
   string `text` and a list `items` and nothing else is a form this
   document does not define too. A file of 0.14 or 0.15 holds no
   `groups`, and a reader of 0.16 reads its `outputs` as those minors
@@ -2795,7 +2808,9 @@ cut before its append with two calls returned, one failed, and one in
 flight, continued by a resume that appends one result unchanged and
 answers the others, a web output marked `untrusted` and an inbox output
 marked `private` folded by a compaction carrying both, beside a label
-this document does not define, kept as written, and
+this document does not define, kept as written, a session that sends one
+output with the default group's text and two with a group of their own,
+written in two deltas, every response hashed and verifying, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
@@ -2811,7 +2826,9 @@ a `target`
 naming another call, a repeated `call_id`, an empty `call_id`, a `run`
 start whose `source` is not the shape of its segment, a response whose
 recorded hash is the request an `omit` in force leaves an item out of,
-and a header
+an `outputs` that lists an entry the default group in force holds in a
+group of its own, which a reader takes as changing nothing and the
+response after it is hashed so, and a header
 naming `dispatch` beside a call that has an output and no `dispatch`;
 and a fork naming `dispatch` whose prefix, from a session that promised
 nothing, holds such a call, and which verifies.
