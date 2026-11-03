@@ -3235,8 +3235,9 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.17
 
-A second form of an existing member, and two rules for converters that
-read an ATIF document back. A 0.17 file is a 0.18 file whose
+A second form of an existing member, two members of the ATIF
+projection, rules for converters that read a document back, a
+redaction rule and a rule for pricing delegated work. A 0.17 file is a 0.18 file whose
 `instructions_part` members are all single objects. No hash changes.
 A writer of 0.18 raises every file it appends to, as Versioning says,
 so every reader of 0.17 refuses those files until it is upgraded.
@@ -3272,12 +3273,8 @@ so every reader of 0.17 refuses those files until it is upgraded.
   entry of the document. 0.17 asked only
   that each `parent` be present, which a path stopping short of the
   leaf, or a document with a step appended after the export, met.
-
-Clarified, with no file reading differently:
-
-- A writer carries each layer's known trust in the `trust` of the item
-  composed from it, which labels the message whole; an element of
-  `instructions_part` carries none of its own (`item`).
+- A redactor keeps the layers of an `instructions_part` list distinct
+  (Redaction): two made one would leave the member in no defined form.
 - A child is priced when every call of it that records usage is
   priced, a child with no calls at 0, and a reader that reports cost
   leaves out one with a call it cannot price whole and says so, as it
@@ -3285,6 +3282,12 @@ Clarified, with no file reading differently:
   child it could not price is left out; the reference ATIF export
   counted such a child at its priced calls, and left out a child with no
   priced call, until 0.18.
+
+Clarified, with no file reading differently:
+
+- A writer carries each layer's known trust in the `trust` of the item
+  composed from it, which labels the message whole; an element of
+  `instructions_part` carries none of its own (`item`).
 
 ## Changes since 0.16
 
