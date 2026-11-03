@@ -23,6 +23,13 @@ import (
 // [DocumentVisible]).
 const ExtraVisible = "visible"
 
+// ExtraLeaf carries, under ExtraAgentSession in a document's top-level
+// extra, the id of the entry the document was built at: the root's
+// trajectory_id, and the leaf an embedded trajectory's trajectory_id,
+// session/leaf, names with its session. A converter checks that the
+// path it rebuilds reaches it (RFC 0001, Projections/ATIF, since 0.18).
+const ExtraLeaf = "leaf"
+
 // StepVisible returns the visible fields of a step, the step as JSON:
 // the step as written with extra removed from it, from each element of
 // tool_calls, from metrics, and from each observation result and each

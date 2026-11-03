@@ -376,9 +376,14 @@ func rebuildDocument(t *testing.T, raw []byte) rebuild {
 			break
 		}
 	}
-	// The path reaches the leaf trajectory_id names, not only each
-	// parent present (0.18): from the leaf up, every entry is held.
-	leaf, _ := doc["trajectory_id"].(string)
+	// The path reaches the leaf the document names under
+	// extra.agentsession.leaf, not only each parent present (0.18): from
+	// the leaf up, every entry is held. An embedded trajectory's
+	// trajectory_id is session/leaf, so the root's is the fallback alone.
+	leaf, _ := root[ExtraLeaf].(string)
+	if leaf == "" {
+		leaf, _ = doc["trajectory_id"].(string)
+	}
 	for id, n := leaf, 0; ; n++ {
 		line, ok := r.lines[id]
 		if !ok || n > len(r.lines) {

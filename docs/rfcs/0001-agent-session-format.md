@@ -2874,13 +2874,18 @@ entry envelope says, and MAY keep them under its own namespace.
 
 The converter MUST restore the header's `redacted` and `redacted_from`
 exactly when every entry it rebuilt matches and the document holds the
-whole path: every entry from a first entry to the leaf the document's
-`trajectory_id` names, each `parent` an entry of the document or
-`null`, and, since 0.18, every step naming under `agentsession` in its
+whole path: every entry from a first entry to the leaf the document
+names, each `parent` an entry of the document or `null`, and, since 0.18, every step naming under `agentsession` in its
 `extra` an entry of the document. Each `parent` being present is not
 enough: a path that stops short of the leaf does not reach it, and a
 step that names no entry, such as one appended to the document after
-the export, is not of the path, and the converter lists it. A document
+the export, is not of the path, and the converter lists it. The leaf is
+`leaf` under `agentsession` in the document's top-level `extra`, the
+`id` of the entry the document was built at, which the projection
+writes in every document: the root's `trajectory_id` is that `id`, but
+an embedded trajectory's is `session/leaf`, so a converter rebuilding
+an embedded child reads `leaf`, and only a document without it falls
+back to `trajectory_id`. A document
 built after a compaction holds no entry before the fold's
 `first_kept`, and one without `entries` holds no envelope, so neither
 holds the whole path. Otherwise it MUST NOT restore them, since the
@@ -3253,8 +3258,10 @@ so every reader of 0.17 refuses those files until it is upgraded.
   every `id` matching and the rebuilt session read as redacted while
   holding the text removed.
 - The whole path a converter needs before it restores the header's
-  `redacted` and `redacted_from` reaches the leaf `trajectory_id`
-  names, and every step names an entry of the document. 0.17 asked only
+  `redacted` and `redacted_from` reaches the leaf the document names
+  under `agentsession` as `leaf`, an embedded trajectory's included,
+  whose `trajectory_id` is `session/leaf`, and every step names an
+  entry of the document. 0.17 asked only
   that each `parent` be present, which a path stopping short of the
   leaf, or a document with a step appended after the export, met.
 

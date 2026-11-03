@@ -60,7 +60,9 @@ versions may break the API.
   `step_id` to its position, so a step duplicated, swapped or removed
   matches nothing. Every export golden gains the hashes. The whole path it
   needs before it restores the header's `redacted` and `redacted_from`
-  reaches the leaf `trajectory_id` names, and every step names an entry;
+  reaches the leaf `extra.agentsession.leaf` names (`ExtraLeaf`; an
+  embedded trajectory's `trajectory_id` is `session/leaf`, so a redacted
+  child could never be restored by it), and every step names an entry;
   a step appended after the export is listed. The reference rebuild in
   `export`'s tests (`rebuildDocument`) does both, with cases for a
   step's `message` edited alone, a step appended and a path short of its

@@ -163,3 +163,47 @@ func TestCostCountsEveryPricedChild(t *testing.T) {
 		t.Errorf("notes %q leave a child out", doc.Notes)
 	}
 }
+
+// TestRebuildEmbeddedChild: an embedded trajectory's trajectory_id is
+// session/leaf, so it names its leaf under extra.agentsession.leaf, and
+// a converter rebuilding a redacted child from the parent's document
+// finds the whole path to that leaf and restores the child's header
+// (RFC 0001, Projections/ATIF, 0.18).
+func TestRebuildEmbeddedChild(t *testing.T) {
+	child := redaction(t, "basic", "test/v1", nil, func(v string) string { return v })
+	if child.Leaf() == "" {
+		t.Fatal("the redacted child has no leaf")
+	}
+	parent := agentsession.New(agentsession.Header{ID: "parent"})
+	mustAppend(t, parent, &agentsession.ConfigEntry{Model: "gpt-5"})
+	mustAppend(t, parent, agentsession.NewItemEntry(openresponses.UserText("delegate")))
+	mustAppend(t, parent, &agentsession.ItemEntry{Item: &openresponses.FunctionCall{CallID: "call_1", Name: "spawn", Arguments: `{}`}, ResponseID: "p1"})
+	mustAppend(t, parent, &agentsession.ResponseEntry{ResponseID: "p1"})
+	mustAppend(t, parent, agentsession.NewSubsessionLink(child.Header().ID, "call_1"))
+	out := agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("call_1", "done"))
+	out.Parents = []agentsession.EntryRef{{Session: child.Header().ID, Entry: child.Leaf()}}
+	mustAppend(t, parent, out)
+	tr, err := At(parent, parent.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ToATIF(tr, Options{Subsessions: func(id string) (*agentsession.Session, error) {
+		if id == child.Header().ID {
+			return child, nil
+		}
+		return nil, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.SubagentTrajectories) != 1 {
+		t.Fatalf("embedded %d trajectories", len(doc.SubagentTrajectories))
+	}
+	sub := doc.SubagentTrajectories[0]
+	if leaf, _ := sub.Extra[ExtraAgentSession].(map[string]any)[ExtraLeaf].(string); leaf != child.Leaf() {
+		t.Errorf("the embedded trajectory names leaf %q, want %s", leaf, child.Leaf())
+	}
+	if r := rebuildDocument(t, encode(t, sub)); !r.whole || !r.restoresHeader() {
+		t.Errorf("the embedded child: whole %v, verified %v", r.whole, r.verified)
+	}
+}
