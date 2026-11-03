@@ -66,7 +66,10 @@ versions may break the API.
   delegated work as `DelegatedWork` counts it, not the sum of the
   embedded documents' totals, so a child embedded at two leaves counts
   their shared prefix once; the notes say how many children were
-  counted, excluded, or counted at a resume leaf. `DelegatedWork` returns the sessions a
+  counted, excluded, or counted at a resume leaf. With no leaf named, a
+  child is embedded at its resume leaf (`Session.Leaf`, which a branch
+  or a leaf label moves), no longer at its last appended entry, and the
+  reference's `extra` says `child_leaf` and `child_leaf_named`. `DelegatedWork` returns the sessions a
   path's `subsession` links delegated work to, as a reader that reports
   what the path cost counts them: once per session, cancel notices
   excepted, over the union of its paths to the leaf each link counts

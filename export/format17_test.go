@@ -181,3 +181,67 @@ func TestCostCountsAChildOnce(t *testing.T) {
 		t.Errorf("total_cost_usd = %g, want 62: the path's 2 and the child's 10, 20 and 30 once each", got)
 	}
 }
+
+// TestEmbedTakesTheResumeLeaf: with no leaf named in parents, the child
+// is embedded at the leaf a reader resuming it takes, which a branch or
+// a leaf label moves off the last appended entry, and the reference
+// records the leaf taken and that no output named it (RFC 0001, link).
+func TestEmbedTakesTheResumeLeaf(t *testing.T) {
+	add := func(s *agentsession.Session, e agentsession.Entry) string {
+		t.Helper()
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	child := agentsession.New(agentsession.Header{ID: "child", ParentSession: "parent", SpawnedBy: "call_1"})
+	add(child, &agentsession.ConfigEntry{Model: "m"})
+	fork := add(child, agentsession.NewItemEntry(openresponses.UserText("task")))
+	add(child, &agentsession.ItemEntry{Item: openresponses.AssistantText("kept"), ResponseID: "r1"})
+	kept := add(child, &agentsession.ResponseEntry{ResponseID: "r1"})
+	if err := child.Branch(fork); err != nil {
+		t.Fatal(err)
+	}
+	add(child, &agentsession.ItemEntry{Item: openresponses.AssistantText("abandoned"), ResponseID: "r2"})
+	add(child, &agentsession.ResponseEntry{ResponseID: "r2"})
+	if err := child.Branch(kept); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := agentsession.New(agentsession.Header{ID: "parent"})
+	add(parent, &agentsession.ConfigEntry{Model: "m"})
+	add(parent, &agentsession.ItemEntry{Item: &openresponses.FunctionCall{CallID: "call_1", Name: "spawn", Arguments: `{}`}, ResponseID: "p1"})
+	add(parent, &agentsession.ResponseEntry{ResponseID: "p1"})
+	add(parent, agentsession.NewSubsessionLink("child", "call_1"))
+	add(parent, agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("call_1", "kept")))
+	tr, err := At(parent, parent.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ToATIF(tr, Options{Subsessions: func(id string) (*agentsession.Session, error) {
+		if id == "child" {
+			return child, nil
+		}
+		return nil, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.SubagentTrajectories) != 1 || doc.SubagentTrajectories[0].TrajectoryID != "child/"+kept {
+		t.Fatalf("embedded %d, the first %+v", len(doc.SubagentTrajectories), doc.SubagentTrajectories)
+	}
+	var ref *atif.SubagentTrajectoryRef
+	for _, s := range doc.Steps {
+		if s.Observation != nil {
+			for _, r := range s.Observation.Results {
+				if len(r.SubagentTrajectoryRef) > 0 {
+					ref = &r.SubagentTrajectoryRef[0]
+				}
+			}
+		}
+	}
+	if ref == nil || ref.Extra["child_leaf"] != kept || ref.Extra["child_leaf_named"] != false {
+		t.Errorf("the reference is %+v", ref)
+	}
+}

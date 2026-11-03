@@ -103,6 +103,7 @@
                 "trajectory_path": "01995b2a-0000-7000-8000-0000000000c1.json",
                 "extra": {
                   "child_leaf": "a0000009",
+                  "child_leaf_named": true,
                   "entry_id": "sha256:88e14e23670b32af427cf8bb2f5295fe87fd662c99609d8f3d3e1dd412aab826"
                 }
               }
@@ -127,6 +128,7 @@
                 "trajectory_path": "01995b2a-0000-7000-8000-0000000000c2.json",
                 "extra": {
                   "child_leaf": "b0000006",
+                  "child_leaf_named": true,
                   "entry_id": "sha256:66fafb31b5f2edbb74542526aa19516b862e4fa7bd5fff0c074228ce6c5594f8"
                 }
               }

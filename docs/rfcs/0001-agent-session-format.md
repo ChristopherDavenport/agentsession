@@ -2681,8 +2681,10 @@ function call outputs to observations by `source_call_id`, compaction
 and branch summaries as copied-context system steps, `link` entries to
 `subagent_trajectories`. Where the output entry carries `parents`, the
 reference into the child session names the leaf the answer was taken
-from; where it does not, the projection chooses one, and the document
-then depends on that choice rather than on the record. `run`,
+from; where it does not, the projection takes the leaf a reader
+resuming the child would take, as `link` counts a child's cost, and the
+reference says the leaf was not named, since the document then depends
+on that choice rather than on the record. `run`,
 `dispatch`, `result`, `decision` and `queued` entries have no step of their own.
 A run's `source`, its start `ref` as `trigger`, its end `reason` and
 its end `ref` as `cause` travel under `run` in the `extra` of the first

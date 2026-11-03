@@ -1471,15 +1471,21 @@ func (b *builder) subsessions() {
 		// The link names the session; the output entry names the point
 		// in it the answer was taken from. With the second, the
 		// document says which of a branched child's leaves was used;
-		// without it, the projection picks the child's main path and
-		// the document turns on that choice rather than on the record.
+		// without it, the projection takes the leaf a reader resuming
+		// the child takes, as RFC 0001's link rule counts its cost, and
+		// says it took it: child_leaf_named is false.
 		leaf := b.answeredFrom(l)
 		if leaf != "" {
 			ref.Extra["child_leaf"] = leaf
+			ref.Extra["child_leaf_named"] = true
 			ref.TrajectoryID = trajectoryID(l.Session, leaf)
 		}
-		if embedded := b.embed(l.Session, leaf); embedded != nil {
+		if embedded, taken := b.embed(l.Session, leaf); embedded != nil {
 			ref.TrajectoryID = embedded.TrajectoryID
+			if leaf == "" {
+				ref.Extra["child_leaf"] = taken
+				ref.Extra["child_leaf_named"] = false
+			}
 		} else {
 			// Nothing was embedded, and when the record named a leaf
 			// no other trajectory is put in its place. trajectory_id
@@ -1525,45 +1531,53 @@ func trajectoryID(sessionID, leaf string) string { return sessionID + "/" + leaf
 // leaf is the entry the parent recorded the answer as coming from. Given
 // one, that path is embedded and no other: a record naming a leaf this
 // export cannot resolve leaves the reference unembedded rather than
-// quietly substituting a different path. Given "", the child's main
-// path is chosen, which is the projection choosing where the record did
-// not say.
-func (b *builder) embed(sessionID, leaf string) *atif.Trajectory {
+// quietly substituting a different path. Given "", the leaf a reader
+// resuming the child takes is chosen ([agentsession.Session.Leaf], which
+// a branch or a leaf label moves off the last appended entry), the
+// projection choosing where the record did not say. It returns the leaf
+// it embedded at.
+func (b *builder) embed(sessionID, leaf string) (*atif.Trajectory, string) {
 	if b.opts.Subsessions == nil {
-		return nil
+		return nil, ""
 	}
 	sub, err := b.opts.Subsessions(sessionID)
 	if err != nil || sub == nil {
-		return nil
+		return nil, ""
+	}
+	if leaf == "" {
+		leaf = sub.Leaf()
 	}
 	var chosen *Trajectory
 	for t, err := range Trajectories(sub, b.opts.Preferences...) {
-		if err != nil {
-			continue
-		}
-		if (leaf == "" && t.Main) || (leaf != "" && t.LeafID == leaf) {
+		if err == nil && t.LeafID == leaf {
 			t := t
 			chosen = &t
 		}
 	}
 	if chosen == nil {
-		return nil
+		// An entry with children, such as an answer the child was
+		// continued past: its path, as At builds it.
+		t, err := At(sub, leaf, b.opts.Preferences...)
+		if err != nil {
+			return nil, ""
+		}
+		chosen = &t
 	}
 	opts := b.opts
 	opts.Redactors = nil // the parent's redactors run over the whole document
 	opts.Notes = ""
 	doc, err := ToATIF(*chosen, opts)
 	if err != nil {
-		return nil
+		return nil, ""
 	}
 	doc.TrajectoryID = trajectoryID(sessionID, chosen.LeafID)
 	for _, existing := range b.doc.SubagentTrajectories {
 		if existing.TrajectoryID == doc.TrajectoryID {
-			return existing
+			return existing, chosen.LeafID
 		}
 	}
 	b.doc.SubagentTrajectories = append(b.doc.SubagentTrajectories, doc)
-	return doc
+	return doc, chosen.LeafID
 }
 
 // attachRef adds the ref to the observation result of callID.
