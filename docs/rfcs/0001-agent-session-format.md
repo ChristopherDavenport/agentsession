@@ -765,8 +765,8 @@ values of `source` are defined:
 - `agentmemory`: memory kept between sessions.
 
 A writer SHOULD use these values for those layers, and a reader MAY
-rely on them, in a file of any minor, since the reference library wrote
-them with these meanings before they were defined. Every other `source`
+rely on them, in a file of any minor, since writers used them with these
+meanings before they were defined. Every other `source`
 is in the harness's own terms and opaque to a reader. The same values
 name the layer of an omitted part (`instructions_omitted`) and of an
 `item`'s `instructions_part`.
@@ -3058,8 +3058,8 @@ so every reader of 0.16 refuses those files until it is upgraded.
   told readers that every `source` was opaque and suggested these names
   as part ids, and an id names one part, so a reader could not find a
   session's instruction files without knowing its harness. A reader
-  reads the values in a file of any minor, as the reference library
-  wrote them, and a redaction keeps them as written.
+  reads the values in a file of any minor, as writers already used
+  them, and a redaction keeps them as written.
 - `item` defines `instructions_part`, `{id, source}`: an item the
   harness composed from an instruction layer and sent as a message. A
   reader of 0.16 read such an item as a user's input. It is a record
