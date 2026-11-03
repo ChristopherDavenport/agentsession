@@ -474,10 +474,26 @@ func redactedOnly(t *testing.T, opts Options) {
 	if _, err := fork.Append(user("unredacted " + secret)); err != nil {
 		t.Fatal(err)
 	}
+	// A judge's verdict on the redacted session, an outcome in a fork of
+	// it at the judged entry (RFC 0001, The redacted session, 0.19), is
+	// not redacted, so a store holding only redacted entries refuses it
+	// by every path, and it stays where it was made.
+	judged := agentsession.FileOrder(r.red)[1].Base().ID
+	verdict, err := agentsession.Fork(r.red, judged, agentsession.Header{ID: "verdict-of-redacted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pass := false
+	if _, err := verdict.Append(&agentsession.OutcomeEntry{Kind: "test", Target: judged, Pass: &pass, Details: json.RawMessage(`{"x:findings":{"aws-key":1}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.Create(ctx, verdict.Header())
+	wantErr(t, "Create of a verdict fork", err, agentsession.ErrNotRedacted)
 	if take := importer(opts, st); take != nil {
 		wantErr(t, "import of an original", take(t, st, fileOf(t, orig)), agentsession.ErrNotRedacted)
 		wantErr(t, "import of a resumed redacted session", take(t, st, fileOf(t, resumed.red)), agentsession.ErrNotRedacted)
 		wantErr(t, "import of a fork of a redacted session", take(t, st, fileOf(t, fork)), agentsession.ErrNotRedacted)
+		wantErr(t, "import of a verdict fork", take(t, st, fileOf(t, verdict)), agentsession.ErrNotRedacted)
 		imported := newRedactor(orig, "test.imported@1", agentsession.Header{})
 		imported.redact(t, orig)
 		if err := take(t, st, fileOf(t, imported.red)); err != nil {
@@ -489,6 +505,7 @@ func redactedOnly(t *testing.T, opts Options) {
 		wantErr(t, "push of an original", opts.Push(t, st, fileOf(t, orig)), agentsession.ErrNotRedacted)
 		wantErr(t, "push of a resumed redacted session", opts.Push(t, st, fileOf(t, resumed.red)), agentsession.ErrNotRedacted)
 		wantErr(t, "push of a fork of a redacted session", opts.Push(t, st, fileOf(t, fork)), agentsession.ErrNotRedacted)
+		wantErr(t, "push of a verdict fork", opts.Push(t, st, fileOf(t, verdict)), agentsession.ErrNotRedacted)
 		pushed := newRedactor(orig, "test.pushed@1", agentsession.Header{})
 		pushed.redact(t, orig)
 		if err := opts.Push(t, st, fileOf(t, pushed.red)); err != nil {

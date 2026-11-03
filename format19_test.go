@@ -268,6 +268,10 @@ var fixtures019 = map[string]func(t *testing.T) *Session{
 	"bad-spawn-link":          func(t *testing.T) *Session { return badSpawnFixture(t, false) },
 	"bad-spawn-repeated":      func(t *testing.T) *Session { return badSpawnFixture(t, true) },
 	"bad-spawned-by":          badSpawnedByFixture,
+	"redacted-ids-original":   func(t *testing.T) *Session { return redactedIDsOriginal(t) },
+	"redacted-ids":            func(t *testing.T) *Session { return redactedIDsFixture(t, false) },
+	"bad-redacted-id":         func(t *testing.T) *Session { return redactedIDsFixture(t, true) },
+	"verdict":                 verdictFixture,
 }
 
 // writeFixtures019 writes the 0.19 fixtures, positive and negative.
@@ -577,5 +581,217 @@ func TestBadSpawnFixtures(t *testing.T) {
 	})
 	if !errors.Is(err, ErrLinkMismatch) {
 		t.Errorf("spawned_by: %v", err)
+	}
+}
+
+// The redacted-ids fixtures' original is the pseudonym vectors' native
+// session, redacted under their key and profile, so its redaction's ID
+// is the vectors' first redacted_id.
+const (
+	idsOriginal = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+	idsProfile  = "example.redact@1"
+)
+
+// redactedIDsOriginal builds redacted-ids-original.jsonl: a native
+// session whose env holds a scratch path naming its own ID, which calls
+// a helper by a subsession link to a child whose ID is derived from its
+// own, and whose tool output quotes both IDs.
+func redactedIDsOriginal(t *testing.T) *Session {
+	t.Helper()
+	child := SubsessionID(idsOriginal, "call_1")
+	s, must, say := fixtureSession(t, Header{ID: idsOriginal, CWD: "/home/u/proj"}, "2026-11-03T18:00:00Z")
+	must(&EnvEntry{CWD: "/tmp/claude-" + idsOriginal + "/scratch"})
+	must(NewItemEntry(openresponses.UserText("Ask a helper to check the build.")))
+	must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_1", CallID: "call_1", Name: "task", Arguments: `{"prompt":"check the build"}`}, ResponseID: "resp_1"})
+	must(&ResponseEntry{ResponseID: "resp_1", Model: "gpt-5", Status: openresponses.ResponseStatusCompleted})
+	must(NewSubsessionLink(child, "call_1"))
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_1", "helper "+child+" wrote /tmp/claude-"+idsOriginal+"/notes.md")))
+	say("resp_2", "The helper ran in session "+child+"; notes are in its scratch directory.")
+	return s
+}
+
+// redactedIDsFixture builds redacted-ids.jsonl: redacted-ids-original
+// redacted as a 0.19 redactor does (RFC 0001, The redacted session,
+// Every redacted entry): under the vectors' key and profile, its ID and
+// redacted_from derived from the pseudonym, every reference into another
+// session re-pointed to that session's redaction though the child is not
+// redacted alongside, and each session ID the original names rewritten
+// wherever text quotes it, the env's path and the header's cwd among
+// them, to the ID the redaction writes. Every entry carries its
+// position and each response the request_hash the redacted session
+// rebuilds. With wrongID the header names another ID, which
+// bad-redacted-id.jsonl holds and CheckRedactedID reports.
+func redactedIDsFixture(t *testing.T, wrongID bool) *Session {
+	t.Helper()
+	orig := redactedIDsOriginal(t)
+	names, err := NewRedactionNames(testKey(t), orig.Header(), idsProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := names.ReplaceIDs(SessionIDsNamed(orig))
+	h, err := RewriteHeaderStrings(orig.Header(), text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.ID, h.Redacted, h.RedactedFrom = names.ID(), true, names.RedactedFrom()
+	if wrongID {
+		h.ID = "01995b2a-0000-7000-8000-000000000065"
+	}
+	red := New(h)
+	rw := NewRewriter(text)
+	ids := map[string]string{}
+	remap := Remap{Entry: func(session, entry string) (string, bool) {
+		if session != "" && session != orig.ID() {
+			return "", true // an entry of a session not redacted here is left out
+		}
+		id, ok := ids[entry]
+		return id, ok
+	}, Session: names.Session}
+	for i, e := range FileOrder(orig) {
+		body, err := rw.Rewrite(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rr, err := RemapRefs(body, remap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := rr.Entry
+		n.Base().ID = ""
+		if err := SetRedacted(n, []Span{{From: i + 1, To: i + 1}}); err != nil {
+			t.Fatal(err)
+		}
+		if resp, ok := n.(*ResponseEntry); ok && resp.RequestHash != "" {
+			if err := red.SetRequestHash(resp); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r, err := red.Commit(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[e.Base().ID] = r.ID
+	}
+	return red
+}
+
+// TestRedactedIDsFixture reads redacted-ids.jsonl: it names neither its
+// original's ID nor the child's, anywhere; its id is the vectors' and
+// the one its redacted_from derives; the link names the child's
+// redaction; the text that quoted either ID names the ID the redaction
+// writes for it; and every response verifies. bad-redacted-id.jsonl,
+// the same with another id, is reported by CheckRedactedID.
+func TestRedactedIDsFixture(t *testing.T) {
+	for _, name := range []string{"redacted-ids-original", "redacted-ids", "bad-redacted-id"} {
+		checkBuilt(t, name)
+	}
+	raw, err := os.ReadFile(filepath.Join("testdata", "sessions", "redacted-ids.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := SubsessionID(idsOriginal, "call_1")
+	if bytes.Contains(raw, []byte(idsOriginal)) || bytes.Contains(raw, []byte(child)) {
+		t.Error("the redaction still names its original or the child")
+	}
+	s := loadFixture(t, "redacted-ids")
+	h := s.Header()
+	if h.ID != "f9cf49c3-f8ed-5a2e-9ff4-fffe8e9f7a1a" || h.RedactedFrom.Session != "238049a1-ae4a-823e-8000-b19bb9a2be91" {
+		t.Errorf("id %s, redacted_from %+v", h.ID, h.RedactedFrom)
+	}
+	if err := CheckRedactedID(h); err != nil {
+		t.Errorf("CheckRedactedID: %v", err)
+	}
+	names, _ := NewRedactionNames(testKey(t), Header{ID: idsOriginal}, idsProfile)
+	redChild := names.Redaction(child)
+	if !bytes.Contains(raw, []byte("helper "+redChild+" wrote /tmp/claude-"+h.ID+"/notes.md")) || !bytes.Contains(raw, []byte("/tmp/claude-"+h.ID+"/scratch")) {
+		t.Error("the text quoting the IDs does not name the IDs the redaction writes")
+	}
+	links := 0
+	for _, e := range s.Entries() {
+		switch v := e.(type) {
+		case *LinkEntry:
+			links++
+			if v.Session != redChild {
+				t.Errorf("the link names %s, not the child's redaction %s", v.Session, redChild)
+			}
+		case *ResponseEntry:
+			if v.RequestHash != "" {
+				if err := s.Verify(v.ID); err != nil {
+					t.Errorf("response %s: %v", v.ID, err)
+				}
+			}
+		}
+		if _, ok := RedactedOf(e); !ok {
+			t.Errorf("entry %s carries no redacted", e.Base().ID)
+		}
+	}
+	if links != 1 {
+		t.Errorf("%d links", links)
+	}
+	// The child was never redacted alongside, so a reader finds no
+	// session by the link and concludes nothing from it.
+	if err := s.VerifyLinks(func(string) (*Session, error) { return nil, nil }); err != nil {
+		t.Errorf("VerifyLinks: %v", err)
+	}
+	bad := loadFixture(t, "bad-redacted-id")
+	if err := CheckRedactedID(bad.Header()); !errors.Is(err, ErrRedactedID) {
+		t.Errorf("bad-redacted-id: %v", err)
+	}
+}
+
+// verdictFixture builds verdict.jsonl (RFC 0001, The redacted session,
+// 0.19): a scan's verdict on redacted-ids.jsonl, written as an outcome
+// in a fork of it whose base is the third entry, the last judged, and
+// whose parent_session is the redacted session's id. Its details name
+// the kind and count of a finding and never its text. The fork carries
+// no redacted, and its prefix entries carry theirs.
+func verdictFixture(t *testing.T) *Session {
+	t.Helper()
+	red := redactedIDsFixture(t, false)
+	base := FileOrder(red)[2].Base().ID
+	created, _ := time.Parse(time.RFC3339, "2026-11-03T19:00:00Z")
+	fork, err := Fork(red, base, Header{ID: "01995b2a-0000-7000-8000-000000000066", CreatedAt: created, Harness: &Harness{Name: "fixture-scan", Version: "1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pass := false
+	verdict := &OutcomeEntry{Kind: "test", Target: base, Pass: &pass, Details: json.RawMessage(`{"agentredact:findings":{"aws-key":1}}`)}
+	verdict.Timestamp = created.Add(time.Second)
+	if _, err := fork.Append(verdict); err != nil {
+		t.Fatal(err)
+	}
+	return fork
+}
+
+// TestVerdictFixture reads verdict.jsonl: a fork of the redacted session
+// at the judged entry, not itself redacted, whose prefix entries carry
+// redacted, holding the outcome naming its base; a store that holds
+// only redacted entries refuses it.
+func TestVerdictFixture(t *testing.T) {
+	checkBuilt(t, "verdict")
+	s := loadFixture(t, "verdict")
+	h := s.Header()
+	red := loadFixture(t, "redacted-ids")
+	if h.Redacted || h.RedactedFrom != nil || h.ParentSession != red.ID() || h.Base != FileOrder(red)[2].Base().ID {
+		t.Errorf("header %+v", h)
+	}
+	var outcome *OutcomeEntry
+	for _, e := range s.Entries() {
+		_, marked := RedactedOf(e)
+		switch {
+		case s.Prefix(e.Base().ID) && !marked:
+			t.Errorf("prefix entry %s carries no redacted", e.Base().ID)
+		case !s.Prefix(e.Base().ID) && marked:
+			t.Errorf("own entry %s carries redacted", e.Base().ID)
+		}
+		if o, ok := e.(*OutcomeEntry); ok {
+			outcome = o
+		}
+	}
+	if outcome == nil || outcome.Target != h.Base || outcome.Pass == nil || *outcome.Pass {
+		t.Errorf("outcome %+v", outcome)
+	}
+	if err := CheckCreate(h, true); !errors.Is(err, ErrNotRedacted) {
+		t.Errorf("a redacted-only store's create: %v", err)
 	}
 }

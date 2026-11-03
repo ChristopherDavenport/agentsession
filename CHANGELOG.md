@@ -73,6 +73,20 @@ versions may break the API.
   `testdata/pseudonym.json` holds test vectors computed apart from this
   package, for another implementation to check against.
 
+- **Fixtures for 0.19's redaction rules (RFC 0001, The redacted
+  session, Every redacted entry).** `redacted-ids-original.jsonl` is a
+  native session whose `env` path, tool output and answer quote its own
+  ID and a derived child's; `redacted-ids.jsonl` is its redaction under
+  the pseudonym vectors' key and profile, naming neither ID anywhere,
+  its `id` and `redacted_from` the vectors', the link and the quoting
+  text naming the child's redaction though the child was not redacted
+  alongside, every response verifying; `bad-redacted-id.jsonl` is the
+  same under another `id`, which `CheckRedactedID` reports.
+  `verdict.jsonl` is a scan's verdict on it, an `outcome` in a fork at
+  the judged entry naming a finding's kind and count, which a store
+  holding only redacted entries refuses; storetest checks that by
+  create, import and push.
+
 - **Breaking (API): a url link's session is text (RFC 0001 0.19, Every
   redacted entry).** The `session` of a `link` carrying `url` is the
   callee's ID in another system, not a reference: `RemapRefs` no longer
