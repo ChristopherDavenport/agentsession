@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.34 - 2026-11-03
 
 - **Format 0.17 (RFC 0001, draft 0.17).** `Format` and `FormatMinor`
   name 0.17, so a writer raises every file it appends to and a reader
