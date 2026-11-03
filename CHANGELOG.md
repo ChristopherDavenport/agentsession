@@ -69,7 +69,7 @@ versions may break the API.
   at the child's resume leaf (`LeafNamed` false), with the child's own
   children by the same rule; a child it cannot read is `Unread`
   (`ErrChildNotFound`) and left out, and a callee in another system it
-  does not hold is not counted. Peer callees, judges and forks are no
+  does not hold is reported `Unread` too (`ErrChildElsewhere`). Peer callees, judges and forks are no
   delegated work. Fixtures `cost-children`, `cost-children-child` and
   `cost-children-grandchild`.
 

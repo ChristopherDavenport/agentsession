@@ -116,6 +116,10 @@ type Unread struct {
 // not find, or that holds no entry by the leaf the parent named.
 var ErrChildNotFound = errors.New("agentsession: delegated session not found")
 
+// ErrChildElsewhere is the error of an [Unread] callee in another system
+// whose session the reader does not hold.
+var ErrChildElsewhere = errors.New("agentsession: delegated session held in another system")
+
 // DelegatedWork returns the sessions a root-first path delegated work
 // to, as a reader that reports what the path cost, including that work,
 // counts them (RFC 0001, link, since 0.17): each session a subsession
@@ -123,10 +127,11 @@ var ErrChildNotFound = errors.New("agentsession: delegated session not found")
 // many links name it, at the leaf the call's output names in parents or
 // else at the child's resume leaf, with its own children by the same
 // rule. A child resolve cannot read, or that holds no entry by the leaf
-// named, is reported in unread and left out. A subsession link carrying
-// a url names a callee in another system: it is counted only when
-// resolve holds its session, and is not reported when it does not. Peer
-// callees, judges and forks are no delegated work and are not counted.
+// named, is reported in unread and left out ([ErrChildNotFound]). A
+// subsession link carrying a url names a callee in another system: it is
+// counted when resolve holds its session, and otherwise reported in
+// unread as one held elsewhere ([ErrChildElsewhere]). Peer callees,
+// judges and forks are no delegated work and are not counted.
 // resolve returns nil and no error for a session it does not hold.
 func DelegatedWork(path []Entry, resolve func(id string) (*Session, error)) (children []Delegated, unread []Unread) {
 	seen := map[string]bool{}
@@ -148,12 +153,12 @@ func delegated(path []Entry, resolve func(id string) (*Session, error), seen map
 		seen[l.Session] = true
 		child, err := resolve(l.Session)
 		if child == nil || err != nil {
-			if l.URL != "" && err == nil {
+			switch {
+			case l.URL != "" && err == nil:
 				// A callee in another system whose session the reader
-				// does not hold: no delegated work it can count.
-				continue
-			}
-			if err == nil {
+				// does not hold: delegated work it cannot count.
+				err = fmt.Errorf("%w: %s at %s", ErrChildElsewhere, l.Session, l.URL)
+			case err == nil:
 				err = fmt.Errorf("%w: %s", ErrChildNotFound, l.Session)
 			}
 			unread = append(unread, Unread{Link: l, Session: l.Session, Err: err})

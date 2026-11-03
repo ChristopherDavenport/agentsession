@@ -734,3 +734,29 @@ func TestEnvSnapshotFixture(t *testing.T) {
 		t.Errorf("an env naming no cwd leaves the working directory %q, want unsaid", got)
 	}
 }
+
+// TestDelegatedElsewhere: a subsession callee in another system whose
+// session the reader does not hold is not counted, and is reported as
+// such, apart from a child that could not be read (RFC 0001, link, Cost
+// across sessions).
+func TestDelegatedElsewhere(t *testing.T) {
+	s := New(Header{ID: "parent"})
+	must := func(e Entry) string {
+		t.Helper()
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	must(&ConfigEntry{Model: "gpt-5"})
+	call := must(&ItemEntry{Item: &openresponses.FunctionCall{CallID: "call_x", Name: "delegate", Arguments: `{}`}, ResponseID: "resp_1"})
+	must(&ResponseEntry{ResponseID: "resp_1"})
+	must(NewDispatch("call_x", call))
+	must(NewCalleeSubsessionLink("call_x", Callee{URL: "https://agents.example/a2a", Task: "t1", Session: "remote-1"}))
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_x", "done")))
+	children, unread := DelegatedWork(s.Path(s.Leaf()), func(string) (*Session, error) { return nil, nil })
+	if len(children) != 0 || len(unread) != 1 || unread[0].Session != "remote-1" || !errors.Is(unread[0].Err, ErrChildElsewhere) || errors.Is(unread[0].Err, ErrChildNotFound) {
+		t.Errorf("children %+v, unread %+v", children, unread)
+	}
+}

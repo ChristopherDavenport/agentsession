@@ -2040,11 +2040,13 @@ and not at the parent's.
 
 A reader MUST say when it could not read or price a child. It leaves
 that child out rather than guess, and it MUST say which leaf it took
-for a child that no `parents` names. Some sessions are not this path's
-delegated work, and this rule does not count them: a `peer` callee,
-whose record is its own; a callee in another system whose session the
-reader does not hold; and a session named by `judged_by` or `fork_of`.
-A reader that counts one of these says so. Token totals and the count
+for a child that no `parents` names. A `subsession` callee in another
+system whose session the reader does not hold is delegated work it
+cannot count: it MUST say so, apart from a child it could not read.
+Some sessions are not this path's delegated work, and this rule does
+not count them: a `peer` callee, whose record is its own, and a session
+named by `judged_by` or `fork_of`. A reader that counts one of these
+says so. Token totals and the count
 of model calls stay the path's own.
 
 ### `custom`
