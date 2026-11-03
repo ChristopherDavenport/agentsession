@@ -346,6 +346,79 @@ type ItemEntry struct {
 	// member in another form is kept as written in Unknown and Trust is
 	// nil.
 	Trust *Trust `json:"-" member:"trust"`
+	// InstructionsPart says, in format 0.17, that the harness composed
+	// the item, a message, from an instruction layer and sent it as a
+	// message rather than in the instructions: an instruction file
+	// wrapped in a reminder, or a memory block. The item carries the
+	// layer's text as composed. It is a record member and reaches no
+	// request, and the item is no input of its run ([PathInputs]). An
+	// instructions_part on any other item, or in another form (see
+	// [LayerRef]), is kept as written in Unknown and InstructionsPart
+	// is nil.
+	InstructionsPart *LayerRef `json:"-" member:"instructions_part"`
+}
+
+// Instruction layers: the source values RFC 0001 defines, since 0.17,
+// for an instructions part ([InstructionPart]), an omitted part
+// ([OmittedPart]) and an item's instructions_part ([LayerRef]). A reader
+// may rely on them in a file of any minor; every other source is in the
+// harness's own terms. A redaction keeps them as written.
+const (
+	// LayerProduct is the harness's own prompt for the product it is.
+	LayerProduct = "product"
+	// LayerAgentsMD is an instruction file, AGENTS.md or a harness's
+	// equivalent: one part per file, its id naming the file.
+	LayerAgentsMD = "agentsmd"
+	// LayerAgentSkill is the catalogue of skills offered.
+	LayerAgentSkill = "agentskill"
+	// LayerAgentMemory is memory kept between sessions.
+	LayerAgentMemory = "agentmemory"
+)
+
+// KnownLayer reports whether source is one of the instruction layers
+// the format defines.
+func KnownLayer(source string) bool {
+	switch source {
+	case LayerProduct, LayerAgentsMD, LayerAgentSkill, LayerAgentMemory:
+		return true
+	}
+	return false
+}
+
+// LayerRef names the instruction layer an item was composed from (RFC
+// 0001, item, instructions_part, since 0.17), with the meanings ID and
+// Source have on an [InstructionPart]. Source is required. ID is
+// required when the layer has more than one part, as [LayerAgentsMD]
+// does, one part per file; when present it is not empty.
+type LayerRef struct {
+	ID     string `json:"id,omitempty"`
+	Source string `json:"source"`
+}
+
+// valid reports whether the reference is in the form the format defines.
+func (r *LayerRef) valid() bool {
+	return r.Source != "" && (r.ID != "" || r.Source != LayerAgentsMD)
+}
+
+// layerRefForm reports whether raw holds an instructions_part in the
+// form the format defines: an object whose source is a non-empty string
+// and whose id, present, is one too, as it must be for an agentsmd
+// layer.
+func layerRefForm(raw json.RawMessage) bool {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil || m == nil {
+		return false
+	}
+	var ref LayerRef
+	if json.Unmarshal(m["source"], &ref.Source) != nil {
+		return false
+	}
+	if rawID, ok := m["id"]; ok {
+		if json.Unmarshal(rawID, &ref.ID) != nil || ref.ID == "" {
+			return false
+		}
+	}
+	return ref.valid()
 }
 
 // Trust labels (RFC 0001, item, since 0.15).
@@ -2468,11 +2541,19 @@ func (e *ItemEntry) MarshalJSON() ([]byte, error) {
 		return nil, errors.New("agentsession: item entry has no item")
 	}
 	type plain ItemEntry
-	if !e.Failed && e.FromLink == "" && e.CopiedFrom == nil && e.Trust == nil {
+	if !e.Failed && e.FromLink == "" && e.CopiedFrom == nil && e.Trust == nil && e.InstructionsPart == nil {
 		return marshalEntry(TypeItem, &e.EntryBase, (*plain)(e))
 	}
 	if _, ok := e.Item.(*openresponses.FunctionCallOutput); e.Failed && !ok {
 		return nil, errors.New("agentsession: failed is defined on a function call output's entry alone")
+	}
+	if p := e.InstructionsPart; p != nil {
+		if _, ok := e.Item.(*openresponses.Message); !ok {
+			return nil, errors.New("agentsession: instructions_part is defined on a message's entry alone")
+		}
+		if !p.valid() {
+			return nil, fmt.Errorf("agentsession: instructions_part %+v names no source, or an agentsmd layer with no id", *p)
+		}
 	}
 	if e.CopiedFrom != nil && e.CopiedFrom.Session == "" {
 		return nil, errors.New("agentsession: copied_from names no session")
@@ -2480,18 +2561,19 @@ func (e *ItemEntry) MarshalJSON() ([]byte, error) {
 	for _, m := range []struct {
 		key string
 		set bool
-	}{{"failed", e.Failed}, {"from_link", e.FromLink != ""}, {"copied_from", e.CopiedFrom != nil}, {"trust", e.Trust != nil}} {
+	}{{"failed", e.Failed}, {"from_link", e.FromLink != ""}, {"copied_from", e.CopiedFrom != nil}, {"trust", e.Trust != nil}, {"instructions_part", e.InstructionsPart != nil}} {
 		if _, dup := e.Unknown[m.key]; dup && m.set {
 			return nil, fmt.Errorf("agentsession: item entry has %s both typed and unknown", m.key)
 		}
 	}
 	return marshalEntry(TypeItem, &e.EntryBase, struct {
 		*plain
-		Failed     bool        `json:"failed,omitempty"`
-		FromLink   string      `json:"from_link,omitempty"`
-		CopiedFrom *CopiedFrom `json:"copied_from,omitempty"`
-		Trust      *Trust      `json:"trust,omitempty"`
-	}{(*plain)(e), e.Failed, e.FromLink, e.CopiedFrom, e.Trust})
+		Failed           bool        `json:"failed,omitempty"`
+		FromLink         string      `json:"from_link,omitempty"`
+		CopiedFrom       *CopiedFrom `json:"copied_from,omitempty"`
+		Trust            *Trust      `json:"trust,omitempty"`
+		InstructionsPart *LayerRef   `json:"instructions_part,omitempty"`
+	}{(*plain)(e), e.Failed, e.FromLink, e.CopiedFrom, e.Trust, e.InstructionsPart})
 }
 
 // UnmarshalJSON decodes the entry, dispatching the item through the
@@ -2562,6 +2644,15 @@ func (e *ItemEntry) decodeMembers(_ []byte, all map[string]json.RawMessage) erro
 		promote(&e.EntryBase, "copied_from", &e.CopiedFrom)
 	}
 	promoteTrust(&e.EntryBase, &e.Trust)
+	// instructions_part is taken in the form 0.17 defines, on a
+	// message's entry, in a file of any minor; anything else is kept as
+	// written.
+	e.InstructionsPart = nil
+	if _, ok := e.Item.(*openresponses.Message); ok {
+		if raw, ok := e.Unknown["instructions_part"]; ok && layerRefForm(raw) {
+			promote(&e.EntryBase, "instructions_part", &e.InstructionsPart)
+		}
+	}
 	return nil
 }
 

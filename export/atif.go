@@ -737,6 +737,10 @@ func (b *builder) itemExtra(e *agentsession.ItemEntry) map[string]any {
 	if e.Trust != nil {
 		agentSessionExtra(extra)["trust"] = e.Trust
 	}
+	if e.InstructionsPart != nil {
+		// A composed layer, which a reader tells from a person's input.
+		agentSessionExtra(extra)["instructions_part"] = e.InstructionsPart
+	}
 	if r := b.replaced[e.ID]; len(r) > 0 {
 		agentSessionExtra(extra)[ExtraReplaced] = r
 	}

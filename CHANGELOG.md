@@ -16,6 +16,24 @@ versions may break the API.
   `redacted` as history members, and adds rules for converters and
   readers, below.
 
+- **Instruction layers (RFC 0001 0.17, Instructions as parts and
+  `item`; RFC 0002, context hash).** `LayerProduct`, `LayerAgentsMD`,
+  `LayerAgentSkill` and `LayerAgentMemory` are the four `source` values
+  the format now defines (`KnownLayer`), read in a file of any minor;
+  an `agentsmd` part is one per file, its id naming the file.
+  `ItemEntry.InstructionsPart` (`LayerRef`, `{id, source}`) marks a
+  message the harness composed from a layer and sent as a message, as
+  Claude Code sends CLAUDE.md: taken in the form 0.17 defines on a
+  message's entry in a file of any minor, kept as written otherwise,
+  and refused by the writer on any other item, with no `source`, or
+  naming `agentsmd` with no `id`. It is a record member: the context
+  hash leaves it out, a rewrite keeps a defined `source` as written on a
+  part, an omitted part and an `instructions_part` (any other `source`,
+  and every `id`, is text), and ATIF carries it under
+  `extra.agentsession` on the item's step. Fixtures
+  `instruction-layers` (every response verifying, the context hash the
+  same session's without the member) and `bad-instructions-part`.
+
 ## v0.0.33 - 2026-11-02
 
 - **Format 0.16 (RFC 0001, draft 0.16).** `Format` and `FormatMinor`

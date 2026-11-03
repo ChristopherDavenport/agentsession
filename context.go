@@ -1827,7 +1827,7 @@ func contributes(e Entry) bool {
 // contextContentHash is the content hash the context hash uses for one
 // contributing entry: the body with legacy_id, normalised and redacted,
 // in whatever form, removed for every type, response, source and queued_from removed from an
-// item, and from_link, failed, copied_from and trust where the format defines them, from removed from a branch_summary, trust
+// item, and from_link, failed, copied_from, trust and instructions_part where the format defines them, from removed from a branch_summary, trust
 // removed from a branch_summary and a compaction where defined, and a compaction's
 // first_kept replaced by [context hash, type] of the entry it names
 // when that entry is on the path and by null otherwise.
@@ -1868,6 +1868,10 @@ func contextContentHash(e Entry, at, types map[string]string) (string, error) {
 		}
 		if e.(*ItemEntry).Trust != nil {
 			delete(body, "trust")
+		}
+		if e.(*ItemEntry).InstructionsPart != nil {
+			// A record member that reaches no request (0.17).
+			delete(body, "instructions_part")
 		}
 	case TypeBranchSummary:
 		delete(body, "from")
