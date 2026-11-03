@@ -1218,7 +1218,7 @@ not by any later leaf:
   whether or not their harnesses marked the call failed. `trust` is
   removed from an `item`, a `compaction` and a `branch_summary` where
   RFC 0001 defines it, since 0.15, and `instructions_part` from an
-  `item`, and `trust` from each instructions part of a `config` and of
+  `item`, in either of its forms since 0.18, and `trust` from each instructions part of a `config` and of
   a `compaction`'s checkpoint, where RFC 0001 defines them, since 0.17,
   for the same reason. For every type, `legacy_id`, `normalised`, `redacted`, and on an `item`
   `response` and `source` are removed as well, since each is provenance
