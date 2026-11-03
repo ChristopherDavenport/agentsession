@@ -31,6 +31,8 @@ versions may break the API.
   verifies. `VerifyLinks` compares the child's `spawned_by` with the
   link's `call_id` or `spawn_id`, and holds it absent for a link with
   neither; a cancel notice carries the link's `spawn_id`.
+  `Callees` lists no subsession link without a `call_id`, since it
+  belongs to no call.
   `DelegatedWork` counts a host-started child at the leaf the first
   entry after its link names in `parents`. The ATIF export carries such
   a link under `agentsession.subsessions` in the next step's `extra`, or

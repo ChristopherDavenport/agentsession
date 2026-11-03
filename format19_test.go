@@ -918,3 +918,24 @@ func TestIDTextExemption(t *testing.T) {
 		}
 	}
 }
+
+// TestCalleesSkipHostStarted: a link with spawn_id belongs to no call
+// (RFC 0001, link, 0.19), nor does a subsession link with neither
+// member, so Callees, which lists the callees of the path's calls,
+// lists neither; a call's subsession link it lists as before.
+func TestCalleesSkipHostStarted(t *testing.T) {
+	parent := hostChildFixture(t)[0]
+	legacy := hostChildLegacyFixture(t)[0]
+	for _, s := range []*Session{parent, legacy} {
+		if got := Callees(s.Path(s.Leaf())); len(got) != 0 {
+			t.Errorf("%s: callees %+v", s.ID(), got)
+		}
+	}
+	s := New(Header{ID: "p"})
+	if _, err := s.Append(NewSubsessionLink("c", "call_1")); err != nil {
+		t.Fatal(err)
+	}
+	if got := Callees(s.Path(s.Leaf())); len(got) != 1 {
+		t.Errorf("a call's link: %+v", got)
+	}
+}

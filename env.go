@@ -438,7 +438,9 @@ type CalleeLink struct {
 // more than once, to a callee that starts new work each time, has a
 // link for each hand-off that reached one. A cancel notice is not a
 // callee; it marks the link its target names, and one naming no link
-// on the path is passed over.
+// on the path is passed over. A subsession link with no call_id, a
+// child the host started (RFC 0001, link, since 0.19), belongs to no
+// call and is not listed.
 func Callees(path []Entry) []CalleeLink {
 	var out []CalleeLink
 	byID := make(map[string]int)
@@ -461,7 +463,9 @@ func Callees(path []Entry) []CalleeLink {
 				}
 			}
 		case *LinkEntry:
-			if !v.callee() {
+			if !v.callee() || v.Rel == RelSubsession && v.CallID == "" {
+				// A child the host started, by spawn_id or, from before
+				// 0.19, with neither member, is none of a call's links.
 				continue
 			}
 			if v.Cancel != "" {
