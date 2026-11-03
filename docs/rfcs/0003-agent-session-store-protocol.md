@@ -141,7 +141,8 @@ from RFC 0001 and RFC 0002 keep their meanings.
 - Errors are `application/problem+json` (RFC 9457), with members of this
   document's beside RFC 9457's: `reason` (the rule a `bad_entry` or
   `bad_base` broke, named as the library names it: `bad_id`,
-  `reserved_member`, `bad_convergence`, `call_id_empty`, …), `head` (the
+  `reserved_member`, `bad_convergence`, `call_id_empty`, `spawn_link`,
+  …), `head` (the
   head on `head_moved`), `holder` (the lease holder's label on
   `session_locked`), `target` (a ref's on `ref_moved` and
   `ref_dangling`) and `incarnation`, and with a stable `code`
@@ -416,8 +417,9 @@ GET /v1/sessions/{id}/path?leaf={entry}&contents={all|since-fold|none}
       a part or list before it. Nothing above the fold is needed to
       resolve them.
     - The server enforces `call_id` uniqueness on append (RFC 0001 makes
-      it unique in a session), so a shallow client appending a function
-      call needs no call IDs from entries above the fold.
+      it unique in a session), and `spawn_id` uniqueness likewise, so a
+      shallow client appending a function call, or a link to a child
+      the host started, needs no IDs from entries above the fold.
     - This is RFC 0002's open question on shallow boundaries, answered
       for reading and not for storage.
   - `none`: envelopes only, for verification or a tree view.
@@ -911,7 +913,8 @@ Failures after the closure was admitted are not a 200 with silence:
   the head step is a no-op when the head already equals `to`.
 - A push of a session the receiver holds under another header is
   `header_differs`; a `call_id` the receiver holds and the sender does
-  not is `call_id_repeated`; a format it does not read is `format`.
+  not is `call_id_repeated`, and such a `spawn_id` `spawn_id_repeated`;
+  a format it does not read is `format`.
 
 A push needs exchange scope, and a `refs` member needs refs scope as well.
 A push is not leased (see Leases).
@@ -1012,6 +1015,7 @@ carry. A request refused for authentication or scope is 401 `auth` or
 | `not_record` | 409 | a push from a store that is not the record |
 | `header_differs` | 409 | the receiver holds another session under this ID |
 | `call_id_repeated` | 409 | an append or exchange that would repeat a `call_id` |
+| `spawn_id_repeated` | 409 | an append or exchange that would repeat a `subsession` link's `spawn_id` (RFC 0001, `link`, since 0.19) |
 | `superseded` | 409 | an append of a `continued_in` link to a session that holds one naming another successor |
 | `synthetic` | 422 | a `leaf` label carrying `synthetic` |
 | `bad_entry` | 422 | malformed: `id` differs, reserved member, `ts` form, not I-JSON, unknown prefix; also a pushed or created header RFC 0001 calls malformed, such as `redacted_from` without `redacted` |

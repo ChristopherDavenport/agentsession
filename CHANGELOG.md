@@ -39,7 +39,9 @@ versions may break the API.
   the top-level one, with its `subagent_trajectory_ref`, and counts its
   cost. The cas exchange refuses a `spawn_id` the two stores' lines
   both carry, as it refuses a `call_id`. A rewrite leaves `spawn_id` as
-  it leaves a `call_id`.
+  it leaves a `call_id`. RFC 0003 and `remote` carry a repeated
+  `spawn_id` as `spawn_id_repeated` (409, `CodeSpawnIDRepeated`), and a
+  link with both members as `bad_entry` with the reason `spawn_link`.
 
 - **Breaking (format, API): a redaction names sessions by a keyed
   pseudonym (RFC 0001 0.19, The redacted session).** 0.18 derived a
