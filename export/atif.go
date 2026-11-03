@@ -756,6 +756,9 @@ func (b *builder) itemExtra(e *agentsession.ItemEntry) map[string]any {
 	if e.InstructionsPart != nil {
 		// A composed layer, which a reader tells from a person's input.
 		agentSessionExtra(extra)["instructions_part"] = e.InstructionsPart
+	} else if e.InstructionsLayers != nil {
+		// Several, as written: a list in the message's order (0.18).
+		agentSessionExtra(extra)["instructions_part"] = e.InstructionsLayers
 	}
 	if r := b.replaced[e.ID]; len(r) > 0 {
 		agentSessionExtra(extra)[ExtraReplaced] = r

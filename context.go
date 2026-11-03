@@ -1874,8 +1874,9 @@ func contextContentHash(e Entry, at, types map[string]string) (string, error) {
 		if e.(*ItemEntry).Trust != nil {
 			delete(body, "trust")
 		}
-		if e.(*ItemEntry).InstructionsPart != nil {
-			// A record member that reaches no request (0.17).
+		if e.(*ItemEntry).Layers() != nil {
+			// A record member that reaches no request (0.17), in either
+			// of its forms (0.18).
 			delete(body, "instructions_part")
 		}
 	case TypeConfig:

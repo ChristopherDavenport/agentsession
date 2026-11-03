@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -149,13 +150,23 @@ func entryVariants(e Entry) []variant {
 	if _, ok := e.(*ItemEntry); ok {
 		// failed is defined on an output's entry alone, so it is
 		// exercised on one, and left off any other item; an
-		// instructions_part on a message's alone, so the other way.
+		// instructions_part on a message's alone, so the other way,
+		// in each of its two forms.
 		return []variant{
 			{"output", func(e Entry) {
 				e.(*ItemEntry).Item = openresponses.NewFunctionCallOutput("call_1", "Error: failed")
-				e.(*ItemEntry).InstructionsPart = nil
+				e.(*ItemEntry).InstructionsPart, e.(*ItemEntry).InstructionsLayers = nil, nil
 			}},
-			{"message", func(e Entry) { e.(*ItemEntry).Failed = false }},
+			{"message", func(e Entry) { e.(*ItemEntry).Failed, e.(*ItemEntry).InstructionsLayers = false, nil }},
+			{"message, layers", func(e Entry) {
+				// A list names each layer once, which the filler's
+				// repeated values would not.
+				it := e.(*ItemEntry)
+				it.Failed, it.InstructionsPart = false, nil
+				for i := range it.InstructionsLayers {
+					it.InstructionsLayers[i].ID += strconv.Itoa(i)
+				}
+			}},
 		}
 	}
 	if _, ok := e.(*ResultEntry); ok {

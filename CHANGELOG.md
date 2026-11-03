@@ -15,6 +15,30 @@ versions may break the API.
   item's `instructions_part` be a list of layers, and tightens the rules
   for a converter rebuilding a session from an ATIF document, below.
 
+- **Instruction layers as a list (RFC 0001 0.18, `item`; RFC 0002,
+  context hash).** One message often carries several layers, as Claude
+  Code sends CLAUDE.md and MEMORY.md in one reminder, and 0.17's
+  `instructions_part` could name only one. It may now be a list of
+  `{id, source}`, the layers in the order their texts appear in the
+  message: `ItemEntry.InstructionsLayers`, beside the single object's
+  `InstructionsPart`, at most one of them set, the form the line holds.
+  `ItemEntry.Layers` reads either, the single object as a list of one. A
+  list is taken on a message's entry in a file of any minor when it is
+  not empty, each element is in the single form, and it names each layer
+  once (no `id` twice, no `source` twice among elements with no `id`);
+  any other list is kept whole as written, and the writer refuses one,
+  one on another item, or both forms at once. Like the single form it
+  is left out of the context hash, makes the item no input of its run
+  (`PathInputs`), keeps each element's defined `source` through a
+  rewrite with every `id` as text, and travels as written under
+  `extra.agentsession` on the item's ATIF step. **Breaking for
+  readers:** code that tells a composed layer by `InstructionsPart !=
+  nil` misses a list; use `Layers() != nil`. Fixtures
+  `instruction-layers-list` (every response verifying, the context hash
+  the same session's without the member) and
+  `bad-instructions-part-list` (an empty list, an `id` named twice), an
+  export golden, and the redaction round trip over the new fixture.
+
 - **ATIF: a partly priced child is left out of the cost (RFC 0001,
   `link`, Cost across sessions).** The export added the calls of a
   delegated session it could price and counted the session as priced

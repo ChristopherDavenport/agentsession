@@ -692,6 +692,7 @@ var (
 	customType   = reflect.TypeOf(CustomEntry{})
 	configType   = reflect.TypeOf(ConfigEntry{})
 	settingsType = reflect.TypeOf(Settings{})
+	layerRefType = reflect.TypeOf(LayerRef{})
 	payloadPkg   = reflect.TypeOf(openresponses.Usage{}).PkgPath()
 	ownPkg       = reflect.TypeOf(Header{}).PkgPath()
 )
@@ -769,6 +770,9 @@ func (s shape) elem() shape {
 		return shape{data: true}
 	case s.t != nil && (s.t.Kind() == reflect.Slice || s.t.Kind() == reflect.Array):
 		return shape{t: s.t.Elem()}.resolve()
+	case s.t == layerRefType:
+		// instructions_part, an object or, since 0.18, a list of them.
+		return s
 	}
 	return shape{}
 }
@@ -804,8 +808,13 @@ func structMembers(t reflect.Type) map[string]reflect.Type {
 		}
 		tag := f.Tag.Get("json")
 		if tag == "-" {
+			// A member in two forms has a field for each, the first
+			// its object form: an element of the list form is that
+			// object (shape.elem).
 			if m := f.Tag.Get("member"); m != "" {
-				names[m] = f.Type
+				if _, dup := names[m]; !dup {
+					names[m] = f.Type
+				}
 			}
 			continue
 		}

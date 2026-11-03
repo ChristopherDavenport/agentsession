@@ -5,8 +5,33 @@ import (
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/atif"
 	"github.com/ChristopherDavenport/openresponses"
 )
+
+// TestInstructionsPartListStep: the instruction-layers-list fixture
+// exports the message the harness composed from two layers as a user
+// step carrying instructions_part under extra.agentsession as written, a
+// list of the two in order (RFC 0001, Projections/ATIF, 0.18).
+func TestInstructionsPartListStep(t *testing.T) {
+	s := loadFixture(t, "instruction-layers-list")
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := mustDoc(t, tr)
+	if len(doc.Steps) < 2 {
+		t.Fatalf("steps = %d", len(doc.Steps))
+	}
+	composed, input := doc.Steps[0], doc.Steps[1]
+	as, _ := composed.Extra[ExtraAgentSession].(map[string]any)
+	if composed.Source != atif.SourceUser || !sameValue(t, as["instructions_part"], `[{"id":"/repo/CLAUDE.md","source":"agentsmd"},{"id":"~/.claude/memory/MEMORY.md","source":"agentmemory"}]`) {
+		t.Errorf("the composed step is %+v", composed)
+	}
+	if as, _ := input.Extra[ExtraAgentSession].(map[string]any); input.Source != atif.SourceUser || as["instructions_part"] != nil {
+		t.Errorf("the input step is %+v", input)
+	}
+}
 
 // TestCostLeavesOutAPartlyPricedChild: a child with a model call the
 // price source cannot price is left out of total_cost_usd whole, and the
