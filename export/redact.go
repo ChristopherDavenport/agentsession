@@ -1,6 +1,7 @@
 package export
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -137,6 +138,7 @@ func Environment() Redactor {
 					rec, _ := v.(map[string]any)
 					if typ, _ := json.Marshal(rec["type"]); string(typ) == `"env"` {
 						delete(rec, "body")
+						delete(rec, "normalised")
 					}
 				}
 			}
@@ -171,6 +173,7 @@ func rewriteStrings(t *atif.Trajectory, f func(string) string) error {
 	if err := dec.Decode(&tree); err != nil {
 		return fmt.Errorf("decode for redaction: %w", err)
 	}
+	dropNormalised(tree, f)
 	tree = walk(tree, f)
 	out, err := json.Marshal(tree)
 	if err != nil {
@@ -182,6 +185,62 @@ func rewriteStrings(t *atif.Trajectory, f func(string) string) error {
 	}
 	*t = back
 	return nil
+}
+
+// dropNormalised removes, anywhere in a document, a normalised record
+// that f would change: an entry's under [ExtraEntries], a response's in
+// its body. Each element holds the member it describes as source text,
+// was, and as original bytes, raw, in base64, which a rewrite of the
+// document's strings does not reach, so a redactor that would change
+// one drops the record (RFC 0001, Redaction); the entry then does not
+// rebuild to its id, which a converter lists.
+func dropNormalised(v any, f func(string) string) {
+	switch x := v.(type) {
+	case map[string]any:
+		if list, ok := x["normalised"].([]any); ok && normalisedTouched(list, f) {
+			delete(x, "normalised")
+		}
+		for _, c := range x {
+			dropNormalised(c, f)
+		}
+	case []any:
+		for _, c := range x {
+			dropNormalised(c, f)
+		}
+	}
+}
+
+// normalisedTouched reports whether f changes what a normalised record
+// holds: was, as written and as the JSON it is the source text of, or
+// raw's bytes.
+func normalisedTouched(list []any, f func(string) string) bool {
+	changes := func(s string) bool { return f(s) != s }
+	for _, el := range list {
+		m, _ := el.(map[string]any)
+		if was, ok := m["was"].(string); ok {
+			if changes(was) {
+				return true
+			}
+			var decoded any
+			if json.Unmarshal([]byte(was), &decoded) == nil {
+				var hit bool
+				walk(decoded, func(s string) string {
+					hit = hit || changes(s)
+					return s
+				})
+				if hit {
+					return true
+				}
+			}
+		}
+		if raw, ok := m["raw"].(string); ok {
+			b, err := base64.StdEncoding.DecodeString(raw)
+			if err != nil || changes(string(b)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func walk(v any, f func(string) string) any {

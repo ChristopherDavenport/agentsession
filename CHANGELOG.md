@@ -56,7 +56,10 @@ versions may break the API.
   restore the header's `redacted` and `redacted_from` when every entry
   verifies over the whole path (RFC 0001 0.17, #21 option B); a round
   trip of a redacted session is the reference. `NoPassthrough` drops the
-  map and `Environment` drops env bodies. A redactor keeps an entry's
+  map and `Environment` drops env bodies and their `normalised`.
+  `Secrets` and `HomePaths` drop a `normalised` record whose `was`,
+  read as written or as JSON, or whose base64 `raw` bytes they would
+  change, anywhere in the document; that entry then does not rebuild. A redactor keeps an entry's
   `legacy_id`, now a rule.
 
 - **A path's inputs (RFC 0001 0.17, `run`).** `PathInputs` returns the

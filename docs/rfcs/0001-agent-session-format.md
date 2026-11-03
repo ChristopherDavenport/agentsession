@@ -2746,7 +2746,13 @@ whole. An observation result carries its output's `id` as `entry_id`
 under `agentsession` in its `extra`, as a step does. A document of a
 redacted session MUST carry `entries`, and any other document MAY. A
 document stripped of its raw items, or of an entry's body, cannot be
-rebuilt to that entry's `id`.
+rebuilt to that entry's `id`. A tool that redacts a document after the
+export treats each `normalised` the document carries, under `entries`
+or in a response's body, as holding the member it describes, as
+Redaction says: `was` is source text and `raw` base64 of the original
+bytes, which a rewrite of the document's strings does not reach. One
+that would change what such a record holds removes the record, and that
+entry then does not rebuild to its `id`.
 
 A converter that rebuilds a session from a document this projection
 wrote restores on each entry:

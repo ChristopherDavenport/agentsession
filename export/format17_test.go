@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -522,5 +523,52 @@ func TestRebuildAgentStepItems(t *testing.T) {
 		if !r.verified[e.Base().ID] {
 			t.Errorf("%T %s does not rebuild to its id: %v", e, e.Base().ID, r.lines[e.Base().ID])
 		}
+	}
+}
+
+// TestRedactorsReachNormalised: a normalised record holds the member it
+// describes as source text (was) and original bytes (raw, base64), which
+// a redactor rewriting strings does not see, so a redactor that would
+// change one drops the record, under entries and in a response's body;
+// the entry then does not rebuild to its id, which a converter lists.
+func TestRedactorsReachNormalised(t *testing.T) {
+	s := loadFixture(t, "normalised")
+	tr, err := At(s, s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const raw = "ImJ5dGVzIOKCIGVuZCI=" // "bytes \xe2\x82 end", the output's original bytes
+	if plain := string(encode(t, mustDoc(t, tr))); !strings.Contains(plain, raw) {
+		t.Fatalf("the document does not carry the output's raw bytes")
+	}
+	doc, err := ToATIF(tr, Options{Redactors: []Redactor{Secrets("\xe2\x82")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := string(encode(t, doc)); strings.Contains(out, raw) {
+		t.Errorf("the secret survives in a normalised record's raw bytes")
+	}
+	// Environment drops an env entry's body under entries, and its
+	// normalised record, which holds the same.
+	envs := agentsession.New(agentsession.Header{ID: "e"})
+	mustAppend(t, envs, &agentsession.ConfigEntry{Model: "m"})
+	env := agentsession.NewEnvEntry("/home/u/secret-project")
+	env.Unknown = map[string]json.RawMessage{"x:inode": json.RawMessage(`9007199254740993`)}
+	mustAppend(t, envs, env)
+	if len(env.Normalised) == 0 {
+		t.Fatalf("the env entry was written without a normalised record")
+	}
+	mustAppend(t, envs, agentsession.NewItemEntry(openresponses.UserText("hi")))
+	etr, err := At(envs, envs.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err = ToATIF(etr, Options{Redactors: []Redactor{Environment()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := obj(t, obj(t, obj(t, doc.Extra[ExtraAgentSession])[ExtraEntries])[env.ID])
+	if rec["body"] != nil || rec["normalised"] != nil {
+		t.Errorf("the env entry keeps %v", rec)
 	}
 }
