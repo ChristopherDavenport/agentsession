@@ -816,3 +816,48 @@ func TestDelegatedUnion(t *testing.T) {
 		t.Errorf("the child is counted at %+v for %d tokens, want both leaves and 60", d.Leaves, total)
 	}
 }
+
+// TestDelegatedReportsOnce: a child read again over the union of its
+// paths, when a later link names it at another leaf, reports a leaf its
+// own link names and its child does not hold once, not once per read.
+func TestDelegatedReportsOnce(t *testing.T) {
+	add := func(s *Session, e Entry) string {
+		t.Helper()
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	spawn := func(s *Session, callID, child, leaf string) {
+		t.Helper()
+		call := add(s, &ItemEntry{Item: &openresponses.FunctionCall{CallID: callID, Name: "spawn", Arguments: `{}`}, ResponseID: "r_" + callID})
+		add(s, &ResponseEntry{ResponseID: "r_" + callID})
+		add(s, NewSubsessionLink(child, callID))
+		add(s, NewDispatch(callID, call))
+		out := NewItemEntry(openresponses.NewFunctionCallOutput(callID, "done"))
+		if leaf != "" {
+			out.Parents = []EntryRef{{Session: child, Entry: leaf}}
+		}
+		add(s, out)
+	}
+	d := New(Header{ID: "d"})
+	add(d, &ConfigEntry{Model: "m"})
+	a := New(Header{ID: "a"})
+	add(a, &ConfigEntry{Model: "m"})
+	spawn(a, "call_d", "d", "sha256:none")
+	spawn(a, "call_c", "c", "")
+	a1 := add(a, NewItemEntry(openresponses.UserText("first")))
+	a2 := add(a, NewItemEntry(openresponses.UserText("second")))
+	c := New(Header{ID: "c"})
+	add(c, &ConfigEntry{Model: "m"})
+	spawn(c, "call_back", "a", a2)
+	parent := New(Header{ID: "p"})
+	add(parent, &ConfigEntry{Model: "m"})
+	spawn(parent, "call_a", "a", a1)
+	held := map[string]*Session{"a": a, "c": c, "d": d}
+	_, unread := DelegatedWork(parent.Path(parent.Leaf()), func(id string) (*Session, error) { return held[id], nil })
+	if len(unread) != 1 || unread[0].Session != "d" {
+		t.Errorf("unread = %+v, want d once", unread)
+	}
+}

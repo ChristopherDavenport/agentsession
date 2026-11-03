@@ -153,6 +153,9 @@ func DelegatedWork(path []Entry, resolve func(id string) (*Session, error)) (chi
 	nodes := map[string]*node{}
 	var order []string
 	failed := map[string]bool{}
+	// missing are the leaves reported held by no entry, so a child read
+	// again over the union of its paths reports one once.
+	missing := map[[2]string]bool{}
 	// scan registers the subsession links on paths, the paths of the
 	// session from: each child it names, and the leaf each link counts.
 	scan := func(paths [][]Entry, from string) {
@@ -207,7 +210,10 @@ func DelegatedWork(path []Entry, resolve func(id string) (*Session, error)) (chi
 				case at >= 0:
 					n.d.Leaves[at].Named = n.d.Leaves[at].Named || leaf.Named
 				case n.session.Path(leaf.Entry) == nil:
-					unread = append(unread, Unread{Link: l, Session: l.Session, Err: fmt.Errorf("%w: %s holds no entry %s", ErrChildNotFound, l.Session, leaf.Entry)})
+					if key := [2]string{l.Session, leaf.Entry}; !missing[key] {
+						missing[key] = true
+						unread = append(unread, Unread{Link: l, Session: l.Session, Err: fmt.Errorf("%w: %s holds no entry %s", ErrChildNotFound, l.Session, leaf.Entry)})
+					}
 				default:
 					n.d.Leaves = append(n.d.Leaves, leaf)
 				}
