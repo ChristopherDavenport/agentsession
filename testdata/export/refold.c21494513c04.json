@@ -197,6 +197,72 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:036ca725d4cf805b23796ce563155b51a464f6fd16f82518c0ed502233575065": {
+          "parent": "sha256:0a4ae9c0f2d60459e4401ed51df2b337b584e6355bfa6e19bb9dc9a8e44b5fe0",
+          "ts": "2026-11-01T13:00:11Z",
+          "type": "item"
+        },
+        "sha256:7cdbaf468101e19f04a1832402dfbe88b7e2eb8d007888b6fff2c76bad9489df": {
+          "parent": "sha256:ac79f3ac14ce94982f20d4b42045bef29ae7e758b7e32c3b97a15c97f472a923",
+          "ts": "2026-11-01T13:00:13Z",
+          "type": "response"
+        },
+        "sha256:8cfca7acce243ea183a3f0ba47fe869be6ff4f244c80671072a7f4e8262c6fa6": {
+          "parent": "sha256:944ba8542a62a5c86552f3e7f357ed13389afcc4478df0afe85810be6fc60346",
+          "ts": "2026-11-01T13:00:15Z",
+          "type": "item"
+        },
+        "sha256:944ba8542a62a5c86552f3e7f357ed13389afcc4478df0afe85810be6fc60346": {
+          "body": {
+            "config": {
+              "model": "gpt-5",
+              "instructions": "Be brief."
+            },
+            "first_kept": "sha256:036ca725d4cf805b23796ce563155b51a464f6fd16f82518c0ed502233575065",
+            "pinned": [
+              {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                  {
+                    "type": "input_text",
+                    "text": "House rule: always run the linter."
+                  }
+                ]
+              }
+            ],
+            "summary": {
+              "type": "message",
+              "role": "system",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Summary: the user said first and second, and the assistant one and two."
+                }
+              ]
+            }
+          },
+          "parent": "sha256:7cdbaf468101e19f04a1832402dfbe88b7e2eb8d007888b6fff2c76bad9489df",
+          "ts": "2026-11-01T13:00:14Z",
+          "type": "compaction"
+        },
+        "sha256:ac79f3ac14ce94982f20d4b42045bef29ae7e758b7e32c3b97a15c97f472a923": {
+          "parent": "sha256:036ca725d4cf805b23796ce563155b51a464f6fd16f82518c0ed502233575065",
+          "ts": "2026-11-01T13:00:12Z",
+          "type": "item"
+        },
+        "sha256:c21494513c04ced6b4bfa8e56ca6abd1eb48f93fa4d5aed829745e46288132e1": {
+          "parent": "sha256:d83b8071ae0b556306cb801957412026c43999b85df2be16e0db4e39592e3162",
+          "ts": "2026-11-01T13:00:17Z",
+          "type": "response"
+        },
+        "sha256:d83b8071ae0b556306cb801957412026c43999b85df2be16e0db4e39592e3162": {
+          "parent": "sha256:8cfca7acce243ea183a3f0ba47fe869be6ff4f244c80671072a7f4e8262c6fa6",
+          "ts": "2026-11-01T13:00:16Z",
+          "type": "item"
+        }
+      },
       "format": "agentsession/0.17",
       "leaf": "sha256:c21494513c04ced6b4bfa8e56ca6abd1eb48f93fa4d5aed829745e46288132e1",
       "main": true

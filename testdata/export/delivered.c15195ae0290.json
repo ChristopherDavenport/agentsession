@@ -232,6 +232,164 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:0a4dd48cfbe5fc4e768927325369637a39eac56a0e7a1145bd0a230a21f18e91": {
+          "body": {
+            "deliver": true,
+            "item": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Background task build-7 finished: 2 warnings."
+                }
+              ]
+            },
+            "mode": "steer",
+            "ref": "inbox-1",
+            "trigger": {
+              "kind": "task",
+              "ref": "build-7",
+              "source": "background"
+            }
+          },
+          "parent": "sha256:5b48cd7ce0f5d53754380258f94d155e45791ee8af203701d60352eddb380635",
+          "ts": "2026-11-01T12:00:08Z",
+          "type": "queued"
+        },
+        "sha256:45f8511d7fe1ce05a5c7f770afeb48175c090d093e7fe34e8a60148bdd0ef773": {
+          "parent": "sha256:bb5ce15b0228823e60a7c4ebea9fe822d7130e928a00e77a3bd073b852314d50",
+          "ts": "2026-11-01T12:00:03Z",
+          "type": "item"
+        },
+        "sha256:534f4c164351aa0f6d255b1ff8c2a804affd4d21d9ad43e8603ea5fd663ddcda": {
+          "parent": "sha256:d126afa194897540a5f93a1cd40e73c37f788ca58950bcb65f491370958b45ba",
+          "ts": "2026-11-01T12:00:05Z",
+          "type": "response"
+        },
+        "sha256:578b7a1be01dbaf44cd0498db4ff444af1d2c94a284a94ee78af9d8dc711871a": {
+          "parent": "sha256:ce7648b0ddeda1a0dcbbf0e8326af57490ec360d6208359ef90887fd613ca07f",
+          "ts": "2026-11-01T12:00:11Z",
+          "type": "item"
+        },
+        "sha256:5b48cd7ce0f5d53754380258f94d155e45791ee8af203701d60352eddb380635": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "done",
+            "run_id": "run-1"
+          },
+          "parent": "sha256:ae65295a91b35e769a552fd57644e777254d23ee6050662040d8d87a7d073a7a",
+          "ts": "2026-11-01T12:00:07Z",
+          "type": "run"
+        },
+        "sha256:7ce27e2f24ba83eb5ca5388ff134c1a3e9a8a7b7ff3adf2c4431a6bc65f6e00a": {
+          "body": {
+            "instructions": "Be brief.",
+            "model": "gpt-5"
+          },
+          "parent": null,
+          "ts": "2026-11-01T12:00:01Z",
+          "type": "config"
+        },
+        "sha256:9fa8754f95f56b55af5777a4a329c3a626db8813d31f1320a168191d1a694d84": {
+          "body": {
+            "by": "policy",
+            "call_id": "call_fix",
+            "reason": "asks a person",
+            "target": "sha256:578b7a1be01dbaf44cd0498db4ff444af1d2c94a284a94ee78af9d8dc711871a",
+            "verdict": "hold"
+          },
+          "parent": "sha256:eccd138f898c2b002f1b35ed6e72855bf71e7f0a325be29f7f84e5259800d2af",
+          "ts": "2026-11-01T12:00:13Z",
+          "type": "decision"
+        },
+        "sha256:ae65295a91b35e769a552fd57644e777254d23ee6050662040d8d87a7d073a7a": {
+          "body": {
+            "deliver": true,
+            "item": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Background task build-7 finished: 2 warnings."
+                }
+              ]
+            },
+            "mode": "steer",
+            "ref": "inbox-1",
+            "trigger": {
+              "kind": "task",
+              "ref": "build-7",
+              "source": "background"
+            }
+          },
+          "parent": "sha256:534f4c164351aa0f6d255b1ff8c2a804affd4d21d9ad43e8603ea5fd663ddcda",
+          "ts": "2026-11-01T12:00:06Z",
+          "type": "queued"
+        },
+        "sha256:bb5ce15b0228823e60a7c4ebea9fe822d7130e928a00e77a3bd073b852314d50": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-1",
+            "source": "input"
+          },
+          "parent": "sha256:7ce27e2f24ba83eb5ca5388ff134c1a3e9a8a7b7ff3adf2c4431a6bc65f6e00a",
+          "ts": "2026-11-01T12:00:02Z",
+          "type": "run"
+        },
+        "sha256:c15195ae0290e507f361d8379b085aa58e072a0f7984339b5974790a9b65bdf3": {
+          "body": {
+            "deliver": true,
+            "item": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Background task lint-3 finished: clean."
+                }
+              ]
+            },
+            "mode": "steer",
+            "trigger": {
+              "kind": "task",
+              "ref": "lint-3",
+              "source": "background"
+            }
+          },
+          "parent": "sha256:9fa8754f95f56b55af5777a4a329c3a626db8813d31f1320a168191d1a694d84",
+          "ts": "2026-11-01T12:00:14Z",
+          "type": "queued"
+        },
+        "sha256:ce7648b0ddeda1a0dcbbf0e8326af57490ec360d6208359ef90887fd613ca07f": {
+          "parent": "sha256:d2e148842bfcfa996541e353425ba5e02e96ecad1aa5a7cff5941448563136d7",
+          "ts": "2026-11-01T12:00:10Z",
+          "type": "item"
+        },
+        "sha256:d126afa194897540a5f93a1cd40e73c37f788ca58950bcb65f491370958b45ba": {
+          "parent": "sha256:45f8511d7fe1ce05a5c7f770afeb48175c090d093e7fe34e8a60148bdd0ef773",
+          "ts": "2026-11-01T12:00:04Z",
+          "type": "item"
+        },
+        "sha256:d2e148842bfcfa996541e353425ba5e02e96ecad1aa5a7cff5941448563136d7": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-2",
+            "source": "input"
+          },
+          "parent": "sha256:0a4dd48cfbe5fc4e768927325369637a39eac56a0e7a1145bd0a230a21f18e91",
+          "ts": "2026-11-01T12:00:09Z",
+          "type": "run"
+        },
+        "sha256:eccd138f898c2b002f1b35ed6e72855bf71e7f0a325be29f7f84e5259800d2af": {
+          "parent": "sha256:578b7a1be01dbaf44cd0498db4ff444af1d2c94a284a94ee78af9d8dc711871a",
+          "ts": "2026-11-01T12:00:12Z",
+          "type": "response"
+        }
+      },
       "format": "agentsession/0.17",
       "leaf": "sha256:c15195ae0290e507f361d8379b085aa58e072a0f7984339b5974790a9b65bdf3",
       "main": true,

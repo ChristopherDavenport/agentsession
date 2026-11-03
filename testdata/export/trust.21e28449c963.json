@@ -127,6 +127,63 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:1703af974688da40e3b9d2367cf0be640e98b009d3d9469ae9e2163992961c60": {
+          "parent": "sha256:e0eb6bb0465537a8d3117549e4b94d6824ea399ba1e8118c45e3abef17ff0afa",
+          "ts": "2026-11-01T15:00:19Z",
+          "type": "response"
+        },
+        "sha256:21e28449c963a690c0164e07246a3531419277acd618ad27fc4388f5e7e0a774": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "done",
+            "run_id": "run-1"
+          },
+          "parent": "sha256:1703af974688da40e3b9d2367cf0be640e98b009d3d9469ae9e2163992961c60",
+          "ts": "2026-11-01T15:00:20Z",
+          "type": "run"
+        },
+        "sha256:605530cecd8a9d0ed06974770e60b064b2717e7447bb2784d12afd3e46818f70": {
+          "body": {
+            "config": {
+              "model": "gpt-5",
+              "instructions": "Be brief."
+            },
+            "first_kept": "sha256:9e5ced9c57eb0f2c953df251de50e67f677f36134178393ede8b0a956b3611a8",
+            "summary": {
+              "type": "message",
+              "role": "system",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Summary: the release page says v2 ships Friday; the inbox holds one bank mail."
+                }
+              ]
+            },
+            "trust": {
+              "reads": [
+                "private",
+                "untrusted",
+                "x:quarantined"
+              ]
+            }
+          },
+          "parent": "sha256:9e5ced9c57eb0f2c953df251de50e67f677f36134178393ede8b0a956b3611a8",
+          "ts": "2026-11-01T15:00:17Z",
+          "type": "compaction"
+        },
+        "sha256:9e5ced9c57eb0f2c953df251de50e67f677f36134178393ede8b0a956b3611a8": {
+          "parent": "sha256:ff7203d4b1c91491244c5c211192f5c9746c5043572434c3d8c175671d921431",
+          "ts": "2026-11-01T15:00:16Z",
+          "type": "item"
+        },
+        "sha256:e0eb6bb0465537a8d3117549e4b94d6824ea399ba1e8118c45e3abef17ff0afa": {
+          "parent": "sha256:605530cecd8a9d0ed06974770e60b064b2717e7447bb2784d12afd3e46818f70",
+          "ts": "2026-11-01T15:00:18Z",
+          "type": "item"
+        }
+      },
       "format": "agentsession/0.17",
       "leaf": "sha256:21e28449c963a690c0164e07246a3531419277acd618ad27fc4388f5e7e0a774",
       "main": true,

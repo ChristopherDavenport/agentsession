@@ -185,6 +185,54 @@
     "abandoned_at": "sha256:d5fb4724d28690ce84fa6970b57ec286c645d3493939c71e0b2e07509573a0d2",
     "agentsession": {
       "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:0b9d4d6fb06c6ad39d8ebf31be35bde8f499a5fe45d976c556625edb12f7bf9c": {
+          "legacy_id": "r0000002",
+          "parent": "sha256:f6283049bf677a32357e2270a0a662d1731f1ee311bb8ef890542efa13189aec",
+          "ts": "2026-09-17T14:00:04Z",
+          "type": "response"
+        },
+        "sha256:29edacce9dbf458831164efdb62dd61ec52152e8a30fecda25b99a5fdaf9b74b": {
+          "body": {
+            "instructions": "Be brief.",
+            "model": "gpt-5"
+          },
+          "legacy_id": "c0000001",
+          "parent": null,
+          "ts": "2026-09-17T14:00:00Z",
+          "type": "config"
+        },
+        "sha256:9b1fa109a514566a682d2d8041515c505af3a62cff7c02e486720746e49c122e": {
+          "legacy_id": "i0000003",
+          "parent": "sha256:d5fb4724d28690ce84fa6970b57ec286c645d3493939c71e0b2e07509573a0d2",
+          "ts": "2026-09-17T14:00:03Z",
+          "type": "item"
+        },
+        "sha256:c7148fabb18d3d73e9ef655243727d80286d464eda2748efdc1b5e7db6147cd7": {
+          "legacy_id": "i0000001",
+          "parent": "sha256:29edacce9dbf458831164efdb62dd61ec52152e8a30fecda25b99a5fdaf9b74b",
+          "ts": "2026-09-17T14:00:01Z",
+          "type": "item"
+        },
+        "sha256:d5fb4724d28690ce84fa6970b57ec286c645d3493939c71e0b2e07509573a0d2": {
+          "legacy_id": "r0000001",
+          "parent": "sha256:dc47e900a9713b423c2ea06166d4be1be91959f4e465cd893728e92c2487d139",
+          "ts": "2026-09-17T14:00:02Z",
+          "type": "response"
+        },
+        "sha256:dc47e900a9713b423c2ea06166d4be1be91959f4e465cd893728e92c2487d139": {
+          "legacy_id": "i0000002",
+          "parent": "sha256:c7148fabb18d3d73e9ef655243727d80286d464eda2748efdc1b5e7db6147cd7",
+          "ts": "2026-09-17T14:00:02Z",
+          "type": "item"
+        },
+        "sha256:f6283049bf677a32357e2270a0a662d1731f1ee311bb8ef890542efa13189aec": {
+          "legacy_id": "i0000004",
+          "parent": "sha256:9b1fa109a514566a682d2d8041515c505af3a62cff7c02e486720746e49c122e",
+          "ts": "2026-09-17T14:00:04Z",
+          "type": "item"
+        }
+      },
       "format": "agentsession/0.17",
       "labels": {
         "sha256:d5fb4724d28690ce84fa6970b57ec286c645d3493939c71e0b2e07509573a0d2": "fork"

@@ -85,6 +85,51 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:3f6b46424216964f2998a45471f49e81db83498642723e5ba1ab2833afecbbdd": {
+          "body": {
+            "rel": "judged_by",
+            "session": "c7cbb816-c8a3-5df5-b921-4871310db182",
+            "target": "sha256:dd5dfd5ea97c60a3f952e4b6f4694bbf65e42c4a5f5a774c20e6dd3cf0663a44"
+          },
+          "parent": "sha256:c7e2b57a492157c782d62ac0e2839b1553e4f5f0de612ffd2f41dd790eca71fb",
+          "ts": "2026-10-01T11:00:05Z",
+          "type": "link"
+        },
+        "sha256:5fd0441ab3bc17cf7c60965e7d836b83788490748730842bf17902a017b9b872": {
+          "body": {
+            "instructions": "Be brief.",
+            "model": "gpt-5"
+          },
+          "parent": null,
+          "ts": "2026-10-01T11:00:01Z",
+          "type": "config"
+        },
+        "sha256:a6e982db0df1962051a580fd220da3a19791967e8acb60fa49b6a35ff9508ebc": {
+          "body": {
+            "rel": "judged_by",
+            "session": "0458961f-dfdc-5b18-ba2e-432a5ecf31f5"
+          },
+          "parent": "sha256:3f6b46424216964f2998a45471f49e81db83498642723e5ba1ab2833afecbbdd",
+          "ts": "2026-10-01T11:00:06Z",
+          "type": "link"
+        },
+        "sha256:a7c172ad245502c0b219fa2367b6f9c7dff3ae63dbdd62c95365616e7120ec4c": {
+          "parent": "sha256:5fd0441ab3bc17cf7c60965e7d836b83788490748730842bf17902a017b9b872",
+          "ts": "2026-10-01T11:00:02Z",
+          "type": "item"
+        },
+        "sha256:c7e2b57a492157c782d62ac0e2839b1553e4f5f0de612ffd2f41dd790eca71fb": {
+          "parent": "sha256:dd5dfd5ea97c60a3f952e4b6f4694bbf65e42c4a5f5a774c20e6dd3cf0663a44",
+          "ts": "2026-10-01T11:00:04Z",
+          "type": "response"
+        },
+        "sha256:dd5dfd5ea97c60a3f952e4b6f4694bbf65e42c4a5f5a774c20e6dd3cf0663a44": {
+          "parent": "sha256:a7c172ad245502c0b219fa2367b6f9c7dff3ae63dbdd62c95365616e7120ec4c",
+          "ts": "2026-10-01T11:00:03Z",
+          "type": "item"
+        }
+      },
       "format": "agentsession/0.17",
       "leaf": "sha256:a6e982db0df1962051a580fd220da3a19791967e8acb60fa49b6a35ff9508ebc",
       "main": true

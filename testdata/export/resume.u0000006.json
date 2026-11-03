@@ -92,6 +92,9 @@
             "source_call_id": "call_1",
             "content": "refused by the operator",
             "extra": {
+              "agentsession": {
+                "entry_id": "sha256:300b63b2390dfd71c6011b2955c673d9ddf9eaf15d25ed9a05813ad68936308e"
+              },
               "openresponses": {
                 "item": {
                   "type": "function_call_output",
@@ -284,6 +287,177 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:06ce3e510c451f2e99e05cc116becfe0ce1d295194db45cf5bea6d417b49c5b7": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "done",
+            "run_id": "run-3"
+          },
+          "legacy_id": "u0000006",
+          "parent": "sha256:952f064da1be551be6bd1db4a6980c298695a6237314dda364b135f0bbbba280",
+          "ts": "2026-09-21T12:00:15Z",
+          "type": "run"
+        },
+        "sha256:16778725287c0bf7afb70e021d4aeb2894c1ed8aea191254533658da279edba9": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "stopped",
+            "ref": "refused",
+            "run_id": "run-2"
+          },
+          "legacy_id": "u0000004",
+          "parent": "sha256:300b63b2390dfd71c6011b2955c673d9ddf9eaf15d25ed9a05813ad68936308e",
+          "ts": "2026-09-21T12:00:10Z",
+          "type": "run"
+        },
+        "sha256:300b63b2390dfd71c6011b2955c673d9ddf9eaf15d25ed9a05813ad68936308e": {
+          "legacy_id": "i0000003",
+          "parent": "sha256:4bf46070c4d2440dae28815a0c45505d94de22692e17ec5c4b9132e57c5828ed",
+          "ts": "2026-09-21T12:00:09Z",
+          "type": "item"
+        },
+        "sha256:48cec887308385e92c25f72741f53b82990d4fe76bdcb81ba1e3d1f5f2f221b2": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-1",
+            "source": "input"
+          },
+          "legacy_id": "u0000001",
+          "parent": "sha256:c76f5301c344a529d7f74bc9d493fbfb9c1c222a49a0377659bad6cdac880b4a",
+          "ts": "2026-09-21T12:00:01Z",
+          "type": "run"
+        },
+        "sha256:4bf46070c4d2440dae28815a0c45505d94de22692e17ec5c4b9132e57c5828ed": {
+          "body": {
+            "by": "human",
+            "call_id": "call_1",
+            "reason": "refused by the operator",
+            "target": "sha256:8cc4d99035499989867dc252ad9acad2adf499c5c931f686725aef5b94dde73e",
+            "verdict": "reject"
+          },
+          "legacy_id": "d0000002",
+          "parent": "sha256:67e8f25618e9dbc4e5c32fa5c8d0d22d10468b9914400dd9c4e341930bfcb528",
+          "ts": "2026-09-21T12:00:08Z",
+          "type": "decision"
+        },
+        "sha256:4e2517f6a58afd043aa4c7bef64fbb747909e009e9b16190ea397c80c59b2c2d": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-3",
+            "source": "input"
+          },
+          "legacy_id": "u0000005",
+          "parent": "sha256:16778725287c0bf7afb70e021d4aeb2894c1ed8aea191254533658da279edba9",
+          "ts": "2026-09-21T12:00:11Z",
+          "type": "run"
+        },
+        "sha256:67e8f25618e9dbc4e5c32fa5c8d0d22d10468b9914400dd9c4e341930bfcb528": {
+          "body": {
+            "phase": "start",
+            "ref": "operator",
+            "run_id": "run-2",
+            "source": "resume"
+          },
+          "legacy_id": "u0000003",
+          "parent": "sha256:cae43ab2c805ac1fb5445d15099f27a440a297df0520cf851197db436a30997a",
+          "ts": "2026-09-21T12:00:07Z",
+          "type": "run"
+        },
+        "sha256:751f4d2ccf2b22247ba1681563319b0934eebd1e8b43d1554fb8feaa34e1d2cf": {
+          "legacy_id": "r0000001",
+          "parent": "sha256:8cc4d99035499989867dc252ad9acad2adf499c5c931f686725aef5b94dde73e",
+          "ts": "2026-09-21T12:00:04Z",
+          "type": "response"
+        },
+        "sha256:8cc4d99035499989867dc252ad9acad2adf499c5c931f686725aef5b94dde73e": {
+          "legacy_id": "i0000002",
+          "parent": "sha256:c24a77cdd2b070f694edf181f46efc46dd3777b39bf1592dc0a7ae984e36340a",
+          "ts": "2026-09-21T12:00:03Z",
+          "type": "item"
+        },
+        "sha256:952f064da1be551be6bd1db4a6980c298695a6237314dda364b135f0bbbba280": {
+          "legacy_id": "r0000002",
+          "parent": "sha256:bd308cec0f3c2767776bd7e0f6f0db2564043715d4c18ba7c9f1c296464ec5a4",
+          "ts": "2026-09-21T12:00:14Z",
+          "type": "response"
+        },
+        "sha256:bd308cec0f3c2767776bd7e0f6f0db2564043715d4c18ba7c9f1c296464ec5a4": {
+          "legacy_id": "i0000005",
+          "parent": "sha256:d7e4549217232a56cca4b4acf8227a1ab0e946b8c28ba098d03754297c40a1a1",
+          "ts": "2026-09-21T12:00:13Z",
+          "type": "item"
+        },
+        "sha256:bdfcd2a1836ef6a24500b7d7622f7a02d29294af43b54726a765b343c161de38": {
+          "body": {
+            "by": "policy",
+            "call_id": "call_1",
+            "reason": "destructive; needs approval",
+            "target": "sha256:8cc4d99035499989867dc252ad9acad2adf499c5c931f686725aef5b94dde73e",
+            "verdict": "hold"
+          },
+          "legacy_id": "d0000001",
+          "parent": "sha256:751f4d2ccf2b22247ba1681563319b0934eebd1e8b43d1554fb8feaa34e1d2cf",
+          "ts": "2026-09-21T12:00:05Z",
+          "type": "decision"
+        },
+        "sha256:c24a77cdd2b070f694edf181f46efc46dd3777b39bf1592dc0a7ae984e36340a": {
+          "legacy_id": "i0000001",
+          "parent": "sha256:48cec887308385e92c25f72741f53b82990d4fe76bdcb81ba1e3d1f5f2f221b2",
+          "ts": "2026-09-21T12:00:02Z",
+          "type": "item"
+        },
+        "sha256:c76f5301c344a529d7f74bc9d493fbfb9c1c222a49a0377659bad6cdac880b4a": {
+          "body": {
+            "instructions": "Be brief.",
+            "model": "gpt-5",
+            "tools_added": [
+              {
+                "type": "function",
+                "name": "bash",
+                "description": "Run a shell command",
+                "parameters": {
+                  "properties": {
+                    "cmd": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cmd"
+                  ],
+                  "type": "object"
+                }
+              }
+            ]
+          },
+          "legacy_id": "c0000001",
+          "parent": null,
+          "ts": "2026-09-21T12:00:00Z",
+          "type": "config"
+        },
+        "sha256:cae43ab2c805ac1fb5445d15099f27a440a297df0520cf851197db436a30997a": {
+          "body": {
+            "pending": [
+              "call_1"
+            ],
+            "phase": "end",
+            "reason": "input_required",
+            "run_id": "run-1"
+          },
+          "legacy_id": "u0000002",
+          "parent": "sha256:bdfcd2a1836ef6a24500b7d7622f7a02d29294af43b54726a765b343c161de38",
+          "ts": "2026-09-21T12:00:06Z",
+          "type": "run"
+        },
+        "sha256:d7e4549217232a56cca4b4acf8227a1ab0e946b8c28ba098d03754297c40a1a1": {
+          "legacy_id": "i0000004",
+          "parent": "sha256:4e2517f6a58afd043aa4c7bef64fbb747909e009e9b16190ea397c80c59b2c2d",
+          "ts": "2026-09-21T12:00:12Z",
+          "type": "item"
+        }
+      },
       "format": "agentsession/0.17",
       "leaf": "sha256:06ce3e510c451f2e99e05cc116becfe0ce1d295194db45cf5bea6d417b49c5b7",
       "main": true,

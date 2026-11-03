@@ -45,7 +45,17 @@ versions may break the API.
   export already carried an entry's undefined members as written in the
   extra of its step, observation result or record; a test now holds it
   to that, with the meaning members under `extra.agentsession` and a
-  response's history members in its body.
+  response's history members in its body. The document's root
+  `extra.agentsession.entries` (`ExtraEntries`) now maps each entry it
+  maps, by id, to its `type`, `ts`, `parent`, `parents` and history
+  members, and for an entry that is neither an item nor a response its
+  `body`, and an observation result names its output's `entry_id`, so a
+  converter can rebuild every entry to its id, check each hash, and
+  restore the header's `redacted` and `redacted_from` when every entry
+  verifies over the whole path (RFC 0001 0.17, #21 option B); a round
+  trip of a redacted session is the reference. `NoPassthrough` drops the
+  map and `Environment` drops env bodies. A redactor keeps an entry's
+  `legacy_id`, now a rule.
 
 - **A path's inputs (RFC 0001 0.17, `run`).** `PathInputs` returns the
   inputs that drove a path, as a replay that sends them again rebuilds

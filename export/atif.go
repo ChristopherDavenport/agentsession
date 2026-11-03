@@ -61,8 +61,15 @@ const (
 	// carries redacted_entries when any of them is redacted: an object
 	// from the ID of each redacted one, entry_id's among them, to its
 	// redacted member. A step built from native entries alone carries
-	// neither.
-	ExtraAgentSession  = "agentsession"
+	// neither. An observation result's carries its output's entry_id.
+	ExtraAgentSession = "agentsession"
+	// ExtraEntries carries, under ExtraAgentSession in the root extra,
+	// an object from the id of each entry the document maps to its
+	// type, ts, parent, parents and history members, and for an entry
+	// that is not an item or a response its body, under "body", so a
+	// converter can rebuild each entry to its id
+	// ([agentsession.IsHistoryMember]).
+	ExtraEntries       = "entries"
 	ExtraEnvironment   = "environment"
 	ExtraOutcome       = "outcome"
 	ExtraPreferredOver = "preferred_over"
@@ -191,6 +198,10 @@ type builder struct {
 	window     agentsession.Settings
 	sawEnv     bool
 	currentRun map[string]any // the open run's record, shared with the step or root that holds it
+	// mapped are the entries the document maps, in the order it took
+	// them, whose envelopes and history members the root carries under
+	// ExtraEntries.
+	mapped []agentsession.Entry
 
 	prompt, completion, cached int
 	cost                       float64
@@ -369,10 +380,12 @@ func (b *builder) run() error {
 		if err := b.entry(e); err != nil {
 			return err
 		}
+		b.mapped = append(b.mapped, e)
 	}
 	b.flushGroup(nil)
 	for _, o := range b.t.Outcomes {
 		b.outcome(o)
+		b.mapped = append(b.mapped, o)
 	}
 	b.finish()
 	return nil
@@ -657,10 +670,14 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 			if step.Observation == nil {
 				step.Observation = &atif.Observation{}
 			}
+			extra := b.itemExtra(e)
+			// The output's own entry, as a step names the entry it
+			// was built from, so a reader finds its envelope.
+			agentSessionExtra(extra)["entry_id"] = e.ID
 			step.Observation.Results = append(step.Observation.Results, atif.ObservationResult{
 				SourceCallID: v.CallID,
 				Content:      outputContent(v.Output),
-				Extra:        b.itemExtra(e),
+				Extra:        extra,
 			})
 			b.stepByEntry[e.ID] = idx
 			b.stepFrom[idx] = append(b.stepFrom[idx], e)
@@ -1236,6 +1253,9 @@ func (b *builder) finish() {
 	if b.t.Main {
 		as["main"] = true
 	}
+	if entries := b.entryRecords(); len(entries) > 0 {
+		as[ExtraEntries] = entries
+	}
 	root[ExtraAgentSession] = as
 	if len(b.t.PreferredOver) > 0 {
 		root[ExtraPreferredOver] = b.t.PreferredOver
@@ -1298,6 +1318,46 @@ func (b *builder) finish() {
 		}
 		b.doc.Notes = note
 	}
+}
+
+// entryRecords is the root's ExtraEntries: for each entry the document
+// maps, by its id, its type, ts, parent and parents and its history
+// members, as the entry writes them, and for an entry that is not an
+// item or a response, whose body no step carries whole, its body under
+// "body", so a converter can rebuild every entry to its id (RFC 0001,
+// Projections/ATIF, 0.17).
+func (b *builder) entryRecords() map[string]any {
+	out := make(map[string]any, len(b.mapped))
+	for _, e := range b.mapped {
+		data, err := agentsession.MarshalEntry(e)
+		if err != nil {
+			continue
+		}
+		var all map[string]json.RawMessage
+		if json.Unmarshal(data, &all) != nil {
+			continue
+		}
+		rec := map[string]any{}
+		body := map[string]json.RawMessage{}
+		for k, v := range all {
+			switch {
+			case k == "id":
+			case k == "type" || k == "ts" || k == "parent" || k == "parents" || agentsession.IsHistoryMember(k):
+				rec[k] = v
+			default:
+				body[k] = v
+			}
+		}
+		switch e.(type) {
+		case *agentsession.ItemEntry, *agentsession.ResponseEntry:
+		default:
+			if len(body) > 0 {
+				rec["body"] = body
+			}
+		}
+		out[e.Base().ID] = rec
+	}
+	return out
 }
 
 // delegatedCost adds to the path's cost the cost of the work it

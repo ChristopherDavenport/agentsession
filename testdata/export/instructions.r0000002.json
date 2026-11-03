@@ -216,6 +216,128 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:013e9c59e559d36067142cf6291b234499e42e9ade3945a98470c41d728643ce": {
+          "legacy_id": "r0000001",
+          "parent": "sha256:88ac12fd98b0945f81345103a1ab343c9d6d928adf85f918d664d5ada047238a",
+          "ts": "2026-09-21T10:00:03Z",
+          "type": "response"
+        },
+        "sha256:1449875a8144521984eba1e81bcb0f31b116c4691cb4b8bdefaade1178c2328a": {
+          "body": {
+            "instructions_omitted": [
+              {
+                "id": "service/AGENTS.md",
+                "reason": "budget",
+                "size": 4096,
+                "source": "agentsmd"
+              },
+              {
+                "id": "memory/2026-08",
+                "reason": "stale",
+                "size": 812,
+                "source": "agentmemory"
+              }
+            ],
+            "instructions_parts": [
+              {
+                "id": "product",
+                "source": "product",
+                "hash": "sha256:8261e07839fef6bcf71ee6911581db5a129c2f543e089b724436e5392549c4a5"
+              },
+              {
+                "id": "agentsmd",
+                "source": "agentsmd",
+                "hash": "sha256:163008d8038c6a40eb3f086db3fa66fd6dc9c069a17bc14bf354014887acdec2"
+              },
+              {
+                "id": "agentmemory",
+                "text": "<memory>\nThe rounding bug is in charge.go, fixed on 2026-09-21.\n</memory>",
+                "source": "agentmemory"
+              }
+            ]
+          },
+          "legacy_id": "c0000002",
+          "parent": "sha256:013e9c59e559d36067142cf6291b234499e42e9ade3945a98470c41d728643ce",
+          "ts": "2026-09-21T10:00:04Z",
+          "type": "config"
+        },
+        "sha256:28c49598d9ef28f4d6dc435e5308722661bf1a96c13dc18694c7cc3c7d8a3ccd": {
+          "legacy_id": "r0000002",
+          "parent": "sha256:e498a6735c07702f170cb7844061e42cf688317ba1b7266b56a97d2f3a1c96cb",
+          "ts": "2026-09-21T10:00:07Z",
+          "type": "response"
+        },
+        "sha256:4329d290fd2d28b9d7c997f4fe95c87383f7ebf8dd6becd69b16e258fdb975b5": {
+          "body": {
+            "instructions_parts": [
+              {
+                "id": "product",
+                "text": "You are the billing assistant. Be brief.",
+                "source": "product"
+              },
+              {
+                "id": "agentsmd",
+                "text": "# Repository conventions\n\nRun make check before every commit.",
+                "source": "agentsmd"
+              },
+              {
+                "id": "agentmemory",
+                "text": "<memory>\nThe rounding bug is in charge.go.\n</memory>",
+                "source": "agentmemory"
+              }
+            ],
+            "model": "gpt-5",
+            "replace": true,
+            "tools_added": [
+              {
+                "type": "function",
+                "name": "bash",
+                "description": "Run a shell command",
+                "parameters": {
+                  "properties": {
+                    "cmd": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cmd"
+                  ],
+                  "type": "object"
+                }
+              }
+            ]
+          },
+          "legacy_id": "c0000001",
+          "parent": null,
+          "ts": "2026-09-21T10:00:00Z",
+          "type": "config"
+        },
+        "sha256:7151a5fd29c0e045d1e3b06892e80c6c6543c385d47076cc7780ec1d9de32ecb": {
+          "legacy_id": "i0000001",
+          "parent": "sha256:4329d290fd2d28b9d7c997f4fe95c87383f7ebf8dd6becd69b16e258fdb975b5",
+          "ts": "2026-09-21T10:00:01Z",
+          "type": "item"
+        },
+        "sha256:88ac12fd98b0945f81345103a1ab343c9d6d928adf85f918d664d5ada047238a": {
+          "legacy_id": "i0000002",
+          "parent": "sha256:7151a5fd29c0e045d1e3b06892e80c6c6543c385d47076cc7780ec1d9de32ecb",
+          "ts": "2026-09-21T10:00:02Z",
+          "type": "item"
+        },
+        "sha256:c72b40e6517fcffd520100956d7a5976143b8f2fc65f8802eb4fe122f0e332c5": {
+          "legacy_id": "i0000003",
+          "parent": "sha256:1449875a8144521984eba1e81bcb0f31b116c4691cb4b8bdefaade1178c2328a",
+          "ts": "2026-09-21T10:00:05Z",
+          "type": "item"
+        },
+        "sha256:e498a6735c07702f170cb7844061e42cf688317ba1b7266b56a97d2f3a1c96cb": {
+          "legacy_id": "i0000004",
+          "parent": "sha256:c72b40e6517fcffd520100956d7a5976143b8f2fc65f8802eb4fe122f0e332c5",
+          "ts": "2026-09-21T10:00:06Z",
+          "type": "item"
+        }
+      },
       "format": "agentsession/0.17",
       "leaf": "sha256:28c49598d9ef28f4d6dc435e5308722661bf1a96c13dc18694c7cc3c7d8a3ccd",
       "main": true

@@ -40,7 +40,9 @@ const Replacement = "[REDACTED]"
 // nothing the declared fields do not. Use it for a judge's input or a
 // published document; keep the full document in the archive, because
 // the passthrough is what makes [Items] lossless, and without it Items
-// returns [ErrNoRawItems]. The root extra's payload profile name stays.
+// returns [ErrNoRawItems], and the entries' envelopes and bodies under
+// [ExtraEntries], without which a converter cannot rebuild the session to
+// its ids. The root extra's payload profile name stays.
 func NoPassthrough() Redactor {
 	return RedactorFunc(func(t *atif.Trajectory) error {
 		stripPassthrough(t)
@@ -49,6 +51,11 @@ func NoPassthrough() Redactor {
 }
 
 func stripPassthrough(t *atif.Trajectory) {
+	// The entries' envelopes and bodies rebuild the session with the raw
+	// items, and without them rebuild nothing.
+	if as, ok := t.Extra[ExtraAgentSession].(map[string]any); ok {
+		delete(as, ExtraEntries)
+	}
 	for i := range t.Steps {
 		step := &t.Steps[i]
 		delete(step.Extra, ExtraOpenResponses)
@@ -108,9 +115,10 @@ func HomePaths(home string) Redactor {
 }
 
 // Environment removes environment snapshots from the document: the
-// root and step extra.environment members and the working directory,
-// which name machines, paths and file hashes that are rarely meant to
-// travel.
+// root and step extra.environment members, the working directory and
+// each env entry's body under [ExtraEntries], which name machines, paths
+// and file hashes that are rarely meant to travel. An env entry so
+// stripped no longer rebuilds to its id.
 func Environment() Redactor {
 	return RedactorFunc(func(t *atif.Trajectory) error {
 		scrub := func(extra map[string]any) {
@@ -121,6 +129,17 @@ func Environment() Redactor {
 		}
 		if t.Extra != nil {
 			scrub(t.Extra)
+			// An env entry's body, which names the same, beside its
+			// envelope under ExtraEntries.
+			if as, ok := t.Extra[ExtraAgentSession].(map[string]any); ok {
+				entries, _ := as[ExtraEntries].(map[string]any)
+				for _, v := range entries {
+					rec, _ := v.(map[string]any)
+					if typ, _ := json.Marshal(rec["type"]); string(typ) == `"env"` {
+						delete(rec, "body")
+					}
+				}
+			}
 		}
 		for i := range t.Steps {
 			if t.Steps[i].Extra != nil {

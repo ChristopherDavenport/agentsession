@@ -437,7 +437,11 @@ made it true:
 
 A writer that makes an entry from another, as a converter does, MUST
 NOT carry the other entry's history members as its own. It MAY keep
-them under its own namespace (`<slug>:legacy_id`). An entry rebuilt,
+them under its own namespace (`<slug>:legacy_id`). A redactor is the
+exception Redaction makes: an entry it makes by redaction keeps the
+`legacy_id` of the entry it made it from as written, and its
+`normalised` as Redaction says, since they name and describe the line
+the redaction rewrote, and carries a `redacted` of its own. An entry rebuilt,
 every member restored, to the `id` of the entry it was rebuilt from is
 that entry and not one made from it, so its history members are true
 of it (Projections, ATIF). Every other member is a **meaning member**.
@@ -2416,6 +2420,9 @@ A redactor:
   the entry. A part so written changes the request the path rebuilds,
   so the `response` entries after it carry no `request_hash` or the one
   the redacted session rebuilds, as below;
+- MUST keep an entry's `legacy_id` as written, since 0.17 a rule and
+  before it what writers did, so output named by the original's earlier
+  IDs still resolves in the redacted session;
 - MUST treat a `normalised` record as holding the member it describes:
   `was` is that member's original source text and `raw` its original
   bytes, so what the redactor removes from the member it removes from
@@ -2723,6 +2730,20 @@ A member of an entry that this document does not define travels as
 written, in the `extra` of the step, observation result or record the
 entry maps to.
 
+Since 0.17 a document carries, under `agentsession` in its top-level
+`extra`, `entries`: an object from the `id` of each entry the document
+maps, a step's, an observation result's and a record's, to that entry's
+envelope and history members as the entry writes them: `type`, `ts`,
+`parent`, `null` for a first entry, `parents` when it has them, and
+`legacy_id`, `normalised` and `redacted` when it has them. For an entry
+that is not an `item` or a `response`, whose body no step carries
+whole, the object also holds the body, every other member, under
+`body`. An observation result carries its output's `id` as `entry_id`
+under `agentsession` in its `extra`, as a step does. A document of a
+redacted session MUST carry `entries`, and any other document MAY. A
+document stripped of its raw items, or of an entry's body, cannot be
+rebuilt to that entry's `id`.
+
 A converter that rebuilds a session from a document this projection
 wrote restores on each entry:
 
@@ -2732,16 +2753,28 @@ wrote restores on each entry:
   core members and not under `agentsession`;
 - every member it does not know, as written.
 
-It MUST NOT restore a history member as its own, as the entry envelope
-says. This includes the document's `redacted` and `redacted_from`,
-since the converter is not the redactor. The exception is an entry the
-converter rebuilds to the `id` the document names for it, every member
-restored. That entry is the exported entry itself, not a new one, so
-its history members are true of it and are restored with it. A file of
-such entries, with the document's header members restored, `redacted`
-and `redacted_from` among them, is a projection of the exported session
-and not a conversion of it, and a session rebuilt so from a redacted
-document reads as redacted.
+It SHOULD rebuild each entry to the `id` the document names for it
+when the document allows it: the body from the members the document
+carries for the entry, its raw item and meaning members or its `body`,
+and the envelope and history members from `entries`. It MUST compute
+each rebuilt entry's `id` (Entry hash) and compare it with the `id` the
+document names. An entry whose `id` matches is the exported entry
+itself, not a new one, so its history members are true of it and are
+restored with it. Any other entry is a new one: the converter MUST NOT
+carry a history member on it as its own, as the entry envelope says,
+and MAY keep them under its own namespace.
+
+The converter MUST restore the header's `redacted` and `redacted_from`
+exactly when every entry it rebuilt matches its `id` and the document
+holds the whole path, every entry from a first entry to the leaf with
+each `parent` an entry of the document or `null`. A document built
+after a compaction holds no entry before the fold's `first_kept`, and
+one without `entries` holds no envelope, so neither holds the whole
+path. Otherwise it MUST NOT restore them, since the converter is not
+the redactor, and it reports why. A file so rebuilt from a document of
+a redacted session is a projection of that session and not a
+conversion of it: its `id`s are the redacted session's, and it reads as
+redacted.
 
 An `item` entry that `omit` leaves out of the request at the trajectory's
 leaf is in the step that holds it, since the model produced it or the
@@ -3010,9 +3043,13 @@ a composed layer and a resume's note, and keep a followup and a
 delivery that starts a run, a parent with two
 children, one counted at the leaf its output's `parents` names with a
 grandchild of its own and a cancel notice counted once, and one
-missing and reported, and an ATIF document whose entries carry history
+missing and reported, an ATIF document whose entries carry history
 members, meaning members and a member this document does not define,
-each where this document puts it, and
+each where this document puts it, and a redacted session's document
+rebuilt to its `id`s with its entries' `redacted` and its header's
+`redacted` and `redacted_from` restored, beside the same document
+changed after the export and one without its first entry, neither of
+which restores them, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
@@ -3088,11 +3125,15 @@ so every reader of 0.16 refuses those files until it is upgraded.
   forbade this for `redacted` alone. A member each minor defines is
   classed from now on; `instructions_part` is a meaning member.
 - The ATIF projection carries an entry's undefined members as written,
-  and `instructions_part`. A converter reading a document back restores
-  meaning members and unknown members, and history members, the
-  header's `redacted` and `redacted_from` among them, only on entries it
-  rebuilds to the document's own `id`, which are the exported entries
-  themselves.
+  `instructions_part`, and under `entries` each entry's envelope and
+  history members, and the body of each entry that is not an `item` or
+  a `response`; a document of a redacted session MUST. A converter
+  reading a document back restores meaning members and unknown members.
+  It SHOULD rebuild each entry to the document's own `id`, MUST check
+  each rebuilt `id`, and keeps history members only on an entry that
+  matches. It restores the header's `redacted` and `redacted_from`
+  exactly when every entry matches and the document holds the whole
+  path, and otherwise reports why.
 - A writer that did not send the request it records, a converter among
   them, writes `request_hash` only after checking the rebuilt request
   against the source's record of it (Request hash). 0.16 allowed a hash

@@ -61,7 +61,8 @@
                     "session": "01995b2a-0000-7000-8000-000000000032",
                     "entry": "sha256:e6e3f259ab71b26418a6104552f6cf3f66cd0497de726bcc47867c091bdd4100"
                   }
-                ]
+                ],
+                "entry_id": "sha256:a8726956eed491002cff0f2f54c89129acbdccf5f48b245aeb0399703c2c8c6a"
               },
               "openresponses": {
                 "item": {
@@ -167,6 +168,59 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:0858ca14912a683a4ac1b8e208ca2511ca6b325ba60eb67bc221c43b10a35169": {
+          "parent": "sha256:4067545727e092b516fc0e27a656beeadb63ee19dbd4f6f2ad6e0a785556109c",
+          "ts": "2026-11-01T12:00:04Z",
+          "type": "response"
+        },
+        "sha256:0949e2a4b11f3378f987a057c4459b7073bd196a79400ec665469a952c6ae3c0": {
+          "parent": "sha256:a0c86c7f20b11565118856e619dfd4c738fe8be491b93f0651605987fd34e34a",
+          "ts": "2026-11-01T11:00:03Z",
+          "type": "item"
+        },
+        "sha256:4067545727e092b516fc0e27a656beeadb63ee19dbd4f6f2ad6e0a785556109c": {
+          "parent": "sha256:a8726956eed491002cff0f2f54c89129acbdccf5f48b245aeb0399703c2c8c6a",
+          "ts": "2026-11-01T12:00:03Z",
+          "type": "item"
+        },
+        "sha256:724acc124477e7cf308bbe7c95472f8c353221ce5d4af10a53a950ab3cb82722": {
+          "body": {
+            "instructions": "Delegate.",
+            "model": "gpt-5"
+          },
+          "parent": null,
+          "ts": "2026-11-01T11:00:01Z",
+          "type": "config"
+        },
+        "sha256:a0c86c7f20b11565118856e619dfd4c738fe8be491b93f0651605987fd34e34a": {
+          "parent": "sha256:724acc124477e7cf308bbe7c95472f8c353221ce5d4af10a53a950ab3cb82722",
+          "ts": "2026-11-01T11:00:02Z",
+          "type": "item"
+        },
+        "sha256:a8726956eed491002cff0f2f54c89129acbdccf5f48b245aeb0399703c2c8c6a": {
+          "parent": "sha256:c9668032918f987457628eebe4bdf3857ab35a9d7a58814588837776319d1e85",
+          "ts": "2026-11-01T12:00:02Z",
+          "type": "item"
+        },
+        "sha256:ad63b85cb70fd5fd9fce166c812faadb3df7fa7e8c550c51980547d4109d58c8": {
+          "parent": "sha256:0949e2a4b11f3378f987a057c4459b7073bd196a79400ec665469a952c6ae3c0",
+          "ts": "2026-11-01T11:00:04Z",
+          "type": "response"
+        },
+        "sha256:c9668032918f987457628eebe4bdf3857ab35a9d7a58814588837776319d1e85": {
+          "body": {
+            "by": "policy",
+            "call_id": "call_agent",
+            "reason": "answered from the origin's record",
+            "target": "sha256:0949e2a4b11f3378f987a057c4459b7073bd196a79400ec665469a952c6ae3c0",
+            "verdict": "answer"
+          },
+          "parent": "sha256:ad63b85cb70fd5fd9fce166c812faadb3df7fa7e8c550c51980547d4109d58c8",
+          "ts": "2026-11-01T12:00:01Z",
+          "type": "decision"
+        }
+      },
       "format": "agentsession/0.17",
       "leaf": "sha256:0858ca14912a683a4ac1b8e208ca2511ca6b325ba60eb67bc221c43b10a35169",
       "main": true,

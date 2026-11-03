@@ -144,6 +144,89 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:14d250d40830b2c9521d9673594747985224fd7e7cce73a2dbaf9080ab891db2": {
+          "body": {
+            "config": {
+              "model": "gpt-5",
+              "instructions": "Be brief.",
+              "instructions_omitted": [
+                {
+                  "id": "p0",
+                  "reason": "budget",
+                  "size": 10,
+                  "source": "agentmemory"
+                },
+                {
+                  "id": "p1",
+                  "reason": "budget",
+                  "size": 11,
+                  "source": "agentmemory"
+                },
+                {
+                  "id": "p2",
+                  "reason": "budget",
+                  "size": 12,
+                  "source": "agentmemory"
+                },
+                {
+                  "id": "p3",
+                  "reason": "budget",
+                  "size": 13,
+                  "source": "agentmemory"
+                }
+              ]
+            },
+            "first_kept": "sha256:b51f8b17ab3a80f1ac852172952a7bce56f058424ab8fd2dfa180e9bc9c33bf3",
+            "summary": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Summary of one and two."
+                }
+              ]
+            }
+          },
+          "parent": "sha256:b51f8b17ab3a80f1ac852172952a7bce56f058424ab8fd2dfa180e9bc9c33bf3",
+          "ts": "2026-10-01T13:00:04Z",
+          "type": "compaction"
+        },
+        "sha256:5d083b4d8bc0e8f6227add972cd4f8a9b7e20fc640a35f0daf5b47ff012e0f5a": {
+          "parent": "sha256:b3a9b62dcb4757ef6a946a978bdad1f1fc1e3063cb59d6f06db2cd9ce63a0a5b",
+          "ts": "2026-10-01T13:00:06Z",
+          "type": "item"
+        },
+        "sha256:a4623dbfa75135d30932d6427bda093b2ba65d3c9b98bc7d1dbcf07b13211f06": {
+          "parent": "sha256:5d083b4d8bc0e8f6227add972cd4f8a9b7e20fc640a35f0daf5b47ff012e0f5a",
+          "ts": "2026-10-01T13:00:07Z",
+          "type": "item"
+        },
+        "sha256:b3a9b62dcb4757ef6a946a978bdad1f1fc1e3063cb59d6f06db2cd9ce63a0a5b": {
+          "body": {
+            "instructions_omitted": [
+              {
+                "keep": 4,
+                "of": "sha256:f3d5cc08c63ca5061fac8d6183e6160567d9a418533fea0de6c2d27626e90654"
+              }
+            ]
+          },
+          "parent": "sha256:14d250d40830b2c9521d9673594747985224fd7e7cce73a2dbaf9080ab891db2",
+          "ts": "2026-10-01T13:00:05Z",
+          "type": "config"
+        },
+        "sha256:b51f8b17ab3a80f1ac852172952a7bce56f058424ab8fd2dfa180e9bc9c33bf3": {
+          "parent": "sha256:c6b6589cd6a56adea43f813155c5f88c7d7f7393b8cf7d0ee14da02e9cadc354",
+          "ts": "2026-10-01T13:00:03Z",
+          "type": "item"
+        },
+        "sha256:b60548d358de6046365d5013aca7896ab46474e4c5561e9a042259a79a3be440": {
+          "parent": "sha256:a4623dbfa75135d30932d6427bda093b2ba65d3c9b98bc7d1dbcf07b13211f06",
+          "ts": "2026-10-01T13:00:08Z",
+          "type": "response"
+        }
+      },
       "format": "agentsession/0.17",
       "leaf": "sha256:b60548d358de6046365d5013aca7896ab46474e4c5561e9a042259a79a3be440",
       "main": true

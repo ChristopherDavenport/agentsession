@@ -243,6 +243,90 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:0d7d06d3aeb399dc85e36d8d33e7a58100ee1ff7924459eee04e331be160f4d3": {
+          "legacy_id": "i0000005",
+          "parent": "sha256:2ba742c12acc3992fa8c29f50cb4738689e76a7e3100b2019d8a0df029b76ee6",
+          "ts": "2026-09-21T10:00:05Z",
+          "type": "item"
+        },
+        "sha256:278e2e4ad632327fdc949eebc3fa2d20f260d212c0d73a22085ba334b70233a5": {
+          "legacy_id": "i0000006",
+          "parent": "sha256:5d4c40ccb8a67c41d9d04cc2ed24f74faf2cec4f4f946cc37ce7555f781e5756",
+          "ts": "2026-09-21T10:00:06Z",
+          "type": "item"
+        },
+        "sha256:2ba742c12acc3992fa8c29f50cb4738689e76a7e3100b2019d8a0df029b76ee6": {
+          "legacy_id": "i0000004",
+          "parent": "sha256:98a011af5e503b8d88bdcfc53434afd1f64f361c0322c483c63eac13ba1d101e",
+          "ts": "2026-09-21T10:00:04Z",
+          "type": "item"
+        },
+        "sha256:5d4c40ccb8a67c41d9d04cc2ed24f74faf2cec4f4f946cc37ce7555f781e5756": {
+          "legacy_id": "r0000002",
+          "parent": "sha256:0d7d06d3aeb399dc85e36d8d33e7a58100ee1ff7924459eee04e331be160f4d3",
+          "ts": "2026-09-21T10:00:05Z",
+          "type": "response"
+        },
+        "sha256:7bc75ea823db6bea95fd3778464a7d38ddd70f689179cec72f4449d1942fe40f": {
+          "legacy_id": "i0000007",
+          "parent": "sha256:eea1eec9f14c86e12d5992fdb6951cb565e18fd75a9f7184d575d36a8bc5d2d1",
+          "ts": "2026-09-21T10:00:08Z",
+          "type": "item"
+        },
+        "sha256:cdf62b2f1a34e4de8b0773622e5fca4ac3c9f2f25348e49dbb5cbfb6b7ae12ed": {
+          "legacy_id": "r0000003",
+          "parent": "sha256:7bc75ea823db6bea95fd3778464a7d38ddd70f689179cec72f4449d1942fe40f",
+          "ts": "2026-09-21T10:00:08Z",
+          "type": "response"
+        },
+        "sha256:eea1eec9f14c86e12d5992fdb6951cb565e18fd75a9f7184d575d36a8bc5d2d1": {
+          "body": {
+            "config": {
+              "model": "gpt-5",
+              "instructions": "Be brief."
+            },
+            "first_kept": "sha256:2ba742c12acc3992fa8c29f50cb4738689e76a7e3100b2019d8a0df029b76ee6",
+            "pinned": [
+              {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                  {
+                    "type": "input_text",
+                    "text": "House rule: never use Box::leak."
+                  }
+                ]
+              },
+              {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                  {
+                    "type": "input_text",
+                    "text": "House rule: always run the linter."
+                  }
+                ]
+              }
+            ],
+            "summary": {
+              "type": "message",
+              "role": "system",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Summary: the user said first and the assistant said one."
+                }
+              ]
+            },
+            "tokens_before": 5000
+          },
+          "legacy_id": "k0000001",
+          "parent": "sha256:278e2e4ad632327fdc949eebc3fa2d20f260d212c0d73a22085ba334b70233a5",
+          "ts": "2026-09-21T10:00:07Z",
+          "type": "compaction"
+        }
+      },
       "format": "agentsession/0.17",
       "leaf": "sha256:cdf62b2f1a34e4de8b0773622e5fca4ac3c9f2f25348e49dbb5cbfb6b7ae12ed",
       "main": true

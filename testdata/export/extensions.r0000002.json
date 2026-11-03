@@ -203,6 +203,121 @@
   "extra": {
     "agentsession": {
       "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:395c1309639ca3743698f2a9a789f71be3ec72680e24aa2b8ea2ab7cad4d0cee": {
+          "legacy_id": "i0000002",
+          "parent": "sha256:ee03a1cf1c6b27980e4284e152f439884886435968210e15e419ab8baee1aae4",
+          "ts": "2026-09-17T15:00:03Z",
+          "type": "item"
+        },
+        "sha256:3e914381fb23912de580fc48a485540339def58a93d42e1e49717efd10b72ca6": {
+          "body": {
+            "call_id": "call_9",
+            "rel": "subsession",
+            "session": "01995b2a-0000-7000-8000-0000000000aa"
+          },
+          "legacy_id": "k0000001",
+          "parent": "sha256:cdb580316cd8179244fa15b23e4e8f0472c1b58c154b63f21633ace24c4888f9",
+          "ts": "2026-09-17T15:00:05Z",
+          "type": "link"
+        },
+        "sha256:5114553995fe43b35aa5298320ed5379a1d20246e82cd3fb7aa8a60c3f052abb": {
+          "legacy_id": "r0000001",
+          "parent": "sha256:5d9fc9aadd2e2deda31bda70c13339e1f227a63eeb1e753b788ef0c049e6dfff",
+          "ts": "2026-09-17T15:00:07Z",
+          "type": "response"
+        },
+        "sha256:5d9fc9aadd2e2deda31bda70c13339e1f227a63eeb1e753b788ef0c049e6dfff": {
+          "legacy_id": "i0000003",
+          "parent": "sha256:61ff74d9d2f54719242ee26ee8e709bf7cfdc51c929b0033aca48572eca40fd8",
+          "ts": "2026-09-17T15:00:07Z",
+          "type": "item"
+        },
+        "sha256:61ff74d9d2f54719242ee26ee8e709bf7cfdc51c929b0033aca48572eca40fd8": {
+          "body": {
+            "cwd": "/home/u/proj",
+            "files": {
+              "read": {
+                "go.mod": "sha256:aaaa"
+              },
+              "written": {
+                "main.go": "sha256:bbbb"
+              }
+            },
+            "tools": {
+              "go": "1.25.0"
+            },
+            "vcs": {
+              "system": "git",
+              "revision": "abc123",
+              "dirty": true
+            }
+          },
+          "legacy_id": "e0000001",
+          "parent": "sha256:3e914381fb23912de580fc48a485540339def58a93d42e1e49717efd10b72ca6",
+          "ts": "2026-09-17T15:00:06Z",
+          "type": "env"
+        },
+        "sha256:7099cfd9ac3a8b30f64ae79e9abf5939620b4da41466b835e63da188f54932c5": {
+          "legacy_id": "r0000002",
+          "parent": "sha256:5114553995fe43b35aa5298320ed5379a1d20246e82cd3fb7aa8a60c3f052abb",
+          "ts": "2026-09-17T15:00:08Z",
+          "type": "response"
+        },
+        "sha256:a59feae65ca6f16dddcb340b405e95dac8dc6832f958b57ed78fbd7f1ccaf4db": {
+          "legacy_id": "i0000001",
+          "parent": "sha256:ee58faaa90523b0450e520f0534d52dd870aa0e83b038a4af9b5e92f35d7dbc0",
+          "ts": "2026-09-17T15:00:01Z",
+          "type": "item"
+        },
+        "sha256:cdb580316cd8179244fa15b23e4e8f0472c1b58c154b63f21633ace24c4888f9": {
+          "body": {
+            "data": {
+              "k": "v",
+              "n": [
+                1,
+                2,
+                3
+              ]
+            },
+            "ns": "acme"
+          },
+          "legacy_id": "u0000001",
+          "parent": "sha256:395c1309639ca3743698f2a9a789f71be3ec72680e24aa2b8ea2ab7cad4d0cee",
+          "ts": "2026-09-17T15:00:04Z",
+          "type": "custom"
+        },
+        "sha256:ee03a1cf1c6b27980e4284e152f439884886435968210e15e419ab8baee1aae4": {
+          "body": {
+            "nested": {
+              "a": [
+                1,
+                2,
+                {
+                  "y": true
+                }
+              ],
+              "z": 1
+            },
+            "order": "is preserved",
+            "text": "<b>&</b> stays literal"
+          },
+          "legacy_id": "n0000001",
+          "parent": "sha256:a59feae65ca6f16dddcb340b405e95dac8dc6832f958b57ed78fbd7f1ccaf4db",
+          "ts": "2026-09-17T15:00:02Z",
+          "type": "agentturn:note"
+        },
+        "sha256:ee58faaa90523b0450e520f0534d52dd870aa0e83b038a4af9b5e92f35d7dbc0": {
+          "body": {
+            "acme_note": "kept on a known entry",
+            "model": "gpt-5"
+          },
+          "legacy_id": "c0000001",
+          "parent": null,
+          "ts": "2026-09-17T15:00:00Z",
+          "type": "config"
+        }
+      },
       "format": "agentsession/0.17",
       "leaf": "sha256:7099cfd9ac3a8b30f64ae79e9abf5939620b4da41466b835e63da188f54932c5",
       "main": true
