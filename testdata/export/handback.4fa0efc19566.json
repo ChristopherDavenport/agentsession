@@ -15,7 +15,8 @@
       "message": "I was charged twice.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:e92bd7ff7943b658f197a54d4e9ca188f0fe5c0762eade6a672950fa18b10dff"
+          "entry_id": "sha256:e92bd7ff7943b658f197a54d4e9ca188f0fe5c0762eade6a672950fa18b10dff",
+          "visible": "sha256:4ebbce1465456d5bb0a4b93d2b83b7a4135231d11370147b206fdf0022d16b8f"
         },
         "config_entries": [
           "sha256:4eaae15edc8860528074067cf9ae2deb9fe3a150ae4a28624024ec32ae39677a"
@@ -43,7 +44,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:6133bcaa22bf465ded9e9070e6822f05f0e46212104cdc8bc6e8d44339620a0f"
+          "entry_id": "sha256:6133bcaa22bf465ded9e9070e6822f05f0e46212104cdc8bc6e8d44339620a0f",
+          "visible": "sha256:a415e3160a2171aff5c91b19a55b7e4efbb86b7a74178b532dadd3248cfb7ed1"
         },
         "item_entry_ids": [
           "sha256:27055c6be87b8034c1c2a2b2cd91a68ade004e49ddf922431059648fe16c3acb"
@@ -82,7 +84,8 @@
       "message": "Please refund the second charge.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:4788c6fa90a7e317caa7fee40cefe4d242ddc450c75ece33ce12d5a6b38200b8"
+          "entry_id": "sha256:4788c6fa90a7e317caa7fee40cefe4d242ddc450c75ece33ce12d5a6b38200b8",
+          "visible": "sha256:af437922caf46c75c7afdc1a112d17d47679151d93b741ab718505f8c4c30666"
         },
         "config_entries": [
           "sha256:f43f976acd7743e74a02790b12f54eb3eea7c94946285616813e0d4237f7b17f"
@@ -110,7 +113,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:48d3ffa3965e382a54e84605118dabc1cd6b9cb6f7ab91a28cff22d1b9e00d65"
+          "entry_id": "sha256:48d3ffa3965e382a54e84605118dabc1cd6b9cb6f7ab91a28cff22d1b9e00d65",
+          "visible": "sha256:425fb9f886560c03510cac6e22f31fc54a1c9d1b253c5f7596051367afd66459"
         },
         "item_entry_ids": [
           "sha256:e1952985bc46236a6e9bffc3eee4391cb8992339175a48ddcedeb7ae7db3b590"
@@ -149,7 +153,8 @@
       "message": "Thanks. What about my other card?",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:86ba6f938855965ac3ffb51990514cbea244057ec1b01032a00169ce9bc2bc42"
+          "entry_id": "sha256:86ba6f938855965ac3ffb51990514cbea244057ec1b01032a00169ce9bc2bc42",
+          "visible": "sha256:e8140aefd50b7d73a1e4e4df1ce1243ee730d0645633b1c58407a9ed5e77719d"
         },
         "config_entries": [
           "sha256:aa2da97b983045aa24222aeee007ef853c00bc45e41b6b75bb168cf6034350bb"
@@ -177,7 +182,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:f4287a6f3f7653e1c5293281f5ed5b3f6279841747d9ace955bde1079752f46d"
+          "entry_id": "sha256:f4287a6f3f7653e1c5293281f5ed5b3f6279841747d9ace955bde1079752f46d",
+          "visible": "sha256:1afada4421f8d3ba54cd8986aa46ff6102938d6437742df237cdd94541e6f175"
         },
         "item_entry_ids": [
           "sha256:4efc1e0ccb5670301b83dcb01abf95e59538ec72e2c020523cec6cd73416cfa7"
@@ -216,7 +222,8 @@
       "message": "Which invoice was it?",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:0a1e0b5f95013aae9dfab2baa3fde6c3b82c020dc949175dc583fa138c0cb197"
+          "entry_id": "sha256:0a1e0b5f95013aae9dfab2baa3fde6c3b82c020dc949175dc583fa138c0cb197",
+          "visible": "sha256:94f64df5ca97e02713d07a09180b98a08c27fe35f21c7b8f69e9861929691a6e"
         },
         "config_entries": [
           "sha256:fdf81f8e00b460053e4e3db547262083251d76b131706fa20c997fdc418e5eb3"
@@ -244,7 +251,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:86f27dd599f672af832b4a9fca02234fd4fa81dea0436acbf166fb9c45184692"
+          "entry_id": "sha256:86f27dd599f672af832b4a9fca02234fd4fa81dea0436acbf166fb9c45184692",
+          "visible": "sha256:61b8221106d089bb29c7ce90b5bb6a1e6ddaa63e52be2cda27ebbcd33a9c6e42"
         },
         "item_entry_ids": [
           "sha256:9d5d88571dacfef2b8faf071e7c9ee343c38662c6acf79a687c1db165568dcc5"
@@ -283,7 +291,8 @@
       "message": "Back to triage.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:fd8bd0468cfdb114eb9747501cf88adfc85c3bd67d7f1e251638740a4d3fa66d"
+          "entry_id": "sha256:fd8bd0468cfdb114eb9747501cf88adfc85c3bd67d7f1e251638740a4d3fa66d",
+          "visible": "sha256:c823397ec8614bfe9ab4fb3a3f59e1688ee0daed2aaafd82655d4a3e8cdae9f1"
         },
         "config_entries": [
           "sha256:77b89aa3cc7431e37367c55af08dbda936d1d2314099efe600ec61c6b5684e43"
@@ -311,7 +320,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:4fa0efc1956679c1dca8fe4730fbd7a5001c1078a3bf7e4ed5318a3387f241db"
+          "entry_id": "sha256:4fa0efc1956679c1dca8fe4730fbd7a5001c1078a3bf7e4ed5318a3387f241db",
+          "visible": "sha256:68143fcd0bfe564d88da8a31b0290dec25af758aa0c267a0d99d725a61ac832a"
         },
         "item_entry_ids": [
           "sha256:c95095e3be15a9dc1c28242ddd47b11bef2db5603d33b13aa328cdfb17edabc1"
@@ -732,7 +742,8 @@
       },
       "format": "agentsession/0.18",
       "leaf": "sha256:4fa0efc1956679c1dca8fe4730fbd7a5001c1078a3bf7e4ed5318a3387f241db",
-      "main": true
+      "main": true,
+      "visible": "sha256:424e0af55669c31e8ac98dc5374e8e7d5df8080cb2d8243004895e2cf90bd444"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

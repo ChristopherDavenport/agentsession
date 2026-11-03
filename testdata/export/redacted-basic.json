@@ -38,7 +38,8 @@
           "entry_id": "sha256:2736b082b786e21a31a47b83e2a5b9e63e42e53063e2043e6ad176ffd9013130",
           "redacted": [
             2
-          ]
+          ],
+          "visible": "sha256:c1935cb25f7f3e38bfd250d77160dbe638553ca2229266c72b34135c26ce2f76"
         },
         "config_entries": [
           "sha256:bb6a29fddf1e5f2ee8bec26c70b704c2e1bb2716b8906c37830ec1b96595d8f5"
@@ -127,7 +128,8 @@
             "sha256:8969138eba9eaa0980dd23fe572576f841ee16dc0e600af13c3fce55724614ca": [
               6
             ]
-          }
+          },
+          "visible": "sha256:99e3432fd5ef573f05f3ea5e01d20a8d806c389e7fc17d0da6aaed993909e8ce"
         },
         "item_entry_ids": [
           "sha256:36a05597fb484070459b2226f64d2bbea7993b8331871643413c0c66b082bbae",
@@ -208,7 +210,8 @@
             "sha256:ccef1b74716261c11c9bdbc07e81b25dd21d7723e8aa467c689a115b58457122": [
               7
             ]
-          }
+          },
+          "visible": "sha256:4fdf33200f0be2f64af1c6ef8f3b3a8d63d7d7f926816655b188dce2e94c3d8d"
         },
         "item_entry_ids": [
           "sha256:ccef1b74716261c11c9bdbc07e81b25dd21d7723e8aa467c689a115b58457122"
@@ -277,7 +280,8 @@
       "message": "and 3+3?",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:e68ebd968c45b51047fa4a0453d43507cd41216ce12ef9b7fc24504b4549575c"
+          "entry_id": "sha256:e68ebd968c45b51047fa4a0453d43507cd41216ce12ef9b7fc24504b4549575c",
+          "visible": "sha256:cfaf611d96ebeac61bac8062854de2e279d476fc2686e707e50ea5fd725984e2"
         },
         "openresponses": {
           "item": {
@@ -303,7 +307,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:08044d1f94662b07c714d9566fec2bc79fc3d7503f16c0e9d4dce1a22bdd87be"
+          "entry_id": "sha256:08044d1f94662b07c714d9566fec2bc79fc3d7503f16c0e9d4dce1a22bdd87be",
+          "visible": "sha256:29a577a4c3171d78f6abd5057ce58123485c3f842884fbb1cb2a8275aa59e15b"
         },
         "openresponses": {
           "items": [],
@@ -487,7 +492,8 @@
         },
         "profile": "test/v1",
         "session": "01995b2a-0000-7000-8000-000000000001"
-      }
+      },
+      "visible": "sha256:2d59b3219343def15562b6983002d076f85a63dc5e84e3918fa8ba1374d88239"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

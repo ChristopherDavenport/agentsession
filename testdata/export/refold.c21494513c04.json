@@ -23,7 +23,8 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:944ba8542a62a5c86552f3e7f357ed13389afcc4478df0afe85810be6fc60346"
+          "entry_id": "sha256:944ba8542a62a5c86552f3e7f357ed13389afcc4478df0afe85810be6fc60346",
+          "visible": "sha256:cd499e62c258f9aa6a5e24897fd3448ed8dd41d2be68ba96f969d6528faf0cfa"
         },
         "context_management": {
           "boundary": "replace",
@@ -64,7 +65,8 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:036ca725d4cf805b23796ce563155b51a464f6fd16f82518c0ed502233575065"
+          "entry_id": "sha256:036ca725d4cf805b23796ce563155b51a464f6fd16f82518c0ed502233575065",
+          "visible": "sha256:9c8300b81504a89b94d74f35cba9c4eaeb2db72cdfd30f13ae752014bc9e57e0"
         },
         "openresponses": {
           "item": {
@@ -90,7 +92,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:7cdbaf468101e19f04a1832402dfbe88b7e2eb8d007888b6fff2c76bad9489df"
+          "entry_id": "sha256:7cdbaf468101e19f04a1832402dfbe88b7e2eb8d007888b6fff2c76bad9489df",
+          "visible": "sha256:dfb3991eec298f124c8f36906dc75ad3fd72e3625bf4a3ce30f4d428c75bf977"
         },
         "item_entry_ids": [
           "sha256:ac79f3ac14ce94982f20d4b42045bef29ae7e758b7e32c3b97a15c97f472a923"
@@ -129,7 +132,8 @@
       "message": "fourth",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:8cfca7acce243ea183a3f0ba47fe869be6ff4f244c80671072a7f4e8262c6fa6"
+          "entry_id": "sha256:8cfca7acce243ea183a3f0ba47fe869be6ff4f244c80671072a7f4e8262c6fa6",
+          "visible": "sha256:0ac1ac6c3ee3112ff8326121b0af5d1c661ea970c17f2055a674adcddc1f33d0"
         },
         "openresponses": {
           "item": {
@@ -154,7 +158,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:c21494513c04ced6b4bfa8e56ca6abd1eb48f93fa4d5aed829745e46288132e1"
+          "entry_id": "sha256:c21494513c04ced6b4bfa8e56ca6abd1eb48f93fa4d5aed829745e46288132e1",
+          "visible": "sha256:46b0cbdb545b80a553e21381e4493a4ef9a6bdcde45cf17d52157c032b9a9e9c"
         },
         "item_entry_ids": [
           "sha256:d83b8071ae0b556306cb801957412026c43999b85df2be16e0db4e39592e3162"
@@ -271,7 +276,8 @@
       },
       "format": "agentsession/0.18",
       "leaf": "sha256:c21494513c04ced6b4bfa8e56ca6abd1eb48f93fa4d5aed829745e46288132e1",
-      "main": true
+      "main": true,
+      "visible": "sha256:94fef539c86138aeaf3b7ee8f26dfd67f0ec313a5d21e2aed73a03ea1e575002"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

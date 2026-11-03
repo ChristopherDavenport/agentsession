@@ -2806,6 +2806,34 @@ bytes, which a rewrite of the document's strings does not reach. One
 that would change what such a record holds removes the record, and that
 entry then does not rebuild to its `id`.
 
+Since 0.18 the projection also writes what a reader of the document
+sees, as hashes: `visible` under `agentsession` in each step's `extra`,
+the hash of the step's visible fields, and `visible` under
+`agentsession` in the top-level `extra`, the hash of the document's.
+
+- The **visible fields of a step** are the step as written with
+  `extra` removed from it, from each element of `tool_calls`, from
+  `metrics`, and from each element of `observation.results` and of each
+  result's `subagent_trajectory_ref`. They are its `step_id`,
+  `timestamp`, `source`, `model_name`, `reasoning_effort`, `message`,
+  `reasoning_content`, `tool_calls`, each with its `tool_call_id`,
+  `function_name` and `arguments`, `observation`, each result with its
+  `source_call_id`, `content` and `subagent_trajectory_ref`, `metrics`,
+  `is_copied_context` and `llm_call_count`, as the step holds them, and
+  any member ATIF does not define.
+- The **visible fields of a document** are the document as written
+  without `steps`, `subagent_trajectories` and `extra`, with `extra`
+  removed from `agent` and from `final_metrics`: `schema_version`,
+  `session_id`, `trajectory_id`, `agent` with its `name`, `version`,
+  `model_name` and `tool_definitions`, `notes`, `final_metrics` and
+  `continued_trajectory_ref`, as the document holds them, and any member
+  ATIF does not define.
+- The hash is SHA-256 over the canonical JSON (RFC 8785) of those
+  fields, in the format's notation, `sha256:` and lowercase
+  hexadecimal. The projection writes the hashes last, over the document
+  as it writes it, after any redaction it makes at export. An embedded
+  trajectory carries its own, over its own steps and fields.
+
 A converter that rebuilds a session from a document this projection
 wrote restores on each entry:
 
@@ -2820,17 +2848,19 @@ when the document allows it: the envelope, the history members and the
 body from `entries`, an item's `item` from its step and a response's
 body from its step. It MUST compute each rebuilt entry's `id` (Entry
 hash) and compare it with the `id` the document names. Since 0.18 it
-MUST also compare what the document shows of the entry with what the
-rebuilt entry projects: the visible fields this projection fills from
-the entry, a step's `message`, `reasoning_content` and `tool_calls` and
-an observation result's `content`, against those the same steps get
-when the rebuilt entries are projected again. An entry matches only
-when both agree. The `id` covers the raw item and not what a reader of
-the document sees, so a change made to the visible fields alone, as a
-redaction applied to the document's text and not to its raw items is,
-leaves every `id` matching; without the second comparison the session
-rebuilt from it would read as redacted while holding the text the
-redaction removed. It MUST list each entry that did not match, so a
+MUST also compute the hash of the document's visible fields, and of
+the visible fields of the step the entry maps to, the step it names or
+whose items, response or observation result it is, and compare each
+with the `visible` the document records there. The comparison is
+equality of the two hash strings and nothing else. An entry matches
+only when its `id`, its step's hash and the document's hash all match;
+an entry that maps to no step, a record's, needs its `id` and the
+document's hash. A document without `visible` matches nothing. The
+`id` covers the raw item and not what a reader of the document sees,
+so a change made to the visible fields alone, as a redaction applied
+to the document's text and not to its raw items is, leaves every `id`
+matching; without the hashes the session rebuilt from it would read as
+redacted while holding the text the redaction removed. It MUST list each entry that did not match, so a
 partial rebuild never goes unreported. An entry that matches is the
 exported entry itself, not a new one, so its history members are true
 of it and are restored with it. Any other entry is a new one: the
@@ -3208,13 +3238,15 @@ so every reader of 0.17 refuses those files until it is upgraded.
   file of any minor, as 0.17 took the single object, so an earlier file
   that held a list in this form under an extension's meaning has its
   context key move at that entry and after it; no entry hash moves.
-- A converter rebuilding an entry to the `id` an ATIF document names
-  also compares the visible fields of the entry's step or observation
-  result with what the rebuilt entry projects, and the entry matches
-  only when both agree (Projections, ATIF). 0.17 compared the `id`
-  alone, which covers the raw item, so a redaction made in a document's
-  visible text alone left every `id` matching and the rebuilt session
-  read as redacted while holding the text removed.
+- The ATIF projection writes the hash of each step's visible fields,
+  and of the document's, under `visible` (Projections, ATIF), each field
+  listed. A converter rebuilding an entry to the `id` the document names
+  takes it as matching only when the hashes of its step's and of the
+  document's visible fields, recomputed over RFC 8785 JSON, equal the
+  recorded ones. 0.17 compared the `id` alone, which covers the raw
+  item, so a redaction made in a document's visible text alone left
+  every `id` matching and the rebuilt session read as redacted while
+  holding the text removed.
 - The whole path a converter needs before it restores the header's
   `redacted` and `redacted_from` reaches the leaf `trajectory_id`
   names, and every step names an entry of the document. 0.17 asked only

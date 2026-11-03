@@ -15,7 +15,8 @@
       "message": "Fetch the three pages.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:bce413ec9d191f99546049ab685910bac2ed4eb0296ce613fd5e8e5c448914ab"
+          "entry_id": "sha256:bce413ec9d191f99546049ab685910bac2ed4eb0296ce613fd5e8e5c448914ab",
+          "visible": "sha256:95fb871ecb6505d3cdb41d5b2913a0877b07f47cf90e7b152ad1a6c8184d1dba"
         },
         "config_entries": [
           "sha256:c62af05477f421a44ab5f12edebb42c7e2cc29674621cb8868455769b98d305a"
@@ -133,7 +134,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:281f5e62beec1eff7be7ed9dad7e5a2074a89180fa48c9f3701701406c93a0b4"
+          "entry_id": "sha256:281f5e62beec1eff7be7ed9dad7e5a2074a89180fa48c9f3701701406c93a0b4",
+          "visible": "sha256:882a4903b4214bc9a196546306facb3e428d3468d6197969e2975e32b8fb9bcd"
         },
         "calls": {
           "call_a": {
@@ -229,7 +231,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:6ef91e953bfd5a793252b86cbd48bbd6114bafffb69d4f059acd68ceb8dc70f6"
+          "entry_id": "sha256:6ef91e953bfd5a793252b86cbd48bbd6114bafffb69d4f059acd68ceb8dc70f6",
+          "visible": "sha256:24f5e88deae1dd56415e7cf92bbcb4c0c1d273243c1290feaea82c8a877fe3b7"
         },
         "item_entry_ids": [
           "sha256:ad495e3fdaf7e1fce5288d13ac21a645735b27f0754457008ca60383d2957487"
@@ -492,7 +495,8 @@
         "run",
         "dispatch",
         "decision"
-      ]
+      ],
+      "visible": "sha256:a0fde72da37e260d30b7e5a3e68fa70502fa2e64410f36637019f4733fde7086"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

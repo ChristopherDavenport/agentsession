@@ -15,7 +15,8 @@
       "message": "Plan the migration.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:93a3c979897b69c7eb1b79a94a98144a76d6e8976b825204d5668982fa505dae"
+          "entry_id": "sha256:93a3c979897b69c7eb1b79a94a98144a76d6e8976b825204d5668982fa505dae",
+          "visible": "sha256:6cd7f8f5dfdf98b2d4d015eb467a1da57f5d4e1acb4c9a6c8c7fd36985c79d00"
         },
         "config_entries": [
           "sha256:99f03d666ffc03b6bb860fbee52697b33617afc9ca541a8bd5de6cd8ca0e9c7f"
@@ -44,7 +45,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:11a36edac6da3c62777db7df85bf77ef1b3e6a80b87e56c405a504add4e42cfb"
+          "entry_id": "sha256:11a36edac6da3c62777db7df85bf77ef1b3e6a80b87e56c405a504add4e42cfb",
+          "visible": "sha256:4f24fdd1b45e04296c617a87ab0e93eea7fc541ce255b94e8281d3cccc06da0c"
         },
         "item_entry_ids": [
           "sha256:881af447ff4a91c60eb2c17d489184b7d4de0d61522c57f3b10c560148cf9c39",
@@ -95,7 +97,8 @@
       "message": "Now apply step one.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:0274218469eb47f7cbf677a54d183a9aee797c2ae0c7d2d979b855f583970641"
+          "entry_id": "sha256:0274218469eb47f7cbf677a54d183a9aee797c2ae0c7d2d979b855f583970641",
+          "visible": "sha256:94584532a1f1874a94b62b1a95078e8e3c89c6599debb80af121023563f320e5"
         },
         "config_entries": [
           "sha256:6a7bb312c7fa462815d3db5082f232936ffe2498e85776a303e7352ced2911dc"
@@ -124,7 +127,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:e8def216807c12b38dc9173e6bf32c7c24b003abed0d321c2db3a7511941ad5d"
+          "entry_id": "sha256:e8def216807c12b38dc9173e6bf32c7c24b003abed0d321c2db3a7511941ad5d",
+          "visible": "sha256:afb39111c3ab80b92a7bd176a962915bb96490f0df4cbdad9241b243834fe788"
         },
         "item_entry_ids": [
           "sha256:c68c8fa405b043db01dfa86644f283b843979b3424148b71b3c255c281f3dc1e",
@@ -174,7 +178,8 @@
       "message": "Back to the first model: summarise.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:adeacd2fe09e224390da85d604826b405d7c35252ad87cc56265d76e2a807f91"
+          "entry_id": "sha256:adeacd2fe09e224390da85d604826b405d7c35252ad87cc56265d76e2a807f91",
+          "visible": "sha256:f9c49e442a6e923e01f93fd2871020506d91f3249167015a90790eb178efedb6"
         },
         "config_entries": [
           "sha256:f00139ba2d29921ca0ba474649abdc164c8a10f26c4f2b977be8ebcb513c1a29"
@@ -203,7 +208,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:d9c65b3b924557ebeefcce78d111c819c56645d7fa015b93aa7c9d9baca36a66"
+          "entry_id": "sha256:d9c65b3b924557ebeefcce78d111c819c56645d7fa015b93aa7c9d9baca36a66",
+          "visible": "sha256:0b45ca71dc674179dee011d7a8e518175771802a89cc71fe70500aa2f77dd98a"
         },
         "item_entry_ids": [
           "sha256:56ee443f993e7dc55eea376147262d18d7aef78b5649f539868ac62abb87b3c9",
@@ -253,7 +259,8 @@
       "message": "Anything else?",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:122aca6042c5502298ec22021425f5436f48041c02ee0294f740593a1d92fe70"
+          "entry_id": "sha256:122aca6042c5502298ec22021425f5436f48041c02ee0294f740593a1d92fe70",
+          "visible": "sha256:639f508f916764f87fbd6ff1f490d2d2fa29139aa055bd2617e4d8777d7836b8"
         },
         "openresponses": {
           "item": {
@@ -279,7 +286,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:5bbae4ba3cefc186f1c24fe7c8082522b7dba945e800146b7196e340828dfae2"
+          "entry_id": "sha256:5bbae4ba3cefc186f1c24fe7c8082522b7dba945e800146b7196e340828dfae2",
+          "visible": "sha256:9910ed329b8d38b64b64f1e99d07fea8c6ff6fce1e15ad2dcddc56db93160d1f"
         },
         "item_entry_ids": [
           "sha256:60e9d63040aaec58d8fa217aea3f4abe4a9fc96bd31d29abbfef06cafc128544",
@@ -466,7 +474,8 @@
       },
       "format": "agentsession/0.18",
       "leaf": "sha256:5bbae4ba3cefc186f1c24fe7c8082522b7dba945e800146b7196e340828dfae2",
-      "main": true
+      "main": true,
+      "visible": "sha256:bdee77804d862a16a6d80e06be8c136873b4558d675153ae9e125d7e0941ee9d"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

@@ -19,7 +19,8 @@
           "instructions_part": {
             "id": "/repo/CLAUDE.md",
             "source": "agentsmd"
-          }
+          },
+          "visible": "sha256:ec6a0f9c4a623e3b6678f34892cfa33b6b40e52d6052f3898617c76a2ae2b4e5"
         },
         "config_entries": [
           "sha256:096ae61047ffef0b060d448e4888154cdca45690bce95c89e43303e25599b8ec"
@@ -55,7 +56,8 @@
       "message": "Fix the build.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:af47fbe71ee844d52d1ea728bef7a76a1c0c2fb0609990fc36239324953848e1"
+          "entry_id": "sha256:af47fbe71ee844d52d1ea728bef7a76a1c0c2fb0609990fc36239324953848e1",
+          "visible": "sha256:8cb7c333ca0e5221e8b65f53dfc76e1f352d7502a7f1684edff05f4d18eb0bbb"
         },
         "openresponses": {
           "item": {
@@ -80,7 +82,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:be512ef5642f9a5ef05e262790ab32edafdf07dda6e76eb24a573881a027575e"
+          "entry_id": "sha256:be512ef5642f9a5ef05e262790ab32edafdf07dda6e76eb24a573881a027575e",
+          "visible": "sha256:82e8420553b076b25f5018df4efde6561c6c9e67eaa143f4d274fcc055c719a2"
         },
         "item_entry_ids": [
           "sha256:cdac881fe7d765f730b174a8368ec78b778c1593cd2c0e1fd40ecccf6b5b3a79"
@@ -225,7 +228,8 @@
         "run",
         "dispatch",
         "decision"
-      ]
+      ],
+      "visible": "sha256:45555f14345042b78ae4fa51f949771e084298c249f00f2d9b65d83116b3617a"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

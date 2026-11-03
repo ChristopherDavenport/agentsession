@@ -45,13 +45,18 @@ versions may break the API.
   then read as a person's input; a redactor keeps them distinct.
 
 - **ATIF read-back checks what a reader sees (RFC 0001 0.18,
-  Projections/ATIF).** A converter rebuilding an entry to the `id` the
-  document names now also compares the visible fields of its step or
-  observation result (`message`, `reasoning_content`, `tool_calls`, a
-  result's `content`) with what the rebuilt entries project, and the
-  entry matches only when both agree: the `id` covers the raw item, so a
-  redaction made in the document's visible text alone left every `id`
-  matching and the rebuilt session read as redacted. The whole path it
+  Projections/ATIF).** The export writes `extra.agentsession.visible`
+  (`ExtraVisible`) on every step and at the top level of every
+  document, embedded ones included: SHA-256 over the RFC 8785 canonical
+  JSON of the step's, or the document's, visible fields
+  (`StepVisible`, `DocumentVisible`, `VisibleHash`), written last, after
+  the export's own redactors. A converter rebuilding an entry to the
+  `id` the document names takes it as matching only when its step's and
+  the document's hashes, recomputed, equal the recorded ones: the `id`
+  covers the raw item, so a redaction made in the document's visible
+  text alone, or an edit to a step's `model_name` or a tool definition,
+  left every `id` matching and the rebuilt session read as redacted.
+  Every export golden gains the hashes. The whole path it
   needs before it restores the header's `redacted` and `redacted_from`
   reaches the leaf `trajectory_id` names, and every step names an entry;
   a step appended after the export is listed. The reference rebuild in

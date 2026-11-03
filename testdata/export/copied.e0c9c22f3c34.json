@@ -22,7 +22,8 @@
               "entry": "sha256:f828a51f15df807e68ffb612cdec4d90df9f09e824a344e04fdb12bf69d715e7"
             }
           ],
-          "entry_id": "sha256:86c3a835b446d895d0e8993921a38bd4338d9a56085febd58cdbb86f17184e6e"
+          "entry_id": "sha256:86c3a835b446d895d0e8993921a38bd4338d9a56085febd58cdbb86f17184e6e",
+          "visible": "sha256:28f6c1b35d89938127a962eee61d9f9f748fb2cf2d1fbb9622fc3eef375e9498"
         },
         "config_entries": [
           "sha256:887426e3c434d924c12108098a9585b5728d60bdd707f01a27f15f590917bbb8"
@@ -104,7 +105,8 @@
               "entry": "sha256:71ecbe469f125677d5d4d2ef35cfe1c288e3bc52fafc35bee49fb49745782793"
             }
           ],
-          "entry_id": "sha256:33652900ebfb8593e28d60cba34110e2ff89ee96c217bda620cf3bcf07ca03eb"
+          "entry_id": "sha256:33652900ebfb8593e28d60cba34110e2ff89ee96c217bda620cf3bcf07ca03eb",
+          "visible": "sha256:83e2bdacaf72806f3c3cb96efe77e7b53dd5f9a8f0c7eb4a5cde8b17be9b0260"
         },
         "item_entry_ids": [
           "sha256:33652900ebfb8593e28d60cba34110e2ff89ee96c217bda620cf3bcf07ca03eb",
@@ -140,7 +142,8 @@
       "message": "Summarise the design doc in one line.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:5ac854bb9bfa3577252e1c0e9227c645dd50a8075be51294a529398cf6f38ad8"
+          "entry_id": "sha256:5ac854bb9bfa3577252e1c0e9227c645dd50a8075be51294a529398cf6f38ad8",
+          "visible": "sha256:81f637b49c964cfb691b0db6c3b9209c2fa2f66c2886e5a4877dfe600963fa2e"
         },
         "openresponses": {
           "item": {
@@ -165,7 +168,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:b872ab0a4dec4e500e26548f34f840408ef7021e083ed31941ed95dd6de55dd8"
+          "entry_id": "sha256:b872ab0a4dec4e500e26548f34f840408ef7021e083ed31941ed95dd6de55dd8",
+          "visible": "sha256:a2da89947f9e4e2dc3604dfa9b1d25e81b7a2a25ef1669b22a9be6393953ac0a"
         },
         "item_entry_ids": [
           "sha256:c038452a7b003af8d29f7bb3b248dfd8f166b8a4460839a1bd9b681191bc78c9"
@@ -310,7 +314,8 @@
         "dispatch",
         "decision"
       ],
-      "spawned_by": "call_helper"
+      "spawned_by": "call_helper",
+      "visible": "sha256:77cb45c303a62cb1a3ea50bdfa666df0b8a3576a37813dbf9abc43e66b805aa8"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

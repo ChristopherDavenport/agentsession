@@ -15,7 +15,8 @@
       "message": "Charge the card.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:7840feb76752310d7ece87ee27e2ee33e15e1d452f26d2622889aad560eee4fe"
+          "entry_id": "sha256:7840feb76752310d7ece87ee27e2ee33e15e1d452f26d2622889aad560eee4fe",
+          "visible": "sha256:35eb292484ca1fe3553b5afdb974a12e249781b216ea4db3c0d7be903ea062e2"
         },
         "config_entries": [
           "sha256:1b77d0ed2913bfb731c511d8483c9e2be73f2df0ba99fd37cccdf828ffbcd254"
@@ -82,7 +83,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:2f1d74a489363f20cd47be7d930d7341e6f9966da6b3acb31c0f7a32ce4d2e07"
+          "entry_id": "sha256:2f1d74a489363f20cd47be7d930d7341e6f9966da6b3acb31c0f7a32ce4d2e07",
+          "visible": "sha256:2a85ee2e2308c3a774c3d84daaf8e943e4e8df3469f067dd2da70c996a36c36f"
         },
         "calls": {
           "call_charge": {
@@ -136,7 +138,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:c1ca2e9314d2f5d57d2e791cd24bb99d30d9568d5f0d490b1f5cb3e671a010c7"
+          "entry_id": "sha256:c1ca2e9314d2f5d57d2e791cd24bb99d30d9568d5f0d490b1f5cb3e671a010c7",
+          "visible": "sha256:e7c27609f2097af986a1eb286e1ae5b66d2234ff5a1d44cb1c692b6c545471bd"
         },
         "item_entry_ids": [
           "sha256:7d602114c4f5d190735da82083be07084455cd3b885b8c2d93cb883960876d26"
@@ -380,7 +383,8 @@
         "run",
         "dispatch",
         "decision"
-      ]
+      ],
+      "visible": "sha256:093d2867da57ff4a84949d41f8135dacf355d795dd50992eeedf987b333adde1"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

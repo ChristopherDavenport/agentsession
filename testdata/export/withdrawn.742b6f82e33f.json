@@ -15,7 +15,8 @@
       "message": "Tell the team, then run the tests.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:3da93a4f857f33f45229d4b4caab0977d29d1d417fe8d7222069e70cb4f18381"
+          "entry_id": "sha256:3da93a4f857f33f45229d4b4caab0977d29d1d417fe8d7222069e70cb4f18381",
+          "visible": "sha256:a251ff990eaf6b812570a89a0900e404ac43b267e41eebf694a93f86b92ce834"
         },
         "config_entries": [
           "sha256:9526ceffe5e7b9ed34d3f656ae7dcc13d07a7ec40c36d66dc5c1f3e56f61ff59"
@@ -108,7 +109,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:9718b58f360f059a826abd80a7ea85e904568a23362c01a72f4eda3d82463b25"
+          "entry_id": "sha256:9718b58f360f059a826abd80a7ea85e904568a23362c01a72f4eda3d82463b25",
+          "visible": "sha256:a4d32f1d2f8f134c8b3aeacf3abfe75f242caaa36aaa9e3f6a763d0396893210"
         },
         "calls": {
           "call_notify": {
@@ -180,7 +182,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:636c9c0a3b73f949cd4b3f06b1e459b5b044785e25c4357d8e9fb6a9d98c6833"
+          "entry_id": "sha256:636c9c0a3b73f949cd4b3f06b1e459b5b044785e25c4357d8e9fb6a9d98c6833",
+          "visible": "sha256:fcd636828a491d8f7c1d08462fcab649e353d1074e322be56b5405c480b43926"
         },
         "item_entry_ids": [
           "sha256:8711dc53e4e384fed1f0c1a2a5f756b23032eab338ec24b6220d138a56622c69"
@@ -387,7 +390,8 @@
         "run",
         "dispatch",
         "decision"
-      ]
+      ],
+      "visible": "sha256:21ba7f0ac199fc75a8904ca941481bca5e9a58ce8204499622ed0f7d0598503f"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

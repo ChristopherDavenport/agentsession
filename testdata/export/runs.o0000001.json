@@ -35,7 +35,8 @@
       "message": "Clean the build directory, list the files, and fetch the changelog.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:c20ac57e30d7a5a8898738d60dafe822bb16fb338108971c1a2e0e8c3affd499"
+          "entry_id": "sha256:c20ac57e30d7a5a8898738d60dafe822bb16fb338108971c1a2e0e8c3affd499",
+          "visible": "sha256:da01a20f9ff6d4ed0e1d9f94dc6a4cb202f90b57a9484af1b3584494d714d378"
         },
         "config_entries": [
           "sha256:dd27d82c6bb5f3dc95871f8d8324f050758b8348730191697b513e673cba6fda"
@@ -160,7 +161,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:485aac5231943b27b92d427cefe7d1a960eba4e03d2621ff746420e4c8927aef"
+          "entry_id": "sha256:485aac5231943b27b92d427cefe7d1a960eba4e03d2621ff746420e4c8927aef",
+          "visible": "sha256:de6e4018a99c2e253849a0ee7f44724f9b6554d44fcafec1a6f99f59680c3b16"
         },
         "calls": {
           "call_1": {
@@ -273,7 +275,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:edd3d7b5b4d17496b558ca82991aeddbbbdb00106fcfd302e5a1b37ca061b858"
+          "entry_id": "sha256:edd3d7b5b4d17496b558ca82991aeddbbbdb00106fcfd302e5a1b37ca061b858",
+          "visible": "sha256:327a9ba2d3297c53a2cce9efc7e0a61b3b6fb640c30a840f71ded3d7da577b5e"
         },
         "item_entry_ids": [
           "sha256:ceedefff9912e00ab065039c015d0d3205d523e105ec40fb6bb78a6e0636ec72"
@@ -609,7 +612,8 @@
         "run",
         "dispatch",
         "decision"
-      ]
+      ],
+      "visible": "sha256:8c4a56c5a4e420e71a30ec4ee21b967f7999a7092efb5954112dcddb55c69543"
     },
     "environment": {
       "cwd": "/home/u/proj",

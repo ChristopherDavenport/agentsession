@@ -15,7 +15,8 @@
       "message": "hello",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:a59feae65ca6f16dddcb340b405e95dac8dc6832f958b57ed78fbd7f1ccaf4db"
+          "entry_id": "sha256:a59feae65ca6f16dddcb340b405e95dac8dc6832f958b57ed78fbd7f1ccaf4db",
+          "visible": "sha256:31b933f2a6867883029607ec8bbeebfd5005e3efa6587d95bb4114bdcf2960ed"
         },
         "config_entries": [
           "sha256:ee58faaa90523b0450e520f0534d52dd870aa0e83b038a4af9b5e92f35d7dbc0"
@@ -47,7 +48,8 @@
       "message": "\u003chi\u003e \u0026 bye",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:395c1309639ca3743698f2a9a789f71be3ec72680e24aa2b8ea2ab7cad4d0cee"
+          "entry_id": "sha256:395c1309639ca3743698f2a9a789f71be3ec72680e24aa2b8ea2ab7cad4d0cee",
+          "visible": "sha256:e0adb8da970269eb7670aa2cb04a0674507ee440430ab33eee477046fbf57e1f"
         },
         "extensions": [
           {
@@ -98,7 +100,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:5114553995fe43b35aa5298320ed5379a1d20246e82cd3fb7aa8a60c3f052abb"
+          "entry_id": "sha256:5114553995fe43b35aa5298320ed5379a1d20246e82cd3fb7aa8a60c3f052abb",
+          "visible": "sha256:92acbdb12de475646a8c72c799f60d47d1c3a89f494150ef5814f77ec2b941fa"
         },
         "custom": [
           {
@@ -165,7 +168,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:7099cfd9ac3a8b30f64ae79e9abf5939620b4da41466b835e63da188f54932c5"
+          "entry_id": "sha256:7099cfd9ac3a8b30f64ae79e9abf5939620b4da41466b835e63da188f54932c5",
+          "visible": "sha256:05f7a23924455fe5aa18a1428f1291d7b95d8447fe5b98841bea91c7bacc6a21"
         },
         "error": {
           "type": "server_error",
@@ -326,7 +330,8 @@
       },
       "format": "agentsession/0.18",
       "leaf": "sha256:7099cfd9ac3a8b30f64ae79e9abf5939620b4da41466b835e63da188f54932c5",
-      "main": true
+      "main": true,
+      "visible": "sha256:129da79f3f45801c6d95d5f9e69b22c4d8d47f793c677b26f10792587e57297c"
     },
     "environment": {
       "cwd": "/home/u/proj",

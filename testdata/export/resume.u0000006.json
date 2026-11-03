@@ -35,7 +35,8 @@
       "message": "Delete the logs.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:c24a77cdd2b070f694edf181f46efc46dd3777b39bf1592dc0a7ae984e36340a"
+          "entry_id": "sha256:c24a77cdd2b070f694edf181f46efc46dd3777b39bf1592dc0a7ae984e36340a",
+          "visible": "sha256:294d17900bb840716b21308111e2f255b9a3d3dc8d9ca72bb7dde9cb7c22688e"
         },
         "config_entries": [
           "sha256:c76f5301c344a529d7f74bc9d493fbfb9c1c222a49a0377659bad6cdac880b4a"
@@ -114,7 +115,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:751f4d2ccf2b22247ba1681563319b0934eebd1e8b43d1554fb8feaa34e1d2cf"
+          "entry_id": "sha256:751f4d2ccf2b22247ba1681563319b0934eebd1e8b43d1554fb8feaa34e1d2cf",
+          "visible": "sha256:9b1ea0f1d2ab162a52a1e13aee56a4f1cadd55e07028e39e5d0acb023e160cd5"
         },
         "calls": {
           "call_1": {
@@ -180,7 +182,8 @@
       "message": "Fine, list them instead.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:d7e4549217232a56cca4b4acf8227a1ab0e946b8c28ba098d03754297c40a1a1"
+          "entry_id": "sha256:d7e4549217232a56cca4b4acf8227a1ab0e946b8c28ba098d03754297c40a1a1",
+          "visible": "sha256:e0d138a8e0309cce81ab95db70ba80e2541f5e100aed341b07632b762112b22a"
         },
         "openresponses": {
           "item": {
@@ -230,7 +233,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:952f064da1be551be6bd1db4a6980c298695a6237314dda364b135f0bbbba280"
+          "entry_id": "sha256:952f064da1be551be6bd1db4a6980c298695a6237314dda364b135f0bbbba280",
+          "visible": "sha256:972be5cec48e5a0b10a1d8f9d57b7226960d71cab1f30b4a561a2db83a5d891d"
         },
         "item_entry_ids": [
           "sha256:bd308cec0f3c2767776bd7e0f6f0db2564043715d4c18ba7c9f1c296464ec5a4"
@@ -471,7 +475,8 @@
         "run",
         "dispatch",
         "decision"
-      ]
+      ],
+      "visible": "sha256:bf1b9446c975be90a90c101985449dbadd31ed0d5801d6eac5d8186cb22f340d"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

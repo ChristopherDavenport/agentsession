@@ -30,7 +30,8 @@
               "untrusted",
               "x:quarantined"
             ]
-          }
+          },
+          "visible": "sha256:571801406eb82b875bdafa3728136c159b379d117f2f7013d93725509b4a5819"
         },
         "context_management": {
           "boundary": "replace",
@@ -59,7 +60,8 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:9e5ced9c57eb0f2c953df251de50e67f677f36134178393ede8b0a956b3611a8"
+          "entry_id": "sha256:9e5ced9c57eb0f2c953df251de50e67f677f36134178393ede8b0a956b3611a8",
+          "visible": "sha256:eb90fa1c4b609eff21034f0eef994a7ca331e2fff6cf62d7a13cae3dd559f640"
         },
         "openresponses": {
           "item": {
@@ -84,7 +86,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:1703af974688da40e3b9d2367cf0be640e98b009d3d9469ae9e2163992961c60"
+          "entry_id": "sha256:1703af974688da40e3b9d2367cf0be640e98b009d3d9469ae9e2163992961c60",
+          "visible": "sha256:b88b845c88707ebdcc8659dd43acf054e8dc02a1fc1291581cab7dd4d4d1c84b"
         },
         "item_entry_ids": [
           "sha256:e0eb6bb0465537a8d3117549e4b94d6824ea399ba1e8118c45e3abef17ff0afa"
@@ -201,7 +204,8 @@
           "untrusted",
           "x:quarantined"
         ]
-      }
+      },
+      "visible": "sha256:b8f94dc4ddc51e93e1b183d025c30fbae984d93b802ec7bbb77d9274c80c460c"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

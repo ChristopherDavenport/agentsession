@@ -15,7 +15,8 @@
       "message": "Find the flaky test.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:a0c86c7f20b11565118856e619dfd4c738fe8be491b93f0651605987fd34e34a"
+          "entry_id": "sha256:a0c86c7f20b11565118856e619dfd4c738fe8be491b93f0651605987fd34e34a",
+          "visible": "sha256:546b7b3f8835d827ecb85a880c05d4f1a06f7a49e3d14ddf24a878ccd8f04dcc"
         },
         "config_entries": [
           "sha256:724acc124477e7cf308bbe7c95472f8c353221ce5d4af10a53a950ab3cb82722"
@@ -78,7 +79,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:ad63b85cb70fd5fd9fce166c812faadb3df7fa7e8c550c51980547d4109d58c8"
+          "entry_id": "sha256:ad63b85cb70fd5fd9fce166c812faadb3df7fa7e8c550c51980547d4109d58c8",
+          "visible": "sha256:512fae2bc15e2981a57e0e834b28dff4da0db754e7fdf626c17eb7fa9efb2326"
         },
         "calls": {
           "call_agent": {
@@ -125,7 +127,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:0858ca14912a683a4ac1b8e208ca2511ca6b325ba60eb67bc221c43b10a35169"
+          "entry_id": "sha256:0858ca14912a683a4ac1b8e208ca2511ca6b325ba60eb67bc221c43b10a35169",
+          "visible": "sha256:0735b540a0dfcb2bc62282bdc200a47ed4e80d0cb8275a9b3f590d88d489bab2"
         },
         "item_entry_ids": [
           "sha256:4067545727e092b516fc0e27a656beeadb63ee19dbd4f6f2ad6e0a785556109c"
@@ -241,7 +244,8 @@
         "run",
         "dispatch",
         "decision"
-      ]
+      ],
+      "visible": "sha256:6afa28b274c17e51daaa86fb8d1f277e8720a3393dccf4469a26b9ac3f45d6c8"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

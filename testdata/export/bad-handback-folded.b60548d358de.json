@@ -23,7 +23,8 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:14d250d40830b2c9521d9673594747985224fd7e7cce73a2dbaf9080ab891db2"
+          "entry_id": "sha256:14d250d40830b2c9521d9673594747985224fd7e7cce73a2dbaf9080ab891db2",
+          "visible": "sha256:5dcde9e9eeeef186a27eb4b6129cbe78f7d810dfd1fb25407122f4c0c5a24417"
         },
         "context_management": {
           "boundary": "replace",
@@ -52,7 +53,8 @@
       "is_copied_context": true,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:b51f8b17ab3a80f1ac852172952a7bce56f058424ab8fd2dfa180e9bc9c33bf3"
+          "entry_id": "sha256:b51f8b17ab3a80f1ac852172952a7bce56f058424ab8fd2dfa180e9bc9c33bf3",
+          "visible": "sha256:8b1a9ceb3a70efa06ff77da0f9d8c57cd39c543c66dfaaff92852719f4f23b32"
         },
         "openresponses": {
           "item": {
@@ -75,7 +77,8 @@
       "message": "three",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:5d083b4d8bc0e8f6227add972cd4f8a9b7e20fc640a35f0daf5b47ff012e0f5a"
+          "entry_id": "sha256:5d083b4d8bc0e8f6227add972cd4f8a9b7e20fc640a35f0daf5b47ff012e0f5a",
+          "visible": "sha256:8c6378878fd03a2e65b6efdba6c43d9434cb7cd7d4c2b66de78f9f92e7f879fd"
         },
         "config_entries": [
           "sha256:b3a9b62dcb4757ef6a946a978bdad1f1fc1e3063cb59d6f06db2cd9ce63a0a5b"
@@ -103,7 +106,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:b60548d358de6046365d5013aca7896ab46474e4c5561e9a042259a79a3be440"
+          "entry_id": "sha256:b60548d358de6046365d5013aca7896ab46474e4c5561e9a042259a79a3be440",
+          "visible": "sha256:dbea8472501380645e3032abe8bd1ce7bd1bba61296329e1c3afe863623ec33c"
         },
         "item_entry_ids": [
           "sha256:a4623dbfa75135d30932d6427bda093b2ba65d3c9b98bc7d1dbcf07b13211f06"
@@ -232,7 +236,8 @@
       },
       "format": "agentsession/0.18",
       "leaf": "sha256:b60548d358de6046365d5013aca7896ab46474e4c5561e9a042259a79a3be440",
-      "main": true
+      "main": true,
+      "visible": "sha256:7ee075693a0b5554d249c6fe68bc9b5307f0dfcaccfafb5fc372e4a125f30915"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

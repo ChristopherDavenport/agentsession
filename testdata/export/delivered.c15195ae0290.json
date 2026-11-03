@@ -15,7 +15,8 @@
       "message": "Start the build in the background.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:45f8511d7fe1ce05a5c7f770afeb48175c090d093e7fe34e8a60148bdd0ef773"
+          "entry_id": "sha256:45f8511d7fe1ce05a5c7f770afeb48175c090d093e7fe34e8a60148bdd0ef773",
+          "visible": "sha256:9ef2c0160b3b2cebd40da9d091e0c649b7f8e2f64fced850e44c7b42cb6eb1a9"
         },
         "config_entries": [
           "sha256:7ce27e2f24ba83eb5ca5388ff134c1a3e9a8a7b7ff3adf2c4431a6bc65f6e00a"
@@ -53,7 +54,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:534f4c164351aa0f6d255b1ff8c2a804affd4d21d9ad43e8603ea5fd663ddcda"
+          "entry_id": "sha256:534f4c164351aa0f6d255b1ff8c2a804affd4d21d9ad43e8603ea5fd663ddcda",
+          "visible": "sha256:69f8c7ab71ce5e89878af06b1b9554eb1dba4139bf4f0d5c91f8b036cf478ef0"
         },
         "item_entry_ids": [
           "sha256:d126afa194897540a5f93a1cd40e73c37f788ca58950bcb65f491370958b45ba"
@@ -92,7 +94,8 @@
       "message": "Background task build-7 finished: 2 warnings.",
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:ce7648b0ddeda1a0dcbbf0e8326af57490ec360d6208359ef90887fd613ca07f"
+          "entry_id": "sha256:ce7648b0ddeda1a0dcbbf0e8326af57490ec360d6208359ef90887fd613ca07f",
+          "visible": "sha256:4394b590c232fcd87a1e7030e797d2a1839df6ab54ca1177ff363cf84cf887a4"
         },
         "openresponses": {
           "item": {
@@ -183,7 +186,8 @@
       "llm_call_count": 1,
       "extra": {
         "agentsession": {
-          "entry_id": "sha256:eccd138f898c2b002f1b35ed6e72855bf71e7f0a325be29f7f84e5259800d2af"
+          "entry_id": "sha256:eccd138f898c2b002f1b35ed6e72855bf71e7f0a325be29f7f84e5259800d2af",
+          "visible": "sha256:b5a660bb618d7aeda018ad16c43f6b426d1876d14f5e32b87e2e2f3517227918"
         },
         "calls": {
           "call_fix": {
@@ -411,7 +415,8 @@
         "run",
         "dispatch",
         "decision"
-      ]
+      ],
+      "visible": "sha256:e0ae03dff8fb7c21af49f37fccfd6996c1d33d47b305bae994a2a5e48355147d"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

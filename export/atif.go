@@ -174,6 +174,12 @@ func ToATIF(t Trajectory, opts Options) (*atif.Trajectory, error) {
 			return nil, fmt.Errorf("export: redact: %w", err)
 		}
 	}
+	// Last, so each hash is of what the document shows as written: an
+	// embedded trajectory's id is set by its parent, after its own
+	// export, and is hashed again here.
+	if err := seal(b.doc); err != nil {
+		return nil, fmt.Errorf("export: %w", err)
+	}
 	return b.doc, nil
 }
 
