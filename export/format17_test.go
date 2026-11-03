@@ -2,6 +2,7 @@ package export
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -113,4 +114,70 @@ func sameValue(t *testing.T, v any, want string) bool {
 	ga, _ := json.Marshal(a)
 	gb, _ := json.Marshal(b)
 	return string(ga) == string(gb)
+}
+
+// TestCostCountsAChildOnce: a child two links count at different leaves
+// adds the union of its two paths to total_cost_usd, the prefix they
+// share once, as RFC 0001's link rule counts delegated work, though the
+// document embeds a trajectory for each leaf.
+func TestCostCountsAChildOnce(t *testing.T) {
+	add := func(s *agentsession.Session, e agentsession.Entry) string {
+		t.Helper()
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	usage := func(n int) *openresponses.Usage { return &openresponses.Usage{InputTokens: n, TotalTokens: n} }
+	child := agentsession.New(agentsession.Header{ID: "child", ParentSession: "parent"})
+	add(child, &agentsession.ConfigEntry{Model: "m"})
+	add(child, agentsession.NewItemEntry(openresponses.UserText("task")))
+	add(child, &agentsession.ItemEntry{Item: openresponses.AssistantText("start"), ResponseID: "r1"})
+	fork := add(child, &agentsession.ResponseEntry{ResponseID: "r1", Usage: usage(10)})
+	add(child, agentsession.NewItemEntry(openresponses.UserText("one way")))
+	add(child, &agentsession.ItemEntry{Item: openresponses.AssistantText("one"), ResponseID: "r2"})
+	one := add(child, &agentsession.ResponseEntry{ResponseID: "r2", Usage: usage(20)})
+	if err := child.Branch(fork); err != nil {
+		t.Fatal(err)
+	}
+	add(child, agentsession.NewItemEntry(openresponses.UserText("the other")))
+	add(child, &agentsession.ItemEntry{Item: openresponses.AssistantText("other"), ResponseID: "r3"})
+	other := add(child, &agentsession.ResponseEntry{ResponseID: "r3", Usage: usage(30)})
+
+	parent := agentsession.New(agentsession.Header{ID: "parent"})
+	add(parent, &agentsession.ConfigEntry{Model: "m"})
+	add(parent, agentsession.NewItemEntry(openresponses.UserText("delegate twice")))
+	for i, leaf := range []string{one, other} {
+		callID := fmt.Sprintf("call_%d", i)
+		add(parent, &agentsession.ItemEntry{Item: &openresponses.FunctionCall{CallID: callID, Name: "spawn", Arguments: `{}`}, ResponseID: "p" + callID})
+		add(parent, &agentsession.ResponseEntry{ResponseID: "p" + callID, Usage: usage(1)})
+		add(parent, agentsession.NewSubsessionLink("child", callID))
+		out := agentsession.NewItemEntry(openresponses.NewFunctionCallOutput(callID, "done"))
+		out.Parents = []agentsession.EntryRef{{Session: "child", Entry: leaf}}
+		add(parent, out)
+	}
+	tr, err := At(parent, parent.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ToATIF(tr, Options{
+		Subsessions: func(id string) (*agentsession.Session, error) {
+			if id == "child" {
+				return child, nil
+			}
+			return nil, nil
+		},
+		Cost: func(_ string, u openresponses.Usage) (float64, bool) { return float64(u.InputTokens), true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fm := doc.FinalMetrics; fm.TotalCostUSD == nil || *fm.TotalCostUSD != 62 {
+		got := -1.0
+		if fm.TotalCostUSD != nil {
+			got = *fm.TotalCostUSD
+		}
+		t.Errorf("total_cost_usd = %g, want 62: the path's 2 and the child's 10, 20 and 30 once each", got)
+	}
 }

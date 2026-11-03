@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/ChristopherDavenport/openresponses"
 )
@@ -86,22 +87,30 @@ func modelCallOf(e Entry, inForce string) (ModelCall, bool) {
 // Delegated is a session whose work a path delegated, by a subsession
 // link on the path (RFC 0001, link, Cost across sessions, since 0.17).
 type Delegated struct {
-	// Link is the first subsession link on the path naming the session.
+	// Link is the first subsession link naming the session.
 	Link *LinkEntry
 	// Session is the child's ID.
 	Session string
-	// Leaf is the entry of the child whose path is counted: the one the
-	// entry carrying the call's output names in its parents, or, when
-	// none does, the leaf a reader resuming the child takes, and then
-	// LeafNamed is false, which a reader reporting cost says.
-	Leaf      string
-	LeafNamed bool
-	// Calls are the model calls on the child's path to Leaf, each priced
-	// at the model that served it in the child.
+	// Leaves are the entries of the child whose paths are counted, one
+	// for each link naming it that names another: the one the entry
+	// carrying the call's output names in its parents, or, when none
+	// does, the leaf a reader resuming the child takes, and then Named is
+	// false, which a reader reporting cost says.
+	Leaves []DelegatedLeaf
+	// Calls are the model calls on the union of the child's paths to its
+	// Leaves, each entry once, each priced at the model that served it in
+	// the child.
 	Calls []ModelCall
 	// Children are the child's own delegated sessions, counted by the
 	// same rule.
 	Children []Delegated
+}
+
+// DelegatedLeaf is an entry of a delegated session whose path a reader
+// counts, and whether a parents member named it.
+type DelegatedLeaf struct {
+	Entry string
+	Named bool
 }
 
 // Unread is a child a reader reporting cost could not read, and left
@@ -124,9 +133,10 @@ var ErrChildElsewhere = errors.New("agentsession: delegated session held in anot
 // to, as a reader that reports what the path cost, including that work,
 // counts them (RFC 0001, link, since 0.17): each session a subsession
 // link on the path names, cancel notices excepted, counted once however
-// many links name it, at the leaf the call's output names in parents or
-// else at the child's resume leaf, with its own children by the same
-// rule. A child resolve cannot read, or that holds no entry by the leaf
+// many links name it, over the union of its paths to the leaf each link
+// counts, each entry once: the leaf the call's output names in parents,
+// or else the child's resume leaf. Its own children are counted by the
+// same rule. A child resolve cannot read, or that holds no entry by the leaf
 // named, is reported in unread and left out ([ErrChildNotFound]). A
 // subsession link carrying a url names a callee in another system: it is
 // counted when resolve holds its session, and otherwise reported in
@@ -134,55 +144,120 @@ var ErrChildElsewhere = errors.New("agentsession: delegated session held in anot
 // judges and forks are no delegated work and are not counted.
 // resolve returns nil and no error for a session it does not hold.
 func DelegatedWork(path []Entry, resolve func(id string) (*Session, error)) (children []Delegated, unread []Unread) {
-	seen := map[string]bool{}
-	return delegated(path, resolve, seen)
-}
-
-func delegated(path []Entry, resolve func(id string) (*Session, error), seen map[string]bool) (children []Delegated, unread []Unread) {
-	outputs := map[string]*ItemEntry{}
-	for _, c := range Calls(path) {
-		if c.Output != nil {
-			outputs[c.ID()] = c.Output
-		}
+	type node struct {
+		d       Delegated
+		session *Session
+		parent  string // the session that named it first; "" for path's
+		scanned int    // how many of its leaves its links were read on
 	}
-	for _, e := range path {
-		l, ok := e.(*LinkEntry)
-		if !ok || l.Rel != RelSubsession || l.Cancel != "" || l.Session == "" || seen[l.Session] {
-			continue
-		}
-		seen[l.Session] = true
-		child, err := resolve(l.Session)
-		if child == nil || err != nil {
-			switch {
-			case l.URL != "" && err == nil:
-				// A callee in another system whose session the reader
-				// does not hold: delegated work it cannot count.
-				err = fmt.Errorf("%w: %s at %s", ErrChildElsewhere, l.Session, l.URL)
-			case err == nil:
-				err = fmt.Errorf("%w: %s", ErrChildNotFound, l.Session)
-			}
-			unread = append(unread, Unread{Link: l, Session: l.Session, Err: err})
-			continue
-		}
-		d := Delegated{Link: l, Session: l.Session, Leaf: child.Leaf()}
-		if out := outputs[l.CallID]; out != nil {
-			for _, r := range out.Parents {
-				if r.Session == l.Session {
-					d.Leaf, d.LeafNamed = r.Entry, true
-					break
+	nodes := map[string]*node{}
+	var order []string
+	failed := map[string]bool{}
+	// scan registers the subsession links on paths, the paths of the
+	// session from: each child it names, and the leaf each link counts.
+	scan := func(paths [][]Entry, from string) {
+		outputs := map[string]*ItemEntry{}
+		for _, p := range paths {
+			for _, c := range Calls(p) {
+				if c.Output != nil {
+					outputs[c.ID()] = c.Output
 				}
 			}
 		}
-		childPath := child.Path(d.Leaf)
-		if childPath == nil {
-			unread = append(unread, Unread{Link: l, Session: l.Session, Err: fmt.Errorf("%w: %s holds no entry %s", ErrChildNotFound, l.Session, d.Leaf)})
-			continue
+		read := map[string]bool{}
+		for _, p := range paths {
+			for _, e := range p {
+				l, ok := e.(*LinkEntry)
+				if !ok || l.Rel != RelSubsession || l.Cancel != "" || l.Session == "" || read[l.ID] || failed[l.Session] {
+					continue
+				}
+				read[l.ID] = true
+				n := nodes[l.Session]
+				if n == nil {
+					child, err := resolve(l.Session)
+					if child == nil || err != nil {
+						switch {
+						case l.URL != "" && err == nil:
+							// A callee in another system whose session the
+							// reader does not hold: delegated work it
+							// cannot count.
+							err = fmt.Errorf("%w: %s at %s", ErrChildElsewhere, l.Session, l.URL)
+						case err == nil:
+							err = fmt.Errorf("%w: %s", ErrChildNotFound, l.Session)
+						}
+						failed[l.Session] = true
+						unread = append(unread, Unread{Link: l, Session: l.Session, Err: err})
+						continue
+					}
+					n = &node{d: Delegated{Link: l, Session: l.Session}, session: child, parent: from}
+					nodes[l.Session] = n
+					order = append(order, l.Session)
+				}
+				leaf := DelegatedLeaf{Entry: n.session.Leaf()}
+				if out := outputs[l.CallID]; out != nil {
+					for _, r := range out.Parents {
+						if r.Session == l.Session {
+							leaf = DelegatedLeaf{Entry: r.Entry, Named: true}
+							break
+						}
+					}
+				}
+				at := slices.IndexFunc(n.d.Leaves, func(x DelegatedLeaf) bool { return x.Entry == leaf.Entry })
+				switch {
+				case at >= 0:
+					n.d.Leaves[at].Named = n.d.Leaves[at].Named || leaf.Named
+				case n.session.Path(leaf.Entry) == nil:
+					unread = append(unread, Unread{Link: l, Session: l.Session, Err: fmt.Errorf("%w: %s holds no entry %s", ErrChildNotFound, l.Session, leaf.Entry)})
+				default:
+					n.d.Leaves = append(n.d.Leaves, leaf)
+				}
+			}
 		}
-		d.Calls = ModelCalls(childPath)
-		var more []Unread
-		d.Children, more = delegated(childPath, resolve, seen)
-		unread = append(unread, more...)
-		children = append(children, d)
 	}
-	return children, unread
+	paths := func(n *node) [][]Entry {
+		out := make([][]Entry, 0, len(n.d.Leaves))
+		for _, leaf := range n.d.Leaves {
+			out = append(out, n.session.Path(leaf.Entry))
+		}
+		return out
+	}
+	scan([][]Entry{path}, "")
+	// A child gains a leaf when another link names it at another one, so
+	// its links are read again over the union until no child gains one.
+	for changed := true; changed; {
+		changed = false
+		for i := 0; i < len(order); i++ {
+			n := nodes[order[i]]
+			if n.scanned == len(n.d.Leaves) {
+				continue
+			}
+			n.scanned = len(n.d.Leaves)
+			scan(paths(n), order[i])
+			changed = true
+		}
+	}
+	var build func(parent string) []Delegated
+	build = func(parent string) []Delegated {
+		var out []Delegated
+		for _, id := range order {
+			n := nodes[id]
+			if n.parent != parent || len(n.d.Leaves) == 0 {
+				continue
+			}
+			d := n.d
+			counted := map[string]bool{}
+			for _, p := range paths(n) {
+				for _, c := range ModelCalls(p) {
+					if eid := c.Entry.Base().ID; !counted[eid] {
+						counted[eid] = true
+						d.Calls = append(d.Calls, c)
+					}
+				}
+			}
+			d.Children = build(id)
+			out = append(out, d)
+		}
+		return out
+	}
+	return build(""), unread
 }

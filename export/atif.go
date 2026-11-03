@@ -222,9 +222,6 @@ type builder struct {
 	// anyOmit is whether a config entry or a checkpoint on Path sets
 	// omit, without which no request leaves anything out.
 	anyOmit bool
-	// unembedded counts the subsession links whose child was not
-	// embedded, whose cost the root's total_cost_usd leaves out.
-	unembedded int
 	// results are the result records written under calls, each with the
 	// entry it was made from, and outputs the calls whose output the
 	// document holds: a result carries its item when the document holds
@@ -1262,25 +1259,21 @@ func (b *builder) finish() {
 	fm.TotalCachedTokens = atif.Ptr(b.cached)
 	fm.TotalSteps = atif.Ptr(calls)
 	// ATIF's total_cost_usd includes subagents, where the token totals
-	// and total_steps are the steps': each embedded document's cost,
-	// which includes its own embedded children, is added to the path's.
+	// and total_steps are the steps': the delegated work is added to the
+	// path's cost as RFC 0001's link rule counts it, each session once
+	// over the union of the paths its links name.
 	var costNotes []string
 	if b.hasCost {
-		embedded, unpriced := 0, 0
-		for _, sub := range b.doc.SubagentTrajectories {
-			if sub.FinalMetrics != nil && sub.FinalMetrics.TotalCostUSD != nil {
-				b.cost += *sub.FinalMetrics.TotalCostUSD
-				embedded++
-			} else {
-				unpriced++
-			}
-		}
+		priced, excluded, resumed := b.delegatedCost()
 		fm.TotalCostUSD = atif.Ptr(b.cost)
-		if embedded > 0 {
-			costNotes = append(costNotes, fmt.Sprintf("total_cost_usd includes the total_cost_usd of %d embedded subagent trajectory(ies); the token totals and total_steps are this path's alone.", embedded))
+		if priced > 0 {
+			costNotes = append(costNotes, fmt.Sprintf("total_cost_usd includes the cost of %d delegated session(s), each counted once; the token totals and total_steps are this path's alone.", priced))
 		}
-		if unpriced+b.unembedded > 0 {
-			costNotes = append(costNotes, fmt.Sprintf("total_cost_usd excludes %d subagent(s) not embedded or not priced.", unpriced+b.unembedded))
+		if resumed > 0 {
+			costNotes = append(costNotes, fmt.Sprintf("%d delegated session(s) are counted at the leaf a resume takes, since no output named one.", resumed))
+		}
+		if excluded > 0 {
+			costNotes = append(costNotes, fmt.Sprintf("total_cost_usd excludes %d delegated session(s) not read or not priced.", excluded))
 		}
 	}
 	// total_steps is the path's model calls, which a reader can count
@@ -1305,6 +1298,53 @@ func (b *builder) finish() {
 		}
 		b.doc.Notes = note
 	}
+}
+
+// delegatedCost adds to the path's cost the cost of the work it
+// delegated, by [agentsession.DelegatedWork] over the resolver: each
+// child once, at the model that served each call. It returns how many
+// children it priced, how many it left out, unread or held elsewhere or
+// with no call priced, and how many it counted at a resume leaf.
+func (b *builder) delegatedCost() (priced, excluded, resumed int) {
+	resolve := b.opts.Subsessions
+	if resolve == nil {
+		resolve = func(string) (*agentsession.Session, error) { return nil, nil }
+	}
+	path := b.t.Path
+	if len(path) == 0 {
+		path = b.t.Context.Entries
+	}
+	children, unread := agentsession.DelegatedWork(path, resolve)
+	excluded = len(unread)
+	var walk func([]agentsession.Delegated)
+	walk = func(ds []agentsession.Delegated) {
+		for _, d := range ds {
+			paid := false
+			for _, c := range d.Calls {
+				if c.Usage == nil {
+					continue
+				}
+				if usd, ok := b.costOf(c.Entry.Base().ID, c.Model, *c.Usage); ok {
+					b.cost += usd
+					paid = true
+				}
+			}
+			if paid {
+				priced++
+			} else {
+				excluded++
+			}
+			for _, leaf := range d.Leaves {
+				if !leaf.Named {
+					resumed++
+					break
+				}
+			}
+			walk(d.Children)
+		}
+	}
+	walk(children)
+	return priced, excluded, resumed
 }
 
 // redactedFrom is a redacted session's redacted_from as the root
@@ -1447,7 +1487,6 @@ func (b *builder) subsessions() {
 			// the session's document would be, which is all a document
 			// that could not load the child can offer.
 			ref.TrajectoryPath = MainDocumentName(l.Session)
-			b.unembedded++
 		}
 		if !b.attachRef(l.CallID, ref) {
 			rec["subagent_trajectory_ref"] = ref

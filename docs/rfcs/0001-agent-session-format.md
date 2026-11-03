@@ -2033,7 +2033,9 @@ links name is counted once. A child's cost is the cost of the child's
 path to the leaf named in `parents` by the entry that carries the
 call's output. When no leaf is named, it is the cost of the path to the
 leaf a reader resuming the child would take (File; in a store, its
-head). The child's cost is computed by this same rule, so it includes
+head). When the links naming one child count it at different leaves,
+its cost is that of the union of those paths, each entry once, so the
+prefix they share is counted once. The child's cost is computed by this same rule, so it includes
 the child's own children. Each model call is priced as the reader
 prices the path's own calls, at the model that served it in the child
 and not at the parent's.
@@ -2808,13 +2810,15 @@ model calls out of the steps the note says how many. Without that rule
 a cost column reads the tail's cost as the run's, and an agent that
 folded eleven times outranks one that did not.
 
-ATIF defines `total_cost_usd` to include subagents. When the
-document embeds subagent trajectories, the root's `total_cost_usd` is
-the path's cost plus each embedded document's, counted as `link` says
-of a reader that reports cost, and the root `notes` says so. The token
-totals and `total_steps` stay the path's, as ATIF defines them over the
-steps. A child that is not embedded, or is embedded without a cost, is
-not counted, and the notes say that the cost excludes it.
+ATIF defines `total_cost_usd` to include subagents. The root's
+`total_cost_usd` is the path's cost plus the cost of the work it
+delegated, counted as `link` says of a reader that reports cost: each
+child once, over the union of the paths its links name, whether or not
+the document embeds one trajectory of it or several. The root `notes`
+says so, and says how many children it counted at a resume leaf. The
+token totals and `total_steps` stay the path's, as ATIF defines them
+over the steps. A child the projection could not read or price is not
+counted, and the notes say that the cost excludes it.
 
 One document per path is a projection of the whole session, so a
 trajectory may be built at any entry and not only at a leaf: anything

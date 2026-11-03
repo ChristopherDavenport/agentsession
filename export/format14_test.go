@@ -66,7 +66,7 @@ func TestCostIncludesEmbeddedSubagents(t *testing.T) {
 	if *fm.TotalPromptTokens != 30 || *fm.TotalSteps != 2 {
 		t.Errorf("token totals and total_steps are the path's: prompt %d steps %d", *fm.TotalPromptTokens, *fm.TotalSteps)
 	}
-	for _, want := range []string{"includes the total_cost_usd of 1 embedded subagent", "excludes 1 subagent(s) not embedded"} {
+	for _, want := range []string{"includes the cost of 1 delegated session(s)", "excludes 1 delegated session(s) not read", "1 delegated session(s) are counted at the leaf a resume takes"} {
 		if !strings.Contains(doc.Notes, want) {
 			t.Errorf("notes %q say nothing of %q", doc.Notes, want)
 		}

@@ -636,10 +636,10 @@ func TestCostChildrenFixture(t *testing.T) {
 	}
 	a := children[0]
 	childA := held[SubsessionID(costParent, "call_a")]
-	if a.Session != childA.ID() || !a.LeafNamed || a.Leaf == childA.Leaf() || describe(a) != "gpt-5-mini:50,gpt-5-mini:60" {
+	if a.Session != childA.ID() || len(a.Leaves) != 1 || !a.Leaves[0].Named || a.Leaves[0].Entry == childA.Leaf() || describe(a) != "gpt-5-mini:50,gpt-5-mini:60" {
 		t.Errorf("child A is counted as %+v: %s", a, describe(a))
 	}
-	if len(a.Children) != 1 || !a.Children[0].LeafNamed || describe(a.Children[0]) != "gpt-5-nano:10" {
+	if len(a.Children) != 1 || len(a.Children[0].Leaves) != 1 || !a.Children[0].Leaves[0].Named || describe(a.Children[0]) != "gpt-5-nano:10" {
 		t.Errorf("the grandchild is counted as %+v", a.Children)
 	}
 	if len(unread) != 1 || unread[0].Session != SubsessionID(costParent, "call_b") || !errors.Is(unread[0].Err, ErrChildNotFound) {
@@ -657,7 +657,7 @@ func TestCostChildrenFixture(t *testing.T) {
 		bare = append(bare, e)
 	}
 	children, _ = DelegatedWork(bare, resolve)
-	if len(children) != 1 || children[0].LeafNamed || children[0].Leaf != childA.Leaf() || describe(children[0]) != "gpt-5-mini:50,gpt-5-mini:60,gpt-5-mini:70" {
+	if len(children) != 1 || len(children[0].Leaves) != 1 || children[0].Leaves[0].Named || children[0].Leaves[0].Entry != childA.Leaf() || describe(children[0]) != "gpt-5-mini:50,gpt-5-mini:60,gpt-5-mini:70" {
 		t.Errorf("without parents child A is counted as %+v", children)
 	}
 }
@@ -758,5 +758,61 @@ func TestDelegatedElsewhere(t *testing.T) {
 	children, unread := DelegatedWork(s.Path(s.Leaf()), func(string) (*Session, error) { return nil, nil })
 	if len(children) != 0 || len(unread) != 1 || unread[0].Session != "remote-1" || !errors.Is(unread[0].Err, ErrChildElsewhere) || errors.Is(unread[0].Err, ErrChildNotFound) {
 		t.Errorf("children %+v, unread %+v", children, unread)
+	}
+}
+
+// TestDelegatedUnion: one session named by two links that count it at
+// different leaves is counted once, over the union of its two paths, so
+// the prefix the two share counts once (RFC 0001, link, Cost across
+// sessions).
+func TestDelegatedUnion(t *testing.T) {
+	child := New(Header{ID: "child"})
+	add := func(s *Session, e Entry) string {
+		t.Helper()
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	usage := func(n int) *openresponses.Usage { return &openresponses.Usage{InputTokens: n, TotalTokens: n} }
+	add(child, &ConfigEntry{Model: "m"})
+	add(child, NewItemEntry(openresponses.UserText("task")))
+	fork := add(child, &ResponseEntry{ResponseID: "r1", Usage: usage(10)})
+	add(child, NewItemEntry(openresponses.UserText("one way")))
+	one := add(child, &ResponseEntry{ResponseID: "r2", Usage: usage(20)})
+	if err := child.Branch(fork); err != nil {
+		t.Fatal(err)
+	}
+	add(child, NewItemEntry(openresponses.UserText("the other")))
+	other := add(child, &ResponseEntry{ResponseID: "r3", Usage: usage(30)})
+
+	parent := New(Header{ID: "parent"})
+	add(parent, &ConfigEntry{Model: "m"})
+	for i, leaf := range []string{one, other} {
+		callID := fmt.Sprintf("call_%d", i)
+		call := add(parent, &ItemEntry{Item: &openresponses.FunctionCall{CallID: callID, Name: "spawn", Arguments: `{}`}, ResponseID: "p" + callID})
+		add(parent, &ResponseEntry{ResponseID: "p" + callID})
+		add(parent, NewSubsessionLink("child", callID))
+		add(parent, NewDispatch(callID, call))
+		out := NewItemEntry(openresponses.NewFunctionCallOutput(callID, "done"))
+		out.Parents = []EntryRef{{Session: "child", Entry: leaf}}
+		add(parent, out)
+	}
+	children, unread := DelegatedWork(parent.Path(parent.Leaf()), func(id string) (*Session, error) {
+		if id == "child" {
+			return child, nil
+		}
+		return nil, nil
+	})
+	if len(unread) != 0 || len(children) != 1 {
+		t.Fatalf("children %+v, unread %+v", children, unread)
+	}
+	total := 0
+	for _, c := range children[0].Calls {
+		total += c.Usage.InputTokens
+	}
+	if d := children[0]; len(d.Leaves) != 2 || d.Leaves[0].Entry != one || d.Leaves[1].Entry != other || total != 60 {
+		t.Errorf("the child is counted at %+v for %d tokens, want both leaves and 60", d.Leaves, total)
 	}
 }
