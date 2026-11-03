@@ -33,6 +33,12 @@ versions may break the API.
   `extra.agentsession` on the item's step. Fixtures
   `instruction-layers` (every response verifying, the context hash the
   same session's without the member) and `bad-instructions-part`.
+  An instructions part may carry `trust` (`InstructionPart.Trust`, the
+  form an item's has): taken in that form in a file of any minor, kept
+  by the hash and keep forms as `source` is, written with its text by
+  `InstructionsDelta` when it changes, taken into `PathTrust` from every
+  config entry and checkpoint, left out of the context hash, and kept
+  as written by a rewrite. Fixture `instruction-trust`.
 
 - **History members (RFC 0001 0.17, Entry envelope and
   Projections/ATIF).** `IsHistoryMember` names an entry's history

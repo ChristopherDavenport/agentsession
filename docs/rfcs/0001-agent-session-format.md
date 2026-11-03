@@ -579,7 +579,10 @@ One conversation item in the payload profile.
 - The **trust of a path** is the union of the `reads` of every `trust`
   on it: each `item` entry's, items an `omit` leaves out or sends as a
   placeholder included, since the model may have read them on an
-  earlier request, and each `compaction`'s and `branch_summary`'s.
+  earlier request, each `compaction`'s and `branch_summary`'s, and,
+  since 0.17, each instructions part's a `config` entry or a
+  compaction's checkpoint writes, a part that has since left force
+  included.
   The trust of a `branch_summary`'s `from` path is folded into the
   summary's own member, as `branch_summary` says. A copied item whose
   `copied_from` names an entry MUST carry that entry's `trust` as
@@ -827,6 +830,16 @@ name the layer of an omitted part (`instructions_omitted`) and of an
   part, as a 0.6 writer repeated it, is the part's source. A writer
   that clears or changes a part's `source` writes the part's `text`
   with it.
+- `trust` MAY be on a part, since 0.17: what the harness knows about
+  where the part's text came from, in the form and with the labels
+  `trust` has on an `item`, such as a memory part that holds what a web
+  page said. It is a record member: the part's text is sent as it is,
+  and the member reaches no request. A part named by `hash` alone, or
+  kept by `keep`, keeps the `trust` it had, as it keeps its `source`,
+  and a `trust` present on one is the part's trust; a writer that
+  clears or changes a part's `trust` writes the part's `text` with it.
+  A compaction's checkpoint writes each part with its `trust`. A
+  reader keeps a `trust` in another form as a member it does not know.
 - A run of unchanged parts MAY be named by position instead:
   `{"keep":n}`, an element with no `id` and a positive integer `keep`,
   stands for the
@@ -2474,8 +2487,8 @@ A redactor:
   which are request member names the provider reads. Two names of
   one object that a redaction makes one MUST NOT both be kept, nor an
   extension entry's name made one its envelope holds;
-- MUST keep `trust` as written, since 0.15: its labels are the
-  format's vocabulary, not text. An entry merged from several carries
+- MUST keep `trust` as written, since 0.15, and an instructions part's
+  since 0.17: its labels are the format's vocabulary, not text. An entry merged from several carries
   the union of theirs. A `compaction`'s or `branch_summary`'s `trust`
   is kept as written even when the entries behind it are left out,
   which is why it may be wider than the union a reader recomputes, and
@@ -3045,7 +3058,11 @@ cut before its append with two calls returned, one failed, and one in
 flight, continued by a resume that appends one result unchanged and
 answers the others, a web output marked `untrusted` and an inbox output
 marked `private` folded by a compaction carrying both, beside a label
-this document does not define, kept as written, a session that sends one
+this document does not define, kept as written, a memory part marked
+`untrusted` kept by a delta that adds an instruction file marked
+`private`, the path's trust holding both after a compaction's
+checkpoint, every response hashed and verifying and the context hash
+the same session's without the parts' `trust`, a session that sends one
 output with the default group's text and two with a group of their own,
 written in two deltas, every response hashed and verifying, a
 configuration naming two instruction files by path under `source`
@@ -3111,9 +3128,10 @@ dispatches and decisions, environment, outcome and cross-session links.
 
 ## Changes since 0.16
 
-One optional member, four defined values of an existing member, a
+Two optional members, four defined values of an existing member, a
 class of members, and rules for converters and readers. A 0.16 file is
-a 0.17 file that holds no `instructions_part`. No hash changes. The new
+a 0.17 file that holds no `instructions_part` and no instructions
+part's `trust`. No hash changes. The new
 member reaches no request, and RFC 0002's context hash leaves it out.
 A writer of 0.17 raises every file it appends to, as Versioning says,
 so every reader of 0.16 refuses those files until it is upgraded.
@@ -3127,6 +3145,11 @@ so every reader of 0.16 refuses those files until it is upgraded.
   session's instruction files without knowing its harness. A reader
   reads the values in a file of any minor, as writers already used
   them, and a redaction keeps them as written.
+- An instructions part may carry `trust`, as an `item` may (`config`,
+  Instructions as parts): a memory part that holds what an untrusted
+  source said says so. Its hash and keep forms keep the trust the part
+  had, as they keep its `source`, the path's trust takes it in, RFC
+  0002's context hash leaves it out, and a redaction keeps its labels.
 - `item` defines `instructions_part`, `{id, source}`: an item the
   harness composed from an instruction layer and sent as a message. A
   reader of 0.16 read such an item as a user's input. It is a record

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ var fixtures017 = map[string]func(t *testing.T) *Session{
 	"cost-children-child":      func(t *testing.T) *Session { _, c, _ := costChildrenFixture(t); return c },
 	"cost-children-grandchild": func(t *testing.T) *Session { _, _, g := costChildrenFixture(t); return g },
 	"env-snapshot":             envSnapshotFixture,
+	"instruction-trust":        func(t *testing.T) *Session { return instructionTrustFixture(t, true) },
 }
 
 // badFixtures017 are the 0.17 negative fixtures: each a valid file whose
@@ -859,5 +861,155 @@ func TestDelegatedReportsOnce(t *testing.T) {
 	_, unread := DelegatedWork(parent.Path(parent.Leaf()), func(id string) (*Session, error) { return held[id], nil })
 	if len(unread) != 1 || unread[0].Session != "d" {
 		t.Errorf("unread = %+v, want d once", unread)
+	}
+}
+
+// instructionTrustFixture builds the session instruction-trust.jsonl
+// holds (RFC 0001, Instructions as parts, since 0.17): a memory part
+// carrying untrusted beside a product part carrying none; a delta that
+// keeps both, the memory part's trust with it, and adds an instruction
+// file read from a private store; a compaction whose
+// checkpoint carries the parts with their trust; every response hashed
+// and verifying. Without marked no part carries trust, which is the same
+// session as the model saw it.
+func instructionTrustFixture(t *testing.T, marked bool) *Session {
+	t.Helper()
+	s, must, say := fixtureSession(t, Header{ID: "01995b2a-0000-7000-8000-000000000048"}, "2026-11-02T17:00:00Z")
+	trust := func(labels ...string) *Trust {
+		if !marked {
+			return nil
+		}
+		return &Trust{Reads: labels}
+	}
+	memory := InstructionPart{ID: "memory", Source: LayerAgentMemory, Text: "The release page said v2 ships Friday.", Trust: trust(TrustUntrusted)}
+	must(&ConfigEntry{Model: "gpt-5", InstructionsParts: []InstructionPart{
+		{ID: "product", Source: LayerProduct, Text: "You are a release agent."},
+		memory,
+	}})
+	must(NewItemEntry(openresponses.UserText("When does v2 ship?")))
+	say("resp_1", "Friday.")
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta := ctx.Settings.InstructionsDelta([]InstructionPart{
+		{ID: "product", Source: LayerProduct, Text: "You are a release agent."},
+		memory,
+		{ID: "/vault/AGENTS.md", Source: LayerAgentsMD, Text: "Ask before tagging.", Trust: trust(TrustPrivate)},
+	})
+	if delta == nil {
+		t.Fatal("no delta for a new part")
+	}
+	must(delta)
+	kept := must(NewItemEntry(openresponses.UserText("Tag it.")))
+	say("resp_2", "Asking first: tag v2?")
+	if ctx, err = s.Context(); err != nil {
+		t.Fatal(err)
+	}
+	must(&CompactionEntry{FirstKept: kept, Summary: openresponses.SystemText("Summary: v2 ships Friday."), Config: ctx.Settings, Trust: PathTrust(s.Path(s.Leaf()))})
+	say("resp_3", "Still waiting on the tag.")
+	return s
+}
+
+// TestInstructionTrustFixture reads the instruction-trust fixture: the
+// part a delta keeps keeps its trust in force, the checkpoint carries
+// the parts' trust, the path's trust takes in the parts', the responses
+// verify, and the context hash at the leaf is the same session's without
+// any part's trust.
+func TestInstructionTrustFixture(t *testing.T) {
+	raw := checkBuilt(t, "instruction-trust")
+	if !bytes.Contains(raw, []byte(`"trust":{"reads":["untrusted"]}`)) {
+		t.Error("the memory part does not carry its trust")
+	}
+	s := loadFixture(t, "instruction-trust")
+	for _, e := range s.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			if err := s.Verify(r.ID); err != nil {
+				t.Errorf("response %s: %v", r.ID, err)
+			}
+		}
+	}
+	path := s.Path(s.Leaf())
+	cfgs := 0
+	for _, e := range path {
+		if c, ok := e.(*ConfigEntry); ok {
+			cfgs++
+			if cfgs == 2 {
+				for _, p := range c.InstructionsParts {
+					if p.ID == "memory" || p.Keep == 0 && p.Text == "" {
+						t.Errorf("the delta repeats the memory part, or names one without text: %+v", p)
+					}
+				}
+			}
+		}
+	}
+	ctx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]*Trust{}
+	for _, p := range ctx.Settings.InstructionsParts {
+		byID[p.ID] = p.Trust
+	}
+	if m := byID["memory"]; m == nil || !slices.Equal(m.Reads, []string{TrustUntrusted}) || byID["product"] != nil {
+		t.Errorf("the parts in force carry trust %v", byID)
+	}
+	want := []string{TrustPrivate, TrustUntrusted}
+	if ctx.Trust == nil || !slices.Equal(ctx.Trust.Reads, want) {
+		t.Errorf("the context's trust is %+v", ctx.Trust)
+	}
+	if got := PathTrust(path[:1]); got == nil || !slices.Equal(got.Reads, []string{TrustUntrusted}) {
+		t.Errorf("the first config's trust is %+v", got)
+	}
+	plain := instructionTrustFixture(t, false)
+	hm, err := s.ContextHash(s.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hp, err := plain.ContextHash(plain.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hm != hp {
+		t.Errorf("the context hash is %s, and %s without the parts' trust", hm, hp)
+	}
+}
+
+// TestPartTrustForms: a part's trust is taken in the form 0.15 defines
+// for an item's, and a rewrite leaves its labels as they are.
+func TestPartTrustForms(t *testing.T) {
+	for _, tt := range []struct {
+		member string
+		typed  bool
+	}{
+		{`{"reads":["untrusted"]}`, true},
+		{`{"reads":[]}`, true},
+		{`{"reads":["private","private"]}`, false},
+		{`["untrusted"]`, false},
+	} {
+		line := `{"type":"config","id":"x","parent":null,"ts":"2026-11-02T10:00:00Z","instructions_parts":[{"id":"memory","source":"agentmemory","text":"m","trust":` + tt.member + `}]}`
+		e, err := UnmarshalEntry([]byte(reparent(t, line, "")))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.member, err)
+		}
+		if p := e.(*ConfigEntry).InstructionsParts[0]; (p.Trust != nil) != tt.typed {
+			t.Errorf("%s: typed %+v", tt.member, p.Trust)
+		}
+		back, err := MarshalEntry(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(back, []byte(`"trust":`+tt.member)) {
+			t.Errorf("%s: written back as %s", tt.member, back)
+		}
+	}
+	e := &ConfigEntry{Model: "m", InstructionsParts: []InstructionPart{{ID: "memory", Source: LayerAgentMemory, Text: "untrusted private", Trust: &Trust{Reads: []string{TrustPrivate, TrustUntrusted}}}}}
+	e.ID, e.Timestamp = "x", time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	out, err := RewriteStrings(e, func(s string) string { return strings.NewReplacer("untrusted", "U", "private", "P").Replace(s) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := out.(*ConfigEntry).InstructionsParts[0]; p.Trust == nil || !slices.Equal(p.Trust.Reads, []string{TrustPrivate, TrustUntrusted}) || p.Text != "U P" {
+		t.Errorf("rewritten: %+v", p)
 	}
 }

@@ -152,7 +152,8 @@ var envelopeMembers = []special{
 // leaves them as they are (RFC 0001, Every redacted entry). So is a
 // source the format defines ([KnownLayer]) on an instructions part, an
 // omitted part and an item's instructions_part, since 0.17; any other
-// source, and every id, is text.
+// source, and every id, is text. A part's trust labels, since 0.17, are
+// the format's vocabulary too.
 var bodyMembers = map[string][]special{
 	TypeItem: {
 		{path: memberPath("queued_from"), role: roleEntry, set: true},
@@ -179,6 +180,7 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("instructions_omitted", "[]", "of"), role: roleEntry, holds: keepOf},
 		{path: memberPath("instructions_parts", "[]", "hash"), role: roleHash},
 		{path: memberPath("instructions_parts", "[]", "source"), role: roleFixed, holds: knownSource},
+		{path: memberPath("instructions_parts", "[]", "trust", "reads", "[]"), role: roleFixed},
 		{path: memberPath("instructions_omitted", "[]", "source"), role: roleFixed, holds: knownSource},
 	},
 	TypeCompaction: {
@@ -189,6 +191,7 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("config", "omit", "images", "before"), role: roleEntry, bound: true, when: func(e Entry) bool { i := e.(*CompactionEntry).Config.Omit.Images; return i != nil && i.Before != "" }},
 		{path: memberPath("config", "instructions_parts", "[]", "hash"), role: roleHash},
 		{path: memberPath("config", "instructions_parts", "[]", "source"), role: roleFixed, holds: knownSource},
+		{path: memberPath("config", "instructions_parts", "[]", "trust", "reads", "[]"), role: roleFixed},
 		{path: memberPath("config", "instructions_omitted", "[]", "source"), role: roleFixed, holds: knownSource},
 		{path: memberPath("pinned", "[]", "call_id"), role: roleCallID},
 		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*CompactionEntry).Trust != nil }},

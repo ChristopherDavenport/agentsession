@@ -537,8 +537,10 @@ func UnionTrust(ts ...*Trust) *Trust {
 // PathTrust returns the trust of a root-first path (RFC 0001, item,
 // since 0.15): the union of the trust of every item entry on it, those
 // an omit leaves out or sends as a placeholder included, since the model
-// may have read them on an earlier request, and of every compaction and
-// branch summary, whose trust is that of the path they were made from.
+// may have read them on an earlier request, of every compaction and
+// branch summary, whose trust is that of the path they were made from,
+// and, since 0.17, of every instructions part a config entry or a
+// compaction's checkpoint writes with trust.
 // It is nil when nothing on the path carries trust.
 func PathTrust(path []Entry) *Trust {
 	var ts []*Trust
@@ -546,8 +548,15 @@ func PathTrust(path []Entry) *Trust {
 		switch v := e.(type) {
 		case *ItemEntry:
 			ts = append(ts, v.Trust)
+		case *ConfigEntry:
+			for _, p := range v.InstructionsParts {
+				ts = append(ts, p.Trust)
+			}
 		case *CompactionEntry:
 			ts = append(ts, v.Trust)
+			for _, p := range v.Config.InstructionsParts {
+				ts = append(ts, p.Trust)
+			}
 		case *BranchSummaryEntry:
 			ts = append(ts, v.Trust)
 		}
@@ -1144,6 +1153,13 @@ type InstructionPart struct {
 	// Source names the layer that produced the part, in the harness's
 	// own terms.
 	Source string `json:"source,omitempty"`
+	// Trust says, in format 0.17, what the harness knows about where
+	// the part's text came from, as on an item ([Trust]), such as a
+	// memory part that holds what a web page said. A part named by its
+	// hash alone keeps the trust it had, as it keeps its source. It is a
+	// record member, reaches no request, and the path's trust takes it
+	// in ([PathTrust]).
+	Trust *Trust `json:"trust,omitempty"`
 	// Hash is the hash of the text a delta does not repeat, in the
 	// format's notation: [HashPrefix] and the SHA-256 of the text.
 	// [HashText] computes it. It is set on a delta's unchanged part
@@ -1177,7 +1193,8 @@ func (p *InstructionPart) UnmarshalJSON(data []byte) error {
 	type plain InstructionPart
 	var v struct {
 		plain
-		Keep json.RawMessage `json:"keep"`
+		Keep  json.RawMessage `json:"keep"`
+		Trust json.RawMessage `json:"trust"`
 	}
 	if err := json.Unmarshal(data, &v); err != nil {
 		return err
@@ -1186,6 +1203,18 @@ func (p *InstructionPart) UnmarshalJSON(data []byte) error {
 	p.Keep = 0
 	if n, err := strconv.ParseInt(string(v.Keep), 10, 32); err == nil && n > 0 {
 		p.Keep = int(n)
+	}
+	// trust is taken in the form an item's is (0.17); another form is a
+	// member the part does not define, which the line keeps as written.
+	p.Trust = nil
+	if len(v.Trust) > 0 && trustForm(v.Trust) {
+		var t Trust
+		if json.Unmarshal(v.Trust, &t) == nil {
+			if t.Reads == nil {
+				t.Reads = []string{}
+			}
+			p.Trust = &t
+		}
 	}
 	return nil
 }
