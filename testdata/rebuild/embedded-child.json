@@ -1,0 +1,618 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "parent",
+  "trajectory_id": "sha256:d31d9c2c2d584e86ffa9dbb04a94646f46d6400c0f4474522b06515d235ff9e7",
+  "agent": {
+    "name": "agentsession",
+    "version": "agentsession/0.18",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-09-17T12:00:02Z",
+      "source": "user",
+      "message": "delegate",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:434f9bd9d263044c19d3c14021290765e842795d7ebf17ec985157cd68545a57",
+          "visible": "sha256:3ab90152037618541daf23bdf0c519b7dab095f7c22e3bfb4aaef72916807e7a"
+        },
+        "config_entries": [
+          "sha256:facbd561825719640fb5089d78e47f30e5c8e2b6ba87ff413b9a6cd8f0be65b4"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "delegate"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-09-17T12:00:04Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "call_1",
+          "function_name": "spawn",
+          "arguments": {}
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "call_1",
+            "content": "done",
+            "subagent_trajectory_ref": [
+              {
+                "trajectory_id": "13180cc1-b6f4-5a32-92d2-8d996f95c305/sha256:1bee2b136e9cfde9316d43d07c09e822b14118db88898ba9edc914310473792a",
+                "session_id": "13180cc1-b6f4-5a32-92d2-8d996f95c305",
+                "extra": {
+                  "child_leaf": "sha256:1bee2b136e9cfde9316d43d07c09e822b14118db88898ba9edc914310473792a",
+                  "child_leaf_named": true,
+                  "entry_id": "sha256:ea3c17db85f9dfb01d6776252727736269e37877609cb765057b3d157970ef59"
+                }
+              }
+            ],
+            "extra": {
+              "agentsession": {
+                "entry_id": "sha256:d31d9c2c2d584e86ffa9dbb04a94646f46d6400c0f4474522b06515d235ff9e7"
+              },
+              "openresponses": {
+                "item": {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "output": "done"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:5285eba3cf76084f6f4a7438bdaed07802d77d9ccdb5590a935aa4f8988897a4",
+          "visible": "sha256:cdd61aeb3011b33d15b2301b0268642f8b50f062e7cad891a0cb4a9949ff0901"
+        },
+        "item_entry_ids": [
+          "sha256:4e244e3cec6c123ef6487c46bc2a7311bca9ef7b178cecc4deb78a5e3988816c"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "function_call",
+              "call_id": "call_1",
+              "name": "spawn",
+              "arguments": "{}"
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:5285eba3cf76084f6f4a7438bdaed07802d77d9ccdb5590a935aa4f8988897a4",
+            "response_id": "p1",
+            "status": "",
+            "ts": "2026-09-17T12:00:04Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 1 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 2 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 1
+  },
+  "extra": {
+    "agentsession": {
+      "entries": {
+        "sha256:434f9bd9d263044c19d3c14021290765e842795d7ebf17ec985157cd68545a57": {
+          "parent": "sha256:facbd561825719640fb5089d78e47f30e5c8e2b6ba87ff413b9a6cd8f0be65b4",
+          "ts": "2026-09-17T12:00:02Z",
+          "type": "item"
+        },
+        "sha256:4e244e3cec6c123ef6487c46bc2a7311bca9ef7b178cecc4deb78a5e3988816c": {
+          "body": {
+            "response": "p1"
+          },
+          "parent": "sha256:434f9bd9d263044c19d3c14021290765e842795d7ebf17ec985157cd68545a57",
+          "ts": "2026-09-17T12:00:03Z",
+          "type": "item"
+        },
+        "sha256:5285eba3cf76084f6f4a7438bdaed07802d77d9ccdb5590a935aa4f8988897a4": {
+          "parent": "sha256:4e244e3cec6c123ef6487c46bc2a7311bca9ef7b178cecc4deb78a5e3988816c",
+          "ts": "2026-09-17T12:00:04Z",
+          "type": "response"
+        },
+        "sha256:d31d9c2c2d584e86ffa9dbb04a94646f46d6400c0f4474522b06515d235ff9e7": {
+          "parent": "sha256:ea3c17db85f9dfb01d6776252727736269e37877609cb765057b3d157970ef59",
+          "parents": [
+            {
+              "session": "13180cc1-b6f4-5a32-92d2-8d996f95c305",
+              "entry": "sha256:1bee2b136e9cfde9316d43d07c09e822b14118db88898ba9edc914310473792a"
+            }
+          ],
+          "ts": "2026-09-17T12:00:06Z",
+          "type": "item"
+        },
+        "sha256:ea3c17db85f9dfb01d6776252727736269e37877609cb765057b3d157970ef59": {
+          "body": {
+            "call_id": "call_1",
+            "rel": "subsession",
+            "session": "13180cc1-b6f4-5a32-92d2-8d996f95c305"
+          },
+          "parent": "sha256:5285eba3cf76084f6f4a7438bdaed07802d77d9ccdb5590a935aa4f8988897a4",
+          "ts": "2026-09-17T12:00:05Z",
+          "type": "link"
+        },
+        "sha256:facbd561825719640fb5089d78e47f30e5c8e2b6ba87ff413b9a6cd8f0be65b4": {
+          "body": {
+            "model": "gpt-5"
+          },
+          "parent": null,
+          "ts": "2026-09-17T12:00:01Z",
+          "type": "config"
+        }
+      },
+      "format": "agentsession/0.18",
+      "leaf": "sha256:d31d9c2c2d584e86ffa9dbb04a94646f46d6400c0f4474522b06515d235ff9e7",
+      "main": true,
+      "visible": "sha256:1df5641cc66bd459e2fe23a8129cbba03322dda6ddd43fd3d3ce21c7f57c3f15"
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  },
+  "subagent_trajectories": [
+    {
+      "schema_version": "ATIF-v1.8",
+      "session_id": "13180cc1-b6f4-5a32-92d2-8d996f95c305",
+      "trajectory_id": "13180cc1-b6f4-5a32-92d2-8d996f95c305/sha256:1bee2b136e9cfde9316d43d07c09e822b14118db88898ba9edc914310473792a",
+      "agent": {
+        "name": "fixture",
+        "version": "1",
+        "model_name": "gpt-5",
+        "tool_definitions": [
+          {
+            "function": {
+              "description": "Look something up",
+              "name": "lookup",
+              "parameters": {
+                "properties": {
+                  "q": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "q"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "step_id": 1,
+          "timestamp": "2026-09-17T12:00:01Z",
+          "source": "user",
+          "message": "What is 2+2?",
+          "extra": {
+            "agentsession": {
+              "entry_id": "sha256:2736b082b786e21a31a47b83e2a5b9e63e42e53063e2043e6ad176ffd9013130",
+              "redacted": [
+                2
+              ],
+              "visible": "sha256:c1935cb25f7f3e38bfd250d77160dbe638553ca2229266c72b34135c26ce2f76"
+            },
+            "config_entries": [
+              "sha256:bb6a29fddf1e5f2ee8bec26c70b704c2e1bb2716b8906c37830ec1b96595d8f5"
+            ],
+            "openresponses": {
+              "item": {
+                "type": "message",
+                "role": "user",
+                "content": [
+                  {
+                    "type": "input_text",
+                    "text": "What is 2+2?"
+                  }
+                ]
+              }
+            },
+            "tool_changes": {
+              "added": [
+                "lookup"
+              ]
+            }
+          }
+        },
+        {
+          "step_id": 2,
+          "timestamp": "2026-09-17T12:00:02.5Z",
+          "source": "agent",
+          "model_name": "gpt-5",
+          "reasoning_effort": "low",
+          "message": "",
+          "reasoning_content": "Arithmetic, but the tool is there.",
+          "tool_calls": [
+            {
+              "tool_call_id": "call_1",
+              "function_name": "lookup",
+              "arguments": {
+                "q": "2+2"
+              }
+            }
+          ],
+          "observation": {
+            "results": [
+              {
+                "source_call_id": "call_1",
+                "content": "[n]",
+                "extra": {
+                  "agentsession": {
+                    "entry_id": "sha256:8969138eba9eaa0980dd23fe572576f841ee16dc0e600af13c3fce55724614ca"
+                  },
+                  "openresponses": {
+                    "item": {
+                      "type": "function_call_output",
+                      "call_id": "call_1",
+                      "output": "[n]"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "metrics": {
+            "prompt_tokens": 40,
+            "completion_tokens": 12,
+            "cached_tokens": 0,
+            "extra": {
+              "reasoning_tokens": 5
+            }
+          },
+          "llm_call_count": 1,
+          "extra": {
+            "agentsession": {
+              "entry_id": "sha256:3dcba05ae05661629a05e7208d433684b8a959cf7a7b7d3fdf97417f27b3f790",
+              "redacted": [
+                5
+              ],
+              "redacted_entries": {
+                "sha256:2909fa8eda24663d8cb8f7581fa4efa778233745c4b0573a85a451afca920168": [
+                  4
+                ],
+                "sha256:36a05597fb484070459b2226f64d2bbea7993b8331871643413c0c66b082bbae": [
+                  3
+                ],
+                "sha256:3dcba05ae05661629a05e7208d433684b8a959cf7a7b7d3fdf97417f27b3f790": [
+                  5
+                ],
+                "sha256:8969138eba9eaa0980dd23fe572576f841ee16dc0e600af13c3fce55724614ca": [
+                  6
+                ]
+              },
+              "visible": "sha256:99e3432fd5ef573f05f3ea5e01d20a8d806c389e7fc17d0da6aaed993909e8ce"
+            },
+            "item_entry_ids": [
+              "sha256:36a05597fb484070459b2226f64d2bbea7993b8331871643413c0c66b082bbae",
+              "sha256:2909fa8eda24663d8cb8f7581fa4efa778233745c4b0573a85a451afca920168"
+            ],
+            "latency_ms": 500,
+            "openresponses": {
+              "items": [
+                {
+                  "type": "reasoning",
+                  "id": "rs_1",
+                  "summary": [
+                    {
+                      "type": "summary_text",
+                      "text": "Arithmetic, but the tool is there."
+                    }
+                  ]
+                },
+                {
+                  "type": "function_call",
+                  "id": "fc_1",
+                  "status": "completed",
+                  "call_id": "call_1",
+                  "name": "lookup",
+                  "arguments": "{\"q\":\"2+2\"}"
+                }
+              ],
+              "response": {
+                "entry_id": "sha256:3dcba05ae05661629a05e7208d433684b8a959cf7a7b7d3fdf97417f27b3f790",
+                "latency_ms": 500,
+                "legacy_id": "r0000001",
+                "model": "gpt-5",
+                "redacted": [
+                  5
+                ],
+                "request_hash": "sha256:e62ea2aa2e8159c4f9c5f045de715e5ab7c2c5f2c3f10ab8af031944194a1e2c",
+                "response_id": "resp_1",
+                "status": "completed",
+                "ts": "2026-09-17T12:00:02.5Z",
+                "usage": {
+                  "input_tokens": 40,
+                  "output_tokens": 12,
+                  "total_tokens": 52,
+                  "input_tokens_details": {
+                    "cached_tokens": 0
+                  },
+                  "output_tokens_details": {
+                    "reasoning_tokens": 5
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "step_id": 3,
+          "timestamp": "2026-09-17T12:00:04Z",
+          "source": "agent",
+          "model_name": "gpt-5",
+          "reasoning_effort": "low",
+          "message": "2+2 is 4.",
+          "metrics": {
+            "prompt_tokens": 60,
+            "completion_tokens": 8,
+            "cached_tokens": 40
+          },
+          "llm_call_count": 1,
+          "extra": {
+            "agentsession": {
+              "entry_id": "sha256:22bbed70ed5d6453e07c4c5fbd62388c97cb58400f5bc855c3b797a95305dbcb",
+              "redacted": [
+                8
+              ],
+              "redacted_entries": {
+                "sha256:22bbed70ed5d6453e07c4c5fbd62388c97cb58400f5bc855c3b797a95305dbcb": [
+                  8
+                ],
+                "sha256:ccef1b74716261c11c9bdbc07e81b25dd21d7723e8aa467c689a115b58457122": [
+                  7
+                ]
+              },
+              "visible": "sha256:4fdf33200f0be2f64af1c6ef8f3b3a8d63d7d7f926816655b188dce2e94c3d8d"
+            },
+            "item_entry_ids": [
+              "sha256:ccef1b74716261c11c9bdbc07e81b25dd21d7723e8aa467c689a115b58457122"
+            ],
+            "latency_ms": 300,
+            "openresponses": {
+              "items": [
+                {
+                  "type": "message",
+                  "id": "msg_1",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "output_text",
+                      "text": "2+2 is 4.",
+                      "annotations": []
+                    }
+                  ],
+                  "phase": "final_answer"
+                }
+              ],
+              "response": {
+                "entry_id": "sha256:22bbed70ed5d6453e07c4c5fbd62388c97cb58400f5bc855c3b797a95305dbcb",
+                "latency_ms": 300,
+                "legacy_id": "r0000002",
+                "model": "gpt-5",
+                "redacted": [
+                  8
+                ],
+                "request_hash": "sha256:c9002ebfd59a10e4d5ef0b12cb77abb36cf05860c15c30d99dff5b68cc3e8ddf",
+                "response_id": "resp_2",
+                "status": "completed",
+                "ts": "2026-09-17T12:00:04Z",
+                "usage": {
+                  "input_tokens": 60,
+                  "output_tokens": 8,
+                  "total_tokens": 68,
+                  "input_tokens_details": {
+                    "cached_tokens": 40
+                  },
+                  "output_tokens_details": {
+                    "reasoning_tokens": 0
+                  }
+                }
+              }
+            },
+            "outcome": [
+              {
+                "entry_id": "sha256:1bee2b136e9cfde9316d43d07c09e822b14118db88898ba9edc914310473792a",
+                "kind": "feedback",
+                "label": "thumbs_up",
+                "score": 1,
+                "target": "sha256:22bbed70ed5d6453e07c4c5fbd62388c97cb58400f5bc855c3b797a95305dbcb"
+              }
+            ],
+            "phases": [
+              "final_answer"
+            ]
+          }
+        }
+      ],
+      "notes": "total_steps counts the path's 2 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 3 steps.",
+      "final_metrics": {
+        "total_prompt_tokens": 100,
+        "total_completion_tokens": 20,
+        "total_cached_tokens": 40,
+        "total_steps": 2,
+        "extra": {
+          "outcome": [
+            {
+              "entry_id": "sha256:1bee2b136e9cfde9316d43d07c09e822b14118db88898ba9edc914310473792a",
+              "kind": "feedback",
+              "label": "thumbs_up",
+              "score": 1,
+              "target": "sha256:22bbed70ed5d6453e07c4c5fbd62388c97cb58400f5bc855c3b797a95305dbcb"
+            }
+          ]
+        }
+      },
+      "extra": {
+        "agentsession": {
+          "cwd": "/home/u/proj",
+          "entries": {
+            "sha256:1bee2b136e9cfde9316d43d07c09e822b14118db88898ba9edc914310473792a": {
+              "body": {
+                "kind": "feedback",
+                "label": "thumbs_up",
+                "score": 1,
+                "target": "sha256:22bbed70ed5d6453e07c4c5fbd62388c97cb58400f5bc855c3b797a95305dbcb"
+              },
+              "legacy_id": "o0000001",
+              "parent": "sha256:22bbed70ed5d6453e07c4c5fbd62388c97cb58400f5bc855c3b797a95305dbcb",
+              "redacted": [
+                9
+              ],
+              "ts": "2026-09-17T12:00:05Z",
+              "type": "outcome"
+            },
+            "sha256:22bbed70ed5d6453e07c4c5fbd62388c97cb58400f5bc855c3b797a95305dbcb": {
+              "legacy_id": "r0000002",
+              "parent": "sha256:ccef1b74716261c11c9bdbc07e81b25dd21d7723e8aa467c689a115b58457122",
+              "redacted": [
+                8
+              ],
+              "ts": "2026-09-17T12:00:04Z",
+              "type": "response"
+            },
+            "sha256:2736b082b786e21a31a47b83e2a5b9e63e42e53063e2043e6ad176ffd9013130": {
+              "legacy_id": "i0000001",
+              "parent": "sha256:bb6a29fddf1e5f2ee8bec26c70b704c2e1bb2716b8906c37830ec1b96595d8f5",
+              "redacted": [
+                2
+              ],
+              "ts": "2026-09-17T12:00:01Z",
+              "type": "item"
+            },
+            "sha256:2909fa8eda24663d8cb8f7581fa4efa778233745c4b0573a85a451afca920168": {
+              "body": {
+                "response": "resp_1"
+              },
+              "legacy_id": "i0000003",
+              "parent": "sha256:36a05597fb484070459b2226f64d2bbea7993b8331871643413c0c66b082bbae",
+              "redacted": [
+                4
+              ],
+              "ts": "2026-09-17T12:00:02Z",
+              "type": "item"
+            },
+            "sha256:36a05597fb484070459b2226f64d2bbea7993b8331871643413c0c66b082bbae": {
+              "body": {
+                "response": "resp_1"
+              },
+              "legacy_id": "i0000002",
+              "parent": "sha256:2736b082b786e21a31a47b83e2a5b9e63e42e53063e2043e6ad176ffd9013130",
+              "redacted": [
+                3
+              ],
+              "ts": "2026-09-17T12:00:02Z",
+              "type": "item"
+            },
+            "sha256:3dcba05ae05661629a05e7208d433684b8a959cf7a7b7d3fdf97417f27b3f790": {
+              "legacy_id": "r0000001",
+              "parent": "sha256:2909fa8eda24663d8cb8f7581fa4efa778233745c4b0573a85a451afca920168",
+              "redacted": [
+                5
+              ],
+              "ts": "2026-09-17T12:00:02.5Z",
+              "type": "response"
+            },
+            "sha256:8969138eba9eaa0980dd23fe572576f841ee16dc0e600af13c3fce55724614ca": {
+              "legacy_id": "i0000004",
+              "parent": "sha256:3dcba05ae05661629a05e7208d433684b8a959cf7a7b7d3fdf97417f27b3f790",
+              "redacted": [
+                6
+              ],
+              "ts": "2026-09-17T12:00:03Z",
+              "type": "item"
+            },
+            "sha256:bb6a29fddf1e5f2ee8bec26c70b704c2e1bb2716b8906c37830ec1b96595d8f5": {
+              "body": {
+                "extra": {
+                  "temperature": 0.2
+                },
+                "instructions": "Be brief.",
+                "model": "gpt-5",
+                "reasoning": {
+                  "effort": "low",
+                  "summary": null
+                },
+                "tools_added": [
+                  {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "Look something up",
+                    "parameters": {
+                      "properties": {
+                        "q": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "q"
+                      ],
+                      "type": "object"
+                    }
+                  }
+                ]
+              },
+              "legacy_id": "c0000001",
+              "parent": null,
+              "redacted": [
+                1
+              ],
+              "ts": "2026-09-17T12:00:00Z",
+              "type": "config"
+            },
+            "sha256:ccef1b74716261c11c9bdbc07e81b25dd21d7723e8aa467c689a115b58457122": {
+              "body": {
+                "response": "resp_2"
+              },
+              "legacy_id": "i0000005",
+              "parent": "sha256:8969138eba9eaa0980dd23fe572576f841ee16dc0e600af13c3fce55724614ca",
+              "redacted": [
+                7
+              ],
+              "ts": "2026-09-17T12:00:04Z",
+              "type": "item"
+            }
+          },
+          "format": "agentsession/0.18",
+          "leaf": "sha256:1bee2b136e9cfde9316d43d07c09e822b14118db88898ba9edc914310473792a",
+          "main": true,
+          "redacted": true,
+          "redacted_from": {
+            "profile": "test/v1",
+            "session": "01995b2a-0000-7000-8000-000000000001"
+          },
+          "visible": "sha256:b91408e8f0c22003a134f10edb721d611319e28a466539d21ee1408c196e4559"
+        },
+        "openresponses": {
+          "payload": "openresponses/2026-04-24"
+        }
+      }
+    }
+  ]
+}

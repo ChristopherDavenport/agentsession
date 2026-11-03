@@ -64,12 +64,16 @@ versions may break the API.
   embedded trajectory's `trajectory_id` is `session/leaf`, so a redacted
   child could never be restored by it), and every step names an entry;
   a step appended after the export is listed. The reference rebuild in
-  `export`'s tests (`rebuildDocument`) does both, with cases for a
-  step's `message` edited alone, a step appended and a path short of its
-  leaf, for agentimport's converter to follow.
+  `export`'s tests (`rebuildDocument`) does both, for agentimport's
+  converter to follow, which has to adopt these rules (**breaking for
+  converters**: a 0.17 rebuild restores headers 0.18 forbids). The
+  documents under `testdata/rebuild` are its fixtures: `verified`,
+  `visible-edit`, `appended-step`, `removed-leaf` and `embedded-child`.
 
-- **ATIF: a partly priced child is left out of the cost (RFC 0001,
-  `link`, Cost across sessions).** The export added the calls of a
+- **Breaking (ATIF cost totals and notes): a partly priced child is
+  left out of the cost (RFC 0001, `link`, Cost across sessions).** A
+  document's `total_cost_usd` and its notes can differ from v0.0.34's
+  for the same session and price source. The export added the calls of a
   delegated session it could price and counted the session as priced
   when the price source could not price another of its calls, which
   understated `total_cost_usd` and said nothing. A child is now
@@ -80,6 +84,8 @@ versions may break the API.
   with no calls counts as 0 where it was left out. A call of the path
   itself the price source cannot price is named in a note ("excludes N
   model call(s) of this path") rather than skipped without a word.
+  Fixtures `cost-priced` and its children `cost-priced-empty`,
+  `cost-priced-partial` and `cost-priced-unpriced`.
 
 ## v0.0.34 - 2026-11-03
 

@@ -3178,10 +3178,18 @@ members, meaning members and a member this document does not define,
 each where this document puts it, and a redacted session's document
 rebuilt to its `id`s with its entries' `redacted` and its header's
 `redacted` and `redacted_from` restored, beside the same document
-changed after the export, one changed in a step's `message` alone, one
-with a step appended that names no entry, and one without its first
-entry, none of which restores them, a partly priced child left out of
-a document's cost and reported, and
+changed after the export and one without its first entry, neither of
+which restores them, the ATIF documents of 0.18's read-back, each step
+and each document carrying the hash of its visible fields: a redacted
+session's document as exported, which restores, the same changed in a
+step's `message` alone, with a step appended that names no entry, and
+without its leaf's entry, none of which restores, and a parent's
+document embedding a redacted child, whose own header is restored from
+the embedded trajectory and its `leaf`, a parent whose three children
+are priced as `link` prices them: one with no model call at 0, one
+whose call that records no usage adds nothing, and one with a call the
+price source cannot price left out whole and reported, beside a path
+call that cannot be priced and is reported, and
 negative cases, each a file broken in one way, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line

@@ -19,6 +19,61 @@ import (
 // its function, as for fixtures017.
 var fixtures018 = map[string]func(t *testing.T) *Session{
 	"instruction-layers-list": func(t *testing.T) *Session { return instructionLayersListFixture(t, true) },
+	"cost-priced":             func(t *testing.T) *Session { return costPricedFixture(t)[0] },
+	"cost-priced-empty":       func(t *testing.T) *Session { return costPricedFixture(t)[1] },
+	"cost-priced-partial":     func(t *testing.T) *Session { return costPricedFixture(t)[2] },
+	"cost-priced-unpriced":    func(t *testing.T) *Session { return costPricedFixture(t)[3] },
+}
+
+// costPricedParent is the session ID of the cost-priced fixture's
+// parent.
+const costPricedParent = "01995b2a-0000-7000-8000-000000000051"
+
+// costPricedFixture builds the sessions cost-priced.jsonl and its three
+// children hold (RFC 0001, link, Cost across sessions, 0.18), for a price
+// source that prices model "priced" at a dollar an input token and not
+// model "unpriced". The parent delegates three calls at "priced", one
+// input token each, then answers at "unpriced": a path call it cannot
+// price, which the notes name. Child empty makes no model call and is
+// priced at 0. Child partial makes a call that records no usage, which
+// adds nothing, and one of 20 tokens at "priced", and is priced at 20.
+// Child unpriced makes one of 10 at "priced" and one of 30 at
+// "unpriced", and is left out whole and reported, not counted at 10. The
+// path's cost is 3 and the document's 23.
+func costPricedFixture(t *testing.T) [4]*Session {
+	t.Helper()
+	ids := [3]string{SubsessionID(costPricedParent, "call_empty"), SubsessionID(costPricedParent, "call_partial"), SubsessionID(costPricedParent, "call_unpriced")}
+	answer := func(must func(Entry) string, resp, model, text string, usage *openresponses.Usage) {
+		t.Helper()
+		must(&ItemEntry{Item: &openresponses.Message{ID: "msg_" + resp, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: text, Annotations: []openresponses.Annotation{}}}}, ResponseID: resp})
+		must(&ResponseEntry{ResponseID: resp, Model: model, Status: openresponses.ResponseStatusCompleted, Usage: usage})
+	}
+	usage := func(n int) *openresponses.Usage { return &openresponses.Usage{InputTokens: n, TotalTokens: n} }
+	child := func(i int, at string) (*Session, func(Entry) string) {
+		s, must, _ := fixtureSession(t, Header{ID: ids[i], ParentSession: costPricedParent, SpawnedBy: []string{"call_empty", "call_partial", "call_unpriced"}[i]}, at)
+		must(&ConfigEntry{Model: "priced"})
+		must(NewItemEntry(openresponses.UserText("Look it up.")))
+		return s, must
+	}
+	empty, _ := child(0, "2026-11-03T14:00:10Z")
+	partial, must := child(1, "2026-11-03T14:00:20Z")
+	answer(must, "resp_p1", "priced", "Looking.", nil)
+	answer(must, "resp_p2", "priced", "Found it.", usage(20))
+	unpriced, must := child(2, "2026-11-03T14:00:30Z")
+	answer(must, "resp_u1", "priced", "Looking.", usage(10))
+	answer(must, "resp_u2", "unpriced", "Found it.", usage(30))
+
+	parent, must, _ := fixtureSession(t, Header{ID: costPricedParent}, "2026-11-03T14:00:00Z")
+	must(&ConfigEntry{Model: "priced"})
+	must(NewItemEntry(openresponses.UserText("Ask three helpers.")))
+	for i, call := range []string{"call_empty", "call_partial", "call_unpriced"} {
+		must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_" + call, CallID: call, Name: "spawn", Arguments: `{}`}, ResponseID: "resp_" + call})
+		must(&ResponseEntry{ResponseID: "resp_" + call, Model: "priced", Status: openresponses.ResponseStatusCompleted, Usage: usage(1)})
+		must(NewSubsessionLink(ids[i], call))
+		must(NewItemEntry(openresponses.NewFunctionCallOutput(call, "done")))
+	}
+	answer(must, "resp_last", "unpriced", "All three answered.", usage(5))
+	return [4]*Session{parent, empty, partial, unpriced}
 }
 
 // badFixtures018 are the 0.18 negative fixtures: each a valid file whose
@@ -380,5 +435,28 @@ func TestRewriteKeepsLayersDistinct(t *testing.T) {
 	}
 	if out, err := RewriteStrings(list, numbered); err != nil || len(out.(*ItemEntry).InstructionsLayers) != 2 {
 		t.Errorf("distinct ids: %v, %+v", err, out)
+	}
+}
+
+// TestCostPricedFixture: the cost-priced fixtures are what their builder
+// writes, and DelegatedWork finds the parent's three children, the empty
+// one with no model call.
+func TestCostPricedFixture(t *testing.T) {
+	for _, name := range []string{"cost-priced", "cost-priced-empty", "cost-priced-partial", "cost-priced-unpriced"} {
+		checkBuilt(t, name)
+	}
+	parent := loadFixture(t, "cost-priced")
+	children := map[string]*Session{}
+	for _, name := range []string{"cost-priced-empty", "cost-priced-partial", "cost-priced-unpriced"} {
+		s := loadFixture(t, name)
+		children[s.Header().ID] = s
+	}
+	work, unread := DelegatedWork(parent.Path(parent.Leaf()), func(id string) (*Session, error) { return children[id], nil })
+	calls := map[string]int{}
+	for _, d := range work {
+		calls[d.Session] = len(d.Calls)
+	}
+	if len(unread) != 0 || len(work) != 3 || calls[SubsessionID(costPricedParent, "call_empty")] != 0 || calls[SubsessionID(costPricedParent, "call_partial")] != 2 {
+		t.Errorf("delegated %v, unread %v", calls, unread)
 	}
 }

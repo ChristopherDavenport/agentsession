@@ -1,9 +1,14 @@
 package export
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/atif"
@@ -174,15 +179,148 @@ func TestRebuildEmbeddedChild(t *testing.T) {
 	if child.Leaf() == "" {
 		t.Fatal("the redacted child has no leaf")
 	}
-	parent := agentsession.New(agentsession.Header{ID: "parent"})
-	mustAppend(t, parent, &agentsession.ConfigEntry{Model: "gpt-5"})
-	mustAppend(t, parent, agentsession.NewItemEntry(openresponses.UserText("delegate")))
-	mustAppend(t, parent, &agentsession.ItemEntry{Item: &openresponses.FunctionCall{CallID: "call_1", Name: "spawn", Arguments: `{}`}, ResponseID: "p1"})
-	mustAppend(t, parent, &agentsession.ResponseEntry{ResponseID: "p1"})
-	mustAppend(t, parent, agentsession.NewSubsessionLink(child.Header().ID, "call_1"))
+	doc := embeddedChildDoc(t, child)
+	if len(doc.SubagentTrajectories) != 1 {
+		t.Fatalf("embedded %d trajectories", len(doc.SubagentTrajectories))
+	}
+	sub := doc.SubagentTrajectories[0]
+	if leaf, _ := sub.Extra[ExtraAgentSession].(map[string]any)[ExtraLeaf].(string); leaf != child.Leaf() {
+		t.Errorf("the embedded trajectory names leaf %q, want %s", leaf, child.Leaf())
+	}
+	if r := rebuildDocument(t, encode(t, sub)); !r.whole || !r.restoresHeader() {
+		t.Errorf("the embedded child: whole %v, verified %v", r.whole, r.verified)
+	}
+}
+
+// TestCostPricedDocument reads the cost-priced fixtures (RFC 0001, link,
+// Cost across sessions, 0.18): the document's cost is the path's 3 priced
+// calls, the empty child's 0 and the partial child's 20, the child with
+// a call the source cannot price left out whole, and the notes name it
+// and the path call that could not be priced.
+func TestCostPricedDocument(t *testing.T) {
+	parent := loadFixture(t, "cost-priced")
+	children := map[string]*agentsession.Session{}
+	for _, name := range []string{"cost-priced-empty", "cost-priced-partial", "cost-priced-unpriced"} {
+		s := loadFixture(t, name)
+		children[s.Header().ID] = s
+	}
+	tr, err := At(parent, parent.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ToATIF(tr, Options{
+		Subsessions: func(id string) (*agentsession.Session, error) { return children[id], nil },
+		Cost: func(model string, u openresponses.Usage) (float64, bool) {
+			return float64(u.InputTokens), model == "priced"
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fm := doc.FinalMetrics; fm.TotalCostUSD == nil || *fm.TotalCostUSD != 23 {
+		t.Errorf("total_cost_usd = %v, want 23", fm.TotalCostUSD)
+	}
+	for _, want := range []string{"includes the cost of 2 delegated session(s)", "excludes 1 delegated session(s) not read or not priced", "excludes 1 model call(s) of this path"} {
+		if !strings.Contains(doc.Notes, want) {
+			t.Errorf("notes %q say nothing of %q", doc.Notes, want)
+		}
+	}
+}
+
+// rebuildFixtures are the ATIF documents under testdata/rebuild, each
+// with whether a converter restores its header (RFC 0001,
+// Projections/ATIF, 0.18): a redacted session's document as exported; it
+// changed in a step's message alone; with a step appended; without its
+// leaf's entry; and a parent's document embedding a redacted child,
+// whose own header is restored from the embedded trajectory.
+var rebuildFixtures = []struct {
+	name     string
+	restores bool
+}{{"verified", true}, {"visible-edit", false}, {"appended-step", false}, {"removed-leaf", false}, {"embedded-child", true}}
+
+// TestRebuildFixtures writes the rebuild fixtures with -update and holds
+// the reference rebuild to each.
+func TestRebuildFixtures(t *testing.T) {
+	red := redaction(t, "basic", "test/v1", nil, func(v string) string {
+		if v == "4" {
+			return "[n]"
+		}
+		return v
+	})
+	tr, err := At(red, red.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := encode(t, mustDoc(t, tr))
+	first := lid(t, red, "i0000001")
+	docs := map[string][]byte{
+		"verified": raw,
+		"visible-edit": edit(t, raw, func(doc map[string]any) {
+			for _, sv := range doc["steps"].([]any) {
+				step := obj(t, sv)
+				if obj(t, obj(t, step["extra"])[ExtraAgentSession])["entry_id"] == first {
+					step["message"] = "[redacted]"
+				}
+			}
+		}),
+		"appended-step": edit(t, raw, func(doc map[string]any) {
+			doc["steps"] = append(doc["steps"].([]any), map[string]any{"step_id": len(doc["steps"].([]any)) + 1, "source": "user", "message": "appended"})
+		}),
+		"removed-leaf": edit(t, raw, func(doc map[string]any) {
+			delete(obj(t, obj(t, obj(t, doc["extra"])[ExtraAgentSession])[ExtraEntries]), red.Leaf())
+		}),
+		"embedded-child": encode(t, embeddedChildDoc(t, red)),
+	}
+	for _, f := range rebuildFixtures {
+		path := filepath.Join("..", "testdata", "rebuild", f.name+".json")
+		var buf bytes.Buffer
+		if err := json.Indent(&buf, docs[f.name], "", "  "); err != nil {
+			t.Fatal(err)
+		}
+		checkGolden(t, path, append(bytes.TrimRight(buf.Bytes(), "\n"), '\n'))
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.name == "embedded-child" {
+			var parent map[string]any
+			if err := json.Unmarshal(data, &parent); err != nil {
+				t.Fatal(err)
+			}
+			subs, _ := parent["subagent_trajectories"].([]any)
+			if len(subs) != 1 {
+				t.Fatalf("embedded-child embeds %d trajectories", len(subs))
+			}
+			if data, err = json.Marshal(subs[0]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if r := rebuildDocument(t, data); r.restoresHeader() != f.restores {
+			t.Errorf("%s: restores the header %v, want %v: whole %v, verified %v, strays %v", f.name, r.restoresHeader(), f.restores, r.whole, r.verified, r.strays)
+		}
+	}
+}
+
+// embeddedChildDoc is the document of a parent that delegated a call to
+// child, whose output names child's leaf, with child embedded.
+func embeddedChildDoc(t *testing.T, child *agentsession.Session) *atif.Trajectory {
+	t.Helper()
+	parent := agentsession.New(agentsession.Header{ID: "parent", CreatedAt: child.Header().CreatedAt})
+	at := child.Header().CreatedAt
+	add := func(e agentsession.Entry) {
+		t.Helper()
+		at = at.Add(time.Second)
+		e.Base().Timestamp = at
+		mustAppend(t, parent, e)
+	}
+	add(&agentsession.ConfigEntry{Model: "gpt-5"})
+	add(agentsession.NewItemEntry(openresponses.UserText("delegate")))
+	add(&agentsession.ItemEntry{Item: &openresponses.FunctionCall{CallID: "call_1", Name: "spawn", Arguments: `{}`}, ResponseID: "p1"})
+	add(&agentsession.ResponseEntry{ResponseID: "p1"})
+	add(agentsession.NewSubsessionLink(child.Header().ID, "call_1"))
 	out := agentsession.NewItemEntry(openresponses.NewFunctionCallOutput("call_1", "done"))
 	out.Parents = []agentsession.EntryRef{{Session: child.Header().ID, Entry: child.Leaf()}}
-	mustAppend(t, parent, out)
+	add(out)
 	tr, err := At(parent, parent.Leaf())
 	if err != nil {
 		t.Fatal(err)
@@ -196,14 +334,5 @@ func TestRebuildEmbeddedChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(doc.SubagentTrajectories) != 1 {
-		t.Fatalf("embedded %d trajectories", len(doc.SubagentTrajectories))
-	}
-	sub := doc.SubagentTrajectories[0]
-	if leaf, _ := sub.Extra[ExtraAgentSession].(map[string]any)[ExtraLeaf].(string); leaf != child.Leaf() {
-		t.Errorf("the embedded trajectory names leaf %q, want %s", leaf, child.Leaf())
-	}
-	if r := rebuildDocument(t, encode(t, sub)); !r.whole || !r.restoresHeader() {
-		t.Errorf("the embedded child: whole %v, verified %v", r.whole, r.verified)
-	}
+	return doc
 }
