@@ -336,3 +336,32 @@ func embeddedChildDoc(t *testing.T, child *agentsession.Session) *atif.Trajector
 	}
 	return doc
 }
+
+// TestRedactorAtExportIsSeen: the visible hashes are of the document as
+// the export built it, before its redactors run, so a custom redactor
+// that edits a step's message alone leaves that step failing its hash:
+// the entry is not rebuilt to its id and the header is not restored,
+// since the session no longer holds what the document shows (RFC 0001,
+// Projections/ATIF, 0.18).
+func TestRedactorAtExportIsSeen(t *testing.T) {
+	red := redaction(t, "basic", "test/v1", nil, func(v string) string { return v })
+	tr, err := At(red, red.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := lid(t, red, "i0000001")
+	doc, err := ToATIF(tr, Options{Redactors: []Redactor{RedactorFunc(func(d *atif.Trajectory) error {
+		for i := range d.Steps {
+			if as, _ := d.Steps[i].Extra[ExtraAgentSession].(map[string]any); as["entry_id"] == first {
+				d.Steps[i].Message = atif.Text("[redacted]")
+			}
+		}
+		return nil
+	})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := rebuildDocument(t, encode(t, doc)); r.restoresHeader() || r.verified[first] {
+		t.Errorf("a redactor at export editing a message alone: verified %v", r.verified)
+	}
+}

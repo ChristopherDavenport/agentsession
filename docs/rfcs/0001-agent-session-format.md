@@ -2832,9 +2832,13 @@ the hash of the step's visible fields, and `visible` under
   the first.
 - The hash is SHA-256 over the canonical JSON (RFC 8785) of those
   fields, in the format's notation, `sha256:` and lowercase
-  hexadecimal. The projection writes the hashes last, over the document
-  as it writes it, after any redaction it makes at export. An embedded
-  trajectory carries its own, over its own steps and fields.
+  hexadecimal. The projection computes the hashes over the document as
+  it builds it from the session, its media inline, before any redaction
+  it makes at export and before it moves media to files. A redaction at
+  export then leaves each step it changed failing its hash, which is
+  correct: that step no longer shows what the session's entries hold.
+  An embedded trajectory carries its own, over its own steps and
+  fields.
 
 A converter that rebuilds a session from a document this projection
 wrote restores on each entry:

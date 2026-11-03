@@ -169,16 +169,18 @@ func ToATIF(t Trajectory, opts Options) (*atif.Trajectory, error) {
 	if err := b.run(); err != nil {
 		return nil, err
 	}
+	// Before the redactors, so each hash is of the document as the
+	// export built it from the session: a step a redactor changes no
+	// longer shows what its entries hold, and fails its hash. An
+	// embedded trajectory's id is set by its parent, after its own
+	// export, so it is hashed again here.
+	if err := seal(b.doc); err != nil {
+		return nil, fmt.Errorf("export: %w", err)
+	}
 	for _, r := range opts.Redactors {
 		if err := r.Redact(b.doc); err != nil {
 			return nil, fmt.Errorf("export: redact: %w", err)
 		}
-	}
-	// Last, so each hash is of what the document shows as written: an
-	// embedded trajectory's id is set by its parent, after its own
-	// export, and is hashed again here.
-	if err := seal(b.doc); err != nil {
-		return nil, fmt.Errorf("export: %w", err)
 	}
 	return b.doc, nil
 }

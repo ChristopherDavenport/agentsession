@@ -49,8 +49,9 @@ versions may break the API.
   (`ExtraVisible`) on every step and at the top level of every
   document, embedded ones included: SHA-256 over the RFC 8785 canonical
   JSON of the step's, or the document's, visible fields
-  (`StepVisible`, `DocumentVisible`, `VisibleHash`), written last, after
-  the export's own redactors. A converter rebuilding an entry to the
+  (`StepVisible`, `DocumentVisible`, `VisibleHash`), computed over the
+  document as the export built it, before its own redactors run, so a
+  step a redactor at export changed fails its hash. A converter rebuilding an entry to the
   `id` the document names takes it as matching only when its step's and
   the document's hashes, recomputed, equal the recorded ones: the `id`
   covers the raw item, so a redaction made in the document's visible

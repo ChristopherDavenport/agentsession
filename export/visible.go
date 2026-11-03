@@ -20,7 +20,9 @@ import (
 // entry to the document's id holds the step it maps to, and the
 // document, to the hashes, so a change made to what a reader sees and
 // not to the raw items behind it is found ([StepVisible],
-// [DocumentVisible]).
+// [DocumentVisible]). The hashes are of the document as the export
+// built it, before [Options.Redactors] run and before [WriteDocument]
+// moves inline media to files.
 const ExtraVisible = "visible"
 
 // ExtraLeaf carries, under ExtraAgentSession in a document's top-level
@@ -108,7 +110,8 @@ func VisibleHash(v any) (string, error) {
 
 // seal writes the hash of the visible fields of each step of doc, and of
 // doc, under ExtraVisible, and does the same for each embedded
-// trajectory: last, so the hashes are of the document as written.
+// trajectory: once the document is built, before any redactor runs, so
+// the hashes are of what the session holds.
 func seal(doc *atif.Trajectory) error {
 	for i := range doc.Steps {
 		step := &doc.Steps[i]
