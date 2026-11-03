@@ -52,14 +52,21 @@ versions may break the API.
   the `id` from the header. New: `Pseudonym(key, id, profile)`,
   `RedactionKeySize` (32) and `ErrRedactionKey`, which refuses an absent
   or short key: there is no default key and no unkeyed fallback.
-  `NewRedactionNames(key, original, profile)` derives one redaction's
+  `NewRedactionNames(key, original *Session, profile)` derives one redaction's
   names: `ID`, `RedactedFrom`, `Redaction(id)` for any session it
   references, `Session` as a `Remap.Session` callback that re-points
   every reference whether or not its redaction is held, and
   `ReplaceIDs(ids)` for text, with `SessionIDsNamed(s)` reading the IDs
-  to rewrite from the original alone. A redacted original's IDs are
-  their own pseudonyms, so a redaction of a redaction derives what 0.18
-  did. `RedactedSessionID(pseudonym, profile)` keeps its signature and
+  to rewrite from the original alone. Whether an ID is its own
+  pseudonym is decided of each ID: a redacted original's own ID, its
+  header's, and those its redacted entries name are, so a redaction of a
+  redaction derives what 0.18 did for what that redaction wrote; an ID
+  named only by an entry appended natively to a redacted session, such
+  as a child a resumed redaction started, is keyed. `WithResolve` lets
+  the redaction read the sessions it names: one whose header carries
+  `redacted` is its own pseudonym, and a native original's reference to
+  it, as a fork of a redaction names it in `parent_session`, keeps its
+  ID. `RedactedSessionID(pseudonym, profile)` keeps its signature and
   now takes the pseudonym: **redacted IDs change for every new
   redaction, and a redaction resumed under 0.19 starts a new session**.
   `CheckRedactedID` reports a redacted header whose `id` is not the one

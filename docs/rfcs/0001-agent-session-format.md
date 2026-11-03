@@ -2735,16 +2735,25 @@ it does not know; the refusal of `redacted_from` without `redacted`
 binds the object that carries `session` as a non-empty string.
 
 Since 0.19 a redaction names every session by its **pseudonym**. A
-session ID is in the format's ID space when a redaction derived it and
-it names nothing the redaction hides, and the pseudonym of such an ID
-is the ID itself. That is every session ID a redacted session holds,
-its own `id` and every ID its members and text name, since what it
-holds was published, or could be, as it stands: a redaction of a
-redacted session derives what 0.18 derived. The pseudonym of every
-session ID an original that is not a redacted session names, its own
-`id` included, whether a native harness or a writer of this format
-minted it, and a subsession's derived ID among them, which is a hash of
-its parent's ID and a call ID, is keyed: the UUID of version 8 (RFC
+session ID is in the format's ID space when a redaction wrote it, so
+that publishing it reveals nothing a redaction hides, and the pseudonym
+of such an ID is the ID itself. A redactor decides it of each ID apart,
+from the original and from what it can read: an ID is in the format's
+ID space when it is the `id` of an original that is itself a redacted
+session; when the header of such an original names it; when an entry
+of the original carrying `redacted` names it in a member that names a
+session;
+or when the redactor can read the session it names and that session's
+header carries `redacted`. A redaction of a redacted session therefore
+derives what 0.18 derived for what the redaction before it wrote. Every
+other session ID is keyed, whether a native harness or a writer of this
+format minted it: a native original's own `id`, an ID named only by an
+entry appended natively to a redacted session, such as the link to a
+child a resumed redacted session started, and a subsession's derived
+ID, which is a hash of its parent's ID and a call ID. A redacted
+session's natively appended entries were never redacted, so the IDs
+they alone name are not published as they stand. The pseudonym of such
+an ID is the UUID of version 8 (RFC
 9562) whose bytes are the first 16 of HMAC-SHA-256 (RFC 2104) under the
 redaction's key over the UTF-8 bytes of the canonical form, as the
 entry hash writes it, of `["agentsession/pseudonym","<session id>","<profile>"]`,
@@ -2786,7 +2795,12 @@ profile write into one session; a profile names one set.
 A reference into another session names that session's redaction under
 the same profile and key: the UUIDv5 above, over that session's
 pseudonym, whether or not the redactor holds that redaction, so that
-what it writes does not depend on what it holds. In a redacted session,
+what it writes does not depend on what it holds. One exception keeps a
+link to a published redaction whole: in a redaction of an original
+that is not itself a redacted session, a reference to a session the
+redactor can read and whose header carries `redacted`, as a fork of a
+redacted session names it in `parent_session`, names that session by
+its own `id`, since it is already a redaction. In a redacted session,
 a session that a reference names and that a reader cannot find was not
 published with it: a reader concludes nothing from its absence, and in
 particular not that a linked child never started. A holder of the

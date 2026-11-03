@@ -104,7 +104,7 @@ var redactionKey = []byte("storetest redaction key, 32 byte")
 
 func newRedactor(orig *agentsession.Session, profile string, h agentsession.Header) *redactor {
 	oh := orig.Header()
-	names, err := agentsession.NewRedactionNames(redactionKey, oh, profile)
+	names, err := agentsession.NewRedactionNames(redactionKey, orig, profile)
 	if err != nil {
 		panic(err) // the key is long enough
 	}
@@ -841,7 +841,7 @@ func redactedRedactions(t *testing.T, opts Options) {
 	// Each profile derives its own pseudonym, so the redactions under
 	// two profiles name the original by two values, and neither is its
 	// ID: without the key, a pseudonym finds its own profile's alone.
-	names, _ := agentsession.NewRedactionNames(redactionKey, orig.Header(), "test.secret@1")
+	names, _ := agentsession.NewRedactionNames(redactionKey, orig, "test.secret@1")
 	for _, tt := range []struct {
 		id   string
 		want int

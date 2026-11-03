@@ -82,7 +82,7 @@ func TestPseudonymVectors(t *testing.T) {
 				t.Errorf("%s: %s is not a UUIDv8", c.Note, p)
 			}
 		}
-		n, err := NewRedactionNames(key, Header{ID: c.ID, Redacted: c.Redacted}, v.Profile)
+		n, err := NewRedactionNames(key, New(Header{ID: c.ID, Redacted: c.Redacted}), v.Profile)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -107,13 +107,13 @@ func TestRedactionKeyRefused(t *testing.T) {
 			t.Errorf("Pseudonym with a %d-byte key = %q, %v", len(key), p, err)
 		}
 		for _, redacted := range []bool{false, true} {
-			if n, err := NewRedactionNames(key, Header{ID: "o", Redacted: redacted}, "p"); !errors.Is(err, ErrRedactionKey) || n != nil {
+			if n, err := NewRedactionNames(key, New(Header{ID: "o", Redacted: redacted}), "p"); !errors.Is(err, ErrRedactionKey) || n != nil {
 				t.Errorf("NewRedactionNames with a %d-byte key, redacted %v = %v", len(key), redacted, err)
 			}
 		}
 	}
 	key := bytes.Repeat([]byte{7}, RedactionKeySize)
-	n, err := NewRedactionNames(key, Header{ID: "o"}, "p")
+	n, err := NewRedactionNames(key, New(Header{ID: "o"}), "p")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestRedactionKeyRefused(t *testing.T) {
 func TestRedactionNamesDerive(t *testing.T) {
 	key := testKey(t)
 	const orig, child = "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "01995b2a-0000-7000-8000-000000000002"
-	n, _ := NewRedactionNames(key, Header{ID: orig}, "p@1")
+	n, _ := NewRedactionNames(key, New(Header{ID: orig}), "p@1")
 	from := n.RedactedFrom()
 	if from.Session == orig || n.ID() != RedactedSessionID(from.Session, "p@1") || n.ID() == RedactedSessionID(orig, "p@1") {
 		t.Errorf("redacted_from %+v, id %s", from, n.ID())
@@ -146,8 +146,8 @@ func TestRedactionNamesDerive(t *testing.T) {
 	}
 	other := slices.Clone(key)
 	other[0] ^= 1
-	n2, _ := NewRedactionNames(other, Header{ID: orig}, "p@1")
-	n3, _ := NewRedactionNames(key, Header{ID: orig}, "p@2")
+	n2, _ := NewRedactionNames(other, New(Header{ID: orig}), "p@1")
+	n3, _ := NewRedactionNames(key, New(Header{ID: orig}), "p@2")
 	if n2.Pseudonym(orig) == from.Session || n3.Pseudonym(orig) == from.Session {
 		t.Error("another key or profile derives the same pseudonym")
 	}
@@ -158,12 +158,13 @@ func TestRedactionNamesDerive(t *testing.T) {
 		t.Errorf("the original's own ID re-points to %s, not %s", got, n.ID())
 	}
 	// A redaction of the redaction derives what 0.18 derived.
-	again, _ := NewRedactionNames(key, h, "p@1")
-	if again.RedactedFrom().Session != n.ID() || again.ID() != RedactedSessionID(n.ID(), "p@1") || again.Redaction(child) != RedactedSessionID(child, "p@1") {
+	again, _ := NewRedactionNames(key, New(h), "p@1")
+	keyedChild, _ := Pseudonym(key, child, "p@1")
+	if again.RedactedFrom().Session != n.ID() || again.ID() != RedactedSessionID(n.ID(), "p@1") || again.Redaction(child) != RedactedSessionID(keyedChild, "p@1") {
 		t.Errorf("redaction of a redaction: from %+v, id %s", again.RedactedFrom(), again.ID())
 	}
 	// No profile: the pseudonym's name holds the empty string.
-	bare, _ := NewRedactionNames(key, Header{ID: orig}, "")
+	bare, _ := NewRedactionNames(key, New(Header{ID: orig}), "")
 	if p, _ := Pseudonym(key, orig, ""); bare.RedactedFrom().Session != p || bare.RedactedFrom().Profile != "" {
 		t.Errorf("no profile: %+v", bare.RedactedFrom())
 	}
@@ -172,7 +173,7 @@ func TestRedactionNamesDerive(t *testing.T) {
 // TestReplaceIDs: each session ID is replaced as a substring by its
 // redaction's, a longer ID holding a shorter whole, and nothing else.
 func TestReplaceIDs(t *testing.T) {
-	n, _ := NewRedactionNames(testKey(t), Header{ID: "sess-1"}, "p")
+	n, _ := NewRedactionNames(testKey(t), New(Header{ID: "sess-1"}), "p")
 	f := n.ReplaceIDs([]string{"sess-1", "sess-12", "", "sess-1"})
 	got := f("/tmp/sess-1/out and sess-12, not sess-2")
 	want := "/tmp/" + n.Redaction("sess-1") + "/out and " + n.Redaction("sess-12") + ", not sess-2"
@@ -624,7 +625,7 @@ func redactedIDsOriginal(t *testing.T) *Session {
 func redactedIDsFixture(t *testing.T, wrongID bool) *Session {
 	t.Helper()
 	orig := redactedIDsOriginal(t)
-	names, err := NewRedactionNames(testKey(t), orig.Header(), idsProfile)
+	names, err := NewRedactionNames(testKey(t), orig, idsProfile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -701,7 +702,7 @@ func TestRedactedIDsFixture(t *testing.T) {
 	if err := CheckRedactedID(h); err != nil {
 		t.Errorf("CheckRedactedID: %v", err)
 	}
-	names, _ := NewRedactionNames(testKey(t), Header{ID: idsOriginal}, idsProfile)
+	names, _ := NewRedactionNames(testKey(t), New(Header{ID: idsOriginal}), idsProfile)
 	redChild := names.Redaction(child)
 	if !bytes.Contains(raw, []byte("helper "+redChild+" wrote /tmp/claude-"+h.ID+"/notes.md")) || !bytes.Contains(raw, []byte("/tmp/claude-"+h.ID+"/scratch")) {
 		t.Error("the text quoting the IDs does not name the IDs the redaction writes")
@@ -803,7 +804,7 @@ func TestVerdictFixture(t *testing.T) {
 // redaction, so RemapRefs refuses it, for an extension entry too; one
 // that maps or drops the entry, or leaves the session too, passes.
 func TestRemapRefsUnmappedIntoRepointedSession(t *testing.T) {
-	n, _ := NewRedactionNames(testKey(t), Header{ID: "o"}, "p")
+	n, _ := NewRedactionNames(testKey(t), New(Header{ID: "o"}), "p")
 	core := NewItemEntry(openresponses.UserText("hi"))
 	core.ID, core.Parent, core.Timestamp = "x", "p1", fixedTime
 	core.Parents = []EntryRef{{Session: "S", Entry: "sha256:X"}}
@@ -830,5 +831,69 @@ func TestRemapRefsUnmappedIntoRepointedSession(t *testing.T) {
 		if _, err := RemapRefs(e, Remap{Entry: drop, Session: n.Session}); err != nil {
 			t.Errorf("%s, entry dropped: %v", e.EntryType(), err)
 		}
+	}
+}
+
+// TestRedactionNamesPerID: whether an ID is its own pseudonym is decided
+// of each ID apart (RFC 0001, The redacted session, 0.19). A resumed
+// redacted session names a child by a redacted link and another by a
+// link appended natively: a redaction of it derives the first unkeyed,
+// as 0.18 did, and keys the second, which was never published as it
+// stands. A native fork of a redacted session R names R in
+// parent_session: read through WithResolve, R is a redaction already and
+// the reference keeps R's ID; unread, it is keyed like any other.
+func TestRedactionNamesPerID(t *testing.T) {
+	key := testKey(t)
+	const p = "p@1"
+	r := New(Header{ID: "red-r", Redacted: true, RedactedFrom: &RedactedFrom{Session: "pseudo", Profile: p}})
+	first := NewSpawnLink("child-redacted", "s1")
+	if err := SetRedacted(first, []Span{{From: 1, To: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Commit(first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Append(NewSpawnLink("child-native", "s2")); err != nil {
+		t.Fatal(err)
+	}
+	n, err := NewRedactionNames(key, r, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyed := func(id string) string { k, _ := Pseudonym(key, id, p); return RedactedSessionID(k, p) }
+	if got := n.Redaction("child-redacted"); got != RedactedSessionID("child-redacted", p) {
+		t.Errorf("a child a redacted entry names: %s", got)
+	}
+	if got := n.Redaction("child-native"); got != keyed("child-native") {
+		t.Errorf("a child only a native entry names: %s, want it keyed %s", got, keyed("child-native"))
+	}
+	if n.ID() != RedactedSessionID("red-r", p) {
+		t.Errorf("the redacted original's own ID: %s", n.ID())
+	}
+
+	fork := New(Header{ID: "fork-f", ParentSession: "red-r"})
+	if _, err := fork.Append(NewItemEntry(openresponses.UserText("more"))); err != nil {
+		t.Fatal(err)
+	}
+	unread, _ := NewRedactionNames(key, fork, p)
+	if got := unread.Redaction("red-r"); got != keyed("red-r") {
+		t.Errorf("unread R: %s, want it keyed", got)
+	}
+	read, _ := NewRedactionNames(key, fork, p)
+	read.WithResolve(func(id string) (*Session, error) {
+		if id == "red-r" {
+			return r, nil
+		}
+		return nil, nil
+	})
+	if got := read.Redaction("red-r"); got != "red-r" {
+		t.Errorf("readable redacted R: %s, want R's own ID", got)
+	}
+	if read.ID() != keyed("fork-f") || read.RedactedFrom().Session == "fork-f" {
+		t.Errorf("the native fork's own ID: %s", read.ID())
+	}
+	h, _ := RemapHeaderRefs(fork.Header(), Remap{Session: read.Session})
+	if h.ParentSession != "red-r" {
+		t.Errorf("parent_session re-pointed to %s", h.ParentSession)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession/internal/jcs"
@@ -174,43 +175,104 @@ func pseudonym(key []byte, id, profile string) string {
 // session's pseudonym, so a reader can recompute the redacted session's
 // ID from its header and a holder of a native ID cannot.
 //
-// Whether an ID is in the format's ID space is decided by the original
-// alone: every ID a redacted session names, its own included, is, and
-// its pseudonym is itself, so a redaction of a redaction derives what
-// 0.18 derived; every ID any other original names is keyed. What a
-// redactor writes therefore does not depend on which other sessions it
-// holds.
+// Whether an ID is in the format's ID space, and so its own pseudonym,
+// is decided of each ID apart: it is when it is the ID of an original
+// that is itself a redacted session, when such an original's header
+// names it, when an entry of the original carrying redacted names it in
+// a member that names a session, or when the redactor can read the
+// session it names, through [RedactionNames.WithResolve], and that
+// session's header carries redacted. Every other ID is keyed, an ID
+// named only by an entry appended natively to a redacted session among
+// them, such as a child a resumed redacted session started: it was
+// never published as it stands. A redaction of a redaction thus derives
+// what 0.18 derived for what the redaction before it wrote.
 //
 // A RedactionNames is safe for concurrent use.
 type RedactionNames struct {
 	key      []byte
 	profile  string
 	original string
-	space    bool
+	// redacted is whether the original is a redacted session.
+	redacted bool
+	// published are the IDs the original writes as a redaction wrote
+	// them: its own and its header's when it is redacted, and those its
+	// redacted entries name.
+	published map[string]bool
+
+	mu      sync.Mutex
+	resolve func(id string) (*Session, error)
+	read    map[string]bool // id -> readable and redacted, as resolve said
 }
 
-// NewRedactionNames returns the names a redaction of the session whose
-// header is original writes under key and profile. key is the holder's
-// secret, at least [RedactionKeySize] bytes, which the caller supplies
-// and keeps; it is copied, and is refused with [ErrRedactionKey] when
-// shorter or absent, also for an original that is itself a redacted
-// session, which needs none, so that a redactor never runs unkeyed by
-// accident. profile is the one redacted_from is to carry.
-func NewRedactionNames(key []byte, original Header, profile string) (*RedactionNames, error) {
+// NewRedactionNames returns the names a redaction of original writes
+// under key and profile. key is the holder's secret, at least
+// [RedactionKeySize] bytes, which the caller supplies and keeps; it is
+// copied, and is refused with [ErrRedactionKey] when shorter or absent,
+// also for an original that is itself a redacted session, so that a
+// redactor never runs unkeyed by accident. profile is the one
+// redacted_from is to carry. The original's entries are read once, for
+// the IDs its redacted entries name; entries it gains later are not.
+func NewRedactionNames(key []byte, original *Session, profile string) (*RedactionNames, error) {
 	if len(key) < RedactionKeySize {
 		return nil, ErrRedactionKey
 	}
-	if original.ID == "" {
+	if original == nil || original.ID() == "" {
 		return nil, errors.New("agentsession: redaction of a session with no id")
 	}
-	return &RedactionNames{key: bytes.Clone(key), profile: profile, original: original.ID, space: original.Redacted}, nil
+	h := original.Header()
+	n := &RedactionNames{key: bytes.Clone(key), profile: profile, original: h.ID, redacted: h.Redacted, published: map[string]bool{}}
+	if h.Redacted {
+		n.published[h.ID], n.published[h.ParentSession] = true, true
+	}
+	for _, e := range original.Entries() {
+		if _, ok := RedactedOf(e); ok {
+			for _, id := range sessionsNamedBy(e) {
+				n.published[id] = true
+			}
+		}
+	}
+	delete(n.published, "")
+	return n, nil
+}
+
+// WithResolve lets the redaction read the sessions it names, resolve
+// returning nil and no error for one it does not hold, and returns n,
+// for chaining. A session it reads whose header carries redacted is in
+// the format's ID space; and a reference to one from an original that
+// is not itself redacted, as a fork of a redacted session names it in
+// parent_session, names it by its own ID, since it is already a
+// redaction (RFC 0001, The redacted session). Without it, only what the
+// original says decides. Call it before the names are used.
+func (n *RedactionNames) WithResolve(resolve func(id string) (*Session, error)) *RedactionNames {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.resolve, n.read = resolve, map[string]bool{}
+	return n
+}
+
+// readRedacted reports whether the redactor can read the session id and
+// its header carries redacted.
+func (n *RedactionNames) readRedacted(id string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.resolve == nil || id == n.original {
+		return false
+	}
+	if v, ok := n.read[id]; ok {
+		return v
+	}
+	s, err := n.resolve(id)
+	v := err == nil && s != nil && s.Header().Redacted
+	n.read[id] = v
+	return v
 }
 
 // Pseudonym is the pseudonym of the session ID id as this redaction
-// names it: id itself when the original is a redacted session, and
-// otherwise its keyed pseudonym ([Pseudonym]).
+// names it: id itself when it is in the format's ID space, as
+// [RedactionNames] says, and otherwise its keyed pseudonym
+// ([Pseudonym]).
 func (n *RedactionNames) Pseudonym(id string) string {
-	if n.space {
+	if n.published[id] || n.readRedacted(id) {
 		return id
 	}
 	return pseudonym(n.key, id, n.profile)
@@ -219,14 +281,20 @@ func (n *RedactionNames) Pseudonym(id string) string {
 // Redaction is the ID this redaction writes for the session id in a
 // reference, and in text that quotes it: the ID of that session's
 // redaction under the same key and profile, whether or not anyone holds
-// it.
+// it; or, from an original that is not itself redacted, the ID of a
+// session the redactor reads as redacted, which is a redaction already.
 func (n *RedactionNames) Redaction(id string) string {
+	if !n.redacted && n.readRedacted(id) {
+		return id
+	}
 	return RedactedSessionID(n.Pseudonym(id), n.profile)
 }
 
 // ID is the redacted session's own ID: the [RedactionNames.Redaction]
 // of the original.
-func (n *RedactionNames) ID() string { return n.Redaction(n.original) }
+func (n *RedactionNames) ID() string {
+	return RedactedSessionID(n.Pseudonym(n.original), n.profile)
+}
 
 // RedactedFrom is the redacted_from the redacted session's header
 // carries: the original's pseudonym and the profile, or no profile when
@@ -283,22 +351,33 @@ func SessionIDsNamed(s *Session) []string {
 	h := s.Header()
 	set := map[string]bool{h.ID: true, h.ParentSession: true}
 	for _, e := range s.Entries() {
-		for _, r := range e.Base().Parents {
-			set[r.Session] = true
-		}
-		switch v := e.(type) {
-		case *LinkEntry:
-			if v.URL == "" {
-				set[v.Session] = true
-			}
-		case *ItemEntry:
-			if v.CopiedFrom != nil {
-				set[v.CopiedFrom.Session] = true
-			}
+		for _, id := range sessionsNamedBy(e) {
+			set[id] = true
 		}
 	}
 	delete(set, "")
 	return slices.Sorted(maps.Keys(set))
+}
+
+// sessionsNamedBy lists the session IDs e names in a member that names a
+// session: a parents element's session, the session of a link without a
+// url and a copied item's copied_from session.
+func sessionsNamedBy(e Entry) []string {
+	var out []string
+	for _, r := range e.Base().Parents {
+		out = append(out, r.Session)
+	}
+	switch v := e.(type) {
+	case *LinkEntry:
+		if v.URL == "" {
+			out = append(out, v.Session)
+		}
+	case *ItemEntry:
+		if v.CopiedFrom != nil {
+			out = append(out, v.CopiedFrom.Session)
+		}
+	}
+	return out
 }
 
 // ErrRedactedID is returned by [CheckRedactedID] for a redacted session
