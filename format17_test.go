@@ -3,6 +3,8 @@ package agentsession
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,8 +17,11 @@ import (
 // fixtures017 are the 0.17 conformance fixtures, each built natively by
 // its function, as for fixtures016.
 var fixtures017 = map[string]func(t *testing.T) *Session{
-	"instruction-layers": func(t *testing.T) *Session { return instructionLayersFixture(t, true) },
-	"inputs":             inputsFixture,
+	"instruction-layers":       func(t *testing.T) *Session { return instructionLayersFixture(t, true) },
+	"inputs":                   inputsFixture,
+	"cost-children":            func(t *testing.T) *Session { p, _, _ := costChildrenFixture(t); return p },
+	"cost-children-child":      func(t *testing.T) *Session { _, c, _ := costChildrenFixture(t); return c },
+	"cost-children-grandchild": func(t *testing.T) *Session { _, _, g := costChildrenFixture(t); return g },
 }
 
 // badFixtures017 are the 0.17 negative fixtures: each a valid file whose
@@ -517,5 +522,138 @@ func TestInputsFixture(t *testing.T) {
 	}
 	if got := describe(turns); byRuns || strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("by runs %v, the turns' inputs are\n%s\nwant\n%s", byRuns, strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// costParent is the session ID of the cost-children fixture's parent.
+const costParent = "01995b2a-0000-7000-8000-000000000046"
+
+// costChildrenFixture builds the sessions cost-children.jsonl and its
+// children hold (RFC 0001, link, Cost across sessions, since 0.17): a
+// parent at gpt-5 delegates two calls by subsession links. Child A, at
+// gpt-5-mini, delegates a call of its own to a grandchild at gpt-5-nano,
+// answers, and is then continued past the answer the parent took, whose
+// output names that answer in parents; a cancel notice names child A's
+// link, and counts it no second time. Child B was never written, so a
+// reader reports it unread.
+func costChildrenFixture(t *testing.T) (parent, child, grandchild *Session) {
+	t.Helper()
+	childA, childB := SubsessionID(costParent, "call_a"), SubsessionID(costParent, "call_b")
+	grand := SubsessionID(childA, "call_g")
+	answer := func(s *Session, must func(Entry) string, resp, model, text string, in, out int) string {
+		t.Helper()
+		sent := fixtureHash(t, s)
+		must(&ItemEntry{Item: &openresponses.Message{ID: "msg_" + resp, Status: "completed", Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: text, Annotations: []openresponses.Annotation{}}}}, ResponseID: resp})
+		return must(&ResponseEntry{ResponseID: resp, Model: model, Status: openresponses.ResponseStatusCompleted, RequestHash: sent, Usage: &openresponses.Usage{InputTokens: in, OutputTokens: out, TotalTokens: in + out}})
+	}
+	calls := func(s *Session, must func(Entry) string, resp, model string, in, out int, ids ...string) []string {
+		t.Helper()
+		sent := fixtureHash(t, s)
+		var entries []string
+		for _, id := range ids {
+			entries = append(entries, must(&ItemEntry{Item: &openresponses.FunctionCall{ID: "fc_" + id, CallID: id, Name: "research", Arguments: `{}`}, ResponseID: resp}))
+		}
+		must(&ResponseEntry{ResponseID: resp, Model: model, Status: openresponses.ResponseStatusCompleted, RequestHash: sent, Usage: &openresponses.Usage{InputTokens: in, OutputTokens: out, TotalTokens: in + out}})
+		return entries
+	}
+
+	grandchild, must, _ := fixtureSession(t, Header{ID: grand, ParentSession: childA, SpawnedBy: "call_g", Records: []string{TypeDispatch}}, "2026-11-02T15:00:10Z")
+	must(&ConfigEntry{Model: "gpt-5-nano", Instructions: ptr("Look prices up.")})
+	must(NewItemEntry(openresponses.UserText("Look up vendor A's prices.")))
+	grandLeaf := answer(grandchild, must, "resp_g1", "gpt-5-nano", "A costs 10 a seat.", 10, 1)
+
+	child, must, _ = fixtureSession(t, Header{ID: childA, ParentSession: costParent, SpawnedBy: "call_a", Records: []string{TypeDispatch}}, "2026-11-02T15:00:05Z")
+	must(&ConfigEntry{Model: "gpt-5-mini", Instructions: ptr("Research a vendor.")})
+	must(NewItemEntry(openresponses.UserText("Research vendor A.")))
+	g := calls(child, must, "resp_c1", "gpt-5-mini", 50, 5, "call_g")
+	must(NewSubsessionLink(grand, "call_g"))
+	must(NewDispatch("call_g", g[0]))
+	out := NewItemEntry(openresponses.NewFunctionCallOutput("call_g", "A costs 10 a seat."))
+	out.Parents = []EntryRef{{Session: grand, Entry: grandLeaf}}
+	must(out)
+	childLeaf := answer(child, must, "resp_c2", "gpt-5-mini", "Vendor A is cheaper.", 60, 6)
+	must(NewItemEntry(openresponses.UserText("And their support?")))
+	answer(child, must, "resp_c3", "gpt-5-mini", "Support is email only.", 70, 7)
+
+	parent, must, _ = fixtureSession(t, Header{ID: costParent, Records: []string{TypeDispatch}}, "2026-11-02T15:00:00Z")
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Delegate research.")})
+	must(NewItemEntry(openresponses.UserText("Compare vendors A and B.")))
+	c := calls(parent, must, "resp_1", "gpt-5", 100, 20, "call_a", "call_b")
+	linkA := NewSubsessionLink(childA, "call_a")
+	must(linkA)
+	must(NewDispatch("call_a", c[0]))
+	must(NewSubsessionLink(childB, "call_b"))
+	must(NewDispatch("call_b", c[1]))
+	must(NewCancelSentLink(linkA))
+	outA := NewItemEntry(openresponses.NewFunctionCallOutput("call_a", "Vendor A is cheaper."))
+	outA.Parents = []EntryRef{{Session: childA, Entry: childLeaf}}
+	must(outA)
+	must(NewItemEntry(openresponses.NewFunctionCallOutput("call_b", "Vendor B did not answer.")))
+	answer(parent, must, "resp_2", "gpt-5", "A is cheaper; B is unknown.", 200, 30)
+	return parent, child, grandchild
+}
+
+// TestCostChildrenFixture reads the cost-children fixtures as a reader
+// that reports cost counts them: child A once, at the leaf the parent's
+// output names, its calls priced at gpt-5-mini, with the grandchild at
+// gpt-5-nano under it; child B unread; the parent's own calls its own.
+func TestCostChildrenFixture(t *testing.T) {
+	for _, name := range []string{"cost-children", "cost-children-child", "cost-children-grandchild"} {
+		checkBuilt(t, name)
+	}
+	held := map[string]*Session{}
+	for _, name := range []string{"cost-children-child", "cost-children-grandchild"} {
+		s := loadFixture(t, name)
+		held[s.ID()] = s
+	}
+	resolve := func(id string) (*Session, error) { return held[id], nil }
+	parent := loadFixture(t, "cost-children")
+	path := parent.Path(parent.Leaf())
+	own := 0
+	for _, c := range ModelCalls(path) {
+		if c.Model != "gpt-5" {
+			t.Errorf("the parent's call %s is priced at %s", c.Entry.Base().ID, c.Model)
+		}
+		own += c.Usage.InputTokens
+	}
+	if own != 300 {
+		t.Errorf("the parent's own input tokens are %d", own)
+	}
+	children, unread := DelegatedWork(path, resolve)
+	describe := func(d Delegated) string {
+		var parts []string
+		for _, c := range d.Calls {
+			parts = append(parts, fmt.Sprintf("%s:%d", c.Model, c.Usage.InputTokens))
+		}
+		return strings.Join(parts, ",")
+	}
+	if len(children) != 1 {
+		t.Fatalf("%d children counted, want 1", len(children))
+	}
+	a := children[0]
+	childA := held[SubsessionID(costParent, "call_a")]
+	if a.Session != childA.ID() || !a.LeafNamed || a.Leaf == childA.Leaf() || describe(a) != "gpt-5-mini:50,gpt-5-mini:60" {
+		t.Errorf("child A is counted as %+v: %s", a, describe(a))
+	}
+	if len(a.Children) != 1 || !a.Children[0].LeafNamed || describe(a.Children[0]) != "gpt-5-nano:10" {
+		t.Errorf("the grandchild is counted as %+v", a.Children)
+	}
+	if len(unread) != 1 || unread[0].Session != SubsessionID(costParent, "call_b") || !errors.Is(unread[0].Err, ErrChildNotFound) {
+		t.Errorf("unread = %+v", unread)
+	}
+	// Without the parents member a reader takes child A's resume leaf,
+	// and says it did.
+	var bare []Entry
+	for _, e := range path {
+		if it, ok := e.(*ItemEntry); ok && len(it.Parents) > 0 {
+			c := *it
+			c.Parents = nil
+			e = &c
+		}
+		bare = append(bare, e)
+	}
+	children, _ = DelegatedWork(bare, resolve)
+	if len(children) != 1 || children[0].LeafNamed || children[0].Leaf != childA.Leaf() || describe(children[0]) != "gpt-5-mini:50,gpt-5-mini:60,gpt-5-mini:70" {
+		t.Errorf("without parents child A is counted as %+v", children)
 	}
 }

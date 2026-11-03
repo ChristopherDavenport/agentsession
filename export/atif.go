@@ -1365,15 +1365,13 @@ func (b *builder) markRedacted() {
 // document's steps are the context after compaction, so a run that
 // folded is described by its last summary and what followed; its cost
 // is not, or a leaderboard reads the tail's cost as the run's. The
-// model calls are what modelCall says. For a Trajectory built without
+// model calls are what [agentsession.ModelCalls] says. For a Trajectory built without
 // a Path, whose context is all there is, the totals the steps
 // accumulated stand and the calls are counted in the context.
 func (b *builder) pathTotals() (calls, hidden int) {
 	if len(b.t.Path) == 0 {
-		for _, e := range b.t.Context.Entries {
-			if _, _, n := modelCall(e, ""); n > 0 {
-				calls += n
-			}
+		for _, c := range agentsession.ModelCalls(b.t.Context.Entries) {
+			calls += c.Calls
 		}
 		return calls, 0
 	}
@@ -1382,82 +1380,26 @@ func (b *builder) pathTotals() (calls, hidden int) {
 		inContext[e.Base().ID] = true
 	}
 	b.prompt, b.completion, b.cached, b.cost, b.hasCost = 0, 0, 0, 0, false
-	model := ""
-	for _, e := range b.t.Path {
-		// The model in force, for a call that does not name its own:
-		// the same replay the steps use, so the two agree.
-		switch v := e.(type) {
-		case *agentsession.ConfigEntry:
-			if v.Replace {
-				model = ""
-			}
-			if v.Model != "" {
-				model = v.Model
-			}
-			continue
-		case *agentsession.CompactionEntry:
-			model = v.Config.Model
+	// Each call is priced at the model that served it, or the one in
+	// force: the same replay the steps use, so the two agree.
+	for _, c := range agentsession.ModelCalls(b.t.Path) {
+		calls += c.Calls
+		if !inContext[c.Entry.Base().ID] {
+			hidden += c.Calls
 		}
-		u, priced, n := modelCall(e, model)
-		if n == 0 {
-			continue
-		}
-		calls += n
-		if !inContext[e.Base().ID] {
-			hidden += n
-		}
+		u := c.Usage
 		if u == nil {
 			continue
 		}
 		b.prompt += u.InputTokens
 		b.completion += u.OutputTokens
 		b.cached += u.InputTokensDetails.CachedTokens
-		if usd, ok := b.costOf(e.Base().ID, priced, *u); ok {
+		if usd, ok := b.costOf(c.Entry.Base().ID, c.Model, *u); ok {
 			b.cost += usd
 			b.hasCost = true
 		}
 	}
 	return calls, hidden
-}
-
-// modelCall reports how many model calls e records, 0 for none, and
-// when it records any their usage, which may be nil, and the model they
-// are priced at: a response, as many as its attempts; a fold or a branch
-// summary, one; or a custom entry whose data is an object with a usage
-// member in the payload's shape, which RFC 0001 reads as calls the path
-// paid for that produced no response, a failed fold's summary calls for
-// one, as many as the attempts member beside the usage says, one when
-// it is absent; anything else such an entry carries is the writer's and
-// not read. A call that names no model is priced at inForce, the model
-// the config entries have in force.
-func modelCall(e agentsession.Entry, inForce string) (u *openresponses.Usage, priced string, n int) {
-	n = 1
-	switch v := e.(type) {
-	case *agentsession.ResponseEntry:
-		u, priced, n = v.Usage, inForce, v.Calls()
-		if v.Model != "" {
-			priced = v.Model
-		}
-	case *agentsession.CompactionEntry:
-		u, priced = v.Usage, v.Config.Model
-	case *agentsession.BranchSummaryEntry:
-		u, priced = v.Usage, inForce
-	case *agentsession.CustomEntry:
-		var paid struct {
-			Usage *openresponses.Usage `json:"usage"`
-			Model string               `json:"model"`
-		}
-		if json.Unmarshal(v.Data, &paid) != nil || paid.Usage == nil {
-			return nil, "", 0
-		}
-		u, priced, n = paid.Usage, inForce, v.Calls()
-		if paid.Model != "" {
-			priced = paid.Model
-		}
-	default:
-		return nil, "", 0
-	}
-	return u, priced, n
 }
 
 // subsessions resolves link entries: a subsession is embedded and

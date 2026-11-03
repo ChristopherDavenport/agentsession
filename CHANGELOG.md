@@ -58,6 +58,20 @@ versions may break the API.
   stood can say so. On a path with no run entries it splits the turns at
   responses and reports that it did. Fixture `inputs`.
 
+- **Cost across sessions (RFC 0001 0.17, `link`).** `ModelCalls`
+  returns the model calls a path records, each priced at the model
+  that served it or the one in force, as the ATIF export counts them
+  (the export now uses it). `DelegatedWork` returns the sessions a
+  path's `subsession` links delegated work to, as a reader that reports
+  what the path cost counts them: once per session, cancel notices
+  excepted, at the leaf the call's output names in `parents`, or else
+  at the child's resume leaf (`LeafNamed` false), with the child's own
+  children by the same rule; a child it cannot read is `Unread`
+  (`ErrChildNotFound`) and left out, and a callee in another system it
+  does not hold is not counted. Peer callees, judges and forks are no
+  delegated work. Fixtures `cost-children`, `cost-children-child` and
+  `cost-children-grandchild`.
+
 ## v0.0.33 - 2026-11-02
 
 - **Format 0.16 (RFC 0001, draft 0.16).** `Format` and `FormatMinor`
