@@ -208,6 +208,9 @@ type builder struct {
 	prompt, completion, cached int
 	cost                       float64
 	hasCost                    bool
+	// unpriced is how many of the path's calls recording usage the
+	// price source could not price, which the notes name.
+	unpriced int
 	// priced remembers what Options.Cost answered for an entry, so a
 	// price source with a cost of its own, or a count, is asked once
 	// per model call and not once for the step and again for the
@@ -973,6 +976,8 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 				step.Metrics.CostUSD = atif.Ptr(usd)
 				b.cost += usd
 				b.hasCost = true
+			} else {
+				b.unpriced++
 			}
 			b.prompt += u.InputTokens
 			b.completion += u.OutputTokens
@@ -1116,6 +1121,8 @@ func (b *builder) foldUsage(entryID string, extra map[string]any, model string, 
 		extra["cost_usd"] = usd
 		b.cost += usd
 		b.hasCost = true
+	} else {
+		b.unpriced++
 	}
 	b.prompt += u.InputTokens
 	b.completion += u.OutputTokens
@@ -1309,6 +1316,9 @@ func (b *builder) finish() {
 		if excluded > 0 {
 			costNotes = append(costNotes, fmt.Sprintf("total_cost_usd excludes %d delegated session(s) not read or not priced.", excluded))
 		}
+		if b.unpriced > 0 {
+			costNotes = append(costNotes, fmt.Sprintf("total_cost_usd excludes %d model call(s) of this path the price source could not price.", b.unpriced))
+		}
 	}
 	// total_steps is the path's model calls, which a reader can count
 	// in the path and check against the document; it is not the number
@@ -1383,8 +1393,8 @@ func (b *builder) entryRecords() map[string]any {
 // delegatedCost adds to the path's cost the cost of the work it
 // delegated, by [agentsession.DelegatedWork] over the resolver: each
 // child once, at the model that served each call. It returns how many
-// children it priced, how many it left out, unread or held elsewhere,
-// with no call priced or with a call it could not price, and how many it
+// children it priced, how many it left out, unread or held elsewhere or
+// with a call recording usage it could not price, and how many it
 // counted at a resume leaf.
 func (b *builder) delegatedCost() (priced, excluded, resumed int) {
 	resolve := b.opts.Subsessions
@@ -1400,12 +1410,13 @@ func (b *builder) delegatedCost() (priced, excluded, resumed int) {
 	var walk func([]agentsession.Delegated)
 	walk = func(ds []agentsession.Delegated) {
 		for _, d := range ds {
-			// A child is counted whole or not at all: one call the price
-			// source cannot price leaves the child out, since its priced
-			// calls alone would understate it (RFC 0001, link). A call
-			// recording no usage adds nothing, as on the path itself.
+			// A child is counted when every call of it that records usage
+			// is priced, and left out whole otherwise, since its priced
+			// calls alone would understate it (RFC 0001, link, 0.18). A
+			// call recording no usage adds nothing, as on the path, so a
+			// child with no calls counts as 0.
 			var usd float64
-			paid, whole := false, true
+			whole := true
 			for _, c := range d.Calls {
 				if c.Usage == nil {
 					continue
@@ -1416,9 +1427,8 @@ func (b *builder) delegatedCost() (priced, excluded, resumed int) {
 					break
 				}
 				usd += v
-				paid = true
 			}
-			if paid && whole {
+			if whole {
 				b.cost += usd
 				priced++
 			} else {
@@ -1509,7 +1519,7 @@ func (b *builder) pathTotals() (calls, hidden int) {
 	for _, e := range b.t.Context.Entries {
 		inContext[e.Base().ID] = true
 	}
-	b.prompt, b.completion, b.cached, b.cost, b.hasCost = 0, 0, 0, 0, false
+	b.prompt, b.completion, b.cached, b.cost, b.hasCost, b.unpriced = 0, 0, 0, 0, false, 0
 	// Each call is priced at the model that served it, or the one in
 	// force: the same replay the steps use, so the two agree.
 	for _, c := range agentsession.ModelCalls(b.t.Path) {
@@ -1527,6 +1537,8 @@ func (b *builder) pathTotals() (calls, hidden int) {
 		if usd, ok := b.costOf(c.Entry.Base().ID, c.Model, *u); ok {
 			b.cost += usd
 			b.hasCost = true
+		} else {
+			b.unpriced++
 		}
 	}
 	return calls, hidden

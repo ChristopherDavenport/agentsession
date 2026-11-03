@@ -1,6 +1,7 @@
 package export
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -92,5 +93,73 @@ func TestCostLeavesOutAPartlyPricedChild(t *testing.T) {
 	}
 	if !strings.Contains(doc.Notes, "excludes 1 delegated session(s) not read or not priced") || strings.Contains(doc.Notes, "includes the cost of") {
 		t.Errorf("notes = %q", doc.Notes)
+	}
+}
+
+// TestCostCountsEveryPricedChild: a child is counted when every call of
+// it that records usage is priced, so a child with no calls counts as 0
+// and one whose other call records no usage counts at its priced calls;
+// and a call of the path itself the price source cannot price is named
+// in the notes rather than skipped without a word (RFC 0001, link, Cost
+// across sessions, 0.18).
+func TestCostCountsEveryPricedChild(t *testing.T) {
+	add := func(s *agentsession.Session, e agentsession.Entry) string {
+		t.Helper()
+		id, err := s.Append(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	usage := func(n int) *openresponses.Usage { return &openresponses.Usage{InputTokens: n, TotalTokens: n} }
+	empty := agentsession.New(agentsession.Header{ID: "empty", ParentSession: "parent"})
+	add(empty, &agentsession.ConfigEntry{Model: "priced"})
+	add(empty, agentsession.NewItemEntry(openresponses.UserText("task")))
+	partial := agentsession.New(agentsession.Header{ID: "partial", ParentSession: "parent"})
+	add(partial, &agentsession.ConfigEntry{Model: "priced"})
+	add(partial, agentsession.NewItemEntry(openresponses.UserText("task")))
+	add(partial, &agentsession.ItemEntry{Item: openresponses.AssistantText("one"), ResponseID: "r1"})
+	add(partial, &agentsession.ResponseEntry{ResponseID: "r1"})
+	add(partial, agentsession.NewItemEntry(openresponses.UserText("again")))
+	add(partial, &agentsession.ItemEntry{Item: openresponses.AssistantText("two"), ResponseID: "r2"})
+	add(partial, &agentsession.ResponseEntry{ResponseID: "r2", Usage: usage(20)})
+
+	parent := agentsession.New(agentsession.Header{ID: "parent"})
+	add(parent, &agentsession.ConfigEntry{Model: "priced"})
+	add(parent, agentsession.NewItemEntry(openresponses.UserText("delegate")))
+	for i, child := range []string{"empty", "partial"} {
+		callID := fmt.Sprintf("call_%d", i)
+		add(parent, &agentsession.ItemEntry{Item: &openresponses.FunctionCall{CallID: callID, Name: "spawn", Arguments: `{}`}, ResponseID: "p" + callID})
+		add(parent, &agentsession.ResponseEntry{ResponseID: "p" + callID, Usage: usage(1)})
+		add(parent, agentsession.NewSubsessionLink(child, callID))
+		add(parent, agentsession.NewItemEntry(openresponses.NewFunctionCallOutput(callID, "done")))
+	}
+	add(parent, &agentsession.ConfigEntry{Model: "unpriced"})
+	add(parent, &agentsession.ItemEntry{Item: openresponses.AssistantText("all done"), ResponseID: "p_last"})
+	add(parent, &agentsession.ResponseEntry{ResponseID: "p_last", Usage: usage(5)})
+	tr, err := At(parent, parent.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	children := map[string]*agentsession.Session{"empty": empty, "partial": partial}
+	doc, err := ToATIF(tr, Options{
+		Subsessions: func(id string) (*agentsession.Session, error) { return children[id], nil },
+		Cost: func(model string, u openresponses.Usage) (float64, bool) {
+			return float64(u.InputTokens), model == "priced"
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fm := doc.FinalMetrics; fm.TotalCostUSD == nil || *fm.TotalCostUSD != 22 {
+		t.Errorf("total_cost_usd = %v, want 22: the path's 2 priced calls and the partial child's 20", fm.TotalCostUSD)
+	}
+	for _, want := range []string{"includes the cost of 2 delegated session(s)", "excludes 1 model call(s) of this path"} {
+		if !strings.Contains(doc.Notes, want) {
+			t.Errorf("notes %q say nothing of %q", doc.Notes, want)
+		}
+	}
+	if strings.Contains(doc.Notes, "delegated session(s) not read or not priced") {
+		t.Errorf("notes %q leave a child out", doc.Notes)
 	}
 }

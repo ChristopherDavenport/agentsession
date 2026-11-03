@@ -58,10 +58,14 @@ versions may break the API.
   `link`, Cost across sessions).** The export added the calls of a
   delegated session it could price and counted the session as priced
   when the price source could not price another of its calls, which
-  understated `total_cost_usd` and said nothing. A child with any call
-  the price source cannot price is now left out whole and counted in the
-  note's "not read or not priced", as the RFC's rule has said since
-  0.17. A call that records no usage adds nothing, as on the path.
+  understated `total_cost_usd` and said nothing. A child is now
+  counted when every call of it that records usage is priced, as RFC
+  0001 0.18's `link` says: a child with a call the price source cannot
+  price is left out whole and counted in the note's "not read or not
+  priced", and a call that records no usage adds nothing, so a child
+  with no calls counts as 0 where it was left out. A call of the path
+  itself the price source cannot price is named in a note ("excludes N
+  model call(s) of this path") rather than skipped without a word.
 
 ## v0.0.34 - 2026-11-03
 

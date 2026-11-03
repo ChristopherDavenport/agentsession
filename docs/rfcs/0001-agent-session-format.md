@@ -2074,6 +2074,14 @@ the child's own children. Each model call is priced as the reader
 prices the path's own calls, at the model that served it in the child
 and not at the parent's.
 
+Since 0.18 a child is priced when every model call of it that records
+usage is priced; a call that records no usage adds nothing, as on the
+path itself, so a child with no model calls is priced at 0. A child
+with a call that records usage the reader cannot price is not priced,
+and its priced calls are not added: they alone would understate it. A
+reader that leaves out a call of the path itself, recording usage it
+cannot price, says so as well.
+
 A reader MUST say when it could not read or price a child. It leaves
 that child out rather than guess, and it MUST say which leaf it took
 for a child that no `parents` names. A `subsession` callee in another
@@ -3205,9 +3213,13 @@ Clarified, with no file reading differently:
 
 - An item's `trust` on a message composed from several layers labels
   the message whole (`item`).
-- A reader that reports cost leaves out a child with any call it could
-  not price, as 0.17's rule says (`link`); the reference ATIF export
-  counted such a child at its priced calls until 0.18.
+- A child is priced when every call of it that records usage is
+  priced, a child with no calls at 0, and a reader that reports cost
+  leaves out one with a call it cannot price whole and says so, as it
+  says of a path call it cannot price (`link`). 0.17 said only that a
+  child it could not price is left out; the reference ATIF export
+  counted such a child at its priced calls, and left out a child with no
+  priced call, until 0.18.
 
 ## Changes since 0.16
 
