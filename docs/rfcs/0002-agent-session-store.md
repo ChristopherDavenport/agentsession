@@ -921,12 +921,25 @@ blobs the redaction kept, which are the same blobs.
   carries any other member, is content, and is refused without
   `redacted`. A fork of a redacted session and an entry
   a writer appended to one natively are refused alike, since neither
-  was redacted. It is the store a publisher pushes to, and it fails
+  was redacted. This includes a fork that holds a judge's verdict on
+  the session (RFC 0001, The redacted session), which therefore stays
+  in the store where it was made. It is the store a publisher pushes to, and it fails
   closed: an original, or an unredacted entry, sent to it by mistake is
   refused, not published.
 - A store SHOULD answer which of the sessions it holds name a given
-  session in `redacted_from`, so that the holder of an original finds
-  what was made from it. Nothing is written into the original.
+  ID in `redacted_from`, so that the holder of an original, who
+  computes its pseudonym under the key (RFC 0001, The redacted
+  session), finds what was made from it. Nothing is written into the
+  original, and the store needs no key.
+- A list of published redacted sessions, such as a manifest, names
+  each by its own `id` and the `id` of the entry it is published at:
+  its head, or an earlier entry when the publisher publishes it up to
+  one, such as the entry a verdict judged. It MAY carry each session's
+  `redacted_from` as the header holds it. It MUST NOT carry an entry
+  hash of an original, nor a session ID that is not in the format's ID
+  space (RFC 0001, The redacted session). The mapping from a redacted
+  session to its original stays with the holder of the original and
+  its key.
 - Deleting an original deletes nothing a redacted session made from it
   holds: a blob both name stays while the redacted session names it, as
   deletion and retention says.
@@ -1054,9 +1067,12 @@ apply here, where holding the session already is the usual case.
   exchange of the session between the two stores, since each still
   carries the other's call; as with two records below, one store
   pushes its line as a session with a base and deletes its copy. The
-  line takes the subsessions its calls spawned with it, each under an
-  ID derived from the new session's as RFC 0001 derives a
-  subsession's, and their own subsessions from theirs, recursively.
+  line takes the subsessions its calls and its host's links spawned
+  with it, each under an ID derived from the new session's as RFC 0001
+  derives a subsession's, over `["spawn",…]` for a child the host
+  started, and their own subsessions from theirs, recursively. A
+  `spawn_id` that a `subsession` link the receiver holds, and the
+  sender does not, already carries is refused as a `call_id` is.
   Every `subsession` link in the line and in the moved subsessions
   names the new ID, which changes the ids of the entries from that
   link on. Under the old IDs the subsessions would stay those of the
