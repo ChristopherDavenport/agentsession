@@ -647,10 +647,169 @@ type Omit struct {
 // sent with its output the string Text, its call ID and every other
 // member as they are. The items in force are the union of every list
 // since the last replace or compaction's checkpoint, as for
-// [Omit.Items], and the text is the one the latest member wrote.
+// [Omit.Items], and the text is the one the latest member wrote: the
+// default group, as format 0.14 defines the member.
+//
+// From 0.16 Groups sends other outputs with other texts, each group
+// named by its Text: a group's items in force are the union of every
+// group of that text since the last replace or checkpoint, and its text
+// never changes. With Groups set, an empty Text and no Items write no
+// default group, and the member is written as groups alone. An entry is
+// in one group at most, the default among them: a writer refuses an
+// outputs that would put one in two ([ErrOmitOverlap]), and a reader
+// takes one as a form the format does not define, which changes nothing.
 type OmitOutputs struct {
+	Text   string            `json:"text"`
+	Items  []string          `json:"items,omitempty"`
+	Groups []OmitOutputGroup `json:"groups,omitempty"`
+}
+
+// OmitOutputGroup is one element of [OmitOutputs.Groups]: the entries
+// whose outputs are sent with Text.
+type OmitOutputGroup struct {
 	Text  string   `json:"text"`
-	Items []string `json:"items,omitempty"`
+	Items []string `json:"items"`
+}
+
+// MarshalJSON writes the group with its items a list, empty or not.
+func (g OmitOutputGroup) MarshalJSON() ([]byte, error) {
+	items := g.Items
+	if items == nil {
+		items = []string{}
+	}
+	return jsonx.MarshalNoEscape(struct {
+		Text  string   `json:"text"`
+		Items []string `json:"items"`
+	}{g.Text, items})
+}
+
+// hasDefault reports whether the member writes the default group: a
+// text or items, or no groups, as every member before 0.16 is.
+func (o OmitOutputs) hasDefault() bool {
+	return o.Text != "" || len(o.Items) > 0 || len(o.Groups) == 0
+}
+
+// MarshalJSON writes the default group's text and items when the member
+// has one, and the groups when it has any.
+func (o OmitOutputs) MarshalJSON() ([]byte, error) {
+	if o.hasDefault() {
+		return jsonx.MarshalNoEscape(struct {
+			Text   string            `json:"text"`
+			Items  []string          `json:"items,omitempty"`
+			Groups []OmitOutputGroup `json:"groups,omitempty"`
+		}{o.Text, o.Items, o.Groups})
+	}
+	return jsonx.MarshalNoEscape(struct {
+		Groups []OmitOutputGroup `json:"groups"`
+	}{o.Groups})
+}
+
+// TextFor returns the text the member sends the output of the entry id
+// with, and false when it lists no such entry.
+func (o OmitOutputs) TextFor(id string) (string, bool) {
+	for _, g := range o.Groups {
+		if slices.Contains(g.Items, id) {
+			return g.Text, true
+		}
+	}
+	if o.hasDefault() && slices.Contains(o.Items, id) {
+		return o.Text, true
+	}
+	return "", false
+}
+
+// owners maps each ID the member lists to the group listing it, the
+// default group's key apart from every named group's, and reports false
+// when the member lists one ID in two of its groups or holds two groups
+// of one text.
+func (o *OmitOutputs) owners() (map[string]string, bool) {
+	own := map[string]string{}
+	if o == nil {
+		return own, true
+	}
+	add := func(id, key string) bool {
+		if id == "" {
+			return true
+		}
+		if k, ok := own[id]; ok && k != key {
+			return false
+		}
+		own[id] = key
+		return true
+	}
+	if o.hasDefault() {
+		for _, id := range o.Items {
+			add(id, "d")
+		}
+	}
+	texts := make(map[string]bool, len(o.Groups))
+	for _, g := range o.Groups {
+		if texts[g.Text] {
+			return nil, false
+		}
+		texts[g.Text] = true
+		for _, id := range g.Items {
+			if !add(id, "g"+g.Text) {
+				return nil, false
+			}
+		}
+	}
+	return own, true
+}
+
+// outputsWellFormed reports whether the member lists no entry in two of
+// its groups and holds no two groups of one text.
+func outputsWellFormed(o *OmitOutputs) bool {
+	_, ok := o.owners()
+	return ok
+}
+
+// outputsOverlap reports whether d, written as a delta over held in
+// force, would put an entry in two groups: two of its own, or one of its
+// own and one of held of another text.
+func outputsOverlap(held, d *OmitOutputs) bool {
+	dOwn, ok := d.owners()
+	if !ok {
+		return true
+	}
+	hOwn, _ := held.owners()
+	for id, k := range dOwn {
+		if hk, ok := hOwn[id]; ok && hk != k {
+			return true
+		}
+	}
+	return false
+}
+
+// clone returns a copy that shares no slice with o.
+func (o OmitOutputs) clone() *OmitOutputs {
+	out := &OmitOutputs{Text: o.Text, Items: slices.Clone(o.Items)}
+	for _, g := range o.Groups {
+		out.Groups = append(out.Groups, OmitOutputGroup{Text: g.Text, Items: slices.Clone(g.Items)})
+	}
+	return out
+}
+
+// mergedOutputs returns the outputs in force after a delta d over held:
+// d's default group adds its items to held's and sets the text, and each
+// of d's groups adds its items to held's group of that text.
+func mergedOutputs(held, d *OmitOutputs) *OmitOutputs {
+	out := &OmitOutputs{}
+	if held != nil {
+		out = held.clone()
+	}
+	if d.hasDefault() {
+		out.Text, out.Items = d.Text, union(out.Items, d.Items)
+	}
+	for _, g := range d.Groups {
+		i := slices.IndexFunc(out.Groups, func(h OmitOutputGroup) bool { return h.Text == g.Text })
+		if i < 0 {
+			out.Groups = append(out.Groups, OmitOutputGroup{Text: g.Text, Items: union(nil, g.Items)})
+		} else {
+			out.Groups[i].Items = union(out.Groups[i].Items, g.Items)
+		}
+	}
+	return out
 }
 
 // OmitImages is the images member of omit, in one of two forms: with
@@ -732,7 +891,7 @@ func (o *Omit) UnmarshalJSON(data []byte) error {
 	*o = Omit{Reasoning: plain.Reasoning, Items: plain.Items}
 	if len(plain.Outputs) > 0 && !isNull(plain.Outputs) {
 		var outputs OmitOutputs
-		if holdsExactly(plain.Outputs, &outputs) {
+		if holdsExactly(plain.Outputs, &outputs) && outputsWellFormed(&outputs) {
 			o.Outputs = &outputs
 		} else {
 			o.undefined = true
@@ -792,7 +951,7 @@ func (o Omit) IsZero() bool {
 func (o Omit) clone() Omit {
 	out := Omit{Reasoning: o.Reasoning, Items: slices.Clone(o.Items)}
 	if o.Outputs != nil {
-		out.Outputs = &OmitOutputs{Text: o.Outputs.Text, Items: slices.Clone(o.Outputs.Items)}
+		out.Outputs = o.Outputs.clone()
 	}
 	if o.Images != nil {
 		images := *o.Images
@@ -821,7 +980,9 @@ func union(a, b []string) []string {
 // this one's when it is one the format defines, a rule it does not
 // define leaves this one's in force, d's items are added to this one's
 // in the order they were first written, d's outputs add their items to
-// those in force and set the text, d's images replace those in force,
+// those in force and set the text, its groups each add theirs to the
+// group of their text, unless they would put an entry in two groups,
+// when they change nothing, d's images replace those in force,
 // and a delta that names none of them clears all of them. The receiver
 // and d are not modified.
 func (o Omit) merged(d Omit) Omit {
@@ -833,12 +994,8 @@ func (o Omit) merged(d Omit) Omit {
 		out.Reasoning = d.Reasoning
 	}
 	out.Items = union(o.Items, d.Items)
-	if d.Outputs != nil {
-		var held []string
-		if o.Outputs != nil {
-			held = o.Outputs.Items
-		}
-		out.Outputs = &OmitOutputs{Text: d.Outputs.Text, Items: union(held, d.Outputs.Items)}
+	if d.Outputs != nil && !outputsOverlap(o.Outputs, d.Outputs) {
+		out.Outputs = mergedOutputs(o.Outputs, d.Outputs)
 	}
 	if d.Images != nil {
 		images := *d.Images

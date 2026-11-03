@@ -431,8 +431,8 @@ func TestMigrationRewritesEveryEntryNamingMember(t *testing.T) {
 var coreStringMembers = map[string][]string{
 	TypeItem:          {"response", "source/kind", "source/ref", "source/source"},
 	TypeResponse:      {"response_id", "model", "status"},
-	TypeConfig:        {"model", "instructions", "instructions_parts/[]/id", "instructions_parts/[]/text", "instructions_parts/[]/source", "instructions_omitted/[]/id", "instructions_omitted/[]/reason", "instructions_omitted/[]/source", "tools_removed/[]", "omit/reasoning", "omit/outputs/text", "omit/images/placeholder"},
-	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_parts/[]/source", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/source", "config/instructions_omitted/[]/of", "config/omit/reasoning", "config/omit/outputs/text", "config/omit/images/placeholder"},
+	TypeConfig:        {"model", "instructions", "instructions_parts/[]/id", "instructions_parts/[]/text", "instructions_parts/[]/source", "instructions_omitted/[]/id", "instructions_omitted/[]/reason", "instructions_omitted/[]/source", "tools_removed/[]", "omit/reasoning", "omit/outputs/text", "omit/outputs/groups/[]/text", "omit/images/placeholder"},
+	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_parts/[]/source", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/source", "config/instructions_omitted/[]/of", "config/omit/reasoning", "config/omit/outputs/text", "config/omit/outputs/groups/[]/text", "config/omit/images/placeholder"},
 	TypeBranchSummary: {},
 	TypeRun:           {"run_id", "phase", "source", "reason", "ref", "trigger/kind", "trigger/ref", "trigger/source"},
 	TypeDispatch:      {"idempotency_key"},
@@ -569,6 +569,7 @@ var rfcNames = func() map[string][]rfcMember {
 	targets := []rfcMember{{TypeDispatch, "target", roleEntry}, {TypeDecision, "target", roleEntry}, {TypeLabel, "target", roleEntry}, {TypeOutcome, "target", roleEntry}, {TypeLink, "target", roleEntry}}
 	omit := []rfcMember{{TypeConfig, "omit/items/[]", roleEntry}, {TypeCompaction, "config/omit/items/[]", roleEntry}}
 	outputs := []rfcMember{{TypeConfig, "omit/outputs/items/[]", roleEntry}, {TypeCompaction, "config/omit/outputs/items/[]", roleEntry}}
+	groups := []rfcMember{{TypeConfig, "omit/outputs/groups/[]/items/[]", roleEntry}, {TypeCompaction, "config/omit/outputs/groups/[]/items/[]", roleEntry}}
 	images := []rfcMember{{TypeConfig, "omit/images/before", roleEntry}, {TypeCompaction, "config/omit/images/before", roleEntry}}
 	of := []rfcMember{{TypeConfig, "instructions_omitted/[]/of", roleEntry}}
 	session := []rfcMember{{TypeLink, "session", roleSession}}
@@ -582,6 +583,7 @@ var rfcNames = func() map[string][]rfcMember {
 		"from_link":            {{TypeItem, "from_link", roleEntry}},
 		"copied_from":          {{TypeItem, "copied_from/entry", roleEntry}, {TypeItem, "copied_from/session", roleSession}},
 		"outputs":              outputs,
+		"groups":               groups,
 		"images":               images,
 		"before":               images,
 		"omit":                 omit,
@@ -791,6 +793,18 @@ func TestRemapRefsLeftOut(t *testing.T) {
 			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"reasoning":"other_models","items":["o-1","gone-2","o-3"],"outputs":{"text":"t","items":["gone-4"]}}}`,
 			`{"type":"config","id":"x","parent":"n-p",` + tsLine + `,"omit":{"reasoning":"other_models","items":["n-1","n-3"],"outputs":{"text":"t"}}}`,
 			[]string{"/omit/items/1", "/omit/outputs/items/0"},
+		},
+		{
+			"config: an outputs group emptied goes, and the omit with it",
+			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"model":"m","omit":{"outputs":{"groups":[{"text":"q","items":["gone-1"]}]}}}`,
+			`{"type":"config","id":"x","parent":"n-p",` + tsLine + `,"model":"m"}`,
+			[]string{"/omit/outputs/groups/0/items/0"},
+		},
+		{
+			"config: outputs groups keep the rest",
+			`{"type":"config","id":"x","parent":"o-p",` + tsLine + `,"omit":{"outputs":{"text":"t","items":["o-1"],"groups":[{"text":"q","items":["gone-2","o-3"]},{"text":"r","items":["gone-4"]}]}}}`,
+			`{"type":"config","id":"x","parent":"n-p",` + tsLine + `,"omit":{"outputs":{"text":"t","items":["n-1"],"groups":[{"text":"q","items":["n-3"]}]}}}`,
+			[]string{"/omit/outputs/groups/0/items/0", "/omit/outputs/groups/1/items/0"},
 		},
 		{
 			"config: an omit that clears stays",

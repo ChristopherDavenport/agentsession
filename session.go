@@ -313,6 +313,11 @@ func (s *Session) checkNew(e Entry) error {
 		// says what it means first.
 		return fmt.Errorf("agentsession: append to %s: %w: the entry holds a redacted member read under a minor before 0.13; ClearRedacted or SetRedacted it first", s.ID(), ErrNoRaise)
 	}
+	if c, ok := e.(*ConfigEntry); ok && c.Omit != nil && c.Omit.Outputs != nil {
+		if err := s.checkOutputs(c); err != nil {
+			return err
+		}
+	}
 	l, ok := e.(*LinkEntry)
 	if ok && l.Rel == RelContinuedIn {
 		// A session continues once: a second successor would fork the
@@ -345,6 +350,29 @@ func (s *Session) checkNew(e Entry) error {
 		}
 		return nil
 	})
+}
+
+// checkOutputs refuses a config entry whose omit outputs would put an
+// entry in two groups with the outputs in force where it is appended
+// (RFC 0001, Items left out of the context): a reader would take it as
+// a form the format does not define, so a writer does not write it.
+func (s *Session) checkOutputs(c *ConfigEntry) error {
+	parent := c.Parent
+	if parent == "" {
+		parent = s.Leaf()
+	}
+	var held *OmitOutputs
+	if parent != "" {
+		ctx, err := s.ContextAt(parent)
+		if err != nil {
+			return nil // the append reports the parent it cannot hang from
+		}
+		held = ctx.Settings.Omit.Outputs
+	}
+	if outputsOverlap(held, c.Omit.Outputs) {
+		return fmt.Errorf("agentsession: append to %s: %w", s.ID(), ErrOmitOverlap)
+	}
+	return nil
 }
 
 // RaiseRefused reports whether the session may be written under format,
@@ -1523,8 +1551,13 @@ func validateConfig(c *ConfigEntry) error {
 				return errors.New("agentsession: an omit items list names an empty id")
 			}
 		}
-		if o := c.Omit.Outputs; o != nil && slices.Contains(o.Items, "") {
-			return errors.New("agentsession: an omit outputs list names an empty id")
+		if o := c.Omit.Outputs; o != nil {
+			if slices.Contains(o.Items, "") || slices.ContainsFunc(o.Groups, func(g OmitOutputGroup) bool { return slices.Contains(g.Items, "") }) {
+				return errors.New("agentsession: an omit outputs list names an empty id")
+			}
+			if !outputsWellFormed(o) {
+				return fmt.Errorf("%w: within its own groups", ErrOmitOverlap)
+			}
 		}
 		if i := c.Omit.Images; i != nil && i.Keep < 0 {
 			return errors.New("agentsession: an omit images keep is negative")

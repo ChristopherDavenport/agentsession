@@ -11,8 +11,8 @@ versions may break the API.
   name 0.16, so a writer raises every file it appends to and a reader
   of 0.15 refuses it; a 0.5 to 0.15 file reads as it stands and no
   entry hash moves. The generated fixtures and export goldens carry the
-  new header. 0.16 changes nothing in the file: it adds the type file
-  beside a sidecar blob, below.
+  new header. 0.16 adds the type file beside a sidecar blob and
+  `omit.outputs.groups`, both below.
 
 - **A sidecar blob keeps its media type (RFC 0001 0.16, File; RFC
   0002, Media; RFC 0003, Objects).** A writer that turned a data URL
@@ -69,6 +69,25 @@ versions may break the API.
   comma. sqlite checks a stored type on read. **Added:
   `SessionBlobTyper`, `SessionBlobReader`, `ReadSessionBlob`,
   `CheckBlobTypes`, `Client.SessionBlob`.**
+
+- **Several placeholder texts for outputs (RFC 0001 0.16, Items left
+  out of the context).** `omit.outputs` held one text for every output
+  it listed, so a request sending a host's trim and a harness's
+  quarantine under two texts could not be described and every later
+  response went without a `request_hash`. `OmitOutputs.Groups`
+  (`OmitOutputGroup`, written `"outputs":{"groups":[{"text","items"}]}`)
+  sends each group's outputs with its own text; a group's items
+  accumulate across deltas, and `Text`/`Items` stay the default group,
+  read exactly as 0.14 and 0.15 read them. An entry is in one group at
+  most: `Append` refuses an outputs that would put one in two
+  (`ErrOmitOverlap`), and a reader takes such a member as changing
+  nothing. `OmitDelta` writes what a group adds, `OmitOutputs.TextFor`
+  gives an output's text (ATIF's `replaced` record uses it), a
+  checkpoint carries the groups, and leaving entries out removes a
+  group it empties, then an emptied `groups`, `outputs` and `omit`.
+  Fixtures `outputs-groups` and `bad-outputs-overlap`. **Added:
+  `OmitOutputs.Groups`, `OmitOutputGroup`, `OmitOutputs.TextFor`,
+  `ErrOmitOverlap`.**
 
 ## v0.0.32 - 2026-11-02
 

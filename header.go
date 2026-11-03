@@ -377,8 +377,9 @@ func (h *Header) fill(now time.Time) {
 // summary. A 0.14 file is a 0.15 file that holds none of them, and each
 // is read by its form in a file of any minor. 0.16 keeps a sidecar
 // blob's media type in the file beside it in the session's directory
-// ([SidecarTypeName]); the file holds nothing new, and a 0.15 session
-// is a 0.16 session whose blobs have no type.
+// ([SidecarTypeName]), and lets omit's outputs carry groups of their own
+// placeholder texts ([OmitOutputs.Groups]); a 0.15 session is a 0.16
+// session whose blobs have no type and whose omit holds no groups.
 const FormatMinor = 16
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.
