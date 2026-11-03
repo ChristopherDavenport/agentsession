@@ -157,6 +157,7 @@ var bodyMembers = map[string][]special{
 	TypeConfig: {
 		{path: memberPath("omit", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*ConfigEntry).Omit != nil }},
 		{path: memberPath("omit", "outputs", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { o := e.(*ConfigEntry).Omit; return o != nil && o.Outputs != nil }},
+		{path: memberPath("omit", "outputs", "groups", "[]", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { o := e.(*ConfigEntry).Omit; return o != nil && o.Outputs != nil }},
 		{path: memberPath("omit", "images", "before"), role: roleEntry, bound: true, when: func(e Entry) bool {
 			o := e.(*ConfigEntry).Omit
 			return o != nil && o.Images != nil && o.Images.Before != ""
@@ -168,6 +169,7 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("first_kept"), role: roleEntry, bound: true},
 		{path: memberPath("config", "omit", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return !e.(*CompactionEntry).Config.Omit.IsZero() }},
 		{path: memberPath("config", "omit", "outputs", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*CompactionEntry).Config.Omit.Outputs != nil }},
+		{path: memberPath("config", "omit", "outputs", "groups", "[]", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*CompactionEntry).Config.Omit.Outputs != nil }},
 		{path: memberPath("config", "omit", "images", "before"), role: roleEntry, bound: true, when: func(e Entry) bool { i := e.(*CompactionEntry).Config.Omit.Images; return i != nil && i.Before != "" }},
 		{path: memberPath("config", "instructions_parts", "[]", "hash"), role: roleHash},
 		{path: memberPath("pinned", "[]", "call_id"), role: roleCallID},
@@ -627,7 +629,10 @@ func pointerUp(at string, n int) string {
 // the last met first, so an element removed never moves one still to
 // be. A list it empties is removed, and so is an omit object left with
 // no member: an empty omit clears the one in force, where the list
-// removed only added to it.
+// removed only added to it. An outputs group whose items it empties is
+// removed whole, since a group sets nothing else, then groups emptied,
+// an outputs left with no member, and its omit if that leaves it none
+// (RFC 0001, Leaving entries out); nothing it did not empty is touched.
 func removeAll(root map[string]any, pointers []string) {
 	var emptied []string
 	for i := len(pointers) - 1; i >= 0; i-- {
@@ -647,17 +652,68 @@ func removeAll(root map[string]any, pointers []string) {
 		emptied = append(emptied, up)
 	}
 	slices.Sort(emptied)
+	// groups are the outputs groups, by the pointer of their list, whose
+	// items this removal emptied: each goes whole, since a group sets
+	// nothing else. A group that held no items before is a form the
+	// format does not define, which no removal reaches, and is left as
+	// written.
+	groups := map[string][]int{}
 	for _, up := range slices.Compact(emptied) {
-		if list, ok := pointerValue(root, up).([]any); ok && len(list) == 0 {
-			holder := pointerUp(up, 1)
-			if obj, ok := pointerValue(root, holder).(map[string]any); ok {
-				delete(obj, unescapeToken(up[len(holder)+1:]))
-				if len(obj) == 0 && strings.HasSuffix(holder, "/omit") {
-					if h, ok := pointerValue(root, pointerUp(holder, 1)).(map[string]any); ok {
-						delete(h, "omit")
-					}
-				}
+		list, ok := pointerValue(root, up).([]any)
+		if !ok || len(list) > 0 {
+			continue
+		}
+		holder := pointerUp(up, 1)
+		if strings.HasSuffix(up, "/items") && strings.HasSuffix(pointerUp(holder, 1), "/outputs/groups") {
+			if k, err := strconv.Atoi(holder[len(pointerUp(holder, 1))+1:]); err == nil {
+				groups[pointerUp(holder, 1)] = append(groups[pointerUp(holder, 1)], k)
+				continue
 			}
+		}
+		if obj, ok := pointerValue(root, holder).(map[string]any); ok {
+			delete(obj, unescapeToken(up[len(holder)+1:]))
+			dropEmptyOmit(root, holder, obj)
+		}
+	}
+	for at, ks := range groups {
+		list, ok := pointerValue(root, at).([]any)
+		if !ok {
+			continue
+		}
+		slices.Sort(ks)
+		for i := len(ks) - 1; i >= 0; i-- {
+			if ks[i] < len(list) {
+				list = slices.Delete(list, ks[i], ks[i]+1)
+			}
+		}
+		if len(list) > 0 {
+			setPointer(root, at, list)
+			continue
+		}
+		outputsAt := pointerUp(at, 1)
+		outputs, ok := pointerValue(root, outputsAt).(map[string]any)
+		if !ok {
+			continue
+		}
+		delete(outputs, "groups")
+		if len(outputs) > 0 {
+			continue
+		}
+		omitAt := pointerUp(outputsAt, 1)
+		if omit, ok := pointerValue(root, omitAt).(map[string]any); ok {
+			delete(omit, "outputs")
+			dropEmptyOmit(root, omitAt, omit)
+		}
+	}
+}
+
+// dropEmptyOmit removes the omit object obj at the pointer holder when
+// it is an omit left with no member: an empty omit clears the one in
+// force, where what was removed only added to it.
+func dropEmptyOmit(root map[string]any, holder string, obj map[string]any) {
+	if len(obj) == 0 && strings.HasSuffix(holder, "/omit") {
+		if h, ok := pointerValue(root, pointerUp(holder, 1)).(map[string]any); ok {
+			delete(h, "omit")
 		}
 	}
 }

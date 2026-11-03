@@ -174,6 +174,9 @@ func (s *Settings) UnmarshalJSON(data []byte) error {
 		omit.Items = slices.DeleteFunc(omit.Items, func(id string) bool { return id == "" })
 		if omit.Outputs != nil {
 			omit.Outputs.Items = slices.DeleteFunc(omit.Outputs.Items, func(id string) bool { return id == "" })
+			for i := range omit.Outputs.Groups {
+				omit.Outputs.Groups[i].Items = slices.DeleteFunc(omit.Outputs.Groups[i].Items, func(id string) bool { return id == "" })
+			}
 		}
 		s.Omit = omit
 	}
@@ -681,16 +684,7 @@ func omittedRuns(list []OmittedPart, of string, omitted []OmittedPart) ([]Omitte
 func (s Settings) OmitDelta(want Omit) (*Omit, bool) {
 	have := s.Omit
 	listed, wanted := idSet(have.Items), idSet(want.Items)
-	var haveOut, wantOut []string
-	if have.Outputs != nil {
-		haveOut = have.Outputs.Items
-	}
-	if want.Outputs != nil {
-		wantOut = want.Outputs.Items
-	}
-	listedOut, wantedOut := idSet(haveOut), idSet(wantOut)
-	sameOutputs := (have.Outputs == nil) == (want.Outputs == nil) && sameSet(listedOut, wantedOut) &&
-		(have.Outputs == nil || have.Outputs.Text == want.Outputs.Text)
+	sameOutputs := sameOutputsInForce(have.Outputs, want.Outputs)
 	sameImages := have.Images == nil && want.Images == nil || have.Images != nil && want.Images != nil && *have.Images == *want.Images
 	if have.Reasoning == want.Reasoning && sameSet(listed, wanted) && sameOutputs && sameImages {
 		return nil, true
@@ -701,7 +695,8 @@ func (s Settings) OmitDelta(want Omit) (*Omit, bool) {
 	if want.Reasoning != "" && want.Reasoning != OmitOtherModels || have.Reasoning != "" && want.Reasoning == "" {
 		return nil, false
 	}
-	if !subset(listed, wanted) || have.Outputs != nil && (want.Outputs == nil || !subset(listedOut, wantedOut)) || have.Images != nil && want.Images == nil {
+	outputs, ok := outputsDelta(have.Outputs, want.Outputs)
+	if !subset(listed, wanted) || !ok || have.Images != nil && want.Images == nil {
 		return nil, false
 	}
 	var d Omit
@@ -715,19 +710,112 @@ func (s Settings) OmitDelta(want Omit) (*Omit, bool) {
 		}
 	}
 	if !sameOutputs {
-		d.Outputs = &OmitOutputs{Text: want.Outputs.Text}
-		for _, id := range wantOut {
-			if id != "" && !listedOut[id] {
-				listedOut[id] = true
-				d.Outputs.Items = append(d.Outputs.Items, id)
-			}
-		}
+		d.Outputs = outputs
 	}
 	if !sameImages {
 		images := *want.Images
 		d.Images = &images
 	}
 	return &d, true
+}
+
+// sameOutputsInForce reports whether two outputs members send the same
+// outputs with the same texts: the same default group, its text and its
+// set of items, and the same named groups, each its set of items.
+func sameOutputsInForce(a, b *OmitOutputs) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if a.hasDefault() != b.hasDefault() || a.hasDefault() && (a.Text != b.Text || !sameSet(idSet(a.Items), idSet(b.Items))) {
+		return false
+	}
+	if len(a.Groups) != len(b.Groups) {
+		return false
+	}
+	for _, g := range a.Groups {
+		i := slices.IndexFunc(b.Groups, func(h OmitOutputGroup) bool { return h.Text == g.Text })
+		if i < 0 || !sameSet(idSet(g.Items), idSet(b.Groups[i].Items)) {
+			return false
+		}
+	}
+	return true
+}
+
+// outputsDelta returns the outputs a delta over have writes to put want
+// in force, and false when no delta can: one that would drop the
+// outputs, the default group's items or a group, take an item from a
+// group, or put an entry in two groups.
+func outputsDelta(have, want *OmitOutputs) (*OmitOutputs, bool) {
+	if want == nil {
+		return nil, have == nil
+	}
+	if !outputsWellFormed(want) {
+		return nil, false
+	}
+	var d OmitOutputs
+	var haveDefault []string
+	if have != nil && have.hasDefault() {
+		haveDefault = have.Items
+	}
+	listed := idSet(haveDefault)
+	if want.hasDefault() {
+		if !subset(listed, idSet(want.Items)) {
+			return nil, false
+		}
+		for _, id := range want.Items {
+			if id != "" && !listed[id] {
+				listed[id] = true
+				d.Items = append(d.Items, id)
+			}
+		}
+		if have == nil || !have.hasDefault() || have.Text != want.Text || len(d.Items) > 0 {
+			d.Text, d.textSet = want.Text, true
+		} else {
+			d.Items = nil
+		}
+	} else if len(listed) > 0 {
+		return nil, false
+	}
+	var haveGroups []OmitOutputGroup
+	if have != nil {
+		haveGroups = have.Groups
+	}
+	for _, g := range haveGroups {
+		i := slices.IndexFunc(want.Groups, func(h OmitOutputGroup) bool { return h.Text == g.Text })
+		if i < 0 || !subset(idSet(g.Items), idSet(want.Groups[i].Items)) {
+			return nil, false
+		}
+	}
+	for _, g := range want.Groups {
+		i := slices.IndexFunc(haveGroups, func(h OmitOutputGroup) bool { return h.Text == g.Text })
+		var held map[string]bool
+		if i >= 0 {
+			held = idSet(haveGroups[i].Items)
+		}
+		added := []string{}
+		for _, id := range g.Items {
+			if id != "" && !held[id] {
+				held = setAdd(held, id)
+				added = append(added, id)
+			}
+		}
+		if i < 0 || len(added) > 0 {
+			d.Groups = append(d.Groups, OmitOutputGroup{Text: g.Text, Items: added})
+		}
+	}
+	if outputsOverlap(have, &d) {
+		return nil, false
+	}
+	return &d, true
+}
+
+// setAdd adds id to set, making it when it is nil.
+func setAdd(set map[string]bool, id string) map[string]bool {
+	if set == nil {
+		set = map[string]bool{}
+	}
+	set[id] = true
+	return set
 }
 
 // idSet is the set of the non-empty IDs in ids.
@@ -1224,14 +1312,14 @@ func (c *Context) leaveOut(path []Entry) {
 // session's items are not modified; Items holds copies.
 func (c *Context) replaceParts(path []Entry) {
 	om := c.Settings.Omit
-	if om.Outputs != nil && len(om.Outputs.Items) > 0 {
-		listed := make(map[string]bool, len(om.Outputs.Items))
-		for _, id := range om.Outputs.Items {
-			listed[id] = true
-		}
+	if om.Outputs != nil {
 		for i, e := range c.ItemEntries {
 			ie, ok := e.(*ItemEntry)
-			if !ok || !listed[ie.ID] {
+			if !ok {
+				continue
+			}
+			text, listed := om.Outputs.TextFor(ie.ID)
+			if !listed {
 				continue
 			}
 			out, ok := c.Items[i].(*openresponses.FunctionCallOutput)
@@ -1239,7 +1327,7 @@ func (c *Context) replaceParts(path []Entry) {
 				continue
 			}
 			sent := *out
-			sent.Output = openresponses.FunctionCallOutputData{Text: om.Outputs.Text}
+			sent.Output = openresponses.FunctionCallOutputData{Text: text}
 			c.Items[i] = &sent
 			c.ReplacedItems = append(c.ReplacedItems, ReplacedItem{Entry: ie, Reason: OmitOutputsReason})
 		}
@@ -1536,6 +1624,13 @@ var ErrHashMismatch = errors.New("agentsession: request hash mismatch")
 // divergence between the record and its own rule, and not a response
 // that recorded no hash.
 var ErrOmitDivergence = errors.New("agentsession: the recorded hash is the request without the omit setting applied")
+
+// ErrOmitOverlap is returned by an append of a config entry whose omit
+// outputs would put an entry in two groups of placeholder text: two of
+// its own, or one of its own and one in force of another text (RFC
+// 0001, Items left out of the context, since 0.16). A reader takes such
+// a member as a form the format does not define, which changes nothing.
+var ErrOmitOverlap = errors.New("agentsession: an omit outputs would put an entry in two groups")
 
 // ErrNoHash is returned by [Session.Verify] for a response entry that
 // recorded no request hash. The response is not verified and not

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -290,12 +291,17 @@ type MemoryStore struct {
 	redactedOnly bool
 	// blobs are the sidecar media blobs the store holds, by hash.
 	blobs map[string]memBlob
+	// blobTypes are each session's types for its blobs, by session and
+	// hash.
+	blobTypes map[string]map[string]string
 }
 
-// memBlob is a blob a MemoryStore holds, and when it was last stored.
+// memBlob is a blob a MemoryStore holds, its media type, "" for none,
+// and when it was last stored.
 type memBlob struct {
-	data []byte
-	at   time.Time
+	data      []byte
+	mediaType string
+	at        time.Time
 }
 
 // MemoryOption configures a [MemoryStore].
@@ -330,10 +336,21 @@ func NewMemoryStore(opts ...MemoryOption) *MemoryStore {
 }
 
 // PutBlob implements [BlobWriter]: it keeps a copy of the blob under
-// its hash. Storing a blob the store holds again restarts its grace
-// for [MemoryStore.SweepBlobs].
+// its hash, with no media type. Storing a blob the store holds again
+// restarts its grace for [MemoryStore.SweepBlobs] and keeps its type.
 func (m *MemoryStore) PutBlob(ctx context.Context, data []byte) (string, error) {
+	return m.PutTypedBlob(ctx, data, "")
+}
+
+// PutTypedBlob implements [TypedBlobWriter]: it keeps a copy of the blob
+// under its hash, with mediaType beside it unless the store holds the
+// blob with a type already, which never changes.
+func (m *MemoryStore) PutTypedBlob(ctx context.Context, data []byte, mediaType string) (string, error) {
 	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	mt, err := BlobMediaType(mediaType)
+	if err != nil {
 		return "", err
 	}
 	h := HashBytes(data)
@@ -342,6 +359,9 @@ func (m *MemoryStore) PutBlob(ctx context.Context, data []byte) (string, error) 
 	b, ok := m.blobs[h]
 	if !ok {
 		b.data = bytes.Clone(data)
+	}
+	if b.mediaType == "" {
+		b.mediaType = mt
 	}
 	b.at = time.Now()
 	m.blobs[h] = b
@@ -390,16 +410,23 @@ func (m *MemoryStore) SweepBlobs(ctx context.Context, grace time.Duration) (int,
 
 // Blob implements [BlobReader]. The bytes returned are the caller's.
 func (m *MemoryStore) Blob(ctx context.Context, hash string) ([]byte, error) {
+	data, _, err := m.TypedBlob(ctx, hash)
+	return data, err
+}
+
+// TypedBlob implements [TypedBlobReader]. The bytes returned are the
+// caller's.
+func (m *MemoryStore) TypedBlob(ctx context.Context, hash string) ([]byte, string, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	b, ok := m.blobs[hash]
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrNoBlob, hash)
+		return nil, "", fmt.Errorf("%w: %s", ErrNoBlob, hash)
 	}
-	return bytes.Clone(b.data), nil
+	return bytes.Clone(b.data), b.mediaType, nil
 }
 
 // Create implements Store. A header whose Base is set makes a fork of
@@ -721,17 +748,81 @@ func (m *MemoryStore) Delete(_ context.Context, id string) error {
 	}
 	delete(m.sessions, id)
 	delete(m.gens, id)
+	delete(m.blobTypes, id)
 	m.hub.Notify(id)
 	return nil
 }
 
+// SetSessionBlobTypes implements [SessionBlobTyper].
+func (m *MemoryStore) SetSessionBlobTypes(ctx context.Context, session string, types map[string]string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	set, err := CheckBlobTypes(types)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.sessions[session]; !ok {
+		return fmt.Errorf("%w: %s", ErrNoSession, session)
+	}
+	if m.blobTypes == nil {
+		m.blobTypes = map[string]map[string]string{}
+	}
+	held := m.blobTypes[session]
+	if held == nil {
+		held = map[string]string{}
+		m.blobTypes[session] = held
+	}
+	for h, t := range set {
+		if _, ok := held[h]; !ok {
+			held[h] = t
+		}
+	}
+	return nil
+}
+
+// SessionBlobTypes implements [SessionBlobTyper].
+func (m *MemoryStore) SessionBlobTypes(ctx context.Context, session string) (map[string]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.sessions[session]; !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNoSession, session)
+	}
+	return maps.Clone(m.blobTypes[session]), nil
+}
+
+// SessionBlob implements [SessionBlobReader]: the blob, with the
+// session's type for it, or the store's where the session holds none.
+func (m *MemoryStore) SessionBlob(ctx context.Context, session, hash string) ([]byte, string, error) {
+	data, mt, err := m.TypedBlob(ctx, hash)
+	if err != nil {
+		return nil, "", err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if t, ok := m.blobTypes[session][hash]; ok {
+		mt = t
+	}
+	return data, mt, nil
+}
+
 var (
-	_ Store       = (*MemoryStore)(nil)
-	_ Reader      = (*MemoryStore)(nil)
-	_ Follower    = (*MemoryStore)(nil)
-	_ Importer    = (*MemoryStore)(nil)
-	_ HeadStore   = (*MemoryStore)(nil)
-	_ BlobWriter  = (*MemoryStore)(nil)
-	_ BlobReader  = (*MemoryStore)(nil)
-	_ BlobSweeper = (*MemoryStore)(nil)
+	_ Store           = (*MemoryStore)(nil)
+	_ Reader          = (*MemoryStore)(nil)
+	_ Follower        = (*MemoryStore)(nil)
+	_ Importer        = (*MemoryStore)(nil)
+	_ HeadStore       = (*MemoryStore)(nil)
+	_ BlobWriter      = (*MemoryStore)(nil)
+	_ BlobReader      = (*MemoryStore)(nil)
+	_ TypedBlobWriter = (*MemoryStore)(nil)
+	_ TypedBlobReader = (*MemoryStore)(nil)
+	_ BlobSweeper     = (*MemoryStore)(nil)
+
+	_ SessionBlobTyper  = (*MemoryStore)(nil)
+	_ SessionBlobReader = (*MemoryStore)(nil)
 )

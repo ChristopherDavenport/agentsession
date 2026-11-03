@@ -816,6 +816,68 @@ An append naming a blob the store lacks is accepted, and the blob is
 reported unresolved; a session with an unresolved blob cannot be pushed
 or projected until the blob arrives.
 
+A blob is stored with its media type: the type of the data URL it
+replaced, as RFC 0001's File section restricts it, which the writer
+gives the store with the bytes. The type is not part of the blob. The
+blob's hash is of its bytes alone, a `sidecar:` URL names the bytes,
+and no entry, context, request or blob hash covers the type, so a type
+changes no hash and no reference. A store MUST keep the type it is
+given and MUST return it, as given, with the bytes, as the rules below
+place it. It MUST refuse a type RFC 0001 does not allow, and MAY refuse
+one longer than it keeps, but MUST NOT shorten or rewrite one. A blob
+given no type, or given `application/octet-stream` with no parameters,
+which says no more than none, has none: a blob a store of an earlier
+draft held, one imported from a 0.15 directory, one whose writer knew
+no type. A reader that needs a type for a blob with none, as a writer
+resolving a `sidecar:` URL to a data URL before it sends a request does
+(RFC 0001, Request hash), uses `application/octet-stream`.
+
+A type is held for a session: a session's type for a blob is what a
+read of the blob for that session returns, and what the session's
+projection writes beside the blob. It comes with the write that names
+the blob: the type the writer stored the blob with, the type a push
+carries for it, the type an import's directory gives it, and, for a
+fork, as it is created and never after, the type its origin held for a
+blob its prefix names. A type once
+held for a session and a blob never changes, so what a reference
+resolves to never changes while the session holds it; a write giving
+another type, or none, succeeds and keeps it, and a session that holds
+none for a blob takes the first type a write gives. Two sessions may
+hold two types for the same bytes, and two items of one session whose
+data URLs carried the same bytes under two types both resolve to the
+type the session was given first: an item that needs its own type
+keeps its media inline. A session's types go with it, deleted with the
+session.
+
+How a store holds a type before a write names the blob, and for a read
+that names no session, depends on whom it serves:
+
+- A store with one principal, a library a program uses directly, MAY
+  hold one type per blob as well: the first it is given, kept once
+  held, a blob held with none taking the first type given. A read for a
+  session then returns the session's type where it holds one and the
+  blob's otherwise, and a read for no session the blob's. A sweep that
+  removes a blob removes its type, so bytes stored again after take the
+  type they are then given.
+- A store that serves several principals, as RFC 0003's server does,
+  MUST NOT let one principal's type reach another. A type per blob
+  would do both harms: a caller who uploads bytes it guesses with a
+  type of its own and reads the type back learns whether another held
+  them first, and a caller who uploads another's bytes first fixes the
+  type the other's sessions resolve to. Such a store holds a type per
+  session, as above, and per uploader for an upload no write has named
+  yet, the uploader's first type kept as a session's is. A read for a
+  session returns that session's type, to a caller that may read it,
+  and a read for no session returns the caller's own upload's type and
+  `application/octet-stream` otherwise. An upload's answer MUST NOT say
+  whether the bytes, or any type for them, were held.
+
+A push carries each blob's type with it, for every blob the closure
+names, whether the receiver holds the blob already or not, so the
+receiver's session holds the sender's type; a projection writes a
+session's types beside its blobs as RFC 0001's File section says, and
+an import takes them from the directory.
+
 Naming an object or a blob grants nothing. A store that serves more
 than one principal, as RFC 0003's server does, decides reach per
 caller: a caller's write, an append, an import or a push, reaches an
@@ -889,7 +951,8 @@ blobs the redaction kept, which are the same blobs.
    log, the member says so, and reading the file back does not make it
    an entry.
 5. A session whose `media` is `sidecar` projects its blobs beside the
-   file, each named by its hex digest as RFC 0001 says, since RFC 0001
+   file, each named by its hex digest as RFC 0001 says, with its media
+   type beside it in `<hex>.type` when it has one, since RFC 0001
    counts a sidecar as part of the session and the file is not
    self-contained without it.
 
@@ -932,7 +995,8 @@ An import of a session whose `media` is `sidecar` takes the session's
 directory with the file, as projection writes it beside the file. It
 verifies each blob the items name against its name, refuses the import
 when one fails, as it does a line that fails its hash, and stores each
-as an object. A blob an item names that the directory lacks and the
+as an object, with the type the directory gives it (Media); a type file
+that holds no media type refuses the import too. A blob an item names that the directory lacks and the
 store does not hold is reported unresolved, as an append reports one,
 and the session cannot be pushed or projected until the blob arrives. Earlier drafts refused every
 redacted file, from when redaction left a file that did not verify.
@@ -947,7 +1011,7 @@ apply here, where holding the session already is the usual case.
 
 - **A push carries the closure of the session**: its own entries and
   their contents, its prefix entries and their contents, and its media
-  blobs. The prefix goes because the receiver's parent rule needs it,
+  blobs, each with its type (Media). The prefix goes because the receiver's parent rule needs it,
   and the receiver retains it under the prefix rule even when it never
   holds the origin session. A push carries the sender's record mark for
   the session, and until heads are signed, which a later document takes
@@ -1195,7 +1259,8 @@ layout keyed on a session and a sequence today, and another store is
 conforming if it satisfies the rules above by any layout.
 
 ```sql
-CREATE TABLE contents (hash TEXT PRIMARY KEY, bytes BLOB NOT NULL);
+CREATE TABLE contents (hash TEXT PRIMARY KEY, bytes BLOB NOT NULL,
+                       media_type TEXT NOT NULL DEFAULT '');
 CREATE TABLE entries  (hash TEXT PRIMARY KEY, type TEXT NOT NULL,
                        parent TEXT, ts TEXT NOT NULL, parents TEXT,
                        content TEXT NOT NULL, context TEXT NOT NULL);
@@ -1207,12 +1272,18 @@ CREATE TABLE log      (session TEXT NOT NULL, seq INTEGER NOT NULL,
                        UNIQUE (session, hash));
 CREATE TABLE edges    (parent TEXT NOT NULL, child TEXT NOT NULL,
                        PRIMARY KEY (parent, child));
+CREATE TABLE session_media (session TEXT NOT NULL, hash TEXT NOT NULL,
+                       media_type TEXT NOT NULL,
+                       PRIMARY KEY (session, hash));
 ```
 
 `contents` holds each body once, media blobs included, and a row leaves
 it only when no retained `entries` row's `content` and no retained
 content's `sidecar:` URL names it, an `entries` row being retained while
-any log or prefix needs it; `entries` is the envelope, naming its
+any log or prefix needs it; a blob's `media_type` is the type a store
+with one principal may hold for it, outside the bytes its hash covers,
+and `session_media` holds each session's type for a blob, its rows
+leaving with the session; `entries` is the envelope, naming its
 content and carrying the context hash the store computed at append;
 `record` is the mark the exchange section enforces, set when this store
 may advance the session. The sketch declares no foreign keys. The rows

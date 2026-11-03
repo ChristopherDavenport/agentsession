@@ -100,6 +100,8 @@ func (h *Handler) importSession(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, importProblem(err))
 		return
 	}
+	h.bindTypes(ctx, who.Name, sess, blobs)
+	h.inheritTypes(ctx, sess)
 	info := sessionInfo{Header: sess.Header(), Head: headOut(sess.Leaf()), Length: sess.Len(), Incarnation: incarnation(sess.Header())}
 	info.Mark = h.markOf(ctx, hdr.ID)
 	w.Header().Set("Incarnation", info.Incarnation)
@@ -171,7 +173,9 @@ func (c *Client) importFile(ctx context.Context, data []byte, asRecord bool) (*a
 
 // ImportMedia implements [agentsession.MediaImporter]: for a sidecar
 // session it uploads each blob the items name from media, verified
-// against its name, then imports the file. A blob media lacks is not
+// against its name, with the media type beside it as its Content-Type
+// (a type file that holds no media type refuses the import with
+// [agentsession.ErrBadMediaType]), then imports the file. A blob media lacks is not
 // uploaded; the server refuses the import with [ErrMissingObject] and
 // [agentsession.ErrNoBlob] unless it holds the blob for the caller
 // already, and nothing is imported. So
@@ -200,7 +204,11 @@ func (c *Client) ImportMedia(ctx context.Context, r io.Reader, media fs.FS, asRe
 			if err != nil {
 				return nil, nil, err
 			}
-			if err := c.PutObject(ctx, cas.SpaceMedia, h, b); err != nil {
+			mt, err := agentsession.ReadSidecarType(media, h)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := c.putObject(ctx, cas.SpaceMedia, h, b, mt); err != nil {
 				return nil, nil, err
 			}
 		}

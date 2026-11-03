@@ -303,21 +303,45 @@ func TestPushFork(t *testing.T) {
 	}
 }
 
-// TestPushCarriesBlobs sends the media a sidecar session's entries name.
+// TestPushCarriesBlobs sends the media a sidecar session's entries
+// name, each with its type, which a fetch carries too; the receiver's
+// session holds the sender's type, and the receiver's own type for a
+// blob it held is left as it was.
 func TestPushCarriesBlobs(t *testing.T) {
 	ctx := context.Background()
 	a, b := twoStores(t)
-	blob, err := a.PutBlob(ctx, []byte("image bytes"))
+	blob, err := a.PutTypedBlob(ctx, []byte("image bytes"), "image/webp")
 	if err != nil {
 		t.Fatal(err)
 	}
+	held, err := a.PutTypedBlob(ctx, []byte("held at both"), "image/gif")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.PutTypedBlob(ctx, []byte("held at both"), "image/x-receivers"); err != nil {
+		t.Fatal(err)
+	}
 	a.Create(ctx, agentsession.Header{ID: "m", Media: agentsession.MediaSidecar})
-	mustAppend(t, a, "m", item("see sidecar:"+blob))
+	mustAppend(t, a, "m", item("see sidecar:"+blob+" and sidecar:"+held))
 	if _, err := a.Push(ctx, b, "m", PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if data, err := b.Blob(ctx, blob); err != nil || string(data) != "image bytes" {
-		t.Errorf("blob at the receiver: %q, %v", data, err)
+	if data, mt, err := b.SessionBlob(ctx, "m", blob); err != nil || string(data) != "image bytes" || mt != "image/webp" {
+		t.Errorf("blob at the receiver: %q of type %q, %v", data, mt, err)
+	}
+	if _, mt, err := b.SessionBlob(ctx, "m", held); err != nil || mt != "image/gif" {
+		t.Errorf("a blob the receiver held typed: type %q in the session, %v; want the sender's", mt, err)
+	}
+	if _, mt, err := b.TypedBlob(ctx, held); err != nil || mt != "image/x-receivers" {
+		t.Errorf("a blob the receiver held typed: its own type %q, %v; want unchanged", mt, err)
+	}
+	c, _ := Open(t.TempDir())
+	defer c.Close()
+	if _, err := c.Fetch(ctx, a, "m"); err != nil {
+		t.Fatal(err)
+	}
+	if _, mt, err := c.SessionBlob(ctx, "m", blob); err != nil || mt != "image/webp" {
+		t.Errorf("blob at the fetcher: type %q, %v", mt, err)
 	}
 }
 

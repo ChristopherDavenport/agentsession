@@ -104,6 +104,8 @@ type bundle struct {
 	prefix []agentsession.Entry // the path to the base, root first
 	own    []agentsession.Entry // in the sender's log order
 	blobs  map[string][]byte
+	// types are the media types of blobs, by hash, of those with one.
+	types map[string]string
 }
 
 // bundleOf reads a session's closure: its own entries and their
@@ -142,7 +144,7 @@ func (s *Store) bundleOf(ctx context.Context, id string) (*bundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &bundle{header: hdr, mark: mark, head: head, blobs: map[string][]byte{}}
+	b := &bundle{header: hdr, mark: mark, head: head, blobs: map[string][]byte{}, types: map[string]string{}}
 	for _, e := range sess.Entries() {
 		if sess.Prefix(e.Base().ID) {
 			b.prefix = append(b.prefix, e)
@@ -157,11 +159,14 @@ func (s *Store) bundleOf(ctx context.Context, id string) (*bundle, error) {
 			if _, ok := b.blobs[hash]; ok {
 				continue
 			}
-			data, err := s.Blob(ctx, hash)
+			data, mt, err := s.SessionBlob(ctx, id, hash)
 			if err != nil {
 				return nil, err
 			}
 			b.blobs[hash] = data
+			if mt != "" {
+				b.types[hash] = mt
+			}
 		}
 	}
 	return b, nil
@@ -448,6 +453,22 @@ func gateBundle(b *bundle) {
 
 // receive admits a bundle.
 func (s *Store) receive(ctx context.Context, b *bundle, o receiveOptions) (Exchange, error) {
+	x, err := s.receiveBundle(ctx, b, o)
+	// The blobs' types go with them, as RFC 0002's push carries them: the
+	// session takes each type sent for a blob it names, unless it holds
+	// one, whether or not the head moved; the store's own type for a
+	// blob is not touched, so a sender gives the types of its session
+	// alone (RFC 0002, Media).
+	if len(b.types) > 0 && (err == nil || errors.Is(err, ErrHeadMoved)) {
+		if terr := s.SetSessionBlobTypes(ctx, b.header.ID, b.types); terr != nil && err == nil {
+			err = fmt.Errorf("cas: exchange: the closure is admitted, and its blobs' types could not be stored: %w", terr)
+		}
+	}
+	return x, err
+}
+
+// receiveBundle is receive but for the blobs' types.
+func (s *Store) receiveBundle(ctx context.Context, b *bundle, o receiveOptions) (Exchange, error) {
 	if err := s.writable(); err != nil {
 		return Exchange{}, err
 	}

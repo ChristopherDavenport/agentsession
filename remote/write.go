@@ -181,6 +181,9 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
+	if fresh {
+		h.inheritTypes(r.Context(), sess)
+	}
 	resp := createResponse{Header: sess.Header(), Incarnation: incarnation(sess.Header())}
 	if resp.Session, err = snapshotOf(sess); err != nil {
 		h.fail(w, err)
@@ -465,6 +468,7 @@ func (h *Handler) appendLine(ctx context.Context, st *held, line []byte) (append
 	if err != nil {
 		return appended{}, err
 	}
+	h.bindTypes(ctx, who.Name, st.sess, names)
 	out := appended{ID: res.ID, Outcome: outcomes[res.Outcome], Durable: res.Durable, Unresolved: res.Unresolved}
 	if out.Unresolved == nil {
 		out.Unresolved = []string{}

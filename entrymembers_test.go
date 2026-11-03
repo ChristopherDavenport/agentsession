@@ -288,6 +288,11 @@ func fillValue(t *testing.T, v reflect.Value, name string) {
 	case v.Type() == rawType:
 		v.Set(reflect.ValueOf(json.RawMessage(`{"k":1}`)))
 		return
+	case v.Type() == reflect.TypeOf([]OmitOutputGroup(nil)):
+		// Groups of two texts listing entries no other group lists, the
+		// one form a reader takes for them.
+		v.Set(reflect.ValueOf([]OmitOutputGroup{{Text: name + "0", Items: []string{name + "0a", name + "0b"}}, {Text: name + "1", Items: []string{name + "1a"}}}))
+		return
 	}
 	switch v.Kind() {
 	case reflect.String:

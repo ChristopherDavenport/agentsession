@@ -87,6 +87,10 @@ func Run(t *testing.T, opts Options) {
 	t.Run("ImportMarker", func(t *testing.T) { testImportMarker(t, opts) })
 	t.Run("Blobs", func(t *testing.T) { testBlobs(t, opts) })
 	t.Run("BlobSweep", func(t *testing.T) { testBlobSweep(t, opts) })
+	t.Run("BlobTypes", func(t *testing.T) { testBlobTypes(t, opts) })
+	t.Run("ImportBlobTypes", func(t *testing.T) { testImportBlobTypes(t, opts) })
+	t.Run("BlobTypeSweep", func(t *testing.T) { testBlobTypeSweep(t, opts) })
+	t.Run("SessionBlobTypes", func(t *testing.T) { testSessionBlobTypes(t, opts) })
 	t.Run("Redacted", func(t *testing.T) { testRedacted(t, opts) })
 	if opts.Reopen != nil {
 		t.Run("Persistence", func(t *testing.T) { testPersistence(t, opts) })

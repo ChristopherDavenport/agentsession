@@ -5,6 +5,7 @@
 //	  objects/contents/<2 hex>/<62 hex>   a loose body, canonical bytes, held once
 //	  objects/entries/<2 hex>/<62 hex>    a loose envelope: type, parent, parents, ts, content
 //	  objects/pack/pack-<hex>.{pack,idx}  objects packed together, with their index
+//	  mediatypes/<64 hex>                 a media blob's type, outside its hash; it goes with the blob
 //	  sessions/<session id>/
 //	    header                            the header line
 //	    log                               the session's write-ahead log and its record
@@ -1374,15 +1375,41 @@ func (s *Store) disown(session string) {
 // 0001 gives an item that names a blob beside the file.
 var sidecarRef = regexp.MustCompile(`sidecar:sha256:[0-9a-f]{64}`)
 
+// mediaTypesDir holds each media blob's type, under the root, as a file
+// named by the blob's hex digest: outside objects, since a type is no
+// part of the bytes the blob's name hashes.
+const mediaTypesDir = "mediatypes"
+
+func (s *Store) mediaTypePath(hash string) string {
+	return filepath.Join(s.root, mediaTypesDir, strings.TrimPrefix(hash, agentsession.HashPrefix))
+}
+
 // PutBlob stores a media blob under its hash, durably, and returns the
-// hash. An item names it with a sidecar: URL carrying the hash, and a
-// projection of a sidecar session writes it beside the file as the file
-// named by the hex digest. A blob is a content object, held once.
+// hash: PutTypedBlob with no media type.
 func (s *Store) PutBlob(ctx context.Context, data []byte) (string, error) {
+	return s.PutTypedBlob(ctx, data, "")
+}
+
+// PutTypedBlob implements [agentsession.TypedBlobWriter]: it stores a
+// media blob under its hash, durably, and then its media type, and
+// returns the hash. An item names the blob with a sidecar: URL carrying
+// the hash, and a projection of a sidecar session writes it beside the
+// file as the file named by the hex digest, its type beside it. A blob
+// is a content object, held once; its type is a file of mediatypes,
+// placed by a link that never replaces one, so a type held stays and a
+// blob held with none takes the one given. Both are written under the
+// sweep's shared lock, and a sweep removes a type only once no blob
+// holds it, under the lock exclusive. A crash between the two leaves the
+// blob with no type, which storing it again with its type gives it.
+func (s *Store) PutTypedBlob(ctx context.Context, data []byte, mediaType string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	if err := s.writable(); err != nil {
+		return "", err
+	}
+	mt, err := agentsession.BlobMediaType(mediaType)
+	if err != nil {
 		return "", err
 	}
 	hash := hashBytes(data)
@@ -1398,7 +1425,209 @@ func (s *Store) PutBlob(ctx context.Context, data []byte) (string, error) {
 	if err := s.objs.flushSet(pend); err != nil {
 		return "", fmt.Errorf("cas: store blob: %w", err)
 	}
+	if mt != "" {
+		if err := s.putMediaType(hash, mt); err != nil {
+			return "", fmt.Errorf("cas: store blob: %w", err)
+		}
+	}
 	return hash, nil
+}
+
+// putMediaType gives the blob named hash its media type, durably, unless
+// it has one. The caller holds the sweep's lock shared.
+func (s *Store) putMediaType(hash, mediaType string) error {
+	path := s.mediaTypePath(hash)
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		if err := s.objs.fsyncDir(s.root); err != nil {
+			return err
+		}
+	}
+	_, err := writeFileWith(path, []byte(mediaType), func(f *os.File) error { return s.objs.fsync(f.Name(), f, syncFile) }, false)
+	switch {
+	case errors.Is(err, os.ErrExist):
+		return nil
+	case errors.Is(err, errNoLink):
+		// A filesystem with no links: a rename, which can replace a
+		// type another writer placed meanwhile, for bytes it holds too.
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		}
+		_, err = s.objs.writeFile(path, []byte(mediaType), true)
+		if err != nil {
+			return err
+		}
+	case err != nil:
+		return err
+	}
+	return s.objs.fsyncDir(dir)
+}
+
+// mediaTypeOf reads the media type the store holds for a blob, "" for
+// none.
+func (s *Store) mediaTypeOf(hash string) (string, error) {
+	raw, err := os.ReadFile(s.mediaTypePath(hash))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("cas: blob %s: type: %w", hash, err)
+	}
+	mt, err := agentsession.BlobMediaType(string(raw))
+	if err != nil {
+		return "", fmt.Errorf("cas: blob %s: type: %w", hash, err)
+	}
+	return mt, nil
+}
+
+// sessionTypesDir is where a session keeps its types for its blobs,
+// each a file named by the blob's hex digest, in the session's directory,
+// so a delete, which renames the directory away, takes them with it.
+const sessionTypesDir = "mediatypes"
+
+// SetSessionBlobTypes implements [agentsession.SessionBlobTyper]: each
+// type is a file of the session's mediatypes directory, placed by a
+// link that never replaces one, so the session's first type for a blob
+// is kept, written durably.
+func (s *Store) SetSessionBlobTypes(ctx context.Context, session string, types map[string]string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.writable(); err != nil {
+		return err
+	}
+	set, err := agentsession.CheckBlobTypes(types)
+	if err != nil {
+		return err
+	}
+	sd, err := s.sessionDir(session)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(sd, "header")); errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: %s", agentsession.ErrNoSession, session)
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	dir := filepath.Join(sd, sessionTypesDir)
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("cas: session %s: types: %w", session, err)
+		}
+		if err := s.objs.fsyncDir(sd); err != nil {
+			return err
+		}
+	}
+	for h, t := range set {
+		path := filepath.Join(dir, strings.TrimPrefix(h, agentsession.HashPrefix))
+		if _, err := os.Stat(path); err == nil {
+			continue
+		}
+		_, err := writeFileWith(path, []byte(t), func(f *os.File) error { return s.objs.fsync(f.Name(), f, syncFile) }, false)
+		if errors.Is(err, errNoLink) {
+			_, err = s.objs.writeFile(path, []byte(t), true)
+		}
+		if err != nil && !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("cas: session %s: blob %s: type: %w", session, h, err)
+		}
+	}
+	return s.objs.fsyncDir(dir)
+}
+
+// SessionBlobTypes implements [agentsession.SessionBlobTyper].
+func (s *Store) SessionBlobTypes(ctx context.Context, session string) (map[string]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	sd, err := s.sessionDir(session)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, session)
+	}
+	if _, err := os.Stat(filepath.Join(sd, "header")); errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, session)
+	}
+	out := map[string]string{}
+	ents, err := os.ReadDir(filepath.Join(sd, sessionTypesDir))
+	if errors.Is(err, os.ErrNotExist) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cas: session %s: types: %w", session, err)
+	}
+	for _, e := range ents {
+		h := agentsession.HashPrefix + e.Name()
+		if !agentsession.ValidHash(h) {
+			continue
+		}
+		mt, err := s.sessionTypeOf(sd, h)
+		if err != nil {
+			return nil, fmt.Errorf("cas: session %s: %w", session, err)
+		}
+		if mt != "" {
+			out[h] = mt
+		}
+	}
+	return out, nil
+}
+
+// sessionTypeOf reads a session's type for a blob from the session's
+// directory, "" for none.
+func (s *Store) sessionTypeOf(sessionDir, hash string) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(sessionDir, sessionTypesDir, strings.TrimPrefix(hash, agentsession.HashPrefix)))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("blob %s: type: %w", hash, err)
+	}
+	mt, err := agentsession.BlobMediaType(string(raw))
+	if err != nil {
+		return "", fmt.Errorf("blob %s: type: %w", hash, err)
+	}
+	return mt, nil
+}
+
+// SessionBlob implements [agentsession.SessionBlobReader]: the blob,
+// with the session's type for it, or the store's where the session
+// holds none.
+func (s *Store) SessionBlob(ctx context.Context, session, hash string) ([]byte, string, error) {
+	data, mt, err := s.TypedBlob(ctx, hash)
+	if err != nil {
+		return nil, "", err
+	}
+	sd, err := s.sessionDir(session)
+	if err != nil {
+		return data, mt, nil
+	}
+	st, err := s.sessionTypeOf(sd, hash)
+	if err != nil {
+		return nil, "", fmt.Errorf("cas: session %s: %w", session, err)
+	}
+	if st != "" {
+		mt = st
+	}
+	return data, mt, nil
+}
+
+// TypedBlob implements [agentsession.TypedBlobReader]: a media blob by
+// its hash, as Blob reads it, with its type, "" for none.
+func (s *Store) TypedBlob(ctx context.Context, hash string) ([]byte, string, error) {
+	data, err := s.Blob(ctx, hash)
+	if err != nil {
+		return nil, "", err
+	}
+	mt, err := s.mediaTypeOf(hash)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, mt, nil
 }
 
 // Blob returns a media blob by its hash, [agentsession.BlobReader]'s:
@@ -3600,7 +3829,7 @@ func (s *Store) ProjectDir(ctx context.Context, dir, sessionID string) (string, 
 			return "", err
 		}
 		for _, b := range blobsNamedBy(body) {
-			data, err := s.Blob(ctx, b)
+			data, mt, err := s.SessionBlob(ctx, sessionID, b)
 			if err != nil {
 				return "", err
 			}
@@ -3608,6 +3837,12 @@ func (s *Store) ProjectDir(ctx context.Context, dir, sessionID string) (string, 
 				return "", err
 			}
 			if err := writeAtomic(filepath.Join(blobDir, strings.TrimPrefix(b, agentsession.HashPrefix)), data); err != nil {
+				return "", err
+			}
+			if mt == "" {
+				continue
+			}
+			if err := writeAtomic(filepath.Join(blobDir, agentsession.SidecarTypeName(b)), []byte(mt)); err != nil {
 				return "", err
 			}
 		}
@@ -3671,9 +3906,11 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 // ImportMedia implements [agentsession.MediaImporter]: it imports an
 // RFC 0001 file as Import does, and for a session whose media is
 // sidecar takes the session's blobs from media, its sidecar directory,
-// each named by its hex digest. Each blob the items name is verified
+// each named by its hex digest, with the media type beside each
+// ([agentsession.ReadSidecarType]). Each blob the items name is verified
 // against its name, and one that fails refuses the import with
-// [agentsession.ErrBlobMismatch]; the blobs arrive in the import's pack,
+// [agentsession.ErrBlobMismatch], as a type file that holds no media
+// type does with [agentsession.ErrBadMediaType]; the blobs arrive in the import's pack,
 // so the session and its blobs are committed together. A blob media
 // lacks that the store does not hold is returned unresolved, and the
 // session is imported without it: a projection of it fails until
@@ -3690,6 +3927,7 @@ func (s *Store) ImportMedia(ctx context.Context, r io.Reader, media fs.FS, asRec
 		return nil, nil, err
 	}
 	blobs := map[string][]byte{}
+	types := map[string]string{}
 	var unresolved []string
 	if mediaOf(sess.Header()) == agentsession.MediaSidecar {
 		hashes, err := agentsession.SessionBlobs(sess)
@@ -3701,6 +3939,9 @@ func (s *Store) ImportMedia(ctx context.Context, r io.Reader, media fs.FS, asRec
 			switch {
 			case err == nil:
 				blobs[h] = data
+				if types[h], err = agentsession.ReadSidecarType(media, h); err != nil {
+					return nil, nil, fmt.Errorf("cas: import: %w", err)
+				}
 			case errors.Is(err, fs.ErrNotExist):
 				if ok, _ := s.HasObject(ctx, SpaceMedia, h); !ok {
 					unresolved = append(unresolved, h)
@@ -3713,6 +3954,9 @@ func (s *Store) ImportMedia(ctx context.Context, r io.Reader, media fs.FS, asRec
 	out, err := s.importRead(ctx, sess, blobs, asRecord)
 	if err != nil {
 		return nil, nil, err
+	}
+	if err := s.SetSessionBlobTypes(ctx, out.Header().ID, types); err != nil {
+		return out, unresolved, fmt.Errorf("cas: import: the session is imported, and its blobs' types could not be stored: %w", err)
 	}
 	return out, unresolved, nil
 }
@@ -3855,7 +4099,12 @@ var (
 	_ agentsession.HeadStore = (*Store)(nil)
 	_ agentsession.Releaser  = (*Store)(nil)
 
-	_ agentsession.BlobWriter    = (*Store)(nil)
-	_ agentsession.BlobReader    = (*Store)(nil)
-	_ agentsession.MediaImporter = (*Store)(nil)
+	_ agentsession.BlobWriter      = (*Store)(nil)
+	_ agentsession.BlobReader      = (*Store)(nil)
+	_ agentsession.TypedBlobWriter = (*Store)(nil)
+	_ agentsession.TypedBlobReader = (*Store)(nil)
+
+	_ agentsession.SessionBlobTyper  = (*Store)(nil)
+	_ agentsession.SessionBlobReader = (*Store)(nil)
+	_ agentsession.MediaImporter     = (*Store)(nil)
 )

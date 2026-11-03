@@ -124,7 +124,8 @@ from RFC 0001 and RFC 0002 keep their meanings.
   store that keeps no commit or mark (the reference memory, JSONL and
   SQLite stores) offers a subset.
 - Request and response bodies are JSON, except object bodies, which are
-  their canonical bytes (`application/octet-stream`), and streams.
+  their canonical bytes (`application/octet-stream`, or a media blob's
+  own type, Objects), and streams.
 - Streams are NDJSON (`application/x-ndjson`) or server-sent events
   (`text/event-stream`), and every stream that is not a follow ends with
   an explicit terminal frame: `{"end":true}` as the last NDJSON line, an
@@ -166,6 +167,7 @@ from RFC 0001 and RFC 0002 keep their meanings.
 
 ```
 GET  /v1/objects/{space}/{hash}
+GET  /v1/objects/media/{hash}?session={id}
 HEAD /v1/objects/{space}/{hash}
 PUT  /v1/objects/{space}/{hash}
 POST /v1/objects/missing
@@ -185,7 +187,26 @@ Media).
 - A `GET` returns the object's canonical bytes. An object never changes
   under its hash, so a server SHOULD mark the response
   `Cache-Control: private, max-age=31536000, immutable`, and a client
-  SHOULD cache it for good. It is `private`, never `public`: the
+  SHOULD cache it for good. A `media` object's `Content-Type` is a
+  media type the server holds for it as RFC 0002's Media section has a
+  store that serves several principals hold one, never another
+  principal's: with `session`, the type the server holds for that
+  session, to a caller that may read the session and only for a blob
+  the session names, as an own or prefix entry's content's `sidecar:`
+  URL, any other being `no_object`; without, the type the caller itself
+  uploaded the blob with, within `upload_grace_ms`; and
+  `application/octet-stream` where it holds none. A session's type once
+  held never changes, but one it lacks may be given later, and the
+  answer without `session` is the caller's own and turns
+  `application/octet-stream` when its upload's grace ends, so a server
+  MUST mark a `media` response immutable only when it answers for a
+  session that holds a type, and SHOULD mark any other
+  `Cache-Control: private, no-cache`. Since the type is one a writer
+  chose, a server MUST send every `media` response with
+  `X-Content-Type-Options: nosniff`, `Content-Disposition: attachment`
+  and `Content-Security-Policy: sandbox; default-src 'none'`, so a blob
+  typed `text/html` or `image/svg+xml` never renders, or runs, on the
+  server's origin. It is `private`, never `public`: the
   response is authorized for this caller, and a shared cache must not
   serve it to another. A missing object, or one the caller may not read
   (below), is 404 `no_object`.
@@ -214,7 +235,16 @@ Media).
   create or import a session whose `media` is `sidecar` with
   `unsupported`. The server MUST verify
   that the bytes hash to the name and refuse them with `bad_object`
-  otherwise. Uploading an object it holds is a no-op that succeeds, and
+  otherwise. A `media` upload's `Content-Type` is the blob's media
+  type, which the server holds for the uploader, the uploader's first
+  type kept, until a write names the blob and gives the type to the
+  session the write lands in (Writing, Import, Exchange). A
+  `Content-Type` of `application/octet-stream` with no parameters, or
+  none, uploads the blob with no type; one RFC 0001's File section does
+  not allow is `bad_request`. The answer is the same whether the server
+  held the bytes, or any type for them, before.
+  Every other space's `Content-Type` is `application/octet-stream`, and
+  the server does not read it. Uploading an object it holds is a no-op that succeeds, and
   the response does not say whether it was held. An uploaded object is
   reachable from nothing but its uploader until a push names it: the
   uploader may name it in a push, an import or an append, and is told
@@ -643,6 +673,14 @@ later one, as RFC 0002's Sessions say.
     append naming a blob it lacks and reports it unresolved (RFC 0002,
     Media), the wire refuses it, since the writer can upload the blob
     (write scope uploads media) and append again.
+  - A line naming a sidecar blob the caller uploaded with a type, within
+    `upload_grace_ms`, gives the session that type for the blob, unless
+    the session holds one (RFC 0002, Media). A create of a fork gives it
+    the types its origin holds for the blobs its prefix names, then and
+    never after: a blob a later append names takes its writer's type
+    alone, so a fork's type never tells its writers, who may not read
+    the origin, what the origin holds for a blob it named after the fork
+    point.
   - `unresolved` lists references the server could not resolve: a
     sidecar blob the caller reaches through a session that names it and
     the store lacks, or a convergence into a session it does not hold.
@@ -832,7 +870,12 @@ A push is RFC 0002's, over the wire.
 2. It posts `{"header": …, "entries": [own entry hashes in log order],
    "prefix": [prefix entry hashes, first entry first], "head": {"expected": e,
    "to": t, "force": bool}, "mark": "mirror"|"record", "refs": [{"name",
-   "expected", "next"}]}`. `mark` is the **receiver's resulting mark**:
+   "expected", "next"}], "media_types": {blob hash: type}}`.
+   `media_types` carries the sender's type for each blob the closure
+   names that has one, whether step 1 uploaded the blob or the server
+   reached it already, and the session takes each as RFC 0002's Media
+   section says, unless it holds one; a type RFC 0001 does not allow,
+   or one for a blob the closure does not name, is `bad_request`. `mark` is the **receiver's resulting mark**:
    `mirror` (the usual push) or `record` (a handover to the receiver).
    The sender is the record by definition, or the server refuses with
    `not_record`; the request cannot say otherwise. Each ref's `next`
@@ -878,7 +921,9 @@ A **fetch** needs nothing new. The fetcher reads the log with
 and head from one committed view, and reads the **closure**: the
 session's own entries from the log, and its prefix from `path` (the
 entries from the first entry to the base, first entry first, which `header.base`
-marks), with their contents, and the media the contents name. It
+marks), with their contents, and the media the contents name, each
+blob read for the session (`GET` with `session`) so it comes with the
+session's type as `Content-Type` (Objects). It
 admits them in its own store, and moves its head and refs under RFC
 0002's fetch rules (Exchange), which hold the head for a record. The
 fetch creates a mirror. The server does not know a fetch happened,
@@ -913,7 +958,10 @@ alone can take a session whole this way, a redacted one among them.
   way, and the header it fills from the origin names none the caller
   may not read.
 - A sidecar session's blobs are uploaded first, as `media` objects
-  (Objects). Every blob an item names that the caller cannot reach
+  (Objects), each with the type its directory gives it as its
+  `Content-Type`, and the imported session takes the type the caller
+  uploaded each blob it names with, as an append's session does
+  (Writing), a fork's the types of its origin for its prefix's blobs. Every blob an item names that the caller cannot reach
   (Objects, Reach), in a file of any `media`, is `missing_object`, its
   `missing` member the hashes in `missing`'s shape, the same answer
   whether another's session holds the blob or none does. Where a local import takes the session and reports
@@ -1006,6 +1054,15 @@ Not carried, because they are a local operator's or a file's:
   it need not recompute; a server that does not keep it omits the member.
 
 ## Security considerations
+
+- A media type is a writer's word about bytes, held per session and per
+  uploader (RFC 0002, Media), never per blob across principals: a type
+  per blob would answer a caller who uploads bytes it guesses with a
+  probe type whether another held them, and would let one caller fix
+  the type another's sessions resolve to. A `media` response carries
+  `nosniff`, `attachment` and a sandboxing policy (Objects), so a type
+  a writer chose cannot make the server's origin render or run the
+  bytes.
 
 - Everything a session holds, every prompt, tool output and model
   response, is readable by anyone with read scope. A deployment MUST

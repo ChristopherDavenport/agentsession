@@ -252,7 +252,9 @@ func replacedRecord(r agentsession.ReplacedItem, omit agentsession.Omit) map[str
 	}
 	switch {
 	case r.Reason == agentsession.OmitOutputsReason && omit.Outputs != nil:
-		rec["text"] = omit.Outputs.Text
+		if text, ok := omit.Outputs.TextFor(r.Entry.ID); ok {
+			rec["text"] = text
+		}
 	case r.Reason == agentsession.OmitImagesReason && omit.Images != nil:
 		rec["text"] = omit.Images.Placeholder
 	}

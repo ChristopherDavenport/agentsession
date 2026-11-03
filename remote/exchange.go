@@ -76,35 +76,150 @@ func validSpace(s string) bool {
 // uploads are the objects each principal uploaded for a push, which
 // nothing else reaches until a push names them: the uploader may name
 // them in a push, and is told it holds them, for the grace the
-// capabilities publish.
+// capabilities publish. A media upload's type is held here too, for its
+// uploader alone, the first it gave kept, until a write names the blob
+// and gives the type to the session it lands in (RFC 0002, Media): the
+// store never holds a type per blob for a server of several principals.
 type uploads struct {
 	mu sync.Mutex
-	by map[string]map[objKey]time.Time
+	by map[string]map[objKey]upload
+	// grace is the longest grace a read has asked about, and pruned when
+	// every principal's uploads were last looked at for it.
+	grace  time.Duration
+	pruned time.Time
 }
 
-func (u *uploads) put(who string, k objKey) {
+// upload is when a principal last uploaded an object, and the media type
+// it first gave a media object, "" for none yet.
+type upload struct {
+	at        time.Time
+	mediaType string
+}
+
+func (u *uploads) put(who string, k objKey, mediaType string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.prune()
 	if u.by == nil {
-		u.by = map[string]map[objKey]time.Time{}
+		u.by = map[string]map[objKey]upload{}
 	}
 	if u.by[who] == nil {
-		u.by[who] = map[objKey]time.Time{}
+		u.by[who] = map[objKey]upload{}
 	}
-	u.by[who][k] = time.Now()
+	up := u.by[who][k]
+	up.at = time.Now()
+	if up.mediaType == "" {
+		up.mediaType = mediaType
+	}
+	u.by[who][k] = up
 }
 
 // has reports whether who uploaded k within grace, and forgets what
 // grace has passed for.
 func (u *uploads) has(who string, k objKey, grace time.Duration) bool {
+	_, ok := u.get(who, k, grace)
+	return ok
+}
+
+// typeOf is the media type who uploaded the blob named hash with, within
+// grace, "" for none.
+func (u *uploads) typeOf(who, hash string, grace time.Duration) string {
+	up, _ := u.get(who, objKey{cas.SpaceMedia, hash}, grace)
+	return up.mediaType
+}
+
+func (u *uploads) get(who string, k objKey, grace time.Duration) (upload, bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	at, ok := u.by[who][k]
-	if ok && time.Since(at) > grace {
+	u.grace = max(u.grace, grace)
+	u.prune()
+	up, ok := u.by[who][k]
+	if ok && time.Since(up.at) > grace {
 		delete(u.by[who], k)
-		return false
+		return upload{}, false
 	}
-	return ok
+	return up, ok
+}
+
+// prune drops every principal's uploads past the grace, at most once a
+// quarter grace, so what the server holds of uploads, their types among
+// it, is bounded by what arrives within a grace. The caller holds mu.
+func (u *uploads) prune() {
+	if u.grace <= 0 || time.Since(u.pruned) < u.grace/4 {
+		return
+	}
+	u.pruned = time.Now()
+	for who, ups := range u.by {
+		for k, up := range ups {
+			if time.Since(up.at) > u.grace {
+				delete(ups, k)
+			}
+		}
+		if len(ups) == 0 {
+			delete(u.by, who)
+		}
+	}
+}
+
+// bindTypes gives session the types who uploaded the blobs a write that
+// landed in it names with, as RFC 0003's Writing and Import have the
+// session take them, each unless the session holds one. A failure is
+// logged: the write has landed, and the session resolves the blob with
+// no type until a write gives it one.
+func (h *Handler) bindTypes(ctx context.Context, who string, sess *agentsession.Session, names []string) {
+	types := map[string]string{}
+	for _, b := range names {
+		if mt := h.uploads.typeOf(who, b, h.uploadGrace); mt != "" {
+			types[b] = mt
+		}
+	}
+	h.setTypes(ctx, sess.Header().ID, types)
+}
+
+// inheritTypes gives a fork, as it is created or imported, the types its
+// origin holds for the blobs its prefix names, and no others: a blob the
+// origin names after the fork point is none of the fork's, and a type
+// the fork took for it later would tell the fork's writers, who may not
+// read the origin, what the origin holds. The caller was authorized to
+// read the origin for the create.
+func (h *Handler) inheritTypes(ctx context.Context, sess *agentsession.Session) {
+	hdr := sess.Header()
+	typer, ok := h.store.(agentsession.SessionBlobTyper)
+	if !ok || hdr.Base == "" || hdr.ParentSession == "" || hdr.ParentSession == hdr.ID {
+		return
+	}
+	held, err := typer.SessionBlobTypes(ctx, hdr.ParentSession)
+	if err != nil || len(held) == 0 {
+		return
+	}
+	types := map[string]string{}
+	for _, e := range sess.Entries() {
+		if !sess.Prefix(e.Base().ID) {
+			continue
+		}
+		names, err := agentsession.SidecarBlobs(e)
+		if err != nil {
+			return
+		}
+		for _, b := range names {
+			if held[b] != "" {
+				types[b] = held[b]
+			}
+		}
+	}
+	h.setTypes(ctx, hdr.ID, types)
+}
+
+// setTypes gives a session types unless it holds one for a blob,
+// logging a failure.
+func (h *Handler) setTypes(ctx context.Context, id string, types map[string]string) {
+	typer, ok := h.store.(agentsession.SessionBlobTyper)
+	if !ok || len(types) == 0 {
+		return
+	}
+	if err := typer.SetSessionBlobTypes(ctx, id, types); err != nil {
+		h.logError(fmt.Errorf("remote: session %s: the types of its blobs: %w", id, err))
+	}
 }
 
 // reach is which objects each of the store's sessions holds: an own or
@@ -203,6 +318,20 @@ func (h *Handler) unreachedMedia(ctx context.Context, who string, names []string
 	return missing, nil
 }
 
+// sessionNames reports whether the caller may read session and the
+// session holds k, as an own or prefix entry's object or a blob such an
+// entry's content names: what a read of a blob for the session needs.
+func (h *Handler) sessionNames(ctx context.Context, session string, k objKey) (bool, error) {
+	if session == "" || !h.may(ctx, ScopeRead, session) || h.reader == nil {
+		return false, nil
+	}
+	sets, err := h.reachSets(ctx)
+	if err != nil {
+		return false, err
+	}
+	return sets[session][k], nil
+}
+
 // reachSets is the objects each of the store's sessions holds, by
 // session ID, each rebuilt when the listing's size or modified time for
 // it has changed.
@@ -256,6 +385,15 @@ func (h *Handler) principal(r *http.Request) Principal {
 // objectGet serves an object's canonical bytes, to a caller it is
 // reachable by; HEAD answers the same without the body. A server over a
 // store that keeps no objects but holds sidecar blobs serves media.
+//
+// A media object's Content-Type is a type held for the caller, never
+// another principal's (RFC 0002, Media): with ?session=, that session's
+// type, for a caller that may read the session and a blob the session
+// names; without, the type the caller itself uploaded the blob with;
+// application/octet-stream where there is none. Only a session's type is
+// marked immutable, and every media response carries nosniff,
+// attachment and a sandboxing policy, since its type is a writer's
+// (RFC 0003, Objects).
 func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
 	k := objKey{r.PathValue("space"), r.PathValue("hash")}
 	if h.ex == nil && (k.space != cas.SpaceMedia || h.blobReader == nil) {
@@ -266,14 +404,33 @@ func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
 		h.writeProblem(w, problem(CodeNoObject, "no such object", ""))
 		return
 	}
-	ok, err := h.reachable(r.Context(), h.principal(r).Name, []objKey{k})
-	if err != nil {
-		h.fail(w, err)
+	who := h.principal(r).Name
+	session, scoped := r.URL.Query().Get("session"), r.URL.Query().Has("session")
+	if scoped && k.space != cas.SpaceMedia {
+		h.writeProblem(w, problem(CodeBadRequest, "only a media object is read for a session", ""))
 		return
 	}
-	if !ok[k] {
-		h.writeProblem(w, problem(CodeNoObject, "no such object", ""))
-		return
+	var err error
+	if scoped {
+		ok, err := h.sessionNames(r.Context(), session, k)
+		if err != nil {
+			h.fail(w, err)
+			return
+		}
+		if !ok {
+			h.writeProblem(w, problem(CodeNoObject, "no such object", ""))
+			return
+		}
+	} else {
+		ok, err := h.reachable(r.Context(), who, []objKey{k})
+		if err != nil {
+			h.fail(w, err)
+			return
+		}
+		if !ok[k] {
+			h.writeProblem(w, problem(CodeNoObject, "no such object", ""))
+			return
+		}
 	}
 	var data []byte
 	if h.ex != nil {
@@ -285,8 +442,37 @@ func (h *Handler) objectGet(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	if k.space != cas.SpaceMedia {
+		w.Header().Set("Content-Type", agentsession.DefaultMediaType)
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	} else {
+		var mt string
+		if scoped {
+			if typer, ok := h.store.(agentsession.SessionBlobTyper); ok {
+				held, err := typer.SessionBlobTypes(r.Context(), session)
+				if err != nil {
+					h.fail(w, err)
+					return
+				}
+				mt = held[k.hash]
+			}
+		} else {
+			mt = h.uploads.typeOf(who, k.hash, h.uploadGrace)
+		}
+		if mt == "" {
+			w.Header().Set("Content-Type", agentsession.DefaultMediaType)
+		} else {
+			w.Header().Set("Content-Type", mt)
+		}
+		if scoped && mt != "" {
+			w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "private, no-cache")
+		}
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Disposition", "attachment")
+		w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(data)
@@ -302,7 +488,9 @@ func (h *Handler) holdsMedia() bool { return h.ex != nil || h.blobs != nil }
 // succeeds and says nothing of it. Exchange scope uploads any object;
 // write scope uploads media, which a writer's sidecar items name (RFC
 // 0003, Objects). A server over a store that keeps no objects but holds
-// sidecar blobs takes media alone.
+// sidecar blobs takes media alone. A media upload's Content-Type is the
+// blob's media type, application/octet-stream or none being no type,
+// and the store keeps it as RFC 0002's Media section says.
 func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
 	k := objKey{r.PathValue("space"), r.PathValue("hash")}
 	who := h.principal(r)
@@ -327,11 +515,23 @@ func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, problem(CodeBadRequest, "the object is larger than the server takes", ""))
 		return
 	}
-	if h.ex != nil {
+	media := k.space == cas.SpaceMedia
+	var mt string
+	if media {
+		if mt, err = agentsession.BlobMediaType(r.Header.Get("Content-Type")); err != nil {
+			h.writeProblem(w, problem(CodeBadRequest, "the Content-Type is not a media type", err.Error()))
+			return
+		}
+	}
+	// The store keeps the bytes alone: the type is the uploader's, held
+	// with its upload, so neither the answer nor any later read tells
+	// one principal whether another uploaded the bytes, or with what.
+	switch {
+	case h.ex != nil:
 		err = h.ex.PutObject(r.Context(), k.space, k.hash, data)
-	} else if agentsession.HashBytes(data) != k.hash {
+	case agentsession.HashBytes(data) != k.hash:
 		err = problem(CodeBadObject, "the bytes do not hash to the name", k.hash)
-	} else {
+	default:
 		h.sweepUploads(r.Context())
 		_, err = h.blobs.PutBlob(r.Context(), data)
 	}
@@ -339,7 +539,7 @@ func (h *Handler) objectPut(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
-	h.uploads.put(who.Name, k)
+	h.uploads.put(who.Name, k, mt)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -414,6 +614,10 @@ type pushRequest struct {
 	Head    pushHeadStep        `json:"head"`
 	Mark    string              `json:"mark"`
 	Refs    []PushRef           `json:"refs"`
+	// MediaTypes are the sender's types for the blobs the closure names,
+	// by hash, those held already among them, which the session takes
+	// unless it holds one (RFC 0003, Exchange).
+	MediaTypes map[string]string `json:"media_types,omitempty"`
 }
 
 type pushHeadStep struct {
@@ -491,6 +695,10 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
+	if _, err := agentsession.CheckBlobTypes(req.MediaTypes); err != nil {
+		h.fail(w, problem(CodeBadRequest, "media_types holds a type a data URL cannot carry", err.Error()))
+		return
+	}
 	switch {
 	case req.Header.ID != id:
 		h.fail(w, problem(CodeBadRequest, "the header names another session", req.Header.ID))
@@ -561,6 +769,13 @@ func (h *Handler) push(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, p)
 		return
 	}
+	for b := range req.MediaTypes {
+		if _, ok := c.Blobs[b]; !ok {
+			h.fail(w, problem(CodeBadRequest, "media_types names a blob the closure does not", b))
+			return
+		}
+	}
+	c.BlobTypes = req.MediaTypes
 	x, err := h.ex.Receive(ctx, c, cas.ReceiveOptions{Expected: headIn(req.Head.Expected), Force: req.Head.Force, Handover: req.Mark == cas.MarkRecord})
 	defer h.settle(r.Context(), st)
 	mark, _, _ := h.ex.MarkOf(r.Context(), id)

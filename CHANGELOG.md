@@ -5,6 +5,95 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Format 0.16 (RFC 0001, draft 0.16).** `Format` and `FormatMinor`
+  name 0.16, so a writer raises every file it appends to and a reader
+  of 0.15 refuses it; a 0.5 to 0.15 file reads as it stands and no
+  entry hash moves. The generated fixtures and export goldens carry the
+  new header. 0.16 adds the type file beside a sidecar blob and
+  `omit.outputs.groups`, both below.
+
+- **A sidecar blob keeps its media type (RFC 0001 0.16, File; RFC
+  0002, Media; RFC 0003, Objects).** A writer that turned a data URL
+  into a blob recorded `sidecar:sha256:<hex>` and lost the type, so a
+  writer resuming the session could not rebuild the data URL its
+  request must send. A blob is now stored with its type, outside every
+  hash: the reference and every hash are as they were.
+  `TypedBlobWriter.PutTypedBlob` stores a blob with its type and
+  `TypedBlobReader.TypedBlob` returns it, as given, `""` for none; a
+  reader uses `DefaultMediaType`, `application/octet-stream`, for a
+  blob with none, and a store holds a blob given that type with none.
+  A type once held never changes: the same bytes stored again with
+  another type, or none, keep it, and a blob held with none takes the
+  first type given. A type that is not one is `ErrBadMediaType`
+  (`BlobMediaType` checks one, at most `MaxMediaTypeLen` bytes). The
+  memory, jsonl, sqlite, cas and remote stores implement both
+  interfaces: jsonl keeps `media/<hex>.type`, sqlite a `media_type`
+  column on `blobs` (added on open), cas `mediatypes/<hex>`, and each
+  sweep removes a type with its blob, so bytes stored again take the
+  type they are then given. A projection writes `<hex>.type` beside the
+  blob (`SidecarTypeName`), `ImportMedia` reads it
+  (`ReadSidecarType`) and a type file that holds no type refuses the
+  import, a cas push and fetch carry each blob's type
+  (`cas.Closure.BlobTypes`), and over RFC 0003 a media upload's
+  `Content-Type` is the type and a `GET` returns it, a blob with none
+  as `application/octet-stream` and not marked immutable. The new
+  interfaces sit beside `BlobWriter` and `BlobReader`, which are
+  unchanged, so a writer typed against them, agentturn's `WithMedia`
+  among them, and an interface of the same shape declared elsewhere, as
+  agentredact's `BlobWriter` is, are satisfied as before. **Added:
+  `TypedBlobWriter`, `TypedBlobReader`, `DefaultMediaType`,
+  `MaxMediaTypeLen`, `ErrBadMediaType`, `BlobMediaType`,
+  `SidecarTypeName`, `ReadSidecarType`, `cas.Closure.BlobTypes`.**
+
+  A type is held per session too (RFC 0002, Media), and a store serving
+  several principals holds it only so, since a type per blob let one
+  principal learn whether another held some bytes and fix the type
+  another's sessions resolve to. `SessionBlobTyper` sets and reads a
+  session's types, the first kept and deleted with the session (memory;
+  jsonl `media/sessions/<id>/<hex>.type`; sqlite `session_blob_types`;
+  cas `sessions/<id>/mediatypes/<hex>`), and `SessionBlobReader`
+  (`ReadSessionBlob`) reads a blob as a session holds it, falling back
+  to the store's type for a library store. An import, a cas push and a
+  fetch give the session the types they carry and leave the store's
+  own. RFC 0003's server keeps an upload's type for its uploader, gives
+  it to the session an append or an import naming the blob lands in, a
+  fork its origin's, and a push's `media_types`, held blobs included;
+  `GET /v1/objects/media/{hash}?session={id}` (`Client.SessionBlob`)
+  answers that session's type, a plain `GET` the caller's own upload's,
+  and every media `GET` carries `X-Content-Type-Options: nosniff`,
+  `Content-Disposition: attachment` and `Content-Security-Policy:
+  sandbox; default-src 'none'`. A type is what an RFC 2397 data URL
+  carries: tokens, `;attribute=value` parameters, no space, quote or
+  comma. sqlite checks a stored type on read. **Added:
+  `SessionBlobTyper`, `SessionBlobReader`, `ReadSessionBlob`,
+  `CheckBlobTypes`, `Client.SessionBlob`.**
+
+- **Several placeholder texts for outputs (RFC 0001 0.16, Items left
+  out of the context).** `omit.outputs` held one text for every output
+  it listed, so a request sending a host's trim and a harness's
+  quarantine under two texts could not be described and every later
+  response went without a `request_hash`. `OmitOutputs.Groups`
+  (`OmitOutputGroup`, written `"outputs":{"groups":[{"text","items"}]}`)
+  sends each group's outputs with its own text; a group's items
+  accumulate across deltas, and `Text`/`Items` stay the default group,
+  read exactly as 0.14 and 0.15 read them. An entry is in one group at
+  most: `Append` refuses an outputs that would put one in two
+  (`ErrOmitOverlap`), and a reader takes such a member as changing
+  nothing. `OmitDelta` writes what a group adds, `OmitOutputs.TextFor`
+  gives an output's text (ATIF's `replaced` record uses it), a
+  checkpoint carries the groups, and leaving entries out removes a
+  group it empties, then an emptied `groups`, `outputs` and `omit`,
+  and leaves a malformed `outputs` as written. A `text` present writes
+  the default group, `""` beside `groups` included; a `groups` element
+  holding anything but `text` and `items` is malformed; a `replace`
+  starts the groups afresh, so it may move an entry to another group.
+  Fixtures `outputs-groups` and `bad-outputs-overlap`, the latter with a
+  hashed response after its bad line. **Added:
+  `OmitOutputs.Groups`, `OmitOutputGroup`, `OmitOutputs.TextFor`,
+  `ErrOmitOverlap`.**
+
 ## v0.0.32 - 2026-11-02
 
 - **Format 0.15 (RFC 0001, draft 0.15).** `Format` and `FormatMinor`
