@@ -83,6 +83,17 @@ versions may break the API.
   `env-snapshot`: a `cwd`-only `env` after a response is a substitution
   to the absent workspace, one repeating every member is none.
 
+- **Rules for converters (RFC 0001 0.17, no library change).** A writer
+  that did not send the request it records, a converter among them,
+  writes `request_hash` only after checking the rebuilt request against
+  the source's record of it (Request hash). `failed` is written from
+  what the harness or native record says, never inferred from an
+  output's text or exit status (`item`). A converter documents the
+  native members it carries that identify a person, account, machine or
+  native session, and reports them by path and count without values
+  (Conformance). `vcs.revision` SHOULD be the full identifier, and a
+  reader resolves an abbreviation as the VCS does (`env`).
+
 ## v0.0.33 - 2026-11-02
 
 - **Format 0.16 (RFC 0001, draft 0.16).** `Format` and `FormatMinor`
