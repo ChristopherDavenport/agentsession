@@ -7,6 +7,13 @@ versions may break the API.
 
 ## Unreleased
 
+- **Breaking (format): Format 0.20 (RFC 0001, draft 0.20).** `Format`
+  and `FormatMinor` name 0.20, so a writer raises every file it appends
+  to and a reader of 0.19 refuses it; a 0.5 to 0.19 file reads as it
+  stands and no entry hash moves. The generated fixtures, the otel
+  copies and the export goldens carry the new header. 0.20 adds one
+  redaction rule, a closed-set member kept as written, below.
+
 - **Fix: `ConfigFromRequestParts` keeps each part whole.** It copied a
   part's `id`, `text` and `source` and dropped its `trust`, so a memory
   part a harness labelled `untrusted` was recorded as saying nothing,

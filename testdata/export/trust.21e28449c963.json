@@ -190,7 +190,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.19",
+      "format": "agentsession/0.20",
       "leaf": "sha256:21e28449c963a690c0164e07246a3531419277acd618ad27fc4388f5e7e0a774",
       "main": true,
       "records": [
@@ -205,7 +205,7 @@
           "x:quarantined"
         ]
       },
-      "visible": "sha256:0968582244fa1b76086f6c9b0e5b2ed04bd0e840182a697e9226fc6b57375ad3"
+      "visible": "sha256:9af13720f9a97a0b4206d09a216222c0aa4fbce9687ad7461de27808418a1041"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

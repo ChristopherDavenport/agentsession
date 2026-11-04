@@ -139,7 +139,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.19",
+      "format": "agentsession/0.20",
       "leaf": "sha256:1bee2b136e9cfde9316d43d07c09e822b14118db88898ba9edc914310473792a",
       "main": true,
       "redacted": true,
@@ -147,7 +147,7 @@
         "profile": "test/v1",
         "session": "01995b2a-0000-7000-8000-000000000001"
       },
-      "visible": "sha256:d1146482ca71e81746e2d38a5ca3d519b11b9d31edfc832efd6e31309b3a1131"
+      "visible": "sha256:f7ee18bd13ce08c2babd4bf059d89f4f2c928450bc24539c4d6c3a41e8be8700"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

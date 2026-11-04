@@ -243,13 +243,13 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.19",
+      "format": "agentsession/0.20",
       "labels": {
         "sha256:d5fb4724d28690ce84fa6970b57ec286c645d3493939c71e0b2e07509573a0d2": "fork"
       },
       "leaf": "sha256:0b9d4d6fb06c6ad39d8ebf31be35bde8f499a5fe45d976c556625edb12f7bf9c",
       "name": "Branching demo",
-      "visible": "sha256:139c88f5283dc132031b4de1f8f4a35bf877f3134a5dfe20e79816cfbac624be"
+      "visible": "sha256:ecd7768abfbe23328a6066c3069b3ca42465bfa44715373a18088125fd8ee9a6"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

@@ -196,16 +196,16 @@ func TestReadErrors(t *testing.T) {
 // rewrite; the rewrite is canonical, so members are compared and not
 // bytes.
 func TestReadMinorVersion(t *testing.T) {
-	later := `{"type":"session","format":"agentsession/0.20","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}` + "\n"
+	later := `{"type":"session","format":"agentsession/0.21","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}` + "\n"
 	if _, err := Read(strings.NewReader(later)); !errors.Is(err, ErrUnsupportedFormat) {
 		t.Errorf("Read of a later 0.x minor = %v, want ErrUnsupportedFormat", err)
 	}
-	// 0.6 to 0.19 only add optional members, elements, entry types,
+	// 0.6 to 0.20 only add optional members, elements, entry types,
 	// relations and a file beside a sidecar blob, and relax a rule or
-	// two, so a 0.5 to 0.18 file reads as it stands:
+	// two, so a 0.5 to 0.19 file reads as it stands:
 	// nothing is rehashed, the header takes the current format, and the
 	// session says which the file declared.
-	for _, minor := range []string{"0.5", "0.6", "0.7", "0.8", "0.9", "0.10", "0.11", "0.12", "0.13", "0.14", "0.15", "0.16", "0.17", "0.18"} {
+	for _, minor := range []string{"0.5", "0.6", "0.7", "0.8", "0.9", "0.10", "0.11", "0.12", "0.13", "0.14", "0.15", "0.16", "0.17", "0.18", "0.19"} {
 		earlier := `{"type":"session","format":"agentsession/` + minor + `","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24"}` + "\n"
 		if s, err := Read(strings.NewReader(earlier)); err != nil {
 			t.Errorf("Read of %s = %v", minor, err)
@@ -213,7 +213,7 @@ func TestReadMinorVersion(t *testing.T) {
 			t.Errorf("%s read as migrated %v, format %s, declared %s", minor, migrated, s.Header().Format, s.DeclaredFormat())
 		}
 	}
-	in := `{"type":"session","format":"agentsession/0.19","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24","future_field":{"a":1}}` + "\n"
+	in := `{"type":"session","format":"agentsession/0.20","id":"x","created_at":"2026-09-17T16:00:00Z","payload":"openresponses/2026-04-24","future_field":{"a":1}}` + "\n"
 	s, err := Read(strings.NewReader(in))
 	if err != nil {
 		t.Fatal(err)
