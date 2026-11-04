@@ -43,6 +43,10 @@ versions may break the API.
   back from the file. A delta, the settings in force and the entry hold
   trust of their own, so changing the labels one hands back changes no
   other.
+  **Breaking:** `ConfigFromRequestParts` refuses a part carrying a
+  `Hash` or a `Keep`, or one the path could not rebuild: copied whole it
+  would write a hash or a keep into a replacing config, where before it
+  quietly dropped them.
 
 ## v0.0.36 - 2026-11-03
 

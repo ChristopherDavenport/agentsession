@@ -366,6 +366,25 @@ func TestConfigFromRequestPartsKeepsTrust(t *testing.T) {
 	}
 }
 
+// TestConfigFromRequestPartsRefusesDeltaForms: ConfigFromRequestParts
+// takes the parts the request was composed from, each with its text, and
+// records each whole. A part in a delta's form, named by its hash or a
+// keep, is no such part: recording it would write a hash or a keep into
+// a replacing config, which nothing on the path resolves, so it is
+// refused rather than copied.
+func TestConfigFromRequestPartsRefusesDeltaForms(t *testing.T) {
+	for name, p := range map[string]InstructionPart{
+		"hash": {ID: "a", Text: "x", Hash: HashText("x")},
+		"keep": {Keep: 1},
+	} {
+		parts := []InstructionPart{{ID: "product", Text: "p"}, p}
+		cfg, err := ConfigFromRequestParts(openresponses.Request{Instructions: JoinInstructions(parts)}, parts...)
+		if err == nil {
+			t.Errorf("%s: recorded %+v", name, cfg.InstructionsParts)
+		}
+	}
+}
+
 // TestInstructionsPartsOwnTheirTrust: a delta and the settings a config
 // puts in force hold trust of their own, so a caller that changes the
 // labels of the parts it passed, or of the settings it was given, changes
