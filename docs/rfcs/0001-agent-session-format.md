@@ -2626,7 +2626,11 @@ A redactor:
   extension's `<definer>.<type>` among them; `error`'s `type` is a
   classification, kept while it holds a value of its set like the rest.
   Any other of these members holding a value its set does not define is
-  text. A redactor that matches a word such a value spells changes it
+  text. A tool's `parameters` and a text format's `schema` are JSON
+  Schema, which the rule does not reach: they are body text in 0.20,
+  their keywords' values (a `type` of `object` or `string`) and the
+  names of the properties they describe included, and a redactor that
+  must keep a tool callable leaves the words they hold. A redactor that matches a word such a value spells changes it
   where it is text and leaves the member, and one that must hide what a
   member says leaves the entry out (Leaving entries out). 0.19 left them
   to a redaction's rules, so one matching "user" wrote a message no
@@ -3486,7 +3490,11 @@ dispatches and decisions, environment, outcome and cross-session links.
 A redaction rule. A 0.19 file is a 0.20 file, and nothing reads
 differently; the rule narrows what a redaction may write. A writer of
 0.20 raises every file it appends to, as Versioning says, so every
-reader of 0.19 refuses those files until it is upgraded.
+reader of 0.19 refuses those files until it is upgraded. A redacted
+session written under 0.19 is raised as it stands, as 0.17 and 0.19
+raised theirs: it may hold a closed-set member a 0.19 redaction
+rewrote, and the raise does not repair it, so its header then names a
+rule its entries were not written under.
 
 - A redactor keeps as written each member whose value is drawn from a
   closed set this document or the payload profile defines, while it
@@ -3503,7 +3511,8 @@ reader of 0.19 refuses those files until it is upgraded.
   "user" rewrote `role:"user"` as text, and the message no longer read
   as a person's, and one matching "models" rewrote `omit`'s
   `other_models` into a value with no effect, which put the other
-  models' reasoning back into every later request.
+  models' reasoning back into every later request. JSON Schema in a
+  tool's `parameters` or a format's `schema` stays body text.
 
 ## Changes since 0.18
 
