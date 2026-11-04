@@ -77,14 +77,14 @@ func ConfigFromRequestParts(req openresponses.Request, parts ...InstructionPart)
 		return nil, fmt.Errorf("agentsession: %d instructions parts join to %d bytes, the request carries %d", len(parts), len(joined), len(req.Instructions))
 	}
 	cfg.Instructions = nil
-	// Each part is copied whole, so a member the part gains is recorded
-	// rather than dropped here, as trust once was; the trust is copied
-	// too, so the entry does not share the caller's labels.
 	for i, p := range parts {
 		if p.Hash != "" || p.Keep != 0 || p.Unresolved() {
 			return nil, fmt.Errorf("agentsession: instructions part %d (%q) is in a delta's form, named by a hash or a keep, and not a part with its text", i, p.ID)
 		}
 	}
+	// Each part is copied whole, so a member the part gains is recorded
+	// rather than dropped here, as trust once was; the trust is copied
+	// too, so the entry does not share the caller's labels.
 	cfg.InstructionsParts = make([]InstructionPart, 0, len(parts))
 	for _, p := range parts {
 		p.Trust = p.Trust.clone()

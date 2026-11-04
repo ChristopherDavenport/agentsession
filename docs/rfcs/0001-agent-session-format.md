@@ -2627,11 +2627,13 @@ A redactor:
   classification, kept while it holds a value of its set like the rest.
   Any other of these members holding a value its set does not define is
   text. A tool's `parameters` and a text format's `schema` are JSON
-  Schema, which the rule does not reach: they are body text in 0.20,
-  their keywords' values (a `type` of `object` or `string`) and the
-  names of the properties they describe included, and a redactor that
-  must keep a tool callable leaves the words they hold. A redactor that matches a word such a value spells changes it
-  where it is text and leaves the member, and one that must hide what a
+  Schema, which the rule does not reach: in 0.20 the string values
+  they hold are body text, their keywords' values (a `type` of
+  `object` or `string`) included, while the names of their members,
+  the properties they describe among them, are the payload's, as any
+  member name is, and are not rewritten. A redactor that must keep a
+  tool callable leaves the words those values hold. A redactor that
+  matches a word such a value spells changes it where it is text and leaves the member, and one that must hide what a
   member says leaves the entry out (Leaving entries out). 0.19 left them
   to a redaction's rules, so one matching "user" wrote a message no
   reader takes as a person's, or an entry its type no longer decodes;
