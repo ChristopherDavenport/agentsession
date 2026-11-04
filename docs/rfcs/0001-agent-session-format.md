@@ -2613,7 +2613,8 @@ A redactor:
   `summary` or `output`, and the `type` of each of a part's
   `annotations`; a `response`'s `status`, its `incomplete` `reason` and
   its `error` `type`; and in a `config` and a compaction's checkpoint,
-  the `effort` and `summary` of `reasoning`, the `verbosity` of `text`
+  `omit`'s `reasoning`, which the context algorithm reads, the `effort`
+  and `summary` of `reasoning`, the `verbosity` of `text`
   and the `type` of its `format`, each tool's `type`, and, among the
   request members of `extra`, `tool_choice` (a mode, or the object's
   `type`, `mode` and each of its tools' `type`), `truncation`,
@@ -3487,14 +3488,16 @@ reader of 0.19 refuses those files until it is upgraded.
   closed set this document or the payload profile defines, while it
   holds a value of that set: an item's `type`, `role`, `status` and
   `phase`, a content part's `type` and `detail`, a `response`'s
-  `status`, a config's reasoning and text settings and its tools'
-  `type`, a `run`'s `phase`, `source` and `reason`, a `queued` entry's
+  `status`, a config's `omit` `reasoning`, its reasoning and text
+  settings and its tools' `type`, a `run`'s `phase`, `source` and `reason`, a `queued` entry's
   `mode`, a `decision`'s `verdict` and `by`, a workspace's `kind`, a
   `link`'s `rel` and `cancel` and an `outcome`'s `kind`, the full list
   in Every redacted entry. A `type` is kept whatever its value. 0.19
   left them to a redaction's rules, so a redactor matching the word
   "user" rewrote `role:"user"` as text, and the message no longer read
-  as a person's.
+  as a person's, and one matching "models" rewrote `omit`'s
+  `other_models` into a value with no effect, which put the other
+  models' reasoning back into every later request.
 
 ## Changes since 0.18
 

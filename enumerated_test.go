@@ -11,6 +11,7 @@ import (
 // members drawn from a closed set, each of which also reads as a word a
 // redactor may look for in text.
 var closedWords = []string{
+	"other_models",
 	"user", "assistant", "developer", "system", "completed", "in_progress", "incomplete", "failed",
 	"commentary", "final_answer", "message", "function_call_output", "function_call", "reasoning",
 	"input_text", "input_image", "output_text", "summary_text", "url_citation", "function",
@@ -88,6 +89,8 @@ func TestRewriteKeepsEnumeratedMembers(t *testing.T) {
 			nil},
 		{"outcome", `{"type":"outcome","id":"x","parent":null,` + tsLine + `,"kind":"feedback","label":"the user liked it"}`,
 			[]string{"/label"}},
+		{"omit's reasoning", `{"type":"config","id":"x","parent":null,` + tsLine + `,"omit":{"reasoning":"other_models"}}`,
+			nil},
 		{"result", `{"type":"result","id":"x","parent":"p",` + tsLine + `,"call_id":"c1","target":"t","item":{"type":"function_call_output","status":"completed","call_id":"c1","output":"done for the user"}}`,
 			[]string{"/item/output"}},
 	} {
@@ -115,5 +118,35 @@ func TestRewriteKeepsEnumeratedMembers(t *testing.T) {
 				t.Errorf("rewritten\n got %s\nwant %s", got, want)
 			}
 		})
+	}
+}
+
+// TestRedactionKeepsOmitReasoning: omit's reasoning is drawn from a
+// closed set, so a redactor matching "models" leaves other_models as
+// written; the rule stays in force, the reasoning items of the other
+// model stay out of every request, and each response's request_hash is
+// the original's, nothing else in the fixture holding the word.
+func TestRedactionKeepsOmitReasoning(t *testing.T) {
+	orig := loadFixture(t, "omit")
+	red := redact(t, orig, func(s string) string { return strings.ReplaceAll(s, "models", "[MODELS]") }, "p")
+	origEntries := orig.Entries()
+	hashes := 0
+	for i, e := range red.back.Entries() {
+		if c, ok := e.(*ConfigEntry); ok && c.Omit != nil && c.Omit.Reasoning != "" && c.Omit.Reasoning != OmitOtherModels {
+			t.Errorf("entry %d: omit's reasoning rewritten to %q", i, c.Omit.Reasoning)
+		}
+		r, ok := e.(*ResponseEntry)
+		if !ok {
+			continue
+		}
+		if want := origEntries[i].(*ResponseEntry).RequestHash; want != "" {
+			hashes++
+			if r.RequestHash != want {
+				t.Errorf("response %d: request_hash %s, the original's %s", i, r.RequestHash, want)
+			}
+		}
+	}
+	if hashes == 0 {
+		t.Fatal("the fixture records no request_hash, so the test shows nothing")
 	}
 }

@@ -431,8 +431,8 @@ func TestMigrationRewritesEveryEntryNamingMember(t *testing.T) {
 var coreStringMembers = map[string][]string{
 	TypeItem:          {"response", "source/kind", "source/ref", "source/source", "instructions_part/id", "instructions_part/[]/id"},
 	TypeResponse:      {"response_id", "model"},
-	TypeConfig:        {"model", "instructions", "instructions_parts/[]/id", "instructions_parts/[]/text", "instructions_omitted/[]/id", "instructions_omitted/[]/reason", "tools_removed/[]", "omit/reasoning", "omit/outputs/text", "omit/outputs/groups/[]/text", "omit/images/placeholder"},
-	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/of", "config/omit/reasoning", "config/omit/outputs/text", "config/omit/outputs/groups/[]/text", "config/omit/images/placeholder"},
+	TypeConfig:        {"model", "instructions", "instructions_parts/[]/id", "instructions_parts/[]/text", "instructions_omitted/[]/id", "instructions_omitted/[]/reason", "tools_removed/[]", "omit/outputs/text", "omit/outputs/groups/[]/text", "omit/images/placeholder"},
+	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/of", "config/omit/outputs/text", "config/omit/outputs/groups/[]/text", "config/omit/images/placeholder"},
 	TypeBranchSummary: {},
 	TypeRun:           {"run_id", "ref", "trigger/kind", "trigger/ref", "trigger/source"},
 	TypeDispatch:      {"idempotency_key"},

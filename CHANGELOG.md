@@ -23,7 +23,8 @@ versions may break the API.
   item's role, status and phase wherever an entry holds an item (an
   item, a queued entry, a result, a compaction's summary and pinned, a
   branch summary), a part's detail, a response's status, incomplete
-  reason and error type, a config's and a checkpoint's reasoning effort
+  reason and error type, a config's and a checkpoint's `omit`
+  reasoning, which the context algorithm reads, their reasoning effort
   and summary, text verbosity and extra's tool_choice, truncation,
   service_tier and include, a run's phase, source and reason, a queued
   entry's mode, a decision's verdict and by, a workspace's kind, a

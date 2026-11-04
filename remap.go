@@ -258,8 +258,9 @@ var envelopeMembers = []special{
 // workspace's kind, a link's rel and cancel, an outcome's kind; an
 // item's role, status and phase, wherever an entry holds an item, and a
 // part's detail; a response's status, incomplete reason and error type;
-// and the settings' reasoning and text settings and the request members
-// of extra the payload closes. A type in the payload, an item's, a
+// and the settings' omit reasoning, which the context algorithm reads,
+// their reasoning and text settings and the request members of extra the
+// payload closes. A type in the payload, an item's, a
 // part's, an annotation's, a text format's, a tool's or a tool choice's,
 // is kept whatever its value, since it says what the object is. Any
 // other value of one of those members is text.
@@ -302,6 +303,7 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("instructions_parts", "[]", "source"), role: roleFixed, holds: knownSource},
 		{path: memberPath("instructions_parts", "[]", "trust", "reads", "[]"), role: roleFixed},
 		{path: memberPath("instructions_omitted", "[]", "source"), role: roleFixed, holds: knownSource},
+		closed(memberPath("omit", "reasoning"), OmitOtherModels),
 	}),
 	TypeCompaction: joined(itemMembers("summary"), itemMembers("pinned", "[]"), settingsMembers("tools", "config"), []special{
 		{path: memberPath("first_kept"), role: roleEntry, bound: true},
@@ -313,6 +315,7 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("config", "instructions_parts", "[]", "source"), role: roleFixed, holds: knownSource},
 		{path: memberPath("config", "instructions_parts", "[]", "trust", "reads", "[]"), role: roleFixed},
 		{path: memberPath("config", "instructions_omitted", "[]", "source"), role: roleFixed, holds: knownSource},
+		closed(memberPath("config", "omit", "reasoning"), OmitOtherModels),
 		{path: memberPath("pinned", "[]", "call_id"), role: roleCallID},
 		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*CompactionEntry).Trust != nil }},
 	}),
