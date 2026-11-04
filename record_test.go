@@ -365,3 +365,30 @@ func TestConfigFromRequestPartsKeepsTrust(t *testing.T) {
 		}
 	}
 }
+
+// TestInstructionsPartsOwnTheirTrust: a delta and the settings a config
+// puts in force hold trust of their own, so a caller that changes the
+// labels of the parts it passed, or of the settings it was given, changes
+// neither the entry it wrote nor the settings in force.
+func TestInstructionsPartsOwnTheirTrust(t *testing.T) {
+	parts := []InstructionPart{{ID: "memory", Text: "m", Trust: &Trust{Reads: []string{TrustUntrusted}}}}
+	cfg, err := ConfigFromRequestParts(openresponses.Request{Instructions: "m"}, parts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := Settings{}.Apply(cfg)
+	next := []InstructionPart{{ID: "memory", Text: "n", Trust: &Trust{Reads: []string{TrustUntrusted}}}}
+	delta := settings.InstructionsDelta(next)
+	if delta == nil {
+		t.Fatal("no delta")
+	}
+	next[0].Trust.Reads[0] = TrustPrivate
+	if got := delta.InstructionsParts[0].Trust.Reads[0]; got != TrustUntrusted {
+		t.Errorf("the delta shares the caller's trust: %q", got)
+	}
+	later := settings.Apply(&ConfigEntry{Model: "other"})
+	later.InstructionsParts[0].Trust.Reads[0] = TrustPrivate
+	if got := settings.InstructionsParts[0].Trust.Reads[0]; got != TrustUntrusted {
+		t.Errorf("settings applied later share the trust in force: %q", got)
+	}
+}

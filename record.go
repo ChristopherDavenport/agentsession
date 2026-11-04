@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/ChristopherDavenport/openresponses"
@@ -80,9 +79,7 @@ func ConfigFromRequestParts(req openresponses.Request, parts ...InstructionPart)
 	// too, so the entry does not share the caller's labels.
 	cfg.InstructionsParts = make([]InstructionPart, 0, len(parts))
 	for _, p := range parts {
-		if p.Trust != nil {
-			p.Trust = &Trust{Reads: slices.Clone(p.Trust.Reads)}
-		}
+		p.Trust = p.Trust.clone()
 		cfg.InstructionsParts = append(cfg.InstructionsParts, p)
 	}
 	return cfg, nil

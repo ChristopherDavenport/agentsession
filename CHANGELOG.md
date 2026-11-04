@@ -40,7 +40,9 @@ versions may break the API.
   part is now copied whole, its trust as a copy of the caller's, so a
   member a part gains later is not lost the same way. A delta already
   wrote a part whose trust alone changed; a test now holds both, read
-  back from the file.
+  back from the file. A delta, the settings in force and the entry hold
+  trust of their own, so changing the labels one hands back changes no
+  other.
 
 ## v0.0.36 - 2026-11-03
 

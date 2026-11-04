@@ -362,7 +362,7 @@ func applyInstructionParts(prev, delta []InstructionPart, left *partHistory) []I
 		if i, ok := at[p.ID]; ok {
 			cursor = i + 1
 		}
-		next := InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source, Trust: p.Trust}
+		next := InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source, Trust: p.Trust.clone()}
 		if p.Text == "" && p.Hash != "" {
 			old, ok := byID[p.ID]
 			if !ok || !old.Unresolved() && HashText(old.Text) != p.Hash {
@@ -379,7 +379,7 @@ func applyInstructionParts(prev, delta []InstructionPart, left *partHistory) []I
 				if next.Trust == nil {
 					// The hash form keeps the trust it had, as it keeps
 					// its source.
-					next.Trust = old.Trust
+					next.Trust = old.Trust.clone()
 				}
 			default:
 				// No text of the id's on the path has the hash, or the
@@ -926,7 +926,7 @@ func (s Settings) InstructionsDelta(parts []InstructionPart) *ConfigEntry {
 				// its hash resolves it, and a hash is all it costs.
 				out = append(out, InstructionPart{ID: p.ID, Hash: HashText(p.Text)})
 			} else {
-				out = append(out, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source, Trust: p.Trust})
+				out = append(out, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source, Trust: p.Trust.clone()})
 			}
 			if ok {
 				cursor = j + 1
@@ -1068,14 +1068,19 @@ func removeTool(tools openresponses.Tools, name string) openresponses.Tools {
 	return out
 }
 
-// cloneParts copies the parts so two Settings never share one array:
-// a Settings taken from a compaction checkpoint would otherwise alias
-// the entry's own slice, which is immutable once appended.
+// cloneParts copies the parts so two Settings never share one array,
+// nor one part's trust: a Settings taken from a compaction checkpoint
+// would otherwise alias the entry's own slice, which is immutable once
+// appended.
 func cloneParts(parts []InstructionPart) []InstructionPart {
 	if parts == nil {
 		return nil
 	}
-	return append([]InstructionPart(nil), parts...)
+	out := append([]InstructionPart(nil), parts...)
+	for i := range out {
+		out[i].Trust = out[i].Trust.clone()
+	}
+	return out
 }
 
 // cloneOmitted copies the omitted parts, nil for none.
