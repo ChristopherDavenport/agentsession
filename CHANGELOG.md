@@ -5,6 +5,17 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Fix: `ConfigFromRequestParts` keeps each part whole.** It copied a
+  part's `id`, `text` and `source` and dropped its `trust`, so a memory
+  part a harness labelled `untrusted` was recorded as saying nothing,
+  and every delta after it compared against a part without labels. Each
+  part is now copied whole, its trust as a copy of the caller's, so a
+  member a part gains later is not lost the same way. A delta already
+  wrote a part whose trust alone changed; a test now holds both, read
+  back from the file.
+
 ## v0.0.36 - 2026-11-03
 
 - **Breaking (format): Format 0.19 (RFC 0001, draft 0.19).** `Format`
