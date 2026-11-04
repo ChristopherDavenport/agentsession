@@ -2620,9 +2620,12 @@ A redactor:
   `type`, `mode` and each of its tools' `type`), `truncation`,
   `service_tier` and each element of `include`, each judged by its own
   value, so an element no set holds is text beside one that is kept. An entry's own `type` is the envelope's,
-  kept already. A `type` is kept whatever its value, an extension's
-  `<definer>.<type>` among them, since it says what the object is; any
-  other of these members holding a value its set does not define is
+  kept already. The `type` that says what an object is, an item's, a
+  part's, an annotation's, a text `format`'s, a tool's, and a
+  `tool_choice`'s and each of its tools', is kept whatever its value, an
+  extension's `<definer>.<type>` among them; `error`'s `type` is a
+  classification, kept while it holds a value of its set like the rest.
+  Any other of these members holding a value its set does not define is
   text. A redactor that matches a word such a value spells changes it
   where it is text and leaves the member, and one that must hide what a
   member says leaves the entry out (Leaving entries out). 0.19 left them
@@ -3493,7 +3496,9 @@ reader of 0.19 refuses those files until it is upgraded.
   settings and its tools' `type`, a `run`'s `phase`, `source` and `reason`, a `queued` entry's
   `mode`, a `decision`'s `verdict` and `by`, a workspace's `kind`, a
   `link`'s `rel` and `cancel` and an `outcome`'s `kind`, the full list
-  in Every redacted entry. A `type` is kept whatever its value. 0.19
+  in Every redacted entry. A `type` that says what an object is, an
+  item's, a part's, an annotation's, a text format's, a tool's or a tool
+  choice's, is kept whatever its value. 0.19
   left them to a redaction's rules, so a redactor matching the word
   "user" rewrote `role:"user"` as text, and the message no longer read
   as a person's, and one matching "models" rewrote `omit`'s
