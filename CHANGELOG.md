@@ -14,6 +14,24 @@ versions may break the API.
   copies and the export goldens carry the new header. 0.20 adds one
   redaction rule, a closed-set member kept as written, below.
 
+- **Fix: a rewrite keeps closed-set members (RFC 0001 0.20, Every
+  redacted entry).** `RewriteStrings`, `Rewriter` and so every redactor
+  gave f members whose value is drawn from a closed set, so a redactor
+  matching "user" wrote `role:"[REDACTED]"`, and one matching
+  "completed" or "start" left an entry that no longer decoded. The
+  member table now fixes each while it holds a value of its set: an
+  item's role, status and phase wherever an entry holds an item (an
+  item, a queued entry, a result, a compaction's summary and pinned, a
+  branch summary), a part's detail, a response's status, incomplete
+  reason and error type, a config's and a checkpoint's reasoning effort
+  and summary, text verbosity and extra's tool_choice, truncation,
+  service_tier and include, a run's phase, source and reason, a queued
+  entry's mode, a decision's verdict and by, a workspace's kind, a
+  link's rel and cancel, and an outcome's kind. A payload type, an
+  item's, a part's, an annotation's, a text format's, a tool's or a tool
+  choice's, is fixed whatever its value. Any other value of those
+  members is text, as before.
+
 - **Fix: `ConfigFromRequestParts` keeps each part whole.** It copied a
   part's `id`, `text` and `source` and dropped its `trust`, so a memory
   part a harness labelled `untrusted` was recorded as saying nothing,

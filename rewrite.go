@@ -247,9 +247,17 @@ func NewRewriter(f func(string) string) *Rewriter {
 // call IDs changes every one in step itself, and the subsessions' IDs
 // with them. A call_id inside a decision's args, a custom entry's data
 // or any member the format does not define is the writer's text and is
-// given to f. Each member is taken where the format defines it: one of
-// those names in another form or place, such as an of beside an id, is
-// body text.
+// given to f. Nor is a member whose value is drawn from a closed set
+// the format or the payload profile defines, while it holds a value of
+// that set (RFC 0001, Every redacted entry, since 0.20): an item's role,
+// status and phase wherever an entry holds an item, a part's detail, a
+// response's status, a run's phase, source and reason, a decision's
+// verdict and by, a link's rel, an outcome's kind and the rest the RFC
+// lists; and a type in the payload, an item's or a part's among them,
+// whatever its value. A redactor matching "user" changes the word in
+// text and leaves role:"user". Each member is taken where the format
+// defines it: one of those names in another form or place, such as an
+// of beside an id, is body text.
 //
 // An instruction part whose text changed has its hash, where it carries
 // one, recomputed, and a part named by its hash alone, whose text is in

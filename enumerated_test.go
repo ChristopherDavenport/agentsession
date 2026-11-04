@@ -1,0 +1,119 @@
+package agentsession
+
+import (
+	"cmp"
+	"slices"
+	"strings"
+	"testing"
+)
+
+// closedWords are values the format and Open Responses define for
+// members drawn from a closed set, each of which also reads as a word a
+// redactor may look for in text.
+var closedWords = []string{
+	"user", "assistant", "developer", "system", "completed", "in_progress", "incomplete", "failed",
+	"commentary", "final_answer", "message", "function_call_output", "function_call", "reasoning",
+	"input_text", "input_image", "output_text", "summary_text", "url_citation", "function",
+	"json_schema", "allowed_tools", "required", "auto", "high", "low", "max_output_tokens",
+	"server_error", "flex", "start", "end", "input", "resume", "done", "interrupted", "steer",
+	"followup", "proceed", "reject", "human", "policy", "local", "container", "subsession",
+	"sent", "feedback", "eval",
+}
+
+// closedRedactor replaces every closed word wherever it appears in a
+// string, as a redactor matching on words does.
+func closedRedactor() func(string) string {
+	words := slices.Clone(closedWords)
+	slices.SortStableFunc(words, func(a, b string) int { return cmp.Compare(len(b), len(a)) })
+	pairs := make([]string, 0, 2*len(words))
+	for _, w := range words {
+		pairs = append(pairs, w, "["+strings.ToUpper(w)+"]")
+	}
+	return strings.NewReplacer(pairs...).Replace
+}
+
+// TestRewriteKeepsEnumeratedMembers: a member whose value is drawn from
+// a closed set the format or Open Responses defines, an item's type,
+// role, status and phase, a content part's type and detail, a
+// response's status, a config's reasoning and text settings, a run's
+// phase, source and reason, a queued entry's mode, a decision's verdict
+// and by, a workspace's kind, a link's rel and cancel and an outcome's
+// kind among them, is not body text: a redactor that rewrites the words
+// those values spell changes them where they are text and leaves them
+// where they are members (RFC 0001, Every redacted entry, since 0.20).
+func TestRewriteKeepsEnumeratedMembers(t *testing.T) {
+	f := closedRedactor()
+	user := `{"type":"message","role":"user","status":"completed","content":[{"type":"input_text","text":"the user asked the assistant"},{"type":"input_image","image_url":"https://example.com/user.png","detail":"high"}]}`
+	for _, tt := range []struct {
+		name, line string
+		// body are the pointers of the strings that are text, which f
+		// rewrites; every other string stays as written.
+		body []string
+	}{
+		{"user message", `{"type":"item","id":"x","parent":null,` + tsLine + `,"item":` + user + `}`,
+			[]string{"/item/content/0/text", "/item/content/1/image_url"}},
+		{"assistant message", `{"type":"item","id":"x","parent":null,` + tsLine + `,"item":{"type":"message","role":"assistant","status":"incomplete","phase":"commentary","content":[{"type":"output_text","text":"completed for the user","annotations":[{"type":"url_citation","url":"https://example.com/assistant","title":"user guide","start_index":0,"end_index":1}]}]}}`,
+			[]string{"/item/content/0/text", "/item/content/0/annotations/0/url", "/item/content/0/annotations/0/title"}},
+		{"reasoning", `{"type":"item","id":"x","parent":null,` + tsLine + `,"item":{"type":"reasoning","status":"in_progress","summary":[{"type":"summary_text","text":"the user wants it done"}]}}`,
+			[]string{"/item/summary/0/text"}},
+		{"function call", `{"type":"item","id":"x","parent":null,` + tsLine + `,"item":{"type":"function_call","status":"completed","call_id":"c1","name":"user_lookup","arguments":"{\"q\":\"assistant\"}"}}`,
+			[]string{"/item/name", "/item/arguments"}},
+		{"function call output", `{"type":"item","id":"x","parent":null,` + tsLine + `,"item":{"type":"function_call_output","status":"completed","call_id":"c1","output":[{"type":"input_text","text":"completed"}]}}`,
+			[]string{"/item/output/0/text"}},
+		{"a role no set holds", `{"type":"item","id":"x","parent":null,` + tsLine + `,"item":{"type":"acme.user_note","role":"user's own","text":"user"}}`,
+			[]string{"/item/role", "/item/text"}},
+		{"response", `{"type":"response","id":"x","parent":null,` + tsLine + `,"response_id":"r1","model":"assistant-1","status":"failed","incomplete":{"reason":"max_output_tokens"},"error":{"type":"server_error","code":"c","message":"the user failed","param":null}}`,
+			[]string{"/model", "/error/message"}},
+		{"config", `{"type":"config","id":"x","parent":null,` + tsLine + `,"model":"m","reasoning":{"effort":"high","summary":"auto"},"text":{"format":{"type":"json_schema","name":"user_schema","schema":{}},"verbosity":"low"},"tools_added":[{"type":"function","name":"user_tool","description":"for the user","parameters":{}}],"extra":{"tool_choice":"required","truncation":"auto","service_tier":"flex","x":"user"}}`,
+			[]string{"/text/format/name", "/tools_added/0/name", "/tools_added/0/description", "/extra/x"}},
+		{"config tool choice", `{"type":"config","id":"x","parent":null,` + tsLine + `,"extra":{"tool_choice":{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"user_tool"}]}}}`,
+			[]string{"/extra/tool_choice/tools/0/name"}},
+		{"compaction", `{"type":"compaction","id":"x","parent":"p",` + tsLine + `,"first_kept":"f","summary":` + user + `,"pinned":[{"type":"function_call","status":"completed","call_id":"c1","name":"user_lookup","arguments":"{}"}],"config":{"model":"m","reasoning":{"effort":"low"},"tools":[{"type":"function","name":"user_tool","parameters":{}}]}}`,
+			[]string{"/summary/content/0/text", "/summary/content/1/image_url", "/pinned/0/name", "/config/tools/0/name"}},
+		{"branch summary", `{"type":"branch_summary","id":"x","parent":"p",` + tsLine + `,"from":"f","summary":` + user + `}`,
+			[]string{"/summary/content/0/text", "/summary/content/1/image_url"}},
+		{"run start", `{"type":"run","id":"x","parent":null,` + tsLine + `,"run_id":"r","phase":"start","source":"input","ref":"user ping"}`,
+			[]string{"/ref"}},
+		{"run end", `{"type":"run","id":"x","parent":null,` + tsLine + `,"run_id":"r","phase":"end","reason":"interrupted","pending":[]}`,
+			nil},
+		{"queued", `{"type":"queued","id":"x","parent":null,` + tsLine + `,"item":` + user + `,"mode":"steer","trigger":{"kind":"user"}}`,
+			[]string{"/item/content/0/text", "/item/content/1/image_url", "/trigger/kind"}},
+		{"decision", `{"type":"decision","id":"x","parent":"p",` + tsLine + `,"call_id":"c1","target":"t","verdict":"reject","by":"human","reason":"the user said reject"}`,
+			[]string{"/reason"}},
+		{"env", `{"type":"env","id":"x","parent":null,` + tsLine + `,"cwd":"/home/user","workspace":{"kind":"container","ref":"user/image"}}`,
+			[]string{"/cwd", "/workspace/ref"}},
+		{"link", `{"type":"link","id":"x","parent":null,` + tsLine + `,"rel":"subsession","session":"s","call_id":"c1","task":"help the user"}`,
+			[]string{"/task"}},
+		{"cancel", `{"type":"link","id":"x","parent":null,` + tsLine + `,"rel":"subsession","session":"s","call_id":"c1","target":"t","cancel":"sent"}`,
+			nil},
+		{"outcome", `{"type":"outcome","id":"x","parent":null,` + tsLine + `,"kind":"feedback","label":"the user liked it"}`,
+			[]string{"/label"}},
+		{"result", `{"type":"result","id":"x","parent":"p",` + tsLine + `,"call_id":"c1","target":"t","item":{"type":"function_call_output","status":"completed","call_id":"c1","output":"done for the user"}}`,
+			[]string{"/item/output"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			v, err := parseValue([]byte(tt.line))
+			if err != nil {
+				t.Fatal(err)
+			}
+			set := map[string]string{}
+			for _, ptr := range tt.body {
+				s, ok := pointerValue(v, ptr).(string)
+				if !ok {
+					t.Fatalf("%s holds no string", ptr)
+				}
+				if f(s) == s {
+					t.Fatalf("%s: %q holds no closed word, so the case shows nothing", ptr, s)
+				}
+				set[ptr] = f(s)
+			}
+			out, err := RewriteStrings(entryOf(t, tt.line), f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := canonicalEntry(t, out), canonicalEntry(t, entryOf(t, withValues(t, tt.line, set))); got != want {
+				t.Errorf("rewritten\n got %s\nwant %s", got, want)
+			}
+		})
+	}
+}
