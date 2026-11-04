@@ -77,6 +77,10 @@ type special struct {
 	// gives the member's role: a member drawn from a closed set is fixed
 	// while it holds a value of the set, and is text otherwise.
 	value func(v any) bool
+	// vocab marks a member drawn from a closed set, or a type, which the
+	// table fixes as the format's vocabulary (RFC 0001, Every redacted
+	// entry, since 0.20).
+	vocab bool
 }
 
 // applies reports whether sp names the member that holder holds, whose
@@ -128,13 +132,13 @@ func oneOf[T ~string](values ...T) func(v any) bool {
 // as include, is named by a path ending "[]", and each element is kept
 // or rewritten by its own value.
 func closed[T ~string](path []string, values ...T) special {
-	return special{path: path, role: roleFixed, value: oneOf(values...)}
+	return special{path: path, role: roleFixed, value: oneOf(values...), vocab: true}
 }
 
 // discriminator is the type member at path, which says what the object
 // is and is kept whatever its value, an extension's included.
 func discriminator(path []string) special {
-	return special{path: path, role: roleFixed}
+	return special{path: path, role: roleFixed, vocab: true}
 }
 
 // under is path with steps appended, a new slice.

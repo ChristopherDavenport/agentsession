@@ -2,16 +2,19 @@ package agentsession
 
 import (
 	"cmp"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // closedWords are values the format and Open Responses define for
 // members drawn from a closed set, each of which also reads as a word a
-// redactor may look for in text.
+// redactor may look for in text, and searching, which no set holds.
 var closedWords = []string{
-	"other_models",
+	"other_models", "searching",
 	"user", "assistant", "developer", "system", "completed", "in_progress", "incomplete", "failed",
 	"commentary", "final_answer", "message", "function_call_output", "function_call", "reasoning",
 	"input_text", "input_image", "output_text", "summary_text", "url_citation", "function",
@@ -44,6 +47,14 @@ func closedRedactor() func(string) string {
 // where they are members (RFC 0001, Every redacted entry, since 0.20).
 func TestRewriteKeepsEnumeratedMembers(t *testing.T) {
 	f := closedRedactor()
+	// sink holds every member of an item the table fixes, the type and
+	// detail of a part and the type of an annotation in each of content,
+	// summary and output.
+	part := `{"type":"output_text","text":"for the user","detail":"low","annotations":[{"type":"url_citation","url":"https://example.com/","title":"t","start_index":0,"end_index":1}]}`
+	sink := `{"type":"message","role":"assistant","status":"completed","phase":"final_answer","content":[` + part + `],"summary":[` + part + `],"output":[` + part + `]}`
+	sinkBody := func(at string) []string {
+		return []string{at + "/content/0/text", at + "/summary/0/text", at + "/output/0/text"}
+	}
 	user := `{"type":"message","role":"user","status":"completed","content":[{"type":"input_text","text":"the user asked the assistant"},{"type":"input_image","image_url":"https://example.com/user.png","detail":"high"}]}`
 	for _, tt := range []struct {
 		name, line string
@@ -89,10 +100,24 @@ func TestRewriteKeepsEnumeratedMembers(t *testing.T) {
 			nil},
 		{"outcome", `{"type":"outcome","id":"x","parent":null,` + tsLine + `,"kind":"feedback","label":"the user liked it"}`,
 			[]string{"/label"}},
+		{"every item member", `{"type":"item","id":"x","parent":null,` + tsLine + `,"item":` + sink + `}`,
+			sinkBody("/item")},
+		{"every queued item member", `{"type":"queued","id":"x","parent":null,` + tsLine + `,"item":` + sink + `,"mode":"followup"}`,
+			sinkBody("/item")},
+		{"every checkpoint member", `{"type":"compaction","id":"x","parent":"p",` + tsLine + `,"first_kept":"f","summary":` + sink + `,"pinned":[` + sink + `],"config":{"model":"m","reasoning":{"effort":"high","summary":"auto"},"text":{"format":{"type":"json_schema","name":"n","schema":{}},"verbosity":"low"},"tools":[{"type":"function","name":"n","parameters":{}}],"omit":{"reasoning":"other_models"},"extra":{"tool_choice":"auto","truncation":"auto","service_tier":"flex","include":["reasoning.encrypted_content"]}}}`,
+			append(sinkBody("/summary"), sinkBody("/pinned/0")...)},
+		{"every branch summary member", `{"type":"branch_summary","id":"x","parent":"p",` + tsLine + `,"from":"f","summary":` + sink + `}`,
+			sinkBody("/summary")},
 		{"omit's reasoning", `{"type":"config","id":"x","parent":null,` + tsLine + `,"omit":{"reasoning":"other_models"}}`,
 			nil},
 		{"include, a value no set holds beside one it does", `{"type":"config","id":"x","parent":null,` + tsLine + `,"extra":{"include":["reasoning.encrypted_content","message.input_image.image_url"]}}`,
 			[]string{"/extra/include/1"}},
+		{"a status no set holds", `{"type":"item","id":"x","parent":null,` + tsLine + `,"item":{"type":"message","role":"assistant","status":"searching","content":[{"type":"output_text","text":"t","annotations":[]}]}}`,
+			[]string{"/item/status"}},
+		{"an extension part's type", `{"type":"item","id":"x","parent":null,` + tsLine + `,"item":{"type":"message","role":"user","content":[{"type":"acme.user_input","text":"the user"}]}}`,
+			[]string{"/item/content/0/text"}},
+		{"result output annotations", `{"type":"result","id":"x","parent":"p",` + tsLine + `,"call_id":"c1","target":"t","item":{"type":"function_call_output","status":"completed","call_id":"c1","output":[` + part + `]}}`,
+			[]string{"/item/output/0/text"}},
 		{"result", `{"type":"result","id":"x","parent":"p",` + tsLine + `,"call_id":"c1","target":"t","item":{"type":"function_call_output","status":"completed","call_id":"c1","output":"done for the user"}}`,
 			[]string{"/item/output"}},
 	} {
@@ -150,5 +175,59 @@ func TestRedactionKeepsOmitReasoning(t *testing.T) {
 	}
 	if hashes == 0 {
 		t.Fatal("the fixture records no request_hash, so the test shows nothing")
+	}
+}
+
+// TestTableNamesPayloadMembers: every step of a path the table fixes for
+// a closed set is a member name the format or the payload profile
+// defines, so a misspelt path, which no entry would ever match, fails
+// here rather than leaving the member to a redactor.
+func TestTableNamesPayloadMembers(t *testing.T) {
+	names := map[string]bool{"[]": true, "*": true, "type": true}
+	seen := map[reflect.Type]bool{}
+	var collect func(reflect.Type)
+	collect = func(typ reflect.Type) {
+		for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array || typ.Kind() == reflect.Map {
+			typ = typ.Elem()
+		}
+		if typ.Kind() != reflect.Struct || seen[typ] {
+			return
+		}
+		seen[typ] = true
+		for i := 0; i < typ.NumField(); i++ {
+			f := typ.Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			if name, ok := memberName(f); ok {
+				// A field a payload type encodes by hand, untagged, is
+				// written under its name in lower case.
+				names[name], names[strings.ToLower(name)] = true, true
+			}
+			collect(f.Type)
+		}
+	}
+	for _, mk := range coreEntries {
+		collect(reflect.TypeOf(mk()))
+	}
+	for _, v := range []any{
+		openresponses.Request{}, openresponses.Message{}, openresponses.FunctionCall{}, openresponses.FunctionCallOutput{},
+		openresponses.ReasoningItem{}, openresponses.Compaction{}, openresponses.InputImage{}, openresponses.OutputText{},
+		openresponses.URLCitation{}, openresponses.FunctionTool{}, openresponses.AllowedTools{}, openresponses.ToolReference{},
+		openresponses.TextConfig{}, openresponses.TextFormat{}, openresponses.ReasoningConfig{},
+	} {
+		collect(reflect.TypeOf(v))
+	}
+	for typ, specials := range bodyMembers {
+		for _, sp := range specials {
+			if !sp.vocab {
+				continue
+			}
+			for _, step := range sp.path {
+				if !names[step] {
+					t.Errorf("%s: the table fixes %s, and no type defines %q", typ, strings.Join(sp.path, "/"), step)
+				}
+			}
+		}
 	}
 }
