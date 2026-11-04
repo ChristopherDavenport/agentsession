@@ -91,6 +91,8 @@ func TestRewriteKeepsEnumeratedMembers(t *testing.T) {
 			[]string{"/label"}},
 		{"omit's reasoning", `{"type":"config","id":"x","parent":null,` + tsLine + `,"omit":{"reasoning":"other_models"}}`,
 			nil},
+		{"include, a value no set holds beside one it does", `{"type":"config","id":"x","parent":null,` + tsLine + `,"extra":{"include":["reasoning.encrypted_content","message.input_image.image_url"]}}`,
+			[]string{"/extra/include/1"}},
 		{"result", `{"type":"result","id":"x","parent":"p",` + tsLine + `,"call_id":"c1","target":"t","item":{"type":"function_call_output","status":"completed","call_id":"c1","output":"done for the user"}}`,
 			[]string{"/item/output"}},
 	} {

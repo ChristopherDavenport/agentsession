@@ -623,10 +623,10 @@ func onward(specials []special, depth int, key string, elem bool) []special {
 }
 
 // ending reports whether a special of one of roles ends at depth, at a
-// member of holder it applies to.
-func ending(specials []special, depth int, holder map[string]any, roles ...memberRole) bool {
+// member of holder holding v that it applies to.
+func ending(specials []special, depth int, holder map[string]any, v any, roles ...memberRole) bool {
 	for _, sp := range specials {
-		if len(sp.path) == depth && slices.Contains(roles, sp.role) && sp.applies(holder) {
+		if len(sp.path) == depth && slices.Contains(roles, sp.role) && sp.applies(holder, v) {
 			return true
 		}
 	}
@@ -643,10 +643,10 @@ func ending(specials []special, depth int, holder map[string]any, roles ...membe
 // saying so. Members are taken in sorted order and elements in index
 // order.
 func (r *Rewriter) walk(v any, specials []special, depth int, holder map[string]any, sh shape) (any, error) {
-	if ending(specials, depth, holder, roleFixed) {
+	if ending(specials, depth, holder, v, roleFixed) {
 		return v, nil
 	}
-	if _, ok := v.(string); ok && ending(specials, depth, holder, roleEntry, roleSession, roleHash, roleCallID) {
+	if _, ok := v.(string); ok && ending(specials, depth, holder, v, roleEntry, roleSession, roleHash, roleCallID) {
 		return v, nil
 	}
 	switch x := v.(type) {
@@ -656,7 +656,7 @@ func (r *Rewriter) walk(v any, specials []special, depth int, holder map[string]
 		}
 		return r.f(x), nil
 	case map[string]any:
-		dataKeys := ending(specials, depth, holder, roleDataKeys)
+		dataKeys := ending(specials, depth, holder, v, roleDataKeys)
 		out := make(map[string]any, len(x))
 		from := map[string]string{}
 		for _, k := range sortedKeys(x) {
@@ -962,7 +962,7 @@ func (r *Rewriter) rewriteAt(at string, root map[string]any, specials []special,
 		sh     = top
 	)
 	for i, t := range tokens {
-		if ending(cur, i, holder, roleFixed) {
+		if ending(cur, i, holder, node, roleFixed) {
 			return at, false
 		}
 		var next []special
@@ -972,7 +972,7 @@ func (r *Rewriter) rewriteAt(at string, root map[string]any, specials []special,
 			switch {
 			case i == 0 && rename && !reservedName[t]:
 				tokens[i], child = r.f(t), shape{data: true}
-			case i > 0 && (ending(cur, i, holder, roleDataKeys) || sh.dataName(t)):
+			case i > 0 && (ending(cur, i, holder, node, roleDataKeys) || sh.dataName(t)):
 				tokens[i] = r.f(t)
 			}
 			next, holder, node, sh = onward(cur, i, t, false), n, n[t], child
@@ -987,7 +987,7 @@ func (r *Rewriter) rewriteAt(at string, root map[string]any, specials []special,
 		}
 		cur = next
 	}
-	body := !ending(cur, len(tokens), holder, roleFixed, roleEntry, roleSession, roleHash, roleCallID)
+	body := !ending(cur, len(tokens), holder, node, roleFixed, roleEntry, roleSession, roleHash, roleCallID)
 	for i, t := range tokens {
 		tokens[i] = pointerToken(t)
 	}

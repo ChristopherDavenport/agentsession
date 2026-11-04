@@ -73,11 +73,16 @@ type special struct {
 	// first_kept and images' before, whose left-out entry is replaced by
 	// the first entry written after it, not by one above it: [Remap.Bound].
 	bound bool
+	// value, if set, says whether the member's value v is one the format
+	// gives the member's role: a member drawn from a closed set is fixed
+	// while it holds a value of the set, and is text otherwise.
+	value func(v any) bool
 }
 
-// applies reports whether sp names the member that holder holds.
-func (sp special) applies(holder map[string]any) bool {
-	return sp.holds == nil || sp.holds(holder)
+// applies reports whether sp names the member that holder holds, whose
+// value is v.
+func (sp special) applies(holder map[string]any, v any) bool {
+	return (sp.holds == nil || sp.holds(holder)) && (sp.value == nil || sp.value(v))
 }
 
 // keepOf reports whether an omitted part is a keep, where alone of is
@@ -104,35 +109,26 @@ func knownSource(el map[string]any) bool {
 // memberPath is a path, for the table.
 func memberPath(steps ...string) []string { return steps }
 
-// oneOf returns a holds that takes the member name of an object when
-// its value is drawn from the closed set values, a string of the set or
-// a list holding only such strings: a member holding any other value is
-// text (RFC 0001, Every redacted entry, since 0.20).
-func oneOf[T ~string](name string, values ...T) func(holder map[string]any) bool {
+// oneOf reports whether a value is a string of the closed set values:
+// a member holding any other value is text (RFC 0001, Every redacted
+// entry, since 0.20).
+func oneOf[T ~string](values ...T) func(v any) bool {
 	set := make(map[string]bool, len(values))
 	for _, v := range values {
 		set[string(v)] = true
 	}
-	return func(holder map[string]any) bool {
-		switch v := holder[name].(type) {
-		case string:
-			return set[v]
-		case []any:
-			for _, el := range v {
-				if s, ok := el.(string); !ok || !set[s] {
-					return false
-				}
-			}
-			return len(v) > 0
-		}
-		return false
+	return func(v any) bool {
+		s, ok := v.(string)
+		return ok && set[s]
 	}
 }
 
-// closed is a member at path, the last step its name, drawn from the
-// closed set values, which a rewrite keeps while it holds one of them.
+// closed is a member at path drawn from the closed set values, which a
+// rewrite keeps while it holds one of them. A list of such values, such
+// as include, is named by a path ending "[]", and each element is kept
+// or rewritten by its own value.
 func closed[T ~string](path []string, values ...T) special {
-	return special{path: path, role: roleFixed, holds: oneOf(path[len(path)-1], values...)}
+	return special{path: path, role: roleFixed, value: oneOf(values...)}
 }
 
 // discriminator is the type member at path, which says what the object
@@ -187,7 +183,7 @@ func settingsMembers(tools string, at ...string) []special {
 		discriminator(under(at, "extra", "tool_choice", "tools", "[]", "type")),
 		closed(under(at, "extra", "truncation"), openresponses.TruncationAuto, openresponses.TruncationDisabled),
 		closed(under(at, "extra", "service_tier"), openresponses.ServiceTierAuto, openresponses.ServiceTierDefault, openresponses.ServiceTierFlex, openresponses.ServiceTierPriority),
-		closed(under(at, "extra", "include"), openresponses.IncludeReasoningEncryptedContent, openresponses.IncludeOutputTextLogprobs),
+		closed(under(at, "extra", "include", "[]"), openresponses.IncludeReasoningEncryptedContent, openresponses.IncludeOutputTextLogprobs),
 	}
 }
 
@@ -629,7 +625,7 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 			continue
 		}
 		eachString(root, sp.path, "", nil, func(at, s string, holder map[string]any) (string, bool) {
-			if s == "" || !sp.applies(holder) {
+			if s == "" || !sp.applies(holder, s) {
 				return s, false // names nothing, or is not the member defined here
 			}
 			id, ok := mapped(at, s, holder)

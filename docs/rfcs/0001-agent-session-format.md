@@ -2618,7 +2618,8 @@ A redactor:
   and the `type` of its `format`, each tool's `type`, and, among the
   request members of `extra`, `tool_choice` (a mode, or the object's
   `type`, `mode` and each of its tools' `type`), `truncation`,
-  `service_tier` and `include`. An entry's own `type` is the envelope's,
+  `service_tier` and each element of `include`, each judged by its own
+  value, so an element no set holds is text beside one that is kept. An entry's own `type` is the envelope's,
   kept already. A `type` is kept whatever its value, an extension's
   `<definer>.<type>` among them, since it says what the object is; any
   other of these members holding a value its set does not define is

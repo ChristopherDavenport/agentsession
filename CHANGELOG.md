@@ -26,7 +26,7 @@ versions may break the API.
   reason and error type, a config's and a checkpoint's `omit`
   reasoning, which the context algorithm reads, their reasoning effort
   and summary, text verbosity and extra's tool_choice, truncation,
-  service_tier and include, a run's phase, source and reason, a queued
+  service_tier and each element of include, judged one by one, a run's phase, source and reason, a queued
   entry's mode, a decision's verdict and by, a workspace's kind, a
   link's rel and cancel, and an outcome's kind. A payload type, an
   item's, a part's, an annotation's, a text format's, a tool's or a tool
