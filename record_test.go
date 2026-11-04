@@ -1,6 +1,7 @@
 package agentsession
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -281,5 +282,132 @@ func TestRecordedSettingsHashAsRecorded(t *testing.T) {
 				t.Errorf("the successor carries %s as %q, want %q", tc.k, got, want)
 			}
 		})
+	}
+}
+
+// TestConfigFromRequestPartsKeepsTrust: a config recorded from named
+// parts carries every member of each part, its trust among them, so a
+// memory part a model wrote is recorded as untrusted and the product's
+// own prompt as reading nothing. Both labels read back from the file,
+// across a later delta that changes another part's text and one that
+// changes a part's trust alone, which is a change: a part read under
+// other labels is a different part to the reader.
+func TestConfigFromRequestPartsKeepsTrust(t *testing.T) {
+	parts := []InstructionPart{
+		{ID: "product", Source: LayerProduct, Text: "be helpful", Trust: &Trust{Reads: []string{}}},
+		{ID: "memory/user/a", Source: LayerAgentMemory, Text: "remember", Trust: &Trust{Reads: []string{TrustUntrusted}}},
+	}
+	cfg, err := ConfigFromRequestParts(openresponses.Request{Model: "m", Instructions: JoinInstructions(parts)}, parts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cfg.InstructionsParts, parts) {
+		t.Fatalf("recorded parts %+v, want %+v", cfg.InstructionsParts, parts)
+	}
+	parts[1].Trust.Reads[0] = TrustPrivate
+	if got := cfg.InstructionsParts[1].Trust.Reads[0]; got != TrustUntrusted {
+		t.Errorf("the entry shares the caller's trust: changing it reads %q", got)
+	}
+	parts[1].Trust.Reads[0] = TrustUntrusted
+
+	s := New(Header{})
+	if _, err := s.Append(cfg); err != nil {
+		t.Fatal(err)
+	}
+	settings := func(s *Session) Settings {
+		t.Helper()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ctx.Settings
+	}
+	edited := edit(parts, "product", "be brief")
+	delta := settings(s).InstructionsDelta(edited)
+	if delta == nil {
+		t.Fatal("no delta for a changed part")
+	}
+	if _, err := s.Append(delta); err != nil {
+		t.Fatal(err)
+	}
+	widened := append([]InstructionPart(nil), edited...)
+	widened[1].Trust = &Trust{Reads: []string{TrustPrivate, TrustUntrusted}}
+	trustOnly := settings(s).InstructionsDelta(widened)
+	if trustOnly == nil {
+		t.Fatal("a part whose trust alone changed writes no delta")
+	}
+	if _, err := s.Append(trustOnly); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := Write(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	back, err := Read(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, e := range back.Entries() {
+		ctx, err := back.ContextAt(e.Base().ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := [][]InstructionPart{parts, edited, widened}[i]
+		got := ctx.Settings.InstructionsParts
+		if len(got) != len(want) {
+			t.Fatalf("entry %d: %d parts in force, want %d", i, len(got), len(want))
+		}
+		for j := range want {
+			if got[j].ID != want[j].ID || got[j].Text != want[j].Text || !sameTrust(got[j].Trust, want[j].Trust) {
+				t.Errorf("entry %d: part %s reads back as %q with trust %+v, want %q with %+v", i, want[j].ID, got[j].Text, got[j].Trust, want[j].Text, want[j].Trust)
+			}
+		}
+	}
+}
+
+// TestConfigFromRequestPartsRefusesDeltaForms: ConfigFromRequestParts
+// takes the parts the request was composed from, each with its text, and
+// records each whole. A part in a delta's form, named by its hash or a
+// keep, is no such part: recording it would write a hash or a keep into
+// a replacing config, which nothing on the path resolves, so it is
+// refused rather than copied.
+func TestConfigFromRequestPartsRefusesDeltaForms(t *testing.T) {
+	for name, p := range map[string]InstructionPart{
+		"hash": {ID: "a", Text: "x", Hash: HashText("x")},
+		"keep": {Keep: 1},
+	} {
+		parts := []InstructionPart{{ID: "product", Text: "p"}, p}
+		cfg, err := ConfigFromRequestParts(openresponses.Request{Instructions: JoinInstructions(parts)}, parts...)
+		if err == nil {
+			t.Errorf("%s: recorded %+v", name, cfg.InstructionsParts)
+		}
+	}
+}
+
+// TestInstructionsPartsOwnTheirTrust: a delta and the settings a config
+// puts in force hold trust of their own, so a caller that changes the
+// labels of the parts it passed, or of the settings it was given, changes
+// neither the entry it wrote nor the settings in force.
+func TestInstructionsPartsOwnTheirTrust(t *testing.T) {
+	parts := []InstructionPart{{ID: "memory", Text: "m", Trust: &Trust{Reads: []string{TrustUntrusted}}}}
+	cfg, err := ConfigFromRequestParts(openresponses.Request{Instructions: "m"}, parts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := Settings{}.Apply(cfg)
+	next := []InstructionPart{{ID: "memory", Text: "n", Trust: &Trust{Reads: []string{TrustUntrusted}}}}
+	delta := settings.InstructionsDelta(next)
+	if delta == nil {
+		t.Fatal("no delta")
+	}
+	next[0].Trust.Reads[0] = TrustPrivate
+	if got := delta.InstructionsParts[0].Trust.Reads[0]; got != TrustUntrusted {
+		t.Errorf("the delta shares the caller's trust: %q", got)
+	}
+	later := settings.Apply(&ConfigEntry{Model: "other"})
+	later.InstructionsParts[0].Trust.Reads[0] = TrustPrivate
+	if got := settings.InstructionsParts[0].Trust.Reads[0]; got != TrustUntrusted {
+		t.Errorf("settings applied later share the trust in force: %q", got)
 	}
 }

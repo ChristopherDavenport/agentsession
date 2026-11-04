@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.19
+Status: draft 0.20
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -231,7 +231,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.19","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.20","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -2599,6 +2599,44 @@ A redactor:
   would then be in no form this document defines, and the item would
   read as a person's input. A redactor keeps them distinct, as by
   numbering its replacements;
+- since 0.20, MUST keep as written each member whose value is drawn
+  from a closed set this document or the payload profile defines, while
+  it holds a value of that set: the value is the format's vocabulary, not
+  text, as `trust` is. They are, in the entries this document defines, a
+  `run`'s `phase`, `source` and `reason`, a `queued` entry's `mode`, a
+  `decision`'s `verdict` and `by`, an `env` entry's `workspace` `kind`, a
+  `link`'s `rel` and `cancel`, and an `outcome`'s `kind`; and in the
+  payload, wherever an entry holds an item (an `item`'s, a `queued`
+  entry's and a `result`'s `item`, a compaction's `summary` and `pinned`,
+  a branch summary's `summary`), the item's `type`, `role`, `status` and
+  `phase`, the `type` and `detail` of each part of its `content`,
+  `summary` or `output`, and the `type` of each of a part's
+  `annotations`; a `response`'s `status`, its `incomplete` `reason` and
+  its `error` `type`; and in a `config` and a compaction's checkpoint,
+  `omit`'s `reasoning`, which the context algorithm reads, the `effort`
+  and `summary` of `reasoning`, the `verbosity` of `text`
+  and the `type` of its `format`, each tool's `type`, and, among the
+  request members of `extra`, `tool_choice` (a mode, or the object's
+  `type`, `mode` and each of its tools' `type`), `truncation`,
+  `service_tier` and each element of `include`, each judged by its own
+  value, so an element no set holds is text beside one that is kept. An entry's own `type` is the envelope's,
+  kept already. The `type` that says what an object is, an item's, a
+  part's, an annotation's, a text `format`'s, a tool's, and a
+  `tool_choice`'s and each of its tools', is kept whatever its value, an
+  extension's `<definer>.<type>` among them; `error`'s `type` is a
+  classification, kept while it holds a value of its set like the rest.
+  Any other of these members holding a value its set does not define is
+  text. A tool's `parameters` and a text format's `schema` are JSON
+  Schema, which the rule does not reach: in 0.20 the string values
+  they hold are body text, their keywords' values (a `type` of
+  `object` or `string`) included, while the names of their members,
+  the properties they describe among them, are the payload's, as any
+  member name is, and are not rewritten. A redactor that must keep a
+  tool callable leaves the words those values hold. A redactor that
+  matches a word such a value spells changes it where it is text and leaves the member, and one that must hide what a
+  member says leaves the entry out (Leaving entries out). 0.19 left them
+  to a redaction's rules, so one matching "user" wrote a message no
+  reader takes as a person's, or an entry its type no longer decodes;
 - MUST give each `response` it writes either no `request_hash` or the
   one the redacted session rebuilds for it, computed as Request hash
   says, and never another: a redacted session hashes independently, and
@@ -3238,13 +3276,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.19 reads a 0.5 to 0.18 file
+it begins at 1.0. A reader of 0.20 reads a 0.5 to 0.19 file
 as it stands, since 0.6 to 0.19 add optional members, elements and
-relations, 0.15 a record entry type and 0.16 a file beside a sidecar blob and an `omit` member, 0.17 an `item` member and defined `source` values, 0.18 a second form of that member, 0.19 a link member and a second form of `subsession`, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
+relations, 0.15 a record entry type and 0.16 a file beside a sidecar blob and an `omit` member, 0.17 an `item` member and defined `source` values, 0.18 a second form of that member, 0.19 a link member and a second form of `subsession`, 0.20 a redaction rule alone, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.19 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.20 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -3448,6 +3486,35 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.19
+
+A redaction rule. A 0.19 file is a 0.20 file, and nothing reads
+differently; the rule narrows what a redaction may write. A writer of
+0.20 raises every file it appends to, as Versioning says, so every
+reader of 0.19 refuses those files until it is upgraded. A redacted
+session written under 0.19 is raised as it stands, as 0.17 and 0.19
+raised theirs: it may hold a closed-set member a 0.19 redaction
+rewrote, and the raise does not repair it, so its header then names a
+rule its entries were not written under.
+
+- A redactor keeps as written each member whose value is drawn from a
+  closed set this document or the payload profile defines, while it
+  holds a value of that set: an item's `type`, `role`, `status` and
+  `phase`, a content part's `type` and `detail`, a `response`'s
+  `status`, a config's `omit` `reasoning`, its reasoning and text
+  settings and its tools' `type`, a `run`'s `phase`, `source` and `reason`, a `queued` entry's
+  `mode`, a `decision`'s `verdict` and `by`, a workspace's `kind`, a
+  `link`'s `rel` and `cancel` and an `outcome`'s `kind`, the full list
+  in Every redacted entry. A `type` that says what an object is, an
+  item's, a part's, an annotation's, a text format's, a tool's or a tool
+  choice's, is kept whatever its value. 0.19
+  left them to a redaction's rules, so a redactor matching the word
+  "user" rewrote `role:"user"` as text, and the message no longer read
+  as a person's, and one matching "models" rewrote `omit`'s
+  `other_models` into a value with no effect, which put the other
+  models' reasoning back into every later request. JSON Schema in a
+  tool's `parameters` or a format's `schema` stays body text.
 
 ## Changes since 0.18
 

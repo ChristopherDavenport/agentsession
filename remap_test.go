@@ -430,19 +430,19 @@ func TestMigrationRewritesEveryEntryNamingMember(t *testing.T) {
 // writes them, joined by "/".
 var coreStringMembers = map[string][]string{
 	TypeItem:          {"response", "source/kind", "source/ref", "source/source", "instructions_part/id", "instructions_part/[]/id"},
-	TypeResponse:      {"response_id", "model", "status"},
-	TypeConfig:        {"model", "instructions", "instructions_parts/[]/id", "instructions_parts/[]/text", "instructions_omitted/[]/id", "instructions_omitted/[]/reason", "tools_removed/[]", "omit/reasoning", "omit/outputs/text", "omit/outputs/groups/[]/text", "omit/images/placeholder"},
-	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/of", "config/omit/reasoning", "config/omit/outputs/text", "config/omit/outputs/groups/[]/text", "config/omit/images/placeholder"},
+	TypeResponse:      {"response_id", "model"},
+	TypeConfig:        {"model", "instructions", "instructions_parts/[]/id", "instructions_parts/[]/text", "instructions_omitted/[]/id", "instructions_omitted/[]/reason", "tools_removed/[]", "omit/outputs/text", "omit/outputs/groups/[]/text", "omit/images/placeholder"},
+	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/of", "config/omit/outputs/text", "config/omit/outputs/groups/[]/text", "config/omit/images/placeholder"},
 	TypeBranchSummary: {},
-	TypeRun:           {"run_id", "phase", "source", "reason", "ref", "trigger/kind", "trigger/ref", "trigger/source"},
+	TypeRun:           {"run_id", "ref", "trigger/kind", "trigger/ref", "trigger/source"},
 	TypeDispatch:      {"idempotency_key"},
-	TypeDecision:      {"verdict", "by", "reason"},
-	TypeQueued:        {"mode", "trigger/kind", "trigger/ref", "trigger/source", "ref"},
+	TypeDecision:      {"reason"},
+	TypeQueued:        {"trigger/kind", "trigger/ref", "trigger/source", "ref"},
 	TypeLabel:         {"label"},
 	TypeInfo:          {"name"},
-	TypeEnv:           {"cwd", "vcs/system", "vcs/revision", "tools/*", "workspace/kind", "workspace/ref", "workspace/host", "workspace/instance"},
-	TypeOutcome:       {"kind", "label"},
-	TypeLink:          {"rel", "url", "task", "context", "cancel"},
+	TypeEnv:           {"cwd", "vcs/system", "vcs/revision", "tools/*", "workspace/ref", "workspace/host", "workspace/instance"},
+	TypeOutcome:       {"label"},
+	TypeLink:          {"url", "task", "context"},
 	TypeCustom:        {"ns"},
 }
 
@@ -491,8 +491,8 @@ func TestRewriteTableClassifiesEveryMember(t *testing.T) {
 	table:
 		for m := range known {
 			for p := range payload {
-				if strings.HasPrefix(m, p+"/") {
-					continue table // a member of an item, which the payload defines
+				if inside(m, p) {
+					continue table // a member of an item, or of another value the payload defines
 				}
 			}
 			if !got[m] {
@@ -502,10 +502,32 @@ func TestRewriteTableClassifiesEveryMember(t *testing.T) {
 	}
 }
 
+// inside reports whether the table path m is a member below the path p,
+// where a * step of p stands for any one member, so a member of a map p
+// names is inside it.
+func inside(m, p string) bool {
+	ms, ps := strings.Split(m, "/"), strings.Split(p, "/")
+	if len(ms) < len(ps) || len(ms) == len(ps) && ps[len(ps)-1] != "*" {
+		return false
+	}
+	for i := range ps {
+		if ps[i] != "*" && ps[i] != ms[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // stringMembers adds to out the path of every member of typ that holds a
 // string, walking the structs of package pkg, and to payload the path of
-// every member holding a payload item, whose members the payload defines.
+// every member holding a payload item or another payload value, or a
+// JSON value such as a request member of extra, whose members the
+// payload defines.
 func stringMembers(typ reflect.Type, path []string, pkg string, out, payload map[string]bool) {
+	if typ.Kind() == reflect.Struct && typ.PkgPath() == payloadPkg {
+		payload[strings.Join(path, "/")] = true
+		return
+	}
 	switch typ.Kind() {
 	case reflect.Interface:
 		payload[strings.Join(path, "/")] = true
@@ -518,7 +540,8 @@ func stringMembers(typ reflect.Type, path []string, pkg string, out, payload map
 		return
 	case reflect.Slice, reflect.Array:
 		if typ == rawType {
-			return // a JSON value, whose strings are text
+			payload[strings.Join(path, "/")] = true
+			return // a JSON value, whose strings are text but where the payload closes them
 		}
 		stringMembers(typ.Elem(), append(path, "[]"), pkg, out, payload)
 		return

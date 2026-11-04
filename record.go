@@ -57,7 +57,11 @@ func RecordResponse(ctx context.Context, store Store, sessionID string, req open
 // ConfigFromRequestParts is [ConfigFromRequest] for a caller that
 // composed the instructions from named parts: the entry carries the
 // parts instead of the joined string, so every delta after it names
-// the one part that moved rather than repeating the whole prompt.
+// the one part that moved rather than repeating the whole prompt. Each
+// part is carried whole, its source and trust included. A part in a
+// delta's form, named by a hash or a keep, or one the path could not
+// rebuild, is refused: a replacing config would carry what nothing on
+// the path resolves.
 // The parts' texts joined with [PartSeparator] must equal the
 // request's instructions, since that is what the model received and
 // what the request hash covers.
@@ -73,9 +77,18 @@ func ConfigFromRequestParts(req openresponses.Request, parts ...InstructionPart)
 		return nil, fmt.Errorf("agentsession: %d instructions parts join to %d bytes, the request carries %d", len(parts), len(joined), len(req.Instructions))
 	}
 	cfg.Instructions = nil
+	for i, p := range parts {
+		if p.Hash != "" || p.Keep != 0 || p.Unresolved() {
+			return nil, fmt.Errorf("agentsession: instructions part %d (%q) is in a delta's form, named by a hash or a keep, and not a part with its text", i, p.ID)
+		}
+	}
+	// Each part is copied whole, so a member the part gains is recorded
+	// rather than dropped here, as trust once was; the trust is copied
+	// too, so the entry does not share the caller's labels.
 	cfg.InstructionsParts = make([]InstructionPart, 0, len(parts))
 	for _, p := range parts {
-		cfg.InstructionsParts = append(cfg.InstructionsParts, InstructionPart{ID: p.ID, Text: p.Text, Source: p.Source})
+		p.Trust = p.Trust.clone()
+		cfg.InstructionsParts = append(cfg.InstructionsParts, p)
 	}
 	return cfg, nil
 }

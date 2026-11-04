@@ -13,7 +13,7 @@ import (
 )
 
 // Format is the session format version this package writes.
-const Format = "agentsession/0.19"
+const Format = "agentsession/0.20"
 
 // FormatMajor is the major version of the format this package reads.
 // Any minor version of it is accepted; files are migrated in memory.
@@ -390,8 +390,10 @@ func (h *Header) fill(now time.Time) {
 // rather than a function call, and names a redacted session's original
 // by a keyed pseudonym ([Pseudonym]); a 0.18 file is a 0.19 file whose
 // subsession links all carry a call_id, and spawn_id is read by its form
-// in a file of any minor.
-const FormatMinor = 19
+// in a file of any minor. 0.20 adds a redaction rule alone: a
+// redaction keeps a member whose value is drawn from a closed set as
+// written; a 0.19 file is a 0.20 file.
+const FormatMinor = 20
 
 // hashedMinor is the first minor whose entry ids are envelope hashes.
 // A file below it is rehashed on read.

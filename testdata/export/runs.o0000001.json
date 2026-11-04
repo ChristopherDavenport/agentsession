@@ -605,7 +605,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.19",
+      "format": "agentsession/0.20",
       "leaf": "sha256:6f45dcf88ab8ca856b214bcdf8ce4fc02b88cff40ab66f7d33d7761248717fd5",
       "main": true,
       "records": [
@@ -613,7 +613,7 @@
         "dispatch",
         "decision"
       ],
-      "visible": "sha256:f3e5b1d3083926ff1407c30ad2cc56d77c2af47b4984652a28447443ca7ed049"
+      "visible": "sha256:456cb4ddf5f08a93d8cdcbf6c85fd63db3e54812564572b73a6e2e10504d7fcc"
     },
     "environment": {
       "cwd": "/home/u/proj",

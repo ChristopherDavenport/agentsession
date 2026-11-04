@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ChristopherDavenport/agentsession/internal/jsonx"
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 // A writer that makes a session out of another, a redactor above all,
@@ -24,8 +25,10 @@ import (
 type memberRole uint8
 
 const (
-	// roleFixed is the envelope, legacy_id and redacted: the whole
-	// value, at any depth, is neither rewritten nor re-pointed.
+	// roleFixed is the envelope, legacy_id and redacted, trust labels,
+	// a source the format defines and every member drawn from a closed
+	// set: the whole value, at any depth, is neither rewritten nor
+	// re-pointed.
 	roleFixed memberRole = iota + 1
 	// roleEntry is a string naming an entry by its id.
 	roleEntry
@@ -70,11 +73,20 @@ type special struct {
 	// first_kept and images' before, whose left-out entry is replaced by
 	// the first entry written after it, not by one above it: [Remap.Bound].
 	bound bool
+	// value, if set, says whether the member's value v is one the format
+	// gives the member's role: a member drawn from a closed set is fixed
+	// while it holds a value of the set, and is text otherwise.
+	value func(v any) bool
+	// vocab marks a member drawn from a closed set, or a type, which the
+	// table fixes as the format's vocabulary (RFC 0001, Every redacted
+	// entry, since 0.20).
+	vocab bool
 }
 
-// applies reports whether sp names the member that holder holds.
-func (sp special) applies(holder map[string]any) bool {
-	return sp.holds == nil || sp.holds(holder)
+// applies reports whether sp names the member that holder holds, whose
+// value is v.
+func (sp special) applies(holder map[string]any, v any) bool {
+	return (sp.holds == nil || sp.holds(holder)) && (sp.value == nil || sp.value(v))
 }
 
 // keepOf reports whether an omitted part is a keep, where alone of is
@@ -100,6 +112,87 @@ func knownSource(el map[string]any) bool {
 
 // memberPath is a path, for the table.
 func memberPath(steps ...string) []string { return steps }
+
+// oneOf reports whether a value is a string of the closed set values:
+// a member holding any other value is text (RFC 0001, Every redacted
+// entry, since 0.20).
+func oneOf[T ~string](values ...T) func(v any) bool {
+	set := make(map[string]bool, len(values))
+	for _, v := range values {
+		set[string(v)] = true
+	}
+	return func(v any) bool {
+		s, ok := v.(string)
+		return ok && set[s]
+	}
+}
+
+// closed is a member at path drawn from the closed set values, which a
+// rewrite keeps while it holds one of them. A list of such values, such
+// as include, is named by a path ending "[]", and each element is kept
+// or rewritten by its own value.
+func closed[T ~string](path []string, values ...T) special {
+	return special{path: path, role: roleFixed, value: oneOf(values...), vocab: true}
+}
+
+// discriminator is the type member at path, which says what the object
+// is and is kept whatever its value, an extension's included.
+func discriminator(path []string) special {
+	return special{path: path, role: roleFixed, vocab: true}
+}
+
+// under is path with steps appended, a new slice.
+func under(path []string, steps ...string) []string {
+	return append(slices.Clone(path), steps...)
+}
+
+// itemMembers are the members drawn from a closed set of an item held at
+// at, as the payload profile defines them: the item's type, role, status
+// and phase, the type and detail of each part of its content, summary or
+// output, and the type of each of a part's annotations.
+func itemMembers(at ...string) []special {
+	out := []special{
+		discriminator(under(at, "type")),
+		closed(under(at, "role"), openresponses.RoleUser, openresponses.RoleAssistant, openresponses.RoleSystem, openresponses.RoleDeveloper),
+		closed(under(at, "status"), openresponses.StatusInProgress, openresponses.StatusCompleted, openresponses.StatusIncomplete),
+		closed(under(at, "phase"), openresponses.PhaseCommentary, openresponses.PhaseFinalAnswer),
+	}
+	for _, parts := range []string{"content", "summary", "output"} {
+		out = append(out,
+			discriminator(under(at, parts, "[]", "type")),
+			closed(under(at, parts, "[]", "detail"), openresponses.ImageDetailLow, openresponses.ImageDetailHigh, openresponses.ImageDetailAuto),
+			discriminator(under(at, parts, "[]", "annotations", "[]", "type")),
+		)
+	}
+	return out
+}
+
+// settingsMembers are the members drawn from a closed set of the
+// settings at at, a config entry's or a compaction's checkpoint, whose
+// tools are in the member tools: reasoning's effort and summary, text's
+// verbosity and its format's type, each tool's type, and the request
+// members of extra the payload profile closes, tool_choice, truncation,
+// service_tier and include.
+func settingsMembers(tools string, at ...string) []special {
+	modes := []openresponses.ToolChoiceMode{openresponses.ToolChoiceNone, openresponses.ToolChoiceAuto, openresponses.ToolChoiceRequired}
+	return []special{
+		closed(under(at, "reasoning", "effort"), openresponses.ReasoningEffortNone, openresponses.ReasoningEffortMinimal, openresponses.ReasoningEffortLow, openresponses.ReasoningEffortMedium, openresponses.ReasoningEffortHigh, openresponses.ReasoningEffortXHigh),
+		closed(under(at, "reasoning", "summary"), openresponses.ReasoningSummaryConcise, openresponses.ReasoningSummaryDetailed, openresponses.ReasoningSummaryAuto),
+		closed(under(at, "text", "verbosity"), openresponses.VerbosityLow, openresponses.VerbosityMedium, openresponses.VerbosityHigh),
+		discriminator(under(at, "text", "format", "type")),
+		discriminator(under(at, tools, "[]", "type")),
+		closed(under(at, "extra", "tool_choice"), modes...),
+		discriminator(under(at, "extra", "tool_choice", "type")),
+		closed(under(at, "extra", "tool_choice", "mode"), modes...),
+		discriminator(under(at, "extra", "tool_choice", "tools", "[]", "type")),
+		closed(under(at, "extra", "truncation"), openresponses.TruncationAuto, openresponses.TruncationDisabled),
+		closed(under(at, "extra", "service_tier"), openresponses.ServiceTierAuto, openresponses.ServiceTierDefault, openresponses.ServiceTierFlex, openresponses.ServiceTierPriority),
+		closed(under(at, "extra", "include", "[]"), openresponses.IncludeReasoningEncryptedContent, openresponses.IncludeOutputTextLogprobs),
+	}
+}
+
+// joined is the lists of specials as one.
+func joined(lists ...[]special) []special { return slices.Concat(lists...) }
 
 // envelopeMembers are the members any entry may carry that are not
 // body text: the envelope; legacy_id, the name an entry had before its
@@ -157,8 +250,22 @@ var envelopeMembers = []special{
 // element of an instructions_part list, since 0.18; any other
 // source, and every id, is text. A part's trust labels, since 0.17, are
 // the format's vocabulary too.
+//
+// So is, since 0.20, every member whose value is drawn from a closed set
+// the format or the payload profile defines, while it holds a value of
+// that set (RFC 0001, Every redacted entry): a run's phase, source and
+// reason, a queued entry's mode, a decision's verdict and by, a
+// workspace's kind, a link's rel and cancel, an outcome's kind; an
+// item's role, status and phase, wherever an entry holds an item, and a
+// part's detail; a response's status, incomplete reason and error type;
+// and the settings' omit reasoning, which the context algorithm reads,
+// their reasoning and text settings and the request members of extra the
+// payload closes. A type in the payload, an item's, a
+// part's, an annotation's, a text format's, a tool's or a tool choice's,
+// is kept whatever its value, since it says what the object is. Any
+// other value of one of those members is text.
 var bodyMembers = map[string][]special{
-	TypeItem: {
+	TypeItem: joined(itemMembers("item"), []special{
 		{path: memberPath("queued_from"), role: roleEntry, set: true},
 		{path: memberPath("from_link"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*ItemEntry).FromLink != "" }},
 		{path: memberPath("copied_from", "entry"), role: roleEntry, session: "session", set: true, when: func(e Entry) bool { return e.(*ItemEntry).CopiedFrom != nil }},
@@ -172,10 +279,18 @@ var bodyMembers = map[string][]special{
 			return e.(*ItemEntry).InstructionsLayers != nil
 		}},
 		{path: memberPath("item", "call_id"), role: roleCallID},
+	}),
+	TypeQueued: joined(itemMembers("item"), []special{
+		{path: memberPath("item", "call_id"), role: roleCallID},
+		closed(memberPath("mode"), ModeSteer, ModeFollowUp),
+	}),
+	TypeResponse: {
+		{path: memberPath("request_hash"), role: roleHash},
+		closed(memberPath("status"), openresponses.ResponseStatusQueued, openresponses.ResponseStatusInProgress, openresponses.ResponseStatusCompleted, openresponses.ResponseStatusIncomplete, openresponses.ResponseStatusFailed),
+		closed(memberPath("incomplete", "reason"), openresponses.IncompleteReasonMaxOutputTokens, openresponses.IncompleteReasonContentFilter),
+		closed(memberPath("error", "type"), openresponses.ErrorTypeInvalidRequest, openresponses.ErrorTypeNotFound, openresponses.ErrorTypeTooManyRequests, openresponses.ErrorTypeModelError, openresponses.ErrorTypeServerError),
 	},
-	TypeQueued:   {{path: memberPath("item", "call_id"), role: roleCallID}},
-	TypeResponse: {{path: memberPath("request_hash"), role: roleHash}},
-	TypeConfig: {
+	TypeConfig: joined(settingsMembers("tools_added"), []special{
 		{path: memberPath("omit", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*ConfigEntry).Omit != nil }},
 		{path: memberPath("omit", "outputs", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { o := e.(*ConfigEntry).Omit; return o != nil && o.Outputs != nil }},
 		{path: memberPath("omit", "outputs", "groups", "[]", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { o := e.(*ConfigEntry).Omit; return o != nil && o.Outputs != nil }},
@@ -188,8 +303,9 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("instructions_parts", "[]", "source"), role: roleFixed, holds: knownSource},
 		{path: memberPath("instructions_parts", "[]", "trust", "reads", "[]"), role: roleFixed},
 		{path: memberPath("instructions_omitted", "[]", "source"), role: roleFixed, holds: knownSource},
-	},
-	TypeCompaction: {
+		closed(memberPath("omit", "reasoning"), OmitOtherModels),
+	}),
+	TypeCompaction: joined(itemMembers("summary"), itemMembers("pinned", "[]"), settingsMembers("tools", "config"), []special{
 		{path: memberPath("first_kept"), role: roleEntry, bound: true},
 		{path: memberPath("config", "omit", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return !e.(*CompactionEntry).Config.Omit.IsZero() }},
 		{path: memberPath("config", "omit", "outputs", "items", "[]"), role: roleEntry, set: true, when: func(e Entry) bool { return e.(*CompactionEntry).Config.Omit.Outputs != nil }},
@@ -199,25 +315,41 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("config", "instructions_parts", "[]", "source"), role: roleFixed, holds: knownSource},
 		{path: memberPath("config", "instructions_parts", "[]", "trust", "reads", "[]"), role: roleFixed},
 		{path: memberPath("config", "instructions_omitted", "[]", "source"), role: roleFixed, holds: knownSource},
+		closed(memberPath("config", "omit", "reasoning"), OmitOtherModels),
 		{path: memberPath("pinned", "[]", "call_id"), role: roleCallID},
 		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*CompactionEntry).Trust != nil }},
-	},
-	TypeBranchSummary: {
+	}),
+	TypeBranchSummary: joined(itemMembers("summary"), []special{
 		{path: memberPath("from"), role: roleEntry},
 		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*BranchSummaryEntry).Trust != nil }},
+	}),
+	TypeRun: {
+		{path: memberPath("pending", "[]"), role: roleCallID},
+		closed(memberPath("phase"), RunStart, RunEnd),
+		closed(memberPath("source"), SourceInput, SourceResume),
+		closed(memberPath("reason"), ReasonDone, ReasonStopped, ReasonInterrupted, ReasonInputRequired, ReasonAborted, ReasonError),
 	},
-	TypeRun:      {{path: memberPath("pending", "[]"), role: roleCallID}},
 	TypeDispatch: {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
-	TypeDecision: {{path: memberPath("target"), role: roleEntry}, {path: memberPath("call_id"), role: roleCallID}},
-	TypeResult: {
+	TypeDecision: {
+		{path: memberPath("target"), role: roleEntry},
+		{path: memberPath("call_id"), role: roleCallID},
+		closed(memberPath("verdict"), VerdictProceed, VerdictReject, VerdictHold, VerdictAnswer),
+		closed(memberPath("by"), ByHuman, ByPolicy, ByAgent),
+	},
+	TypeResult: joined(itemMembers("item"), []special{
 		{path: memberPath("target"), role: roleEntry},
 		{path: memberPath("call_id"), role: roleCallID},
 		{path: memberPath("item", "call_id"), role: roleCallID},
 		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*ResultEntry).Trust != nil }},
+	}),
+	TypeLabel: {{path: memberPath("target"), role: roleEntry}},
+	TypeOutcome: {
+		{path: memberPath("target"), role: roleEntry},
+		closed(memberPath("kind"), OutcomeFeedback, OutcomeTest, OutcomeTask, OutcomeToolError, OutcomeEval, OutcomeCustom),
 	},
-	TypeLabel:   {{path: memberPath("target"), role: roleEntry}},
-	TypeOutcome: {{path: memberPath("target"), role: roleEntry}},
 	TypeLink: {
+		closed(memberPath("rel"), RelSubsession, RelForkOf, RelContinuedIn, RelJudgedBy, RelPeer),
+		closed(memberPath("cancel"), CancelSent),
 		{path: memberPath("target"), role: roleEntry, when: func(e Entry) bool { return e.(*LinkEntry).Target != "" }},
 		// A link carrying a url names the callee's session in another
 		// system, an ID of that system's and not of this format's, which
@@ -233,6 +365,7 @@ var bodyMembers = map[string][]special{
 		{path: memberPath("files", "written"), role: roleDataKeys},
 		{path: memberPath("files", "read", "*"), role: roleHash},
 		{path: memberPath("files", "written", "*"), role: roleHash},
+		closed(memberPath("workspace", "kind"), WorkspaceLocal, WorkspaceContainer, WorkspaceRemote),
 	},
 }
 
@@ -496,7 +629,7 @@ func remapRefs(e Entry, m Remap, sortParents bool) (Remapped, error) {
 			continue
 		}
 		eachString(root, sp.path, "", nil, func(at, s string, holder map[string]any) (string, bool) {
-			if s == "" || !sp.applies(holder) {
+			if s == "" || !sp.applies(holder, s) {
 				return s, false // names nothing, or is not the member defined here
 			}
 			id, ok := mapped(at, s, holder)

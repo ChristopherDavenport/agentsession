@@ -5,6 +5,50 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Breaking (format): Format 0.20 (RFC 0001, draft 0.20).** `Format`
+  and `FormatMinor` name 0.20, so a writer raises every file it appends
+  to and a reader of 0.19 refuses it; a 0.5 to 0.19 file reads as it
+  stands and no entry hash moves. The generated fixtures, the otel
+  copies and the export goldens carry the new header. 0.20 adds one
+  redaction rule, a closed-set member kept as written, below.
+
+- **Fix: a rewrite keeps closed-set members (RFC 0001 0.20, Every
+  redacted entry).** `RewriteStrings`, `Rewriter` and so every redactor
+  rewrote members whose value is drawn from a closed set, so a redactor
+  matching "user" wrote `role:"[REDACTED]"`, and one matching
+  "completed" or "start" left an entry that no longer decoded. The
+  member table now fixes each while it holds a value of its set: an
+  item's role, status and phase wherever an entry holds an item (an
+  item, a queued entry, a result, a compaction's summary and pinned, a
+  branch summary), a part's detail, a response's status, incomplete
+  reason and error type, a config's and a checkpoint's `omit`
+  reasoning, which the context algorithm reads, their reasoning effort
+  and summary, text verbosity and extra's tool_choice, truncation,
+  service_tier and each element of include, judged one by one, a run's
+  phase, source and reason, a queued
+  entry's mode, a decision's verdict and by, a workspace's kind, a
+  link's rel and cancel, and an outcome's kind. A payload type, an
+  item's, a part's, an annotation's, a text format's, a tool's or a tool
+  choice's, is fixed whatever its value. Any other value of those
+  members is text, as before.
+
+- **Fix: `ConfigFromRequestParts` keeps each part whole.** It copied a
+  part's `id`, `text` and `source` and dropped its `trust`, so a memory
+  part a harness labelled `untrusted` was recorded as saying nothing,
+  and every delta after it compared against a part without labels. Each
+  part is now copied whole, its trust as a copy of the caller's, so a
+  member a part gains later is not lost the same way. A delta already
+  wrote a part whose trust alone changed; a test now holds both, read
+  back from the file. A delta, the settings in force and the entry hold
+  trust of their own, so changing the labels one hands back changes no
+  other.
+  **Breaking:** `ConfigFromRequestParts` refuses a part carrying a
+  `Hash` or a `Keep`, or one the path could not rebuild: copied whole it
+  would write a hash or a keep into a replacing config, where before it
+  quietly dropped them.
+
 ## v0.0.36 - 2026-11-03
 
 - **Breaking (format): Format 0.19 (RFC 0001, draft 0.19).** `Format`

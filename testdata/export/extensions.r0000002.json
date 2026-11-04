@@ -328,10 +328,10 @@
           "type": "config"
         }
       },
-      "format": "agentsession/0.19",
+      "format": "agentsession/0.20",
       "leaf": "sha256:7099cfd9ac3a8b30f64ae79e9abf5939620b4da41466b835e63da188f54932c5",
       "main": true,
-      "visible": "sha256:2fa1b96543f01dc8aee88824d54373abf505bf32a8bcd9468ca9b9be96004815"
+      "visible": "sha256:29c31f545b886bab1907a1d7254adee0e50be0b43725fdd749f26f43b4a85543"
     },
     "environment": {
       "cwd": "/home/u/proj",

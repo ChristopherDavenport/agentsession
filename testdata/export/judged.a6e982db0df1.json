@@ -135,10 +135,10 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.19",
+      "format": "agentsession/0.20",
       "leaf": "sha256:a6e982db0df1962051a580fd220da3a19791967e8acb60fa49b6a35ff9508ebc",
       "main": true,
-      "visible": "sha256:6f9a011409247aa3bdfc499040751c6ac6bbf3db20de2a659c0fe721dd9172ad"
+      "visible": "sha256:a034d6a99ee7dca9a55350fdd58fb331197a94473af2c735bde045eb555bad2c"
     },
     "links": [
       {

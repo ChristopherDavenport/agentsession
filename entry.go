@@ -516,6 +516,15 @@ type Trust struct {
 	Reads []string `json:"reads"`
 }
 
+// clone returns a copy of t holding labels of its own, nil for nil, so
+// an entry, the settings in force and a caller never share one list.
+func (t *Trust) clone() *Trust {
+	if t == nil {
+		return nil
+	}
+	return &Trust{Reads: slices.Clone(t.Reads)}
+}
+
 // MarshalJSON writes reads as a list, empty when there are none.
 func (t Trust) MarshalJSON() ([]byte, error) {
 	reads := t.Reads
