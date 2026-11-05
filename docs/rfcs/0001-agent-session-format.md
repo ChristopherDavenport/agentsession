@@ -870,6 +870,19 @@ layer an `item`'s `instructions_part` names.
   clears or changes a part's `trust` writes the part's `text` with it.
   A compaction's checkpoint writes each part with its `trust`. A
   reader keeps a `trust` in another form as a member it does not know.
+  Parts, and `trust` on a part, are otherwise a writer's choice, but
+  since 0.21 a writer that composes instructions from a layer whose
+  trust it knows, as an `untrusted` memory block or an MCP server's
+  instructions, MUST record them as parts, each carrying that trust, so
+  the path's trust holds it; written as one string, the labels are
+  lost, and a reader cannot tell the instructions held such text. This
+  is the `config` twin of the rule an `item`'s `instructions_part`
+  states for a layer composed into a message. A writer that carries the
+  settings in force into a new file, as a successor (`parent_session`)
+  or a child seeded from them, writes the parts in force the same way,
+  each whole with its `source` and `trust`, where the path could
+  rebuild every one; when it could not, the `instructions` in force
+  stand alone, as a reader takes them.
 - A run of unchanged parts MAY be named by position instead:
   `{"keep":n}`, an element with no `id` and a positive integer `keep`,
   stands for the
@@ -3520,7 +3533,10 @@ queued as a follow-up, closed by a run end, queued again and drained,
 each drained item carrying the members and the trigger its queued
 entry wrote, a fold the budget forced carrying neither `requested` nor
 `instructions` and a later fold asked for carrying both, every response
-hashed and verifying, and
+hashed and verifying, a successor whose first config carries the parts
+in force at its predecessor's leaf, an `untrusted` memory part and a
+`private` instruction file, each with its `trust`, so its path's trust
+holds both from its first entry, and
 negative cases, each a file broken in one way, a drained item that
 drops its queued entry's `trust`, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
@@ -3593,6 +3609,13 @@ files until it is upgraded.
   record under `queued`. 0.20 had no member for them, so an input owed
   when a process stopped lost them on resume, and read as the person's
   words.
+- A writer that composes instructions from a layer whose trust it
+  knows MUST record them as parts carrying that trust (`config`,
+  Instructions as parts), and one that carries the settings in force
+  into a new file writes the parts in force with their `trust`. 0.20
+  made parts a writer's choice, so instructions composed from an
+  `untrusted` layer could be recorded as one string, and the path's
+  trust lost the label.
 - A `compaction` MAY carry `requested: true`, for a fold the host or a
   person asked for, and with it `instructions`, the text the summariser
   was asked to follow, never written without `requested` (`compaction`).

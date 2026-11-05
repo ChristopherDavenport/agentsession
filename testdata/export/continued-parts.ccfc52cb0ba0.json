@@ -1,0 +1,192 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-0000000000b8",
+  "trajectory_id": "sha256:ccfc52cb0ba02f28c845d0e219cee8430f0fcf748b06dbcc25c5e6c26247e46e",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-04T12:00:02Z",
+      "source": "user",
+      "message": "Summary: v2 ships Friday, as the release page said.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:4b963e0e88d120681a047f3951d3d02906fa18aecf429c036769f38299721c1e",
+          "visible": "sha256:d861f1694c7ea58da2b63eac10de22a546f6e9cf39170be4354acfbcc461cb86"
+        },
+        "config_entries": [
+          "sha256:5dcd6d084f8862512314a9fe4ac216c48b1a54a1a4f781b4a8054cd04f934185"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Summary: v2 ships Friday, as the release page said."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-04T12:00:03Z",
+      "source": "user",
+      "message": "Is that still the plan?",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:6236c12df83732ef29802a8bd8908953ed60bd33ab8aa6a3c8a3d405fc129a18",
+          "visible": "sha256:55d71263ea1b9c70f7a84e875430fd2f757b5bf689b945457eca3d884a9453d5"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Is that still the plan?"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-04T12:00:05Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "As far as the release page says, yes.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:ccfc52cb0ba02f28c845d0e219cee8430f0fcf748b06dbcc25c5e6c26247e46e",
+          "visible": "sha256:fa220253a2ffc38d4c98a8181b6ee309d004efed0038d7095cb8c842f7281ade"
+        },
+        "item_entry_ids": [
+          "sha256:7dc15678cfa57b42d0568659367cab077ab018c71e3f3a15687f06b37eb4a50c"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "As far as the release page says, yes.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:ccfc52cb0ba02f28c845d0e219cee8430f0fcf748b06dbcc25c5e6c26247e46e",
+            "model": "gpt-5",
+            "request_hash": "sha256:594b8e234592433bf12377cfafb325329fbbc3545aef75c52bf98c421c692b19",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-11-04T12:00:05Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 1 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 3 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 1
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:4b963e0e88d120681a047f3951d3d02906fa18aecf429c036769f38299721c1e": {
+          "parent": "sha256:5dcd6d084f8862512314a9fe4ac216c48b1a54a1a4f781b4a8054cd04f934185",
+          "ts": "2026-11-04T12:00:02Z",
+          "type": "item"
+        },
+        "sha256:5dcd6d084f8862512314a9fe4ac216c48b1a54a1a4f781b4a8054cd04f934185": {
+          "body": {
+            "instructions_parts": [
+              {
+                "id": "product",
+                "text": "You are a release agent.",
+                "source": "product"
+              },
+              {
+                "id": "memory",
+                "text": "The release page said v2 ships Friday.",
+                "source": "agentmemory",
+                "trust": {
+                  "reads": [
+                    "untrusted"
+                  ]
+                }
+              },
+              {
+                "id": "/vault/AGENTS.md",
+                "text": "Ask before tagging.",
+                "source": "agentsmd",
+                "trust": {
+                  "reads": [
+                    "private"
+                  ]
+                }
+              }
+            ],
+            "model": "gpt-5",
+            "replace": true
+          },
+          "parent": null,
+          "ts": "2026-11-04T12:00:01Z",
+          "type": "config"
+        },
+        "sha256:6236c12df83732ef29802a8bd8908953ed60bd33ab8aa6a3c8a3d405fc129a18": {
+          "parent": "sha256:4b963e0e88d120681a047f3951d3d02906fa18aecf429c036769f38299721c1e",
+          "ts": "2026-11-04T12:00:03Z",
+          "type": "item"
+        },
+        "sha256:7dc15678cfa57b42d0568659367cab077ab018c71e3f3a15687f06b37eb4a50c": {
+          "body": {
+            "response": "resp_1"
+          },
+          "parent": "sha256:6236c12df83732ef29802a8bd8908953ed60bd33ab8aa6a3c8a3d405fc129a18",
+          "ts": "2026-11-04T12:00:04Z",
+          "type": "item"
+        },
+        "sha256:ccfc52cb0ba02f28c845d0e219cee8430f0fcf748b06dbcc25c5e6c26247e46e": {
+          "parent": "sha256:7dc15678cfa57b42d0568659367cab077ab018c71e3f3a15687f06b37eb4a50c",
+          "ts": "2026-11-04T12:00:05Z",
+          "type": "response"
+        }
+      },
+      "format": "agentsession/0.21",
+      "leaf": "sha256:ccfc52cb0ba02f28c845d0e219cee8430f0fcf748b06dbcc25c5e6c26247e46e",
+      "main": true,
+      "parent_session": "01995b2a-0000-7000-8000-000000000048",
+      "trust": {
+        "reads": [
+          "private",
+          "untrusted"
+        ]
+      },
+      "visible": "sha256:759439c3dceb5057187dfd84c684d256958ed7cddbffcb34a4a0f139e1a60738"
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

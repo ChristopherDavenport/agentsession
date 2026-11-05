@@ -58,6 +58,15 @@ versions may break the API.
   `agentsession` in the fold's step. New fixture `requested-fold`; the
   RFC's conformance list names the 0.21 fixtures.
 
+- **Fix (format 0.21): `Continue` keeps the instructions parts, and
+  their trust (#281).** The successor's first config wrote the
+  instructions in force as one string, so a memory part labelled
+  `untrusted` reached the successor with no label and its path's trust
+  dropped it. It now writes the parts in force, each with its source and
+  trust, when the path rebuilt every one, as RFC 0001 0.21 asks of a
+  writer that composes instructions from a layer of known trust. New
+  fixture `continued-parts`.
+
 ## v0.0.37 - 2026-11-03
 
 - **Breaking (format): Format 0.20 (RFC 0001, draft 0.20).** `Format`

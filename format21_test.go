@@ -190,6 +190,7 @@ var fixtures021 = map[string]func(t *testing.T) *Session{
 	"queued-members":   func(t *testing.T) *Session { return queuedMembersFixture(t, false) },
 	"bad-queued-drain": func(t *testing.T) *Session { return queuedMembersFixture(t, true) },
 	"requested-fold":   requestedFoldFixture,
+	"continued-parts":  continuedPartsFixture,
 }
 
 // writeFixtures021 writes the 0.21 fixtures, positive and negative.
@@ -567,5 +568,119 @@ func TestRequestedFoldFixture(t *testing.T) {
 	}
 	if len(folds) != 2 || folds[0].Requested || folds[0].Instructions != "" || !folds[1].Requested || folds[1].Instructions != "keep the API notes" {
 		t.Fatalf("folds: %+v", folds)
+	}
+}
+
+// TestContinueKeepsParts: a writer that composes instructions from a
+// layer whose trust it knows records them as parts carrying that trust
+// (RFC 0001, Instructions as parts, since 0.21; agentsession#281).
+// Continue writes the successor's first config from the settings in
+// force, so it carries the parts, each with its source and trust, and
+// the successor's path holds the memory part's untrusted label; the
+// request it rebuilds is the one before the rollover.
+func TestContinueKeepsParts(t *testing.T) {
+	ctx := t.Context()
+	store := NewMemoryStore()
+	old, err := store.Create(ctx, Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := []InstructionPart{
+		{ID: "product", Text: "You deploy services.", Source: LayerProduct},
+		{ID: "memory", Text: "The deploy window is Tuesday.", Source: LayerAgentMemory, Trust: &Trust{Reads: []string{TrustUntrusted}}},
+	}
+	for _, e := range []Entry{
+		&ConfigEntry{Model: "gpt-5", InstructionsParts: parts},
+		NewItemEntry(openresponses.UserText("hi")),
+	} {
+		if _, err := store.Append(ctx, old.ID(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := old.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := Continue(ctx, store, old.ID(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cx, err := next.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cx.Settings.InstructionsParts
+	if len(got) != 2 || got[1].Source != LayerAgentMemory || got[1].Trust == nil || !slices.Equal(got[1].Trust.Reads, []string{TrustUntrusted}) {
+		t.Errorf("the successor's parts: %+v", got)
+	}
+	if cx.Trust == nil || !slices.Equal(cx.Trust.Reads, []string{TrustUntrusted}) {
+		t.Errorf("the successor's path trust: %+v", cx.Trust)
+	}
+	if cx.Settings.Instructions != before.Settings.Instructions {
+		t.Errorf("instructions %q, before the rollover %q", cx.Settings.Instructions, before.Settings.Instructions)
+	}
+}
+
+// continuedPartsFixture builds the session continued-parts.jsonl holds:
+// the successor of instruction-trust.jsonl as [Continue] writes it, a
+// full config of the settings in force at its leaf whose instructions
+// are the parts, the memory part marked untrusted and the instruction
+// file marked private, followed by a summary and a turn. The path's
+// trust holds both labels from the first entry on.
+func continuedPartsFixture(t *testing.T) *Session {
+	t.Helper()
+	old := instructionTrustFixture(t, true)
+	cx, err := old.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, must, say := fixtureSession(t, Header{ID: "01995b2a-0000-7000-8000-0000000000b8", ParentSession: old.ID()}, "2026-11-04T12:00:00Z")
+	cfg := configFromSettings(cx.Settings)
+	cfg.InstructionsOmitted = cloneOmitted(cx.Settings.InstructionsOmitted)
+	must(cfg)
+	must(NewItemEntry(openresponses.UserText("Summary: v2 ships Friday, as the release page said.")))
+	must(NewItemEntry(openresponses.UserText("Is that still the plan?")))
+	say("resp_1", "As far as the release page says, yes.")
+	return s
+}
+
+// TestContinuedPartsFixture reads continued-parts.jsonl: the successor's
+// first config carries the parts in force, each with its source and
+// trust, the path's trust holds their labels, its instructions are the
+// ones in force before the rollover, and its response verifies.
+func TestContinuedPartsFixture(t *testing.T) {
+	checkBuilt(t, "continued-parts")
+	s := loadFixture(t, "continued-parts")
+	old := loadFixture(t, "instruction-trust")
+	was, err := old.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := s.Path(s.Leaf())[0].(*ConfigEntry)
+	if first.Instructions != nil || len(first.InstructionsParts) != len(was.Settings.InstructionsParts) {
+		t.Fatalf("the first config: %+v", first)
+	}
+	for i, p := range first.InstructionsParts {
+		w := was.Settings.InstructionsParts[i]
+		if p.ID != w.ID || p.Text != w.Text || p.Source != w.Source || !sameTrust(p.Trust, w.Trust) {
+			t.Errorf("part %d: %+v, before the rollover %+v", i, p, w)
+		}
+	}
+	cx, err := s.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameTrust(cx.Trust, PathTrust([]Entry{first})) || cx.Trust == nil || !slices.Contains(cx.Trust.Reads, TrustUntrusted) {
+		t.Errorf("the path's trust: %+v", cx.Trust)
+	}
+	if cx.Settings.Instructions != was.Settings.Instructions {
+		t.Errorf("instructions %q, before the rollover %q", cx.Settings.Instructions, was.Settings.Instructions)
+	}
+	for _, e := range s.Entries() {
+		if r, ok := e.(*ResponseEntry); ok {
+			if err := s.Verify(r.ID); err != nil {
+				t.Errorf("response %s: %v", r.ResponseID, err)
+			}
+		}
 	}
 }
