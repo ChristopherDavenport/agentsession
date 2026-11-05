@@ -2292,32 +2292,35 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 		slot.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
-	lk, err := s.lockSession(h.ID)
-	if err != nil {
-		s.abandon(h.ID, slot)
-		return nil, err
-	}
-	fail := func(err error) (*agentsession.Session, error) {
-		lk.release()
-		s.abandon(h.ID, slot)
+	// Every way out but the session's, a panic too, lets the claim and
+	// the lock go, so a recovered panic leaves the ID free.
+	var lk *dirLock
+	taken := false
+	defer func() {
+		if !taken {
+			lk.release()
+			s.abandon(h.ID, slot)
+		}
+	}()
+	if lk, err = s.lockSession(h.ID); err != nil {
 		return nil, err
 	}
 	if _, err := os.Stat(dir); err == nil {
-		return fail(fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID))
+		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fail(fmt.Errorf("cas: %w", err))
+		return nil, fmt.Errorf("cas: %w", err)
 	}
 	if h.Base != "" {
 		sess, err = s.assemble(h, prefix, nil, h.Base)
 		if err != nil {
-			return fail(err)
+			return nil, err
 		}
 		// A fork's prefix is held already, but in a store holding only
 		// redacted entries a fork of a session that has native entries on
 		// its path brings none of them in. It is read again under the
 		// sweep's lock below.
 		if err := s.refuseUnredacted(h, sess.Entries()); err != nil {
-			return fail(err)
+			return nil, err
 		}
 	} else {
 		sess = tmp
@@ -2330,7 +2333,7 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 	// sweep keeps it.
 	if h.Base != "" {
 		if err := s.commitOrigin(owner, h.Base); err != nil {
-			return fail(err)
+			return nil, err
 		}
 	}
 	// No sweep's last step from here until the session names the
@@ -2338,39 +2341,40 @@ func (s *Store) createLocked(ctx context.Context, h agentsession.Header, mark st
 	// the lock is dropped.
 	guard, err := s.writeGuard(ctx)
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	defer guard.release()
 	if h.Base != "" {
 		if err := s.refuseUnredacted(h, sess.Entries()); err != nil {
-			return fail(err)
+			return nil, err
 		}
 	}
 	if h.Base != "" {
 		pend := newPendSet()
 		if err := s.freshenPath(h.Base, pend); err != nil {
-			return fail(err)
+			return nil, err
 		}
 		// The path's objects are durable before any log that names the
 		// base is, whichever process wrote them.
 		if err := s.objs.flushSet(pend); err != nil {
-			return fail(err)
+			return nil, err
 		}
 	}
 	recs := []logRecord{{Op: opCreate, Session: h.ID, Base: h.Base}, {Op: opMark, Session: h.ID, Mark: mark}}
 	if err := s.placeSession(dir, h, recs, h.Base, mark); err != nil {
-		return fail(err)
+		return nil, err
 	}
 	if h.Base != "" {
 		if err := s.notePrefix(h.ID, h.Base); err != nil {
-			return fail(err)
+			return nil, err
 		}
 	}
 	logf, err := openLog(dir)
 	if err != nil {
-		return fail(fmt.Errorf("cas: log: %w", err))
+		return nil, fmt.Errorf("cas: log: %w", err)
 	}
 	slot.take(&handle{session: sess, dir: dir, lock: lk, logf: logf, pend: newPendSet(), mark: mark, head: h.Base, count: sess.Len(), diskFormat: h.Format, own: map[string]bool{}})
+	taken = true
 	slot.mu.Unlock()
 	return sess, nil
 }
@@ -2908,12 +2912,20 @@ func (s *Store) hold(id string) (*handle, error) {
 	if held {
 		return h, nil
 	}
+	// A panic opening the session lets the claim go too, so the next
+	// caller, and Close, do not wait on it forever.
+	taken := false
+	defer func() {
+		if !taken {
+			s.abandon(id, h)
+		}
+	}()
 	n, err := s.openSession(id)
 	if err != nil {
-		s.abandon(id, h)
 		return nil, err
 	}
 	h.take(n)
+	taken = true
 	return h, nil
 }
 
@@ -2982,12 +2994,20 @@ func (s *Store) reopen(id string, h *handle) error {
 		h.logf.Close()
 		h.logf = nil
 	}
+	// openHeld lets the lock go on failure, a panic too, so the handle
+	// leaves the store's sessions then.
+	taken := false
+	defer func() {
+		if !taken {
+			s.forget(id, h)
+		}
+	}()
 	n, err := s.openHeld(id, h.dir, h.lock)
 	if err != nil {
-		s.forget(id, h) // openHeld let the lock go
 		return err
 	}
 	h.take(n)
+	taken = true
 	return nil
 }
 
@@ -3032,20 +3052,22 @@ func (s *Store) openSession(id string) (*handle, error) {
 // openHeld recovers and opens a session whose lock the caller has
 // taken, which it keeps, or lets go on failure.
 func (s *Store) openHeld(id, dir string, lk *dirLock) (*handle, error) {
-	fail := func(err error) (*handle, error) {
-		lk.release()
-		return nil, err
-	}
+	kept := false
+	defer func() {
+		if !kept {
+			lk.release() // on a panic too
+		}
+	}()
 	v, err := s.recoverSession(id, dir)
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	if !v.exists {
-		return fail(fmt.Errorf("%w: %s", agentsession.ErrNoSession, id))
+		return nil, fmt.Errorf("%w: %s", agentsession.ErrNoSession, id)
 	}
 	sess, hdr, err := s.build(id, dir, v)
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	diskFormat := hdr.Format
 	committed := make(map[string]bool, len(v.log))
@@ -3056,13 +3078,14 @@ func (s *Store) openHeld(id, dir string, lk *dirLock) (*handle, error) {
 	var logf *os.File
 	if !s.readOnly {
 		if logf, err = openLog(dir); err != nil {
-			return fail(fmt.Errorf("cas: log: %w", err))
+			return nil, fmt.Errorf("cas: log: %w", err)
 		}
 	}
 	// A stopped store recovered in memory: the working state it kept is
 	// still uncommitted, and its commit, which serving it needs, is
 	// refused.
 	lazy := s.objs.stopped() != nil && len(v.adopt) > 0
+	kept = true
 	return &handle{session: sess, dir: dir, lock: lk, logf: logf, pend: newPendSet(), mark: v.mark, head: v.head, count: sess.Len(), diskFormat: diskFormat, own: committed, lazy: lazy}, nil
 }
 
@@ -3642,6 +3665,10 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	}
 	h, held := s.claim(id)
 	var lk *dirLock
+	defer func() {
+		lk.release()
+		s.abandon(id, h)
+	}()
 	if held {
 		if h.logf != nil {
 			h.logf.Close()
@@ -3649,13 +3676,8 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		}
 		lk = h.lock
 	} else if lk, err = s.lockSession(id); err != nil {
-		s.abandon(id, h)
 		return err
 	}
-	defer func() {
-		lk.release()
-		s.abandon(id, h)
-	}()
 	// One step, after which nothing of the session is read: its
 	// directory is renamed out of sessions, and removed after.
 	trash := filepath.Join(s.root, "trash")
@@ -4010,12 +4032,18 @@ func (s *Store) importRead(ctx context.Context, sess *agentsession.Session, blob
 		slot.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	}
+	taken := false
+	defer func() {
+		if !taken {
+			s.abandon(h.ID, slot) // on a panic too
+		}
+	}()
 	hd, err := s.admitNew(ctx, dir, h, mark, stored, own, blobs, sess.Leaf())
 	if err != nil {
-		s.abandon(h.ID, slot)
 		return nil, err
 	}
 	slot.take(hd)
+	taken = true
 	slot.mu.Unlock()
 	return hd.session, nil
 }
@@ -4031,39 +4059,40 @@ func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header,
 	if err != nil {
 		return nil, err
 	}
+	// The lock goes with the session to openHeld, which keeps it or
+	// lets it go; on any way out before, a panic too, it is let go here.
+	handed := false
+	defer func() {
+		if !handed {
+			lk.release()
+		}
+	}()
 	if _, err := os.Stat(dir); err == nil {
-		lk.release()
 		return nil, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, h.ID)
 	} else if !errors.Is(err, os.ErrNotExist) {
-		lk.release()
 		return nil, fmt.Errorf("cas: %w", err)
 	}
 	guard, err := s.writeGuard(ctx)
 	if err != nil {
-		lk.release()
 		return nil, err
 	}
 	defer guard.release()
-	fail := func(err error) (*handle, error) {
-		lk.release()
-		return nil, err
-	}
 	// The setting is written under the sweep's lock held exclusive, so
 	// read here, under it held shared, it holds until the session is
 	// placed: what another process's setting now refuses leaves no
 	// object behind. placeSession reads it again.
 	if err := s.refuseUnredacted(h, stored); err != nil {
-		return fail(err)
+		return nil, err
 	}
 	pend := newPendSet()
 	sizes, err := s.packEntries(stored, blobs, pend)
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	// What packEntries left loose reaches the disk before the log that
 	// names it: the session is committed before it is acknowledged.
 	if err := s.objs.flushSet(pend); err != nil {
-		return fail(err)
+		return nil, err
 	}
 	recs := []logRecord{{Op: opCreate, Session: h.ID, Base: h.Base}, {Op: opMark, Session: h.ID, Mark: mark}}
 	hashes := make([]string, 0, len(own))
@@ -4078,16 +4107,17 @@ func (s *Store) admitNew(ctx context.Context, dir string, h agentsession.Header,
 		first = head
 	}
 	if err := s.placeSession(dir, h, recs, first, mark); err != nil {
-		return fail(err)
+		return nil, err
 	}
 	for _, id := range hashes {
 		s.own(id, h.ID)
 	}
 	if h.Base != "" {
 		if err := s.notePrefix(h.ID, h.Base); err != nil {
-			return fail(err)
+			return nil, err
 		}
 	}
+	handed = true
 	return s.openHeld(h.ID, dir, lk)
 }
 
