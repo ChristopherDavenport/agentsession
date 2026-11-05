@@ -1839,7 +1839,8 @@ func contributes(e Entry) bool {
 // in whatever form, removed for every type, response, source and queued_from removed from an
 // item, and from_link, failed, copied_from, trust and instructions_part where the format defines them, an
 // instructions part's trust from a config and a compaction's checkpoint, from removed from a branch_summary, trust
-// removed from a branch_summary and a compaction where defined, and a compaction's
+// removed from a branch_summary and a compaction where defined, requested and instructions from a
+// compaction where defined (0.21), and a compaction's
 // first_kept replaced by [context hash, type] of the entry it names
 // when that entry is on the path and by null otherwise.
 func contextContentHash(e Entry, at, types map[string]string) (string, error) {
@@ -1898,6 +1899,13 @@ func contextContentHash(e Entry, at, types map[string]string) (string, error) {
 	case TypeCompaction:
 		if e.(*CompactionEntry).Trust != nil {
 			delete(body, "trust")
+		}
+		if e.(*CompactionEntry).Requested {
+			// Record members that reach no request (0.21).
+			delete(body, "requested")
+			if e.(*CompactionEntry).Instructions != "" {
+				delete(body, "instructions")
+			}
 		}
 		var checkpoint map[string]json.RawMessage
 		if raw, ok := body["config"]; ok && json.Unmarshal(raw, &checkpoint) == nil {

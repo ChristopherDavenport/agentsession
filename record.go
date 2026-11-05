@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/ChristopherDavenport/openresponses"
@@ -118,10 +119,22 @@ var settingsKeys = map[string]bool{
 // as [ConfigFromRequest] builds one for a request, with every recorded
 // member exactly as recorded: nothing goes through openresponses.Request,
 // which drops a declared member recorded empty and cannot hold some
-// values, so the entry rebuilds the request the settings hash.
+// values, so the entry rebuilds the request the settings hash. The
+// instructions are written as the parts in force, each with its source
+// and trust, when there are parts and the path rebuilt every one, so the
+// path's trust holds what a part carries (RFC 0001, Instructions as
+// parts, since 0.21); a part the path could not rebuild leaves them
+// written as the one string in force.
 func configFromSettings(s Settings) *ConfigEntry {
 	cfg := &ConfigEntry{Model: s.Model, Replace: true}
-	if s.Instructions != "" {
+	if len(s.InstructionsParts) > 0 && !slices.ContainsFunc(s.InstructionsParts, InstructionPart.Unresolved) {
+		// Each part whole, with its text: a replacing config names
+		// nothing by hash or keep.
+		cfg.InstructionsParts = cloneParts(s.InstructionsParts)
+		for i := range cfg.InstructionsParts {
+			cfg.InstructionsParts[i].Hash, cfg.InstructionsParts[i].Keep = "", 0
+		}
+	} else if s.Instructions != "" {
 		instructions := s.Instructions
 		cfg.Instructions = &instructions
 	}

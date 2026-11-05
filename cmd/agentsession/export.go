@@ -45,10 +45,14 @@ func exportCmd(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	resolve := siblingResolver(src.path)
+	// A sidecar session's blobs: beside the file, in the directory named
+	// after the session, or in the store.
+	blobs := export.DirBlobs(filepath.Dir(src.path))
 	if src.id != "" {
 		resolve = casResolver(src.path)
+		blobs = casBlobs(src.path)
 	}
-	opts := export.Options{Subsessions: resolve, Preferences: prefs}
+	opts := export.Options{Subsessions: resolve, Preferences: prefs, Blobs: blobs}
 	if len(secrets) > 0 {
 		opts.Redactors = append(opts.Redactors, export.Secrets(secrets...))
 	}
@@ -80,7 +84,7 @@ func exportCmd(args []string, stdout, stderr io.Writer) error {
 				return
 			}
 		}
-	}); err != nil {
+	}, export.WithBlobs(blobs)); err != nil {
 		return err
 	}
 	for _, d := range docs {

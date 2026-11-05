@@ -256,7 +256,8 @@ func TestNoRaise(t *testing.T) {
 		{"0.16, typed, to 0.17", Header{Format: "agentsession/0.16", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o"}}, "agentsession/0.17", true},
 		{"0.17, typed, to 0.18", Header{Format: "agentsession/0.17", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o"}}, "agentsession/0.18", true},
 		{"0.18, typed, to 0.19", Header{Format: "agentsession/0.18", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o"}}, "agentsession/0.19", true},
-		{"0.19, typed, to 0.20", Header{Format: "agentsession/0.19", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o"}}, Format, true},
+		{"0.19, typed, to 0.20", Header{Format: "agentsession/0.19", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o"}}, "agentsession/0.20", true},
+		{"0.20, typed, to 0.21", Header{Format: "agentsession/0.20", Redacted: true, RedactedFrom: &RedactedFrom{Session: "o"}}, Format, true},
 	} {
 		h := tt.h
 		err := h.Raise(tt.to)

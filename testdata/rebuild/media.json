@@ -4,7 +4,7 @@
   "trajectory_id": "sha256:bd5f755c8e481935c3427c7c6493412856a2888c25a3e911819d03865022156b",
   "agent": {
     "name": "agentsession",
-    "version": "agentsession/0.20",
+    "version": "agentsession/0.21",
     "model_name": "gpt-5"
   },
   "steps": [
@@ -129,10 +129,10 @@
           "type": "config"
         }
       },
-      "format": "agentsession/0.20",
+      "format": "agentsession/0.21",
       "leaf": "sha256:bd5f755c8e481935c3427c7c6493412856a2888c25a3e911819d03865022156b",
       "main": true,
-      "visible": "sha256:57c023d95a526973a01c936ec887ff08483427316b7e6d48a305e021088892ff"
+      "visible": "sha256:d6855d6849058b7141a32e857f3f69b8be887952076187f744fd726d2def47d8"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

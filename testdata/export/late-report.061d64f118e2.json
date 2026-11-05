@@ -411,13 +411,13 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.20",
+      "format": "agentsession/0.21",
       "leaf": "sha256:061d64f118e23d7960dc61b2a0079edfa10724510779eddcb635a71cfadbbfde",
       "main": true,
       "records": [
         "dispatch"
       ],
-      "visible": "sha256:986cc3c0bda6e05fbe3362baf7e640336dad3f367e74264c9273431db9f65398"
+      "visible": "sha256:d932081b174d5a1c72cbc10531d542fb8db8e8b41dfd53dae06ff44bc57cae10"
     },
     "links": [
       {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
+	"github.com/ChristopherDavenport/agentsession/export"
 )
 
 // source is where a session is read from: a file, or a session a cas
@@ -181,6 +182,19 @@ func casResolver(root string) func(id string) (*agentsession.Session, error) {
 		}
 		defer st.Close()
 		return resolveIn(st, root)(id)
+	}
+}
+
+// casBlobs reads a session's sidecar blobs from the cas store at root,
+// opened for each read, as casResolver opens it for each subsession.
+func casBlobs(root string) export.Blobs {
+	return func(session, hash string) ([]byte, string, error) {
+		st, err := cas.Open(root, cas.WithReadOnly())
+		if err != nil {
+			return nil, "", err
+		}
+		defer st.Close()
+		return agentsession.ReadSessionBlob(context.Background(), st, session, hash)
 	}
 }
 

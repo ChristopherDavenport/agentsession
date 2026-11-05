@@ -490,14 +490,14 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.20",
+      "format": "agentsession/0.21",
       "leaf": "sha256:c5867edf1c2ad1c0a9c6e2443b641118e4848dff8020f472d0a0f24fcd8555d5",
       "records": [
         "run",
         "dispatch",
         "decision"
       ],
-      "visible": "sha256:2ef3212176951965922ccf44e8edd89e394e8329d15128976f1585899817d337"
+      "visible": "sha256:d3d543e445ddc117d1d65a118d5cb0833e24664af048ec66402a4a7e7f8f9a6d"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

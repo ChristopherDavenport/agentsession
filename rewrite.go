@@ -44,7 +44,8 @@ var ErrInstructionsJoin = errors.New("agentsession: rewritten instructions canno
 // redaction to keep.
 var ErrKeyCollision = errors.New("agentsession: a rewrite makes two member names one")
 
-// ErrLayersMerged is returned by [RewriteStrings] for an item whose
+// ErrLayersMerged is returned by [RewriteStrings] for an item, or since
+// 0.21 a queued entry, whose
 // instructions_part the rewrite would leave in no form the format
 // defines: two layers of a list made one, by their ids or by their
 // sources where they have none, or an id made empty. The item would then
@@ -420,10 +421,22 @@ func (r *Rewriter) rewriteCore(e Entry) (Entry, error) {
 	// An instructions_part the rewrite leaves in no form the format
 	// defines would make the item a person's input: two layers made one,
 	// or an id made empty, are refused, as two member names made one are.
-	if it, ok := e.(*ItemEntry); ok && it.Layers() != nil && back.(*ItemEntry).Layers() == nil {
+	if entryLayers(e) != nil && entryLayers(back) == nil {
 		return nil, fmt.Errorf("%w: instructions_part %s", ErrLayersMerged, out["instructions_part"])
 	}
 	return back, nil
+}
+
+// entryLayers is the instructions_part an item entry or, since 0.21, a
+// queued entry holds, in either form, or nil.
+func entryLayers(e Entry) []LayerRef {
+	switch v := e.(type) {
+	case *ItemEntry:
+		return v.Layers()
+	case *QueuedEntry:
+		return v.Layers()
+	}
+	return nil
 }
 
 // dropCopiedEntry removes copied_from's entry from out when the rewrite

@@ -7,6 +7,100 @@ versions may break the API.
 
 ## Unreleased
 
+- **Breaking (format): Format 0.21 (RFC 0001, draft 0.21).** `Format`
+  and `FormatMinor` name 0.21, so a writer raises every file it appends
+  to and a reader of 0.20 refuses it; a 0.5 to 0.20 file reads as it
+  stands and no entry hash moves. The generated fixtures, the otel
+  copies and the export goldens carry the new header. 0.21's members
+  and rules are below.
+
+- **Format 0.21: a copy may carry more trust labels than its source
+  (#279).** `VerifyCopies` checks that a copy's `trust` holds every
+  label of the entry it names, where it used to ask for the same
+  labels, so a host can mark a copied item `untrusted` beyond its
+  source. A copy that drops a label, or drops `trust` its source
+  carries, is still refused with `ErrCopyMismatch`.
+
+- **Format 0.21: a queued input keeps visible, trust and
+  instructions_part (#278).** `QueuedEntry` gains `Visible`, `Trust`,
+  `InstructionsPart` and `InstructionsLayers`, read by form in a file
+  of any minor, and `Layers`. `Drain` and `Requeue` copy them, so an
+  input still owed when a process stops keeps them across the resume.
+  The redaction table keeps a queued entry's trust labels and defined
+  layer sources, and a rewrite that merges its layers is refused with
+  `ErrLayersMerged`. A queued entry's trust does not join `PathTrust`
+  until the input is drained. `VerifyRecords` reports, with
+  `ErrDrainMismatch`, a drained item that lacks or changes a member its
+  queued entry carries. The ATIF projection carries them in the
+  input's record under `queued`. New fixtures `queued-members` and
+  `bad-queued-drain`.
+
+- **Format 0.21: the trigger kind `human` (for agentturn#303).**
+  `TriggerHuman` is the one trigger kind the format defines: a person
+  sent the input. `WordsOf(e)` reads an item's or a queued entry's user
+  message from its own trigger, as written in a file of any minor:
+  `WordsPerson` when the kind is `human`, `WordsComposed` when it has
+  another kind or the message names `instructions_part` or `from_link`,
+  and `WordsUnclaimed` when it has no trigger, or for any other entry;
+  an unclaimed message is never presented as the person's. A 0.20
+  writer may have stamped `human` on a composed message, which reads as
+  written. One that carries `human` beside `instructions_part` or
+  `from_link` reads as composed, and a store takes it as recorded: a
+  writer composing a new message does not write that pair, but a
+  redaction, a copy or a rebuild of a session agentturn v0.0.37 wrote
+  keeps it. The redaction table keeps the
+  kind `human` as written on an item's source, a queued entry's and a
+  run start's trigger, and `VerifyRecords` reports a drained item whose
+  source differs from its queued entry's trigger, or that lacks it
+  where the queued entry carries a member 0.21 defines
+  (`ErrDrainMismatch`); a 0.20 drain without a source, valid then,
+  passes.
+
+- **Format 0.21: a compaction records that the fold was requested,
+  and its instructions (#277).** `CompactionEntry` gains `Requested`
+  and `Instructions`, read where 0.21 defines them in a file of any
+  minor: `requested` true, and `instructions` a non-empty string beside
+  it. A compaction with instructions and no requested is refused. Both
+  are record members, left out of the context hash; `instructions` is
+  text a redaction rewrites. The ATIF projection carries them under
+  `agentsession` in the fold's step. New fixture `requested-fold`; the
+  RFC's conformance list names the 0.21 fixtures.
+
+- **Fix (format 0.21): `Continue` keeps the instructions parts, and
+  their trust (#281).** The successor's first config wrote the
+  instructions in force as one string, so a memory part labelled
+  `untrusted` reached the successor with no label and its path's trust
+  dropped it. It now writes the parts in force, each with its source and
+  trust, when the path rebuilt every one, as RFC 0001 0.21 asks of a
+  writer that composes instructions from a layer of known trust. New
+  fixture `continued-parts`.
+
+- **Fix: `Continue`'s summary carries the old path's trust.** The
+  summary item was appended with no `trust`, though it is made from the
+  old path, so an untrusted page the old session read reached the
+  successor unlabelled. It now carries the old path's trust, as RFC
+  0001 already asked of a summary made from a path.
+
+- **Breaking: the ATIF export resolves and carries sidecar blobs
+  (#280).** `ToATIF` wrote a sidecar session's image as its `sidecar:`
+  URL, which no reader of the document can open, and `WriteATIF`
+  copied no blob. `Options.Blobs` now reads a session's blobs
+  (`StoreBlobs`, `DirBlobs`), and the export of a session whose header
+  says `media: sidecar` resolves each `sidecar:` URL a visible part
+  holds (an image's, a file's, a video's) to a data URL of its blob
+  where it renders the part, before any hash, while the raw items keep
+  the references the entry IDs hash over. Such a document names
+  `media` under `agentsession` in its top-level extra. `WriteATIF` and
+  `WriteDocument` take `WithBlobs` and, for a document naming that
+  media, copy each blob a part URL of it references under
+  `sidecar/<session>/` beside the document, with its `.type` file.
+  Either refuses with `ErrBlobUnread` when it has no reader, cannot
+  read a blob, or reads bytes that do not hash to its name. Text that
+  quotes a reference is text: an inline session, or a sidecar
+  session's message, mentioning one exports with no blob reader
+  needed. `agentsession export` reads the blobs beside the file or
+  from the cas store.
+
 - **Feature: session search (RFC 0002 and RFC 0003, Search; #261).**
   `Search(ctx, store, Query)` finds the messages of a store's sessions
   that hold every word of a query, agentmemory RFC 0001's reference
