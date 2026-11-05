@@ -189,6 +189,7 @@ func TestQueuedMemberForms(t *testing.T) {
 var fixtures021 = map[string]func(t *testing.T) *Session{
 	"queued-members":   func(t *testing.T) *Session { return queuedMembersFixture(t, false) },
 	"bad-queued-drain": func(t *testing.T) *Session { return queuedMembersFixture(t, true) },
+	"requested-fold":   requestedFoldFixture,
 }
 
 // writeFixtures021 writes the 0.21 fixtures, positive and negative.
@@ -408,5 +409,163 @@ func TestWordsOf(t *testing.T) {
 		if got := out.(*ItemEntry).Source.Kind; got != tt.want {
 			t.Errorf("kind %s rewritten to %s, want %s", tt.kind, got, tt.want)
 		}
+	}
+}
+
+// TestRequestedFold: since 0.21 a compaction records that the fold was
+// asked for, and the instructions the summariser was asked to follow
+// (agentsession#277). Both survive a write and a read, neither reaches
+// the context or its hash, instructions is never written without
+// requested, and a rewrite treats the instructions as text and keeps
+// requested.
+func TestRequestedFold(t *testing.T) {
+	fold := func(requested bool, instructions string) (*Session, string) {
+		s := New(Header{ID: "f"})
+		first, err := s.Append(NewItemEntry(openresponses.UserText("first")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Append(NewItemEntry(openresponses.UserText("second"))); err != nil {
+			t.Fatal(err)
+		}
+		c := &CompactionEntry{FirstKept: first, Summary: openresponses.UserText("Summary: the API notes."), Config: Settings{Model: "gpt-5"}, Requested: requested, Instructions: instructions}
+		id, err := s.Append(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s, id
+	}
+	asked, at := fold(true, "keep the API notes")
+	var buf bytes.Buffer
+	if err := Write(&buf, asked); err != nil {
+		t.Fatal(err)
+	}
+	for _, member := range []string{`"requested":true`, `"instructions":"keep the API notes"`} {
+		if !strings.Contains(buf.String(), member) {
+			t.Errorf("the compaction does not carry %s:\n%s", member, buf.String())
+		}
+	}
+	back, err := Read(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _ := back.Entry(at)
+	if c := e.(*CompactionEntry); !c.Requested || c.Instructions != "keep the API notes" {
+		t.Errorf("read back: requested %v, instructions %q", c.Requested, c.Instructions)
+	}
+	plain, pat := fold(false, "")
+	ha, err := back.ContextHash(at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hb, err := plain.ContextHash(pat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ha != hb {
+		t.Errorf("a requested fold's context hash %s differs from an automatic one's %s", ha, hb)
+	}
+	if _, err := MarshalEntry(&CompactionEntry{FirstKept: "x", Summary: openresponses.UserText("s"), Instructions: "keep the API notes"}); err == nil {
+		t.Error("instructions were written without requested")
+	}
+
+	out, err := RewriteStrings(e, strings.NewReplacer("API", "[X]", "requested", "[R]").Replace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := out.(*CompactionEntry); !c.Requested || c.Instructions != "keep the [X] notes" {
+		t.Errorf("rewritten: requested %v, instructions %q", c.Requested, c.Instructions)
+	}
+
+	// Each is taken in the form 0.21 defines, in a file of any minor;
+	// another form, or instructions beside no requested, is kept.
+	for _, tt := range []struct {
+		members        string
+		requested      bool
+		instructions   string
+		keptRequested  bool
+		keptInstructed bool
+	}{
+		{`"requested":true,"instructions":"keep it"`, true, "keep it", false, false},
+		{`"requested":true`, true, "", false, false},
+		{`"requested":false`, false, "", true, false},
+		{`"requested":"yes","instructions":"keep it"`, false, "", true, true},
+		{`"instructions":"keep it"`, false, "", false, true},
+		{`"requested":true,"instructions":""`, true, "", false, true},
+		{`"requested":true,"instructions":["keep it"]`, true, "", false, true},
+	} {
+		line := `{"type":"compaction","id":"x","parent":null,"ts":"2026-11-04T10:00:00Z","first_kept":"y","summary":{"type":"message","role":"user","content":[{"type":"input_text","text":"s"}]},"config":{},` + tt.members + `}`
+		e, err := UnmarshalEntry([]byte(reparent(t, line, "")))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.members, err)
+		}
+		c := e.(*CompactionEntry)
+		_, keptR := c.Unknown["requested"]
+		_, keptI := c.Unknown["instructions"]
+		if c.Requested != tt.requested || c.Instructions != tt.instructions || keptR != tt.keptRequested || keptI != tt.keptInstructed {
+			t.Errorf("%s: requested %v, instructions %q, kept %v %v", tt.members, c.Requested, c.Instructions, keptR, keptI)
+		}
+		again, err := MarshalEntry(e)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.members, err)
+		}
+		m := members(t, again)
+		for _, k := range []string{"requested", "instructions"} {
+			if want, ok := members(t, []byte("{"+tt.members+"}"))[k]; ok && !sameJSON(t, m[k], want) {
+				t.Errorf("%s: %s written back as %s", tt.members, k, m[k])
+			}
+		}
+	}
+}
+
+// requestedFoldFixture builds the session requested-fold.jsonl holds: a
+// fold the budget forced, which carries neither member, and a later one
+// a person asked for with instructions, which the compaction records as
+// requested with those instructions. Every response's request_hash is
+// computed over the context, which neither member reaches.
+func requestedFoldFixture(t *testing.T) *Session {
+	t.Helper()
+	s, must, say := fixtureSession(t, Header{ID: "01995b2a-0000-7000-8000-0000000000b7"}, "2026-11-04T11:00:00Z")
+	fold := func(firstKept, summary, instructions string) {
+		t.Helper()
+		ctx, err := s.Context()
+		if err != nil {
+			t.Fatal(err)
+		}
+		must(&CompactionEntry{FirstKept: firstKept, Summary: openresponses.SystemText(summary), Config: ctx.Settings, Requested: instructions != "", Instructions: instructions, TokensBefore: 5000})
+	}
+	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("Be brief.")})
+	must(NewItemEntry(openresponses.UserText("The API takes a bearer token.")))
+	say("resp_1", "Noted.")
+	second := must(NewItemEntry(openresponses.UserText("The deploy runs on Tuesdays.")))
+	say("resp_2", "Noted.")
+	fold(second, "Summary: the API takes a bearer token.", "")
+	third := must(NewItemEntry(openresponses.UserText("What does the API take?")))
+	say("resp_3", "A bearer token.")
+	fold(third, "Summary: the API takes a bearer token; the deploy runs on Tuesdays.", "keep the API notes")
+	must(NewItemEntry(openresponses.UserText("And when is the deploy?")))
+	say("resp_4", "Tuesdays.")
+	return s
+}
+
+// TestRequestedFoldFixture reads requested-fold.jsonl: the first fold
+// was not asked for, the second was, with instructions, and every
+// response verifies over a context neither member reaches.
+func TestRequestedFoldFixture(t *testing.T) {
+	checkBuilt(t, "requested-fold")
+	s := loadFixture(t, "requested-fold")
+	var folds []*CompactionEntry
+	for _, e := range s.Entries() {
+		switch v := e.(type) {
+		case *CompactionEntry:
+			folds = append(folds, v)
+		case *ResponseEntry:
+			if err := s.Verify(v.ID); err != nil {
+				t.Errorf("response %s: %v", v.ResponseID, err)
+			}
+		}
+	}
+	if len(folds) != 2 || folds[0].Requested || folds[0].Instructions != "" || !folds[1].Requested || folds[1].Instructions != "keep the API notes" {
+		t.Fatalf("folds: %+v", folds)
 	}
 }

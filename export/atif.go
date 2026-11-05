@@ -523,6 +523,14 @@ func (b *builder) entry(e agentsession.Entry) error {
 		if v.Trust != nil {
 			agentSessionExtra(step.Extra)["trust"] = v.Trust
 		}
+		if v.Requested {
+			// Why the fold happened (0.21): asked for, and what it was
+			// asked to keep.
+			agentSessionExtra(step.Extra)["requested"] = true
+			if v.Instructions != "" {
+				agentSessionExtra(step.Extra)["instructions"] = v.Instructions
+			}
+		}
 		copyUnknown(step.Extra, v.Unknown)
 		b.addStep(step, e)
 	case *agentsession.BranchSummaryEntry:

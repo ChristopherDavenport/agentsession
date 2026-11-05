@@ -48,6 +48,16 @@ versions may break the API.
   `VerifyRecords` reports a drained item whose source is not its queued
   entry's trigger (`ErrDrainMismatch`).
 
+- **Format 0.21: a compaction records that the fold was requested,
+  and its instructions (#277).** `CompactionEntry` gains `Requested`
+  and `Instructions`, read where 0.21 defines them in a file of any
+  minor: `requested` true, and `instructions` a non-empty string beside
+  it. A compaction with instructions and no requested is refused. Both
+  are record members, left out of the context hash; `instructions` is
+  text a redaction rewrites. The ATIF projection carries them under
+  `agentsession` in the fold's step. New fixture `requested-fold`; the
+  RFC's conformance list names the 0.21 fixtures.
+
 ## v0.0.37 - 2026-11-03
 
 - **Breaking (format): Format 0.20 (RFC 0001, draft 0.20).** `Format`

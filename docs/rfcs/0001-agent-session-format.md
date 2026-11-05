@@ -1217,6 +1217,20 @@ Replaces earlier context with a summary.
   computes from the entries it holds, since a redaction may have left
   some out. A reader takes the union of both, and a writer that writes
   a later fold carries the earlier one's labels and never narrows them.
+- `requested` MAY be `true` on a `compaction`, since 0.21: the host or
+  a person asked for the fold, rather than a budget or a provider's
+  refusal forcing it. A fold a loop runs again after a context-length
+  refusal was forced, however it was started. `instructions` MAY be on
+  a compaction carrying `requested`: the text the summariser was asked
+  to follow, a non-empty string, which is text a redaction rewrites. A
+  writer MUST NOT write `instructions` without `requested`, nor
+  `requested` with any value but `true`; a reader keeps either in
+  another form, and `instructions` beside no `requested`, as a member it
+  does not know. Both are record members: neither is part of the
+  context or of any request, and RFC 0002's context hash leaves them
+  out, so a fold asked for and one forced that kept the same context
+  share it. A fold without `requested` says nothing either way, as an
+  absent `trust` says nothing.
 - `first_kept` MUST name an entry on the path before this one, since
   0.14 in those words: a compaction cannot name itself. Entries before
   it are excluded from context; entries from it up to this entry are
@@ -3498,8 +3512,17 @@ refuses, a parent with a child the host started, linked by `spawn_id`,
 whose header carries it in `spawned_by` and whose leaf a later `custom`
 entry names in `parents`, counted as delegated work at that leaf and
 carried under `subsessions` in the ATIF document, beside a link with
-neither `call_id` nor `spawn_id`, checked by `parent_session` alone, and
-negative cases, each a file broken in one way, for a broken parent link,
+neither `call_id` nor `spawn_id`, checked by `parent_session` alone, a
+person's typed input carrying the trigger kind `human`, a hidden,
+untrusted reminder composed from memory, queued as a steer and drained,
+and a private block composed from an instruction file and memory,
+queued as a follow-up, closed by a run end, queued again and drained,
+each drained item carrying the members and the trigger its queued
+entry wrote, a fold the budget forced carrying neither `requested` nor
+`instructions` and a later fold asked for carrying both, every response
+hashed and verifying, and
+negative cases, each a file broken in one way, a drained item that
+drops its queued entry's `trust`, for a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
 before the base that is not on the path to it, a `dispatch` that follows a
@@ -3570,6 +3593,13 @@ files until it is upgraded.
   record under `queued`. 0.20 had no member for them, so an input owed
   when a process stopped lost them on resume, and read as the person's
   words.
+- A `compaction` MAY carry `requested: true`, for a fold the host or a
+  person asked for, and with it `instructions`, the text the summariser
+  was asked to follow, never written without `requested` (`compaction`).
+  Both are record members that reach no request and no context hash.
+  0.20 had no member for either, so a fold a person asked for read as
+  one the budget forced, and the instructions that shaped its summary
+  were lost.
 - A trigger's `kind` `human` says a person sent the input, and a
   `user` message is the person's words only when its trigger has it
   (`queued`, `trigger`): one with another kind, or none, is not, so a

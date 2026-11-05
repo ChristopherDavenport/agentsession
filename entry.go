@@ -1416,6 +1416,19 @@ type CompactionEntry struct {
 	// entries it holds, since a redaction may have left some out; a
 	// reader takes the union of both, and a writer never narrows it.
 	Trust *Trust `json:"-" member:"trust"`
+	// Requested marks, in format 0.21, a fold the host or a person asked
+	// for, rather than one a budget or a provider's refusal forced. A
+	// requested member that is not true is kept as written in Unknown and
+	// Requested is false.
+	Requested bool `json:"-" member:"requested"`
+	// Instructions is, in format 0.21, the text the summariser was asked
+	// to follow, for a requested fold alone: a writer never writes it
+	// without Requested, and an instructions member beside no requested,
+	// or that is not a non-empty string, is kept as written in Unknown and
+	// Instructions is empty. It is text, which a redaction rewrites.
+	// Requested and Instructions are record members: neither is part of
+	// the context or of any request.
+	Instructions string `json:"-" member:"instructions"`
 }
 
 // EntryType returns "compaction".
@@ -2873,16 +2886,26 @@ func (e *CompactionEntry) MarshalJSON() ([]byte, error) {
 		return nil, errors.New("agentsession: compaction entry has no summary")
 	}
 	type plain CompactionEntry
-	if e.Trust == nil {
+	if e.Trust == nil && !e.Requested && e.Instructions == "" {
 		return marshalEntry(TypeCompaction, &e.EntryBase, (*plain)(e))
 	}
-	if _, dup := e.Unknown["trust"]; dup {
-		return nil, errors.New("agentsession: compaction entry has trust both typed and unknown")
+	if e.Instructions != "" && !e.Requested {
+		return nil, errors.New("agentsession: a compaction's instructions are defined on a requested fold alone")
+	}
+	for _, m := range []struct {
+		key string
+		set bool
+	}{{"trust", e.Trust != nil}, {"requested", e.Requested}, {"instructions", e.Instructions != ""}} {
+		if _, dup := e.Unknown[m.key]; dup && m.set {
+			return nil, fmt.Errorf("agentsession: compaction entry has %s both typed and unknown", m.key)
+		}
 	}
 	return marshalEntry(TypeCompaction, &e.EntryBase, struct {
 		*plain
-		Trust *Trust `json:"trust"`
-	}{(*plain)(e), e.Trust})
+		Trust        *Trust `json:"trust,omitempty"`
+		Requested    bool   `json:"requested,omitempty"`
+		Instructions string `json:"instructions,omitempty"`
+	}{(*plain)(e), e.Trust, e.Requested, e.Instructions})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -2929,6 +2952,14 @@ func (e *CompactionEntry) decodeMembers(data []byte, all map[string]json.RawMess
 	e.TokensBefore = aux.TokensBefore
 	e.Usage = aux.Usage
 	promoteTrust(&e.EntryBase, &e.Trust)
+	// requested and instructions are taken where 0.21 defines them,
+	// requested true and instructions a non-empty string beside it, in a
+	// file of any minor; anything else is kept as written.
+	e.Requested, e.Instructions = false, ""
+	promote(&e.EntryBase, "requested", &e.Requested)
+	if e.Requested {
+		promote(&e.EntryBase, "instructions", &e.Instructions)
+	}
 	return nil
 }
 
