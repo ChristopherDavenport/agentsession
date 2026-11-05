@@ -1,6 +1,6 @@
 module github.com/ChristopherDavenport/agentsession/sqlite
 
-go 1.25.0
+go 1.26.0
 
 // Every module in the repository is released at one version, from one
 // commit, and requires its first-party siblings at exactly that version.
