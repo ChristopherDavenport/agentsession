@@ -101,6 +101,38 @@ versions may break the API.
   needed. `agentsession export` reads the blobs beside the file or
   from the cas store.
 
+- **Feature: session search (RFC 0002 and RFC 0003, Search; #261).**
+  `Search(ctx, store, Query)` finds the messages of a store's sessions
+  that hold every word of a query, agentmemory RFC 0001's reference
+  match: in each session the `message` items among its own entries on
+  the path to its head, leaving out a fork's prefix, items marked
+  `visible: false`, items carrying `instructions_part` and copied items,
+  so each message is found once on each session's own path. A redacted
+  session is a session of its own, so a message its redaction kept is
+  found in it and in its original; `Query.OmitRedacted` leaves redacted
+  sessions out. A `Query` takes the listing's
+  `ListFilter`, sessions to exclude, roles, an entry time range, a limit
+  and a read check; a `Hit` is the session, its name, the entry, time,
+  role and a snippet. The entry time range is exclusive at both ends. `ScanSearch` is the reference scan over `List` and `Reader`;
+  a store answering faster implements `Searcher`, which must answer as
+  the scan does, and the store suite checks every store against a
+  table. The remote server serves `POST /v1/sessions/search` under the
+  `search` capability, over only the sessions the caller may read, and
+  the remote client is a `Searcher`. Where the server serves no search,
+  or the query carries `Readable`, the client answers `ErrUnsupported`
+  unless made `WithSearchScan`, and then scans through `List` and
+  `Read`. A server in front of a remote client advertises `search` only
+  where it serves it: without an `Authorizer` it sends the search on as
+  it came, and with one only over a client made `WithSearchScan`. No
+  format change.
+  An index may lag the store's writes (appends, head moves, sessions
+  created, imported or pushed) by a bound it states, never a delete. On
+  every store an empty query matches every message. The store suite's Search table tells an index
+  from the scan by a limit on sessions searched that counts a session
+  with no hit, sessions created at one instant, and the listing's
+  filters; `storetest.Options.SearchOwnMatch` and `SearchSync` let a
+  store that matches otherwise, or whose index lags, run it.
+
 - **cas: a panic while opening, creating, importing, receiving or
   writing a session no longer leaves the session locked.** The store claims a
   session's handle, locked, before it opens or places the session, and

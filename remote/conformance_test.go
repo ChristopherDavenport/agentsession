@@ -40,7 +40,9 @@ func serve(t *testing.T, st agentsession.Store, closer func() error, opts ...rem
 	t.Helper()
 	h := remote.NewHandler(st, append([]remote.Option{remote.WithInsecureNoAuth(), remote.WithLinger(0)}, opts...)...)
 	srv := httptest.NewServer(h)
-	c, err := remote.Dial(srv.URL)
+	// The suite's Search table has a query carrying Readable, which a
+	// client scans only when made WithSearchScan.
+	c, err := remote.Dial(srv.URL, remote.WithSearchScan())
 	if err != nil {
 		t.Fatal(err)
 	}
