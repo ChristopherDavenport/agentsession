@@ -62,9 +62,9 @@ type Options struct {
 	// word as a token prefix. The Search case then leaves out its cases
 	// that hold a store to the reference match (a word found inside
 	// another, letter case across words) and its checks of a snippet's
-	// text, and asks only words its sessions hold whole, which RFC 0002
-	// has every match find as the reference does; on those it still
-	// checks the store's answer against the scan's.
+	// text, and asks only words its sessions hold whole, or no words,
+	// which RFC 0002 has every match find as the reference does; on
+	// those it still checks the store's answer against the scan's.
 	SearchOwnMatch bool
 	// SearchSync waits until the store's search reflects every write
 	// that returned before it was called, for a store whose Searcher

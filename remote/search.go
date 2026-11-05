@@ -171,8 +171,13 @@ func searchRequestOf(q agentsession.Query) searchRequest {
 }
 
 // searches reports whether the handler serves search: over a store
-// that searches, or one it can scan, which needs its Reader.
+// that searches, or one it can scan, which needs its Reader. A
+// [Client] cannot send the read check an [Authorizer] puts on the
+// query, so behind one it searches only when made [WithSearchScan].
 func (h *Handler) searches() bool {
+	if c, ok := h.store.(*Client); ok {
+		return h.authorize == nil || c.searchScan
+	}
 	if _, ok := h.store.(agentsession.Searcher); ok {
 		return true
 	}
@@ -199,7 +204,11 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	q.Readable = func(id string) bool { return h.may(ctx, ScopeRead, id) }
+	if h.authorize != nil {
+		// Without an Authorizer every session is readable, and a query
+		// carrying no check is one any Searcher can answer.
+		q.Readable = func(id string) bool { return h.may(ctx, ScopeRead, id) }
+	}
 	next, stop := iter.Pull2(agentsession.Search(ctx, h.store, q))
 	defer stop()
 	hit, err, ok := next()

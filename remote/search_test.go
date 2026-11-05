@@ -205,3 +205,54 @@ func TestSearchScanOfAnUnreadableStore(t *testing.T) {
 		t.Errorf("scan of a store the server cannot read: %v, want the search's own unsupported", err)
 	}
 }
+
+// A server in front of a [remote.Client] advertises search only where
+// it serves it. Without an authorizer it asks no read check, so the
+// search goes upstream as it came. With one, the client cannot send
+// the check, so the server serves search only over a client made
+// WithSearchScan, and then over the sessions the caller may read.
+func TestSearchThroughARelayIsAdvertisedOnlyWhereServed(t *testing.T) {
+	st := agentsession.NewMemoryStore()
+	searchSessions(t, st)
+	upstream := server(t, st, remote.WithInsecureNoAuth())
+	auth := []remote.Option{
+		remote.WithAuthenticator(tokenAuth(map[string]remote.Principal{"alice": {Name: "alice", Scopes: []remote.Scope{remote.ScopeRead}}})),
+		remote.WithAuthorize(owners(map[string]string{"alice-old": "alice", "alice-new": "alice", "bob-newest": "bob"})),
+	}
+	for _, tc := range []struct {
+		name   string
+		opts   []remote.Option
+		scan   bool
+		search bool
+		want   []string
+	}{
+		{"no authorizer", []remote.Option{remote.WithInsecureNoAuth()}, false, true, []string{"bob-newest", "alice-new", "alice-old"}},
+		{"authorizer", auth, false, false, nil},
+		{"authorizer, scan", auth, true, true, []string{"alice-new", "alice-old"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var copts []remote.ClientOption
+			if tc.scan {
+				copts = append(copts, remote.WithSearchScan())
+			}
+			relay := server(t, dial(t, upstream, copts...), tc.opts...)
+			c := dial(t, relay, withToken("alice", nil))
+			caps, err := c.Capabilities(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if caps.Features.Search != tc.search {
+				t.Fatalf("relay advertises search %v, want %v", caps.Features.Search, tc.search)
+			}
+			if !tc.search {
+				if err := searchErr(c, agentsession.Query{Text: "secret"}); !errors.Is(err, remote.ErrUnsupported) {
+					t.Errorf("search of a relay that serves none: %v, want ErrUnsupported", err)
+				}
+				return
+			}
+			if got := hitSessions(t, c, agentsession.Query{Text: "secret"}); !slices.Equal(got, tc.want) {
+				t.Errorf("search through the relay: %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

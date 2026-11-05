@@ -27,9 +27,13 @@ versions may break the API.
   the remote client is a `Searcher`. Where the server serves no search,
   or the query carries `Readable`, the client answers `ErrUnsupported`
   unless made `WithSearchScan`, and then scans through `List` and
-  `Read`. No format change.
-  An index may lag the store's appends and head moves by a bound it
-  states, never a delete. The store suite's Search table tells an index
+  `Read`. A server in front of a remote client advertises `search` only
+  where it serves it: without an `Authorizer` it sends the search on as
+  it came, and with one only over a client made `WithSearchScan`. No
+  format change.
+  An index may lag the store's writes (appends, head moves, sessions
+  created, imported or pushed) by a bound it states, never a delete. On
+  every store an empty query matches every message. The store suite's Search table tells an index
   from the scan by a limit on sessions searched that counts a session
   with no hit, sessions created at one instant, and the listing's
   filters; `storetest.Options.SearchOwnMatch` and `SearchSync` let a

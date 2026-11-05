@@ -822,16 +822,17 @@ roles, a range of entry `ts`, and a limit on the hits.
 - **Matching.** The reference match is agentmemory RFC 0001's (section
   3.5): the query is lowercased and split at white space into words,
   each distinct word once, and a message matches when every word occurs
-  in its lowercased text as a substring of code points; a query that is
-  empty, or white space alone, matches every message. Lowercased and
+  in its lowercased text as a substring of code points. Lowercased and
   white space are as that document defines them. A store MAY match
   otherwise, as a full-text index matching each word as a token prefix
   does, and says how; a caller MUST NOT assume one store's matching of
-  another's. Whatever its matching, a store SHOULD find what the
-  reference finds for a query whose words each occur in the messages
-  only whole, between characters that are not letters or digits or at
-  an end of the text, in any letter case, so that a query of whole
-  words means the same on every store.
+  another's. Whatever its matching, on every store a query that is
+  empty, or white space alone, matches every message, so that a search
+  with no words selects by its filters alone; and a store SHOULD find
+  what the reference finds for a query whose words each occur in the
+  messages only whole, between characters that are not letters or
+  digits or at an end of the text, in any letter case, so that a query
+  of whole words means the same on every store.
 - **Filters.** The filter selects sessions as a listing does (RFC 0003,
   Sessions), but for its limit, which caps the number of sessions
   searched, counted after those the search leaves out by name or as
@@ -856,7 +857,8 @@ roles, a range of entry `ts`, and a limit on the hits.
   at the same limit, and so no hit for an entry a head move left off
   the path, or for an item the scan leaves out. The index is the
   store's, kept as it likes; this document defines none.
-- **Lag.** An index MAY lag the store's appends and head moves, as one
+- **Lag.** An index MAY lag the store's writes (appends, head moves,
+  and sessions created, imported or received by a push), as one
   fed by following the store's sessions does, answering as the scan
   would have over the store as it stood a moment before; a store whose
   index lags SHOULD say by how much at most, and how a caller waits for

@@ -87,8 +87,9 @@ const snippetLead = 60
 // (RFC 0002, Search): the same messages from the same sessions, in the
 // same order, cut at the same limit, a deleted session's never; only
 // its matching of the words, and so its snippets, may differ, as the
-// store documents, and an index may lag the store's appends and head
-// moves, by a bound the store documents, but never a delete. [Search]
+// store documents, though a query of no words matches every message
+// on every store, and an index may lag the store's writes, by a bound
+// the store documents, but never a delete. [Search]
 // uses it when the store implements it, and the store suite
 // (storetest) checks it against ScanSearch, with its SearchOwnMatch
 // and SearchSync options for a store that matches otherwise or lags.
