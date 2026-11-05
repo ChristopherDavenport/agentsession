@@ -426,6 +426,21 @@ type QueuedEntry struct {
 	// kept as written in Unknown and Deliver is false. See [NewDelivery]
 	// and [QueuedEntry.Requeue].
 	Deliver bool `json:"-" member:"deliver"`
+	// Visible, Trust, InstructionsPart and InstructionsLayers are, in
+	// format 0.21, the item entry's members of those names, with the
+	// meanings and forms they have there ([ItemEntry]): an input hidden
+	// from the person, the trust of its content, and the instruction
+	// layers it was composed from, which the input's Item, an Open
+	// Responses item, cannot carry. They are record members. The trust
+	// is the input's, and does not join the trust of the path until the
+	// item entry that drains the input carries it. [QueuedEntry.Drain]
+	// and [QueuedEntry.Requeue] copy them. Each is read by its form in a
+	// file of any minor; one in another form, or an instructions_part
+	// beside an item that is not a message, is kept as written in Unknown.
+	Visible            *bool      `json:"-" member:"visible"`
+	Trust              *Trust     `json:"-" member:"trust"`
+	InstructionsPart   *LayerRef  `json:"-" member:"instructions_part"`
+	InstructionsLayers []LayerRef `json:"-" member:"instructions_part"`
 }
 
 // EntryType returns "queued".
@@ -446,13 +461,42 @@ func NewDelivery(item openresponses.Item) *QueuedEntry {
 
 // Requeue returns the entry that queues this input again, as a harness
 // that still wants it writes one after a run end closed this one: the
-// same item, mode, trigger, ref and deliver, members the format does
-// not define included, and no ID. The trigger is copied whole, as
+// same item, mode, trigger, ref and deliver, and, since 0.21, visible,
+// trust and instructions_part, members the format does not define
+// included, and no ID. The trigger is copied whole, as
 // [QueuedEntry.Drain] copies it.
 func (e *QueuedEntry) Requeue() *QueuedEntry {
 	out := &QueuedEntry{Item: e.Item, Mode: e.Mode, Trigger: e.Trigger.Clone(), Ref: e.Ref, Deliver: e.Deliver}
+	out.Visible, out.Trust, out.InstructionsPart, out.InstructionsLayers = e.inputMembers()
 	out.Unknown = cloneRaw(e.Unknown)
 	return out
+}
+
+// Layers returns the instruction layers the queued input names in its
+// instructions_part, in either form, as [ItemEntry.Layers] does: nil
+// when it carries neither.
+func (e *QueuedEntry) Layers() []LayerRef {
+	if e.InstructionsPart != nil {
+		return []LayerRef{*e.InstructionsPart}
+	}
+	return e.InstructionsLayers
+}
+
+// inputMembers returns copies of the members, since 0.21, that the item
+// draining the input carries as the queued entry wrote them: visible,
+// trust and instructions_part in the form the entry holds it.
+func (e *QueuedEntry) inputMembers() (*bool, *Trust, *LayerRef, []LayerRef) {
+	var visible *bool
+	if e.Visible != nil {
+		v := *e.Visible
+		visible = &v
+	}
+	var part *LayerRef
+	if e.InstructionsPart != nil {
+		p := *e.InstructionsPart
+		part = &p
+	}
+	return visible, e.Trust.clone(), part, slices.Clone(e.InstructionsLayers)
 }
 
 // WithTrigger records what brought the input in and returns the
@@ -464,13 +508,16 @@ func (e *QueuedEntry) WithTrigger(kind, ref, source string) *QueuedEntry {
 
 // Drain returns the item entry that appends this queued input to the
 // conversation: the item, the trigger as its source and QueuedFrom
-// naming this entry, so the record says why the item is there. The
-// entry must already have an ID, which it has once it is appended.
-// The trigger is copied whole, the members the format does not define
-// included, so the two entries do not share one once both are appended
-// and neither may be modified.
+// naming this entry, so the record says why the item is there, and,
+// since 0.21, visible, trust and instructions_part as this entry holds
+// them. The entry must already have an ID, which it has once it is
+// appended. The trigger is copied whole, the members the format does
+// not define included, so the two entries do not share one once both
+// are appended and neither may be modified.
 func (e *QueuedEntry) Drain() *ItemEntry {
-	return &ItemEntry{Item: e.Item, QueuedFrom: e.ID, Source: e.Trigger.Clone()}
+	it := &ItemEntry{Item: e.Item, QueuedFrom: e.ID, Source: e.Trigger.Clone()}
+	it.Visible, it.Trust, it.InstructionsPart, it.InstructionsLayers = e.inputMembers()
+	return it
 }
 
 // Workspace says which file system an env entry's cwd is a path in.
@@ -673,6 +720,22 @@ func validateLifecycle(e Entry) error {
 		if v.Deliver && v.Mode != ModeSteer {
 			return errors.New("agentsession: deliver is defined on a steer alone")
 		}
+		if v.InstructionsPart != nil || v.InstructionsLayers != nil {
+			if _, ok := v.Item.(*openresponses.Message); !ok {
+				return errors.New("agentsession: instructions_part is defined beside a message alone")
+			}
+		}
+		if p := v.InstructionsPart; p != nil && !p.valid() {
+			return fmt.Errorf("agentsession: instructions_part %+v names no source, or an agentsmd layer with no id", *p)
+		}
+		if l := v.InstructionsLayers; l != nil {
+			if v.InstructionsPart != nil {
+				return errors.New("agentsession: instructions_part is both a single layer and a list")
+			}
+			if !validLayers(l) {
+				return fmt.Errorf("agentsession: instructions_part %+v is empty, names no source, an agentsmd layer with no id, or a layer twice", l)
+			}
+		}
 	}
 	return nil
 }
@@ -836,16 +899,30 @@ func (e *QueuedEntry) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	type plain QueuedEntry
-	if !e.Deliver {
+	if !e.Deliver && e.Visible == nil && e.Trust == nil && e.InstructionsPart == nil && e.InstructionsLayers == nil {
 		return marshalEntry(TypeQueued, &e.EntryBase, (*plain)(e))
 	}
-	if _, dup := e.Unknown["deliver"]; dup {
-		return nil, errors.New("agentsession: queued entry has deliver both typed and unknown")
+	for _, m := range []struct {
+		key string
+		set bool
+	}{{"deliver", e.Deliver}, {"visible", e.Visible != nil}, {"trust", e.Trust != nil}, {"instructions_part", e.InstructionsPart != nil || e.InstructionsLayers != nil}} {
+		if _, dup := e.Unknown[m.key]; dup && m.set {
+			return nil, fmt.Errorf("agentsession: queued entry has %s both typed and unknown", m.key)
+		}
+	}
+	var layers any
+	if e.InstructionsPart != nil {
+		layers = e.InstructionsPart
+	} else if e.InstructionsLayers != nil {
+		layers = e.InstructionsLayers
 	}
 	return marshalEntry(TypeQueued, &e.EntryBase, struct {
 		*plain
-		Deliver bool `json:"deliver"`
-	}{(*plain)(e), true})
+		Deliver          bool   `json:"deliver,omitempty"`
+		Visible          *bool  `json:"visible,omitempty"`
+		Trust            *Trust `json:"trust,omitempty"`
+		InstructionsPart any    `json:"instructions_part,omitempty"`
+	}{(*plain)(e), e.Deliver, e.Visible, e.Trust, layers})
 }
 
 // UnmarshalJSON decodes the entry, dispatching the item through the
@@ -884,6 +961,22 @@ func (e *QueuedEntry) decodeMembers(data []byte, all map[string]json.RawMessage)
 	e.Deliver = false
 	if e.Mode == ModeSteer {
 		promote(&e.EntryBase, "deliver", &e.Deliver)
+	}
+	// visible, trust and instructions_part are taken in the forms 0.21
+	// defines, the item entry's, in a file of any minor; instructions_part
+	// beside a message alone. Anything else is kept as written.
+	e.Visible, e.InstructionsPart, e.InstructionsLayers = nil, nil, nil
+	promote(&e.EntryBase, "visible", &e.Visible)
+	promoteTrust(&e.EntryBase, &e.Trust)
+	if _, ok := e.Item.(*openresponses.Message); ok {
+		if raw, ok := e.Unknown["instructions_part"]; ok {
+			switch {
+			case layerRefForm(raw):
+				promote(&e.EntryBase, "instructions_part", &e.InstructionsPart)
+			case layerListForm(raw):
+				promote(&e.EntryBase, "instructions_part", &e.InstructionsLayers)
+			}
+		}
 	}
 	return validateLifecycle(e)
 }

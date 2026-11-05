@@ -437,7 +437,7 @@ var coreStringMembers = map[string][]string{
 	TypeRun:           {"run_id", "ref", "trigger/kind", "trigger/ref", "trigger/source"},
 	TypeDispatch:      {"idempotency_key"},
 	TypeDecision:      {"reason"},
-	TypeQueued:        {"trigger/kind", "trigger/ref", "trigger/source", "ref"},
+	TypeQueued:        {"trigger/kind", "trigger/ref", "trigger/source", "ref", "instructions_part/id", "instructions_part/[]/id"},
 	TypeLabel:         {"label"},
 	TypeInfo:          {"name"},
 	TypeEnv:           {"cwd", "vcs/system", "vcs/revision", "tools/*", "workspace/ref", "workspace/host", "workspace/instance"},

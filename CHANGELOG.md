@@ -21,6 +21,20 @@ versions may break the API.
   source. A copy that drops a label, or drops `trust` its source
   carries, is still refused with `ErrCopyMismatch`.
 
+- **Format 0.21: a queued input keeps visible, trust and
+  instructions_part (#278).** `QueuedEntry` gains `Visible`, `Trust`,
+  `InstructionsPart` and `InstructionsLayers`, read by form in a file
+  of any minor, and `Layers`. `Drain` and `Requeue` copy them, so an
+  input still owed when a process stops keeps them across the resume.
+  The redaction table keeps a queued entry's trust labels and defined
+  layer sources, and a rewrite that merges its layers is refused with
+  `ErrLayersMerged`. A queued entry's trust does not join `PathTrust`
+  until the input is drained. `VerifyRecords` reports, with
+  `ErrDrainMismatch`, a drained item that lacks or changes a member its
+  queued entry carries. The ATIF projection carries them in the
+  input's record under `queued`. New fixtures `queued-members` and
+  `bad-queued-drain`.
+
 ## v0.0.37 - 2026-11-03
 
 - **Breaking (format): Format 0.20 (RFC 0001, draft 0.20).** `Format`

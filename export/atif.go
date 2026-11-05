@@ -661,6 +661,18 @@ func (b *builder) entry(e agentsession.Entry) error {
 		if v.Deliver {
 			rec["deliver"] = true
 		}
+		// The input's own members (0.21), as the entry writes them.
+		if v.Visible != nil {
+			rec["visible"] = *v.Visible
+		}
+		if v.Trust != nil {
+			rec["trust"] = v.Trust
+		}
+		if v.InstructionsPart != nil {
+			rec["instructions_part"] = v.InstructionsPart
+		} else if v.InstructionsLayers != nil {
+			rec["instructions_part"] = v.InstructionsLayers
+		}
 		copyUnknown(rec, v.Unknown)
 		b.addPendingList(ExtraQueued, rec)
 	case *agentsession.UnknownEntry:

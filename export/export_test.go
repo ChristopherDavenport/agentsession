@@ -117,7 +117,7 @@ func TestATIFGolden(t *testing.T) {
 	for _, name := range []string{"basic", "compaction", "branch", "extensions", "runs", "interleaved", "instructions", "queued", "resume", "pinned", "converge",
 		"empty-resume", "bad-resume", "handback", "bad-handback", "omit", "omit-absent", "bad-omit", "omit-folded", "bad-handback-folded", "judged", "peer",
 		"refold", "no-response-id", "withdrawn", "late-report", "placeholders",
-		"copied", "copied-answer", "delivered", "returned", "trust", "instruction-layers", "instruction-trust", "instruction-layers-list"} {
+		"copied", "copied-answer", "delivered", "returned", "trust", "instruction-layers", "instruction-trust", "instruction-layers-list", "queued-members"} {
 		t.Run(name, func(t *testing.T) {
 			s := loadFixture(t, name)
 			n := 0

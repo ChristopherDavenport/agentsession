@@ -243,11 +243,12 @@ var envelopeMembers = []special{
 // define, is the writer's text and body.
 //
 // A trust member's labels, on an item, a result, a compaction and a
-// branch summary, are the format's vocabulary and not text, so a rewrite
+// branch summary, and since 0.21 a queued entry, are the format's vocabulary and not text, so a rewrite
 // leaves them as they are (RFC 0001, Every redacted entry). So is a
 // source the format defines ([KnownLayer]) on an instructions part, an
 // omitted part and an item's instructions_part, since 0.17, and each
-// element of an instructions_part list, since 0.18; any other
+// element of an instructions_part list, since 0.18, and a queued
+// entry's in either form, since 0.21; any other
 // source, and every id, is text. A part's trust labels, since 0.17, are
 // the format's vocabulary too.
 //
@@ -283,6 +284,14 @@ var bodyMembers = map[string][]special{
 	TypeQueued: joined(itemMembers("item"), []special{
 		{path: memberPath("item", "call_id"), role: roleCallID},
 		closed(memberPath("mode"), ModeSteer, ModeFollowUp),
+		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*QueuedEntry).Trust != nil }},
+		{path: memberPath("instructions_part", "source"), role: roleFixed, when: func(e Entry) bool {
+			p := e.(*QueuedEntry).InstructionsPart
+			return p != nil && KnownLayer(p.Source)
+		}},
+		{path: memberPath("instructions_part", "[]", "source"), role: roleFixed, holds: knownSource, when: func(e Entry) bool {
+			return e.(*QueuedEntry).InstructionsLayers != nil
+		}},
 	}),
 	TypeResponse: {
 		{path: memberPath("request_hash"), role: roleHash},

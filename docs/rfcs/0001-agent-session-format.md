@@ -582,7 +582,9 @@ One conversation item in the payload profile.
   earlier request, each `compaction`'s and `branch_summary`'s, and,
   since 0.17, each instructions part's a `config` entry or a
   compaction's checkpoint writes, a part that has since left force
-  included.
+  included. A `queued` entry's `trust` is not among them, since 0.21:
+  the input joins the path's trust through the `item` entry that
+  drains it.
   The trust of a `branch_summary`'s `from` path is folded into the
   summary's own member, as `branch_summary` says. A copied item whose
   `copied_from` names an entry MUST carry `trust` when that entry does,
@@ -1756,6 +1758,24 @@ end.
   `true`; a reader keeps such a member as one it does not know. The
   `item` that drains the entry carries nothing new: its `queued_from`
   names the entry, which says how the item arrived.
+- `visible`, `trust` and `instructions_part` MAY be on a `queued`
+  entry, since 0.21, with the meanings and forms they have on an `item`
+  entry: an input the harness hides from the person, the trust of its
+  content, and the instruction layers it was composed from, which the
+  entry's `item`, an Open Responses item, cannot carry. They are record
+  members, and `instructions_part` is defined beside a `message` alone,
+  as on an `item`. A queued entry's `trust` is the input's and does not
+  join the trust of the path: the input reaches the model when an
+  `item` entry drains it, and that entry's `trust` joins it then. The
+  `item` entry that drains the input MUST carry them as the `queued`
+  entry wrote them, and a writer that queues the input again after a
+  run end MUST write them again, as it writes `deliver`, so an input
+  still owed when a process stops keeps them across the resume. A
+  reader takes each by its form in a file of any minor, and keeps one in
+  another form as a member it does not know. A tool that checks a file
+  reports a drained `item` that lacks or changes one its `queued` entry
+  carries. It does not report one the `item` carries and its `queued`
+  entry lacks, since before 0.21 a `queued` entry had no member for it.
 - The entry is a record entry: its `item` is not in context and
   reaches no request. The input enters the conversation when it is
   appended as an `item` entry, which carries `queued_from` naming this
@@ -1789,7 +1809,8 @@ end.
 The `item` entry that drains a queued input carries two optional
 members: `source`, the trigger the queued entry held, the whole
 object with any members of its own, and `queued_from`, the ID of that
-entry. `source` on an `item` is not
+entry; and, since 0.21, the `visible`, `trust` and `instructions_part`
+the queued entry carries, as above. `source` on an `item` is not
 restricted to a drained input: any item a person or another system
 sent rather than the model or the loop may carry it.
 
@@ -2599,14 +2620,15 @@ A redactor:
   a redactor MUST NOT narrow it. A redactor likewise keeps a `source`
   value this document defines (`config`, Instructions as parts) as
   written, since 0.17, on an instructions part, an omitted part and an
-  `item`'s `instructions_part`, each element of its list since 0.18;
+  `item`'s `instructions_part`, each element of its list since 0.18,
+  and a `queued` entry's, in either form, since 0.21;
   any other `source`, and every `id`, is text. Two layers of one
   `instructions_part` list that a redaction makes one, by their `id`s
   or, where they have none, their `source`s, MUST NOT both be kept, as
   two member names made one are not, nor an `id` made empty: the member
-  would then be in no form this document defines, and the item would
-  read as a person's input. A redactor keeps them distinct, as by
-  numbering its replacements;
+  would then be in no form this document defines, and the item, or the
+  input a `queued` entry holds, would read as a person's input. A
+  redactor keeps them distinct, as by numbering its replacements;
 - since 0.20, MUST keep as written each member whose value is drawn
   from a closed set this document or the payload profile defines, while
   it holds a value of that set: the value is the format's vocabulary, not
@@ -2991,8 +3013,9 @@ next turn or another call's; one naming no call in the document
 travels, as every other `custom` entry does, in the list `custom` of
 the next step's `extra`, or of the top-level `extra` when no step
 follows. A queued
-input travels as a list under `queued`, a delivered input's record
-carrying `deliver: true`, and the step of the item that
+input travels as a list under `queued`, each record carrying the
+`visible`, `trust` and `instructions_part` its entry carries, since
+0.21, and a delivered input's `deliver: true`, and the step of the item that
 drained one carries its trigger under `source`; a fold's usage
 travels under `usage` in its system step's `extra`, and a fold's
 `pinned` items travel beside its `summary` in the same step, since the
@@ -3511,6 +3534,16 @@ files until it is upgraded.
   and accepts one that only adds labels. 0.20 asked for the source's
   `trust` as written, so a host could not mark a copy more cautiously,
   and a recorder that tried refused its own copy.
+- A `queued` entry MAY carry `visible`, `trust` and
+  `instructions_part`, with an `item`'s meanings and forms, and the
+  `item` that drains the input, and the entry that queues it again
+  after a run end, carry them as written (`queued`). A queued entry's
+  `trust` does not join the path's. A redactor keeps its `trust` labels
+  and its defined `instructions_part` sources as written (Every
+  redacted entry), and the ATIF projection carries them in the input's
+  record under `queued`. 0.20 had no member for them, so an input owed
+  when a process stopped lost them on resume, and read as the person's
+  words.
 
 ## Changes since 0.19
 

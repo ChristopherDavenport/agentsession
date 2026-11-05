@@ -171,6 +171,19 @@ func entryVariants(e Entry) []variant {
 			}},
 		}
 	}
+	if _, ok := e.(*QueuedEntry); ok {
+		// instructions_part, since 0.21, in each of its two forms.
+		return []variant{
+			{"layer", func(e Entry) { e.(*QueuedEntry).InstructionsLayers = nil }},
+			{"layers", func(e Entry) {
+				q := e.(*QueuedEntry)
+				q.InstructionsPart = nil
+				for i := range q.InstructionsLayers {
+					q.InstructionsLayers[i].ID += strconv.Itoa(i)
+				}
+			}},
+		}
+	}
 	if _, ok := e.(*ResultEntry); ok {
 		// A result's item is its call's output.
 		return []variant{{"output", func(e Entry) {
