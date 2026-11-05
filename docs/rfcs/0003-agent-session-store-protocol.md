@@ -462,9 +462,15 @@ POST /v1/sessions/search
   caller may not read yields no hit and does not count toward
   `filter.limit`, so neither the hits nor their number say anything of
   it.
-- A client of a server that does not serve search MAY scan instead,
-  listing and reading each session, and finds the same messages, but
-  for where the server's store matches otherwise.
+- A client learns that a server does not serve search from the
+  capability `search`, or from the 501 `unsupported` its search
+  answers. It MUST NOT then scan in the server's place, listing and
+  reading each session, unless its caller asked it to: a scan reads in
+  full every session the filter selects, which a caller, such as a
+  tool a model drives, should not set off unawares. A scan it was asked
+  for finds the same messages, but for where the server's store
+  matches otherwise; one the server cannot serve, since it reads no
+  session either, fails with the search's `unsupported`.
 
 ## Following
 
@@ -1268,9 +1274,11 @@ Search is served over every reference store: the server asks the
 store's `Searcher` where it has one, and otherwise scans the store's
 sessions through its `Reader`, the library's `ScanSearch`, asking the
 program's `WithAuthorize` hook which sessions the caller may read. Its
-client is the library's `Searcher`, and scans through `List` and `Read`
-itself where a server answers `unsupported`, or where the caller's query
-carries a read check of its own, which cannot be sent.
+client is the library's `Searcher`. Where a server answers
+`unsupported`, or where the caller's query carries a read check of its
+own, which cannot be sent, it answers `unsupported` too, unless the
+program made it with `WithSearchScan`, and then scans through `List`
+and `Read` itself.
 
 With it the reference implementation covers the protocol. What it
 leaves, each the reference server's choice and not the protocol's:

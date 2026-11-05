@@ -24,7 +24,10 @@ versions may break the API.
   the scan does, and the store suite checks every store against a
   table. The remote server serves `POST /v1/sessions/search` under the
   `search` capability, over only the sessions the caller may read, and
-  the remote client is a `Searcher`. No format change.
+  the remote client is a `Searcher`. Where the server serves no search,
+  or the query carries `Readable`, the client answers `ErrUnsupported`
+  unless made `WithSearchScan`, and then scans through `List` and
+  `Read`. No format change.
   An index may lag the store's appends and head moves by a bound it
   states, never a delete. The store suite's Search table tells an index
   from the scan by a limit on sessions searched that counts a session

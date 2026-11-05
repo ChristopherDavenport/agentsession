@@ -165,12 +165,20 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 }
 
 // Search implements [agentsession.Searcher] through the server's
-// search, which answers over the sessions this client may read. A query
-// with Readable set, which the server cannot be sent, and a server that
-// serves no search (unsupported) are scanned here instead, over List
-// and Read, as [agentsession.ScanSearch] scans any store.
+// search, which answers over the sessions this client may read. Where
+// the server cannot answer, a server that serves no search and a query
+// with Readable set, which cannot be sent, it answers [ErrUnsupported]
+// unless the client was made [WithSearchScan], and then scans here,
+// over List and Read, as [agentsession.ScanSearch] scans any store. A
+// scan the server cannot serve either, over a store with no Reader,
+// fails with the server's answer to the search.
 func (c *Client) Search(ctx context.Context, q agentsession.Query) iter.Seq2[agentsession.Hit, error] {
 	if q.Readable != nil {
+		if !c.searchScan {
+			return func(yield func(agentsession.Hit, error) bool) {
+				yield(agentsession.Hit{}, fmt.Errorf("%w: a search carrying Readable is scanned only by a client made WithSearchScan", ErrUnsupported))
+			}
+		}
 		return agentsession.ScanSearch(ctx, c, q)
 	}
 	return func(yield func(agentsession.Hit, error) bool) {
@@ -183,12 +191,8 @@ func (c *Client) Search(ctx context.Context, q agentsession.Query) iter.Seq2[age
 		for line, err := range c.streamLines(ctx, http.MethodPost, "/sessions/search", nil, body, nil) {
 			if err != nil {
 				var p *Problem
-				if first && errors.As(err, &p) && p.Code == CodeUnsupported {
-					for h, err := range agentsession.ScanSearch(ctx, c, q) {
-						if !yield(h, err) || err != nil {
-							return
-						}
-					}
+				if first && c.searchScan && errors.As(err, &p) && p.Code == CodeUnsupported {
+					c.scan(ctx, q, p, yield)
 					return
 				}
 				yield(agentsession.Hit{}, err)
@@ -204,6 +208,21 @@ func (c *Client) Search(ctx context.Context, q agentsession.Query) iter.Seq2[age
 			if !yield(agentsession.Hit{Session: l.Session, Entry: l.Entry, Time: l.TS, Role: openresponses.Role(l.Role), Snippet: l.Snippet}, nil) {
 				return
 			}
+		}
+	}
+}
+
+// scan answers q by a scan here, for a server that answered its search
+// with refused: a scan the server cannot serve either fails with
+// refused, the server's answer to the search, and not with the read
+// that found it out.
+func (c *Client) scan(ctx context.Context, q agentsession.Query, refused *Problem, yield func(agentsession.Hit, error) bool) {
+	for h, err := range agentsession.ScanSearch(ctx, c, q) {
+		if errors.Is(err, ErrUnsupported) {
+			err = refused
+		}
+		if !yield(h, err) || err != nil {
+			return
 		}
 	}
 }
