@@ -18,7 +18,8 @@ import (
 // mode; its first entry is a full config carrying the settings in
 // force at the old leaf, so the first request on its first entry rebuilds
 // and a recorder finds a config on the path; summary, when not nil, is
-// appended as the item that carries the conversation across; the old
+// appended as the item that carries the conversation across, with the
+// trust of the old path it was made from; the old
 // session's display name is carried over; and the old session gets a
 // continued_in link naming the successor, which is what a store reads
 // to mark it superseded. It returns the successor.
@@ -71,7 +72,11 @@ func Continue(ctx context.Context, store Store, id string, summary openresponses
 		return nil, fmt.Errorf("agentsession: continue %s: config: %w", id, err)
 	}
 	if summary != nil {
-		if _, err := store.Append(ctx, nextID, NewItemEntry(summary)); err != nil {
+		// Made from the old path, so it carries at least that path's
+		// trust (RFC 0001, item, trust), as a compaction's summary does.
+		e := NewItemEntry(summary)
+		e.Trust = cx.Trust.clone()
+		if _, err := store.Append(ctx, nextID, e); err != nil {
 			return nil, fmt.Errorf("agentsession: continue %s: summary: %w", id, err)
 		}
 	}

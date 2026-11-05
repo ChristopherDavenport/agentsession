@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.20
+Status: draft 0.21
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -231,7 +231,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.20","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.21","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -538,7 +538,8 @@ One conversation item in the payload profile.
   context but that a renderer SHOULD hide.
 - `source` MAY carry the trigger of an item a person or another system
   sent, in the shape `queued` defines, and `queued_from` MAY name the
-  `queued` entry the item was accepted as.
+  `queued` entry the item was accepted as. Since 0.21 its `kind` says
+  whether a `user` message is the person's words (`queued`, `trigger`).
 - `failed` MAY be `true` on an `item` entry holding a
   `function_call_output`, since 0.14: the tool reported failure, or the
   harness gave the call up (cut it off, timed it out, could not learn
@@ -582,16 +583,25 @@ One conversation item in the payload profile.
   earlier request, each `compaction`'s and `branch_summary`'s, and,
   since 0.17, each instructions part's a `config` entry or a
   compaction's checkpoint writes, a part that has since left force
-  included.
+  included. A `queued` entry's `trust` is not among them, since 0.21:
+  the input joins the path's trust through the `item` entry that
+  drains it.
   The trust of a `branch_summary`'s `from` path is folded into the
   summary's own member, as `branch_summary` says. A copied item whose
-  `copied_from` names an entry MUST carry that entry's `trust` as
-  written, and none when it carries none, so a label a session read
-  reaches every session its conversation is copied into. A copied item
-  that names no entry, a summary or another item made from the path it
-  was copied from among them, carries the trust of that path. A reader
-  that holds the source checks a copy's `trust` with its `item`, as
-  `copied_from` says. The policy a harness applies by
+  `copied_from` names an entry MUST carry `trust` when that entry does,
+  holding every label of the entry's `trust`, so a label a session read
+  reaches every session its conversation is copied into. Since 0.21 it
+  MAY hold more, as a host that copies an earlier output into a child's
+  prompt and marks it `untrusted` writes it: a label only narrows what a
+  reader may do with the text, so a wider copy launders nothing. A
+  copied item that names no entry, a summary or another item made from
+  the path it was copied from among them, carries at least the trust of
+  that path. A reader that holds the source checks a copy's `trust` with
+  its `item`, as `copied_from` says: a verifier MUST refuse a copy whose
+  `trust` lacks a label of its source's, or that carries no `trust`
+  where its source carries one, and MUST accept one that only adds
+  labels. 0.20 asked for the entry's `trust` as written, and none when
+  it carried none, so a verifier of 0.20 refuses the wider copy. The policy a harness applies by
   trust, to ask, refuse or taint a session, is its own.
 - `from_link` MAY name, by `id`, a `peer` link entry before the item on
   its path, other than a cancel notice, since 0.14: the item carries
@@ -627,8 +637,10 @@ One conversation item in the payload profile.
   in another form. A reader keeps a `copied_from` it cannot read this
   way as a member it does not know. A reader that holds the session
   named MAY check an item naming an entry against that entry, its
-  `item` and its `trust`, and reports one that differs, or an entry
-  that session does not hold. It checks with the read rights of whoever
+  `item` and its `trust`, and reports one whose `item` differs, whose
+  `trust` lacks a label of the entry's or that carries no `trust` where
+  the entry carries one (`item`, `trust`), or that names an entry that
+  session does not hold. It checks with the read rights of whoever
   asks for the check and no more, since a check made with more answers
   whether an entry the asker may not read holds a given item; it does not check an item a redaction
   made against a session that was not redacted alongside it.
@@ -859,6 +871,19 @@ layer an `item`'s `instructions_part` names.
   clears or changes a part's `trust` writes the part's `text` with it.
   A compaction's checkpoint writes each part with its `trust`. A
   reader keeps a `trust` in another form as a member it does not know.
+  Parts, and `trust` on a part, are otherwise a writer's choice, but
+  since 0.21 a writer that composes instructions from a layer whose
+  trust it knows, as an `untrusted` memory block or an MCP server's
+  instructions, MUST record them as parts, each carrying that trust, so
+  the path's trust holds it; written as one string, the labels are
+  lost, and a reader cannot tell the instructions held such text. This
+  is the `config` twin of the rule an `item`'s `instructions_part`
+  states for a layer composed into a message. A writer that carries the
+  settings in force into a new file, as a successor (`parent_session`)
+  or a child seeded from them, writes the parts in force the same way,
+  each whole with its `source` and `trust`, where the path could
+  rebuild every one; when it could not, the `instructions` in force
+  stand alone, as a reader takes them.
 - A run of unchanged parts MAY be named by position instead:
   `{"keep":n}`, an element with no `id` and a positive integer `keep`,
   stands for the
@@ -1206,6 +1231,20 @@ Replaces earlier context with a summary.
   computes from the entries it holds, since a redaction may have left
   some out. A reader takes the union of both, and a writer that writes
   a later fold carries the earlier one's labels and never narrows them.
+- `requested` MAY be `true` on a `compaction`, since 0.21: the host or
+  a person asked for the fold, rather than a budget or a provider's
+  refusal forcing it. A fold a loop runs again after a context-length
+  refusal was forced, however it was started. `instructions` MAY be on
+  a compaction carrying `requested`: the text the summariser was asked
+  to follow, a non-empty string, which is text a redaction rewrites. A
+  writer MUST NOT write `instructions` without `requested`, nor
+  `requested` with any value but `true`; a reader keeps either in
+  another form, and `instructions` beside no `requested`, as a member it
+  does not know. Both are record members: neither is part of the
+  context or of any request, and RFC 0002's context hash leaves them
+  out, so a fold asked for and one forced that kept the same context
+  share it. A fold without `requested` says nothing either way, as an
+  absent `trust` says nothing.
 - `first_kept` MUST name an entry on the path before this one, since
   0.14 in those words: a compaction cannot name itself. Entries before
   it are excluded from context; entries from it up to this entry are
@@ -1333,8 +1372,16 @@ Why a run started and how it ended. Two entries per run, paired by
   harness feature and goes in `trigger`, `ref` or a `custom` entry.
 - `trigger` on `start` says how the input that started the run arrived,
   in the object `queued` defines: `kind`, `ref` and `source`, each
-  opaque. It sits beside `ref` and changes nothing about it; `ref` stays
-  one opaque string. A writer that holds a trigger's parts SHOULD write
+  opaque but for the `kind` `human`, since 0.21, which says a person
+  sent it (`queued`). It says nothing of the words of the messages the
+  run is prompted with: a reader reads each message's from its own
+  trigger alone, an `item`'s `source`, never from the run's, since a
+  run a person started may be prompted with messages the harness
+  composed, onto which a writer MUST NOT copy a `human` trigger as
+  their `source`. A store keeps as recorded one a writer before the
+  rule copied beside `instructions_part`, which a reader reads as
+  composed (`queued`). The trigger sits beside `ref` and changes
+  nothing about it; `ref` stays one opaque string. A writer that holds a trigger's parts SHOULD write
   them here rather than joined into `ref`, since a joined string cannot
   be split back. Anything richer, such as when a scheduled firing was
   due or which attempt at it this is, SHOULD go in members of
@@ -1748,6 +1795,31 @@ end.
   `true`; a reader keeps such a member as one it does not know. The
   `item` that drains the entry carries nothing new: its `queued_from`
   names the entry, which says how the item arrived.
+- `visible`, `trust` and `instructions_part` MAY be on a `queued`
+  entry, since 0.21, with the meanings and forms they have on an `item`
+  entry: an input the harness hides from the person, the trust of its
+  content, and the instruction layers it was composed from, which the
+  entry's `item`, an Open Responses item, cannot carry. They are record
+  members, and `instructions_part` is defined beside a `message` alone,
+  as on an `item`. A queued entry's `trust` is the input's and does not
+  join the trust of the path: the input reaches the model when an
+  `item` entry drains it, and that entry's `trust` joins it then. The
+  `item` entry that drains the input MUST carry them as the `queued`
+  entry wrote them, and its `trigger` as its `source`, and a writer
+  that queues the input again after a run end MUST write them and the
+  `trigger` again, as it writes `deliver`, so an input still owed when
+  a process stops keeps them, and whose words it is, across the resume. A
+  reader takes each by its form in a file of any minor, and keeps one in
+  another form as a member it does not know. A tool that checks a file
+  reports a drained `item` that lacks or changes one of the three its
+  `queued` entry carries, and one whose `source` differs from the
+  entry's `trigger`, which 0.20 asked for too. It reports an `item`
+  that lacks the `trigger` only when its `queued` entry carries one of
+  the three, which dates the drain to 0.21: before, an `item`'s
+  `source` was optional, and a file raised to 0.21 holds such drains,
+  which nothing tells from later ones. It does not report a member the
+  `item` carries and its `queued` entry lacks, since before 0.21 a
+  `queued` entry had no member for it.
 - The entry is a record entry: its `item` is not in context and
   reaches no request. The input enters the conversation when it is
   appended as an `item` entry, which carries `queued_from` naming this
@@ -1755,10 +1827,52 @@ end.
 - `trigger` says how the input arrived: `kind` is the sort of thing it
   came from, `ref` names the thing itself, `source` names the layer
   that took it. All three are in the harness's own terms and a reader
-  treats them as opaque. This is where the trigger of an input that
+  treats them as opaque, but for one `kind` this document defines. This
+  is where the trigger of an input that
   joins a run already in flight lives, since the `run` start's
   `trigger` and `ref` name what started the run and not what arrived
   during it: two people steering one run are two triggers.
+- The `kind` `human`, since 0.21, says a person sent the input. On a
+  `user` message, a `queued` entry's `trigger` or an `item` entry's
+  `source`, it says the text is the person's words as they wrote them:
+  typed at a prompt, or sent from a chat. A writer SHOULD write it for
+  such an input. Since 0.21 a writer MUST mark a message the harness
+  composed, whatever its provenance (a scheduled reminder, a peer's
+  text it forwards, a background task's result, a layer of
+  instructions, a prompt it replays under the trigger of the run it
+  starts), with a trigger of another `kind`, or with the member that
+  says how it was composed, `instructions_part` or `from_link`, and
+  MUST NOT write `human` on it, so never beside either member. The
+  rule binds a writer composing a new message, not one carrying a
+  recorded entry: a store, and a rewriter that copies, redacts or
+  rebuilds a session, MUST accept an entry that carries `human` beside
+  `instructions_part` or `from_link` as it was recorded, since a writer
+  before the rule wrote that pair, and a reader reads such a message
+  as composed, by the list below. The drained `item` carries the
+  trigger as its `source` (below), so the kind survives a restart with
+  the queued input's other members.
+- A reader reads a `user` message's words from its own trigger alone,
+  as written, in a file of any minor:
+  - one that names its `instructions_part` or its `from_link` is not
+    the person's words, whatever its trigger, and a reader MUST NOT
+    present it as the person's;
+  - otherwise, one whose trigger has the kind `human` is the person's
+    words;
+  - one whose trigger has another kind is not, and a reader MUST NOT
+    present it as the person's;
+  - one with no trigger makes no claim either way. A reader MUST NOT
+    present it as the person's words, and MAY treat it as unclaimed
+    input, which a host may handle as it handles no composed message,
+    such as a fallback it takes when no message on the path is the
+    person's.
+
+  The kind was the harness's own term before 0.21, and a writer of
+  0.20 or earlier may have written `human` on a message it composed,
+  as a harness that stamped the trigger of a run on every item the run
+  was prompted with did. A reader cannot tell such a message from the
+  person's words, and reads it as written. Nor does the header's minor
+  draw a line: a file raised to 0.21 holds the entries written before
+  the raise, which nothing tells from those after.
 - Members of `trigger` beyond `kind`, `ref` and `source` are the
   harness's, for what it knows about the arrival beyond those three:
   when a scheduled firing was due and which attempt at it this is, so
@@ -1781,7 +1895,8 @@ end.
 The `item` entry that drains a queued input carries two optional
 members: `source`, the trigger the queued entry held, the whole
 object with any members of its own, and `queued_from`, the ID of that
-entry. `source` on an `item` is not
+entry; and, since 0.21, the `visible`, `trust` and `instructions_part`
+the queued entry carries, as above. `source` on an `item` is not
 restricted to a drained input: any item a person or another system
 sent rather than the model or the loop may carry it.
 
@@ -2591,21 +2706,24 @@ A redactor:
   a redactor MUST NOT narrow it. A redactor likewise keeps a `source`
   value this document defines (`config`, Instructions as parts) as
   written, since 0.17, on an instructions part, an omitted part and an
-  `item`'s `instructions_part`, each element of its list since 0.18;
+  `item`'s `instructions_part`, each element of its list since 0.18,
+  and a `queued` entry's, in either form, since 0.21;
   any other `source`, and every `id`, is text. Two layers of one
   `instructions_part` list that a redaction makes one, by their `id`s
   or, where they have none, their `source`s, MUST NOT both be kept, as
   two member names made one are not, nor an `id` made empty: the member
-  would then be in no form this document defines, and the item would
-  read as a person's input. A redactor keeps them distinct, as by
-  numbering its replacements;
+  would then be in no form this document defines, and the item, or the
+  input a `queued` entry holds, would read as a person's input. A
+  redactor keeps them distinct, as by numbering its replacements;
 - since 0.20, MUST keep as written each member whose value is drawn
   from a closed set this document or the payload profile defines, while
   it holds a value of that set: the value is the format's vocabulary, not
   text, as `trust` is. They are, in the entries this document defines, a
   `run`'s `phase`, `source` and `reason`, a `queued` entry's `mode`, a
   `decision`'s `verdict` and `by`, an `env` entry's `workspace` `kind`, a
-  `link`'s `rel` and `cancel`, and an `outcome`'s `kind`; and in the
+  `link`'s `rel` and `cancel`, an `outcome`'s `kind`, and, since 0.21, a
+  trigger's `kind` while it holds `human`, on a `queued` entry's and a
+  `run` start's `trigger` and an `item`'s `source`; and in the
   payload, wherever an entry holds an item (an `item`'s, a `queued`
   entry's and a `result`'s `item`, a compaction's `summary` and `pinned`,
   a branch summary's `summary`), the item's `type`, `role`, `status` and
@@ -2983,13 +3101,16 @@ next turn or another call's; one naming no call in the document
 travels, as every other `custom` entry does, in the list `custom` of
 the next step's `extra`, or of the top-level `extra` when no step
 follows. A queued
-input travels as a list under `queued`, a delivered input's record
-carrying `deliver: true`, and the step of the item that
+input travels as a list under `queued`, each record carrying the
+`visible`, `trust` and `instructions_part` its entry carries, since
+0.21, and a delivered input's `deliver: true`, and the step of the item that
 drained one carries its trigger under `source`; a fold's usage
 travels under `usage` in its system step's `extra`, and a fold's
 `pinned` items travel beside its `summary` in the same step, since the
 entries they were copied from are before `first_kept` and so are not
-in the document. Raw items travel in step `extra` so the projection is
+in the document; since 0.21 a fold's `requested` and `instructions`
+travel under `agentsession` in that step's `extra`, beside its
+`trust`. Raw items travel in step `extra` so the projection is
 lossless.
 
 A member of an entry that this document does not define travels as
@@ -3066,6 +3187,34 @@ the hash of the step's visible fields, and `visible` under
   document holds that `path` as a string, the raw items in the extras
   included, before it computes any hash; a `path` naming no such file
   stays as it is, and the hashes that cover it fail.
+- A projection of a sidecar session, since 0.21, writes `media:
+  "sidecar"` under `agentsession` in the top-level `extra`, and a
+  converter restores the header's `media` from it. Only a session whose
+  header says `sidecar` has references, and only a string that is a
+  `sidecar:` URL as a whole, in the member of a part that holds a URL
+  (an image's `image_url`, a file's `file_url`, a video's `video_url`),
+  is one. Text that quotes a reference, in either kind of session, is
+  text: the projection shows it as written and reads no blob for it.
+- Such a projection MUST resolve each reference a visible part holds
+  to its blob, as a data URL of the blob's media type,
+  `application/octet-stream` for a blob held with none, where it
+  renders the part and before it computes any hash, so a visible part
+  never names a sidecar: an image part names the data URL, and a file
+  or video part, or an image of a type ATIF does not take, which a step
+  shows as text, is described as such a data URL is. The raw items in
+  the extras keep each `sidecar:` reference as the session recorded it,
+  since the entry `id` a converter rebuilds covers it. A document
+  written to files carries each blob its raw items reference beside
+  it, each part URL of the document that is a reference as a whole, in
+  the session's sidecar layout under `sidecar/`: the blob named by its
+  hex digest alone and its type in the file `<hex>.type`, both in a
+  directory named after the session the trajectory is of, an embedded
+  trajectory's blobs under its own session's, so a converter rebuilds
+  the session, and its sidecar directory, from the document alone. A
+  projection that cannot read a blob, or reads one whose bytes do not
+  hash to its name, MUST refuse rather than write a reference nothing
+  resolves. 0.20 wrote the reference into the visible part, which a
+  reader of Open Responses refuses, and copied no blob.
 
 A converter that rebuilds a session from a document this projection
 wrote restores on each entry:
@@ -3276,13 +3425,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.20 reads a 0.5 to 0.19 file
-as it stands, since 0.6 to 0.19 add optional members, elements and
-relations, 0.15 a record entry type and 0.16 a file beside a sidecar blob and an `omit` member, 0.17 an `item` member and defined `source` values, 0.18 a second form of that member, 0.19 a link member and a second form of `subsession`, 0.20 a redaction rule alone, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
+it begins at 1.0. A reader of 0.21 reads a 0.5 to 0.20 file
+as it stands, since 0.6 to 0.21 add optional members, elements and
+relations, 0.15 a record entry type and 0.16 a file beside a sidecar blob and an `omit` member, 0.17 an `item` member and defined `source` values, 0.18 a second form of that member, 0.19 a link member and a second form of `subsession`, 0.20 a redaction rule alone, 0.21 record members on a `queued` entry and a `compaction`, a defined trigger `kind` and a wider copy of `trust`, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.20 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.21 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -3441,8 +3590,20 @@ refuses, a parent with a child the host started, linked by `spawn_id`,
 whose header carries it in `spawned_by` and whose leaf a later `custom`
 entry names in `parents`, counted as delegated work at that leaf and
 carried under `subsessions` in the ATIF document, beside a link with
-neither `call_id` nor `spawn_id`, checked by `parent_session` alone, and
-negative cases, each a file broken in one way, for a broken parent link,
+neither `call_id` nor `spawn_id`, checked by `parent_session` alone, a
+person's typed input carrying the trigger kind `human`, a hidden,
+untrusted reminder composed from memory, queued as a steer and drained,
+and a private block composed from an instruction file and memory,
+queued as a follow-up, closed by a run end, queued again and drained,
+each drained item carrying the members and the trigger its queued
+entry wrote, a fold the budget forced carrying neither `requested` nor
+`instructions` and a later fold asked for carrying both, every response
+hashed and verifying, a successor whose first config carries the parts
+in force at its predecessor's leaf, an `untrusted` memory part and a
+`private` instruction file, each with its `trust`, so its path's trust
+holds both from its first entry, and
+negative cases, each a file broken in one way, for a drained item
+that drops its queued entry's `trust`, a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
 before the base that is not on the path to it, a `dispatch` that follows a
@@ -3486,6 +3647,69 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.20
+
+Record members on a `queued` entry and a `compaction`, a trigger
+`kind` the format defines, a wider `trust` on a copy, and rules for
+instructions of known trust and for the ATIF projection of a sidecar
+session. A 0.20 file is a 0.21 file that holds none of the new
+members, and no hash changes. A writer of 0.21 raises every file it
+appends to, as Versioning says, so every reader of 0.20 refuses those
+files until it is upgraded.
+
+- A copy's `trust` holds every label of its source's and MAY hold
+  more (`item`, `trust`). A verifier refuses a copy that lacks a label
+  of its source's, or carries no `trust` where its source carries one,
+  and accepts one that only adds labels. 0.20 asked for the source's
+  `trust` as written, so a host could not mark a copy more cautiously,
+  and a recorder that tried refused its own copy.
+- A `queued` entry MAY carry `visible`, `trust` and
+  `instructions_part`, with an `item`'s meanings and forms, and the
+  `item` that drains the input, and the entry that queues it again
+  after a run end, carry them as written (`queued`). A queued entry's
+  `trust` does not join the path's. A redactor keeps its `trust` labels
+  and its defined `instructions_part` sources as written (Every
+  redacted entry), and the ATIF projection carries them in the input's
+  record under `queued`. 0.20 had no member for them, so an input owed
+  when a process stopped lost them on resume, and could read as the
+  person's words.
+- The ATIF projection of a sidecar session names its `media` in the
+  top-level `extra`, resolves each `sidecar:` URL a visible part holds
+  to a data URL of its blob before any hash, keeps the raw items'
+  references as recorded, carries each blob beside a document written
+  to files under `sidecar/<session>/`, and refuses when it cannot read
+  a blob. Text quoting a reference, and any string of an inline
+  session, is not one (Projections, ATIF). This is a projection rule:
+  no file member changes.
+- A writer that composes instructions from a layer whose trust it
+  knows MUST record them as parts carrying that trust (`config`,
+  Instructions as parts), and one that carries the settings in force
+  into a new file writes the parts in force with their `trust`. 0.20
+  made parts a writer's choice, so instructions composed from an
+  `untrusted` layer could be recorded as one string, and the path's
+  trust lost the label.
+- A `compaction` MAY carry `requested: true`, for a fold the host or a
+  person asked for, and with it `instructions`, the text the summariser
+  was asked to follow, never written without `requested` (`compaction`).
+  Both are record members that reach no request and no context hash.
+  0.20 had no member for either, so a fold a person asked for read as
+  one the budget forced, and the instructions that shaped its summary
+  were lost.
+- A trigger's `kind` `human` says a person sent the input, and a
+  `user` message is the person's words when its trigger has it
+  (`queued`, `trigger`). One whose trigger has another kind, or that
+  names `instructions_part` or `from_link`, is not; one with no trigger
+  makes no claim and is never presented as the person's. A 0.21 writer
+  MUST mark a message it composed so, never `human`, though a store or
+  a rewriter accepts a recorded entry that carries `human` beside
+  either member, which reads as composed. A reader reads the kind as
+  written in a file of any minor, though a 0.20 writer may have
+  written `human` on a composed message. The drained `item` carries the
+  trigger as its `source`, which a tool that checks a file compares. A
+  redactor keeps the kind as written. 0.20 left every kind opaque, so a
+  reader could not tell a scheduled reminder or a forwarded peer's text
+  from what the person typed.
 
 ## Changes since 0.19
 

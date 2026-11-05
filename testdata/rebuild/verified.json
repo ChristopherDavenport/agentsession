@@ -422,7 +422,7 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.20",
+      "format": "agentsession/0.21",
       "leaf": "sha256:1bee2b136e9cfde9316d43d07c09e822b14118db88898ba9edc914310473792a",
       "main": true,
       "redacted": true,
@@ -430,7 +430,7 @@
         "profile": "test/v1",
         "session": "01995b2a-0000-7000-8000-000000000001"
       },
-      "visible": "sha256:f7ee18bd13ce08c2babd4bf059d89f4f2c928450bc24539c4d6c3a41e8be8700"
+      "visible": "sha256:c11a99e5efeabcdd3718c44ffa9908756e0ce6d82c78220eddee88aa0bc32a08"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

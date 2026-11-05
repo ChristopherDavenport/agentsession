@@ -429,15 +429,15 @@ func TestMigrationRewritesEveryEntryNamingMember(t *testing.T) {
 // fails when a type gains one that neither lists. Paths are as the table
 // writes them, joined by "/".
 var coreStringMembers = map[string][]string{
-	TypeItem:          {"response", "source/kind", "source/ref", "source/source", "instructions_part/id", "instructions_part/[]/id"},
+	TypeItem:          {"response", "source/ref", "source/source", "instructions_part/id", "instructions_part/[]/id"},
 	TypeResponse:      {"response_id", "model"},
 	TypeConfig:        {"model", "instructions", "instructions_parts/[]/id", "instructions_parts/[]/text", "instructions_omitted/[]/id", "instructions_omitted/[]/reason", "tools_removed/[]", "omit/outputs/text", "omit/outputs/groups/[]/text", "omit/images/placeholder"},
-	TypeCompaction:    {"config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/of", "config/omit/outputs/text", "config/omit/outputs/groups/[]/text", "config/omit/images/placeholder"},
+	TypeCompaction:    {"instructions", "config/model", "config/instructions", "config/instructions_parts/[]/id", "config/instructions_parts/[]/text", "config/instructions_omitted/[]/id", "config/instructions_omitted/[]/reason", "config/instructions_omitted/[]/of", "config/omit/outputs/text", "config/omit/outputs/groups/[]/text", "config/omit/images/placeholder"},
 	TypeBranchSummary: {},
-	TypeRun:           {"run_id", "ref", "trigger/kind", "trigger/ref", "trigger/source"},
+	TypeRun:           {"run_id", "ref", "trigger/ref", "trigger/source"},
 	TypeDispatch:      {"idempotency_key"},
 	TypeDecision:      {"reason"},
-	TypeQueued:        {"trigger/kind", "trigger/ref", "trigger/source", "ref"},
+	TypeQueued:        {"trigger/ref", "trigger/source", "ref", "instructions_part/id", "instructions_part/[]/id"},
 	TypeLabel:         {"label"},
 	TypeInfo:          {"name"},
 	TypeEnv:           {"cwd", "vcs/system", "vcs/revision", "tools/*", "workspace/ref", "workspace/host", "workspace/instance"},

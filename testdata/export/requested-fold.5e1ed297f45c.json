@@ -1,0 +1,268 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-0000000000b7",
+  "trajectory_id": "sha256:5e1ed297f45cb8ce244dcc763073d935f01a583671716d348f8be4dec9225d95",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-04T11:00:12Z",
+      "source": "system",
+      "message": "Summary: the API takes a bearer token; the deploy runs on Tuesdays.",
+      "observation": {
+        "results": [
+          {
+            "content": "Summary: the API takes a bearer token; the deploy runs on Tuesdays."
+          }
+        ]
+      },
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:f634f729e5e3d596fc781f1fe42e96e187761b412ed99c665b9533235e9d8df9",
+          "instructions": "keep the API notes",
+          "requested": true,
+          "visible": "sha256:c4fdf7bd0ef9c97a36799d3e746c2d67b9b89ed224a421b8129216cf0474dbc1"
+        },
+        "context_management": {
+          "boundary": "replace",
+          "type": "compaction"
+        },
+        "first_kept": "sha256:8155fe0025260b72f3b481c0de1bf64dda6f262907ca6993ba55e30028eb03a7",
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "system",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Summary: the API takes a bearer token; the deploy runs on Tuesdays."
+              }
+            ]
+          }
+        },
+        "tokens_before": 5000
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-04T11:00:09Z",
+      "source": "user",
+      "message": "What does the API take?",
+      "is_copied_context": true,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:8155fe0025260b72f3b481c0de1bf64dda6f262907ca6993ba55e30028eb03a7",
+          "visible": "sha256:072a235733205bcab80aa7c5de6b84c8a21527c9f2635ca633999ecf8a255966"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "What does the API take?"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-04T11:00:11Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "A bearer token.",
+      "is_copied_context": true,
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:91bc015005ad0e0d0c2c78e4c193fda7d7bee9b73c9523d1774ebef60409c0db",
+          "visible": "sha256:a1a2dbf029ffebbcbd033761c05a8732dd410dec684020e6b240fb9e116cdb56"
+        },
+        "item_entry_ids": [
+          "sha256:da71fd58ca1817fa4b79f882632c641cf8b7f6b1eb1b3fa4efb407ce657d3ea6"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_3",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "A bearer token.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:91bc015005ad0e0d0c2c78e4c193fda7d7bee9b73c9523d1774ebef60409c0db",
+            "model": "gpt-5",
+            "request_hash": "sha256:878038f64b68e0c8bc3ed7fb84babd83b674e6ce2f710d65bf6764e61de42657",
+            "response_id": "resp_3",
+            "status": "completed",
+            "ts": "2026-11-04T11:00:11Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-11-04T11:00:13Z",
+      "source": "user",
+      "message": "And when is the deploy?",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:dbafeda0a8347cc281f50da45496220a139aabc2be50b78f90c916e34be1f33e",
+          "visible": "sha256:7ad9ccb7baf41837a1c31aa9eb0fd3b9dc39fd7547e8169f616dbd38a8af23bb"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "And when is the deploy?"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": 5,
+      "timestamp": "2026-11-04T11:00:15Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Tuesdays.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:5e1ed297f45cb8ce244dcc763073d935f01a583671716d348f8be4dec9225d95",
+          "visible": "sha256:0eb4ec536b51bbad5f1fa23bfa3f443d469f8d5cba4af137a3ff9bdc8bf7bb3b"
+        },
+        "item_entry_ids": [
+          "sha256:55080e719bb9c30ac465878dfb57c46b546fa01220c428f099ceb624dca016d0"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_4",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Tuesdays.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:5e1ed297f45cb8ce244dcc763073d935f01a583671716d348f8be4dec9225d95",
+            "model": "gpt-5",
+            "request_hash": "sha256:9462869472ee21826fefc12a580e0a16758e8e09105b2dd387fea3100dfce49b",
+            "response_id": "resp_4",
+            "status": "completed",
+            "ts": "2026-11-04T11:00:15Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 6 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 5 steps. The steps are the context after compaction and leave out 3 model call(s) that were folded away; final_metrics totals the whole path.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 6
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:55080e719bb9c30ac465878dfb57c46b546fa01220c428f099ceb624dca016d0": {
+          "body": {
+            "response": "resp_4"
+          },
+          "parent": "sha256:dbafeda0a8347cc281f50da45496220a139aabc2be50b78f90c916e34be1f33e",
+          "ts": "2026-11-04T11:00:14Z",
+          "type": "item"
+        },
+        "sha256:5e1ed297f45cb8ce244dcc763073d935f01a583671716d348f8be4dec9225d95": {
+          "parent": "sha256:55080e719bb9c30ac465878dfb57c46b546fa01220c428f099ceb624dca016d0",
+          "ts": "2026-11-04T11:00:15Z",
+          "type": "response"
+        },
+        "sha256:8155fe0025260b72f3b481c0de1bf64dda6f262907ca6993ba55e30028eb03a7": {
+          "parent": "sha256:05e3b1e937d9c680867633d29bb79d032bf273e7131c14596f73955f72032ff1",
+          "ts": "2026-11-04T11:00:09Z",
+          "type": "item"
+        },
+        "sha256:91bc015005ad0e0d0c2c78e4c193fda7d7bee9b73c9523d1774ebef60409c0db": {
+          "parent": "sha256:da71fd58ca1817fa4b79f882632c641cf8b7f6b1eb1b3fa4efb407ce657d3ea6",
+          "ts": "2026-11-04T11:00:11Z",
+          "type": "response"
+        },
+        "sha256:da71fd58ca1817fa4b79f882632c641cf8b7f6b1eb1b3fa4efb407ce657d3ea6": {
+          "body": {
+            "response": "resp_3"
+          },
+          "parent": "sha256:8155fe0025260b72f3b481c0de1bf64dda6f262907ca6993ba55e30028eb03a7",
+          "ts": "2026-11-04T11:00:10Z",
+          "type": "item"
+        },
+        "sha256:dbafeda0a8347cc281f50da45496220a139aabc2be50b78f90c916e34be1f33e": {
+          "parent": "sha256:f634f729e5e3d596fc781f1fe42e96e187761b412ed99c665b9533235e9d8df9",
+          "ts": "2026-11-04T11:00:13Z",
+          "type": "item"
+        },
+        "sha256:f634f729e5e3d596fc781f1fe42e96e187761b412ed99c665b9533235e9d8df9": {
+          "body": {
+            "config": {
+              "model": "gpt-5",
+              "instructions": "Be brief."
+            },
+            "first_kept": "sha256:8155fe0025260b72f3b481c0de1bf64dda6f262907ca6993ba55e30028eb03a7",
+            "instructions": "keep the API notes",
+            "requested": true,
+            "summary": {
+              "type": "message",
+              "role": "system",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Summary: the API takes a bearer token; the deploy runs on Tuesdays."
+                }
+              ]
+            },
+            "tokens_before": 5000
+          },
+          "parent": "sha256:91bc015005ad0e0d0c2c78e4c193fda7d7bee9b73c9523d1774ebef60409c0db",
+          "ts": "2026-11-04T11:00:12Z",
+          "type": "compaction"
+        }
+      },
+      "format": "agentsession/0.21",
+      "leaf": "sha256:5e1ed297f45cb8ce244dcc763073d935f01a583671716d348f8be4dec9225d95",
+      "main": true,
+      "visible": "sha256:9b5018a40a660284ccf2f00c598c855ca52bf0a2ebc5b7f3ecb5b499bb7b3c0d"
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

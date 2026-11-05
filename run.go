@@ -1039,6 +1039,13 @@ var ErrCallCompleted = errors.New("agentsession: call has its output")
 // writes a reject.
 var ErrAnswerNotDispatched = errors.New("agentsession: answer for a call the record shows never started")
 
+// ErrDrainMismatch is returned by [Session.VerifyRecords] for an item
+// entry that drains a queued entry and lacks or changes a member the
+// queued entry carries for it, since 0.21: visible, trust,
+// instructions_part, or its trigger as the item's source (RFC 0001,
+// queued).
+var ErrDrainMismatch = errors.New("agentsession: drained item differs from its queued entry")
+
 // ErrRecordMissing is returned by [Session.VerifyRecords] when the
 // header promises a record entry type and the path lacks one where the
 // event plainly happened.
@@ -1053,7 +1060,8 @@ var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 // no reject a dispatch but a withdrawal, every item's from_link names a
 // peer link before it, no copied_from names this session, no dispatch or
 // decision names a copied call and every output of one is marked copied,
-// and, when the header names dispatch in records,
+// every item that drains a queued input carries what the queued entry
+// carries for it (since 0.21), and, when the header names dispatch in records,
 // no answer ends a call with no dispatch and every call that ran has a
 // dispatch. A run written resume over a segment that takes nothing up,
 // holding record entries at most, agrees with it, as [Run.Empty] says,
@@ -1086,6 +1094,9 @@ func (s *Session) VerifyRecords(leaf string) error {
 		return err
 	}
 	if err := verifyCopied(s.ID(), path); err != nil {
+		return err
+	}
+	if err := verifyDrains(path); err != nil {
 		return err
 	}
 	calls := Calls(path)
@@ -1472,6 +1483,46 @@ func verifyTargets(path []Entry) error {
 	return nil
 }
 
+// verifyDrains checks each item entry on the path that drains a queued
+// entry before it against that entry (RFC 0001, queued, since 0.21):
+// every member the queued entry carries for the input, visible, trust
+// and instructions_part, the item carries as written, and its trigger as
+// the item's source, which says whose words the input is ([WordsOf]).
+// A member the item
+// carries and its queued entry does not is not reported, since a queued
+// entry written before 0.21 could not carry it. A source that differs
+// from the trigger is reported in a file of any minor, since 0.20 asked
+// for the same; one the item lacks only when its queued entry carries a
+// member 0.21 defines, which dates the drain after it to 0.21: before,
+// an item's source was optional, and a file raised to 0.21 holds such
+// drains, which nothing else tells from later ones.
+func verifyDrains(path []Entry) error {
+	queued := map[string]*QueuedEntry{}
+	for _, e := range path {
+		switch v := e.(type) {
+		case *QueuedEntry:
+			queued[v.ID] = v
+		case *ItemEntry:
+			q, ok := queued[v.QueuedFrom]
+			if !ok {
+				continue
+			}
+			switch {
+			case q.Visible != nil && (v.Visible == nil || *v.Visible != *q.Visible):
+				return fmt.Errorf("%w: item %s drains %s and does not carry its visible", ErrDrainMismatch, v.ID, q.ID)
+			case q.Trust != nil && !sameTrust(q.Trust, v.Trust):
+				return fmt.Errorf("%w: item %s drains %s and does not carry its trust", ErrDrainMismatch, v.ID, q.ID)
+			case q.Layers() != nil && !slices.Equal(q.Layers(), v.Layers()):
+				return fmt.Errorf("%w: item %s drains %s and does not carry its instructions_part", ErrDrainMismatch, v.ID, q.ID)
+			case q.Trigger != nil && v.Source != nil && !q.Trigger.Equal(v.Source),
+				q.Trigger != nil && v.Source == nil && (q.Visible != nil || q.Trust != nil || q.Layers() != nil):
+				return fmt.Errorf("%w: item %s drains %s and does not carry its trigger as its source", ErrDrainMismatch, v.ID, q.ID)
+			}
+		}
+	}
+	return nil
+}
+
 // sameTrust reports whether two trust members carry the same labels,
 // both absent counting as the same.
 func sameTrust(a, b *Trust) bool {
@@ -1481,16 +1532,39 @@ func sameTrust(a, b *Trust) bool {
 	return slices.Equal(UnionTrust(a).Reads, UnionTrust(b).Reads)
 }
 
+// holdsTrust reports whether a copy's trust holds every label of its
+// source's (RFC 0001, item, since 0.21): a source with trust asks the
+// copy for trust holding each of its labels, and more are allowed,
+// since a label only narrows what a reader may do with the text; a
+// source without trust asks for nothing.
+func holdsTrust(copy, source *Trust) bool {
+	if source == nil {
+		return true
+	}
+	if copy == nil {
+		return false
+	}
+	for _, r := range source.Reads {
+		if !slices.Contains(copy.Reads, r) {
+			return false
+		}
+	}
+	return true
+}
+
 // ErrCopyMismatch is returned by [Session.VerifyCopies] for a copied
 // item whose copied_from names an entry of its source that does not
-// hold an equal item, carrying the same trust, or that the source does
-// not hold (RFC 0001, item, since 0.15).
+// hold an equal item, or whose trust the copy lacks a label of, or that
+// the source does not hold (RFC 0001, item, since 0.15).
 var ErrCopyMismatch = errors.New("agentsession: copied item differs from the entry it names")
 
 // VerifyCopies checks every item of the session whose copied_from names
 // an entry against that entry, in the session copied_from names, read
 // through resolve: the entry holds the same item, member for member, and
-// the same trust. A session resolve does not find, returned as (nil,
+// the copy carries trust holding every label of the entry's, when the
+// entry carries trust. Since 0.21 the copy may hold more labels than the
+// entry, as a host marking a copy more cautiously writes it, and never
+// fewer. A session resolve does not find, returned as (nil,
 // nil), is not checked; an error from resolve is returned. With a nil
 // resolve it checks nothing. Each session is resolved once. It returns
 // the first problem found.
@@ -1528,8 +1602,8 @@ func (s *Session) VerifyCopies(resolve func(id string) (*Session, error)) error 
 			return fmt.Errorf("%w: item %s names %s, which %s holds no item entry under", ErrCopyMismatch, it.ID, it.CopiedFrom.Entry, it.CopiedFrom.Session)
 		case !sameItem(from.Item, it.Item):
 			return fmt.Errorf("%w: item %s is not the item of %s", ErrCopyMismatch, it.ID, from.ID)
-		case !sameTrust(from.Trust, it.Trust):
-			return fmt.Errorf("%w: item %s does not carry the trust of %s", ErrCopyMismatch, it.ID, from.ID)
+		case !holdsTrust(it.Trust, from.Trust):
+			return fmt.Errorf("%w: item %s does not carry every trust label of %s", ErrCopyMismatch, it.ID, from.ID)
 		}
 	}
 	return nil

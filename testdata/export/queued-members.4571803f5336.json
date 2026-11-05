@@ -1,0 +1,608 @@
+{
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01995b2a-0000-7000-8000-0000000000b5",
+  "trajectory_id": "sha256:4571803f53364cc7bd24ad65a62c0af2323f633dc5f461bb508abf820fd67277",
+  "agent": {
+    "name": "fixture",
+    "version": "1",
+    "model_name": "gpt-5"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-11-04T09:00:03Z",
+      "source": "user",
+      "message": "Deploy billing.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:fc172bdb571556e28d51b3fe181eba8c8b98972820682f910209ea422e11a97d",
+          "visible": "sha256:afb7cb7f4552adc6d817fe64c8be51218cff24e5f302a4999c4e3a5ddc7b140d"
+        },
+        "config_entries": [
+          "sha256:ee42b1cab65d1287eef919acaae34fc0a9140bfbd71eeafa0c749dc4fd9fe45e"
+        ],
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Deploy billing."
+              }
+            ]
+          }
+        },
+        "run": [
+          {
+            "end_entry_id": "sha256:85b871212d0949825969829ca4ce36b1f37c31aaa78afda530028697f12a218f",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-1",
+            "source": "input",
+            "start_entry_id": "sha256:5fce936eb5ca3f33d244c96797c4dc36f8e42ca9906a29556d99a9bb67b6b01e"
+          }
+        ],
+        "source": {
+          "kind": "human",
+          "source": "terminal"
+        }
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-11-04T09:00:05Z",
+      "source": "user",
+      "message": "Reminder from memory: the deploy window is Tuesday.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:600d8e6b1d76f9595f59e2481fa698b71683dd3fd54dab53b10c2b36b01a662c",
+          "instructions_part": {
+            "source": "agentmemory"
+          },
+          "trust": {
+            "reads": [
+              "untrusted"
+            ]
+          },
+          "visible": "sha256:9f91e84cbe2fcbb4bd7f97b7d9d3c246f4aeaae2907d2d4d35839765c78c7e15"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Reminder from memory: the deploy window is Tuesday."
+              }
+            ]
+          }
+        },
+        "queued": [
+          {
+            "entry_id": "sha256:2200817bc1b95a43bb06dbfb2d2805113f8544b10095e0a0e1dc31156d555635",
+            "instructions_part": {
+              "source": "agentmemory"
+            },
+            "item": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Reminder from memory: the deploy window is Tuesday."
+                }
+              ]
+            },
+            "mode": "steer",
+            "trigger": {
+              "kind": "schedule",
+              "ref": "cron:deploy-window",
+              "source": "scheduler"
+            },
+            "trust": {
+              "reads": [
+                "untrusted"
+              ]
+            },
+            "visible": false
+          }
+        ],
+        "queued_from": "sha256:2200817bc1b95a43bb06dbfb2d2805113f8544b10095e0a0e1dc31156d555635",
+        "source": {
+          "kind": "schedule",
+          "ref": "cron:deploy-window",
+          "source": "scheduler"
+        },
+        "visible": false
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-11-04T09:00:07Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Billing deploys Tuesday, in the window.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:45a0b3fe8347d2f14403555540a99e4480257a62d0a6efabe8a9b614efb4c271",
+          "visible": "sha256:9870cbb6bb05dcfb4faa144fa13f3e82c732664152d6f2ec968d96b4a9739ca9"
+        },
+        "item_entry_ids": [
+          "sha256:21d98915db02161f189dd87bf69576ca1c0f9c272f7c832741d8bf674a3362d0"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_1",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Billing deploys Tuesday, in the window.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:45a0b3fe8347d2f14403555540a99e4480257a62d0a6efabe8a9b614efb4c271",
+            "model": "gpt-5",
+            "request_hash": "sha256:b26da8a421c312b499e17bcdd3f9a47093092b767e4624897a00a6bb7ca64af1",
+            "response_id": "resp_1",
+            "status": "completed",
+            "ts": "2026-11-04T09:00:07Z"
+          }
+        }
+      }
+    },
+    {
+      "step_id": 4,
+      "timestamp": "2026-11-04T09:00:12Z",
+      "source": "user",
+      "message": "From AGENTS.md and memory: the billing owner is on call.",
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:1f1c7725c1f388c6e5ff7922cfd1ce9c089c42b3b95e9826f91815f849ea86bc",
+          "instructions_part": [
+            {
+              "id": "AGENTS.md",
+              "source": "agentsmd"
+            },
+            {
+              "source": "agentmemory"
+            }
+          ],
+          "trust": {
+            "reads": [
+              "private"
+            ]
+          },
+          "visible": "sha256:7d663e5207919d8394311e8bf4251b12e1917ac94a7151edeabefd5651dabdcd"
+        },
+        "openresponses": {
+          "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "From AGENTS.md and memory: the billing owner is on call."
+              }
+            ]
+          }
+        },
+        "queued": [
+          {
+            "entry_id": "sha256:e9118b26cb9d702b354dfd1bc7359ba57549c8aecd650d2e7435219c3f8db9e5",
+            "instructions_part": [
+              {
+                "id": "AGENTS.md",
+                "source": "agentsmd"
+              },
+              {
+                "source": "agentmemory"
+              }
+            ],
+            "item": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "From AGENTS.md and memory: the billing owner is on call."
+                }
+              ]
+            },
+            "mode": "followup",
+            "trigger": {
+              "kind": "hook",
+              "ref": "session-start",
+              "source": "harness"
+            },
+            "trust": {
+              "reads": [
+                "private"
+              ]
+            },
+            "visible": false
+          },
+          {
+            "entry_id": "sha256:eea65def3d06bad5ed68d2c57bdbd09fd541ccb28e23ef71c8ae7d92857cfbe2",
+            "instructions_part": [
+              {
+                "id": "AGENTS.md",
+                "source": "agentsmd"
+              },
+              {
+                "source": "agentmemory"
+              }
+            ],
+            "item": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "From AGENTS.md and memory: the billing owner is on call."
+                }
+              ]
+            },
+            "mode": "followup",
+            "trigger": {
+              "kind": "hook",
+              "ref": "session-start",
+              "source": "harness"
+            },
+            "trust": {
+              "reads": [
+                "private"
+              ]
+            },
+            "visible": false
+          }
+        ],
+        "queued_from": "sha256:eea65def3d06bad5ed68d2c57bdbd09fd541ccb28e23ef71c8ae7d92857cfbe2",
+        "run": [
+          {
+            "end_entry_id": "sha256:4571803f53364cc7bd24ad65a62c0af2323f633dc5f461bb508abf820fd67277",
+            "pending": [],
+            "reason": "done",
+            "run_id": "run-2",
+            "source": "input",
+            "start_entry_id": "sha256:fa74fd51914e4dee0e67114efb69e1e54f7825dd7e2137102cfcc04ddef07021"
+          }
+        ],
+        "source": {
+          "kind": "hook",
+          "ref": "session-start",
+          "source": "harness"
+        },
+        "visible": false
+      }
+    },
+    {
+      "step_id": 5,
+      "timestamp": "2026-11-04T09:00:14Z",
+      "source": "agent",
+      "model_name": "gpt-5",
+      "message": "Noted: the billing owner is on call.",
+      "llm_call_count": 1,
+      "extra": {
+        "agentsession": {
+          "entry_id": "sha256:586da649c5985c293f567774e2c9be752770df44fea41f15875df3fc1ac5fa1d",
+          "visible": "sha256:a33d093b6de1af08d2ce1e1c22dc8553232b942e437054f4a639365a00d7bc6c"
+        },
+        "item_entry_ids": [
+          "sha256:a1835daa5a7199e24eda3ca518826229c8acfee0427f07d0fbe38777c8728db5"
+        ],
+        "openresponses": {
+          "items": [
+            {
+              "type": "message",
+              "id": "msg_resp_2",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Noted: the billing owner is on call.",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "response": {
+            "entry_id": "sha256:586da649c5985c293f567774e2c9be752770df44fea41f15875df3fc1ac5fa1d",
+            "model": "gpt-5",
+            "request_hash": "sha256:50053d867d7943ea93e66b14365beb100de920d208d9a44bfc1086d1087d6a7b",
+            "response_id": "resp_2",
+            "status": "completed",
+            "ts": "2026-11-04T09:00:14Z"
+          }
+        }
+      }
+    }
+  ],
+  "notes": "total_steps counts the path's 2 model call(s), each response's attempts, folds, branch summaries and calls recorded with their usage alone, and not its 5 steps.",
+  "final_metrics": {
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_cached_tokens": 0,
+    "total_steps": 2
+  },
+  "extra": {
+    "agentsession": {
+      "cwd": "/home/u/proj",
+      "entries": {
+        "sha256:1f1c7725c1f388c6e5ff7922cfd1ce9c089c42b3b95e9826f91815f849ea86bc": {
+          "body": {
+            "instructions_part": [
+              {
+                "id": "AGENTS.md",
+                "source": "agentsmd"
+              },
+              {
+                "source": "agentmemory"
+              }
+            ],
+            "queued_from": "sha256:eea65def3d06bad5ed68d2c57bdbd09fd541ccb28e23ef71c8ae7d92857cfbe2",
+            "source": {
+              "kind": "hook",
+              "ref": "session-start",
+              "source": "harness"
+            },
+            "trust": {
+              "reads": [
+                "private"
+              ]
+            },
+            "visible": false
+          },
+          "parent": "sha256:fa74fd51914e4dee0e67114efb69e1e54f7825dd7e2137102cfcc04ddef07021",
+          "ts": "2026-11-04T09:00:12Z",
+          "type": "item"
+        },
+        "sha256:21d98915db02161f189dd87bf69576ca1c0f9c272f7c832741d8bf674a3362d0": {
+          "body": {
+            "response": "resp_1"
+          },
+          "parent": "sha256:600d8e6b1d76f9595f59e2481fa698b71683dd3fd54dab53b10c2b36b01a662c",
+          "ts": "2026-11-04T09:00:06Z",
+          "type": "item"
+        },
+        "sha256:2200817bc1b95a43bb06dbfb2d2805113f8544b10095e0a0e1dc31156d555635": {
+          "body": {
+            "instructions_part": {
+              "source": "agentmemory"
+            },
+            "item": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Reminder from memory: the deploy window is Tuesday."
+                }
+              ]
+            },
+            "mode": "steer",
+            "trigger": {
+              "kind": "schedule",
+              "ref": "cron:deploy-window",
+              "source": "scheduler"
+            },
+            "trust": {
+              "reads": [
+                "untrusted"
+              ]
+            },
+            "visible": false
+          },
+          "parent": "sha256:fc172bdb571556e28d51b3fe181eba8c8b98972820682f910209ea422e11a97d",
+          "ts": "2026-11-04T09:00:04Z",
+          "type": "queued"
+        },
+        "sha256:4571803f53364cc7bd24ad65a62c0af2323f633dc5f461bb508abf820fd67277": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "done",
+            "run_id": "run-2"
+          },
+          "parent": "sha256:586da649c5985c293f567774e2c9be752770df44fea41f15875df3fc1ac5fa1d",
+          "ts": "2026-11-04T09:00:15Z",
+          "type": "run"
+        },
+        "sha256:45a0b3fe8347d2f14403555540a99e4480257a62d0a6efabe8a9b614efb4c271": {
+          "parent": "sha256:21d98915db02161f189dd87bf69576ca1c0f9c272f7c832741d8bf674a3362d0",
+          "ts": "2026-11-04T09:00:07Z",
+          "type": "response"
+        },
+        "sha256:586da649c5985c293f567774e2c9be752770df44fea41f15875df3fc1ac5fa1d": {
+          "parent": "sha256:a1835daa5a7199e24eda3ca518826229c8acfee0427f07d0fbe38777c8728db5",
+          "ts": "2026-11-04T09:00:14Z",
+          "type": "response"
+        },
+        "sha256:5fce936eb5ca3f33d244c96797c4dc36f8e42ca9906a29556d99a9bb67b6b01e": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-1",
+            "source": "input"
+          },
+          "parent": "sha256:ee42b1cab65d1287eef919acaae34fc0a9140bfbd71eeafa0c749dc4fd9fe45e",
+          "ts": "2026-11-04T09:00:02Z",
+          "type": "run"
+        },
+        "sha256:600d8e6b1d76f9595f59e2481fa698b71683dd3fd54dab53b10c2b36b01a662c": {
+          "body": {
+            "instructions_part": {
+              "source": "agentmemory"
+            },
+            "queued_from": "sha256:2200817bc1b95a43bb06dbfb2d2805113f8544b10095e0a0e1dc31156d555635",
+            "source": {
+              "kind": "schedule",
+              "ref": "cron:deploy-window",
+              "source": "scheduler"
+            },
+            "trust": {
+              "reads": [
+                "untrusted"
+              ]
+            },
+            "visible": false
+          },
+          "parent": "sha256:2200817bc1b95a43bb06dbfb2d2805113f8544b10095e0a0e1dc31156d555635",
+          "ts": "2026-11-04T09:00:05Z",
+          "type": "item"
+        },
+        "sha256:85b871212d0949825969829ca4ce36b1f37c31aaa78afda530028697f12a218f": {
+          "body": {
+            "pending": [],
+            "phase": "end",
+            "reason": "done",
+            "run_id": "run-1"
+          },
+          "parent": "sha256:e9118b26cb9d702b354dfd1bc7359ba57549c8aecd650d2e7435219c3f8db9e5",
+          "ts": "2026-11-04T09:00:09Z",
+          "type": "run"
+        },
+        "sha256:a1835daa5a7199e24eda3ca518826229c8acfee0427f07d0fbe38777c8728db5": {
+          "body": {
+            "response": "resp_2"
+          },
+          "parent": "sha256:1f1c7725c1f388c6e5ff7922cfd1ce9c089c42b3b95e9826f91815f849ea86bc",
+          "ts": "2026-11-04T09:00:13Z",
+          "type": "item"
+        },
+        "sha256:e9118b26cb9d702b354dfd1bc7359ba57549c8aecd650d2e7435219c3f8db9e5": {
+          "body": {
+            "instructions_part": [
+              {
+                "id": "AGENTS.md",
+                "source": "agentsmd"
+              },
+              {
+                "source": "agentmemory"
+              }
+            ],
+            "item": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "From AGENTS.md and memory: the billing owner is on call."
+                }
+              ]
+            },
+            "mode": "followup",
+            "trigger": {
+              "kind": "hook",
+              "ref": "session-start",
+              "source": "harness"
+            },
+            "trust": {
+              "reads": [
+                "private"
+              ]
+            },
+            "visible": false
+          },
+          "parent": "sha256:45a0b3fe8347d2f14403555540a99e4480257a62d0a6efabe8a9b614efb4c271",
+          "ts": "2026-11-04T09:00:08Z",
+          "type": "queued"
+        },
+        "sha256:ee42b1cab65d1287eef919acaae34fc0a9140bfbd71eeafa0c749dc4fd9fe45e": {
+          "body": {
+            "instructions": "You deploy services.",
+            "model": "gpt-5"
+          },
+          "parent": null,
+          "ts": "2026-11-04T09:00:01Z",
+          "type": "config"
+        },
+        "sha256:eea65def3d06bad5ed68d2c57bdbd09fd541ccb28e23ef71c8ae7d92857cfbe2": {
+          "body": {
+            "instructions_part": [
+              {
+                "id": "AGENTS.md",
+                "source": "agentsmd"
+              },
+              {
+                "source": "agentmemory"
+              }
+            ],
+            "item": {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "From AGENTS.md and memory: the billing owner is on call."
+                }
+              ]
+            },
+            "mode": "followup",
+            "trigger": {
+              "kind": "hook",
+              "ref": "session-start",
+              "source": "harness"
+            },
+            "trust": {
+              "reads": [
+                "private"
+              ]
+            },
+            "visible": false
+          },
+          "parent": "sha256:85b871212d0949825969829ca4ce36b1f37c31aaa78afda530028697f12a218f",
+          "ts": "2026-11-04T09:00:10Z",
+          "type": "queued"
+        },
+        "sha256:fa74fd51914e4dee0e67114efb69e1e54f7825dd7e2137102cfcc04ddef07021": {
+          "body": {
+            "phase": "start",
+            "run_id": "run-2",
+            "source": "input"
+          },
+          "parent": "sha256:eea65def3d06bad5ed68d2c57bdbd09fd541ccb28e23ef71c8ae7d92857cfbe2",
+          "ts": "2026-11-04T09:00:11Z",
+          "type": "run"
+        },
+        "sha256:fc172bdb571556e28d51b3fe181eba8c8b98972820682f910209ea422e11a97d": {
+          "body": {
+            "source": {
+              "kind": "human",
+              "source": "terminal"
+            }
+          },
+          "parent": "sha256:5fce936eb5ca3f33d244c96797c4dc36f8e42ca9906a29556d99a9bb67b6b01e",
+          "ts": "2026-11-04T09:00:03Z",
+          "type": "item"
+        }
+      },
+      "format": "agentsession/0.21",
+      "leaf": "sha256:4571803f53364cc7bd24ad65a62c0af2323f633dc5f461bb508abf820fd67277",
+      "main": true,
+      "records": [
+        "run",
+        "queued"
+      ],
+      "trust": {
+        "reads": [
+          "private",
+          "untrusted"
+        ]
+      },
+      "visible": "sha256:9746a7f3848fde821fcfdc93971a6672f41778506dd1bc8ddc4dfb3a7673ce30"
+    },
+    "openresponses": {
+      "payload": "openresponses/2026-04-24"
+    }
+  }
+}

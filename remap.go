@@ -243,11 +243,12 @@ var envelopeMembers = []special{
 // define, is the writer's text and body.
 //
 // A trust member's labels, on an item, a result, a compaction and a
-// branch summary, are the format's vocabulary and not text, so a rewrite
+// branch summary, and since 0.21 a queued entry, are the format's vocabulary and not text, so a rewrite
 // leaves them as they are (RFC 0001, Every redacted entry). So is a
 // source the format defines ([KnownLayer]) on an instructions part, an
 // omitted part and an item's instructions_part, since 0.17, and each
-// element of an instructions_part list, since 0.18; any other
+// element of an instructions_part list, since 0.18, and a queued
+// entry's in either form, since 0.21; any other
 // source, and every id, is text. A part's trust labels, since 0.17, are
 // the format's vocabulary too.
 //
@@ -258,6 +259,8 @@ var envelopeMembers = []special{
 // workspace's kind, a link's rel and cancel, an outcome's kind; an
 // item's role, status and phase, wherever an entry holds an item, and a
 // part's detail; a response's status, incomplete reason and error type;
+// a trigger's kind human, since 0.21, on an item's source, a queued
+// entry's trigger and a run start's trigger;
 // and the settings' omit reasoning, which the context algorithm reads,
 // their reasoning and text settings and the request members of extra the
 // payload closes. A type in the payload, an item's, a
@@ -279,10 +282,20 @@ var bodyMembers = map[string][]special{
 			return e.(*ItemEntry).InstructionsLayers != nil
 		}},
 		{path: memberPath("item", "call_id"), role: roleCallID},
+		closed(memberPath("source", "kind"), TriggerHuman),
 	}),
 	TypeQueued: joined(itemMembers("item"), []special{
+		closed(memberPath("trigger", "kind"), TriggerHuman),
 		{path: memberPath("item", "call_id"), role: roleCallID},
 		closed(memberPath("mode"), ModeSteer, ModeFollowUp),
+		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*QueuedEntry).Trust != nil }},
+		{path: memberPath("instructions_part", "source"), role: roleFixed, when: func(e Entry) bool {
+			p := e.(*QueuedEntry).InstructionsPart
+			return p != nil && KnownLayer(p.Source)
+		}},
+		{path: memberPath("instructions_part", "[]", "source"), role: roleFixed, holds: knownSource, when: func(e Entry) bool {
+			return e.(*QueuedEntry).InstructionsLayers != nil
+		}},
 	}),
 	TypeResponse: {
 		{path: memberPath("request_hash"), role: roleHash},
@@ -325,6 +338,7 @@ var bodyMembers = map[string][]special{
 	}),
 	TypeRun: {
 		{path: memberPath("pending", "[]"), role: roleCallID},
+		closed(memberPath("trigger", "kind"), TriggerHuman),
 		closed(memberPath("phase"), RunStart, RunEnd),
 		closed(memberPath("source"), SourceInput, SourceResume),
 		closed(memberPath("reason"), ReasonDone, ReasonStopped, ReasonInterrupted, ReasonInputRequired, ReasonAborted, ReasonError),
