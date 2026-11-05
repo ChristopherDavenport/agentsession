@@ -53,6 +53,10 @@ type Features struct {
 	// takes sidecar sessions and a media object's PUT; one that does not
 	// refuses a sidecar session with unsupported (RFC 0002, Media).
 	Media bool `json:"media"`
+	// Search is set when the server serves RFC 0003's search: over a
+	// store that searches ([agentsession.Searcher]) or that it can scan
+	// ([agentsession.Reader]), every reference store among them.
+	Search bool `json:"search"`
 }
 
 // Limits are the server's bounds a client can plan around.

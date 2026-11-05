@@ -79,6 +79,7 @@ func Run(t *testing.T, opts Options) {
 	t.Run("Fork", func(t *testing.T) { testFork(t, opts) })
 	t.Run("ForkPrefix", func(t *testing.T) { testForkPrefix(t, opts) })
 	t.Run("Read", func(t *testing.T) { testRead(t, opts) })
+	t.Run("Search", func(t *testing.T) { testSearch(t, opts) })
 	t.Run("Follow", func(t *testing.T) { testFollow(t, opts) })
 	t.Run("Head", func(t *testing.T) { testHead(t, opts) })
 	t.Run("Refs", func(t *testing.T) { testRefs(t, opts) })

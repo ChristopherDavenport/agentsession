@@ -5,6 +5,24 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Feature: session search (RFC 0002 and RFC 0003, Search; #261).**
+  `Search(ctx, store, Query)` finds the messages of a store's sessions
+  that hold every word of a query, agentmemory RFC 0001's reference
+  match: in each session the `message` items among its own entries on
+  the path to its head, leaving out a fork's prefix, items marked
+  `visible: false`, items carrying `instructions_part` and copied items,
+  so each message is found once. A `Query` takes the listing's
+  `ListFilter`, sessions to exclude, roles, an entry time range, a limit
+  and a read check; a `Hit` is the session, entry, time, role and a
+  snippet. `ScanSearch` is the reference scan over `List` and `Reader`;
+  a store answering faster implements `Searcher`, which must answer as
+  the scan does, and the store suite checks every store against a
+  table. The remote server serves `POST /v1/sessions/search` under the
+  `search` capability, over only the sessions the caller may read, and
+  the remote client is a `Searcher`. No format change.
+
 ## v0.0.37 - 2026-11-03
 
 - **Breaking (format): Format 0.20 (RFC 0001, draft 0.20).** `Format`

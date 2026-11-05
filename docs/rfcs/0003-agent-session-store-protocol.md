@@ -76,8 +76,9 @@ partners: see Which store is the record.
 - Authentication and authorization schemes. The protocol names what each
   request needs (read, write, refs, exchange), so a deployment can map
   its own scheme onto it. Which scheme is an open question.
-- A query language. Listing is the reference library's `List` with its
-  filter.
+- A query language beyond one word match over the listing's filter.
+  Listing is the reference library's `List` with its filter, and search
+  is RFC 0002's (Search).
 - Following every session in a store. A client follows sessions and
   refs by name.
 - Multi-store transactions. A push is RFC 0002's two steps, admission
@@ -118,7 +119,8 @@ from RFC 0001 and RFC 0002 keep their meanings.
   `committed_view` (which `durable=true` needs), `log` (the log read,
   which needs a store that keeps a log of records with a cursor after
   each), `refs`, `ref_follow`, `durable_marks` (Following), `leases`,
-  `media` (a store that holds sidecar blobs, Objects),
+  `media` (a store that holds sidecar blobs, Objects), `search`
+  (Search),
   plus its limits, `snapshot_bytes` among them (Following). A request
   for a feature the store lacks is 501 `unsupported`. A server over a
   store that keeps no commit or mark (the reference memory, JSONL and
@@ -432,6 +434,36 @@ GET /v1/sessions/{id}/path?leaf={entry}&contents={all|since-fold|none}
   it does not offer the library's `Follower` snapshot, which is the
   whole session. A harness that must recover state from item contents
   above the fold reads `all`.
+
+## Search
+
+```
+POST /v1/sessions/search
+```
+
+- **Search** (read scope) is RFC 0002's search, served where the
+  capability `search` says so and 501 `unsupported` elsewhere. The body
+  is a JSON object, every member optional: `query`, a string; `filter`,
+  an object of the listing's filter members (`cwd`, `parent_session`,
+  `harness`, `extra` as an object of member name to JSON value,
+  `top_level`, `after`, `before`, `limit`, `current`), whose `limit`
+  caps the sessions searched; `exclude`, the IDs of sessions to leave
+  out; `roles`, message roles; `after` and `before` (RFC 3339), bounding
+  an entry's `ts`; and `limit`, the most hits. A member the server does
+  not know, or a negative limit, is `bad_request`, so an option a later
+  revision adds is refused by a server without it rather than ignored.
+  The request is a `POST` only because a filter with `extra` and lists
+  sits badly in a query string; it changes nothing.
+- The response streams the hits as NDJSON in RFC 0002's order, each
+  `{"session", "entry", "ts", "role", "snippet"}`, ending with `end`.
+- The server searches only the sessions the caller may read, as RFC
+  0002 requires of a store serving several principals: a session the
+  caller may not read yields no hit and does not count toward
+  `filter.limit`, so neither the hits nor their number say anything of
+  it.
+- A client of a server that does not serve search MAY scan instead,
+  listing and reading each session, and finds the same messages, but
+  for where the server's store matches otherwise.
 
 ## Following
 
@@ -1231,6 +1263,14 @@ objects into a local `cas` store as `cas.Store.Fetch` would, and
 head it fetched and declares the local store the record. A snapshot's
 records sent without lines are read as objects.
 
+Search is served over every reference store: the server asks the
+store's `Searcher` where it has one, and otherwise scans the store's
+sessions through its `Reader`, the library's `ScanSearch`, asking the
+program's `WithAuthorize` hook which sessions the caller may read. Its
+client is the library's `Searcher`, and scans through `List` and `Read`
+itself where a server answers `unsupported`, or where the caller's query
+carries a read check of its own, which cannot be sent.
+
 With it the reference implementation covers the protocol. What it
 leaves, each the reference server's choice and not the protocol's:
 - **`durable_marks`.** A plain follow is a store's follower, which does
@@ -1256,7 +1296,7 @@ The whole implementation is:
   view, a log of records and the object spaces; a server over memory,
   JSONL or SQLite publishes the subset it has (see Conventions).
 - **A client** that implements the library's `Store`, `Reader`,
-  `Follower` and `RefStore` over these calls, with an object cache keyed
+  `Follower`, `RefStore` and `Searcher` over these calls, with an object cache keyed
   by hash. That is not the claim that code written against a local store
   runs unchanged. `Append` returns the entry's ID, and the outcome,
   durable and unresolved fields come from the response through the

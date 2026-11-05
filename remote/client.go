@@ -21,7 +21,8 @@ import (
 
 // Client is a store a [Handler] serves, over the wire. It implements
 // [agentsession.Store], [agentsession.Writer], [agentsession.Reader],
-// [agentsession.Follower] and [agentsession.RefStore].
+// [agentsession.Follower], [agentsession.RefStore] and
+// [agentsession.Searcher].
 //
 // It writes under leases, RFC 0003's form of a store's hold: Create and
 // Open take one on the session, which the client renews until Release,
@@ -64,6 +65,7 @@ var (
 	_ agentsession.RefStore  = (*Client)(nil)
 	_ agentsession.HeadStore = (*Client)(nil)
 	_ agentsession.Releaser  = (*Client)(nil)
+	_ agentsession.Searcher  = (*Client)(nil)
 )
 
 // ClientOption configures [Dial].
@@ -196,8 +198,14 @@ func (c *Client) lines(ctx context.Context, path string, q url.Values) iter.Seq2
 
 // linesTo is lines, keeping the end frame in end when end is not nil.
 func (c *Client) linesTo(ctx context.Context, path string, q url.Values, end *json.RawMessage) iter.Seq2[json.RawMessage, error] {
+	return c.streamLines(ctx, http.MethodGet, path, q, nil, end)
+}
+
+// streamLines is linesTo for a request of any method, with a JSON body
+// when body is not nil.
+func (c *Client) streamLines(ctx context.Context, method, path string, q url.Values, body []byte, end *json.RawMessage) iter.Seq2[json.RawMessage, error] {
 	return func(yield func(json.RawMessage, error) bool) {
-		resp, err := c.get(ctx, path, q, nil)
+		resp, err := c.do(ctx, method, path, q, nil, body)
 		if err != nil {
 			yield(nil, err)
 			return

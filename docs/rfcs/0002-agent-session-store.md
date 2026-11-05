@@ -83,7 +83,9 @@ is the order, and the head is a ref, never inferred.
 
 ## Non-goals
 
-- A query language or index beyond what the projections need.
+- A query language beyond one word match over the listing's filter
+  (Search), or an index beyond what the projections and that search
+  need.
 - A network protocol between stores. What a store owes when it sends or
   receives a session is the exchange section's; how the bytes move is
   not this document's, and RFC 0003 defines one.
@@ -790,6 +792,60 @@ session so archived is fetched or imported again and verifies on the
 way in. Where a session is kept, the
 cost of keeping it is the store's to tier, and content shared across
 sessions is paid for once.
+
+## Search
+
+A store MAY offer search: a text query over the messages its sessions
+hold. A search takes a query, the filter a listing of sessions takes,
+sessions to leave out, message roles, a range of entry `ts`, and a
+limit on the hits.
+
+- **What is searched.** In each session the filter selects, the
+  `message` items among the session's own entries on the path from its
+  head back to its base, or to the universal root: not its prefix, which
+  is searched in the session whose own entries hold it, and not an entry
+  off that path. Of those it leaves out an item marked `visible: false`,
+  an item carrying `instructions_part`, which the harness composed, and
+  an item carrying `copied_from`, which another session's conversation
+  holds (RFC 0001, `item`). So each message is found once, in the
+  session that wrote it. Only `item` entries are searched: not a
+  `compaction`'s summary or pinned items, not a `branch_summary`, and
+  not a `queued` entry, whose input is searched as the item it was
+  accepted as.
+- **The text of a message** is the text of each of its text parts
+  (`input_text`, `output_text`, `text` and `refusal`), joined by U+000A.
+- **Matching.** The reference match is agentmemory RFC 0001's (section
+  3.5): the query is lowercased and split at white space into words,
+  each distinct word once, and a message matches when every word occurs
+  in its lowercased text as a substring of code points; a query that is
+  empty, or white space alone, matches every message. Lowercased and
+  white space are as that document defines them. A store MAY match
+  otherwise, as a full-text index matching each word as a token prefix
+  does, and says how; a caller MUST NOT assume one store's matching of
+  another's.
+- **Filters.** The filter selects sessions as a listing does (RFC 0003,
+  Sessions), but for its limit, which caps the number of sessions
+  searched, counted after those the search leaves out by name and those
+  the caller may not read. Roles keep the messages of those roles. The
+  range keeps the entries whose `ts` is after its start and before its
+  end, both exclusive; `ts` filters a search and never orders it (Ordering).
+- **Order.** Hits come session by session, the newest `created_at`
+  first and sessions created at one instant by ID in code-point order,
+  and within a session from the head back. The limit cuts that order.
+- **A hit** names the session, the entry, its `ts`, the message's role
+  and a snippet: a run of the message's text around the first word of
+  the query found in it, at most 200 code points in the reference.
+- **Several principals.** A store that serves more than one principal,
+  as RFC 0003's server does, MUST search only the sessions the caller may
+  read. A session it may not read is as one the store does not hold: it
+  yields no hit and counts toward no limit. The store asks the question
+  as Sessions has it asked, holding none of its own locks.
+- **An index.** A store that answers from an index MUST answer as the
+  scan above would, but for its matching and its snippets: the same
+  messages of the same sessions, in the same order, cut at the same
+  limit, and so no hit for a deleted session, for an entry a head move
+  left off the path, or for an item the scan leaves out. The index is
+  the store's, kept as it likes; this document defines none.
 
 ## Media
 

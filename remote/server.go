@@ -235,6 +235,7 @@ func NewHandler(store agentsession.Store, opts ...Option) *Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/{$}", h.guard("", h.capabilities))
 	mux.HandleFunc("GET /v1/sessions", h.guard(ScopeRead, h.list))
+	mux.HandleFunc("POST /v1/sessions/search", h.guard(ScopeRead, h.search))
 	mux.HandleFunc("GET /v1/sessions/{id}", h.guard(ScopeRead, h.session))
 	mux.HandleFunc("GET /v1/sessions/{id}/path", h.guard(ScopeRead, h.path))
 	mux.HandleFunc("GET /v1/sessions/{id}/log", h.guard(ScopeRead, h.log))
@@ -310,6 +311,7 @@ func (h *Handler) Capabilities() Capabilities {
 			Log:           h.lr != nil,
 			CommittedView: h.lr != nil,
 			Media:         h.holdsMedia(),
+			Search:        h.searches(),
 		},
 		Limits: Limits{FollowBuffer: h.buffer, FollowReplay: h.replay, SnapshotBytes: h.snapshotLimit},
 	}
