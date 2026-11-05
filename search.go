@@ -31,6 +31,14 @@ type Query struct {
 	// Exclude names sessions to leave out, such as the one a tool
 	// searching for its own conversation runs in.
 	Exclude []string
+	// OmitRedacted leaves out the redacted sessions, those whose header
+	// carries redacted (RFC 0001, The redacted session). A store
+	// holding a redacted session beside its original holds each message
+	// the redaction kept in both, and a search finds it once on each
+	// session's own path; with OmitRedacted it finds the original's
+	// alone. A session it leaves out does not count toward
+	// Filter.Limit.
+	OmitRedacted bool
 	// Roles keeps only messages of these roles; empty keeps every role.
 	Roles []openresponses.Role
 	// After and Before bound each message entry's ts, exclusive.
@@ -105,8 +113,11 @@ func Search(ctx context.Context, store Store, q Query) iter.Seq2[Hit, error] {
 // off the path, not an item marked visible false, not one carrying
 // instructions_part, which the harness composed, and not one carrying
 // copied_from, which another session's conversation holds. So each
-// message is found once, in the session that wrote it. A session
-// deleted between the listing and its read is not searched.
+// message a session wrote is found once, in that session: a redacted
+// session is a session of its own, and a message its redaction kept is
+// found in it and in its original, unless q.OmitRedacted leaves the
+// redacted session out. A session deleted between the listing and its
+// read is not searched.
 func ScanSearch(ctx context.Context, store Store, q Query) iter.Seq2[Hit, error] {
 	return func(yield func(Hit, error) bool) {
 		r, ok := store.(Reader)
@@ -135,7 +146,7 @@ func ScanSearch(ctx context.Context, store Store, q Query) iter.Seq2[Hit, error]
 		hits, searched := 0, 0
 		for _, sum := range sums {
 			id := sum.Header.ID
-			if slices.Contains(q.Exclude, id) || !q.Filter.Keep(sum) {
+			if slices.Contains(q.Exclude, id) || q.OmitRedacted && sum.Header.Redacted || !q.Filter.Keep(sum) {
 				continue
 			}
 			if q.Readable != nil && !q.Readable(id) {

@@ -448,7 +448,8 @@ POST /v1/sessions/search
   `harness`, `extra` as an object of member name to JSON value,
   `top_level`, `after`, `before`, `limit`, `current`), whose `limit`
   caps the sessions searched; `exclude`, the IDs of sessions to leave
-  out; `roles`, message roles; `after` and `before` (RFC 3339), bounding
+  out; `omit_redacted`, `true` to leave out the sessions whose header
+  carries `redacted`; `roles`, message roles; `after` and `before` (RFC 3339), bounding
   an entry's `ts`; and `limit`, the most hits. A member the server does
   not know, or a negative limit, is `bad_request`, so an option a later
   revision adds is refused by a server without it rather than ignored.

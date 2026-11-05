@@ -13,7 +13,10 @@ versions may break the API.
   match: in each session the `message` items among its own entries on
   the path to its head, leaving out a fork's prefix, items marked
   `visible: false`, items carrying `instructions_part` and copied items,
-  so each message is found once. A `Query` takes the listing's
+  so each message is found once on each session's own path. A redacted
+  session is a session of its own, so a message its redaction kept is
+  found in it and in its original; `Query.OmitRedacted` leaves redacted
+  sessions out. A `Query` takes the listing's
   `ListFilter`, sessions to exclude, roles, an entry time range, a limit
   and a read check; a `Hit` is the session, entry, time, role and a
   snippet. `ScanSearch` is the reference scan over `List` and `Reader`;

@@ -797,8 +797,8 @@ sessions is paid for once.
 
 A store MAY offer search: a text query over the messages its sessions
 hold. A search takes a query, the filter a listing of sessions takes,
-sessions to leave out, message roles, a range of entry `ts`, and a
-limit on the hits.
+sessions to leave out, whether to leave out redacted sessions, message
+roles, a range of entry `ts`, and a limit on the hits.
 
 - **What is searched.** In each session the filter selects, the
   `message` items among the session's own entries on the path from its
@@ -807,8 +807,12 @@ limit on the hits.
   off that path. Of those it leaves out an item marked `visible: false`,
   an item carrying `instructions_part`, which the harness composed, and
   an item carrying `copied_from`, which another session's conversation
-  holds (RFC 0001, `item`). So each message is found once, in the
-  session that wrote it. Only `item` entries are searched: not a
+  holds (RFC 0001, `item`). So each message a session wrote is found
+  once, in that session, on its own path. A redacted session is a
+  session of its own (Redacted sessions), so a store holding one beside
+  its original finds a message the redaction kept twice, once in each;
+  a search asked to leave out redacted sessions, those whose header
+  carries `redacted`, finds the original's alone. Only `item` entries are searched: not a
   `compaction`'s summary or pinned items, not a `branch_summary`, and
   not a `queued` entry, whose input is searched as the item it was
   accepted as.
@@ -829,8 +833,8 @@ limit on the hits.
   words means the same on every store.
 - **Filters.** The filter selects sessions as a listing does (RFC 0003,
   Sessions), but for its limit, which caps the number of sessions
-  searched, counted after those the search leaves out by name and those
-  the caller may not read. Roles keep the messages of those roles. The
+  searched, counted after those the search leaves out by name or as
+  redacted and those the caller may not read. Roles keep the messages of those roles. The
   range keeps the entries whose `ts` is after its start and before its
   end, both exclusive; `ts` filters a search and never orders it (Ordering).
 - **Order.** Hits come session by session, the newest `created_at`

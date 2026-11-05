@@ -23,10 +23,12 @@ type searchRequest struct {
 	Query   string        `json:"query,omitempty"`
 	Filter  *searchFilter `json:"filter,omitempty"`
 	Exclude []string      `json:"exclude,omitempty"`
-	Roles   []string      `json:"roles,omitempty"`
-	After   *time.Time    `json:"after,omitempty"`
-	Before  *time.Time    `json:"before,omitempty"`
-	Limit   int           `json:"limit,omitempty"`
+	// OmitRedacted is omit_redacted: true leaves out redacted sessions.
+	OmitRedacted bool       `json:"omit_redacted,omitempty"`
+	Roles        []string   `json:"roles,omitempty"`
+	After        *time.Time `json:"after,omitempty"`
+	Before       *time.Time `json:"before,omitempty"`
+	Limit        int        `json:"limit,omitempty"`
 }
 
 // searchFilter is the listing's filter in a search's body, its members
@@ -68,7 +70,8 @@ func timeIn(t time.Time) *time.Time {
 
 // query is the library's query the request asks.
 func (req searchRequest) query() (agentsession.Query, error) {
-	q := agentsession.Query{Text: req.Query, Exclude: req.Exclude, After: timeOf(req.After), Before: timeOf(req.Before), Limit: req.Limit}
+	q := agentsession.Query{Text: req.Query, Exclude: req.Exclude, OmitRedacted: req.OmitRedacted,
+		After: timeOf(req.After), Before: timeOf(req.Before), Limit: req.Limit}
 	if req.Limit < 0 {
 		return q, errors.New("limit is negative")
 	}
@@ -93,7 +96,8 @@ func (req searchRequest) query() (agentsession.Query, error) {
 // searchRequestOf is the request that asks q, but for its Readable,
 // which the server answers for itself.
 func searchRequestOf(q agentsession.Query) searchRequest {
-	req := searchRequest{Query: q.Text, Exclude: q.Exclude, After: timeIn(q.After), Before: timeIn(q.Before), Limit: q.Limit}
+	req := searchRequest{Query: q.Text, Exclude: q.Exclude, OmitRedacted: q.OmitRedacted,
+		After: timeIn(q.After), Before: timeIn(q.Before), Limit: q.Limit}
 	for _, r := range q.Roles {
 		req.Roles = append(req.Roles, string(r))
 	}

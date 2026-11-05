@@ -81,9 +81,13 @@ func testSearch(t *testing.T, opts Options) {
 
 	// Created at one instant, and not in ID order: t2 is continued in
 	// t1, and t3 is a subsession a call of search-a spawned.
+	// t0, at the same instant, is a redacted session, which
+	// OmitRedacted leaves out.
+	create(agentsession.Header{ID: "search-t0", CreatedAt: at(-10), CWD: "/t", Redacted: true})
 	create(agentsession.Header{ID: "search-t2", CreatedAt: at(-10), CWD: "/t"})
 	create(agentsession.Header{ID: "search-t1", CreatedAt: at(-10), CWD: "/t"})
 	create(agentsession.Header{ID: "search-t3", CreatedAt: at(-10), CWD: "/t", ParentSession: "search-a", SpawnedBy: "call_1"})
+	t0 := appendAt("search-t0", -9, user("a tie the redaction kept, t0"))
 	t1 := appendAt("search-t1", -9, user("a tie at one instant, t1"))
 	t2 := appendAt("search-t2", -9, user("a tie at one instant, t2"))
 	t3 := appendAt("search-t3", -9, user("a tie at one instant, t3"))
@@ -123,7 +127,7 @@ func testSearch(t *testing.T, opts Options) {
 		{"no match", agentsession.Query{Text: "parser zebra"}, nil, false},
 		{"roles", agentsession.Query{Text: "parser", Roles: []openresponses.Role{openresponses.RoleAssistant}}, []string{a2}, false},
 		{"empty text is every message",
-			agentsession.Query{Roles: []openresponses.Role{openresponses.RoleUser}}, []string{c1, b1, a5, a1, t1, t2, t3}, false},
+			agentsession.Query{Roles: []openresponses.Role{openresponses.RoleUser}}, []string{c1, b1, a5, a1, t0, t1, t2, t3}, false},
 		{"exclude", agentsession.Query{Text: "parser", Exclude: []string{"search-c"}}, []string{b1, a5, a2, a1}, false},
 		{"limit", agentsession.Query{Text: "parser", Limit: 2}, []string{c1, b1}, false},
 		{"filter", agentsession.Query{Text: "parser", Filter: agentsession.ListFilter{CWD: "/a"}}, []string{a5, a2, a1}, false},
@@ -131,14 +135,16 @@ func testSearch(t *testing.T, opts Options) {
 			agentsession.Query{Text: "parser", Exclude: []string{"search-c"}, Filter: agentsession.ListFilter{Limit: 1}}, []string{b1}, false},
 		{"filter limit counts a searched session with no hit",
 			agentsession.Query{Text: "deploy", Filter: agentsession.ListFilter{Limit: 1}}, nil, false},
-		{"sessions created at one instant, by ID", agentsession.Query{Text: "tie"}, []string{t1, t2, t3}, false},
+		{"sessions created at one instant, by ID", agentsession.Query{Text: "tie"}, []string{t0, t1, t2, t3}, false},
 		{"filter limit among sessions created at one instant",
-			agentsession.Query{Text: "tie", Filter: agentsession.ListFilter{CWD: "/t", Limit: 2}}, []string{t1, t2}, false},
+			agentsession.Query{Text: "tie", Filter: agentsession.ListFilter{CWD: "/t", Limit: 2}}, []string{t0, t1}, false},
+		{"omit redacted, which counts toward no limit",
+			agentsession.Query{Text: "tie", OmitRedacted: true, Filter: agentsession.ListFilter{CWD: "/t", Limit: 1}}, []string{t1}, false},
 		{"parent session",
 			agentsession.Query{Roles: []openresponses.Role{openresponses.RoleUser}, Filter: agentsession.ListFilter{ParentSession: "search-a"}},
 			[]string{b1, t3}, false},
-		{"top level", agentsession.Query{Text: "tie", Filter: agentsession.ListFilter{TopLevel: true}}, []string{t1, t2}, false},
-		{"current", agentsession.Query{Text: "tie", Filter: agentsession.ListFilter{Current: true}}, []string{t1, t3}, false},
+		{"top level", agentsession.Query{Text: "tie", Filter: agentsession.ListFilter{TopLevel: true}}, []string{t0, t1, t2}, false},
+		{"current", agentsession.Query{Text: "tie", Filter: agentsession.ListFilter{Current: true}}, []string{t0, t1, t3}, false},
 		{"entry time, exclusive",
 			agentsession.Query{Text: "parser", After: at(1), Before: at(12)}, []string{a5, a2}, false},
 		{"readable, which reads the store",
