@@ -44,8 +44,11 @@ versions may break the API.
   and `WordsUnclaimed` when it has no trigger, or for any other entry;
   an unclaimed message is never presented as the person's. A 0.20
   writer may have stamped `human` on a composed message, which reads as
-  written. `Append` refuses a human trigger beside `instructions_part`
-  or `from_link` (`ErrComposedHuman`), the redaction table keeps the
+  written. One that carries `human` beside `instructions_part` or
+  `from_link` reads as composed, and a store takes it as recorded: a
+  writer composing a new message does not write that pair, but a
+  redaction, a copy or a rebuild of a session agentturn v0.0.37 wrote
+  keeps it. The redaction table keeps the
   kind `human` as written on an item's source, a queued entry's and a
   run start's trigger, and `VerifyRecords` reports a drained item whose
   source differs from its queued entry's trigger, or that lacks it
@@ -89,7 +92,7 @@ versions may break the API.
   the references the entry IDs hash over. Such a document names
   `media` under `agentsession` in its top-level extra. `WriteATIF` and
   `WriteDocument` take `WithBlobs` and, for a document naming that
-  media, copy each blob a whole string of it references under
+  media, copy each blob a part URL of it references under
   `sidecar/<session>/` beside the document, with its `.type` file.
   Either refuses with `ErrBlobUnread` when it has no reader, cannot
   read a blob, or reads bytes that do not hash to its name. Text that

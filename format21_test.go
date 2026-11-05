@@ -352,16 +352,6 @@ func TestWordsOf(t *testing.T) {
 		}
 	}
 
-	// A writer does not mark a composed layer as typed.
-	q := NewQueued(openresponses.UserText("x"), ModeSteer).WithTrigger(TriggerHuman, "", "")
-	q.InstructionsPart = &LayerRef{Source: LayerAgentMemory}
-	for _, e := range []Entry{&ItemEntry{Item: openresponses.UserText("x"), Source: typed, InstructionsPart: &LayerRef{Source: LayerAgentMemory}}, q,
-		&ItemEntry{Item: openresponses.UserText("x"), Source: typed, FromLink: "link-1"}} {
-		if _, err := New(Header{ID: "w"}).Append(e); !errors.Is(err, ErrComposedHuman) {
-			t.Errorf("a composed %s with a human trigger: Append = %v", e.EntryType(), err)
-		}
-	}
-
 	// The drained item carries the trigger as its source, which the
 	// record checks, so the claim survives a restart.
 	s := New(Header{ID: "w"})
@@ -795,5 +785,64 @@ func TestContinueSummaryTrust(t *testing.T) {
 	}
 	if cx.Trust == nil || !slices.Equal(cx.Trust.Reads, []string{TrustUntrusted}) {
 		t.Errorf("the successor's path trust: %+v", cx.Trust)
+	}
+}
+
+// TestComposedHumanAccepted: agentturn v0.0.37 gives every prompt item of
+// a run a person started the run's human trigger, beside the
+// instructions_part of the layer it came from. A store takes such an
+// entry as recorded, and so does a redaction rewriting it, and a reader
+// reads it as composed, from its marker, whatever its kind
+// (agentsession format-0-21 review, R2-M1).
+func TestComposedHumanAccepted(t *testing.T) {
+	typed := &Trigger{Kind: TriggerHuman, Source: "terminal"}
+	layered := func() *ItemEntry {
+		return &ItemEntry{Item: openresponses.UserText("Memory: the window is Tuesday."), Source: typed, InstructionsPart: &LayerRef{Source: LayerAgentMemory}}
+	}
+	queued := func() *QueuedEntry {
+		q := NewQueued(openresponses.UserText("Memory: the window is Tuesday."), ModeSteer).WithTrigger(TriggerHuman, "", "terminal")
+		q.InstructionsPart = &LayerRef{Source: LayerAgentMemory}
+		return q
+	}
+	forwarded := func() *ItemEntry {
+		return &ItemEntry{Item: openresponses.UserText("The peer says hello."), Source: typed, FromLink: "link-1"}
+	}
+	f := func(s string) string { return strings.ReplaceAll(s, " ", "_") }
+	for _, mk := range []func() Entry{
+		func() Entry { return layered() },
+		func() Entry { return queued() },
+		func() Entry { return forwarded() },
+	} {
+		e := mk()
+		s := New(Header{ID: "w"})
+		if _, err := s.Append(e); err != nil {
+			t.Errorf("append a %s as agentturn writes it: %v", e.EntryType(), err)
+			continue
+		}
+		if got := WordsOf(e); got != WordsComposed {
+			t.Errorf("a %s with a human trigger and a marker reads %v, want composed", e.EntryType(), got)
+		}
+
+		// A redaction of it: rewritten, marked and prepared, then
+		// appended, as agentredact does.
+		n, err := NewRewriter(f).Rewrite(mk())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := SetRedacted(n, []Span{{1, 1}}); err != nil {
+			t.Fatal(err)
+		}
+		n.Base().ID = ""
+		red := New(Header{ID: "r", Redacted: true, RedactedFrom: &RedactedFrom{Session: "w", Profile: "test.spaces@1"}})
+		if _, err := red.Prepare(n); err != nil {
+			t.Errorf("prepare the redacted %s: %v", n.EntryType(), err)
+		}
+		if _, err := red.Append(n); err != nil {
+			t.Errorf("append the redacted %s: %v", n.EntryType(), err)
+			continue
+		}
+		if got := WordsOf(red.Entries()[0]); got != WordsComposed {
+			t.Errorf("the redacted %s reads %v, want composed", n.EntryType(), got)
+		}
 	}
 }

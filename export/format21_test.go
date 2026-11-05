@@ -100,7 +100,8 @@ func TestSidecarExport(t *testing.T) {
 // reference, as a session about this format or a tool output showing a
 // fixture does, is text: an inline session holding it exports and
 // writes with no blob reader, and a sidecar session shows it as written
-// and needs no blob for it (RFC 0001, Projections, ATIF, since 0.21).
+// and needs no blob for it, even where the whole text is a reference
+// (RFC 0001, Projections, ATIF, since 0.21).
 func TestSidecarQuotedText(t *testing.T) {
 	quoted := "sidecar:sha256:" + strings.Repeat("ab", 32)
 	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
@@ -136,6 +137,9 @@ func TestSidecarQuotedText(t *testing.T) {
 	}
 	side := agentsession.New(agentsession.Header{ID: "side", CreatedAt: at, Media: agentsession.MediaSidecar})
 	mustAppend(t, side, agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputText{Text: "see " + quoted}, &openresponses.InputImage{ImageURL: "sidecar:" + hash})))
+	// A message whose whole text is a reference is text still: the
+	// document holds it as a whole string, and no blob is asked for it.
+	mustAppend(t, side, agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputText{Text: quoted})))
 	tr, err = At(side, side.Leaf())
 	if err != nil {
 		t.Fatal(err)

@@ -319,8 +319,10 @@ const (
 // or a queued entry's trigger, as written in a file of any minor.
 //
 // A user message that names its instruction layers (instructions_part)
-// or the peer link it came from (from_link) is [WordsComposed]; one
-// whose trigger has the kind [TriggerHuman] is [WordsPerson]; one whose
+// or the peer link it came from (from_link) is [WordsComposed], whatever
+// its trigger, since a writer before the rule may have written human
+// beside either and a store keeps such an entry as recorded; otherwise
+// one whose trigger has the kind [TriggerHuman] is [WordsPerson]; one whose
 // trigger has another kind is [WordsComposed]; and one with no trigger
 // is [WordsUnclaimed]. Every other entry is [WordsUnclaimed].
 //
@@ -370,14 +372,6 @@ func inputOf(e Entry) (*Trigger, []LayerRef) {
 	}
 	return nil, nil
 }
-
-// ErrComposedHuman is returned by [Session.Append] for an item entry or
-// a queued entry whose trigger has the kind [TriggerHuman] and that
-// names the instruction layers its message was composed from, or for an
-// item entry with such a trigger that names the peer link it was
-// forwarded from: the harness composed it, so it is not the person's
-// words (RFC 0001, queued, since 0.21).
-var ErrComposedHuman = errors.New("agentsession: a composed input carries a human trigger")
 
 // Trigger says how an input arrived, in the harness's own terms: Kind
 // is the sort of thing it came from (a person, a channel, a schedule,

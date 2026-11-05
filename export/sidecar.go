@@ -122,15 +122,15 @@ func sidecarMedia(doc *atif.Trajectory) bool {
 	return m == agentsession.MediaSidecar
 }
 
-// sidecarURLs adds to seen each string of v, at any depth, that is a
-// sidecar reference as a whole, appending each new one's hash to out.
+// partURLs are the members of a part that hold its URL, the only
+// members a sidecar reference is written in (RFC 0001, File).
+var partURLs = map[string]bool{"image_url": true, "file_url": true, "video_url": true}
+
+// sidecarURLs adds to seen each part URL of v, at any depth, that is a
+// sidecar reference as a whole, appending each new one's hash to out. A
+// string in any other member, such as a message's text, is text.
 func sidecarURLs(v any, seen map[string]bool, out []string) []string {
 	switch t := v.(type) {
-	case string:
-		if h, ok := strings.CutPrefix(t, "sidecar:"); ok && agentsession.ValidHash(h) && !seen[h] {
-			seen[h] = true
-			out = append(out, h)
-		}
 	case []any:
 		for _, el := range t {
 			out = sidecarURLs(el, seen, out)
@@ -142,6 +142,13 @@ func sidecarURLs(v any, seen map[string]bool, out []string) []string {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
+			if u, ok := t[k].(string); ok {
+				if h, ok := strings.CutPrefix(u, "sidecar:"); ok && partURLs[k] && agentsession.ValidHash(h) && !seen[h] {
+					seen[h] = true
+					out = append(out, h)
+				}
+				continue
+			}
 			out = sidecarURLs(t[k], seen, out)
 		}
 	}
@@ -153,8 +160,8 @@ func sidecarURLs(v any, seen map[string]bool, out []string) []string {
 // session each belongs to, so a converter rebuilds the session from the
 // document alone. Only a document of a sidecar session, which names its
 // media under [ExtraAgentSession], references a blob, and only by a
-// string that is a sidecar: URL as a whole, as a part's URL is; text
-// quoting one is text. A blob it cannot read refuses the write.
+// part's URL that is a sidecar: URL as a whole; text quoting one, or
+// that is one, is text. A blob it cannot read refuses the write.
 func copyBlobs(dir string, doc *atif.Trajectory, blobs Blobs) error {
 	if sidecarMedia(doc) {
 		own := *doc

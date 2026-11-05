@@ -1378,8 +1378,10 @@ Why a run started and how it ended. Two entries per run, paired by
   trigger alone, an `item`'s `source`, never from the run's, since a
   run a person started may be prompted with messages the harness
   composed, onto which a writer MUST NOT copy a `human` trigger as
-  their `source`. It sits beside `ref` and changes nothing about it; `ref` stays
-  one opaque string. A writer that holds a trigger's parts SHOULD write
+  their `source`. A store keeps as recorded one a writer before the
+  rule copied beside `instructions_part`, which a reader reads as
+  composed (`queued`). The trigger sits beside `ref` and changes
+  nothing about it; `ref` stays one opaque string. A writer that holds a trigger's parts SHOULD write
   them here rather than joined into `ref`, since a joined string cannot
   be split back. Anything richer, such as when a scheduled firing was
   due or which attempt at it this is, SHOULD go in members of
@@ -1841,14 +1843,23 @@ end.
   starts), with a trigger of another `kind`, or with the member that
   says how it was composed, `instructions_part` or `from_link`, and
   MUST NOT write `human` on it, so never beside either member. The
-  drained `item` carries the trigger as its `source` (below), so the
-  kind survives a restart with the queued input's other members.
+  rule binds a writer composing a new message, not one carrying a
+  recorded entry: a store, and a rewriter that copies, redacts or
+  rebuilds a session, MUST accept an entry that carries `human` beside
+  `instructions_part` or `from_link` as it was recorded, since a writer
+  before the rule wrote that pair, and a reader reads such a message
+  as composed, by the list below. The drained `item` carries the
+  trigger as its `source` (below), so the kind survives a restart with
+  the queued input's other members.
 - A reader reads a `user` message's words from its own trigger alone,
   as written, in a file of any minor:
-  - one whose trigger has the kind `human` is the person's words;
-  - one whose trigger has another kind, or that names its
-    `instructions_part` or its `from_link`, is not, and a reader MUST
-    NOT present it as the person's;
+  - one that names its `instructions_part` or its `from_link` is not
+    the person's words, whatever its trigger, and a reader MUST NOT
+    present it as the person's;
+  - otherwise, one whose trigger has the kind `human` is the person's
+    words;
+  - one whose trigger has another kind is not, and a reader MUST NOT
+    present it as the person's;
   - one with no trigger makes no claim either way. A reader MUST NOT
     present it as the person's words, and MAY treat it as unclaimed
     input, which a host may handle as it handles no composed message,
@@ -3194,7 +3205,7 @@ the hash of the step's visible fields, and `visible` under
   the extras keep each `sidecar:` reference as the session recorded it,
   since the entry `id` a converter rebuilds covers it. A document
   written to files carries each blob its raw items reference beside
-  it, each string of the document that is a reference as a whole, in
+  it, each part URL of the document that is a reference as a whole, in
   the session's sidecar layout under `sidecar/`: the blob named by its
   hex digest alone and its type in the file `<hex>.type`, both in a
   directory named after the session the trajectory is of, an embedded
@@ -3690,8 +3701,10 @@ files until it is upgraded.
   (`queued`, `trigger`). One whose trigger has another kind, or that
   names `instructions_part` or `from_link`, is not; one with no trigger
   makes no claim and is never presented as the person's. A 0.21 writer
-  MUST mark a message it composed so, never `human`. A reader reads the
-  kind as written in a file of any minor, though a 0.20 writer may have
+  MUST mark a message it composed so, never `human`, though a store or
+  a rewriter accepts a recorded entry that carries `human` beside
+  either member, which reads as composed. A reader reads the kind as
+  written in a file of any minor, though a 0.20 writer may have
   written `human` on a composed message. The drained `item` carries the
   trigger as its `source`, which a tool that checks a file compares. A
   redactor keeps the kind as written. 0.20 left every kind opaque, so a

@@ -296,9 +296,7 @@ func (s *Session) Append(e Entry) (string, error) {
 // file may not be raised to this package's format takes no entry
 // ([ErrNoRaise]), since appending under the raised header is what a
 // writer does: [Session.RaiseRefused] decides it, for the header's
-// redacted_from and every entry's redacted. An input that names the
-// instruction layers it was composed from, or the peer link it was
-// forwarded from, carries no human trigger ([ErrComposedHuman]). A continued_in link goes
+// redacted_from and every entry's redacted. A continued_in link goes
 // only into a session that holds none, or one naming the same
 // successor ([ErrSuperseded]). A store raises the stored
 // header only after its session's Prepare has run this check, so the
@@ -323,14 +321,6 @@ func (s *Session) checkNew(e Entry) error {
 	if c, ok := e.(*ConfigEntry); ok && c.Omit != nil && c.Omit.Outputs != nil {
 		if err := s.checkOutputs(c); err != nil {
 			return err
-		}
-	}
-	if trigger, layers := inputOf(e); trigger != nil && trigger.Kind == TriggerHuman {
-		if layers != nil {
-			return fmt.Errorf("%w: %s %s names the instruction layers it was composed from", ErrComposedHuman, e.EntryType(), e.Base().ID)
-		}
-		if it, ok := e.(*ItemEntry); ok && it.FromLink != "" {
-			return fmt.Errorf("%w: %s %s names the peer link it was forwarded from", ErrComposedHuman, e.EntryType(), e.Base().ID)
 		}
 	}
 	l, ok := e.(*LinkEntry)
