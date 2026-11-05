@@ -564,12 +564,18 @@ func (s *Store) receiveBundle(ctx context.Context, b *bundle, o receiveOptions) 
 			slot.mu.Unlock()
 			return Exchange{}, fmt.Errorf("%w: %s", agentsession.ErrSessionExists, id)
 		}
+		taken := false
+		defer func() {
+			if !taken {
+				s.abandon(id, slot) // on a panic too
+			}
+		}()
 		n, err := s.admitNew(ctx, dir, b.header, mark, stored, b.own, b.blobs, head)
 		if err != nil {
-			s.abandon(id, slot)
 			return Exchange{}, err
 		}
 		slot.take(n)
+		taken = true
 		slot.mu.Unlock()
 		x.Head = head
 		return x, nil

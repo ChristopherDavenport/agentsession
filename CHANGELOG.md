@@ -133,6 +133,19 @@ versions may break the API.
   filters; `storetest.Options.SearchOwnMatch` and `SearchSync` let a
   store that matches otherwise, or whose index lags, run it.
 
+- **cas: a panic while opening, creating, importing, receiving or
+  writing a session no longer leaves the session locked.** The store claims a
+  session's handle, locked, before it opens or places the session, and
+  a panic on the way (net/http recovers a handler's, so `remote`'s
+  server over a cas store sees one as a failed request) left that
+  handle claimed: every later call for the session, and `Close`,
+  waited on it forever. Each claim now lets the handle and the
+  session's lock go on every way out, a panic too, and the panic goes
+  on to the caller unchanged. A panic rebuilding a held session after
+  an exchange drops the handle, so the next open reads the session
+  afresh. So does a panic while an append, `Sync`, a durable `ReadLog`
+  or `Close` holds the session, which likewise left it locked.
+
 ## v0.0.37 - 2026-11-03
 
 - **Breaking (format): Format 0.20 (RFC 0001, draft 0.20).** `Format`
