@@ -1372,7 +1372,12 @@ Why a run started and how it ended. Two entries per run, paired by
 - `trigger` on `start` says how the input that started the run arrived,
   in the object `queued` defines: `kind`, `ref` and `source`, each
   opaque but for the `kind` `human`, since 0.21, which says a person
-  sent it (`queued`). It sits beside `ref` and changes nothing about it; `ref` stays
+  sent it (`queued`). It says nothing of the words of the messages the
+  run is prompted with: a reader reads each message's from its own
+  trigger alone, an `item`'s `source`, never from the run's, since a
+  run a person started may be prompted with messages the harness
+  composed, and a writer MUST NOT copy the run's trigger onto them as
+  their `source`. It sits beside `ref` and changes nothing about it; `ref` stays
   one opaque string. A writer that holds a trigger's parts SHOULD write
   them here rather than joined into `ref`, since a joined string cannot
   be split back. Anything richer, such as when a scheduled firing was
