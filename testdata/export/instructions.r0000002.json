@@ -348,10 +348,10 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.20",
+      "format": "agentsession/0.21",
       "leaf": "sha256:28c49598d9ef28f4d6dc435e5308722661bf1a96c13dc18694c7cc3c7d8a3ccd",
       "main": true,
-      "visible": "sha256:ed4c4a77882d4d66aa077813e41db873fc999487baccae022fcd4cf08743b3b3"
+      "visible": "sha256:c9399f201c9f2ce589647a1b5470bf27720ae33ccd766c294ded2883c8c3a267"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

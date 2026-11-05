@@ -469,10 +469,10 @@
           "type": "item"
         }
       },
-      "format": "agentsession/0.20",
+      "format": "agentsession/0.21",
       "leaf": "sha256:056ebc75fa1090a41fdbd7a6684c267817e29c15015d961a29d46a5782418bac",
       "main": true,
-      "visible": "sha256:cb7888bc47cea2a7de85291a03eb51b95939e479d02229bbcab14db11b99e083"
+      "visible": "sha256:ab9697d61d68193af6b00cbc2a16a7af5611b3f1632ffd01db278d9cde7edf05"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"
