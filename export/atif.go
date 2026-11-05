@@ -46,9 +46,12 @@ type Options struct {
 	Notes string
 	// Blobs reads the sidecar blobs of a sidecar session, and of each
 	// subsession embedded, by the session's ID and the blob's hash; see
-	// [Blobs]. The export resolves each sidecar: reference in a step's
-	// visible content through it, and refuses with [ErrBlobUnread] when
-	// it is nil or cannot read one (RFC 0001, Projections, ATIF).
+	// [Blobs]. The export of a session whose header says media sidecar
+	// resolves each sidecar: URL a visible part names, an image's, a
+	// file's or a video's, through it, and refuses with [ErrBlobUnread]
+	// when it is nil or cannot read one (RFC 0001, Projections, ATIF).
+	// Text that quotes a reference is text, and an inline session has
+	// none, so neither needs it.
 	Blobs Blobs
 }
 
@@ -166,6 +169,7 @@ func ToATIF(t Trajectory, opts Options) (*atif.Trajectory, error) {
 			b.sent[ie.ID] = t.Context.Items[i]
 		}
 	}
+	b.side = newSidecars(t.Header, opts.Blobs)
 	b.doc = &atif.Trajectory{
 		SchemaVersion: atif.SchemaVersion,
 		SessionID:     t.Header.ID,
@@ -188,10 +192,11 @@ func ToATIF(t Trajectory, opts Options) (*atif.Trajectory, error) {
 	if err := b.run(); err != nil {
 		return nil, err
 	}
-	// What a reader sees names no sidecar, before anything is hashed;
-	// the raw items keep the references the entry IDs hash over.
-	if err := resolveSidecar(b.doc, t.Header.ID, opts.Blobs); err != nil {
-		return nil, err
+	// What a reader sees names no sidecar, resolved where each part was
+	// rendered, before anything is hashed; the raw items keep the
+	// references the entry IDs hash over.
+	if b.side != nil && b.side.err != nil {
+		return nil, b.side.err
 	}
 	// Before the redactors, so each hash is of the document as the
 	// export built it from the session: a step a redactor changes no
@@ -213,6 +218,9 @@ type builder struct {
 	t    Trajectory
 	opts Options
 	doc  *atif.Trajectory
+	// side resolves the sidecar references of a sidecar session's
+	// parts; nil for an inline session.
+	side *sidecars
 
 	settings     agentsession.Settings
 	pending      map[string]any // extra members for the next step
@@ -561,7 +569,7 @@ func (b *builder) entry(e agentsession.Entry) error {
 		b.flushGroup(nil)
 		step := atif.Step{
 			Source:          atif.SourceSystem,
-			Message:         messageContent(v.Summary),
+			Message:         messageContent(v.Summary, b.side),
 			IsCopiedContext: atif.Ptr(true),
 			Extra: map[string]any{
 				ExtraBranchFrom:    v.From,
@@ -749,7 +757,7 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 		if v.Role != openresponses.RoleUser {
 			source = atif.SourceSystem
 		}
-		step := atif.Step{Source: source, Message: messageContent(v), Extra: b.itemExtra(e)}
+		step := atif.Step{Source: source, Message: messageContent(v, b.side), Extra: b.itemExtra(e)}
 		if v.Role != openresponses.RoleUser {
 			step.Extra["role"] = string(v.Role)
 		}
@@ -779,7 +787,7 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 			agentSessionExtra(extra)["entry_id"] = e.ID
 			step.Observation.Results = append(step.Observation.Results, atif.ObservationResult{
 				SourceCallID: v.CallID,
-				Content:      outputContent(v.Output),
+				Content:      outputContent(v.Output, b.side),
 				Extra:        extra,
 			})
 			b.stepByEntry[e.ID] = idx
@@ -791,7 +799,7 @@ func (b *builder) item(e *agentsession.ItemEntry) error {
 		step := atif.Step{
 			Source:      atif.SourceSystem,
 			Message:     atif.Text(""),
-			Observation: &atif.Observation{Results: []atif.ObservationResult{{Content: outputContent(v.Output)}}},
+			Observation: &atif.Observation{Results: []atif.ObservationResult{{Content: outputContent(v.Output, b.side)}}},
 			Extra:       b.itemExtra(e),
 		}
 		step.Extra["orphan_call_id"] = v.CallID
@@ -964,7 +972,7 @@ func (b *builder) flushGroupItems(g *agentGroup, resp *agentsession.ResponseEntr
 		ids = append(ids, e.ID)
 		switch v := e.Item.(type) {
 		case *openresponses.Message:
-			c := messageContent(v)
+			c := messageContent(v, b.side)
 			if c.Parts != nil {
 				mixed = true
 				parts = append(parts, c.Parts...)
@@ -1351,6 +1359,12 @@ func (b *builder) finish() {
 	}
 	if len(b.t.Header.Records) > 0 {
 		as["records"] = b.t.Header.Records
+	}
+	if b.t.Header.Media == agentsession.MediaSidecar {
+		// Which strings are references (0.21): a converter restores the
+		// header's media from it, and a writer of the document's files
+		// copies blobs for a sidecar session alone.
+		as["media"] = agentsession.MediaSidecar
 	}
 	if b.t.Header.Redacted {
 		as["redacted"] = true
@@ -1906,24 +1920,28 @@ func itemText(item openresponses.Item) string {
 }
 
 // messageContent converts message parts: text only becomes a string,
-// anything else a part list.
-func messageContent(item openresponses.Item) atif.Content {
+// anything else a part list. side resolves a sidecar session's parts.
+func messageContent(item openresponses.Item, side *sidecars) atif.Content {
 	m, ok := item.(*openresponses.Message)
 	if !ok {
 		return atif.Text(itemText(item))
 	}
-	return contentParts(m.Content)
+	return contentParts(m.Content, side)
 }
 
 // outputContent converts a function call output.
-func outputContent(d openresponses.FunctionCallOutputData) atif.Content {
+func outputContent(d openresponses.FunctionCallOutputData, side *sidecars) atif.Content {
 	if d.Parts == nil {
 		return atif.Text(d.Text)
 	}
-	return contentParts(d.Parts)
+	return contentParts(d.Parts, side)
 }
 
-func contentParts(parts openresponses.Contents) atif.Content {
+// contentParts converts parts. In a sidecar session (side not nil) a
+// part's URL that is a sidecar reference is rendered as the data URL of
+// its blob, so a visible part never names a sidecar (RFC 0001,
+// Projections, ATIF, since 0.21); text is text, whatever it quotes.
+func contentParts(parts openresponses.Contents, side *sidecars) atif.Content {
 	var out []atif.ContentPart
 	textOnly := true
 	for _, p := range parts {
@@ -1937,11 +1955,12 @@ func contentParts(parts openresponses.Contents) atif.Content {
 		case *openresponses.Refusal:
 			out = append(out, atif.ContentPart{Type: atif.PartText, Text: "[refusal] " + v.Refusal})
 		case *openresponses.InputImage:
-			ref := v.ImageURL
+			url, _ := side.url(v.ImageURL)
+			ref := url
 			if ref == "" {
 				ref = v.FileID
 			}
-			mt := imageMediaType(v.ImageURL)
+			mt := imageMediaType(url)
 			if mt == "" {
 				// A type Harbor's models refuse: keep the reference as
 				// text, as file and video parts already are.
@@ -1956,11 +1975,19 @@ func contentParts(parts openresponses.Contents) atif.Content {
 				name = v.FileID
 			}
 			if name == "" {
-				name = v.FileURL
+				if url, ok := side.url(v.FileURL); ok {
+					name = describeRef(url)
+				} else {
+					name = v.FileURL
+				}
 			}
 			out = append(out, atif.ContentPart{Type: atif.PartText, Text: "[file: " + name + "]"})
 		case *openresponses.InputVideo:
-			out = append(out, atif.ContentPart{Type: atif.PartText, Text: "[video: " + v.VideoURL + "]"})
+			url := v.VideoURL
+			if u, ok := side.url(url); ok {
+				url = describeRef(u)
+			}
+			out = append(out, atif.ContentPart{Type: atif.PartText, Text: "[video: " + url + "]"})
 		default:
 			data, _ := json.Marshal(p)
 			out = append(out, atif.ContentPart{Type: atif.PartText, Text: string(data)})

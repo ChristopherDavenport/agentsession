@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -21,10 +21,6 @@ import (
 // [agentsession.SidecarTypeName] names (RFC 0001, File; Projections,
 // ATIF, since 0.21).
 const SidecarDir = "sidecar"
-
-// sidecarRef matches a sidecar reference, the URL RFC 0001 gives an item
-// that names a blob beside the file.
-var sidecarRef = regexp.MustCompile(`sidecar:sha256:[0-9a-f]{64}`)
 
 // StoreBlobs reads a session's blobs from a store, as
 // [agentsession.ReadSessionBlob] does: the type the session holds for
@@ -70,115 +66,123 @@ func readBlob(blobs Blobs, session, hash string) ([]byte, string, error) {
 	return data, mediaType, nil
 }
 
-// resolveSidecar resolves each sidecar reference in the visible content
-// of doc's own steps, a message's or an observation result's, through
-// blobs: an image part names its blob as a data URL of the blob's type,
-// or, for a type ATIF does not take, becomes the text a data URL of
-// that type is described by, as any image of such a type does; a
-// reference in text is replaced by that description. An embedded
-// trajectory was resolved by its own export.
-func resolveSidecar(doc *atif.Trajectory, session string, blobs Blobs) error {
-	resolve := func(c *atif.Content) error {
-		if c.Text != "" && sidecarRef.MatchString(c.Text) {
-			text, err := describeRefs(c.Text, session, blobs)
-			if err != nil {
-				return err
-			}
-			c.Text = text
-		}
-		for i := range c.Parts {
-			p := &c.Parts[i]
-			if p.Text != "" && sidecarRef.MatchString(p.Text) {
-				text, err := describeRefs(p.Text, session, blobs)
-				if err != nil {
-					return err
-				}
-				p.Text = text
-			}
-			if p.Source == nil || !strings.HasPrefix(p.Source.Path, "sidecar:") {
-				continue
-			}
-			hash := strings.TrimPrefix(p.Source.Path, "sidecar:")
-			data, mediaType, err := readBlob(blobs, session, hash)
-			if err != nil {
-				return err
-			}
-			url := "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data)
-			mt := imageMediaType(url)
-			if p.Type != atif.PartImage || mt == "" {
-				*p = atif.ContentPart{Type: atif.PartText, Text: "[" + string(p.Type) + ": " + describeRef(url) + "]"}
-				continue
-			}
-			p.Source.MediaType = mt
-			p.Source.Path = "data:" + mt + ";base64," + base64.StdEncoding.EncodeToString(data)
-		}
-		return nil
-	}
-	for i := range doc.Steps {
-		st := &doc.Steps[i]
-		if err := resolve(&st.Message); err != nil {
-			return err
-		}
-		if st.Observation != nil {
-			for j := range st.Observation.Results {
-				if err := resolve(&st.Observation.Results[j].Content); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
+// sidecars resolves the sidecar references of one session's parts as
+// the projection renders them: nil for a session whose media is inline,
+// which has none. The first blob it cannot read is kept in err, which
+// [ToATIF] returns once the document is built.
+type sidecars struct {
+	session string
+	blobs   Blobs
+	read    map[string]string // hash -> the data URL of its blob
+	err     error
 }
 
-// describeRefs replaces each sidecar reference in text with the
-// description of a data URL of its blob, once the blob is read.
-func describeRefs(text, session string, blobs Blobs) (string, error) {
-	var err error
-	out := sidecarRef.ReplaceAllStringFunc(text, func(ref string) string {
-		if err != nil {
-			return ref
+// newSidecars returns the resolver of a session with header h: nil
+// unless its media is sidecar (RFC 0001, File).
+func newSidecars(h agentsession.Header, blobs Blobs) *sidecars {
+	if h.Media != agentsession.MediaSidecar {
+		return nil
+	}
+	return &sidecars{session: h.ID, blobs: blobs, read: map[string]string{}}
+}
+
+// url returns the data URL of the blob ref names, its blob's media type
+// and true, when ref, a URL a part holds, is a sidecar reference; for any
+// other it returns ref and false. A blob it cannot read is kept in s.err
+// and ref returned as it is.
+func (s *sidecars) url(ref string) (string, bool) {
+	if s == nil {
+		return ref, false
+	}
+	hash, ok := strings.CutPrefix(ref, "sidecar:")
+	if !ok || !agentsession.ValidHash(hash) {
+		return ref, false
+	}
+	if u, ok := s.read[hash]; ok {
+		return u, true
+	}
+	if s.err != nil {
+		return ref, true
+	}
+	data, mediaType, err := readBlob(s.blobs, s.session, hash)
+	if err != nil {
+		s.err = err
+		return ref, true
+	}
+	u := "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data)
+	s.read[hash] = u
+	return u, true
+}
+
+// sidecarMedia is the media the root extra names, under
+// [ExtraAgentSession], for a document of a sidecar session.
+func sidecarMedia(doc *atif.Trajectory) bool {
+	as, _ := doc.Extra[ExtraAgentSession].(map[string]any)
+	m, _ := as["media"].(string)
+	return m == agentsession.MediaSidecar
+}
+
+// sidecarURLs adds to seen each string of v, at any depth, that is a
+// sidecar reference as a whole, appending each new one's hash to out.
+func sidecarURLs(v any, seen map[string]bool, out []string) []string {
+	switch t := v.(type) {
+	case string:
+		if h, ok := strings.CutPrefix(t, "sidecar:"); ok && agentsession.ValidHash(h) && !seen[h] {
+			seen[h] = true
+			out = append(out, h)
 		}
-		var mediaType string
-		if _, mediaType, err = readBlob(blobs, session, strings.TrimPrefix(ref, "sidecar:")); err != nil {
-			return ref
+	case []any:
+		for _, el := range t {
+			out = sidecarURLs(el, seen, out)
 		}
-		return "data URL " + mediaType
-	})
-	return out, err
+	case map[string]any:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			out = sidecarURLs(t[k], seen, out)
+		}
+	}
+	return out
 }
 
 // copyBlobs writes each blob the raw items of doc reference, and of each
 // trajectory it embeds, under SidecarDir in dir, in the layout of the
 // session each belongs to, so a converter rebuilds the session from the
-// document alone. A blob it cannot read refuses the write.
+// document alone. Only a document of a sidecar session, which names its
+// media under [ExtraAgentSession], references a blob, and only by a
+// string that is a sidecar: URL as a whole, as a part's URL is; text
+// quoting one is text. A blob it cannot read refuses the write.
 func copyBlobs(dir string, doc *atif.Trajectory, blobs Blobs) error {
-	own := *doc
-	own.SubagentTrajectories = nil
-	data, err := json.Marshal(&own)
-	if err != nil {
-		return fmt.Errorf("export: encode: %w", err)
-	}
-	seen := map[string]bool{}
-	for _, m := range sidecarRef.FindAll(data, -1) {
-		hash := strings.TrimPrefix(string(m), "sidecar:")
-		if seen[hash] {
-			continue
-		}
-		seen[hash] = true
-		blob, mediaType, err := readBlob(blobs, doc.SessionID, hash)
+	if sidecarMedia(doc) {
+		own := *doc
+		own.SubagentTrajectories = nil
+		data, err := json.Marshal(&own)
 		if err != nil {
-			return err
+			return fmt.Errorf("export: encode: %w", err)
 		}
-		at := filepath.Join(dir, SidecarDir, safeName(doc.SessionID))
-		if err := os.MkdirAll(at, 0o755); err != nil {
-			return fmt.Errorf("export: create %s: %w", at, err)
+		var tree any
+		if err := json.Unmarshal(data, &tree); err != nil {
+			return fmt.Errorf("export: decode: %w", err)
 		}
-		if err := os.WriteFile(filepath.Join(at, strings.TrimPrefix(hash, agentsession.HashPrefix)), blob, 0o644); err != nil {
-			return fmt.Errorf("export: write blob %s: %w", hash, err)
-		}
-		if mediaType != "" {
-			if err := os.WriteFile(filepath.Join(at, agentsession.SidecarTypeName(hash)), []byte(mediaType), 0o644); err != nil {
-				return fmt.Errorf("export: write the type of blob %s: %w", hash, err)
+		for _, hash := range sidecarURLs(tree, map[string]bool{}, nil) {
+			blob, mediaType, err := readBlob(blobs, doc.SessionID, hash)
+			if err != nil {
+				return err
+			}
+			at := filepath.Join(dir, SidecarDir, safeName(doc.SessionID))
+			if err := os.MkdirAll(at, 0o755); err != nil {
+				return fmt.Errorf("export: create %s: %w", at, err)
+			}
+			if err := os.WriteFile(filepath.Join(at, strings.TrimPrefix(hash, agentsession.HashPrefix)), blob, 0o644); err != nil {
+				return fmt.Errorf("export: write blob %s: %w", hash, err)
+			}
+			if mediaType != "" {
+				if err := os.WriteFile(filepath.Join(at, agentsession.SidecarTypeName(hash)), []byte(mediaType), 0o644); err != nil {
+					return fmt.Errorf("export: write the type of blob %s: %w", hash, err)
+				}
 			}
 		}
 	}

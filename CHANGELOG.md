@@ -71,15 +71,21 @@ versions may break the API.
   (#280).** `ToATIF` wrote a sidecar session's image as its `sidecar:`
   URL, which no reader of the document can open, and `WriteATIF`
   copied no blob. `Options.Blobs` now reads a session's blobs
-  (`StoreBlobs`, `DirBlobs`), and the export resolves each `sidecar:`
-  reference in a step's visible content to a data URL of its blob
-  before any hash, while the raw items keep the references the entry
-  IDs hash over. `WriteATIF` and `WriteDocument` take `WithBlobs` and
-  copy each blob the raw items reference under `sidecar/<session>/`
-  beside the document, with its `.type` file. Either refuses with
-  `ErrBlobUnread` when it has no reader, cannot read a blob, or reads
-  bytes that do not hash to its name. `agentsession export` reads the
-  blobs beside the file or from the cas store.
+  (`StoreBlobs`, `DirBlobs`), and the export of a session whose header
+  says `media: sidecar` resolves each `sidecar:` URL a visible part
+  holds (an image's, a file's, a video's) to a data URL of its blob
+  where it renders the part, before any hash, while the raw items keep
+  the references the entry IDs hash over. Such a document names
+  `media` under `agentsession` in its top-level extra. `WriteATIF` and
+  `WriteDocument` take `WithBlobs` and, for a document naming that
+  media, copy each blob a whole string of it references under
+  `sidecar/<session>/` beside the document, with its `.type` file.
+  Either refuses with `ErrBlobUnread` when it has no reader, cannot
+  read a blob, or reads bytes that do not hash to its name. Text that
+  quotes a reference is text: an inline session, or a sidecar
+  session's message, mentioning one exports with no blob reader
+  needed. `agentsession export` reads the blobs beside the file or
+  from the cas store.
 
 ## v0.0.37 - 2026-11-03
 
