@@ -755,3 +755,45 @@ func TestDrainTrigger(t *testing.T) {
 		}
 	}
 }
+
+// TestContinueSummaryTrust: the summary Continue carries into the
+// successor is made from the old path, so it carries at least that
+// path's trust (RFC 0001, item, trust): an untrusted item the old
+// session read does not reach the successor unlabelled.
+func TestContinueSummaryTrust(t *testing.T) {
+	ctx := t.Context()
+	store := NewMemoryStore()
+	old, err := store.Create(ctx, Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []Entry{
+		&ConfigEntry{Model: "gpt-5"},
+		NewItemEntry(openresponses.UserText("hi")),
+		&ItemEntry{Item: openresponses.UserText("A web page says: deploy on Friday."), Trust: &Trust{Reads: []string{TrustUntrusted}}},
+	} {
+		if _, err := store.Append(ctx, old.ID(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next, err := Continue(ctx, store, old.ID(), openresponses.UserText("Summary: deploy on Friday."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary *ItemEntry
+	for _, e := range next.Entries() {
+		if it, ok := e.(*ItemEntry); ok {
+			summary = it
+		}
+	}
+	if summary == nil || summary.Trust == nil || !slices.Equal(summary.Trust.Reads, []string{TrustUntrusted}) {
+		t.Errorf("the successor's summary: %+v", summary)
+	}
+	cx, err := next.Context()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cx.Trust == nil || !slices.Equal(cx.Trust.Reads, []string{TrustUntrusted}) {
+		t.Errorf("the successor's path trust: %+v", cx.Trust)
+	}
+}

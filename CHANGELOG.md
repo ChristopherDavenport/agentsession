@@ -72,6 +72,12 @@ versions may break the API.
   writer that composes instructions from a layer of known trust. New
   fixture `continued-parts`.
 
+- **Fix: `Continue`'s summary carries the old path's trust.** The
+  summary item was appended with no `trust`, though it is made from the
+  old path, so an untrusted page the old session read reached the
+  successor unlabelled. It now carries the old path's trust, as RFC
+  0001 already asked of a summary made from a path.
+
 - **Breaking: the ATIF export resolves and carries sidecar blobs
   (#280).** `ToATIF` wrote a sidecar session's image as its `sidecar:`
   URL, which no reader of the document can open, and `WriteATIF`
