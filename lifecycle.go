@@ -285,53 +285,59 @@ func (e *DecisionEntry) WithArgs(args json.RawMessage) *DecisionEntry {
 
 // TriggerHuman is the one trigger kind RFC 0001 defines, since 0.21: a
 // person sent the input, and an input message's text is their words as
-// they wrote them. A writer sets it on typed input, and never on a
-// message the harness composed, whatever its provenance: a scheduled
-// reminder, a peer's text it forwards, a background result, a layer of
-// instructions. [WordsOf] reads it.
+// they wrote them. A writer sets it on typed input. Since 0.21 it never
+// sets it on a message the harness composed, whatever its provenance (a
+// scheduled reminder, a peer's text it forwards, a background result, a
+// layer of instructions, a prompt replayed under a run's trigger), which
+// it marks with another kind, or with instructions_part or from_link.
+// [WordsOf] reads it.
 const TriggerHuman = "human"
 
 // Words says whose words an input message is, as RFC 0001 reads its
-// trigger since 0.21 ([WordsOf]).
+// trigger ([WordsOf]).
 type Words uint8
 
 const (
-	// WordsUnclaimed is an entry that makes no claim either way: one
-	// read from a file whose header names a minor before 0.21, where
-	// trigger kinds were opaque, or one that holds no input message.
+	// WordsUnclaimed is an entry that makes no claim either way: an
+	// input message with no trigger, or an entry that holds no input
+	// message. A reader never presents an unclaimed message as the
+	// person's words; a host MAY treat it as unclaimed input, as it
+	// treats no composed one.
 	WordsUnclaimed Words = iota
 	// WordsPerson is an input message whose trigger's kind is
 	// [TriggerHuman]: a person wrote it.
 	WordsPerson
 	// WordsComposed is an input message whose trigger has another kind,
-	// or that has none, or that names the instruction layers it was
-	// composed from: it is not the person's words, and a reader does
-	// not present it as theirs.
+	// or that names the instruction layers it was composed from or the
+	// peer link it was forwarded from: it is not the person's words,
+	// and a reader does not present it as theirs.
 	WordsComposed
 )
 
 // WordsOf says whose words the input message e holds, an item entry's
-// or a queued entry's, read under format, the format its file's header
-// names ([Session.DeclaredFormat]).
+// or a queued entry's, as RFC 0001 reads its trigger, an item's source
+// or a queued entry's trigger, as written in a file of any minor.
 //
-// Under 0.21 or later, an item entry or a queued entry holding a user
-// message is [WordsPerson] when its trigger, an item's source or a
-// queued entry's trigger, has the kind [TriggerHuman], and
-// [WordsComposed] when the trigger has another kind, when there is
-// none, or when the entry names the instruction layers the message was
-// composed from. Every other entry, and every entry under an earlier
-// minor, is [WordsUnclaimed]. A file raised to 0.21 holds entries
-// written before the raise, which this cannot tell from those after; it
-// reads them as composed, which errs toward a person's words read as
-// composed and never the reverse.
-func WordsOf(format string, e Entry) Words {
-	if major, minor, err := ParseFormat(format); err != nil || major == 0 && minor < 21 {
-		return WordsUnclaimed
-	}
+// A user message that names its instruction layers (instructions_part)
+// or the peer link it came from (from_link) is [WordsComposed]; one
+// whose trigger has the kind [TriggerHuman] is [WordsPerson]; one whose
+// trigger has another kind is [WordsComposed]; and one with no trigger
+// is [WordsUnclaimed]. Every other entry is [WordsUnclaimed].
+//
+// The kind is read as written, whatever the file's minor: before 0.21
+// it was the harness's own term, and a writer of 0.20 may have stamped
+// human on a message it composed, which a reader cannot tell from the
+// person's words.
+func WordsOf(e Entry) Words {
 	var item openresponses.Item
 	switch v := e.(type) {
 	case *ItemEntry:
 		item = v.Item
+		if v.FromLink != "" {
+			if m, ok := item.(*openresponses.Message); ok && m.Role == openresponses.RoleUser {
+				return WordsComposed
+			}
+		}
 	case *QueuedEntry:
 		item = v.Item
 	default:
@@ -340,7 +346,13 @@ func WordsOf(format string, e Entry) Words {
 	if m, ok := item.(*openresponses.Message); !ok || m.Role != openresponses.RoleUser {
 		return WordsUnclaimed
 	}
-	if trigger, layers := inputOf(e); layers == nil && trigger != nil && trigger.Kind == TriggerHuman {
+	trigger, layers := inputOf(e)
+	switch {
+	case layers != nil:
+		return WordsComposed
+	case trigger == nil:
+		return WordsUnclaimed
+	case trigger.Kind == TriggerHuman:
 		return WordsPerson
 	}
 	return WordsComposed
@@ -361,9 +373,10 @@ func inputOf(e Entry) (*Trigger, []LayerRef) {
 
 // ErrComposedHuman is returned by [Session.Append] for an item entry or
 // a queued entry whose trigger has the kind [TriggerHuman] and that
-// names the instruction layers its message was composed from: the
-// harness composed it, so it is not the person's words (RFC 0001,
-// queued, since 0.21).
+// names the instruction layers its message was composed from, or for an
+// item entry with such a trigger that names the peer link it was
+// forwarded from: the harness composed it, so it is not the person's
+// words (RFC 0001, queued, since 0.21).
 var ErrComposedHuman = errors.New("agentsession: a composed input carries a human trigger")
 
 // Trigger says how an input arrived, in the harness's own terms: Kind

@@ -299,7 +299,7 @@ func TestQueuedMembersFixture(t *testing.T) {
 		if it.QueuedFrom == "" {
 			want = WordsPerson
 		}
-		if got := s.Words(it); got != want {
+		if got := WordsOf(it); got != want {
 			t.Errorf("input %q: %v, want %v", it.Item.(*openresponses.Message).Content.Text(), got, want)
 		}
 	}
@@ -318,62 +318,47 @@ func TestQueuedMembersFixture(t *testing.T) {
 	}
 }
 
-// TestWordsOf: since 0.21 an input message is the person's words when
-// its trigger's kind is human, and not when the trigger has another kind
-// or there is none (agentturn#303). An entry that holds no input message
-// makes no claim, and nor does a file whose header names a minor before
-// 0.21, where trigger kinds were opaque.
+// TestWordsOf: an input message is the person's words when its
+// trigger's kind is human, and not when the trigger has another kind or
+// the message names the layers it was composed from or the peer link it
+// was forwarded from; with no trigger it makes no claim, and nor does an
+// entry that holds no input message (agentturn#303; the user's decision
+// of 2026-11-05).
 func TestWordsOf(t *testing.T) {
 	typed := &Trigger{Kind: TriggerHuman, Source: "terminal"}
 	reminder := &Trigger{Kind: "schedule", Ref: "cron:deploy-window"}
 	assistant := NewItemEntry(&openresponses.Message{Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: "ok", Annotations: []openresponses.Annotation{}}}})
 	layered := &ItemEntry{Item: openresponses.UserText("Memory: the window is Tuesday."), InstructionsPart: &LayerRef{Source: LayerAgentMemory}}
+	forwarded := &ItemEntry{Item: openresponses.UserText("The peer says hello."), FromLink: "link-1"}
 	for _, tt := range []struct {
-		name   string
-		e      Entry
-		at021  Words
-		before Words
+		name string
+		e    Entry
+		want Words
 	}{
-		{"typed", &ItemEntry{Item: openresponses.UserText("Deploy billing."), Source: typed}, WordsPerson, WordsUnclaimed},
-		{"a reminder", &ItemEntry{Item: openresponses.UserText("The window opens."), Source: reminder}, WordsComposed, WordsUnclaimed},
-		{"no trigger", NewItemEntry(openresponses.UserText("A peer says hello.")), WordsComposed, WordsUnclaimed},
-		{"a layer", layered, WordsComposed, WordsUnclaimed},
-		{"queued, typed", NewQueued(openresponses.UserText("And the docs."), ModeSteer).WithTrigger(TriggerHuman, "", "terminal"), WordsPerson, WordsUnclaimed},
-		{"queued, a reminder", NewQueued(openresponses.UserText("The window opens."), ModeFollowUp).WithTrigger("schedule", "cron:deploy-window", ""), WordsComposed, WordsUnclaimed},
-		{"model output", assistant, WordsUnclaimed, WordsUnclaimed},
-		{"a tool's output", NewItemEntry(openresponses.NewFunctionCallOutput("call_1", "4")), WordsUnclaimed, WordsUnclaimed},
-		{"a config", &ConfigEntry{Model: "gpt-5"}, WordsUnclaimed, WordsUnclaimed},
+		{"typed", &ItemEntry{Item: openresponses.UserText("Deploy billing."), Source: typed}, WordsPerson},
+		{"a reminder", &ItemEntry{Item: openresponses.UserText("The window opens."), Source: reminder}, WordsComposed},
+		{"no trigger", NewItemEntry(openresponses.UserText("Deploy billing.")), WordsUnclaimed},
+		{"a layer", layered, WordsComposed},
+		{"a peer's text", forwarded, WordsComposed},
+		{"queued, typed", NewQueued(openresponses.UserText("And the docs."), ModeSteer).WithTrigger(TriggerHuman, "", "terminal"), WordsPerson},
+		{"queued, a reminder", NewQueued(openresponses.UserText("The window opens."), ModeFollowUp).WithTrigger("schedule", "cron:deploy-window", ""), WordsComposed},
+		{"queued, no trigger", NewQueued(openresponses.UserText("And the docs."), ModeSteer), WordsUnclaimed},
+		{"model output", assistant, WordsUnclaimed},
+		{"a tool's output", NewItemEntry(openresponses.NewFunctionCallOutput("call_1", "4")), WordsUnclaimed},
+		{"a config", &ConfigEntry{Model: "gpt-5"}, WordsUnclaimed},
 	} {
-		if got := WordsOf(Format, tt.e); got != tt.at021 {
-			t.Errorf("%s at 0.21: %v, want %v", tt.name, got, tt.at021)
-		}
-		if got := WordsOf("agentsession/0.20", tt.e); got != tt.before {
-			t.Errorf("%s at 0.20: %v, want %v", tt.name, got, tt.before)
+		if got := WordsOf(tt.e); got != tt.want {
+			t.Errorf("%s: %v, want %v", tt.name, got, tt.want)
 		}
 	}
 
 	// A writer does not mark a composed layer as typed.
 	q := NewQueued(openresponses.UserText("x"), ModeSteer).WithTrigger(TriggerHuman, "", "")
 	q.InstructionsPart = &LayerRef{Source: LayerAgentMemory}
-	for _, e := range []Entry{&ItemEntry{Item: openresponses.UserText("x"), Source: typed, InstructionsPart: &LayerRef{Source: LayerAgentMemory}}, q} {
+	for _, e := range []Entry{&ItemEntry{Item: openresponses.UserText("x"), Source: typed, InstructionsPart: &LayerRef{Source: LayerAgentMemory}}, q,
+		&ItemEntry{Item: openresponses.UserText("x"), Source: typed, FromLink: "link-1"}} {
 		if _, err := New(Header{ID: "w"}).Append(e); !errors.Is(err, ErrComposedHuman) {
-			t.Errorf("a %s naming its layers with a human trigger: Append = %v", e.EntryType(), err)
-		}
-	}
-
-	// Read from a file: the session's declared format decides.
-	for _, tt := range []struct {
-		format string
-		want   Words
-	}{{"agentsession/0.20", WordsUnclaimed}, {Format, WordsComposed}} {
-		in := `{"type":"session","format":"` + tt.format + `","id":"x","created_at":"2026-11-04T10:00:00Z","payload":"openresponses/2026-04-24"}` + "\n" +
-			reparent(t, `{"type":"item","id":"x","parent":null,"ts":"2026-11-04T10:00:01Z","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"Reminder."}]},"source":{"kind":"schedule"}}`, "") + "\n"
-		s, err := Read(strings.NewReader(in))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := s.Words(s.Entries()[0]); got != tt.want {
-			t.Errorf("a reminder read from a %s file: %v, want %v", tt.format, got, tt.want)
+			t.Errorf("a composed %s with a human trigger: Append = %v", e.EntryType(), err)
 		}
 	}
 
@@ -385,7 +370,7 @@ func TestWordsOf(t *testing.T) {
 		t.Fatal(err)
 	}
 	it := steer.Drain()
-	if WordsOf(Format, it) != WordsPerson {
+	if WordsOf(it) != WordsPerson {
 		t.Error("the drained item is not the person's words")
 	}
 	it.Source = nil
@@ -682,5 +667,54 @@ func TestContinuedPartsFixture(t *testing.T) {
 				t.Errorf("response %s: %v", r.ResponseID, err)
 			}
 		}
+	}
+}
+
+// TestWordsAsWritten: a trigger's kind is read as written in a file of
+// any minor, so a raise draws no line through a file: human is the
+// person's words, another kind is not, and no trigger makes no claim
+// (RFC 0001, queued, since 0.21; the user's decision of 2026-11-05).
+func TestWordsAsWritten(t *testing.T) {
+	line := func(id, source string) string {
+		item := `{"type":"item","id":"` + id + `","parent":null,"ts":"2026-11-04T10:00:01Z","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"Deploy billing."}]}` + source + `}`
+		return reparent(t, item, "") + "\n"
+	}
+	for _, tt := range []struct {
+		name, format, source string
+		want                 Words
+	}{
+		{"human at 0.20", "agentsession/0.20", `,"source":{"kind":"human"}`, WordsPerson},
+		{"a schedule at 0.20", "agentsession/0.20", `,"source":{"kind":"schedule"}`, WordsComposed},
+		{"no trigger at 0.20", "agentsession/0.20", ``, WordsUnclaimed},
+		{"human at 0.21", Format, `,"source":{"kind":"human"}`, WordsPerson},
+		{"a schedule at 0.21", Format, `,"source":{"kind":"schedule"}`, WordsComposed},
+		{"no trigger at 0.21", Format, ``, WordsUnclaimed},
+	} {
+		in := `{"type":"session","format":"` + tt.format + `","id":"x","created_at":"2026-11-04T10:00:00Z","payload":"openresponses/2026-04-24"}` + "\n" + line("x", tt.source)
+		s, err := Read(strings.NewReader(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := WordsOf(s.Entries()[0]); got != tt.want {
+			t.Errorf("%s: %v, want %v", tt.name, got, tt.want)
+		}
+	}
+
+	// A 0.20 file raised by an append: the new typed input is the
+	// person's in the process that raised it.
+	in := `{"type":"session","format":"agentsession/0.20","id":"x","created_at":"2026-11-04T10:00:00Z","payload":"openresponses/2026-04-24"}` + "\n" + line("x", ``)
+	s, err := Read(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	typed := &ItemEntry{Item: openresponses.UserText("And the docs."), Source: &Trigger{Kind: TriggerHuman}}
+	if _, err := s.Append(typed); err != nil {
+		t.Fatal(err)
+	}
+	if got := WordsOf(typed); got != WordsPerson {
+		t.Errorf("typed input appended to a raised file: %v", got)
+	}
+	if got := WordsOf(s.Entries()[0]); got != WordsUnclaimed {
+		t.Errorf("an untagged input before the raise: %v", got)
 	}
 }

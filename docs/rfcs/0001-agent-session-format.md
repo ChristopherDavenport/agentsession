@@ -1821,23 +1821,35 @@ end.
 - The `kind` `human`, since 0.21, says a person sent the input. On a
   `user` message, a `queued` entry's `trigger` or an `item` entry's
   `source`, it says the text is the person's words as they wrote them:
-  typed at a prompt, or sent from a chat. A writer writes it for such
-  an input and MUST NOT write it for a message the harness composed,
-  whatever its provenance: a scheduled reminder, a peer's text it
-  forwards, a background task's result, or a layer of instructions,
-  so never beside `instructions_part`. A reader reads a `user` message
-  whose trigger has the kind `human` as the person's words, and one whose
-  trigger has another kind, or that has no trigger, as not the person's
-  words, as it reads one naming its `instructions_part`; a reader MUST
-  NOT present such a message as the person's. The drained `item`
-  carries the trigger as its `source` (below), so the kind survives a
-  restart with the queued input's other members. A file whose header
-  names a minor before 0.21 makes no claim either way: the kind was the
-  harness's own term then, and a reader draws nothing from it or from
-  its absence. A file raised to 0.21 holds the entries written before
-  the raise, which a reader cannot tell from those after; it reads them
-  by this rule, which may read a person's words as composed and never
-  reads a composed message as the person's.
+  typed at a prompt, or sent from a chat. A writer SHOULD write it for
+  such an input. Since 0.21 a writer MUST mark a message the harness
+  composed, whatever its provenance (a scheduled reminder, a peer's
+  text it forwards, a background task's result, a layer of
+  instructions, a prompt it replays under the trigger of the run it
+  starts), with a trigger of another `kind`, or with the member that
+  says how it was composed, `instructions_part` or `from_link`, and
+  MUST NOT write `human` on it, so never beside either member. The
+  drained `item` carries the trigger as its `source` (below), so the
+  kind survives a restart with the queued input's other members.
+- A reader reads a `user` message's words from its own trigger alone,
+  as written, in a file of any minor:
+  - one whose trigger has the kind `human` is the person's words;
+  - one whose trigger has another kind, or that names its
+    `instructions_part` or its `from_link`, is not, and a reader MUST
+    NOT present it as the person's;
+  - one with no trigger makes no claim either way. A reader MUST NOT
+    present it as the person's words, and MAY treat it as unclaimed
+    input, which a host may handle as it handles no composed message,
+    such as a fallback it takes when no message on the path is the
+    person's.
+
+  The kind was the harness's own term before 0.21, and a writer of
+  0.20 or earlier may have written `human` on a message it composed,
+  as a harness that stamped the trigger of a run on every item the run
+  was prompted with did. A reader cannot tell such a message from the
+  person's words, and reads it as written. Nor does the header's minor
+  draw a line: a file raised to 0.21 holds the entries written before
+  the raise, which nothing tells from those after.
 - Members of `trigger` beyond `kind`, `ref` and `source` are the
   harness's, for what it knows about the arrival beyond those three:
   when a scheduled firing was due and which attempt at it this is, so
@@ -3635,8 +3647,8 @@ files until it is upgraded.
   and its defined `instructions_part` sources as written (Every
   redacted entry), and the ATIF projection carries them in the input's
   record under `queued`. 0.20 had no member for them, so an input owed
-  when a process stopped lost them on resume, and read as the person's
-  words.
+  when a process stopped lost them on resume, and could read as the
+  person's words.
 - The ATIF projection of a sidecar session names its `media` in the
   top-level `extra`, resolves each `sidecar:` URL a visible part holds
   to a data URL of its blob before any hash, keeps the raw items'
@@ -3660,15 +3672,17 @@ files until it is upgraded.
   one the budget forced, and the instructions that shaped its summary
   were lost.
 - A trigger's `kind` `human` says a person sent the input, and a
-  `user` message is the person's words only when its trigger has it
-  (`queued`, `trigger`): one with another kind, or none, is not, so a
-  message the harness composed with no marker but its provenance no
-  longer reads as the person's. The drained `item` carries the trigger
-  as its `source`, which a tool that checks a file compares. A
-  redactor keeps the kind as written. A file of an earlier minor makes
-  no claim either way. 0.20 left every kind opaque, so a reader could
-  not tell a scheduled reminder or a forwarded peer's text from what
-  the person typed.
+  `user` message is the person's words when its trigger has it
+  (`queued`, `trigger`). One whose trigger has another kind, or that
+  names `instructions_part` or `from_link`, is not; one with no trigger
+  makes no claim and is never presented as the person's. A 0.21 writer
+  MUST mark a message it composed so, never `human`. A reader reads the
+  kind as written in a file of any minor, though a 0.20 writer may have
+  written `human` on a composed message. The drained `item` carries the
+  trigger as its `source`, which a tool that checks a file compares. A
+  redactor keeps the kind as written. 0.20 left every kind opaque, so a
+  reader could not tell a scheduled reminder or a forwarded peer's text
+  from what the person typed.
 
 ## Changes since 0.19
 

@@ -116,11 +116,6 @@ func (s *Session) DeclaredFormat() string {
 	return s.declared
 }
 
-// Words says whose words the input message e holds, as RFC 0001 reads
-// its trigger since 0.21, under the format the session's file declared:
-// [WordsOf] with [Session.DeclaredFormat].
-func (s *Session) Words(e Entry) Words { return WordsOf(s.DeclaredFormat(), e) }
-
 // Header returns a copy of the header.
 func (s *Session) Header() Header {
 	s.mu.RLock()
@@ -302,8 +297,8 @@ func (s *Session) Append(e Entry) (string, error) {
 // ([ErrNoRaise]), since appending under the raised header is what a
 // writer does: [Session.RaiseRefused] decides it, for the header's
 // redacted_from and every entry's redacted. An input that names the
-// instruction layers it was composed from carries no human trigger
-// ([ErrComposedHuman]). A continued_in link goes
+// instruction layers it was composed from, or the peer link it was
+// forwarded from, carries no human trigger ([ErrComposedHuman]). A continued_in link goes
 // only into a session that holds none, or one naming the same
 // successor ([ErrSuperseded]). A store raises the stored
 // header only after its session's Prepare has run this check, so the
@@ -330,8 +325,13 @@ func (s *Session) checkNew(e Entry) error {
 			return err
 		}
 	}
-	if trigger, layers := inputOf(e); layers != nil && trigger != nil && trigger.Kind == TriggerHuman {
-		return fmt.Errorf("%w: %s %s names the instruction layers it was composed from", ErrComposedHuman, e.EntryType(), e.Base().ID)
+	if trigger, layers := inputOf(e); trigger != nil && trigger.Kind == TriggerHuman {
+		if layers != nil {
+			return fmt.Errorf("%w: %s %s names the instruction layers it was composed from", ErrComposedHuman, e.EntryType(), e.Base().ID)
+		}
+		if it, ok := e.(*ItemEntry); ok && it.FromLink != "" {
+			return fmt.Errorf("%w: %s %s names the peer link it was forwarded from", ErrComposedHuman, e.EntryType(), e.Base().ID)
+		}
 	}
 	l, ok := e.(*LinkEntry)
 	if ok && l.Rel == RelContinuedIn {
