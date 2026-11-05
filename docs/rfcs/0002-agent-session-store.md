@@ -83,7 +83,9 @@ is the order, and the head is a ref, never inferred.
 
 ## Non-goals
 
-- A query language or index beyond what the projections need.
+- A query language beyond one word match over the listing's filter
+  (Search), or an index beyond what the projections and that search
+  need.
 - A network protocol between stores. What a store owes when it sends or
   receives a session is the exchange section's; how the bytes move is
   not this document's, and RFC 0003 defines one.
@@ -790,6 +792,80 @@ session so archived is fetched or imported again and verifies on the
 way in. Where a session is kept, the
 cost of keeping it is the store's to tier, and content shared across
 sessions is paid for once.
+
+## Search
+
+A store MAY offer search: a text query over the messages its sessions
+hold. A search takes a query, the filter a listing of sessions takes,
+sessions to leave out, whether to leave out redacted sessions, message
+roles, a range of entry `ts`, and a limit on the hits.
+
+- **What is searched.** In each session the filter selects, the
+  `message` items among the session's own entries on the path from its
+  head back to its base, or to the universal root: not its prefix, which
+  is searched in the session whose own entries hold it, and not an entry
+  off that path. Of those it leaves out an item marked `visible: false`,
+  an item carrying `instructions_part`, which the harness composed, and
+  an item carrying `copied_from`, which another session's conversation
+  holds (RFC 0001, `item`), either member in any form, one the format
+  does not define included, so that a search fails closed on it. So each message a session wrote is found
+  once, in that session, on its own path. A redacted session is a
+  session of its own (Redacted sessions), so a store holding one beside
+  its original finds a message the redaction kept twice, once in each;
+  a search asked to leave out redacted sessions, those whose header
+  carries `redacted`, finds the original's alone. Only `item` entries are searched: not a
+  `compaction`'s summary or pinned items, not a `branch_summary`, and
+  not a `queued` entry, whose input is searched as the item it was
+  accepted as.
+- **The text of a message** is the text of each of its text parts
+  (`input_text`, `output_text`, `text` and `refusal`), joined by U+000A.
+- **Matching.** The reference match is agentmemory RFC 0001's (section
+  3.5): the query is lowercased and split at white space into words,
+  each distinct word once, and a message matches when every word occurs
+  in its lowercased text as a substring of code points. Lowercased and
+  white space are as that document defines them. A store MAY match
+  otherwise, as a full-text index matching each word as a token prefix
+  does, and says how; a caller MUST NOT assume one store's matching of
+  another's. Whatever its matching, on every store a query that is
+  empty, or white space alone, matches every message, so that a search
+  with no words selects by its filters alone; and a store SHOULD find
+  what the reference finds for a query whose words each occur in the
+  messages only whole, between characters that are not letters or
+  digits or at an end of the text, in any letter case, so that a query
+  of whole words means the same on every store.
+- **Filters.** The filter selects sessions as a listing does (RFC 0003,
+  Sessions), but for its limit, which caps the number of sessions
+  searched, counted after those the search leaves out by name or as
+  redacted and those the caller may not read. Roles keep the messages of those roles. The
+  range keeps the entries whose `ts` is after its start and before its
+  end, both exclusive; `ts` filters a search and never orders it (Ordering).
+- **Order.** Hits come session by session, the newest `created_at`
+  first and sessions created at one instant by ID in code-point order,
+  and within a session from the head back. The limit cuts that order.
+- **A hit** names the session and its name, where it has one (the
+  last `info` entry that set one, as a listing gives it), the entry,
+  its `ts`, the message's role and a snippet: a run of the message's text around the first word of
+  the query found in it, at most 200 code points in the reference.
+- **Several principals.** A store that serves more than one principal,
+  as RFC 0003's server does, MUST search only the sessions the caller may
+  read. A session it may not read is as one the store does not hold: it
+  yields no hit and counts toward no limit. The store asks the question
+  as Sessions has it asked, holding none of its own locks.
+- **An index.** A store that answers from an index MUST answer as the
+  scan above would, but for its matching, its snippets and how far it
+  lags: the same messages of the same sessions, in the same order, cut
+  at the same limit, and so no hit for an entry a head move left off
+  the path, or for an item the scan leaves out. The index is the
+  store's, kept as it likes; this document defines none.
+- **Lag.** An index MAY lag the store's writes (appends, head moves,
+  and sessions created, imported or received by a push), as one
+  fed by following the store's sessions does, answering as the scan
+  would have over the store as it stood a moment before; a store whose
+  index lags SHOULD say by how much at most, and how a caller waits for
+  it to catch up. It MUST NOT lag a delete: once a delete has returned,
+  no search finds anything of the session deleted. Nor does any index
+  find text a session does not hold, as an index of a redacted session
+  holding text of its original would.
 
 ## Media
 
