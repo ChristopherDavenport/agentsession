@@ -341,8 +341,9 @@ type ItemEntry struct {
 	// and CopiedFrom is nil.
 	CopiedFrom *CopiedFrom `json:"-" member:"copied_from"`
 	// Trust says, in format 0.15, what the harness knows about where the
-	// item's content came from; see [Trust]. A copied item carries the
-	// trust of the entry it was copied from. Nil says nothing. A trust
+	// item's content came from; see [Trust]. A copied item carries every
+	// label of the trust of the entry it was copied from, and since 0.21
+	// may carry more ([Session.VerifyCopies]). Nil says nothing. A trust
 	// member in another form is kept as written in Unknown and Trust is
 	// nil.
 	Trust *Trust `json:"-" member:"trust"`

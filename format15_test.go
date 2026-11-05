@@ -924,12 +924,26 @@ func TestTrustForms(t *testing.T) {
 }
 
 // TestVerifyCopies: a copied item that names an entry holds that entry's
-// item and trust, which a reader holding the source checks; a copy that
-// dropped the source's trust, changed its item, or names an entry the
-// source does not hold is reported.
+// item and every label of its trust, which a reader holding the source
+// checks; a copy that dropped the source's trust or one of its labels,
+// changed its item, or names an entry the source does not hold is
+// reported. Since 0.21 a copy may carry more labels than its source, so
+// a host can mark a copy more cautiously (agentsession#279).
 func TestVerifyCopies(t *testing.T) {
 	src := New(Header{ID: "parent"})
 	read, err := src.Append(&ItemEntry{Item: openresponses.UserText("v2 ships Friday."), Trust: &Trust{Reads: []string{TrustUntrusted}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	both, err := src.Append(&ItemEntry{Item: openresponses.UserText("The key is in the vault."), Trust: &Trust{Reads: []string{TrustPrivate, TrustUntrusted}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean, err := src.Append(&ItemEntry{Item: openresponses.UserText("Judged clean."), Trust: &Trust{Reads: []string{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsaid, err := src.Append(NewItemEntry(openresponses.UserText("Says nothing.")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -949,6 +963,13 @@ func TestVerifyCopies(t *testing.T) {
 		{"trust narrowed", &ItemEntry{Item: openresponses.UserText("v2 ships Friday."), Trust: &Trust{Reads: []string{}}, CopiedFrom: &CopiedFrom{Session: "parent", Entry: read}}, false},
 		{"item changed", &ItemEntry{Item: openresponses.UserText("v3 ships Friday."), Trust: &Trust{Reads: []string{TrustUntrusted}}, CopiedFrom: &CopiedFrom{Session: "parent", Entry: read}}, false},
 		{"no such entry", &ItemEntry{Item: openresponses.UserText("v2 ships Friday."), Trust: &Trust{Reads: []string{TrustUntrusted}}, CopiedFrom: &CopiedFrom{Session: "parent", Entry: "sha256:none"}}, false},
+		{"trust widened", &ItemEntry{Item: openresponses.UserText("v2 ships Friday."), Trust: &Trust{Reads: []string{TrustPrivate, TrustUntrusted}}, CopiedFrom: &CopiedFrom{Session: "parent", Entry: read}}, true},
+		{"a label dropped", &ItemEntry{Item: openresponses.UserText("The key is in the vault."), Trust: &Trust{Reads: []string{TrustUntrusted}}, CopiedFrom: &CopiedFrom{Session: "parent", Entry: both}}, false},
+		{"a label kept, another added", &ItemEntry{Item: openresponses.UserText("The key is in the vault."), Trust: &Trust{Reads: []string{TrustPrivate, TrustUntrusted, "acme:pii"}}, CopiedFrom: &CopiedFrom{Session: "parent", Entry: both}}, true},
+		{"clean, marked untrusted", &ItemEntry{Item: openresponses.UserText("Judged clean."), Trust: &Trust{Reads: []string{TrustUntrusted}}, CopiedFrom: &CopiedFrom{Session: "parent", Entry: clean}}, true},
+		{"clean, trust dropped", &ItemEntry{Item: openresponses.UserText("Judged clean."), CopiedFrom: &CopiedFrom{Session: "parent", Entry: clean}}, false},
+		{"none, marked untrusted", &ItemEntry{Item: openresponses.UserText("Says nothing."), Trust: &Trust{Reads: []string{TrustUntrusted}}, CopiedFrom: &CopiedFrom{Session: "parent", Entry: unsaid}}, true},
+		{"none, none", &ItemEntry{Item: openresponses.UserText("Says nothing."), CopiedFrom: &CopiedFrom{Session: "parent", Entry: unsaid}}, true},
 		{"source not held", &ItemEntry{Item: openresponses.UserText("x"), CopiedFrom: &CopiedFrom{Session: "elsewhere", Entry: read}}, true},
 	} {
 		child := New(Header{ID: "child"})

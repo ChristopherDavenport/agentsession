@@ -585,13 +585,20 @@ One conversation item in the payload profile.
   included.
   The trust of a `branch_summary`'s `from` path is folded into the
   summary's own member, as `branch_summary` says. A copied item whose
-  `copied_from` names an entry MUST carry that entry's `trust` as
-  written, and none when it carries none, so a label a session read
-  reaches every session its conversation is copied into. A copied item
-  that names no entry, a summary or another item made from the path it
-  was copied from among them, carries the trust of that path. A reader
-  that holds the source checks a copy's `trust` with its `item`, as
-  `copied_from` says. The policy a harness applies by
+  `copied_from` names an entry MUST carry `trust` when that entry does,
+  holding every label of the entry's `trust`, so a label a session read
+  reaches every session its conversation is copied into. Since 0.21 it
+  MAY hold more, as a host that copies an earlier output into a child's
+  prompt and marks it `untrusted` writes it: a label only narrows what a
+  reader may do with the text, so a wider copy launders nothing. A
+  copied item that names no entry, a summary or another item made from
+  the path it was copied from among them, carries at least the trust of
+  that path. A reader that holds the source checks a copy's `trust` with
+  its `item`, as `copied_from` says: a verifier MUST refuse a copy whose
+  `trust` lacks a label of its source's, or that carries no `trust`
+  where its source carries one, and MUST accept one that only adds
+  labels. 0.20 asked for the entry's `trust` as written, and none when
+  it carried none, so a verifier of 0.20 refuses the wider copy. The policy a harness applies by
   trust, to ask, refuse or taint a session, is its own.
 - `from_link` MAY name, by `id`, a `peer` link entry before the item on
   its path, other than a cancel notice, since 0.14: the item carries
@@ -627,8 +634,9 @@ One conversation item in the payload profile.
   in another form. A reader keeps a `copied_from` it cannot read this
   way as a member it does not know. A reader that holds the session
   named MAY check an item naming an entry against that entry, its
-  `item` and its `trust`, and reports one that differs, or an entry
-  that session does not hold. It checks with the read rights of whoever
+  `item` and its `trust`, and reports one whose `item` differs, whose
+  `trust` lacks a label of the entry's (`item`, `trust`), or that names
+  an entry that session does not hold. It checks with the read rights of whoever
   asks for the check and no more, since a check made with more answers
   whether an entry the asker may not read holds a given item; it does not check an item a redaction
   made against a session that was not redacted alongside it.
@@ -3496,6 +3504,13 @@ session. A 0.20 file is a 0.21 file that holds none of the new
 members, and no hash changes. A writer of 0.21 raises every file it
 appends to, as Versioning says, so every reader of 0.20 refuses those
 files until it is upgraded.
+
+- A copy's `trust` holds every label of its source's and MAY hold
+  more (`item`, `trust`). A verifier refuses a copy that lacks a label
+  of its source's, or carries no `trust` where its source carries one,
+  and accepts one that only adds labels. 0.20 asked for the source's
+  `trust` as written, so a host could not mark a copy more cautiously,
+  and a recorder that tried refused its own copy.
 
 ## Changes since 0.19
 

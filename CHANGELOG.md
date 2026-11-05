@@ -14,6 +14,13 @@ versions may break the API.
   copies and the export goldens carry the new header. 0.21's members
   and rules are below.
 
+- **Format 0.21: a copy may carry more trust labels than its source
+  (#279).** `VerifyCopies` checks that a copy's `trust` holds every
+  label of the entry it names, where it used to ask for the same
+  labels, so a host can mark a copied item `untrusted` beyond its
+  source. A copy that drops a label, or drops `trust` its source
+  carries, is still refused with `ErrCopyMismatch`.
+
 ## v0.0.37 - 2026-11-03
 
 - **Breaking (format): Format 0.20 (RFC 0001, draft 0.20).** `Format`

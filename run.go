@@ -1481,16 +1481,39 @@ func sameTrust(a, b *Trust) bool {
 	return slices.Equal(UnionTrust(a).Reads, UnionTrust(b).Reads)
 }
 
+// holdsTrust reports whether a copy's trust holds every label of its
+// source's (RFC 0001, item, since 0.21): a source with trust asks the
+// copy for trust holding each of its labels, and more are allowed,
+// since a label only narrows what a reader may do with the text; a
+// source without trust asks for nothing.
+func holdsTrust(copy, source *Trust) bool {
+	if source == nil {
+		return true
+	}
+	if copy == nil {
+		return false
+	}
+	for _, r := range source.Reads {
+		if !slices.Contains(copy.Reads, r) {
+			return false
+		}
+	}
+	return true
+}
+
 // ErrCopyMismatch is returned by [Session.VerifyCopies] for a copied
 // item whose copied_from names an entry of its source that does not
-// hold an equal item, carrying the same trust, or that the source does
-// not hold (RFC 0001, item, since 0.15).
+// hold an equal item, or whose trust the copy lacks a label of, or that
+// the source does not hold (RFC 0001, item, since 0.15).
 var ErrCopyMismatch = errors.New("agentsession: copied item differs from the entry it names")
 
 // VerifyCopies checks every item of the session whose copied_from names
 // an entry against that entry, in the session copied_from names, read
 // through resolve: the entry holds the same item, member for member, and
-// the same trust. A session resolve does not find, returned as (nil,
+// the copy carries trust holding every label of the entry's, when the
+// entry carries trust. Since 0.21 the copy may hold more labels than the
+// entry, as a host marking a copy more cautiously writes it, and never
+// fewer. A session resolve does not find, returned as (nil,
 // nil), is not checked; an error from resolve is returned. With a nil
 // resolve it checks nothing. Each session is resolved once. It returns
 // the first problem found.
@@ -1528,8 +1551,8 @@ func (s *Session) VerifyCopies(resolve func(id string) (*Session, error)) error 
 			return fmt.Errorf("%w: item %s names %s, which %s holds no item entry under", ErrCopyMismatch, it.ID, it.CopiedFrom.Entry, it.CopiedFrom.Session)
 		case !sameItem(from.Item, it.Item):
 			return fmt.Errorf("%w: item %s is not the item of %s", ErrCopyMismatch, it.ID, from.ID)
-		case !sameTrust(from.Trust, it.Trust):
-			return fmt.Errorf("%w: item %s does not carry the trust of %s", ErrCopyMismatch, it.ID, from.ID)
+		case !holdsTrust(it.Trust, from.Trust):
+			return fmt.Errorf("%w: item %s does not carry every trust label of %s", ErrCopyMismatch, it.ID, from.ID)
 		}
 	}
 	return nil
