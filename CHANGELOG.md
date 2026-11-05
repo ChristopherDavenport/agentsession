@@ -22,6 +22,12 @@ versions may break the API.
   table. The remote server serves `POST /v1/sessions/search` under the
   `search` capability, over only the sessions the caller may read, and
   the remote client is a `Searcher`. No format change.
+  An index may lag the store's appends and head moves by a bound it
+  states, never a delete. The store suite's Search table tells an index
+  from the scan by a limit on sessions searched that counts a session
+  with no hit, sessions created at one instant, and the listing's
+  filters; `storetest.Options.SearchOwnMatch` and `SearchSync` let a
+  store that matches otherwise, or whose index lags, run it.
 
 ## v0.0.37 - 2026-11-03
 

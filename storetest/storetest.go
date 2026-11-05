@@ -56,6 +56,23 @@ type Options struct {
 	// left it, and returns a store on the same storage that reads it. It
 	// is nil for a store that cannot; the EntryNoRaise case then skips.
 	Lower func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store
+	// SearchOwnMatch is set for a store whose [agentsession.Searcher]
+	// matches a query's words otherwise than the reference match, as RFC
+	// 0002 (Search) lets it, such as a full-text index matching each
+	// word as a token prefix. The Search case then leaves out its cases
+	// that hold a store to the reference match (a word found inside
+	// another, letter case across words) and its checks of a snippet's
+	// text, and asks only words its sessions hold whole, which RFC 0002
+	// has every match find as the reference does; on those it still
+	// checks the store's answer against the scan's.
+	SearchOwnMatch bool
+	// SearchSync waits until the store's search reflects every write
+	// that returned before it was called, for a store whose Searcher
+	// lags the store's writes, as RFC 0002 (Search) lets an index do. It
+	// is nil for a store whose search reflects each write as soon as it
+	// returns. The Search case calls it after its appends and head
+	// moves, and never after a delete, which no search may lag.
+	SearchSync func(t *testing.T, s agentsession.Store)
 }
 
 // Run exercises a store through the whole interface.

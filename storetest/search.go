@@ -19,12 +19,21 @@ import (
 // fork: the fork's prefix is found once, in the session that wrote it,
 // and a hidden reminder, an instruction layer sent as a message, a
 // copied item and an entry off the head's path are not found at all.
+// Three more are created at one instant, out of ID order, one spawned
+// and one continued, so that the order among them, the listing's
+// filters and a limit on sessions searched, which counts a session
+// with no hit, each tell an index from the scan.
 func testSearch(t *testing.T, opts Options) {
 	ctx := context.Background()
 	st := opts.New(t)
 	if _, ok := st.(agentsession.Reader); !ok {
 		if _, ok := st.(agentsession.Searcher); !ok {
 			t.Skip("the store implements neither agentsession.Reader nor agentsession.Searcher")
+		}
+	}
+	sync := func() {
+		if opts.SearchSync != nil {
+			opts.SearchSync(t, st)
 		}
 	}
 	base := time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC)
@@ -41,11 +50,15 @@ func testSearch(t *testing.T, opts Options) {
 	user := func(text string) *agentsession.ItemEntry {
 		return agentsession.NewItemEntry(openresponses.UserText(text))
 	}
+	create := func(h agentsession.Header) {
+		t.Helper()
+		if _, err := st.Create(ctx, h); err != nil {
+			t.Fatalf("create %s: %v", h.ID, err)
+		}
+	}
 	hidden := false
 
-	if _, err := st.Create(ctx, agentsession.Header{ID: "search-a", CreatedAt: at(0), CWD: "/a"}); err != nil {
-		t.Fatal(err)
-	}
+	create(agentsession.Header{ID: "search-a", CreatedAt: at(0), CWD: "/a"})
 	a1 := appendAt("search-a", 1, user("Deploy the parser"))
 	a2 := appendAt("search-a", 2, agentsession.NewItemEntry(openresponses.AssistantText("The parser is deployed.")))
 	reminder := user("parser reminder the harness hid")
@@ -56,44 +69,80 @@ func testSearch(t *testing.T, opts Options) {
 	appendAt("search-a", 4, layer)
 	a5 := appendAt("search-a", 5, user("one more parser question"))
 
-	if _, err := st.Create(ctx, agentsession.Header{ID: "search-b", CreatedAt: at(10), CWD: "/b", ParentSession: "search-a", Base: a2}); err != nil {
-		t.Fatal(err)
-	}
+	create(agentsession.Header{ID: "search-b", CreatedAt: at(10), CWD: "/b", ParentSession: "search-a", Base: a2})
 	copied := user("Deploy the parser")
 	copied.CopiedFrom = &agentsession.CopiedFrom{Session: "search-a", Entry: a1}
 	appendAt("search-b", 11, copied)
 	b1 := appendAt("search-b", 12, user("does the forked parser hold"))
 
-	if _, err := st.Create(ctx, agentsession.Header{ID: "search-c", CreatedAt: at(20), CWD: "/c"}); err != nil {
-		t.Fatal(err)
-	}
+	create(agentsession.Header{ID: "search-c", CreatedAt: at(20), CWD: "/c"})
 	c1 := appendAt("search-c", 21, user("PARSER in session c"))
 	appendAt("search-c", 22, agentsession.NewItemEntry(openresponses.AssistantText("nothing to see")))
 
+	// Created at one instant, and not in ID order: t2 is continued in
+	// t1, and t3 is a subsession a call of search-a spawned.
+	create(agentsession.Header{ID: "search-t2", CreatedAt: at(-10), CWD: "/t"})
+	create(agentsession.Header{ID: "search-t1", CreatedAt: at(-10), CWD: "/t"})
+	create(agentsession.Header{ID: "search-t3", CreatedAt: at(-10), CWD: "/t", ParentSession: "search-a", SpawnedBy: "call_1"})
+	t1 := appendAt("search-t1", -9, user("a tie at one instant, t1"))
+	t2 := appendAt("search-t2", -9, user("a tie at one instant, t2"))
+	t3 := appendAt("search-t3", -9, user("a tie at one instant, t3"))
+	if _, err := st.Append(ctx, "search-t2", agentsession.NewLinkEntry(agentsession.RelContinuedIn, "search-t1")); err != nil {
+		t.Fatal(err)
+	}
+	sync()
+
+	// readable reads the store while it answers, as a server's read
+	// check may: a Searcher holding its own lock while it asks would
+	// stall here.
+	readable := func(id string) bool {
+		for _, err := range st.List(ctx, agentsession.ListFilter{}) {
+			if err != nil {
+				t.Errorf("List inside Readable: %v", err)
+			}
+		}
+		if r, ok := st.(agentsession.Reader); ok {
+			if _, err := r.Read(ctx, id); err != nil {
+				t.Errorf("Read inside Readable: %v", err)
+			}
+		}
+		return id != "search-c"
+	}
 	cases := []struct {
 		name string
 		q    agentsession.Query
 		want []string
+		// ref holds the store to the reference match.
+		ref bool
 	}{
 		{"fork prefix once, hidden and composed and copied not at all",
-			agentsession.Query{Text: "parser"}, []string{c1, b1, a5, a2, a1}},
+			agentsession.Query{Text: "parser"}, []string{c1, b1, a5, a2, a1}, false},
 		{"every word, any case",
-			agentsession.Query{Text: "  PARSER\tdeploy parser "}, []string{a2, a1}},
-		{"a word is a substring", agentsession.Query{Text: "ploy"}, []string{a2, a1}},
-		{"no match", agentsession.Query{Text: "parser zebra"}, nil},
-		{"roles", agentsession.Query{Text: "parser", Roles: []openresponses.Role{openresponses.RoleAssistant}}, []string{a2}},
+			agentsession.Query{Text: "  PARSER\tdeploy parser "}, []string{a2, a1}, true},
+		{"a word is a substring", agentsession.Query{Text: "ploy"}, []string{a2, a1}, true},
+		{"no match", agentsession.Query{Text: "parser zebra"}, nil, false},
+		{"roles", agentsession.Query{Text: "parser", Roles: []openresponses.Role{openresponses.RoleAssistant}}, []string{a2}, false},
 		{"empty text is every message",
-			agentsession.Query{Roles: []openresponses.Role{openresponses.RoleUser}}, []string{c1, b1, a5, a1}},
-		{"exclude", agentsession.Query{Text: "parser", Exclude: []string{"search-c"}}, []string{b1, a5, a2, a1}},
-		{"limit", agentsession.Query{Text: "parser", Limit: 2}, []string{c1, b1}},
-		{"filter", agentsession.Query{Text: "parser", Filter: agentsession.ListFilter{CWD: "/a"}}, []string{a5, a2, a1}},
+			agentsession.Query{Roles: []openresponses.Role{openresponses.RoleUser}}, []string{c1, b1, a5, a1, t1, t2, t3}, false},
+		{"exclude", agentsession.Query{Text: "parser", Exclude: []string{"search-c"}}, []string{b1, a5, a2, a1}, false},
+		{"limit", agentsession.Query{Text: "parser", Limit: 2}, []string{c1, b1}, false},
+		{"filter", agentsession.Query{Text: "parser", Filter: agentsession.ListFilter{CWD: "/a"}}, []string{a5, a2, a1}, false},
 		{"filter limit counts searched sessions",
-			agentsession.Query{Text: "parser", Exclude: []string{"search-c"}, Filter: agentsession.ListFilter{Limit: 1}}, []string{b1}},
+			agentsession.Query{Text: "parser", Exclude: []string{"search-c"}, Filter: agentsession.ListFilter{Limit: 1}}, []string{b1}, false},
+		{"filter limit counts a searched session with no hit",
+			agentsession.Query{Text: "deploy", Filter: agentsession.ListFilter{Limit: 1}}, nil, false},
+		{"sessions created at one instant, by ID", agentsession.Query{Text: "tie"}, []string{t1, t2, t3}, false},
+		{"filter limit among sessions created at one instant",
+			agentsession.Query{Text: "tie", Filter: agentsession.ListFilter{CWD: "/t", Limit: 2}}, []string{t1, t2}, false},
+		{"parent session",
+			agentsession.Query{Roles: []openresponses.Role{openresponses.RoleUser}, Filter: agentsession.ListFilter{ParentSession: "search-a"}},
+			[]string{b1, t3}, false},
+		{"top level", agentsession.Query{Text: "tie", Filter: agentsession.ListFilter{TopLevel: true}}, []string{t1, t2}, false},
+		{"current", agentsession.Query{Text: "tie", Filter: agentsession.ListFilter{Current: true}}, []string{t1, t3}, false},
 		{"entry time, exclusive",
-			agentsession.Query{Text: "parser", After: at(1), Before: at(12)}, []string{a5, a2}},
-		{"readable",
-			agentsession.Query{Text: "parser", Readable: func(id string) bool { return id != "search-c" }, Filter: agentsession.ListFilter{Limit: 1}},
-			[]string{b1}},
+			agentsession.Query{Text: "parser", After: at(1), Before: at(12)}, []string{a5, a2}, false},
+		{"readable, which reads the store",
+			agentsession.Query{Text: "parser", Readable: readable, Filter: agentsession.ListFilter{Limit: 1}}, []string{b1}, false},
 	}
 	check := func(name string, q agentsession.Query, want []string) {
 		t.Helper()
@@ -118,11 +167,14 @@ func testSearch(t *testing.T, opts Options) {
 		}
 	}
 	for _, c := range cases {
+		if c.ref && opts.SearchOwnMatch {
+			continue
+		}
 		check(c.name, c.q, c.want)
 	}
 	hits := searchHits(t, ctx, st, agentsession.Query{Text: "parser", Exclude: []string{"search-b"}})
 	if len(hits) == 0 || hits[0].Session != "search-c" || hits[0].Role != openresponses.RoleUser || !hits[0].Time.Equal(at(21)) ||
-		!strings.Contains(hits[0].Snippet, "PARSER") {
+		!opts.SearchOwnMatch && !strings.Contains(hits[0].Snippet, "PARSER") {
 		t.Errorf("first hit %+v, want search-c's user message at %v", hits, at(21))
 	}
 
@@ -131,9 +183,11 @@ func testSearch(t *testing.T, opts Options) {
 		if err := hs.SetHead(ctx, "search-a", a5, a2); err != nil {
 			t.Fatal(err)
 		}
+		sync()
 		check("after a head move", agentsession.Query{Text: "parser", Filter: agentsession.ListFilter{CWD: "/a"}}, []string{a2, a1})
 	}
-	// A deleted session is not found.
+	// A deleted session is not found, with no wait for an index to
+	// catch up: no search lags a delete.
 	if err := st.Delete(ctx, "search-c"); err != nil {
 		t.Fatal(err)
 	}

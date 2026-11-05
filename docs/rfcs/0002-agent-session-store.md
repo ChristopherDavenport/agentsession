@@ -822,7 +822,11 @@ limit on the hits.
   white space are as that document defines them. A store MAY match
   otherwise, as a full-text index matching each word as a token prefix
   does, and says how; a caller MUST NOT assume one store's matching of
-  another's.
+  another's. Whatever its matching, a store SHOULD find what the
+  reference finds for a query whose words each occur in the messages
+  only whole, between characters that are not letters or digits or at
+  an end of the text, in any letter case, so that a query of whole
+  words means the same on every store.
 - **Filters.** The filter selects sessions as a listing does (RFC 0003,
   Sessions), but for its limit, which caps the number of sessions
   searched, counted after those the search leaves out by name and those
@@ -841,11 +845,19 @@ limit on the hits.
   yields no hit and counts toward no limit. The store asks the question
   as Sessions has it asked, holding none of its own locks.
 - **An index.** A store that answers from an index MUST answer as the
-  scan above would, but for its matching and its snippets: the same
-  messages of the same sessions, in the same order, cut at the same
-  limit, and so no hit for a deleted session, for an entry a head move
-  left off the path, or for an item the scan leaves out. The index is
-  the store's, kept as it likes; this document defines none.
+  scan above would, but for its matching, its snippets and how far it
+  lags: the same messages of the same sessions, in the same order, cut
+  at the same limit, and so no hit for an entry a head move left off
+  the path, or for an item the scan leaves out. The index is the
+  store's, kept as it likes; this document defines none.
+- **Lag.** An index MAY lag the store's appends and head moves, as one
+  fed by following the store's sessions does, answering as the scan
+  would have over the store as it stood a moment before; a store whose
+  index lags SHOULD say by how much at most, and how a caller waits for
+  it to catch up. It MUST NOT lag a delete: once a delete has returned,
+  no search finds anything of the session deleted. Nor does any index
+  find text a session does not hold, as an index of a redacted session
+  holding text of its original would.
 
 ## Media
 
