@@ -59,6 +59,9 @@ func testSearch(t *testing.T, opts Options) {
 	hidden := false
 
 	create(agentsession.Header{ID: "search-a", CreatedAt: at(0), CWD: "/a"})
+	if _, err := st.Append(ctx, "search-a", &agentsession.InfoEntry{Name: "Parser work"}); err != nil {
+		t.Fatal(err)
+	}
 	a1 := appendAt("search-a", 1, user("Deploy the parser"))
 	a2 := appendAt("search-a", 2, agentsession.NewItemEntry(openresponses.AssistantText("The parser is deployed.")))
 	reminder := user("parser reminder the harness hid")
@@ -164,6 +167,9 @@ func testSearch(t *testing.T, opts Options) {
 			if h.Snippet == "" || h.Time.IsZero() || h.Role == "" || !strings.HasPrefix(h.Session, "search-") {
 				t.Errorf("%s: hit %+v lacks a member", name, h)
 			}
+			if h.Session == "search-a" && h.Name != "Parser work" || h.Session == "search-c" && h.Name != "" {
+				t.Errorf("%s: hit %+v names its session %q", name, h, h.Name)
+			}
 		}
 		if _, ok := st.(agentsession.Searcher); ok {
 			scan := searchHits(t, ctx, st, q, true)
@@ -222,7 +228,7 @@ func searchHits(t *testing.T, ctx context.Context, st agentsession.Store, q agen
 // compared.
 func sameHits(a, b []agentsession.Hit) bool {
 	key := func(h agentsession.Hit) string {
-		return fmt.Sprintf("%s %s %s %s", h.Session, h.Entry, h.Time.UTC().Format(time.RFC3339Nano), h.Role)
+		return fmt.Sprintf("%s %q %s %s %s", h.Session, h.Name, h.Entry, h.Time.UTC().Format(time.RFC3339Nano), h.Role)
 	}
 	return slices.EqualFunc(a, b, func(x, y agentsession.Hit) bool { return key(x) == key(y) })
 }

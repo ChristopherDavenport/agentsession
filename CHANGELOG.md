@@ -18,8 +18,8 @@ versions may break the API.
   found in it and in its original; `Query.OmitRedacted` leaves redacted
   sessions out. A `Query` takes the listing's
   `ListFilter`, sessions to exclude, roles, an entry time range, a limit
-  and a read check; a `Hit` is the session, entry, time, role and a
-  snippet. `ScanSearch` is the reference scan over `List` and `Reader`;
+  and a read check; a `Hit` is the session, its name, the entry, time,
+  role and a snippet. The entry time range is exclusive at both ends. `ScanSearch` is the reference scan over `List` and `Reader`;
   a store answering faster implements `Searcher`, which must answer as
   the scan does, and the store suite checks every store against a
   table. The remote server serves `POST /v1/sessions/search` under the

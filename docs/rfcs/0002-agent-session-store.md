@@ -807,7 +807,8 @@ roles, a range of entry `ts`, and a limit on the hits.
   off that path. Of those it leaves out an item marked `visible: false`,
   an item carrying `instructions_part`, which the harness composed, and
   an item carrying `copied_from`, which another session's conversation
-  holds (RFC 0001, `item`). So each message a session wrote is found
+  holds (RFC 0001, `item`), either member in any form, one the format
+  does not define included, so that a search fails closed on it. So each message a session wrote is found
   once, in that session, on its own path. A redacted session is a
   session of its own (Redacted sessions), so a store holding one beside
   its original finds a message the redaction kept twice, once in each;
@@ -840,8 +841,9 @@ roles, a range of entry `ts`, and a limit on the hits.
 - **Order.** Hits come session by session, the newest `created_at`
   first and sessions created at one instant by ID in code-point order,
   and within a session from the head back. The limit cuts that order.
-- **A hit** names the session, the entry, its `ts`, the message's role
-  and a snippet: a run of the message's text around the first word of
+- **A hit** names the session and its name, where it has one (the
+  last `info` entry that set one, as a listing gives it), the entry,
+  its `ts`, the message's role and a snippet: a run of the message's text around the first word of
   the query found in it, at most 200 code points in the reference.
 - **Several principals.** A store that serves more than one principal,
   as RFC 0003's server does, MUST search only the sessions the caller may

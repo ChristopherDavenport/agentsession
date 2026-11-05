@@ -9,6 +9,7 @@ import (
 	"io"
 	"iter"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -48,6 +49,7 @@ type searchFilter struct {
 // hitLine is a hit in a search's stream.
 type hitLine struct {
 	Session string    `json:"session"`
+	Name    string    `json:"name,omitempty"`
 	Entry   string    `json:"entry"`
 	TS      time.Time `json:"ts"`
 	Role    string    `json:"role"`
@@ -66,6 +68,64 @@ func timeIn(t time.Time) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+// searchMembers and filterMembers are the members a search's body and
+// its filter may hold, by their exact names.
+var (
+	searchMembers = []string{"query", "filter", "exclude", "omit_redacted", "roles", "after", "before", "limit"}
+	filterMembers = []string{"cwd", "parent_session", "harness", "extra", "top_level", "after", "before", "limit", "current"}
+)
+
+// decodeSearch reads a search's body: one JSON object, or nothing,
+// whose members, and its filter's, are named exactly as RFC 0003 names
+// them. encoding/json alone would take "Limit" for limit and ignore what
+// follows the object.
+func decodeSearch(body io.Reader) (searchRequest, error) {
+	var req searchRequest
+	dec := json.NewDecoder(body)
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); errors.Is(err, io.EOF) {
+		return req, nil
+	} else if err != nil {
+		return req, err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return req, errors.New("data after the object")
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return req, err
+	}
+	if err := knownMembers(top, searchMembers, ""); err != nil {
+		return req, err
+	}
+	if f, ok := top["filter"]; ok {
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal(f, &members); err != nil {
+			return req, fmt.Errorf("filter: %w", err)
+		}
+		if err := knownMembers(members, filterMembers, "filter "); err != nil {
+			return req, err
+		}
+	}
+	strict := json.NewDecoder(bytes.NewReader(raw))
+	strict.DisallowUnknownFields()
+	if err := strict.Decode(&req); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
+// knownMembers refuses a member of obj not named in known, compared
+// exactly.
+func knownMembers(obj map[string]json.RawMessage, known []string, where string) error {
+	for name := range obj {
+		if !slices.Contains(known, name) {
+			return fmt.Errorf("unknown %smember %q", where, name)
+		}
+	}
+	return nil
 }
 
 // query is the library's query the request asks.
@@ -128,10 +188,8 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 		h.writeProblem(w, problem(CodeUnsupported, "the store cannot be searched", ""))
 		return
 	}
-	var req searchRequest
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxSearchBody))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+	req, err := decodeSearch(io.LimitReader(r.Body, maxSearchBody))
+	if err != nil {
 		h.writeProblem(w, problem(CodeBadRequest, "the body does not parse", err.Error()))
 		return
 	}
@@ -155,7 +213,7 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 			out.fail(h, err)
 			return
 		}
-		if err := out.line(hitLine{Session: hit.Session, Entry: hit.Entry, TS: hit.Time, Role: string(hit.Role), Snippet: hit.Snippet}); err != nil {
+		if err := out.line(hitLine{Session: hit.Session, Name: hit.Name, Entry: hit.Entry, TS: hit.Time, Role: string(hit.Role), Snippet: hit.Snippet}); err != nil {
 			out.fail(h, err)
 			return
 		}
@@ -205,7 +263,7 @@ func (c *Client) Search(ctx context.Context, q agentsession.Query) iter.Seq2[age
 				yield(agentsession.Hit{}, fmt.Errorf("remote: search: %w", err))
 				return
 			}
-			if !yield(agentsession.Hit{Session: l.Session, Entry: l.Entry, Time: l.TS, Role: openresponses.Role(l.Role), Snippet: l.Snippet}, nil) {
+			if !yield(agentsession.Hit{Session: l.Session, Name: l.Name, Entry: l.Entry, Time: l.TS, Role: openresponses.Role(l.Role), Snippet: l.Snippet}, nil) {
 				return
 			}
 		}

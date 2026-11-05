@@ -83,7 +83,8 @@ func TestSearchOnlyWhatTheCallerMayRead(t *testing.T) {
 // answered as though the member were not there.
 func TestSearchRefusesAnUnknownMember(t *testing.T) {
 	url := server(t, agentsession.NewMemoryStore(), remote.WithInsecureNoAuth())
-	for _, body := range []string{`{"query":"x","any":true}`, `{"limit":-1}`, `{"filter":{"limit":-2}}`} {
+	for _, body := range []string{`{"query":"x","any":true}`, `{"limit":-1}`, `{"filter":{"limit":-2}}`,
+		`{"Query":"x"}`, `{"LIMIT":1}`, `{"filter":{"CWD":"/a"}}`, `{"query":"x"} {"query":"y"}`, `{"query":"x"} trailing`} {
 		resp, err := http.Post(url+"/v1/sessions/search", "application/json", strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)

@@ -41,7 +41,10 @@ type Query struct {
 	OmitRedacted bool
 	// Roles keeps only messages of these roles; empty keeps every role.
 	Roles []openresponses.Role
-	// After and Before bound each message entry's ts, exclusive.
+	// After and Before bound each message entry's ts, both exclusive:
+	// a message at exactly After or Before is not found. A caller
+	// searching from a date inclusive sets After a nanosecond before
+	// it. Zero does not bound.
 	After, Before time.Time
 	// Limit caps the number of hits; zero means no cap.
 	Limit int
@@ -58,9 +61,13 @@ type Query struct {
 // it, the entry's ts, the message's role, and a snippet of its text.
 type Hit struct {
 	Session string
-	Entry   string
-	Time    time.Time
-	Role    openresponses.Role
+	// Name is the session's display name, from the last info entry that
+	// set one, as a listing gives it in [Summary.Name]; empty when it
+	// has none.
+	Name  string
+	Entry string
+	Time  time.Time
+	Role  openresponses.Role
 	// Snippet is a run of the message's text around the first word of
 	// the query found in it. The scan's is at most [SnippetRunes] code
 	// points; a store answering from an index may cut it otherwise.
@@ -112,7 +119,8 @@ func Search(ctx context.Context, store Store, q Query) iter.Seq2[Hit, error] {
 // back: not a fork's prefix, which another session wrote, not an entry
 // off the path, not an item marked visible false, not one carrying
 // instructions_part, which the harness composed, and not one carrying
-// copied_from, which another session's conversation holds. So each
+// copied_from, which another session's conversation holds, either
+// member in any form, one the format does not define included. So each
 // message a session wrote is found once, in that session: a redacted
 // session is a session of its own, and a message its redaction kept is
 // found in it and in its original, unless q.OmitRedacted leaves the
@@ -149,11 +157,11 @@ func ScanSearch(ctx context.Context, store Store, q Query) iter.Seq2[Hit, error]
 			if slices.Contains(q.Exclude, id) || q.OmitRedacted && sum.Header.Redacted || !q.Filter.Keep(sum) {
 				continue
 			}
-			if q.Readable != nil && !q.Readable(id) {
-				continue
-			}
 			if q.Filter.Limit > 0 && searched == q.Filter.Limit {
 				return
+			}
+			if q.Readable != nil && !q.Readable(id) {
+				continue
 			}
 			if err := ctx.Err(); err != nil {
 				yield(Hit{}, err)
@@ -168,8 +176,10 @@ func ScanSearch(ctx context.Context, store Store, q Query) iter.Seq2[Hit, error]
 				return
 			}
 			searched++
+			name := s.Name()
 			for _, e := range searchable(s) {
 				h, ok := q.hit(id, e, words)
+				h.Name = name
 				if !ok {
 					continue
 				}
@@ -201,6 +211,14 @@ func searchable(s *Session) []*ItemEntry {
 			continue
 		}
 		if it.Visible != nil && !*it.Visible || it.Layers() != nil || it.CopiedFrom != nil {
+			continue
+		}
+		// The member in a form the format does not define, kept in
+		// Unknown, says the same of the item.
+		if _, ok := it.Unknown["instructions_part"]; ok {
+			continue
+		}
+		if _, ok := it.Unknown["copied_from"]; ok {
 			continue
 		}
 		out = append(out, it)

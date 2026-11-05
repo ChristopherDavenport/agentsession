@@ -450,13 +450,15 @@ POST /v1/sessions/search
   caps the sessions searched; `exclude`, the IDs of sessions to leave
   out; `omit_redacted`, `true` to leave out the sessions whose header
   carries `redacted`; `roles`, message roles; `after` and `before` (RFC 3339), bounding
-  an entry's `ts`; and `limit`, the most hits. A member the server does
-  not know, or a negative limit, is `bad_request`, so an option a later
+  an entry's `ts`, both exclusive; and `limit`, the most hits. A member
+  the server does not know, matched by its exact name, a negative limit,
+  or anything after the object, is `bad_request`, so an option a later
   revision adds is refused by a server without it rather than ignored.
   The request is a `POST` only because a filter with `extra` and lists
   sits badly in a query string; it changes nothing.
 - The response streams the hits as NDJSON in RFC 0002's order, each
-  `{"session", "entry", "ts", "role", "snippet"}`, ending with `end`.
+  `{"session", "name", "entry", "ts", "role", "snippet"}`, `name`
+  omitted where the session has none, ending with `end`.
 - The server searches only the sessions the caller may read, as RFC
   0002 requires of a store serving several principals: a session the
   caller may not read yields no hit and does not count toward

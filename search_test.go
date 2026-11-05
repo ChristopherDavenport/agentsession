@@ -2,9 +2,11 @@ package agentsession_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/openresponses"
@@ -78,6 +80,14 @@ func TestSearchSnippet(t *testing.T) {
 	if hits := searchOne(t, agentsession.Query{Text: "short"}, openresponses.UserText("a short one")); len(hits) != 1 || hits[0].Snippet != "a short one" {
 		t.Errorf("short snippet: %v", hits)
 	}
+	// Lowercasing changes a code point's length in bytes (İ to i, Ⱥ to
+	// ⱥ), never the count of code points before the match.
+	mixed := strings.Repeat("İ", 300) + "NEEDLE" + strings.Repeat("Ⱥ", 300)
+	hits = searchOne(t, agentsession.Query{Text: "needle"}, openresponses.UserText(mixed))
+	want := strings.Repeat("İ", 60) + "NEEDLE" + strings.Repeat("Ⱥ", agentsession.SnippetRunes-66)
+	if len(hits) != 1 || hits[0].Snippet != want {
+		t.Errorf("snippet across a change of length: %v", hits)
+	}
 	head := searchOne(t, agentsession.Query{}, openresponses.UserText(long))
 	if len(head) != 1 || head[0].Snippet != string([]rune(long)[:agentsession.SnippetRunes]) {
 		t.Errorf("an empty query's snippet is not the text's start: %v", head)
@@ -96,4 +106,51 @@ func TestSearchNeedsAReader(t *testing.T) {
 		return
 	}
 	t.Error("search of a store without Reader yielded nothing")
+}
+
+// An item carrying instructions_part or copied_from in a form the
+// format does not define is left out all the same: the member says the
+// harness composed it or another session holds it, whatever its form.
+func TestSearchLeavesOutAMemberInAnotherForm(t *testing.T) {
+	ctx := context.Background()
+	st := agentsession.NewMemoryStore()
+	s, err := st.Create(ctx, agentsession.Header{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, member := range []string{"instructions_part", "copied_from"} {
+		e := agentsession.NewItemEntry(openresponses.UserText("needle under " + member))
+		e.Unknown = map[string]json.RawMessage{member: json.RawMessage(`"not the format's form"`)}
+		if _, err := st.Append(ctx, s.ID(), e); err != nil {
+			t.Fatalf("append with %s in another form: %v", member, err)
+		}
+	}
+	for h, err := range agentsession.Search(ctx, st, agentsession.Query{Text: "needle"}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Errorf("found %q", h.Snippet)
+	}
+}
+
+// Once Filter.Limit sessions are searched, no other session's read
+// check is asked: it may be a round trip to an authorizer.
+func TestSearchAsksNoReadCheckPastTheLimit(t *testing.T) {
+	ctx := context.Background()
+	st := agentsession.NewMemoryStore()
+	for i := range 3 {
+		if _, err := st.Create(ctx, agentsession.Header{CreatedAt: time.Date(2026, 11, 4, i, 0, 0, 0, time.UTC)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var asked []string
+	q := agentsession.Query{Filter: agentsession.ListFilter{Limit: 1}, Readable: func(id string) bool { asked = append(asked, id); return true }}
+	for _, err := range agentsession.Search(ctx, st, q) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(asked) != 1 {
+		t.Errorf("read checks asked: %v, want the one session searched", asked)
+	}
 }
