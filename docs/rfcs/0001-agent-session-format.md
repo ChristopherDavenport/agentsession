@@ -638,8 +638,9 @@ One conversation item in the payload profile.
   way as a member it does not know. A reader that holds the session
   named MAY check an item naming an entry against that entry, its
   `item` and its `trust`, and reports one whose `item` differs, whose
-  `trust` lacks a label of the entry's (`item`, `trust`), or that names
-  an entry that session does not hold. It checks with the read rights of whoever
+  `trust` lacks a label of the entry's or that carries no `trust` where
+  the entry carries one (`item`, `trust`), or that names an entry that
+  session does not hold. It checks with the read rights of whoever
   asks for the check and no more, since a check made with more answers
   whether an entry the asker may not read holds a given item; it does not check an item a redaction
   made against a session that was not redacted alongside it.
@@ -1376,7 +1377,7 @@ Why a run started and how it ended. Two entries per run, paired by
   run is prompted with: a reader reads each message's from its own
   trigger alone, an `item`'s `source`, never from the run's, since a
   run a person started may be prompted with messages the harness
-  composed, and a writer MUST NOT copy the run's trigger onto them as
+  composed, onto which a writer MUST NOT copy a `human` trigger as
   their `source`. It sits beside `ref` and changes nothing about it; `ref` stays
   one opaque string. A writer that holds a trigger's parts SHOULD write
   them here rather than joined into `ref`, since a joined string cannot
@@ -3096,7 +3097,9 @@ drained one carries its trigger under `source`; a fold's usage
 travels under `usage` in its system step's `extra`, and a fold's
 `pinned` items travel beside its `summary` in the same step, since the
 entries they were copied from are before `first_kept` and so are not
-in the document. Raw items travel in step `extra` so the projection is
+in the document; since 0.21 a fold's `requested` and `instructions`
+travel under `agentsession` in that step's `extra`, beside its
+`trust`. Raw items travel in step `extra` so the projection is
 lossless.
 
 A member of an entry that this document does not define travels as
@@ -3588,8 +3591,8 @@ hashed and verifying, a successor whose first config carries the parts
 in force at its predecessor's leaf, an `untrusted` memory part and a
 `private` instruction file, each with its `trust`, so its path's trust
 holds both from its first entry, and
-negative cases, each a file broken in one way, a drained item that
-drops its queued entry's `trust`, for a broken parent link,
+negative cases, each a file broken in one way, for a drained item
+that drops its queued entry's `trust`, a broken parent link,
 a truncated last line, an unknown type, a file with a `base` holding a
 second first entry, a branch at the root a file with a base may not have, an own entry hung from the prefix above the base, or a line
 before the base that is not on the path to it, a `dispatch` that follows a
