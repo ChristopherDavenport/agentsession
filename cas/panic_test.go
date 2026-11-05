@@ -43,17 +43,21 @@ func within(t *testing.T, what string, f func() error) {
 	}
 }
 
-// panicSyncUnder makes the store's file fsyncs under root panic until
-// the returned func restores them.
+// panicSyncUnder makes the store's fsyncs of files, objects and
+// directories under root panic until the returned func restores them.
 func panicSyncUnder(root string) func() {
-	old := syncFile
-	syncFile = func(f *os.File) error {
-		if strings.HasPrefix(f.Name(), root) {
-			panic(injected{})
+	oldFile, oldObject, oldDir := syncFile, syncObject, syncDirFile
+	under := root + string(os.PathSeparator)
+	hook := func(old func(*os.File) error) func(*os.File) error {
+		return func(f *os.File) error {
+			if strings.HasPrefix(f.Name(), under) {
+				panic(injected{})
+			}
+			return old(f)
 		}
-		return old(f)
 	}
-	return func() { syncFile = old }
+	syncFile, syncObject, syncDirFile = hook(oldFile), hook(oldObject), hook(oldDir)
+	return func() { syncFile, syncObject, syncDirFile = oldFile, oldObject, oldDir }
 }
 
 // TestPanicWhileClaimedFreesSession panics inside the store while it
@@ -163,4 +167,76 @@ func TestPanicWhileClaimedFreesSession(t *testing.T) {
 		within(t, "Push", func() error { _, err := rec.Push(ctx, mir, "p", PushOptions{}); return err })
 		within(t, "Close", mir.Close)
 	})
+	t.Run("Import openHeld", func(t *testing.T) {
+		src, err := Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		fill(t, src, "i", 2)
+		var file bytes.Buffer
+		if err := src.Project(ctx, &file, "i"); err != nil {
+			t.Fatal(err)
+		}
+		src.Close()
+		st, err := Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		loading = func() { panic(injected{}) }
+		mustPanic(t, "Import", func() { st.Import(ctx, bytes.NewReader(file.Bytes()), false) })
+		loading = nil
+		within(t, "Open", func() error { _, err := st.Open(ctx, "i"); return err })
+		within(t, "Close", st.Close)
+	})
+	t.Run("Push openHeld", func(t *testing.T) {
+		rec, err := Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rec.Close()
+		fill(t, rec, "p", 2)
+		mir, err := Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		loading = func() { panic(injected{}) }
+		mustPanic(t, "Push", func() { rec.Push(ctx, mir, "p", PushOptions{}) })
+		loading = nil
+		within(t, "Open", func() error { _, err := mir.Open(ctx, "p"); return err })
+		within(t, "Close", mir.Close)
+	})
+}
+
+// TestPanicWhileHeldFreesSession panics inside the store while it holds
+// a session's handle to write to it or commit it: an append, Sync, a
+// durable ReadLog and Close. The handle is dropped, so the next call
+// for the session opens it afresh from what the disk holds, and returns,
+// as Close does, rather than wait forever on a handle left locked.
+func TestPanicWhileHeldFreesSession(t *testing.T) {
+	ctx := context.Background()
+	for _, tt := range []struct {
+		name   string
+		policy SyncPolicy
+		call   func(st *Store)
+	}{
+		{"Append", SyncEveryAppend, func(st *Store) { st.Append(ctx, "s", item("panics")) }},
+		{"Sync", SyncNever, func(st *Store) { st.Sync(ctx) }},
+		{"ReadLog", SyncNever, func(st *Store) { st.ReadLog(ctx, "s", "", true) }},
+		{"Close", SyncNever, func(st *Store) { st.Close() }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			st, err := Open(root, WithSync(tt.policy))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fill(t, st, "s", 2)
+			restore := panicSyncUnder(root)
+			mustPanic(t, tt.name, func() { tt.call(st) })
+			restore()
+			within(t, "Append", func() error { _, err := st.Append(ctx, "s", item("after")); return err })
+			within(t, "Open", func() error { _, err := st.Open(ctx, "s"); return err })
+			within(t, "Close", st.Close)
+		})
+	}
 }

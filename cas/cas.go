@@ -3171,8 +3171,8 @@ func (s *Store) Write(ctx context.Context, sessionID string, e agentsession.Entr
 	if err != nil {
 		return agentsession.Result{}, err
 	}
-	r, err := s.writeHeld(ctx, h, sessionID, e)
-	h.mu.Unlock()
+	var r agentsession.Result
+	s.letGoAfter(sessionID, h, func() { r, err = s.writeHeld(ctx, h, sessionID, e) })
 	if err == nil && r.Outcome != agentsession.Held {
 		s.mu.Lock()
 		s.appends++
@@ -3747,6 +3747,23 @@ func (s *Store) dropHandle(id string, h *handle) {
 	h.lock.release()
 }
 
+// letGoAfter runs f with the handle h held, its lock taken, then lets
+// the lock go. A panic in f drops the handle first, as what f left
+// half done in memory cannot be trusted, so the next call for the
+// session opens it afresh from the disk rather than wait on the handle
+// forever; the panic goes on to the caller unchanged.
+func (s *Store) letGoAfter(id string, h *handle, f func()) {
+	done := false
+	defer func() {
+		if !done {
+			s.dropHandle(id, h)
+		}
+		h.mu.Unlock()
+	}()
+	f()
+	done = true
+}
+
 // Sync commits the working state of every session this store holds:
 // the commit on its own that RFC 0002 asks a store to offer.
 func (s *Store) Sync(ctx context.Context) error {
@@ -3759,12 +3776,13 @@ func (s *Store) Sync(ctx context.Context) error {
 	var first error
 	for id, h := range s.handles() {
 		h.mu.Lock()
-		if !h.gone {
-			if err := s.commitHandle(id, h); err != nil && first == nil {
-				first = err
+		s.letGoAfter(id, h, func() {
+			if !h.gone {
+				if err := s.commitHandle(id, h); err != nil && first == nil {
+					first = err
+				}
 			}
-		}
-		h.mu.Unlock()
+		})
 	}
 	s.startPack(false)
 	return first
@@ -3775,12 +3793,13 @@ func (s *Store) Close() error {
 	var first error
 	for id, h := range s.handles() {
 		h.mu.Lock()
-		if !h.gone {
-			if err := s.releaseHandle(id, h); err != nil && first == nil {
-				first = err
+		s.letGoAfter(id, h, func() {
+			if !h.gone {
+				if err := s.releaseHandle(id, h); err != nil && first == nil {
+					first = err
+				}
 			}
-		}
-		h.mu.Unlock()
+		})
 	}
 	s.mu.Lock()
 	s.closing = true

@@ -74,8 +74,8 @@ func (s *Store) ReadLog(ctx context.Context, id string, after agentsession.Curso
 		// A sender commits the session before it serves it. Only a
 		// session this store holds has working state of this store's.
 		if h := s.held(id); h != nil {
-			err := s.commitHandle(id, h)
-			h.mu.Unlock()
+			var err error
+			s.letGoAfter(id, h, func() { err = s.commitHandle(id, h) })
 			if err != nil {
 				return Log{}, err
 			}
