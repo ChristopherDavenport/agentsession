@@ -3150,6 +3150,25 @@ the hash of the step's visible fields, and `visible` under
   document holds that `path` as a string, the raw items in the extras
   included, before it computes any hash; a `path` naming no such file
   stays as it is, and the hashes that cover it fail.
+- A projection of a sidecar session, since 0.21, MUST resolve each
+  `sidecar:` reference in a step's visible content to its blob, as a
+  data URL of the blob's media type, `application/octet-stream` for a
+  blob held with none, before it computes any hash, so a visible part
+  never names a sidecar: an image part names the data URL, and a
+  reference a step shows as text, or an image of a type ATIF does not
+  take, is described as such a data URL is. The raw items in the
+  extras keep each `sidecar:` reference as the session recorded it,
+  since the entry `id` a converter rebuilds covers it. A document
+  written to files carries each blob its raw items reference beside
+  it, in the session's sidecar layout under `sidecar/`: the blob named
+  by its hex digest alone and its type in the file `<hex>.type`, both
+  in a directory named after the session the trajectory is of, an
+  embedded trajectory's blobs under its own session's, so a converter
+  rebuilds the session, and its sidecar directory, from the document
+  alone. A projection that cannot read a blob, or reads one whose bytes
+  do not hash to its name, MUST refuse rather than write a reference
+  nothing resolves. 0.20 wrote the reference into the visible part,
+  which a reader of Open Responses refuses, and copied no blob.
 
 A converter that rebuilds a session from a document this projection
 wrote restores on each entry:
@@ -3609,6 +3628,12 @@ files until it is upgraded.
   record under `queued`. 0.20 had no member for them, so an input owed
   when a process stopped lost them on resume, and read as the person's
   words.
+- The ATIF projection of a sidecar session resolves each `sidecar:`
+  reference in visible content to a data URL of its blob before any
+  hash, keeps the raw items' references as recorded, carries each blob
+  beside a document written to files under `sidecar/<session>/`, and
+  refuses when it cannot read a blob (Projections, ATIF). This is a
+  projection rule: no file member changes.
 - A writer that composes instructions from a layer whose trust it
   knows MUST record them as parts carrying that trust (`config`,
   Instructions as parts), and one that carries the settings in force

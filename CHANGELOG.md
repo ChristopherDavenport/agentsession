@@ -67,6 +67,20 @@ versions may break the API.
   writer that composes instructions from a layer of known trust. New
   fixture `continued-parts`.
 
+- **Breaking: the ATIF export resolves and carries sidecar blobs
+  (#280).** `ToATIF` wrote a sidecar session's image as its `sidecar:`
+  URL, which no reader of the document can open, and `WriteATIF`
+  copied no blob. `Options.Blobs` now reads a session's blobs
+  (`StoreBlobs`, `DirBlobs`), and the export resolves each `sidecar:`
+  reference in a step's visible content to a data URL of its blob
+  before any hash, while the raw items keep the references the entry
+  IDs hash over. `WriteATIF` and `WriteDocument` take `WithBlobs` and
+  copy each blob the raw items reference under `sidecar/<session>/`
+  beside the document, with its `.type` file. Either refuses with
+  `ErrBlobUnread` when it has no reader, cannot read a blob, or reads
+  bytes that do not hash to its name. `agentsession export` reads the
+  blobs beside the file or from the cas store.
+
 ## v0.0.37 - 2026-11-03
 
 - **Breaking (format): Format 0.20 (RFC 0001, draft 0.20).** `Format`

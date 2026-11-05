@@ -44,7 +44,26 @@ type Options struct {
 	Redactors []Redactor
 	// Notes is copied to the document's notes member.
 	Notes string
+	// Blobs reads the sidecar blobs of a sidecar session, and of each
+	// subsession embedded, by the session's ID and the blob's hash; see
+	// [Blobs]. The export resolves each sidecar: reference in a step's
+	// visible content through it, and refuses with [ErrBlobUnread] when
+	// it is nil or cannot read one (RFC 0001, Projections, ATIF).
+	Blobs Blobs
 }
+
+// Blobs reads one sidecar blob of a session: its bytes and the media
+// type the session holds for it, "" for none. A blob it cannot read is
+// an error. [StoreBlobs] reads them from a store, [DirBlobs] from the
+// directories beside session files.
+type Blobs func(session, hash string) (data []byte, mediaType string, err error)
+
+// ErrBlobUnread is returned by [ToATIF] and [WriteDocument] for a
+// sidecar blob of a session that they were given no way to read, or
+// could not read, or that does not hash to its name: a projection
+// refuses rather than write a reference nothing resolves (RFC 0001,
+// Projections, ATIF, since 0.21).
+var ErrBlobUnread = errors.New("export: a sidecar blob cannot be read")
 
 // Root extra members the exporter writes.
 const (
@@ -167,6 +186,11 @@ func ToATIF(t Trajectory, opts Options) (*atif.Trajectory, error) {
 		b.doc.Agent.Version = agentsession.Format
 	}
 	if err := b.run(); err != nil {
+		return nil, err
+	}
+	// What a reader sees names no sidecar, before anything is hashed;
+	// the raw items keep the references the entry IDs hash over.
+	if err := resolveSidecar(b.doc, t.Header.ID, opts.Blobs); err != nil {
 		return nil, err
 	}
 	// Before the redactors, so each hash is of the document as the

@@ -26,7 +26,7 @@ import (
 // and audio/, named by content hash, and the parts are rewritten to
 // point at those files. Documents are validated before they are
 // written.
-func WriteATIF(dir string, docs iter.Seq[*atif.Trajectory]) error {
+func WriteATIF(dir string, docs iter.Seq[*atif.Trajectory], opts ...WriteOption) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("export: create %s: %w", dir, err)
 	}
@@ -34,7 +34,7 @@ func WriteATIF(dir string, docs iter.Seq[*atif.Trajectory]) error {
 		if doc == nil {
 			continue
 		}
-		if err := WriteDocument(filepath.Join(dir, DocumentName(doc)), doc); err != nil {
+		if err := WriteDocument(filepath.Join(dir, DocumentName(doc)), doc, opts...); err != nil {
 			return err
 		}
 	}
@@ -54,13 +54,29 @@ func WriteATIF(dir string, docs iter.Seq[*atif.Trajectory]) error {
 // encoded with encoding/json alone keeps every image inline. The
 // document is validated before it is written, and the one in memory
 // is rewritten too.
-func WriteDocument(path string, doc *atif.Trajectory) error {
+//
+// The raw items of a sidecar session keep the sidecar: references the
+// entry IDs hash over, and each blob they reference is copied under
+// [SidecarDir] beside the document, in the session's own layout, read
+// through the [WithBlobs] reader; one it cannot read, or a reference
+// with no reader given, refuses the write with [ErrBlobUnread] (RFC
+// 0001, Projections, ATIF, since 0.21).
+func WriteDocument(path string, doc *atif.Trajectory, opts ...WriteOption) error {
 	if doc == nil {
 		return errors.New("export: no document to write")
 	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("export: create %s: %w", dir, err)
+	}
+	var cfg writeConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	// Before anything is moved, so a document whose blobs cannot be read
+	// is refused and not written with references nothing resolves.
+	if err := copyBlobs(dir, doc, cfg.blobs); err != nil {
+		return fmt.Errorf("export: %s: %w", path, err)
 	}
 	spilled := map[string]string{}
 	if err := spillMedia(dir, doc, spilled); err != nil {
@@ -91,6 +107,19 @@ func WriteDocument(path string, doc *atif.Trajectory) error {
 		return fmt.Errorf("export: write %s: %w", path, err)
 	}
 	return nil
+}
+
+// WriteOption configures [WriteATIF] and [WriteDocument].
+type WriteOption func(*writeConfig)
+
+type writeConfig struct {
+	blobs Blobs
+}
+
+// WithBlobs gives the writer the sidecar blobs the documents' raw items
+// reference, which it copies beside them.
+func WithBlobs(b Blobs) WriteOption {
+	return func(c *writeConfig) { c.blobs = b }
 }
 
 // DocumentName returns the file name WriteATIF uses for a document.
