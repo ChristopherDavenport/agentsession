@@ -1490,7 +1490,12 @@ func verifyTargets(path []Entry) error {
 // the item's source, which says whose words the input is ([WordsOf]).
 // A member the item
 // carries and its queued entry does not is not reported, since a queued
-// entry written before 0.21 could not carry it.
+// entry written before 0.21 could not carry it. A source that differs
+// from the trigger is reported in a file of any minor, since 0.20 asked
+// for the same; one the item lacks only when its queued entry carries a
+// member 0.21 defines, which dates the drain after it to 0.21: before,
+// an item's source was optional, and a file raised to 0.21 holds such
+// drains, which nothing else tells from later ones.
 func verifyDrains(path []Entry) error {
 	queued := map[string]*QueuedEntry{}
 	for _, e := range path {
@@ -1509,7 +1514,8 @@ func verifyDrains(path []Entry) error {
 				return fmt.Errorf("%w: item %s drains %s and does not carry its trust", ErrDrainMismatch, v.ID, q.ID)
 			case q.Layers() != nil && !slices.Equal(q.Layers(), v.Layers()):
 				return fmt.Errorf("%w: item %s drains %s and does not carry its instructions_part", ErrDrainMismatch, v.ID, q.ID)
-			case q.Trigger != nil && !q.Trigger.Equal(v.Source):
+			case q.Trigger != nil && v.Source != nil && !q.Trigger.Equal(v.Source),
+				q.Trigger != nil && v.Source == nil && (q.Visible != nil || q.Trust != nil || q.Layers() != nil):
 				return fmt.Errorf("%w: item %s drains %s and does not carry its trigger as its source", ErrDrainMismatch, v.ID, q.ID)
 			}
 		}

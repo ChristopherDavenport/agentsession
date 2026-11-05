@@ -48,7 +48,10 @@ versions may break the API.
   or `from_link` (`ErrComposedHuman`), the redaction table keeps the
   kind `human` as written on an item's source, a queued entry's and a
   run start's trigger, and `VerifyRecords` reports a drained item whose
-  source is not its queued entry's trigger (`ErrDrainMismatch`).
+  source differs from its queued entry's trigger, or that lacks it
+  where the queued entry carries a member 0.21 defines
+  (`ErrDrainMismatch`); a 0.20 drain without a source, valid then,
+  passes.
 
 - **Format 0.21: a compaction records that the fold was requested,
   and its instructions (#277).** `CompactionEntry` gains `Requested`

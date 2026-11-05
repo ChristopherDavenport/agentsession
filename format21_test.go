@@ -373,12 +373,12 @@ func TestWordsOf(t *testing.T) {
 	if WordsOf(it) != WordsPerson {
 		t.Error("the drained item is not the person's words")
 	}
-	it.Source = nil
+	it.Source = &Trigger{Kind: "schedule"}
 	if _, err := s.Append(it); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrDrainMismatch) {
-		t.Errorf("a drain that dropped the trigger: VerifyRecords = %v", err)
+		t.Errorf("a drain that changed the trigger: VerifyRecords = %v", err)
 	}
 
 	// A redactor keeps the kind the format defines and rewrites any
@@ -716,5 +716,42 @@ func TestWordsAsWritten(t *testing.T) {
 	}
 	if got := WordsOf(s.Entries()[0]); got != WordsUnclaimed {
 		t.Errorf("an untagged input before the raise: %v", got)
+	}
+}
+
+// TestDrainTrigger: a drained item that changes its queued entry's
+// trigger is reported, as it was wrong under 0.20 too; one that lacks
+// it is reported only when the queued entry carries a member 0.21
+// defines, which dates the drain after it to 0.21, since under 0.20 an
+// item's source was optional and a file raised to 0.21 still holds such
+// drains (RFC 0001, queued).
+func TestDrainTrigger(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		trust  bool
+		source *Trigger
+		want   error
+	}{
+		{"no source, a 0.20 queued entry", false, nil, nil},
+		{"the trigger", false, &Trigger{Kind: TriggerHuman, Source: "terminal"}, nil},
+		{"another trigger", false, &Trigger{Kind: "schedule"}, ErrDrainMismatch},
+		{"no source, a 0.21 queued entry", true, nil, ErrDrainMismatch},
+	} {
+		s := New(Header{ID: "w"})
+		steer := NewQueued(openresponses.UserText("And the docs."), ModeSteer).WithTrigger(TriggerHuman, "", "terminal")
+		if tt.trust {
+			steer.Trust = &Trust{Reads: []string{TrustPrivate}}
+		}
+		if _, err := s.Append(steer); err != nil {
+			t.Fatal(err)
+		}
+		it := steer.Drain()
+		it.Source = tt.source
+		if _, err := s.Append(it); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, tt.want) {
+			t.Errorf("%s: VerifyRecords = %v, want %v", tt.name, err, tt.want)
+		}
 	}
 }

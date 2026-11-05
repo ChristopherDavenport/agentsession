@@ -1803,9 +1803,15 @@ end.
   a process stops keeps them, and whose words it is, across the resume. A
   reader takes each by its form in a file of any minor, and keeps one in
   another form as a member it does not know. A tool that checks a file
-  reports a drained `item` that lacks or changes one its `queued` entry
-  carries, or the entry's `trigger`. It does not report one the `item` carries and its `queued`
-  entry lacks, since before 0.21 a `queued` entry had no member for it.
+  reports a drained `item` that lacks or changes one of the three its
+  `queued` entry carries, and one whose `source` differs from the
+  entry's `trigger`, which 0.20 asked for too. It reports an `item`
+  that lacks the `trigger` only when its `queued` entry carries one of
+  the three, which dates the drain to 0.21: before, an `item`'s
+  `source` was optional, and a file raised to 0.21 holds such drains,
+  which nothing tells from later ones. It does not report a member the
+  `item` carries and its `queued` entry lacks, since before 0.21 a
+  `queued` entry had no member for it.
 - The entry is a record entry: its `item` is not in context and
   reaches no request. The input enters the conversation when it is
   appended as an `item` entry, which carries `queued_from` naming this
