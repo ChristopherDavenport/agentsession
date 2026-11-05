@@ -35,6 +35,19 @@ versions may break the API.
   input's record under `queued`. New fixtures `queued-members` and
   `bad-queued-drain`.
 
+- **Format 0.21: the trigger kind `human` (for agentturn#303).**
+  `TriggerHuman` is the one trigger kind the format defines: a person
+  sent the input. `WordsOf(format, e)` and `Session.Words(e)` read an
+  item's or a queued entry's user message as `WordsPerson` when its
+  trigger has the kind, `WordsComposed` when it has another kind, none,
+  or names its instruction layers, and `WordsUnclaimed` for any other
+  entry or a file declared before 0.21. `Append` refuses a human
+  trigger beside `instructions_part` (`ErrComposedHuman`), the
+  redaction table keeps the kind `human` as written on an item's
+  source, a queued entry's and a run start's trigger, and
+  `VerifyRecords` reports a drained item whose source is not its queued
+  entry's trigger (`ErrDrainMismatch`).
+
 ## v0.0.37 - 2026-11-03
 
 - **Breaking (format): Format 0.20 (RFC 0001, draft 0.20).** `Format`

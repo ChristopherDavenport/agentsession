@@ -259,6 +259,8 @@ var envelopeMembers = []special{
 // workspace's kind, a link's rel and cancel, an outcome's kind; an
 // item's role, status and phase, wherever an entry holds an item, and a
 // part's detail; a response's status, incomplete reason and error type;
+// a trigger's kind human, since 0.21, on an item's source, a queued
+// entry's trigger and a run start's trigger;
 // and the settings' omit reasoning, which the context algorithm reads,
 // their reasoning and text settings and the request members of extra the
 // payload closes. A type in the payload, an item's, a
@@ -280,8 +282,10 @@ var bodyMembers = map[string][]special{
 			return e.(*ItemEntry).InstructionsLayers != nil
 		}},
 		{path: memberPath("item", "call_id"), role: roleCallID},
+		closed(memberPath("source", "kind"), TriggerHuman),
 	}),
 	TypeQueued: joined(itemMembers("item"), []special{
+		closed(memberPath("trigger", "kind"), TriggerHuman),
 		{path: memberPath("item", "call_id"), role: roleCallID},
 		closed(memberPath("mode"), ModeSteer, ModeFollowUp),
 		{path: memberPath("trust", "reads", "[]"), role: roleFixed, when: func(e Entry) bool { return e.(*QueuedEntry).Trust != nil }},
@@ -334,6 +338,7 @@ var bodyMembers = map[string][]special{
 	}),
 	TypeRun: {
 		{path: memberPath("pending", "[]"), role: roleCallID},
+		closed(memberPath("trigger", "kind"), TriggerHuman),
 		closed(memberPath("phase"), RunStart, RunEnd),
 		closed(memberPath("source"), SourceInput, SourceResume),
 		closed(memberPath("reason"), ReasonDone, ReasonStopped, ReasonInterrupted, ReasonInputRequired, ReasonAborted, ReasonError),

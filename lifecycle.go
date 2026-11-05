@@ -283,11 +283,95 @@ func (e *DecisionEntry) WithArgs(args json.RawMessage) *DecisionEntry {
 	return e
 }
 
+// TriggerHuman is the one trigger kind RFC 0001 defines, since 0.21: a
+// person sent the input, and an input message's text is their words as
+// they wrote them. A writer sets it on typed input, and never on a
+// message the harness composed, whatever its provenance: a scheduled
+// reminder, a peer's text it forwards, a background result, a layer of
+// instructions. [WordsOf] reads it.
+const TriggerHuman = "human"
+
+// Words says whose words an input message is, as RFC 0001 reads its
+// trigger since 0.21 ([WordsOf]).
+type Words uint8
+
+const (
+	// WordsUnclaimed is an entry that makes no claim either way: one
+	// read from a file whose header names a minor before 0.21, where
+	// trigger kinds were opaque, or one that holds no input message.
+	WordsUnclaimed Words = iota
+	// WordsPerson is an input message whose trigger's kind is
+	// [TriggerHuman]: a person wrote it.
+	WordsPerson
+	// WordsComposed is an input message whose trigger has another kind,
+	// or that has none, or that names the instruction layers it was
+	// composed from: it is not the person's words, and a reader does
+	// not present it as theirs.
+	WordsComposed
+)
+
+// WordsOf says whose words the input message e holds, an item entry's
+// or a queued entry's, read under format, the format its file's header
+// names ([Session.DeclaredFormat]).
+//
+// Under 0.21 or later, an item entry or a queued entry holding a user
+// message is [WordsPerson] when its trigger, an item's source or a
+// queued entry's trigger, has the kind [TriggerHuman], and
+// [WordsComposed] when the trigger has another kind, when there is
+// none, or when the entry names the instruction layers the message was
+// composed from. Every other entry, and every entry under an earlier
+// minor, is [WordsUnclaimed]. A file raised to 0.21 holds entries
+// written before the raise, which this cannot tell from those after; it
+// reads them as composed, which errs toward a person's words read as
+// composed and never the reverse.
+func WordsOf(format string, e Entry) Words {
+	if major, minor, err := ParseFormat(format); err != nil || major == 0 && minor < 21 {
+		return WordsUnclaimed
+	}
+	var item openresponses.Item
+	switch v := e.(type) {
+	case *ItemEntry:
+		item = v.Item
+	case *QueuedEntry:
+		item = v.Item
+	default:
+		return WordsUnclaimed
+	}
+	if m, ok := item.(*openresponses.Message); !ok || m.Role != openresponses.RoleUser {
+		return WordsUnclaimed
+	}
+	if trigger, layers := inputOf(e); layers == nil && trigger != nil && trigger.Kind == TriggerHuman {
+		return WordsPerson
+	}
+	return WordsComposed
+}
+
+// inputOf returns the trigger and the instruction layers of an input an
+// item entry or a queued entry holds: an item's source, a queued entry's
+// trigger, and either's instructions_part; nil for any other entry.
+func inputOf(e Entry) (*Trigger, []LayerRef) {
+	switch v := e.(type) {
+	case *ItemEntry:
+		return v.Source, v.Layers()
+	case *QueuedEntry:
+		return v.Trigger, v.Layers()
+	}
+	return nil, nil
+}
+
+// ErrComposedHuman is returned by [Session.Append] for an item entry or
+// a queued entry whose trigger has the kind [TriggerHuman] and that
+// names the instruction layers its message was composed from: the
+// harness composed it, so it is not the person's words (RFC 0001,
+// queued, since 0.21).
+var ErrComposedHuman = errors.New("agentsession: a composed input carries a human trigger")
+
 // Trigger says how an input arrived, in the harness's own terms: Kind
 // is the sort of thing it came from (a person, a channel, a schedule,
 // another agent), Ref names the thing itself (a message ID, a cron
 // name) and Source names the layer that took it. A reader treats all
-// three as opaque; what the format fixes is where they are written,
+// three as opaque, but for the kind [TriggerHuman], which the format
+// defines since 0.21; what the format fixes is where they are written,
 // so two people steering one run are two triggers and not one.
 type Trigger struct {
 	Kind   string `json:"kind,omitempty"`

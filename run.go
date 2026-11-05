@@ -1486,7 +1486,9 @@ func verifyTargets(path []Entry) error {
 // verifyDrains checks each item entry on the path that drains a queued
 // entry before it against that entry (RFC 0001, queued, since 0.21):
 // every member the queued entry carries for the input, visible, trust
-// and instructions_part, the item carries as written. A member the item
+// and instructions_part, the item carries as written, and its trigger as
+// the item's source, which says whose words the input is ([WordsOf]).
+// A member the item
 // carries and its queued entry does not is not reported, since a queued
 // entry written before 0.21 could not carry it.
 func verifyDrains(path []Entry) error {
@@ -1507,6 +1509,8 @@ func verifyDrains(path []Entry) error {
 				return fmt.Errorf("%w: item %s drains %s and does not carry its trust", ErrDrainMismatch, v.ID, q.ID)
 			case q.Layers() != nil && !slices.Equal(q.Layers(), v.Layers()):
 				return fmt.Errorf("%w: item %s drains %s and does not carry its instructions_part", ErrDrainMismatch, v.ID, q.ID)
+			case q.Trigger != nil && !q.Trigger.Equal(v.Source):
+				return fmt.Errorf("%w: item %s drains %s and does not carry its trigger as its source", ErrDrainMismatch, v.ID, q.ID)
 			}
 		}
 	}

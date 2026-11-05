@@ -538,7 +538,8 @@ One conversation item in the payload profile.
   context but that a renderer SHOULD hide.
 - `source` MAY carry the trigger of an item a person or another system
   sent, in the shape `queued` defines, and `queued_from` MAY name the
-  `queued` entry the item was accepted as.
+  `queued` entry the item was accepted as. Since 0.21 its `kind` says
+  whether a `user` message is the person's words (`queued`, `trigger`).
 - `failed` MAY be `true` on an `item` entry holding a
   `function_call_output`, since 0.14: the tool reported failure, or the
   harness gave the call up (cut it off, timed it out, could not learn
@@ -1343,7 +1344,8 @@ Why a run started and how it ended. Two entries per run, paired by
   harness feature and goes in `trigger`, `ref` or a `custom` entry.
 - `trigger` on `start` says how the input that started the run arrived,
   in the object `queued` defines: `kind`, `ref` and `source`, each
-  opaque. It sits beside `ref` and changes nothing about it; `ref` stays
+  opaque but for the `kind` `human`, since 0.21, which says a person
+  sent it (`queued`). It sits beside `ref` and changes nothing about it; `ref` stays
   one opaque string. A writer that holds a trigger's parts SHOULD write
   them here rather than joined into `ref`, since a joined string cannot
   be split back. Anything richer, such as when a scheduled firing was
@@ -1768,13 +1770,14 @@ end.
   join the trust of the path: the input reaches the model when an
   `item` entry drains it, and that entry's `trust` joins it then. The
   `item` entry that drains the input MUST carry them as the `queued`
-  entry wrote them, and a writer that queues the input again after a
-  run end MUST write them again, as it writes `deliver`, so an input
-  still owed when a process stops keeps them across the resume. A
+  entry wrote them, and its `trigger` as its `source`, and a writer
+  that queues the input again after a run end MUST write them and the
+  `trigger` again, as it writes `deliver`, so an input still owed when
+  a process stops keeps them, and whose words it is, across the resume. A
   reader takes each by its form in a file of any minor, and keeps one in
   another form as a member it does not know. A tool that checks a file
   reports a drained `item` that lacks or changes one its `queued` entry
-  carries. It does not report one the `item` carries and its `queued`
+  carries, or the entry's `trigger`. It does not report one the `item` carries and its `queued`
   entry lacks, since before 0.21 a `queued` entry had no member for it.
 - The entry is a record entry: its `item` is not in context and
   reaches no request. The input enters the conversation when it is
@@ -1783,10 +1786,31 @@ end.
 - `trigger` says how the input arrived: `kind` is the sort of thing it
   came from, `ref` names the thing itself, `source` names the layer
   that took it. All three are in the harness's own terms and a reader
-  treats them as opaque. This is where the trigger of an input that
+  treats them as opaque, but for one `kind` this document defines. This
+  is where the trigger of an input that
   joins a run already in flight lives, since the `run` start's
   `trigger` and `ref` name what started the run and not what arrived
   during it: two people steering one run are two triggers.
+- The `kind` `human`, since 0.21, says a person sent the input. On a
+  `user` message, a `queued` entry's `trigger` or an `item` entry's
+  `source`, it says the text is the person's words as they wrote them:
+  typed at a prompt, or sent from a chat. A writer writes it for such
+  an input and MUST NOT write it for a message the harness composed,
+  whatever its provenance: a scheduled reminder, a peer's text it
+  forwards, a background task's result, or a layer of instructions,
+  so never beside `instructions_part`. A reader reads a `user` message
+  whose trigger has the kind `human` as the person's words, and one whose
+  trigger has another kind, or that has no trigger, as not the person's
+  words, as it reads one naming its `instructions_part`; a reader MUST
+  NOT present such a message as the person's. The drained `item`
+  carries the trigger as its `source` (below), so the kind survives a
+  restart with the queued input's other members. A file whose header
+  names a minor before 0.21 makes no claim either way: the kind was the
+  harness's own term then, and a reader draws nothing from it or from
+  its absence. A file raised to 0.21 holds the entries written before
+  the raise, which a reader cannot tell from those after; it reads them
+  by this rule, which may read a person's words as composed and never
+  reads a composed message as the person's.
 - Members of `trigger` beyond `kind`, `ref` and `source` are the
   harness's, for what it knows about the arrival beyond those three:
   when a scheduled firing was due and which attempt at it this is, so
@@ -2635,7 +2659,9 @@ A redactor:
   text, as `trust` is. They are, in the entries this document defines, a
   `run`'s `phase`, `source` and `reason`, a `queued` entry's `mode`, a
   `decision`'s `verdict` and `by`, an `env` entry's `workspace` `kind`, a
-  `link`'s `rel` and `cancel`, and an `outcome`'s `kind`; and in the
+  `link`'s `rel` and `cancel`, an `outcome`'s `kind`, and, since 0.21, a
+  trigger's `kind` while it holds `human`, on a `queued` entry's and a
+  `run` start's `trigger` and an `item`'s `source`; and in the
   payload, wherever an entry holds an item (an `item`'s, a `queued`
   entry's and a `result`'s `item`, a compaction's `summary` and `pinned`,
   a branch summary's `summary`), the item's `type`, `role`, `status` and
@@ -3544,6 +3570,16 @@ files until it is upgraded.
   record under `queued`. 0.20 had no member for them, so an input owed
   when a process stopped lost them on resume, and read as the person's
   words.
+- A trigger's `kind` `human` says a person sent the input, and a
+  `user` message is the person's words only when its trigger has it
+  (`queued`, `trigger`): one with another kind, or none, is not, so a
+  message the harness composed with no marker but its provenance no
+  longer reads as the person's. The drained `item` carries the trigger
+  as its `source`, which a tool that checks a file compares. A
+  redactor keeps the kind as written. A file of an earlier minor makes
+  no claim either way. 0.20 left every kind opaque, so a reader could
+  not tell a scheduled reminder or a forwarded peer's text from what
+  the person typed.
 
 ## Changes since 0.19
 

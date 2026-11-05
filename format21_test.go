@@ -206,6 +206,7 @@ func writeFixtures021(t *testing.T) {
 }
 
 // queuedMembersFixture builds the session queued-members.jsonl holds: a
+// person types the first input, whose trigger says so; a
 // reminder the harness composed from memory, hidden and untrusted, is
 // queued as a steer while the first run is in flight and drained into
 // it; a block composed from an instruction file and memory, private,
@@ -221,7 +222,7 @@ func queuedMembersFixture(t *testing.T, bad bool) *Session {
 	s, must, say := fixtureSession(t, Header{ID: id, Records: []string{TypeRun, TypeQueued}}, "2026-11-04T09:00:00Z")
 	must(&ConfigEntry{Model: "gpt-5", Instructions: ptr("You deploy services.")})
 	must(NewRunStart("run-1", SourceInput, ""))
-	must(NewItemEntry(openresponses.UserText("Deploy billing.")))
+	must(&ItemEntry{Item: openresponses.UserText("Deploy billing."), Source: &Trigger{Kind: TriggerHuman, Source: "terminal"}})
 	reminder := queuedReminder().WithTrigger("schedule", "cron:deploy-window", "scheduler")
 	must(reminder)
 	must(reminder.Drain())
@@ -287,6 +288,19 @@ func TestQueuedMembersFixture(t *testing.T) {
 			t.Errorf("drained item %d: %+v, queued %+v", i, it, q)
 		}
 	}
+	for _, e := range s.Entries() {
+		it, ok := e.(*ItemEntry)
+		if !ok || it.Item.(*openresponses.Message).Role != openresponses.RoleUser {
+			continue
+		}
+		want := WordsComposed
+		if it.QueuedFrom == "" {
+			want = WordsPerson
+		}
+		if got := s.Words(it); got != want {
+			t.Errorf("input %q: %v, want %v", it.Item.(*openresponses.Message).Content.Text(), got, want)
+		}
+	}
 	before := PathTrust(s.Path(queued[2].ID))
 	if !slices.Equal(before.Reads, []string{TrustUntrusted}) {
 		t.Errorf("trust before the second drain: %+v", before)
@@ -299,5 +313,100 @@ func TestQueuedMembersFixture(t *testing.T) {
 	bad := loadFixture(t, "bad-queued-drain")
 	if err := bad.VerifyRecords(bad.Leaf()); !errors.Is(err, ErrDrainMismatch) {
 		t.Errorf("bad-queued-drain: VerifyRecords = %v", err)
+	}
+}
+
+// TestWordsOf: since 0.21 an input message is the person's words when
+// its trigger's kind is human, and not when the trigger has another kind
+// or there is none (agentturn#303). An entry that holds no input message
+// makes no claim, and nor does a file whose header names a minor before
+// 0.21, where trigger kinds were opaque.
+func TestWordsOf(t *testing.T) {
+	typed := &Trigger{Kind: TriggerHuman, Source: "terminal"}
+	reminder := &Trigger{Kind: "schedule", Ref: "cron:deploy-window"}
+	assistant := NewItemEntry(&openresponses.Message{Role: openresponses.RoleAssistant, Content: openresponses.Contents{&openresponses.OutputText{Text: "ok", Annotations: []openresponses.Annotation{}}}})
+	layered := &ItemEntry{Item: openresponses.UserText("Memory: the window is Tuesday."), InstructionsPart: &LayerRef{Source: LayerAgentMemory}}
+	for _, tt := range []struct {
+		name   string
+		e      Entry
+		at021  Words
+		before Words
+	}{
+		{"typed", &ItemEntry{Item: openresponses.UserText("Deploy billing."), Source: typed}, WordsPerson, WordsUnclaimed},
+		{"a reminder", &ItemEntry{Item: openresponses.UserText("The window opens."), Source: reminder}, WordsComposed, WordsUnclaimed},
+		{"no trigger", NewItemEntry(openresponses.UserText("A peer says hello.")), WordsComposed, WordsUnclaimed},
+		{"a layer", layered, WordsComposed, WordsUnclaimed},
+		{"queued, typed", NewQueued(openresponses.UserText("And the docs."), ModeSteer).WithTrigger(TriggerHuman, "", "terminal"), WordsPerson, WordsUnclaimed},
+		{"queued, a reminder", NewQueued(openresponses.UserText("The window opens."), ModeFollowUp).WithTrigger("schedule", "cron:deploy-window", ""), WordsComposed, WordsUnclaimed},
+		{"model output", assistant, WordsUnclaimed, WordsUnclaimed},
+		{"a tool's output", NewItemEntry(openresponses.NewFunctionCallOutput("call_1", "4")), WordsUnclaimed, WordsUnclaimed},
+		{"a config", &ConfigEntry{Model: "gpt-5"}, WordsUnclaimed, WordsUnclaimed},
+	} {
+		if got := WordsOf(Format, tt.e); got != tt.at021 {
+			t.Errorf("%s at 0.21: %v, want %v", tt.name, got, tt.at021)
+		}
+		if got := WordsOf("agentsession/0.20", tt.e); got != tt.before {
+			t.Errorf("%s at 0.20: %v, want %v", tt.name, got, tt.before)
+		}
+	}
+
+	// A writer does not mark a composed layer as typed.
+	q := NewQueued(openresponses.UserText("x"), ModeSteer).WithTrigger(TriggerHuman, "", "")
+	q.InstructionsPart = &LayerRef{Source: LayerAgentMemory}
+	for _, e := range []Entry{&ItemEntry{Item: openresponses.UserText("x"), Source: typed, InstructionsPart: &LayerRef{Source: LayerAgentMemory}}, q} {
+		if _, err := New(Header{ID: "w"}).Append(e); !errors.Is(err, ErrComposedHuman) {
+			t.Errorf("a %s naming its layers with a human trigger: Append = %v", e.EntryType(), err)
+		}
+	}
+
+	// Read from a file: the session's declared format decides.
+	for _, tt := range []struct {
+		format string
+		want   Words
+	}{{"agentsession/0.20", WordsUnclaimed}, {Format, WordsComposed}} {
+		in := `{"type":"session","format":"` + tt.format + `","id":"x","created_at":"2026-11-04T10:00:00Z","payload":"openresponses/2026-04-24"}` + "\n" +
+			reparent(t, `{"type":"item","id":"x","parent":null,"ts":"2026-11-04T10:00:01Z","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"Reminder."}]},"source":{"kind":"schedule"}}`, "") + "\n"
+		s, err := Read(strings.NewReader(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Words(s.Entries()[0]); got != tt.want {
+			t.Errorf("a reminder read from a %s file: %v, want %v", tt.format, got, tt.want)
+		}
+	}
+
+	// The drained item carries the trigger as its source, which the
+	// record checks, so the claim survives a restart.
+	s := New(Header{ID: "w"})
+	steer := NewQueued(openresponses.UserText("And the docs."), ModeSteer).WithTrigger(TriggerHuman, "", "terminal")
+	if _, err := s.Append(steer); err != nil {
+		t.Fatal(err)
+	}
+	it := steer.Drain()
+	if WordsOf(Format, it) != WordsPerson {
+		t.Error("the drained item is not the person's words")
+	}
+	it.Source = nil
+	if _, err := s.Append(it); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrDrainMismatch) {
+		t.Errorf("a drain that dropped the trigger: VerifyRecords = %v", err)
+	}
+
+	// A redactor keeps the kind the format defines and rewrites any
+	// other as text.
+	for _, tt := range []struct {
+		kind, want string
+	}{{TriggerHuman, TriggerHuman}, {"humane-society", "[X]e-society"}} {
+		e := &ItemEntry{Item: openresponses.UserText("a human wrote this"), Source: &Trigger{Kind: tt.kind}}
+		e.ID = "x"
+		out, err := RewriteStrings(e, func(s string) string { return strings.ReplaceAll(s, "human", "[X]") })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := out.(*ItemEntry).Source.Kind; got != tt.want {
+			t.Errorf("kind %s rewritten to %s, want %s", tt.kind, got, tt.want)
+		}
 	}
 }
