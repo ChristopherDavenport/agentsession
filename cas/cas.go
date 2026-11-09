@@ -3729,8 +3729,9 @@ func (s *Store) Release(id string) error {
 	if h == nil {
 		return nil
 	}
-	defer h.mu.Unlock()
-	return s.releaseHandle(id, h)
+	var err error
+	s.letGoAfter(id, h, func() { err = s.releaseHandle(id, h) })
+	return err
 }
 
 // releaseHandle commits a held session's working state, brings its
