@@ -3750,8 +3750,8 @@ files until it is upgraded.
 
 These rules were written into this document after writers of 0.21
 were released. None changes what a file may hold, how its context is
-built or any hash, so the format stays 0.21 and every 0.21 file reads
-as it did.
+built or any entry hash, so the format stays 0.21 and every 0.21 file
+reads as it did.
 
 - A projection to ATIF that renders an image part whose blob has no
   media type sniffs the type from the bytes, by WHATWG MIME Sniffing's
@@ -3761,7 +3761,11 @@ as it did.
   as such a data URL too (Projections, ATIF). A projection of 0.21 as
   first released wrote `data:;base64,`, which RFC 2397 reads as
   `text/plain`, though File already gave a blob with no type
-  `application/octet-stream`.
+  `application/octet-stream`. A fresh export of a session holding such
+  a blob therefore differs from one 0.21 as first released wrote, and
+  so does the `visible` hash of each step it changes; a document
+  already written verifies as before, since its hashes cover the
+  document as written.
 - A writer SHOULD record each setting that shapes the requests it
   sends, beyond what a `config` entry records, as a header member
   `<slug>.<name>`, and a change to one during the session as a `custom`
