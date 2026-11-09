@@ -1955,7 +1955,7 @@ func contentParts(parts openresponses.Contents, side *sidecars) atif.Content {
 		case *openresponses.Refusal:
 			out = append(out, atif.ContentPart{Type: atif.PartText, Text: "[refusal] " + v.Refusal})
 		case *openresponses.InputImage:
-			url, _ := side.url(v.ImageURL)
+			url, _ := side.imageURL(v.ImageURL)
 			ref := url
 			if ref == "" {
 				ref = v.FileID

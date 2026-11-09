@@ -3,7 +3,6 @@ package export
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -194,8 +193,9 @@ func list(v any) []any {
 //
 // A media part's path that names a file images/ or audio/ holds under
 // dir, its name the SHA-256 of its bytes, is the data URL
-// data:<media_type>;base64,<bytes in standard base64>, which is the one
-// form WriteDocument moves to a file; every string of the document equal
+// data:<media_type>;base64,<bytes in standard base64>, media_type
+// application/octet-stream for a part with none, which is the one form
+// WriteDocument moves to a file; every string of the document equal
 // to such a path, the raw items' in the extras included, is replaced by
 // it. A path naming no such file is left as it is, and the hashes then
 // fail where it is held.
@@ -222,7 +222,7 @@ func InlineMedia(doc map[string]any, dir string) error {
 			if name := pathpkg.Base(path); strings.TrimSuffix(name, pathpkg.Ext(name)) != hex.EncodeToString(sum[:]) {
 				continue
 			}
-			inline[path] = "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data)
+			inline[path] = dataURL(mediaType, data)
 		}
 		return nil
 	}

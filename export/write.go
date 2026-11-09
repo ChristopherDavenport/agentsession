@@ -206,7 +206,7 @@ func spillParts(dir string, parts []atif.ContentPart, spilled map[string]string)
 		// Only a data URL a reader can write back from the file and the
 		// part's media_type, exactly, is moved: the document's hashes are
 		// over its media inline (InlineMedia), and any other stays inline.
-		if p.Source.Path != "data:"+p.Source.MediaType+";base64,"+base64.StdEncoding.EncodeToString(data) {
+		if p.Source.Path != dataURL(p.Source.MediaType, data) {
 			continue
 		}
 		sub := "images"

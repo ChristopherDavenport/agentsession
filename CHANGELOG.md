@@ -17,6 +17,19 @@ versions may break the API.
   now runs under the handle as `Write` does: a panic drops the handle,
   and the next call reads the session from its log.
 
+- **export: an untyped sidecar image is sniffed, not written as
+  `data:;base64,` (#292).** The ATIF projection rendered a sidecar blob
+  the session holds with no type as `data:;base64,…`, which RFC 2397
+  reads as `text/plain`. Such a data URL now names
+  `application/octet-stream`, as RFC 0001's File section already asked,
+  and an image part whose blob has no type takes its type from the
+  bytes by WHATWG MIME Sniffing's image patterns: a PNG, JPEG, GIF or
+  WebP exports as that image, and other bytes render as text naming
+  `application/octet-stream`. The blob beside a written document keeps
+  no type file. `InlineMedia` puts back a moved part with no
+  `media_type` as `application/octet-stream`. A projection rule
+  written into RFC 0001 after 0.21's release; no format change.
+
 ## v0.0.38 - 2026-11-05
 
 - **Breaking (format): Format 0.21 (RFC 0001, draft 0.21).** `Format`

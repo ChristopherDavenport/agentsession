@@ -3182,7 +3182,8 @@ the hash of the step's visible fields, and `visible` under
   `path` then naming `images/` or `audio/` and a file named by the
   SHA-256 of its bytes, moves only a data URL of the form
   `data:<media_type>;base64,` and the bytes in standard base64 with
-  padding, `media_type` the part's own. A converter puts each such
+  padding, `media_type` the part's own, `application/octet-stream` for
+  a part with none. A converter puts each such
   media back inline, from the document's own files, wherever the
   document holds that `path` as a string, the raw items in the extras
   included, before it computes any hash; a `path` naming no such file
@@ -3215,6 +3216,15 @@ the hash of the step's visible fields, and `visible` under
   hash to its name, MUST refuse rather than write a reference nothing
   resolves. 0.20 wrote the reference into the visible part, which a
   reader of Open Responses refuses, and copied no blob.
+- A projection that renders an image part whose blob has no media type
+  SHOULD take the type from the blob's bytes by the image type pattern
+  matching algorithm of WHATWG MIME Sniffing. If the bytes match none
+  of the image types ATIF takes, it renders the part as an image of a
+  type ATIF does not take, using `application/octet-stream` for the
+  data URL, never `data:;base64,`, which RFC 2397 reads as
+  `text/plain`. The sniffed type is the projection's alone: the blob
+  carried beside the document keeps the type the session holds for it,
+  so a blob held with none gets no type file there.
 
 A converter that rebuilds a session from a document this projection
 wrote restores on each entry:
@@ -3710,6 +3720,23 @@ files until it is upgraded.
   redactor keeps the kind as written. 0.20 left every kind opaque, so a
   reader could not tell a scheduled reminder or a forwarded peer's text
   from what the person typed.
+
+### Changed after writers of 0.21 were released
+
+These rules were written into this document after writers of 0.21
+were released. None changes what a file may hold, how its context is
+built or any hash, so the format stays 0.21 and every 0.21 file reads
+as it did.
+
+- A projection to ATIF that renders an image part whose blob has no
+  media type sniffs the type from the bytes, by WHATWG MIME Sniffing's
+  image type pattern matching, and renders bytes that match no image
+  type ATIF takes as text, describing an `application/octet-stream`
+  data URL; a moved media part with no `media_type` comes back inline
+  as such a data URL too (Projections, ATIF). A projection of 0.21 as
+  first released wrote `data:;base64,`, which RFC 2397 reads as
+  `text/plain`, though File already gave a blob with no type
+  `application/octet-stream`.
 
 ## Changes since 0.19
 
