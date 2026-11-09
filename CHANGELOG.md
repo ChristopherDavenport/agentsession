@@ -5,6 +5,18 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **cas: a panic mid-change no longer leaves a held session stale
+  (#287).** `SetHead`, `DeclareRecord`, `DeclareRecordAt`, `HandOver`,
+  a receive (`Push`, `Fetch`, `Receive`) and a handover's clearing of
+  the sender's mark log a record and then apply it to the held session.
+  A panic between the two, which `net/http` recovers under `remote`,
+  used to leave the handle serving the old head or mark, so a later
+  compare-and-swap could succeed against a head the log had moved. Each
+  now runs under the handle as `Write` does: a panic drops the handle,
+  and the next call reads the session from its log.
+
 ## v0.0.38 - 2026-11-05
 
 - **Breaking (format): Format 0.21 (RFC 0001, draft 0.21).** `Format`

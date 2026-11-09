@@ -3397,7 +3397,15 @@ func (s *Store) SetHead(ctx context.Context, sessionID, expected, to string) err
 	if err != nil {
 		return err
 	}
-	defer h.mu.Unlock()
+	s.letGoAfter(sessionID, h, func() { err = s.setHeadHeld(h, sessionID, expected, to) })
+	return err
+}
+
+// setHeadHeld is SetHead with the session's handle held. moveHead logs
+// the move before the handle follows it, so the caller runs it under
+// letGoAfter: a panic between the two drops the handle, and the next
+// compare-and-swap is held to the head the log has, not a stale one.
+func (s *Store) setHeadHeld(h *handle, sessionID, expected, to string) error {
 	if h.mark != MarkRecord {
 		return fmt.Errorf("%w: %s", ErrMirror, sessionID)
 	}
@@ -3496,7 +3504,15 @@ func (s *Store) DeclareRecord(ctx context.Context, sessionID string) error {
 	if err != nil {
 		return err
 	}
-	defer h.mu.Unlock()
+	// The mark is logged before the handle follows it; a panic between
+	// drops the handle.
+	s.letGoAfter(sessionID, h, func() { err = s.declareHeld(h, sessionID) })
+	return err
+}
+
+// declareHeld marks a held session the record and puts its leaf back
+// on its head. The caller runs it under letGoAfter.
+func (s *Store) declareHeld(h *handle, sessionID string) error {
 	if err := s.setMark(h, sessionID, MarkRecord); err != nil {
 		return err
 	}
