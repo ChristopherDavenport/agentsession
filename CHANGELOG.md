@@ -30,6 +30,16 @@ versions may break the API.
   `media_type` as `application/octet-stream`. A projection rule
   written into RFC 0001 after 0.21's release; no format change.
 
+- **RFC 0001: request-shaping settings go in a slug-prefixed header
+  extension (#293).** A writer SHOULD record each setting that shapes
+  the requests it sends, other than what the request records itself (a
+  compaction budget, a context window, a tool-output cap), as a member
+  of a slug-prefixed header extension such as `dax.context`, and a
+  reader that compares sessions' configurations SHOULD compare those
+  members. RFC text only; no format change, since `Header.Extra`
+  already keeps and writes back a header member this package does not
+  define.
+
 ## v0.0.38 - 2026-11-05
 
 - **Breaking (format): Format 0.21 (RFC 0001, draft 0.21).** `Format`

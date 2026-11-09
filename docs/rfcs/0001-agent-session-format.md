@@ -258,6 +258,18 @@ RFC 2119.
 Unknown header fields MUST be preserved by any tool that rewrites the
 file.
 
+A writer SHOULD record each setting that shapes the requests it sends,
+other than what the request records itself (`config`), as a member of a
+slug-prefixed header extension: a header member whose name is the slug
+of whoever defines it, then `.` or `:`, then a name of its own, as in
+`dax.context`, a form no field above takes. A compaction budget, a
+context window, a cap on tool output and a budget for instructions are
+such settings: two runs that differ only in them send different
+requests from the same entries. A reader that compares sessions'
+configurations SHOULD compare those members. A reader that does not
+know such a member preserves it as written, as it does any unknown
+field.
+
 ## Entry envelope
 
 ```json
@@ -3737,6 +3749,13 @@ as it did.
   first released wrote `data:;base64,`, which RFC 2397 reads as
   `text/plain`, though File already gave a blob with no type
   `application/octet-stream`.
+- A writer SHOULD record each setting that shapes the requests it
+  sends, beyond what the request records, as a member of a
+  slug-prefixed header extension, and a reader that compares sessions'
+  configurations SHOULD compare those members (Header). 0.21 as first
+  released said nothing of where such settings belong, so two runs
+  that differed only in them compared as one configuration. A header
+  member a writer does not define was already preserved.
 
 ## Changes since 0.19
 
