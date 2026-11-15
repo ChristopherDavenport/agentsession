@@ -5,6 +5,44 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **cas: a panic mid-change no longer leaves a held session stale
+  (#287).** `SetHead`, `DeclareRecord`, `DeclareRecordAt`, `HandOver`,
+  a receive (`Push`, `Fetch`, `Receive`) and a handover's clearing of
+  the sender's mark log a record and then apply it to the held session.
+  A panic between the two, which `net/http` recovers under `remote`,
+  used to leave the handle serving the old head or mark, so a later
+  compare-and-swap could succeed against a head the log had moved. Each
+  now runs under the handle as `Write` does: a panic drops the handle,
+  and the next call reads the session from its log.
+
+- **export: an untyped sidecar image is sniffed, not written as
+  `data:;base64,` (#292).** The ATIF projection rendered a sidecar blob
+  the session holds with no type as `data:;base64,…`, which RFC 2397
+  reads as `text/plain`. Such a data URL now names
+  `application/octet-stream`, as RFC 0001's File section already asked,
+  and an image part whose blob has no type takes its type from the
+  bytes by WHATWG MIME Sniffing's image patterns: a PNG, JPEG, GIF or
+  WebP exports as that image, and other bytes render as text naming
+  `application/octet-stream`. The blob beside a written document keeps
+  no type file. `InlineMedia` puts back a moved part with no
+  `media_type` as `application/octet-stream`. A projection rule
+  written into RFC 0001 after 0.21's release; no format change.
+
+- **RFC 0001: request-shaping settings go in a slug-prefixed header
+  extension (#293).** A writer SHOULD record each setting that shapes
+  the requests it sends (a compaction budget, a context window, a
+  tool-output cap), other than what a `config` entry records, as a
+  header member named `<slug>.<name>`, such as `dax.context`, and a
+  change during the session as a `custom` entry, `ns` the slug, whose
+  `data` holds the new value under the same name. A reader that
+  compares sessions' configurations SHOULD compare those members and
+  changes. Such members are configuration, not secrets; a redactor
+  treats them as text. RFC text only; no format change, since
+  `Header.Extra` already keeps and writes back a header member this
+  package does not define.
+
 ## v0.0.38 - 2026-11-05
 
 - **Breaking (format): Format 0.21 (RFC 0001, draft 0.21).** `Format`

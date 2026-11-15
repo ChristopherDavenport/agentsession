@@ -73,8 +73,19 @@ func readBlob(blobs Blobs, session, hash string) ([]byte, string, error) {
 type sidecars struct {
 	session string
 	blobs   Blobs
-	read    map[string]string // hash -> the data URL of its blob
+	read    map[string]resolved // by hash
 	err     error
+}
+
+// resolved is a blob a sidecar reference names, as the projection
+// renders it.
+type resolved struct {
+	// url is the data URL of the blob under the type the session holds
+	// for it, [agentsession.DefaultMediaType] where it holds none.
+	url string
+	// image is, for a blob held with no type whose bytes sniff as an
+	// image type ATIF takes, the data URL under that type; "" otherwise.
+	image string
 }
 
 // newSidecars returns the resolver of a session with header h: nil
@@ -83,7 +94,7 @@ func newSidecars(h agentsession.Header, blobs Blobs) *sidecars {
 	if h.Media != agentsession.MediaSidecar {
 		return nil
 	}
-	return &sidecars{session: h.ID, blobs: blobs, read: map[string]string{}}
+	return &sidecars{session: h.ID, blobs: blobs, read: map[string]resolved{}}
 }
 
 // url returns the data URL of the blob ref names, its blob's media type
@@ -91,27 +102,64 @@ func newSidecars(h agentsession.Header, blobs Blobs) *sidecars {
 // other it returns ref and false. A blob it cannot read is kept in s.err
 // and ref returned as it is.
 func (s *sidecars) url(ref string) (string, bool) {
+	r, ok := s.resolve(ref)
+	return r.url, ok
+}
+
+// imageURL is url for an image part: a blob held with no type is
+// rendered under the image type its bytes sniff as, where that is one
+// ATIF takes, as RFC 0001's Projections, ATIF, asks. The sniffed type
+// is the projection's alone; the blob beside the document keeps none.
+func (s *sidecars) imageURL(ref string) (string, bool) {
+	r, ok := s.resolve(ref)
+	if r.image != "" {
+		return r.image, ok
+	}
+	return r.url, ok
+}
+
+// resolve reads the blob ref names, once, when ref is a sidecar
+// reference; for any other ref it returns ref as the url, and false. A
+// blob it cannot read is kept in s.err, and ref returned as it is.
+func (s *sidecars) resolve(ref string) (resolved, bool) {
 	if s == nil {
-		return ref, false
+		return resolved{url: ref}, false
 	}
 	hash, ok := strings.CutPrefix(ref, "sidecar:")
 	if !ok || !agentsession.ValidHash(hash) {
-		return ref, false
+		return resolved{url: ref}, false
 	}
-	if u, ok := s.read[hash]; ok {
-		return u, true
+	if r, ok := s.read[hash]; ok {
+		return r, true
 	}
 	if s.err != nil {
-		return ref, true
+		return resolved{url: ref}, true
 	}
 	data, mediaType, err := readBlob(s.blobs, s.session, hash)
 	if err != nil {
 		s.err = err
-		return ref, true
+		return resolved{url: ref}, true
 	}
-	u := "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data)
-	s.read[hash] = u
-	return u, true
+	r := resolved{url: dataURL(mediaType, data)}
+	if mediaType == "" {
+		if t := sniffImage(data); t != "" {
+			r.image = dataURL(t, data)
+		}
+	}
+	s.read[hash] = r
+	return r, true
+}
+
+// dataURL is the data URL of data under mediaType, in the one form a
+// written document moves to a file: data:<type>;base64, and the bytes
+// in standard base64 with padding. An empty mediaType, a blob or part
+// with none, is [agentsession.DefaultMediaType], since RFC 2397 reads
+// data:; as text/plain.
+func dataURL(mediaType string, data []byte) string {
+	if mediaType == "" {
+		mediaType = agentsession.DefaultMediaType
+	}
+	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data)
 }
 
 // sidecarMedia is the media the root extra names, under

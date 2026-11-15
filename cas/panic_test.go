@@ -3,6 +3,7 @@ package cas
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -239,4 +240,111 @@ func TestPanicWhileHeldFreesSession(t *testing.T) {
 			within(t, "Close", st.Close)
 		})
 	}
+}
+
+// panicLogSyncUnder makes the fsync of a session's log under root panic
+// until the returned func restores it: the records are in the log, and
+// the call that wrote them panics before it applies them in memory.
+func panicLogSyncUnder(root string) func() {
+	old := syncLog
+	under := root + string(os.PathSeparator)
+	syncLog = func(f *os.File) error {
+		if strings.HasPrefix(f.Name(), under) {
+			panic(injected{})
+		}
+		return old(f)
+	}
+	return func() { syncLog = old }
+}
+
+// TestPanicMidChangeKeepsLoggedState panics a call between the log
+// record it writes and the change it then makes to the held session. The
+// handle is dropped, so the next call reads what the log holds: a
+// compare-and-swap against the head the panic left in memory fails, and
+// a mark the log changed holds.
+func TestPanicMidChangeKeepsLoggedState(t *testing.T) {
+	ctx := context.Background()
+	t.Run("SetHead", func(t *testing.T) {
+		root := t.TempDir()
+		st, err := Open(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		ids := fill(t, st, "s", 3)
+		restore := panicLogSyncUnder(root)
+		mustPanic(t, "SetHead", func() { st.SetHead(ctx, "s", ids[2], ids[0]) })
+		restore()
+		if err := st.SetHead(ctx, "s", ids[2], ids[1]); !errors.Is(err, ErrHeadMoved) {
+			t.Fatalf("SetHead against the head the panic left in memory = %v; want ErrHeadMoved", err)
+		}
+		if head, err := st.Head(ctx, "s"); err != nil || head != ids[0] {
+			t.Fatalf("Head after a panicked SetHead = %s, %v; want the logged %s", head, err, ids[0])
+		}
+	})
+	t.Run("HandOver", func(t *testing.T) {
+		root := t.TempDir()
+		st, err := Open(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		ids := fill(t, st, "s", 2)
+		restore := panicLogSyncUnder(root)
+		mustPanic(t, "HandOver", func() { st.HandOver(ctx, "s", ids[1]) })
+		restore()
+		if mark, err := st.Mark(ctx, "s"); err != nil || mark != MarkMirror {
+			t.Fatalf("Mark after a panicked HandOver = %s, %v; want the logged %s", mark, err, MarkMirror)
+		}
+		if err := st.SetHead(ctx, "s", ids[1], ids[0]); !errors.Is(err, ErrMirror) {
+			t.Fatalf("SetHead on a session handed over = %v; want ErrMirror", err)
+		}
+	})
+	t.Run("DeclareRecordAt", func(t *testing.T) {
+		rec, err := Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rec.Close()
+		ids := fill(t, rec, "s", 2)
+		root := t.TempDir()
+		mir, err := Open(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer mir.Close()
+		if _, err := rec.Push(ctx, mir, "s", PushOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		restore := panicLogSyncUnder(root)
+		mustPanic(t, "DeclareRecordAt", func() { mir.DeclareRecordAt(ctx, "s", ids[1]) })
+		restore()
+		if mark, err := mir.Mark(ctx, "s"); err != nil || mark != MarkRecord {
+			t.Fatalf("Mark after a panicked DeclareRecordAt = %s, %v; want the logged %s", mark, err, MarkRecord)
+		}
+	})
+	t.Run("Push", func(t *testing.T) {
+		rec, err := Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rec.Close()
+		ids := fill(t, rec, "s", 2)
+		root := t.TempDir()
+		mir, err := Open(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer mir.Close()
+		if _, err := rec.Push(ctx, mir, "s", PushOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		next := mustAppend(t, rec, "s", item("after"))
+		restore := panicLogSyncUnder(root)
+		mustPanic(t, "Push", func() { rec.Push(ctx, mir, "s", PushOptions{Expected: ids[1]}) })
+		restore()
+		if head, err := mir.Head(ctx, "s"); err != nil || head != next {
+			t.Fatalf("receiver's Head after a panicked Push = %s, %v; want the logged %s", head, err, next)
+		}
+	})
 }

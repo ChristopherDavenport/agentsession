@@ -232,8 +232,8 @@ func (s *Store) Push(ctx context.Context, to *Store, id string, opts PushOptions
 	if err != nil {
 		return x, fmt.Errorf("cas: handover: the receiver is the record, and this store could not clear its mark: %w", err)
 	}
-	defer h.mu.Unlock()
-	if err := s.setMark(h, id, MarkMirror); err != nil {
+	s.letGoAfter(id, h, func() { err = s.setMark(h, id, MarkMirror) })
+	if err != nil {
 		return x, fmt.Errorf("cas: handover: the receiver is the record, and this store could not clear its mark: %w", err)
 	}
 	x.Handover = true
@@ -583,7 +583,18 @@ func (s *Store) receiveBundle(ctx context.Context, b *bundle, o receiveOptions) 
 	if err != nil {
 		return Exchange{}, err
 	}
-	defer h.mu.Unlock()
+	// The log records land before the handle follows them, so a panic
+	// between the two drops the handle, and the next call reads the
+	// session from the log.
+	var x Exchange
+	s.letGoAfter(id, h, func() { x, err = s.receiveHeld(ctx, h, b, o, all) })
+	return x, err
+}
+
+// receiveHeld merges a bundle into a session this store holds, its
+// handle's lock taken: the rest of receiveBundle.
+func (s *Store) receiveHeld(ctx context.Context, h *handle, b *bundle, o receiveOptions, all map[string]agentsession.Entry) (Exchange, error) {
+	id := b.header.ID
 	hdr, err := readHeader(h.dir)
 	if err != nil {
 		return Exchange{}, err

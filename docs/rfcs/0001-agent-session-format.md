@@ -258,6 +258,31 @@ RFC 2119.
 Unknown header fields MUST be preserved by any tool that rewrites the
 file.
 
+A writer SHOULD record each setting that shapes the requests it sends,
+other than what a `config` entry records, as a member of a
+slug-prefixed header extension: a header member named
+`<slug>.<name>`, the slug of whoever defines it, a dot and a name of
+its own, as in `dax.context`, a form no field above takes. Header
+extension members join slug and name with a dot, as the payload
+profile's extensions do (`<definer>.<type>`); namespaced entry types
+and entry members keep `ns:name`. A compaction budget, a context
+window, a cap on tool output and a budget for instructions are such
+settings: two runs that differ only in them send different requests
+from the same entries. The header holds a setting's value when the
+session is created, and changes after only in `format` (RFC 0002,
+Sessions); a setting
+that changes during the session is recorded where it changes, as a
+`custom` entry whose `ns` is the slug and whose `data` is an object
+holding the new value under the same member name, as in
+`{"type":"custom","ns":"dax","data":{"dax.context":…}}`. A reader
+that compares sessions' configurations SHOULD compare those members
+and, along the path, those changes. A reader that does not know such
+a member preserves it as written, as it does any unknown field. Such
+members are configuration, not secrets, and a writer keeps credentials
+out of them: a redactor reaches a header member this document does not
+define as text (Redaction), so a redacted session's settings need not
+compare with its original's.
+
 ## Entry envelope
 
 ```json
@@ -3182,7 +3207,8 @@ the hash of the step's visible fields, and `visible` under
   `path` then naming `images/` or `audio/` and a file named by the
   SHA-256 of its bytes, moves only a data URL of the form
   `data:<media_type>;base64,` and the bytes in standard base64 with
-  padding, `media_type` the part's own. A converter puts each such
+  padding, `media_type` the part's own, `application/octet-stream` for
+  a part with none. A converter puts each such
   media back inline, from the document's own files, wherever the
   document holds that `path` as a string, the raw items in the extras
   included, before it computes any hash; a `path` naming no such file
@@ -3215,6 +3241,15 @@ the hash of the step's visible fields, and `visible` under
   hash to its name, MUST refuse rather than write a reference nothing
   resolves. 0.20 wrote the reference into the visible part, which a
   reader of Open Responses refuses, and copied no blob.
+- A projection that renders an image part whose blob has no media type
+  SHOULD take the type from the blob's bytes by the image type pattern
+  matching algorithm of WHATWG MIME Sniffing. If the bytes match none
+  of the image types ATIF takes, it renders the part as an image of a
+  type ATIF does not take, using `application/octet-stream` for the
+  data URL, never `data:;base64,`, which RFC 2397 reads as
+  `text/plain`. The sniffed type is the projection's alone: the blob
+  carried beside the document keeps the type the session holds for it,
+  so a blob held with none gets no type file there.
 
 A converter that rebuilds a session from a document this projection
 wrote restores on each entry:
@@ -3710,6 +3745,36 @@ files until it is upgraded.
   redactor keeps the kind as written. 0.20 left every kind opaque, so a
   reader could not tell a scheduled reminder or a forwarded peer's text
   from what the person typed.
+
+### Changed after writers of 0.21 were released
+
+These rules were written into this document after writers of 0.21
+were released. None changes what a file may hold, how its context is
+built or any entry hash, so the format stays 0.21 and every 0.21 file
+reads as it did.
+
+- A projection to ATIF that renders an image part whose blob has no
+  media type sniffs the type from the bytes, by WHATWG MIME Sniffing's
+  image type pattern matching, and renders bytes that match no image
+  type ATIF takes as text, describing an `application/octet-stream`
+  data URL; a moved media part with no `media_type` comes back inline
+  as such a data URL too (Projections, ATIF). A projection of 0.21 as
+  first released wrote `data:;base64,`, which RFC 2397 reads as
+  `text/plain`, though File already gave a blob with no type
+  `application/octet-stream`. A fresh export of a session holding such
+  a blob therefore differs from one 0.21 as first released wrote, and
+  so does the `visible` hash of each step it changes; a document
+  already written verifies as before, since its hashes cover the
+  document as written.
+- A writer SHOULD record each setting that shapes the requests it
+  sends, beyond what a `config` entry records, as a header member
+  `<slug>.<name>`, and a change to one during the session as a `custom`
+  entry carrying the new value under the same name; a reader that
+  compares sessions' configurations SHOULD compare those members and
+  changes (Header). 0.21 as first
+  released said nothing of where such settings belong, so two runs
+  that differed only in them compared as one configuration. A header
+  member a writer does not define was already preserved.
 
 ## Changes since 0.19
 

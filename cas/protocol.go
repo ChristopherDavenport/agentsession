@@ -301,23 +301,15 @@ func (s *Store) DeclareRecordAt(ctx context.Context, sessionID, head string) err
 	if err != nil {
 		return err
 	}
-	defer h.mu.Unlock()
-	if h.head != head {
-		return fmt.Errorf("%w: the head is %s, not %s", ErrHeadMoved, orNone(h.head), orNone(head))
-	}
-	if h.mark == MarkRecord {
-		return nil
-	}
-	if err := s.setMark(h, sessionID, MarkRecord); err != nil {
-		return err
-	}
-	if h.head != "" {
-		return h.session.Branch(h.head)
-	}
-	if h.session.Header().Base == "" {
-		h.session.ResetLeaf()
-	}
-	return nil
+	s.letGoAfter(sessionID, h, func() {
+		switch {
+		case h.head != head:
+			err = fmt.Errorf("%w: the head is %s, not %s", ErrHeadMoved, orNone(h.head), orNone(head))
+		case h.mark != MarkRecord:
+			err = s.declareHeld(h, sessionID)
+		}
+	})
+	return err
 }
 
 // HandOver makes this store a mirror of a session it is the record for,
@@ -337,12 +329,17 @@ func (s *Store) HandOver(ctx context.Context, sessionID, head string) error {
 	if err != nil {
 		return err
 	}
-	defer h.mu.Unlock()
-	if h.mark != MarkRecord {
-		return fmt.Errorf("%w: %s", ErrMirror, sessionID)
-	}
-	if h.head != head {
-		return fmt.Errorf("%w: the head is %s, not %s", ErrHeadMoved, orNone(h.head), orNone(head))
-	}
-	return s.setMark(h, sessionID, MarkMirror)
+	// The mark is logged before the handle follows it; a panic between
+	// drops the handle.
+	s.letGoAfter(sessionID, h, func() {
+		switch {
+		case h.mark != MarkRecord:
+			err = fmt.Errorf("%w: %s", ErrMirror, sessionID)
+		case h.head != head:
+			err = fmt.Errorf("%w: the head is %s, not %s", ErrHeadMoved, orNone(h.head), orNone(head))
+		default:
+			err = s.setMark(h, sessionID, MarkMirror)
+		}
+	})
+	return err
 }
