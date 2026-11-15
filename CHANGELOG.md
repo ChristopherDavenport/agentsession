@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.39 - 2026-11-15
 
 - **cas: a panic mid-change no longer leaves a held session stale
   (#287).** `SetHead`, `DeclareRecord`, `DeclareRecordAt`, `HandOver`,
