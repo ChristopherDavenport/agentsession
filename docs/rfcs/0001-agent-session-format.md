@@ -266,31 +266,30 @@ file.
 
 A writer SHOULD record each setting that shapes the requests it sends,
 other than what a `config` entry records, as a member of a
-slug-prefixed header extension: a header member named
-`<slug>.<name>`, the slug of whoever defines it, a dot and a name of
-its own, as in `dax.context`, a form no field above takes. Header
-extension members join slug and name with a dot, as the payload
+slug-prefixed header extension: a header member named `<slug>.<name>`,
+the slug of whoever defines it, a dot and a name of its own, as in
+`dax.context`, a form no field above takes. A request-shaping header
+extension member joins slug and name with a dot, as the payload
 profile's extensions do (`<definer>.<type>`); namespaced entry types
-and entry members keep `ns:name`. A header member named
-`<slug>.<name>` is a setting that shapes the requests the writer
-sends, and a reader comparing configurations reads it as one. A writer
-SHOULD NOT give that form to any other member; another slug-prefixed
-header member, such as where the session ran or who started it, is
-named `<slug>:<name>`, as namespaced entry types and members are. This
-is a SHOULD NOT only because writers of 0.21 were released before it
-was written (Versioning); the next minor makes it a MUST NOT. A compaction budget, a context
+and entry members keep `ns:name`. A compaction budget, a context
 window, a cap on tool output and a budget for instructions are such
 settings: two runs that differ only in them send different requests
-from the same entries. The header holds a setting's value when the
-session is created, and changes after only in `format` (RFC 0002,
-Sessions); a setting
-that changes during the session is recorded where it changes, as a
-`custom` entry whose `ns` is the slug and whose `data` is an object
-holding the new value under the same member name, as in
-`{"type":"custom","ns":"dax","data":{"dax.context":…}}`. A reader
-that compares sessions' configurations SHOULD compare those members
-and, along the path, those changes. A reader that does not know such
-a member preserves it as written, as it does any unknown field. Such
+from the same entries. A header member named `<slug>.<name>` is such a
+setting, and a reader comparing configurations reads it as one. A
+writer SHOULD NOT give that form to any other member; another
+slug-prefixed header member, such as where the session ran or who
+started it, is named `<slug>:<name>`, as namespaced entry types and
+members are. This is a SHOULD NOT only because writers of 0.21 were
+released before it was written (Versioning); the next minor makes it a
+MUST NOT. The header holds a setting's value when the session is
+created, and changes after only in `format` (RFC 0002, Sessions); a
+setting that changes during the session is recorded where it changes,
+as a `custom` entry whose `ns` is the slug and whose `data` is an
+object holding the new value under the same member name, as in
+`{"type":"custom","ns":"dax","data":{"dax.context":…}}`. A reader that
+compares sessions' configurations SHOULD compare those members and,
+along the path, those changes. A reader that does not know such a
+member preserves it as written, as it does any unknown field. Such
 members are configuration, not secrets, and a writer keeps credentials
 out of them: a redactor reaches a header member this document does not
 define as text (Redaction), so a redacted session's settings need not
