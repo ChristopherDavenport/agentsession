@@ -274,6 +274,11 @@ func SidecarBlobsIn(data []byte) ([]string, error) {
 	seen := map[string]bool{}
 	for {
 		tok, err := dec.Token()
+		if err == io.EOF && len(open) > 0 {
+			// Token reports the end of the input as io.EOF even inside
+			// an object or array, which a whole value never ends in.
+			return out, fmt.Errorf("agentsession: sidecar references: %w", io.ErrUnexpectedEOF)
+		}
 		if err == io.EOF {
 			return out, nil
 		}

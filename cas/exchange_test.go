@@ -409,6 +409,17 @@ func TestPushQuotedReference(t *testing.T) {
 	}
 }
 
+// TestBlobsNamedByUndecodable: a content that does not decode names
+// every reference its text holds, quoted or not, so a sweep keeps what
+// it may name.
+func TestBlobsNamedByUndecodable(t *testing.T) {
+	x, y := "sha256:"+strings.Repeat("a", 64), "sha256:"+strings.Repeat("b", 64)
+	got := blobsNamedBy([]byte(`{"url":"sidecar:` + x + `","text":"see sidecar:` + y + `"`))
+	if len(got) != 2 || got[0] != x || got[1] != y {
+		t.Errorf("blobsNamedBy of a torn content = %q, want both", got)
+	}
+}
+
 // TestLaterFormatRefused: a fork of an origin, and an exchange of a
 // session, whose header names a minor this package does not read.
 func TestLaterFormatRefused(t *testing.T) {

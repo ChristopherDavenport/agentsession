@@ -32,6 +32,7 @@ func TestSidecarBlobsWholeStrings(t *testing.T) {
 		)), []string{image}},
 		{"a custom entry member", &CustomEntry{NS: "acme", Data: json.RawMessage(`{"shot":{"url":"sidecar:` + custom + `"},"note":"see sidecar:` + note + `"}`)}, []string{custom}},
 		{"a reference as an object key", &CustomEntry{NS: "acme", Data: json.RawMessage(`{"sidecar:` + note + `":1}`)}, nil},
+		{"arrays inside objects", &CustomEntry{NS: "acme", Data: json.RawMessage(`{"a":["sidecar:` + quoted + `",{"sidecar:` + note + `":"sidecar:` + image + `"},[]],"b":"sidecar:` + custom + `","c":{}}`)}, []string{quoted, image, custom}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -43,6 +44,22 @@ func TestSidecarBlobsWholeStrings(t *testing.T) {
 				t.Errorf("SidecarBlobs = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// TestSidecarBlobsInInvalid: a value that is not JSON is an error,
+// with the references named before the error.
+func TestSidecarBlobsInInvalid(t *testing.T) {
+	h := "sha256:" + strings.Repeat("a", 64)
+	got, err := SidecarBlobsIn([]byte(`{"a":"sidecar:` + h + `","b":[1,`))
+	if err == nil {
+		t.Error("a truncated value: no error")
+	}
+	if !slices.Equal(got, []string{h}) {
+		t.Errorf("a truncated value names %q, want %q", got, []string{h})
+	}
+	if _, err := SidecarBlobsIn([]byte(`{"a":"sidecar:` + h + `"}}`)); err == nil {
+		t.Error("a value followed by a stray brace: no error")
 	}
 }
 
