@@ -164,8 +164,7 @@ RFC 2119.
   not a legal file name everywhere; a reference names its bytes and a
   reader verifies the blob against its hash, as it verifies a content.
   A sidecar reference is a JSON string whose whole value is
-  `sidecar:sha256:<hex>`, in any member of any entry, an item's URL or
-  a `custom` entry's data alike. A reader MUST NOT treat the text
+  `sidecar:sha256:<hex>`. A reader MUST NOT treat the text
   `sidecar:sha256:…` appearing inside a longer string, as a message
   quoting a reference holds, as a reference, nor a member's name: such
   a string names no blob, and a store neither requires nor retains one
