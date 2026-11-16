@@ -4,8 +4,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # Each nested module is named explicitly rather than left to the `/`
+  # entry's discovery through go.work, so its updates arrive from its own
+  # entry and survive any change to go.work.
   - package-ecosystem: gomod
     directory: /sqlite
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /otel
     schedule:
       interval: weekly
   - package-ecosystem: github-actions

@@ -15,8 +15,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 1.25 is the floor declared in go.mod; stable is the current release.
-        go: ["1.25.x", "stable"]
+        # 1.26 is the floor the sqlite and otel modules declare (the root
+        # declares 1.25, which upstream no longer supports, and every job
+        # builds all three modules); stable is the current release.
+        go: ["1.26.x", "stable"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

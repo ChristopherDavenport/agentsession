@@ -5,6 +5,22 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Dependencies:** `openresponses` v0.0.20, from v0.0.17, in the root
+  and the `sqlite` and `otel` modules. The `sqlite` module takes
+  `modernc.org/sqlite` v1.62.0, from v1.59.0 (SQLite 3.54.1, from
+  3.53, with `modernc.org/libc` v1.80.1), and the `otel` module takes
+  OpenTelemetry v1.47.0, from v1.46.0. Both declare Go 1.26, so the
+  `sqlite` and `otel` modules now require Go 1.26; the root still
+  requires Go 1.25, and CI tests 1.26 and stable. Behaviour: a SQLite
+  lock wait (`busy_timeout`) and a commit now stop when the context is
+  done and return the context's error; the store maps no `SQLITE_BUSY`,
+  so nothing it reports changes. OpenTelemetry now limits attribute
+  depth to 64 by default, which the store's flat attributes never
+  reach. Supersedes dependabot #207, #209, #210, #289, #291, #296 and
+  #297. Dependabot now has an entry for the `otel` module.
+
 ## v0.0.39 - 2026-11-15
 
 - **cas: a panic mid-change no longer leaves a held session stale
