@@ -265,7 +265,14 @@ slug-prefixed header extension: a header member named
 its own, as in `dax.context`, a form no field above takes. Header
 extension members join slug and name with a dot, as the payload
 profile's extensions do (`<definer>.<type>`); namespaced entry types
-and entry members keep `ns:name`. A compaction budget, a context
+and entry members keep `ns:name`. A header member named
+`<slug>.<name>` is a setting that shapes the requests the writer
+sends, and a reader comparing configurations reads it as one. A writer
+SHOULD NOT give that form to any other member; another slug-prefixed
+header member, such as where the session ran or who started it, is
+named `<slug>:<name>`, as namespaced entry types and members are. This
+is a SHOULD NOT only because writers of 0.21 were released before it
+was written (Versioning); the next minor makes it a MUST NOT. A compaction budget, a context
 window, a cap on tool output and a budget for instructions are such
 settings: two runs that differ only in them send different requests
 from the same entries. The header holds a setting's value when the
@@ -3775,6 +3782,14 @@ reads as it did.
   released said nothing of where such settings belong, so two runs
   that differed only in them compared as one configuration. A header
   member a writer does not define was already preserved.
+- A header member named `<slug>.<name>` is a request-shaping setting,
+  and a writer SHOULD NOT give that form to any other member: another
+  slug-prefixed header member is named `<slug>:<name>` (Header). The
+  rule above said where such settings go but not that the dotted form
+  was theirs alone, so a reader comparing configurations compared
+  every dotted member, a session's identity among them, and two runs
+  of one configuration compared as different. The next minor makes it
+  a MUST NOT, since a MUST NOT would change what a 0.21 file may hold.
 
 ## Changes since 0.19
 

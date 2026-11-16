@@ -21,6 +21,15 @@ versions may break the API.
   reach. Supersedes dependabot #207, #209, #210, #289, #291, #296 and
   #297. Dependabot now has an entry for the `otel` module.
 
+- **RFC 0001: a dotted header member is a request-shaping setting
+  only (#299).** A header member named `<slug>.<name>` is a setting that
+  shapes the requests the writer sends, and a reader comparing
+  configurations reads it as one; a writer SHOULD NOT give that form to
+  any other member, which is named `<slug>:<name>` instead, as
+  namespaced entry types and members are. A SHOULD NOT in 0.21, since
+  writers of 0.21 are released, and a MUST NOT at the next format
+  minor. RFC text only; no format change and no API change.
+
 ## v0.0.39 - 2026-11-15
 
 - **cas: a panic mid-change no longer leaves a held session stale
