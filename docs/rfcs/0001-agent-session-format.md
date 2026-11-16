@@ -167,8 +167,8 @@ RFC 2119.
   `sidecar:sha256:<hex>`. A reader MUST NOT treat the text
   `sidecar:sha256:…` appearing inside a longer string, as a message
   quoting a reference holds, as a reference, nor a member's name: such
-  a string names no blob, and a store neither requires nor retains one
-  for it.
+  a string names no blob, so it puts no blob in a push's closure and
+  keeps none from a sweep (RFC 0002).
 - A blob's media type, since 0.16, is the file named `<hex>.type`
   beside the blob in the session's directory: the type the data URL the
   reference replaced carried, in US-ASCII and nothing else in the file,
