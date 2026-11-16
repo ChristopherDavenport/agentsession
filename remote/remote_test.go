@@ -25,6 +25,12 @@ func user(text string) agentsession.Entry {
 	return agentsession.NewItemEntry(openresponses.UserText(text))
 }
 
+// sidecarItem is a user message whose image names the blob hash by a
+// sidecar reference.
+func sidecarItem(hash string) agentsession.Entry {
+	return agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputImage{ImageURL: "sidecar:" + hash}))
+}
+
 // seeded is a memory store holding one session of n entries, and its
 // entry IDs.
 func seeded(t *testing.T, n int) (*agentsession.MemoryStore, *agentsession.Session, []string) {

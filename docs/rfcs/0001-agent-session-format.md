@@ -163,6 +163,13 @@ RFC 2119.
   file named `<hex>` alone in the session's directory, since a colon is
   not a legal file name everywhere; a reference names its bytes and a
   reader verifies the blob against its hash, as it verifies a content.
+  A sidecar reference is a JSON string whose whole value is
+  `sidecar:sha256:<hex>`, in any member of any entry, an item's URL or
+  a `custom` entry's data alike. A reader MUST NOT treat the text
+  `sidecar:sha256:…` appearing inside a longer string, as a message
+  quoting a reference holds, as a reference, nor a member's name: such
+  a string names no blob, and a store neither requires nor retains one
+  for it.
 - A blob's media type, since 0.16, is the file named `<hex>.type`
   beside the blob in the session's directory: the type the data URL the
   reference replaced carried, in US-ASCII and nothing else in the file,
@@ -3790,6 +3797,13 @@ reads as it did.
   every dotted member, a session's identity among them, and two runs
   of one configuration compared as different. The next minor makes it
   a MUST NOT, since a MUST NOT would change what a 0.21 file may hold.
+- A sidecar reference is a string whose whole value is
+  `sidecar:sha256:<hex>`, and a reader MUST NOT treat that text inside a
+  longer string as one (File). File already called a reference a URL,
+  which a string quoting one is not, but this library's readers counted
+  the text wherever it appeared, so a message quoting a reference named
+  a blob the store did not hold, and an import or push reported it
+  unresolved or failed.
 
 ## Changes since 0.19
 

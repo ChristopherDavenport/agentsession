@@ -3,11 +3,11 @@ package agentsession
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -237,27 +237,72 @@ type MediaImporter interface {
 	ImportMedia(ctx context.Context, r io.Reader, media fs.FS, asRecord bool) (*Session, []string, error)
 }
 
-// sidecarRefs matches a sidecar reference, the URL RFC 0001 gives an
-// item that names a blob beside the file.
-var sidecarRefs = regexp.MustCompile(`sidecar:sha256:[0-9a-f]{64}`)
-
-// SidecarBlobs returns the hashes of the sidecar blobs an entry's items
-// name, each once, in the order they first appear.
+// SidecarBlobs returns the hashes of the sidecar blobs an entry names,
+// each once, in the order they first appear: each string in the entry,
+// in any member of any entry type, whose whole value is a sidecar
+// reference, as [SidecarBlobsIn] finds them.
 func SidecarBlobs(e Entry) ([]string, error) {
 	line, err := MarshalEntry(e)
 	if err != nil {
 		return nil, err
 	}
+	return SidecarBlobsIn(line)
+}
+
+// sidecarText is what every sidecar reference holds, so a value without
+// it names no blob.
+var sidecarText = []byte("sidecar:sha256:")
+
+// SidecarBlobsIn returns the hashes of the sidecar blobs a JSON value
+// names, each once, in the order they first appear. RFC 0001 makes a
+// sidecar reference a string whose whole value is sidecar:sha256:<hex>:
+// the same text inside a longer string, as a message quoting one holds,
+// is no reference, and neither is an object member's name. A value
+// that is not JSON is an error, with the blobs named before the error.
+func SidecarBlobsIn(data []byte) ([]string, error) {
+	if !bytes.Contains(data, sidecarText) {
+		return nil, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	// open holds a frame for each object and array the value is inside,
+	// the innermost last; an object's says whether its next token is a
+	// member's name.
+	type frame struct{ object, name bool }
+	var open []frame
 	var out []string
 	seen := map[string]bool{}
-	for _, m := range sidecarRefs.FindAll(line, -1) {
-		h := strings.TrimPrefix(string(m), "sidecar:")
-		if !seen[h] {
-			seen[h] = true
-			out = append(out, h)
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return out, nil
+		}
+		if err != nil {
+			return out, err
+		}
+		name := false
+		if d, ok := tok.(json.Delim); ok && (d == '}' || d == ']') {
+			open = open[:len(open)-1]
+			continue
+		}
+		if n := len(open); n > 0 && open[n-1].object {
+			// A name is followed by its value, and a value by a name.
+			name = open[n-1].name
+			open[n-1].name = !name
+		}
+		switch t := tok.(type) {
+		case json.Delim:
+			open = append(open, frame{object: t == '{', name: t == '{'})
+		case string:
+			if !name && isSidecarURL(t) {
+				h := strings.TrimPrefix(t, "sidecar:")
+				if !seen[h] {
+					seen[h] = true
+					out = append(out, h)
+				}
+			}
 		}
 	}
-	return out, nil
 }
 
 // SessionBlobs returns the hashes of the sidecar blobs a session's

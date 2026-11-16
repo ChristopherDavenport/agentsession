@@ -86,8 +86,8 @@ func (s *Store) SweepBlobs(ctx context.Context, grace time.Duration) (int, error
 			rows.Close()
 			return 0, fmt.Errorf("sqlite: sweep blobs: %w", err)
 		}
-		for _, m := range sidecarRef.FindAllString(line, -1) {
-			named[strings.TrimPrefix(m, "sidecar:")] = true
+		for _, h := range blobsNamedBy(line) {
+			named[h] = true
 		}
 	}
 	if err := rows.Close(); err != nil {
@@ -109,9 +109,27 @@ func (s *Store) SweepBlobs(ctx context.Context, grace time.Duration) (int, error
 	return n, nil
 }
 
-// sidecarRef matches a sidecar reference in an entry's line, the URL
-// RFC 0001 gives an item that names a blob beside the file.
+// sidecarRef matches the text of a sidecar reference anywhere in an
+// entry's line: what a line that does not decode may name, which
+// blobsNamedBy keeps rather than lose a blob it names.
 var sidecarRef = regexp.MustCompile(`sidecar:sha256:[0-9a-f]{64}`)
+
+// blobsNamedBy returns the blob hashes an entry's line names: each
+// string whose whole value is a sidecar reference, as RFC 0001 has it,
+// so a message quoting a reference names no blob. A line that does not
+// decode, which the store never writes, names every reference its text
+// holds, so that a sweep keeps what it may name.
+func blobsNamedBy(line string) []string {
+	out, err := agentsession.SidecarBlobsIn([]byte(line))
+	if err == nil {
+		return out
+	}
+	out = nil
+	for _, m := range sidecarRef.FindAllString(line, -1) {
+		out = append(out, strings.TrimPrefix(m, "sidecar:"))
+	}
+	return out
+}
 
 // Blob implements [agentsession.BlobReader].
 func (s *Store) Blob(ctx context.Context, hash string) ([]byte, error) {

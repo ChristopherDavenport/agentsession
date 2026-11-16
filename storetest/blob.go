@@ -56,7 +56,7 @@ func testBlobs(t *testing.T, opts Options) {
 	hh, hl := agentsession.HashBytes(held), agentsession.HashBytes(lacked)
 	sess := agentsession.New(agentsession.Header{ID: "side-imp", Media: agentsession.MediaSidecar})
 	for _, b := range []string{hh, hl} {
-		if _, err := sess.Append(user("see sidecar:" + b)); err != nil {
+		if _, err := sess.Append(sidecarItem(b)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -104,7 +104,8 @@ func testBlobs(t *testing.T, opts Options) {
 // retention: a blob no session names goes once older than the grace, a
 // young one stays for the write that will name it, and a blob a session
 // names stays however old, a fork's prefix and a session made by an
-// import among the namers.
+// import among the namers. A message that quotes a reference inside its
+// text names no blob.
 func testBlobSweep(t *testing.T, opts Options) {
 	ctx := context.Background()
 	st := opts.New(t)
@@ -125,8 +126,15 @@ func testBlobSweep(t *testing.T, opts Options) {
 	if _, err := st.Create(ctx, agentsession.Header{ID: "side", Media: agentsession.MediaSidecar}); err != nil {
 		t.Fatal(err)
 	}
-	e, err := st.Append(ctx, "side", user("see sidecar:"+named))
+	e, err := st.Append(ctx, "side", sidecarItem(named))
 	if err != nil {
+		t.Fatal(err)
+	}
+	// A message quoting a reference names no blob (#300).
+	if _, err := st.Create(ctx, agentsession.Header{ID: "quoting", Media: agentsession.MediaSidecar}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(ctx, "quoting", user("the stray one is sidecar:"+stray)); err != nil {
 		t.Fatal(err)
 	}
 	// A fork whose prefix names the blob keeps it once its origin goes.
@@ -275,7 +283,7 @@ func testImportBlobTypes(t *testing.T, opts Options) {
 	hg, hp := agentsession.HashBytes(gif), agentsession.HashBytes(plain)
 	sess := agentsession.New(agentsession.Header{ID: "typed-imp", Media: agentsession.MediaSidecar})
 	for _, b := range []string{hg, hp} {
-		if _, err := sess.Append(user("see sidecar:" + b)); err != nil {
+		if _, err := sess.Append(sidecarItem(b)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -346,7 +354,7 @@ func testSessionBlobTypes(t *testing.T, opts Options) {
 		if _, err := st.Create(ctx, agentsession.Header{ID: id, Media: agentsession.MediaSidecar}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := st.Append(ctx, id, user("see sidecar:"+h)); err != nil {
+		if _, err := st.Append(ctx, id, sidecarItem(h)); err != nil {
 			t.Fatal(err)
 		}
 	}

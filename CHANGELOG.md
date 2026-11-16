@@ -30,6 +30,19 @@ versions may break the API.
   writers of 0.21 are released, and a MUST NOT at the next format
   minor. RFC text only; no format change and no API change.
 
+- **A message quoting a sidecar reference no longer names a blob
+  (#300).** `SidecarBlobs` matched `sidecar:sha256:<hex>` anywhere in an
+  entry's line, so a hash quoted inside a message's text counted as a
+  reference: an import or push reported a blob the store lacked
+  unresolved, a cas push failed, and a sweep kept a blob nothing named.
+  A sidecar reference is now a JSON string whose whole value is one, in
+  any member of any entry type, `custom` entries included, as RFC 0001's
+  File section now says; neither the text inside a longer string nor a
+  member's name is one. **Added: `SidecarBlobsIn`**, the same reading
+  over any JSON value. cas (`BlobsNamedBy` and its push, fetch, verify,
+  sweep and repair) and the `sqlite` module's sweep read references the
+  same way. No format change.
+
 ## v0.0.39 - 2026-11-15
 
 - **cas: a panic mid-change no longer leaves a held session stale

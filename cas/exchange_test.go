@@ -355,7 +355,10 @@ func TestPushCarriesBlobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Create(ctx, agentsession.Header{ID: "m", Media: agentsession.MediaSidecar})
-	mustAppend(t, a, "m", item("see sidecar:"+blob+" and sidecar:"+held))
+	mustAppend(t, a, "m", agentsession.NewItemEntry(openresponses.UserMessage(
+		&openresponses.InputImage{ImageURL: "sidecar:" + blob},
+		&openresponses.InputImage{ImageURL: "sidecar:" + held},
+	)))
 	if _, err := a.Push(ctx, b, "m", PushOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -375,6 +378,34 @@ func TestPushCarriesBlobs(t *testing.T) {
 	}
 	if _, mt, err := c.SessionBlob(ctx, "m", blob); err != nil || mt != "image/webp" {
 		t.Errorf("blob at the fetcher: type %q, %v", mt, err)
+	}
+}
+
+// TestPushQuotedReference: a message quoting a sidecar reference names
+// no blob, so a session holding one pushes though no store holds that
+// blob, and only a string wholly a reference names one (#300).
+func TestPushQuotedReference(t *testing.T) {
+	ctx := context.Background()
+	a, b := twoStores(t)
+	blob, err := a.PutTypedBlob(ctx, []byte("image bytes"), "image/webp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	absent := "sha256:" + strings.Repeat("e", 64)
+	a.Create(ctx, agentsession.Header{ID: "q", Media: agentsession.MediaSidecar})
+	mustAppend(t, a, "q", agentsession.NewItemEntry(openresponses.UserMessage(
+		&openresponses.InputText{Text: "the old one was sidecar:" + absent},
+		&openresponses.InputImage{ImageURL: "sidecar:" + blob},
+	)))
+	if _, err := a.Push(ctx, b, "q", PushOptions{}); err != nil {
+		t.Fatalf("push of a session quoting a reference: %v", err)
+	}
+	if data, _, err := b.SessionBlob(ctx, "q", blob); err != nil || string(data) != "image bytes" {
+		t.Errorf("the image's blob at the receiver: %q, %v", data, err)
+	}
+	got := BlobsNamedBy([]byte(`{"type":"custom","ns":"acme","data":{"url":"sidecar:` + blob + `","note":"see sidecar:` + absent + `"}}`))
+	if len(got) != 1 || got[0] != blob {
+		t.Errorf("BlobsNamedBy = %q, want only the member wholly a reference", got)
 	}
 }
 

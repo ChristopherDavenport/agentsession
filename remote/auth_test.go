@@ -505,7 +505,7 @@ func TestMediaTypesPerPrincipal(t *testing.T) {
 		if _, err := s.cl.Create(ctx, agentsession.Header{ID: s.id, Media: agentsession.MediaSidecar}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.cl.Append(ctx, s.id, user("see sidecar:"+h)); err != nil {
+		if _, err := s.cl.Append(ctx, s.id, sidecarItem(h)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -556,7 +556,7 @@ func TestForkTypesAtCreation(t *testing.T) {
 	if _, err := a.Create(ctx, agentsession.Header{ID: "origin", Media: agentsession.MediaSidecar}); err != nil {
 		t.Fatal(err)
 	}
-	at, err := a.Append(ctx, "origin", user("see sidecar:"+x))
+	at, err := a.Append(ctx, "origin", sidecarItem(x))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,13 +570,13 @@ func TestForkTypesAtCreation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Append(ctx, "origin", user("see sidecar:"+y)); err != nil {
+	if _, err := a.Append(ctx, "origin", sidecarItem(y)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := b.PutBlob(ctx, []byte("after the fork")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Append(ctx, "fork", user("see sidecar:"+y)); err != nil {
+	if _, err := b.Append(ctx, "fork", sidecarItem(y)); err != nil {
 		t.Fatal(err)
 	}
 	if _, mt, err := b.SessionBlob(ctx, "fork", y); err != nil || mt != "" {
@@ -703,7 +703,7 @@ func testNamingABlobGrantsNothing(t *testing.T, st agentsession.Store) {
 	if _, err := st.Create(ctx, agentsession.Header{ID: "alices", Media: agentsession.MediaSidecar}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Append(ctx, "alices", user("see sidecar:"+h)); err != nil {
+	if _, err := st.Append(ctx, "alices", sidecarItem(h)); err != nil {
 		t.Fatal(err)
 	}
 	all := []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeExchange}
@@ -740,12 +740,12 @@ func testNamingABlobGrantsNothing(t *testing.T, st agentsession.Store) {
 		t.Fatal(err)
 	}
 	same("an append", func(hash string) error {
-		_, err := m.Append(ctx, "mallorys", user("see sidecar:"+hash))
+		_, err := m.Append(ctx, "mallorys", sidecarItem(hash))
 		return err
 	})
 	same("an import with no sidecar header", func(hash string) error {
 		s := agentsession.New(agentsession.Header{ID: "plain"})
-		if _, err := s.Append(user("see sidecar:" + hash)); err != nil {
+		if _, err := s.Append(sidecarItem(hash)); err != nil {
 			t.Fatal(err)
 		}
 		_, err := m.Import(ctx, bytes.NewReader(fileOfSession(t, s)), true)
@@ -753,7 +753,7 @@ func testNamingABlobGrantsNothing(t *testing.T, st agentsession.Store) {
 	})
 	same("a sidecar import", func(hash string) error {
 		s := agentsession.New(agentsession.Header{ID: "imported", Media: agentsession.MediaSidecar})
-		if _, err := s.Append(user("see sidecar:" + hash)); err != nil {
+		if _, err := s.Append(sidecarItem(hash)); err != nil {
 			t.Fatal(err)
 		}
 		_, _, err := m.ImportMedia(ctx, bytes.NewReader(fileOfSession(t, s)), fstest.MapFS{}, true)
@@ -768,7 +768,7 @@ func testNamingABlobGrantsNothing(t *testing.T, st agentsession.Store) {
 		if _, err := local.Create(ctx, agentsession.Header{ID: "pushed", Media: agentsession.MediaSidecar}); err != nil {
 			t.Fatal(err)
 		}
-		e, err := local.Append(ctx, "pushed", user("see sidecar:"+h))
+		e, err := local.Append(ctx, "pushed", sidecarItem(h))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -803,7 +803,7 @@ func testNamingABlobGrantsNothing(t *testing.T, st agentsession.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Append(ctx, "mallorys", user("see sidecar:"+mine)); err != nil {
+	if _, err := m.Append(ctx, "mallorys", sidecarItem(mine)); err != nil {
 		t.Errorf("an append naming mallory's own upload: %v", err)
 	}
 	if resp := get(t, media+mine, mallory); resp.StatusCode != http.StatusOK {
@@ -854,7 +854,7 @@ func TestUnnamedUploadsSwept(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := c.Append(ctx, "s", user("see sidecar:"+named)); err != nil {
+			if _, err := c.Append(ctx, "s", sidecarItem(named)); err != nil {
 				t.Fatal(err)
 			}
 			stray, err := c.PutBlob(ctx, []byte("a blob nothing names"))

@@ -45,14 +45,14 @@ func TestWritesNamingABlobFreshenIt(t *testing.T) {
 	if _, err := st.Create(ctx, agentsession.Header{ID: "s", Media: agentsession.MediaSidecar}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Append(ctx, "s", agentsession.NewItemEntry(openresponses.UserText("see sidecar:"+appended))); err != nil {
+	if _, err := st.Append(ctx, "s", sidecarItem(appended)); err != nil {
 		t.Fatal(err)
 	}
 	fresh("an append", appended)
 
 	imported := aged("named by an import")
 	sess := agentsession.New(agentsession.Header{ID: "imp", Media: agentsession.MediaSidecar})
-	if _, err := sess.Append(agentsession.NewItemEntry(openresponses.UserText("see sidecar:" + imported))); err != nil {
+	if _, err := sess.Append(sidecarItem(imported)); err != nil {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
@@ -84,7 +84,7 @@ func TestSweepTakesStrayTypes(t *testing.T) {
 	if _, err := st.Create(ctx, agentsession.Header{ID: "s", Media: agentsession.MediaSidecar}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Append(ctx, "s", agentsession.NewItemEntry(openresponses.UserText("see sidecar:"+kept))); err != nil {
+	if _, err := st.Append(ctx, "s", sidecarItem(kept)); err != nil {
 		t.Fatal(err)
 	}
 	stray, err := st.PutTypedBlob(ctx, []byte("lost its blob"), "text/x-stale")
@@ -115,4 +115,10 @@ func TestSweepTakesStrayTypes(t *testing.T) {
 	if _, mt, err := st.TypedBlob(ctx, stray); err != nil || mt != "text/x-fresh" {
 		t.Errorf("bytes stored again after their stray type went: type %q, %v", mt, err)
 	}
+}
+
+// sidecarItem is a user message whose image names the blob hash by a
+// sidecar reference.
+func sidecarItem(hash string) agentsession.Entry {
+	return agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputImage{ImageURL: "sidecar:" + hash}))
 }
