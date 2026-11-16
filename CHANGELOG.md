@@ -5,6 +5,44 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Dependencies:** `openresponses` v0.0.20, from v0.0.17, in the root
+  and the `sqlite` and `otel` modules. The `sqlite` module takes
+  `modernc.org/sqlite` v1.62.0, from v1.59.0 (SQLite 3.54.1, from
+  3.53, with `modernc.org/libc` v1.80.1), and the `otel` module takes
+  OpenTelemetry v1.47.0, from v1.46.0. Both declare Go 1.26, so the
+  `sqlite` and `otel` modules now require Go 1.26; the root still
+  requires Go 1.25, and CI tests 1.26 and stable. Behaviour: a SQLite
+  lock wait (`busy_timeout`) and a commit now stop when the context is
+  done and return the context's error; the store maps no `SQLITE_BUSY`,
+  so nothing it reports changes. OpenTelemetry now limits attribute
+  depth to 64 by default, which the store's flat attributes never
+  reach. Supersedes dependabot #207, #209, #210, #289, #291, #296 and
+  #297. Dependabot now has an entry for the `otel` module.
+
+- **RFC 0001: a dotted header member is a request-shaping setting
+  only (#299).** A header member named `<slug>.<name>` is a setting that
+  shapes the requests the writer sends, and a reader comparing
+  configurations reads it as one; a writer SHOULD NOT give that form to
+  any other member, which is named `<slug>:<name>` instead, as
+  namespaced entry types and members are. A SHOULD NOT in 0.21, since
+  writers of 0.21 are released, and a MUST NOT at the next format
+  minor. RFC text only; no format change and no API change.
+
+- **A message quoting a sidecar reference no longer names a blob
+  (#300).** `SidecarBlobs` matched `sidecar:sha256:<hex>` anywhere in an
+  entry's line, so a hash quoted inside a message's text counted as a
+  reference: an import or push reported a blob the store lacked
+  unresolved, a cas push failed, and a sweep kept a blob nothing named.
+  A sidecar reference is now a JSON string whose whole value is one, as
+  RFC 0001's File section now says; neither the text inside a longer
+  string nor a member's name is one. The library still looks for such
+  strings in every member of every entry type, as it did. **Added: `SidecarBlobsIn`**, the same reading
+  over any JSON value. cas (`BlobsNamedBy` and its push, fetch, verify,
+  sweep and repair) and the `sqlite` module's sweep read references the
+  same way. No format change.
+
 ## v0.0.39 - 2026-11-15
 
 - **cas: a panic mid-change no longer leaves a held session stale

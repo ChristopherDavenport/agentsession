@@ -78,7 +78,7 @@ func TestImportEndpoint(t *testing.T) {
 
 	blob := []byte("image bytes")
 	side := agentsession.New(agentsession.Header{ID: "side", Media: agentsession.MediaSidecar})
-	if _, err := side.Append(user("see sidecar:" + agentsession.HashBytes(blob))); err != nil {
+	if _, err := side.Append(sidecarItem(agentsession.HashBytes(blob))); err != nil {
 		t.Fatal(err)
 	}
 	sf := fileOfSession(t, side)

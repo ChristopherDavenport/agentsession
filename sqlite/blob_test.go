@@ -43,7 +43,7 @@ func TestNamingABlobGrantsNothingOverSQLite(t *testing.T) {
 	if _, err := st.Create(ctx, agentsession.Header{ID: "alices", Media: agentsession.MediaSidecar}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Append(ctx, "alices", agentsession.NewItemEntry(openresponses.UserText("see sidecar:"+h))); err != nil {
+	if _, err := st.Append(ctx, "alices", sidecarItem(h)); err != nil {
 		t.Fatal(err)
 	}
 	srv, m := mallorysServer(t, st, map[string]string{"alices": "alice", "mallorys": "mallory"})
@@ -51,7 +51,7 @@ func TestNamingABlobGrantsNothingOverSQLite(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, hash := range []string{h, agentsession.HashBytes([]byte("a blob nobody holds"))} {
-		_, err := m.Append(ctx, "mallorys", agentsession.NewItemEntry(openresponses.UserText("see sidecar:"+hash)))
+		_, err := m.Append(ctx, "mallorys", sidecarItem(hash))
 		if !errors.Is(err, remote.ErrMissingObject) {
 			t.Errorf("an append naming %s: %v, want ErrMissingObject", hash, err)
 		}
@@ -251,4 +251,10 @@ func TestForkOriginLoadsOnlyTheAdmitted(t *testing.T) {
 			break
 		}
 	}
+}
+
+// sidecarItem is a user message whose image names the blob hash by a
+// sidecar reference.
+func sidecarItem(hash string) agentsession.Entry {
+	return agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputImage{ImageURL: "sidecar:" + hash}))
 }

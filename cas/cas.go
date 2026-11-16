@@ -1371,8 +1371,9 @@ func (s *Store) disown(session string) {
 
 // --- media blobs ---
 
-// sidecarRef matches a sidecar reference inside a content, the URL RFC
-// 0001 gives an item that names a blob beside the file.
+// sidecarRef matches the text of a sidecar reference anywhere in a
+// content: what a content that does not decode may name, which
+// blobsNamedBy keeps rather than lose a blob it names.
 var sidecarRef = regexp.MustCompile(`sidecar:sha256:[0-9a-f]{64}`)
 
 // mediaTypesDir holds each media blob's type, under the root, as a file
@@ -1647,9 +1648,16 @@ func (s *Store) Blob(ctx context.Context, hash string) ([]byte, error) {
 }
 
 // blobsNamedBy returns the blob hashes the content names through sidecar
-// references.
+// references: each string whose whole value is one, as RFC 0001 has it,
+// so a message quoting a reference names no blob. A content that does
+// not decode, which the store never writes, names every reference its
+// text holds, so that a sweep keeps what it may name.
 func blobsNamedBy(content []byte) []string {
-	var out []string
+	out, err := agentsession.SidecarBlobsIn(content)
+	if err == nil {
+		return out
+	}
+	out = nil
 	for _, m := range sidecarRef.FindAll(content, -1) {
 		out = append(out, strings.TrimPrefix(string(m), "sidecar:"))
 	}

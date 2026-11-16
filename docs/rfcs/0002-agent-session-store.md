@@ -880,7 +880,11 @@ session was written in. A sidecar blob is an object of its own and is
 held once; an inline data URL is part of its entry's content and is held
 once only as that content is. An item names a sidecar blob as RFC 0001
 says, by a `sidecar:` URL carrying the blob's hash, so a push's closure
-over media is computable: the blobs the pushed entries' items name.
+over media is computable: the blobs the pushed entries' items name,
+each by a string whose whole value is such a URL. The text of one inside a longer
+string, as a message quoting a reference holds, names no blob (RFC
+0001, File): it puts no blob in a push's closure and keeps none from a
+sweep.
 
 A store that holds a sidecar session MUST accept a blob by its bytes
 and store it under its hash after verifying them, so that a writer

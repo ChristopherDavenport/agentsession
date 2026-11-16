@@ -1,11 +1,21 @@
 version: 2
 updates:
+  # The root entry also walks go.work, so it opens updates for the
+  # nested modules too, duplicating their own entries' PRs, and may raise
+  # the root's go directive to a nested module's. The root declares
+  # go 1.25 on purpose: a PR that raises it must not be merged.
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+  # Each nested module has its own entry, so its updates do not depend on
+  # the root entry's walk of go.work.
   - package-ecosystem: gomod
     directory: /sqlite
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /otel
     schedule:
       interval: weekly
   - package-ecosystem: github-actions

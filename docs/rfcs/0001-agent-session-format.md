@@ -163,6 +163,12 @@ RFC 2119.
   file named `<hex>` alone in the session's directory, since a colon is
   not a legal file name everywhere; a reference names its bytes and a
   reader verifies the blob against its hash, as it verifies a content.
+  A sidecar reference is a JSON string whose whole value is
+  `sidecar:sha256:<hex>`. A reader MUST NOT treat the text
+  `sidecar:sha256:…` appearing inside a longer string, as a message
+  quoting a reference holds, as a reference, nor a member's name: such
+  a string names no blob, so it puts no blob in a push's closure and
+  keeps none from a sweep (RFC 0002).
 - A blob's media type, since 0.16, is the file named `<hex>.type`
   beside the blob in the session's directory: the type the data URL the
   reference replaced carried, in US-ASCII and nothing else in the file,
@@ -260,24 +266,30 @@ file.
 
 A writer SHOULD record each setting that shapes the requests it sends,
 other than what a `config` entry records, as a member of a
-slug-prefixed header extension: a header member named
-`<slug>.<name>`, the slug of whoever defines it, a dot and a name of
-its own, as in `dax.context`, a form no field above takes. Header
-extension members join slug and name with a dot, as the payload
+slug-prefixed header extension: a header member named `<slug>.<name>`,
+the slug of whoever defines it, a dot and a name of its own, as in
+`dax.context`, a form no field above takes. A request-shaping header
+extension member joins slug and name with a dot, as the payload
 profile's extensions do (`<definer>.<type>`); namespaced entry types
 and entry members keep `ns:name`. A compaction budget, a context
 window, a cap on tool output and a budget for instructions are such
 settings: two runs that differ only in them send different requests
-from the same entries. The header holds a setting's value when the
-session is created, and changes after only in `format` (RFC 0002,
-Sessions); a setting
-that changes during the session is recorded where it changes, as a
-`custom` entry whose `ns` is the slug and whose `data` is an object
-holding the new value under the same member name, as in
-`{"type":"custom","ns":"dax","data":{"dax.context":…}}`. A reader
-that compares sessions' configurations SHOULD compare those members
-and, along the path, those changes. A reader that does not know such
-a member preserves it as written, as it does any unknown field. Such
+from the same entries. A header member named `<slug>.<name>` is such a
+setting, and a reader comparing configurations reads it as one. A
+writer SHOULD NOT give that form to any other member; another
+slug-prefixed header member, such as where the session ran or who
+started it, is named `<slug>:<name>`, as namespaced entry types and
+members are. This is a SHOULD NOT only because writers of 0.21 were
+released before it was written (Versioning); the next minor makes it a
+MUST NOT. The header holds a setting's value when the session is
+created, and changes after only in `format` (RFC 0002, Sessions); a
+setting that changes during the session is recorded where it changes,
+as a `custom` entry whose `ns` is the slug and whose `data` is an
+object holding the new value under the same member name, as in
+`{"type":"custom","ns":"dax","data":{"dax.context":…}}`. A reader that
+compares sessions' configurations SHOULD compare those members and,
+along the path, those changes. A reader that does not know such a
+member preserves it as written, as it does any unknown field. Such
 members are configuration, not secrets, and a writer keeps credentials
 out of them: a redactor reaches a header member this document does not
 define as text (Redaction), so a redacted session's settings need not
@@ -3775,6 +3787,21 @@ reads as it did.
   released said nothing of where such settings belong, so two runs
   that differed only in them compared as one configuration. A header
   member a writer does not define was already preserved.
+- A header member named `<slug>.<name>` is a request-shaping setting,
+  and a writer SHOULD NOT give that form to any other member: another
+  slug-prefixed header member is named `<slug>:<name>` (Header). The
+  rule above said where such settings go but not that the dotted form
+  was theirs alone, so a reader comparing configurations compared
+  every dotted member, a session's identity among them, and two runs
+  of one configuration compared as different. The next minor makes it
+  a MUST NOT, since a MUST NOT would change what a 0.21 file may hold.
+- A sidecar reference is a string whose whole value is
+  `sidecar:sha256:<hex>`, and a reader MUST NOT treat that text inside a
+  longer string as one (File). File already called a reference a URL,
+  which a string quoting one is not, but this library's readers counted
+  the text wherever it appeared, so a message quoting a reference named
+  a blob the store did not hold, and an import or push reported it
+  unresolved or failed.
 
 ## Changes since 0.19
 

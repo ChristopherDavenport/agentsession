@@ -23,10 +23,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # The nested module's own go.mod names its Go version, which may be
+      # above the root's: setup-go pins the toolchain it installs, so the
+      # root's version would refuse a module that needs a later one.
+      - name: Find the tagged nested module
+        id: mod
+        if: contains(github.ref_name, '/')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: echo "dir=${TAG%/v*}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v7
         if: contains(github.ref_name, '/')
         with:
-          go-version-file: go.mod
+          go-version-file: ${{ steps.mod.outputs.dir }}/go.mod
       - name: Build the tagged nested module outside the workspace
         if: contains(github.ref_name, '/')
         env:

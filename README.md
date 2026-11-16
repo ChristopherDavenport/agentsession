@@ -44,7 +44,8 @@ branched, and what happened afterwards.
 
 The root module depends on
 [`openresponses`](https://github.com/ChristopherDavenport/openresponses)
-and the standard library alone. Requires Go 1.25. The library is
+and the standard library alone. Requires Go 1.25; the `sqlite` and
+`otel` modules require Go 1.26, as their dependencies do. The library is
 pre-1.0: minor versions may change the API, and
 [CHANGELOG.md](CHANGELOG.md) records every break.
 

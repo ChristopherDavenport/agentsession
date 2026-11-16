@@ -18,6 +18,12 @@ func user(text string) agentsession.Entry {
 	return agentsession.NewItemEntry(openresponses.UserText(text))
 }
 
+// sidecarItem is a user message whose image names the blob hash by a
+// sidecar reference.
+func sidecarItem(hash string) agentsession.Entry {
+	return agentsession.NewItemEntry(openresponses.UserMessage(&openresponses.InputImage{ImageURL: "sidecar:" + hash}))
+}
+
 // testFollow exercises [agentsession.Follower]: the snapshot, the
 // appends that follow it, a branch and a recorded head, a second store
 // on the same storage, a resume, a resume from a cursor the log no

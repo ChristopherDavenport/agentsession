@@ -161,7 +161,7 @@ func TestAPushThroughTheServerIsRFC0002sPush(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustCreate(t, local, agentsession.Header{ID: "m", Media: agentsession.MediaSidecar})
-	mustAppend(t, local, "m", user("see sidecar:"+blob))
+	mustAppend(t, local, "m", sidecarItem(blob))
 	both("media", "m", cas.PushOptions{})
 	if data, mt, err := served.SessionBlob(ctx, "m", blob); err != nil || string(data) != "image bytes" || mt != "image/webp" {
 		t.Errorf("the blob at the server: %q of type %q, %v", data, mt, err)
@@ -173,7 +173,7 @@ func TestAPushThroughTheServerIsRFC0002sPush(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustCreate(t, local, agentsession.Header{ID: "u", Media: agentsession.MediaSidecar})
-	uh := mustAppend(t, local, "u", user("see sidecar:"+raw))
+	uh := mustAppend(t, local, "u", sidecarItem(raw))
 	both("untyped media", "u", cas.PushOptions{})
 	if _, mt, err := served.SessionBlob(ctx, "u", raw); err != nil || mt != "" {
 		t.Fatalf("the untyped blob at the server: %q, %v", mt, err)
