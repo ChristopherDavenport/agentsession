@@ -1,11 +1,21 @@
 version: 2
 updates:
-  # The root entry also walks go.work, so it opens updates for the
-  # nested modules too, duplicating their own entries' PRs, and may raise
-  # the root's go directive to a nested module's. The root declares
-  # go 1.25 on purpose: a PR that raises it must not be merged.
+  # go.work at / puts this entry in dependabot's workspace mode, and no
+  # setting turns that off (exclude-paths is not consulted for go.work's
+  # use list). In that mode it updates any dependency of any workspace
+  # module, running `go get` in every module and then `go work sync`,
+  # which writes the workspace's selected versions into every go.mod and
+  # raises a module's go line when one of them needs a newer Go (#207,
+  # #210 and #291 moved the root to go 1.26 that way). allow keeps it to
+  # the root module's own requirement, which `make deps` holds to
+  # openresponses alone, so it no longer opens the nested modules'
+  # updates; their own entries below do. A root update still runs across
+  # the workspace and can still raise a floor; the root job in ci.yml
+  # (Go 1.25) and the 1.26.x test job fail such a PR.
   - package-ecosystem: gomod
     directory: /
+    allow:
+      - dependency-name: github.com/ChristopherDavenport/openresponses
     schedule:
       interval: weekly
   # Each nested module has its own entry, so its updates do not depend on
