@@ -1019,11 +1019,9 @@ func writeEarly09(t *testing.T, path string) string {
 }
 
 // importFile imports a session file into a cas store and closes the
-// store. With declared set, the session's stored header is rewritten to
-// declare that format, as a store an earlier release wrote holds it:
-// Import writes the header this release's Read raises, and this release
-// raises a stored header only when it appends.
-func importFile(t *testing.T, root, path, declared string) {
+// store. The store holds the session under the format its file
+// declared, until an append raises it (#304).
+func importFile(t *testing.T, root, path string) {
 	t.Helper()
 	st, err := cas.Open(root)
 	if err != nil {
@@ -1033,31 +1031,12 @@ func importFile(t *testing.T, root, path, declared string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := st.Import(context.Background(), f, true)
+	_, err = st.Import(context.Background(), f, true)
 	f.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if declared == "" {
-		return
-	}
-	hp := filepath.Join(root, "sessions", s.ID(), "header")
-	data, err := os.ReadFile(hp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var h agentsession.Header
-	if err := json.Unmarshal(data, &h); err != nil {
-		t.Fatal(err)
-	}
-	h.Format = declared
-	if data, err = json.Marshal(h); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(hp, append(data, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1073,9 +1052,9 @@ func TestCASVerifyNotes(t *testing.T) {
 	tmp := t.TempDir()
 	root := filepath.Join(tmp, "cas")
 	writeResumed(t, filepath.Join(tmp, "refused.jsonl"), refusedResume)
-	importFile(t, root, filepath.Join(tmp, "refused.jsonl"), "")
+	importFile(t, root, filepath.Join(tmp, "refused.jsonl"))
 	early := writeEarly09(t, filepath.Join(tmp, "early.jsonl"))
-	importFile(t, root, filepath.Join(tmp, "early.jsonl"), "agentsession/0.9")
+	importFile(t, root, filepath.Join(tmp, "early.jsonl"))
 	// A second 0.9 session, so the note at the end is shown to be
 	// printed once for both.
 	other := filepath.Join(tmp, "other")
@@ -1085,7 +1064,7 @@ func TestCASVerifyNotes(t *testing.T) {
 	}
 	// Import refuses a session the store holds, so the second copy goes
 	// into a store of its own and the two are checked apart.
-	importFile(t, other, filepath.Join(tmp, "other.jsonl"), "agentsession/0.9")
+	importFile(t, other, filepath.Join(tmp, "other.jsonl"))
 
 	tests := []struct {
 		name   string

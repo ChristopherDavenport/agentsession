@@ -289,7 +289,7 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 			}
 		}
 	}
-	return s.place(sess)
+	return s.place(sess, sess.Header())
 }
 
 // Import implements [agentsession.Importer]: the file is read with
@@ -338,7 +338,9 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	if names, err := agentsession.SessionBlobs(sess); err == nil {
 		_ = s.freshenBlobs(names)
 	}
-	return s.place(sess)
+	// The file's header keeps the format the imported file declared,
+	// which the first append raises, as RFC 0002's import has it.
+	return s.place(sess, agentsession.ImportHeader(sess))
 }
 
 // placeFault, when set, runs once place has made the project directory
@@ -347,11 +349,11 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 // directory is made.
 var placeFault func() error
 
-// place writes a new session's file, its header and every entry the
-// session holds, beside its place and links it into place once synced,
-// and holds it open for append. The caller holds s.mu.
-func (s *Store) place(sess *agentsession.Session) (*agentsession.Session, error) {
-	h := sess.Header()
+// place writes a new session's file, h as its header and every entry
+// the session holds, beside its place and links it into place once
+// synced, and holds it open for append. h is the session's header,
+// under the format the file is to declare. The caller holds s.mu.
+func (s *Store) place(sess *agentsession.Session, h agentsession.Header) (*agentsession.Session, error) {
 	if !validSessionID(h.ID) {
 		return nil, fmt.Errorf("%w: session id %q", ErrBadName, h.ID)
 	}

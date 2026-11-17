@@ -414,6 +414,17 @@ func (s *Session) RaiseRefused(format string) error {
 	return s.raiseRefused(format)
 }
 
+// holdImported puts the header of a session read for import back at
+// the format its file declared, as [ImportHeader] gives it, for a store
+// that holds the session it read: the store then raises it as it does
+// any session's, on the first append.
+func (s *Session) holdImported() {
+	f := ImportHeader(s).Format
+	s.mu.Lock()
+	s.header.Format = f
+	s.mu.Unlock()
+}
+
 // raiseHeader raises the header of a session whose header names an
 // earlier minor to format, as a store does before it appends to it, and
 // refuses one [Session.RaiseRefused] refuses. A header at format or

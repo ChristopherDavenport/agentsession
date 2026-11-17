@@ -310,11 +310,11 @@ func TestVerifyRedacted(t *testing.T) {
 	// cas stores hold the redacted session, the resumed one and the one
 	// that kept the original's hashes, by import.
 	root := filepath.Join(tmp, "cas")
-	importFile(t, root, path, "")
+	importFile(t, root, path)
 	resumedRoot := filepath.Join(tmp, "cas-resumed")
-	importFile(t, resumedRoot, resumed, "")
+	importFile(t, resumedRoot, resumed)
 	keptRoot := filepath.Join(tmp, "cas-kept")
-	importFile(t, keptRoot, kept, "")
+	importFile(t, keptRoot, kept)
 
 	for _, tt := range []struct {
 		name   string

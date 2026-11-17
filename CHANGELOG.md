@@ -5,6 +5,34 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **An imported session declares its file's format (#304).** Every
+  store's import (`cas`, `jsonl`, the `sqlite` module and
+  `MemoryStore`, and so a `remote` server's) created the session with
+  the header `Read` raises in memory, so importing a 0.9 file gave a
+  session declaring `agentsession/0.21` before anything was appended:
+  a reader of 0.9 refused it, a push carried 0.21, and `verify`'s
+  early-0.9 note never reached an imported early 0.9 file. A store now
+  creates an imported session with the `format` its file declares, and
+  raises it on the first append, as it does a session a migration or
+  an earlier writer left at an earlier minor. A file before 0.5, whose
+  entries `Read` rewrites as a 0.5 file's, is now held at
+  `agentsession/0.5`, where it took the format `Read` gives it (0.21,
+  or 0.12 for a file holding a redaction member). RFC 0002 (Projection
+  to JSONL) states the rule. `MemoryStore`'s imported session, which
+  `Import` and `Open` return and the store shares, now reports the
+  declared format in `Header().Format` until the store's first
+  `Append` raises it; cas, `jsonl` and `sqlite` still return a session
+  whose `Header().Format` is this package's and whose `DeclaredFormat`
+  is the stored one. A known gap remains: a `remote` client's reads
+  (follow snapshot, session info, the import response) and cas
+  `Project` still report this package's format for a session stored
+  at an earlier one. **Added: `ImportHeader`**, the header a store
+  creates an imported session with. `storetest` gains the
+  `ImportFormat` case and a `Backing` hook, which works around that gap
+  for a client store. No format change.
+
 ## v0.0.40 - 2026-11-15
 
 - **Dependencies:** `openresponses` v0.0.20, from v0.0.17, in the root
