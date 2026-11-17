@@ -81,6 +81,10 @@ func lowerHeaderFile(t *testing.T, path, format string) {
 func TestConformanceOverMemory(t *testing.T) {
 	storetest.Run(t, storetest.Options{
 		New: func(t *testing.T) agentsession.Store { return serve(t, agentsession.NewMemoryStore(), nil) },
+		// The client reads a session as a follow's snapshot carries it,
+		// under this package's format; the server's store says what the
+		// session is stored under.
+		Backing: func(s agentsession.Store) agentsession.Store { return s.(*wire).backing },
 		RedactedOnly: func(t *testing.T) agentsession.Store {
 			return serve(t, agentsession.NewMemoryStore(agentsession.MemoryRedactedOnly()), nil)
 		},
@@ -106,6 +110,10 @@ func TestConformanceOverJSONL(t *testing.T) {
 	root := func(s agentsession.Store) string { return s.(*wire).backing.(*jsonl.Store).Root() }
 	storetest.Run(t, storetest.Options{
 		New: func(t *testing.T) agentsession.Store { return open(t, t.TempDir()) },
+		// The client reads a session as a follow's snapshot carries it,
+		// under this package's format; the server's store says what the
+		// session is stored under.
+		Backing: func(s agentsession.Store) agentsession.Store { return s.(*wire).backing },
 		Reopen: func(t *testing.T, s agentsession.Store) agentsession.Store {
 			s.(*wire).Close()
 			return open(t, root(s))
@@ -140,6 +148,10 @@ func TestConformanceOverCAS(t *testing.T) {
 	root := func(s agentsession.Store) string { return s.(*wire).backing.(*cas.Store).Root() }
 	storetest.Run(t, storetest.Options{
 		New: func(t *testing.T) agentsession.Store { return open(t, t.TempDir()) },
+		// The client reads a session as a follow's snapshot carries it,
+		// under this package's format; the server's store says what the
+		// session is stored under.
+		Backing: func(s agentsession.Store) agentsession.Store { return s.(*wire).backing },
 		Reopen: func(t *testing.T, s agentsession.Store) agentsession.Store {
 			s.(*wire).Close()
 			return open(t, root(s))

@@ -5,6 +5,25 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **An imported session declares its file's format (#304).** Every
+  store's import (`cas`, `jsonl`, the `sqlite` module and
+  `MemoryStore`, and so a `remote` server's) created the session with
+  the header `Read` raises in memory, so importing a 0.9 file gave a
+  session declaring `agentsession/0.21` before anything was appended:
+  a reader of 0.9 refused it, a push carried 0.21, and `verify`'s
+  early-0.9 note never reached an imported early 0.9 file. A store now
+  creates an imported session with the `format` its file declares, and
+  raises it on the first append, as it does a session a migration or
+  an earlier writer left at an earlier minor. A file before 0.5, whose
+  entries `Read` rewrites, is held at the format `Read` gives it, as
+  before. RFC 0002 (Projection to JSONL) states the rule. **Added:
+  `ImportHeader`**, the header a store creates an imported session
+  with. `storetest` gains the `ImportFormat` case and a `Backing` hook
+  for a client store whose reads carry this package's format. No
+  format change.
+
 ## v0.0.40 - 2026-11-15
 
 - **Dependencies:** `openresponses` v0.0.20, from v0.0.17, in the root

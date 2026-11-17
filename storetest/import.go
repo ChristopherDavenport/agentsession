@@ -199,3 +199,63 @@ func testImportMarker(t *testing.T, opts Options) {
 		t.Errorf("held %v at %s, want %v at the marker's %s", entryIDs(got), got.Leaf(), want, root)
 	}
 }
+
+// testImportFormat: an imported session declares the format its file
+// declared, as RFC 0002's import has it, and not the one this package
+// writes: a 0.9 file imports as a 0.9 session, read back and after a
+// reopen, and so does one a push carries from a store that imported it;
+// the first append raises it to this package's format, as for any
+// session whose header names an earlier minor. A file before 0.5, whose
+// entries the reader rewrote, is held as the migrated file, at the
+// format its reader brought it to.
+func testImportFormat(t *testing.T, opts Options) {
+	ctx := context.Background()
+	st := opts.New(t)
+	take := importer(opts, st)
+	hooks(t, take != nil)
+	const early = "agentsession/0.9"
+	declared := func(what string, st agentsession.Store, id, want string) {
+		t.Helper()
+		if opts.Backing != nil {
+			st = opts.Backing(st)
+		}
+		if got := readBack(t, st, id).DeclaredFormat(); got != want {
+			t.Errorf("%s: %s declares %s, want %s", what, id, got, want)
+		}
+	}
+
+	const old = `{"type":"session","format":"agentsession/0.4","id":"imp-04","created_at":"2026-09-17T12:00:00Z","payload":"openresponses/2026-04-24"}
+{"type":"item","id":"i0000001","parent":null,"ts":"2026-09-17T12:00:01Z","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}
+`
+	if err := take(t, st, []byte(old)); err != nil {
+		t.Fatalf("import of a 0.4 file: %v", err)
+	}
+	declared("a migrated 0.4 file", st, "imp-04", agentsession.Format)
+
+	s := agentsession.New(agentsession.Header{ID: "imp-09", Format: early})
+	for _, text := range []string{"hello", "world"} {
+		if _, err := s.Append(user(text)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file := fileOf(t, s)
+	if err := take(t, st, file); err != nil {
+		t.Fatalf("import of a %s file: %v", early, err)
+	}
+	declared("imported", st, "imp-09", early)
+	if opts.Push != nil {
+		pushed := opts.New(t)
+		if err := opts.Push(t, pushed, file); err != nil {
+			t.Fatalf("push of a %s session: %v", early, err)
+		}
+		declared("pushed", pushed, "imp-09", early)
+	}
+	if opts.Reopen != nil {
+		st = opts.Reopen(t, st)
+		declared("after a reopen", st, "imp-09", early)
+	}
+	if _, err := st.Append(ctx, "imp-09", user("after the import")); err != nil {
+		t.Fatalf("append to an imported %s session: %v", early, err)
+	}
+	declared("after an append", st, "imp-09", agentsession.Format)
+}

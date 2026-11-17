@@ -496,7 +496,7 @@ func (s *Store) Create(ctx context.Context, h agentsession.Header) (*agentsessio
 			}
 		}
 	}
-	return s.insert(ctx, sess)
+	return s.insert(ctx, sess, sess.Header())
 }
 
 // Import implements [agentsession.Importer]: the file is read with
@@ -538,13 +538,16 @@ func (s *Store) Import(ctx context.Context, r io.Reader, asRecord bool) (*agents
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.insert(ctx, sess)
+	// The stored header keeps the format the imported file declared,
+	// which the first append raises, as RFC 0002's import has it.
+	return s.insert(ctx, sess, agentsession.ImportHeader(sess))
 }
 
-// insert writes a new session, its header and every entry it holds in
-// file order, and holds it, in one transaction. The caller holds s.mu.
-func (s *Store) insert(ctx context.Context, sess *agentsession.Session) (*agentsession.Session, error) {
-	h := sess.Header()
+// insert writes a new session, h as its header and every entry it holds
+// in file order, and holds it, in one transaction. h is the session's
+// header, under the format the stored header is to declare. The caller
+// holds s.mu.
+func (s *Store) insert(ctx context.Context, sess *agentsession.Session, h agentsession.Header) (*agentsession.Session, error) {
 	line, err := h.MarshalJSON()
 	if err != nil {
 		return nil, err

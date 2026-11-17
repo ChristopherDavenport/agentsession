@@ -509,6 +509,9 @@ func (m *MemoryStore) Import(ctx context.Context, r io.Reader, asRecord bool) (*
 			return nil, err
 		}
 	}
+	// The session is held under the format its file declared, and the
+	// first append raises it, as RFC 0002's import has it.
+	s.holdImported()
 	m.sessions[h.ID] = s
 	m.gens[h.ID] = memoryGen.Add(1)
 	m.hub.Notify(h.ID)

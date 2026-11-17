@@ -4032,7 +4032,10 @@ func (s *Store) importRead(ctx context.Context, sess *agentsession.Session, blob
 	if t := sess.Truncated(); t != nil {
 		return nil, fmt.Errorf("cas: import: %w", t)
 	}
-	h := sess.Header()
+	// The header is stored under the format the file declared, which
+	// the first append raises (raiseFormat), as RFC 0002's import has
+	// it; not the one Read raised it to in memory.
+	h := agentsession.ImportHeader(sess)
 	if migrated, unresolved := sess.Migrated(); migrated && len(unresolved) > 0 {
 		return nil, agentsession.ErrUnresolvedMigration
 	}

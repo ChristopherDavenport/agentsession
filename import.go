@@ -83,6 +83,23 @@ func ReadForImport(r io.Reader) (*Session, error) {
 	return s, nil
 }
 
+// ImportHeader returns the header a store creates an imported session
+// with, as RFC 0002's import has it: the session's header under the
+// format its file declared ([Session.DeclaredFormat]), not the one
+// [Read] brought it to in memory, so the store raises it only as an
+// append requires, as for any session whose header names an earlier
+// minor. A file before 0.5, whose entries Read rewrote as a 0.5 file's
+// (RFC 0001, Versioning), keeps the format Read gave it: what the store
+// holds is the migrated file, not the one it read.
+func ImportHeader(s *Session) Header {
+	h := s.Header()
+	declared := s.DeclaredFormat()
+	if _, minor, err := ParseFormat(declared); err == nil && minor >= hashedMinor {
+		h.Format = declared
+	}
+	return h
+}
+
 // synthetic reports whether a label carries synthetic: true.
 func synthetic(l *LabelEntry) bool {
 	raw, ok := l.Unknown["synthetic"]

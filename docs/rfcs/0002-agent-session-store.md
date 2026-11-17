@@ -1075,8 +1075,18 @@ its entries cannot hold a head the marker names, since keeping it would
 add an entry the session never had, and MUST refuse a file carrying one
 rather than lose the head. Two refusals follow. The imported session
 keeps the header's `id`, and a store already holding a session with that
-ID MUST refuse the import. An import is committed before it is
-acknowledged. An importer MUST verify each line's hash and
+ID MUST refuse the import. It keeps the header's `format` too: a store
+MUST create an imported session with the `format` its file declares,
+and raise it only as Sessions requires of an append, since a reader
+migrates a file in memory and never rewrites it (RFC 0001, Versioning),
+and a session nothing has continued holds only entries written under
+the minor its file names. A file earlier than 0.5, whose entries a
+reader rewrites as a 0.5 file's (RFC 0001, Versioning), is imported as
+the file its reader migrated it to, under the format that reader gives
+it, since the entries the store holds are those and not the file's.
+Earlier drafts said nothing of the format, and the reference stores
+created an imported session at the format they write. An import is
+committed before it is acknowledged. An importer MUST verify each line's hash and
 MUST refuse a file in which one fails. A file whose header carries
 `redacted` is imported as any other is: a redacted session is a session
 of its own, under an ID of its own, and RFC 0001 requires its lines to

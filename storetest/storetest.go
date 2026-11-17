@@ -56,6 +56,13 @@ type Options struct {
 	// left it, and returns a store on the same storage that reads it. It
 	// is nil for a store that cannot; the EntryNoRaise case then skips.
 	Lower func(t *testing.T, s agentsession.Store, id, format string) agentsession.Store
+	// Backing returns the store behind s, for a store that is a client
+	// of another, such as a remote client of a server's store, whose
+	// reads carry a session as a projection does, under the format this
+	// package writes: the ImportFormat case reads the format a session
+	// is stored under there. It is nil for a store that reads its
+	// sessions back under the format it stores them with.
+	Backing func(s agentsession.Store) agentsession.Store
 	// SearchOwnMatch is set for a store whose [agentsession.Searcher]
 	// matches a query's words otherwise than the reference match, as RFC
 	// 0002 (Search) lets it, such as a full-text index matching each
@@ -103,6 +110,7 @@ func Run(t *testing.T, opts Options) {
 	t.Run("Import", func(t *testing.T) { testImport(t, opts) })
 	t.Run("ImportMedia", func(t *testing.T) { testImportMedia(t, opts) })
 	t.Run("ImportMarker", func(t *testing.T) { testImportMarker(t, opts) })
+	t.Run("ImportFormat", func(t *testing.T) { testImportFormat(t, opts) })
 	t.Run("Blobs", func(t *testing.T) { testBlobs(t, opts) })
 	t.Run("BlobSweep", func(t *testing.T) { testBlobSweep(t, opts) })
 	t.Run("BlobTypes", func(t *testing.T) { testBlobTypes(t, opts) })
