@@ -5,7 +5,7 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
-## Unreleased
+## v0.0.41 - 2026-11-16
 
 - **An imported session declares its file's format (#304).** Every
   store's import (`cas`, `jsonl`, the `sqlite` module and
