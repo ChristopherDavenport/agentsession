@@ -89,16 +89,23 @@ func ReadForImport(r io.Reader) (*Session, error) {
 // [Read] brought it to in memory, so the store raises it only as an
 // append requires, as for any session whose header names an earlier
 // minor. A file before 0.5, whose entries Read rewrote as a 0.5 file's
-// (RFC 0001, Versioning), keeps the format Read gave it: what the store
-// holds is the migrated file, not the one it read.
+// (RFC 0001, Versioning), is held at agentsession/0.5: what the store
+// holds is that migrated file, not the one it read, whatever minor this
+// package writes.
 func ImportHeader(s *Session) Header {
 	h := s.Header()
 	declared := s.DeclaredFormat()
 	if _, minor, err := ParseFormat(declared); err == nil && minor >= hashedMinor {
 		h.Format = declared
+	} else {
+		h.Format = hashedFormat
 	}
 	return h
 }
+
+// hashedFormat is the format of the first minor whose entry ids are
+// envelope hashes, which a file before it is read as once migrated.
+var hashedFormat = fmt.Sprintf("agentsession/%d.%d", FormatMajor, hashedMinor)
 
 // synthetic reports whether a label carries synthetic: true.
 func synthetic(l *LabelEntry) bool {

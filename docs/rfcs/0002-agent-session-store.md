@@ -1082,8 +1082,8 @@ migrates a file in memory and never rewrites it (RFC 0001, Versioning),
 and a session nothing has continued holds only entries written under
 the minor its file names. A file earlier than 0.5, whose entries a
 reader rewrites as a 0.5 file's (RFC 0001, Versioning), is imported as
-the file its reader migrated it to, under the format that reader gives
-it, since the entries the store holds are those and not the file's.
+that migrated file, with `format` `agentsession/0.5`, since the entries
+the store holds are those and not the file's.
 Earlier drafts said nothing of the format, and the reference stores
 created an imported session at the format they write. An import is
 committed before it is acknowledged. An importer MUST verify each line's hash and

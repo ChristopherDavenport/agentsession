@@ -205,9 +205,10 @@ func testImportMarker(t *testing.T, opts Options) {
 // writes: a 0.9 file imports as a 0.9 session, read back and after a
 // reopen, and so does one a push carries from a store that imported it;
 // the first append raises it to this package's format, as for any
-// session whose header names an earlier minor. A file before 0.5, whose
-// entries the reader rewrote, is held as the migrated file, at the
-// format its reader brought it to.
+// session whose header names an earlier minor. A 0.5 file, the first
+// minor a store keeps, is held at 0.5. A file before 0.5, whose entries
+// the reader rewrote as a 0.5 file's, is held as that migrated file, at
+// 0.5, whatever minor this package writes.
 func testImportFormat(t *testing.T, opts Options) {
 	ctx := context.Background()
 	st := opts.New(t)
@@ -230,15 +231,24 @@ func testImportFormat(t *testing.T, opts Options) {
 	if err := take(t, st, []byte(old)); err != nil {
 		t.Fatalf("import of a 0.4 file: %v", err)
 	}
-	declared("a migrated 0.4 file", st, "imp-04", agentsession.Format)
+	const hashed = "agentsession/0.5"
+	declared("a migrated 0.4 file", st, "imp-04", hashed)
 
-	s := agentsession.New(agentsession.Header{ID: "imp-09", Format: early})
-	for _, text := range []string{"hello", "world"} {
-		if _, err := s.Append(user(text)); err != nil {
-			t.Fatal(err)
+	fileAt := func(id, format string) []byte {
+		s := agentsession.New(agentsession.Header{ID: id, Format: format})
+		for _, text := range []string{"hello", "world"} {
+			if _, err := s.Append(user(text)); err != nil {
+				t.Fatal(err)
+			}
 		}
+		return fileOf(t, s)
 	}
-	file := fileOf(t, s)
+	if err := take(t, st, fileAt("imp-05", hashed)); err != nil {
+		t.Fatalf("import of a %s file: %v", hashed, err)
+	}
+	declared("a 0.5 file", st, "imp-05", hashed)
+
+	file := fileAt("imp-09", early)
 	if err := take(t, st, file); err != nil {
 		t.Fatalf("import of a %s file: %v", early, err)
 	}
@@ -258,4 +268,8 @@ func testImportFormat(t *testing.T, opts Options) {
 		t.Fatalf("append to an imported %s session: %v", early, err)
 	}
 	declared("after an append", st, "imp-09", agentsession.Format)
+	if _, err := st.Append(ctx, "imp-04", user("after the migration")); err != nil {
+		t.Fatalf("append to an imported 0.4 session: %v", err)
+	}
+	declared("a migrated 0.4 file after an append", st, "imp-04", agentsession.Format)
 }

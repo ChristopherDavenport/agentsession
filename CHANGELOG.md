@@ -17,12 +17,21 @@ versions may break the API.
   creates an imported session with the `format` its file declares, and
   raises it on the first append, as it does a session a migration or
   an earlier writer left at an earlier minor. A file before 0.5, whose
-  entries `Read` rewrites, is held at the format `Read` gives it, as
-  before. RFC 0002 (Projection to JSONL) states the rule. **Added:
-  `ImportHeader`**, the header a store creates an imported session
-  with. `storetest` gains the `ImportFormat` case and a `Backing` hook
-  for a client store whose reads carry this package's format. No
-  format change.
+  entries `Read` rewrites as a 0.5 file's, is now held at
+  `agentsession/0.5`, where it took the format `Read` gives it (0.21,
+  or 0.12 for a file holding a redaction member). RFC 0002 (Projection
+  to JSONL) states the rule. `MemoryStore`'s imported session, which
+  `Import` and `Open` return and the store shares, now reports the
+  declared format in `Header().Format` until the store's first
+  `Append` raises it; cas, `jsonl` and `sqlite` still return a session
+  whose `Header().Format` is this package's and whose `DeclaredFormat`
+  is the stored one. A known gap remains: a `remote` client's reads
+  (follow snapshot, session info, the import response) and cas
+  `Project` still report this package's format for a session stored
+  at an earlier one. **Added: `ImportHeader`**, the header a store
+  creates an imported session with. `storetest` gains the
+  `ImportFormat` case and a `Backing` hook, which works around that gap
+  for a client store. No format change.
 
 ## v0.0.40 - 2026-11-15
 
