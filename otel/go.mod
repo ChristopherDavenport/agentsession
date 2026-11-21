@@ -11,7 +11,7 @@ go 1.26.0
 // which names the commit this module was built against, by construction.
 require (
 	github.com/ChristopherDavenport/agentsession v0.0.41
-	github.com/ChristopherDavenport/openresponses v0.0.20
+	github.com/ChristopherDavenport/openresponses v0.0.22
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
