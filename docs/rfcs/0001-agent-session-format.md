@@ -2038,22 +2038,30 @@ checkout outside `cwd`. It is a list of objects:
   "vcs":{"system":"git","revision":"…","dirty":true},"branch":"fix"}]
 ```
 
-- `path` MUST be present. It names the checkout's top directory:
-  relative to `cwd` when the checkout is under `cwd`, as slash-separated
-  segments none of which is empty, `.` or `..`, or `.` for `cwd`
-  itself; absolute otherwise. No two checkouts in a list have the same
-  `path`.
+- `path` MUST be present. It names the checkout's top directory, in a
+  form that reads the same on every system. Under `cwd` it is relative
+  to it: `.` for `cwd` itself, or slash-separated segments none of
+  which is empty, `.` or `..`, holding no backslash, and whose first
+  segment is not a drive letter and a colon (`C:foo`, which Windows
+  reads against that drive's current directory, is in no form).
+  Otherwise it is absolute and clean: a POSIX path that cleaning
+  leaves as it is (no empty, `.` or `..` segment, no trailing slash
+  but the root's), or a Windows drive path (`C:\` or `C:/`) or UNC path
+  (`\\server\share`) with no empty, `.` or `..` segment and no trailing
+  separator but a drive's root. No two checkouts in a list have the
+  same `path`.
 - `repo` names the repository the checkout belongs to, in the form
   `path` takes, so a reader can group the checkouts of one repository.
   For git it is the common git directory, which every worktree of a
   repository shares. A system with no such directory names what its
-  checkouts share, or leaves `repo` out.
+  checkouts share, or leaves `repo` out; it is never the empty string.
 - `vcs` has the top-level `vcs`'s members and meanings, for this
-  checkout. A checkout the writer knows of but could not read has no
-  `vcs`.
+  checkout, and MUST carry `system`; none of its members is null. A
+  checkout the writer knows of but could not read has no `vcs`.
 - `branch` names the branch the checkout is on, in the system's short
   form (`main`, not `refs/heads/main`), and is absent when it is on
-  none, as a detached HEAD is.
+  none, as a detached HEAD is; it is never the empty string. Absent is
+  how a checkout says it has no `repo` or `branch`.
 - `upstream`, when the writer read one, names the branch's upstream as
   the checkout names it (`name`, as `origin/main`) and the revision it
   was on (`revision`), which `vcs.revision`'s rules govern.
@@ -2064,23 +2072,28 @@ checkout outside `cwd`. It is a list of objects:
   first.
 
 When `checkouts` holds a checkout whose `path` is `.`, a writer MUST
-NOT write its `vcs` different from the top-level `vcs`, compared in
-canonical form, an absent one equal only to another absent one. A
-reader that finds them different reads the top-level `vcs` for the
-tree at `cwd`, as a reader of 0.21 does, and a verifier reports the
-entry in a file of 0.22 or later. A `checkouts` member that is not a
-list of checkouts in this form, with every `path` present and in form,
-every `repo` in form, no `path` twice, and each defined member of its
-type, is a member the reader does not know, in a file of any minor,
-and is preserved as written; a verifier reports one in a file of 0.22
-or later, while a file of an earlier minor was free to write it.
+NOT write its `vcs` different from the top-level `vcs`. The two agree
+when both are absent, or both are present with the same `system`, the
+same `revision` as written, the same `dirty` with an absent one read
+as `false`, and the same members this document does not define,
+compared in canonical form. A reader that finds them different reads
+the top-level `vcs` for the tree at `cwd`, as a reader of 0.21 does.
 
-`checkouts` absent means the entry does not say, as for every member
-of `env`; an empty list says no checkout is in force. A writer that
-could not look, because the workspace holds no version control system
-it reads, or the log it converts recorded none, leaves the member out.
-A checkout absent from a later `env` entry on the path is no longer in
-force there.
+A writer of 0.22 MUST write `checkouts` in this form or not at all. A
+`checkouts` member that is not a list of checkouts in it, with every
+`path` present and in form, every `repo` in form, no `path` twice, and
+each defined member of its type, is a member the reader does not know,
+in a file of any minor, and is preserved as written. Neither rule is a
+verifier's to report: a file raised from an earlier minor, whose writer
+was free to write `checkouts` in any form, may hold an entry written
+before the raise, and nothing in the file dates it.
+
+`checkouts` absent means the entry says nothing of checkouts, as for
+every member of `env`; an empty list says no checkout is in force. A
+writer that could not look, because the workspace holds no version
+control system it reads, or the log it converts recorded none, leaves
+the member out. A checkout absent from a later `env` entry on the path
+that carries the member is no longer in force there.
 
 So that two writers recording the same work write the same checkouts,
 a writer SHOULD:
@@ -2101,8 +2114,10 @@ a writer SHOULD:
 - read a repository as its tools would, in the workspace, and never
   run a program the repository's own configuration names.
 
-A reader follows a path's checkouts by comparing each `env` entry's
-with those in force before it, checkout by `path`: a new `path` is a
+A reader follows a path's checkouts by comparing each `env` entry that
+carries the member with the last entry before it on the path that
+carries it, passing over the `env` entries between that do not,
+checkout by `path`: a new `path` is a
 checkout made or first worked in; a new `revision` on the same
 `branch` is a commit or a reset; a new `branch` is a switch; an
 `upstream` whose `revision` moves is a push or a fetch; and a `path`
@@ -2840,6 +2855,13 @@ A redactor:
   would then be in no form this document defines, and the item, or the
   input a `queued` entry holds, would read as a person's input. A
   redactor keeps them distinct, as by numbering its replacements;
+- since 0.22, MUST keep each `path` and `repo` of an `env` entry's
+  checkouts in the form `env` gives them when it rewrites one: an
+  absolute one stays absolute and clean, a relative one stays relative
+  and in form, no two paths of one list are made one, as by numbering
+  its replacements, and checkouts that shared a `repo` still share
+  one; a list the redaction left out of form would read as a member
+  the reader does not know;
 - since 0.20, MUST keep as written each member whose value is drawn
   from a closed set this document or the payload profile defines, while
   it holds a value of that set: the value is the format's vocabulary, not
@@ -3798,7 +3820,11 @@ those files until it is upgraded.
   and its `upstream`, and a writer SHOULD list the checkouts its tools
   acted in and write an entry when one changes (`env`). A checkout at
   `.` carries the top-level `vcs`, which keeps its meaning. No remote
-  URL is written in a checkout. 0.21 described one tree, at `cwd`, with
+  URL is written in a checkout. Paths read the same on every system. A
+  reader follows the checkouts across the entries that carry the
+  member. A redactor keeps paths in form and distinct (Every redacted
+  entry). No verifier checks a checkouts member, since a file raised
+  from 0.21 may hold one in any form. 0.21 described one tree, at `cwd`, with
   no branch, so the worktrees a session made, the repositories below a
   `cwd` that is not one, and the branch the work went on were recorded
   only as text in tool calls, and converters from three agents' logs

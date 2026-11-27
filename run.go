@@ -1046,38 +1046,6 @@ var ErrAnswerNotDispatched = errors.New("agentsession: answer for a call the rec
 // queued).
 var ErrDrainMismatch = errors.New("agentsession: drained item differs from its queued entry")
 
-// ErrCheckoutsForm is returned by [Session.VerifyRecords] for an env
-// entry, in a file declaring 0.22 or later, whose checkouts member is
-// not a list of checkouts in the form RFC 0001 gives it: a path missing
-// or out of form, a repo out of form, a path listed twice, or a defined
-// member of another type. The decoder keeps such a member as written,
-// as it does in a file of an earlier minor, which was free to write it.
-var ErrCheckoutsForm = errors.New("agentsession: env checkouts not in the format's form")
-
-// verifyCheckouts checks the env entries the session wrote on path, in
-// a file declaring 0.22 or later: a checkout at "." carries the entry's
-// vcs, and no checkouts member is one the decoder could not take. A
-// file of an earlier minor was free to write either, and a fork's
-// prefix is another session's record.
-func (s *Session) verifyCheckouts(path []Entry) error {
-	if _, minor, err := ParseFormat(s.DeclaredFormat()); err != nil || minor < 22 {
-		return nil
-	}
-	for _, e := range path {
-		v, ok := e.(*EnvEntry)
-		if !ok || s.Prefix(v.ID) {
-			continue
-		}
-		if !v.checkoutVCSAgrees() {
-			return fmt.Errorf("%w: env %s", ErrCheckoutVCS, v.ID)
-		}
-		if _, raw := v.Unknown["checkouts"]; raw {
-			return fmt.Errorf("%w: env %s", ErrCheckoutsForm, v.ID)
-		}
-	}
-	return nil
-}
-
 // ErrRecordMissing is returned by [Session.VerifyRecords] when the
 // header promises a record entry type and the path lacks one where the
 // event plainly happened.
@@ -1093,10 +1061,7 @@ var ErrRecordMissing = errors.New("agentsession: promised record entry missing")
 // peer link before it, no copied_from names this session, no dispatch or
 // decision names a copied call and every output of one is marked copied,
 // every item that drains a queued input carries what the queued entry
-// carries for it (since 0.21), in a file declaring 0.22 or later every
-// env entry the session wrote holds its checkouts in the format's form
-// ([ErrCheckoutsForm]) with the checkout at "." carrying the entry's
-// vcs ([ErrCheckoutVCS]), and, when the header names dispatch in records,
+// carries for it (since 0.21), and, when the header names dispatch in records,
 // no answer ends a call with no dispatch and every call that ran has a
 // dispatch. A run written resume over a segment that takes nothing up,
 // holding record entries at most, agrees with it, as [Run.Empty] says,
@@ -1132,9 +1097,6 @@ func (s *Session) VerifyRecords(leaf string) error {
 		return err
 	}
 	if err := verifyDrains(path); err != nil {
-		return err
-	}
-	if err := s.verifyCheckouts(path); err != nil {
 		return err
 	}
 	calls := Calls(path)

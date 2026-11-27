@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,7 +118,9 @@ func NewEnvEntry(cwd string) *EnvEntry {
 // directory that is not a git checkout leaves VCS unset and returns
 // nil; other errors are returned. Members of an existing VCS the
 // format does not define, set with [VCS.SetMember] or read from a
-// file, are kept.
+// file, are kept. When the entry lists a checkout at ".", which carries
+// the entry's vcs (RFC 0001, env, since 0.22), its VCS is set to a copy
+// of the same.
 func (e *EnvEntry) SetGit(dir string, dirty bool) error {
 	rev, err := GitRevision(dir)
 	if err != nil {
@@ -131,6 +134,11 @@ func (e *EnvEntry) SetGit(dir string, dirty bool) error {
 		v.Unknown = e.VCS.Unknown
 	}
 	e.VCS = v
+	if c := e.Checkout("."); c != nil {
+		cv := *v
+		cv.Unknown = maps.Clone(v.Unknown)
+		c.VCS = &cv
+	}
 	return nil
 }
 

@@ -76,7 +76,11 @@ func checkoutsFixture(t *testing.T) *Session {
 		lib))
 	must(NewItemEntry(openresponses.UserText("Clean up.")))
 	say("resp_3", "Removed the worktree.")
-	must(env())
+	// The worktree and the checkout outside cwd are gone, and the
+	// session no longer reads the root: an empty list, and no vcs.
+	last := env()
+	last.VCS = nil
+	must(last)
 	return s
 }
 
@@ -159,6 +163,22 @@ func TestCheckoutsForms(t *testing.T) {
 		{"relative", `[{"path":"a/b","repo":".git","branch":"x"}]`, true},
 		{"absolute", `[{"path":"/srv/lib"}]`, true},
 		{"windows", `[{"path":"C:\\src\\lib"}]`, true},
+		{"windows slashes", `[{"path":"C:/src/lib"}]`, true},
+		{"drive root", `[{"path":"C:\\"}]`, true},
+		{"unc", `[{"path":"\\\\server\\share\\lib"}]`, true},
+		{"unclean absolute", `[{"path":"/srv/a/../lib"}]`, false},
+		{"absolute trailing slash", `[{"path":"/srv/lib/"}]`, false},
+		{"absolute doubled slash", `[{"path":"/srv//lib"}]`, false},
+		{"windows dot dot", `[{"path":"C:\\a\\..\\b"}]`, false},
+		{"windows trailing", `[{"path":"C:\\a\\"}]`, false},
+		{"unc no share", `[{"path":"\\\\server"}]`, false},
+		{"drive relative", `[{"path":"C:foo"}]`, false},
+		{"relative backslash", `[{"path":"a\\b"}]`, false},
+		{"empty repo", `[{"path":".","repo":""}]`, false},
+		{"empty branch", `[{"path":".","branch":""}]`, false},
+		{"vcs without system", `[{"path":"sub","vcs":{"revision":"x"}}]`, false},
+		{"vcs null member", `[{"path":"sub","vcs":{"system":"git","revision":null}}]`, false},
+		{"vcs null undefined member", `[{"path":"sub","vcs":{"system":"git","acme:x":null}}]`, false},
 		{"undefined members", `[{"path":"sub","acme:tree":"t1","vcs":{"system":"git","acme:x":1},"upstream":{"name":"o/m","acme:y":true}}]`, true},
 		{"no path", `[{"repo":".git"}]`, false},
 		{"empty path", `[{"path":""}]`, false},
@@ -188,9 +208,19 @@ func TestCheckoutsForms(t *testing.T) {
 			if !sameJSON(t, members(t, back)["checkouts"], []byte(tt.member)) {
 				t.Errorf("%s at %s: written back as %s", tt.name, format, back)
 			}
-			err = s.VerifyRecords(s.Leaf())
-			if wantReport := !tt.typed && format == Format; wantReport != errors.Is(err, ErrCheckoutsForm) || !wantReport && err != nil {
+			// Nothing reports it: a file raised from an earlier minor may
+			// hold any form, written before 0.22.
+			if err := s.VerifyRecords(s.Leaf()); err != nil {
 				t.Errorf("%s at %s: VerifyRecords = %v", tt.name, format, err)
+			}
+			// A writer that appends the entry as read is refused: it
+			// writes the typed member or none.
+			if !tt.typed {
+				e := *env
+				e.ID, e.Parent = "", ""
+				if _, err := New(Header{ID: "w"}).Append(&e); !errors.Is(err, ErrCheckoutsForm) {
+					t.Errorf("%s at %s: append of the entry as read = %v, want ErrCheckoutsForm", tt.name, format, err)
+				}
 			}
 		}
 	}
@@ -271,6 +301,12 @@ func TestCheckoutsAppend(t *testing.T) {
 		{"absolute", nil, []Checkout{{Path: "/srv/lib", Repo: "/srv/lib/.git"}}, nil},
 		{"differs", git(revMain), []Checkout{{Path: ".", VCS: git(revFix)}}, ErrCheckoutVCS},
 		{"dot unread", git(revMain), []Checkout{{Path: "."}}, ErrCheckoutVCS},
+		{"dirty absent and false", &VCS{System: "git", Revision: revMain}, []Checkout{{Path: ".", VCS: &VCS{System: "git", Revision: revMain, Dirty: false}}}, nil},
+		{"dirty differs", git(revMain), []Checkout{{Path: ".", VCS: &VCS{System: "git", Revision: revMain, Dirty: true}}}, ErrCheckoutVCS},
+		{"system differs", git(revMain), []Checkout{{Path: ".", VCS: &VCS{System: "hg", Revision: revMain}}}, ErrCheckoutVCS},
+		{"no system", nil, []Checkout{{Path: "sub", VCS: &VCS{Revision: revMain}}}, errors.New("system")},
+		{"unclean", nil, []Checkout{{Path: "/srv/a/../b"}}, errors.New("path")},
+		{"drive relative", nil, []Checkout{{Path: "C:foo"}}, errors.New("path")},
 		{"entry unsaid", nil, []Checkout{{Path: ".", VCS: git(revMain)}}, ErrCheckoutVCS},
 		{"no path", nil, []Checkout{{Repo: ".git"}}, errors.New("path")},
 		{"climbs", nil, []Checkout{{Path: "../x"}}, errors.New("path")},
@@ -292,21 +328,80 @@ func TestCheckoutsAppend(t *testing.T) {
 	}
 }
 
-// TestCheckoutVCSReported: a file whose checkout at "." carries a vcs
-// other than the entry's reads, the entry's vcs standing for the tree
-// at cwd, and VerifyRecords reports it.
-func TestCheckoutVCSReported(t *testing.T) {
-	s, env := readEnv(t, Format, `,"vcs":{"system":"git","revision":"`+revMain+`"},"checkouts":[{"path":".","vcs":{"system":"git","revision":"`+revFix+`"}}]`)
-	if env.VCS.Revision != revMain || env.Checkout(".").VCS.Revision != revFix {
-		t.Errorf("read as %+v", env)
+// TestCheckoutVCSRead: a file whose checkout at "." carries a vcs
+// other than the entry's reads at 0.21 and at 0.22, the entry's vcs
+// standing for the tree at cwd, and nothing reports it, since a file
+// raised from 0.21 may hold one; a session read from it extends with
+// the entry, as a follower's does. An append of it is refused, naming
+// the two.
+func TestCheckoutVCSRead(t *testing.T) {
+	disagree := `,"vcs":{"system":"git","revision":"` + revMain + `"},"checkouts":[{"path":".","vcs":{"system":"git","revision":"` + revFix + `"}}]`
+	for _, format := range []string{"agentsession/0.21", Format} {
+		s, env := readEnv(t, format, disagree)
+		if env.VCS.Revision != revMain || env.Checkout(".").VCS.Revision != revFix {
+			t.Errorf("%s: read as %+v", format, env)
+		}
+		if err := s.VerifyRecords(s.Leaf()); err != nil {
+			t.Errorf("%s: VerifyRecords = %v", format, err)
+		}
+		follower := New(s.Header())
+		if _, err := follower.Extend(env); err != nil {
+			t.Errorf("%s: Extend = %v", format, err)
+		}
+		if _, err := New(s.Header()).Commit(env); err != nil {
+			t.Errorf("%s: Commit = %v", format, err)
+		}
+		e := *env
+		e.ID, e.Parent = "", ""
+		_, err := New(Header{ID: "w"}).Append(&e)
+		if !errors.Is(err, ErrCheckoutVCS) || !strings.Contains(err.Error(), revFix) || !strings.Contains(err.Error(), revMain) {
+			t.Errorf("%s: Append = %v, want ErrCheckoutVCS naming both revisions", format, err)
+		}
 	}
-	if err := s.VerifyRecords(s.Leaf()); !errors.Is(err, ErrCheckoutVCS) {
-		t.Errorf("VerifyRecords = %v, want ErrCheckoutVCS", err)
+}
+
+// TestCheckoutsRawRefused: an env entry whose checkouts member is held
+// as written is refused by an append whatever it holds, a string or a
+// list in form whose checkout at "." disagrees with the entry, since a
+// writer of 0.22 writes the typed member or none.
+func TestCheckoutsRawRefused(t *testing.T) {
+	for _, raw := range []string{
+		`"not a list"`,
+		`[{"path":".","vcs":{"system":"git","revision":"` + revFix + `"}}]`,
+	} {
+		e := NewEnvEntry("/home/u/work")
+		e.VCS = &VCS{System: "git", Revision: revMain}
+		e.Unknown = map[string]json.RawMessage{"checkouts": json.RawMessage(raw)}
+		if _, err := New(Header{ID: "w"}).Append(e); !errors.Is(err, ErrCheckoutsForm) {
+			t.Errorf("%s: Append = %v, want ErrCheckoutsForm", raw, err)
+		}
 	}
-	// A 0.21 writer had no rule for a member its minor did not define.
-	s, _ = readEnv(t, "agentsession/0.21", `,"vcs":{"system":"git","revision":"`+revMain+`"},"checkouts":[{"path":".","vcs":{"system":"git","revision":"`+revFix+`"}}]`)
-	if err := s.VerifyRecords(s.Leaf()); err != nil {
-		t.Errorf("at 0.21, VerifyRecords = %v", err)
+}
+
+// TestSetGitCheckout: SetGit sets the vcs of the checkout at "." to the
+// entry's, so the two agree, and leaves the others.
+func TestSetGitCheckout(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte(revFix+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := NewEnvEntry(dir)
+	e.VCS = &VCS{System: "git", Revision: revMain}
+	e.Checkouts = []Checkout{{Path: ".", VCS: &VCS{System: "git", Revision: revMain}}, {Path: "sub", VCS: &VCS{System: "git", Revision: revLib}}}
+	if err := e.SetGit(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	if e.VCS.Revision != revFix || !e.VCS.Dirty || !e.checkoutVCSAgrees() || e.Checkout(".").VCS == e.VCS {
+		t.Errorf("after SetGit: entry %+v, checkout . %+v", e.VCS, e.Checkout(".").VCS)
+	}
+	if e.Checkout("sub").VCS.Revision != revLib {
+		t.Errorf("another checkout moved: %+v", e.Checkout("sub").VCS)
+	}
+	if _, err := New(Header{ID: "w"}).Append(e); err != nil {
+		t.Errorf("Append after SetGit: %v", err)
 	}
 }
 
