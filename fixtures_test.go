@@ -330,6 +330,7 @@ func TestRegenerateFixtures(t *testing.T) {
 	writeFixtures018(t)
 	writeFixtures019(t)
 	writeFixtures021(t)
+	writeFixtures022(t)
 
 	// The 0.14 conformance vectors, appended natively.
 	for name, build := range fixtures014 {
@@ -1975,6 +1976,9 @@ func checkBuilt(t *testing.T, name string) []byte {
 	}
 	if build == nil {
 		build = fixtures021[name]
+	}
+	if build == nil {
+		build = fixtures022[name]
 	}
 	if err := Write(&buf, build(t)); err != nil {
 		t.Fatal(err)

@@ -316,6 +316,16 @@ func fillValue(t *testing.T, v reflect.Value, name string) {
 	case v.Type() == rawType:
 		v.Set(reflect.ValueOf(json.RawMessage(`{"k":1}`)))
 		return
+	case v.Type() == reflect.TypeOf([]Checkout(nil)):
+		// Two checkouts at paths of their own, the one form a reader
+		// takes for a list, every member filled.
+		list := make([]Checkout, 2)
+		for i := range list {
+			fillStruct(t, reflect.ValueOf(&list[i]).Elem())
+			list[i].Path = fmt.Sprintf("%s%d", name, i)
+		}
+		v.Set(reflect.ValueOf(list))
+		return
 	case v.Type() == reflect.TypeOf([]OmitOutputGroup(nil)):
 		// Groups of two texts listing entries no other group lists, the
 		// one form a reader takes for them.

@@ -1505,6 +1505,13 @@ type EnvEntry struct {
 	// Workspace says which file system CWD is a path in. A local run
 	// may leave it nil.
 	Workspace *Workspace `json:"workspace,omitempty"`
+	// Checkouts lists the checkouts the session worked in, since 0.22
+	// ([Checkout]). Nil is no checkouts member, which says nothing; an
+	// empty, non-nil list says no checkout is in force. A member that
+	// is not a list of checkouts in the format's form, which a file of
+	// an earlier minor was free to write, is kept as written in Unknown
+	// and Checkouts is nil, in a file of any minor.
+	Checkouts []Checkout `json:"-" member:"checkouts"`
 }
 
 // EntryType returns "env".
@@ -3064,7 +3071,16 @@ func (e *InfoEntry) decodeMembers(data []byte, all map[string]json.RawMessage) e
 // MarshalJSON emits the entry as one JSON object.
 func (e *EnvEntry) MarshalJSON() ([]byte, error) {
 	type plain EnvEntry
-	return marshalEntry(TypeEnv, &e.EntryBase, (*plain)(e))
+	if e.Checkouts == nil {
+		return marshalEntry(TypeEnv, &e.EntryBase, (*plain)(e))
+	}
+	if _, dup := e.Unknown["checkouts"]; dup {
+		return nil, errors.New("agentsession: env entry has checkouts both typed and unknown")
+	}
+	return marshalEntry(TypeEnv, &e.EntryBase, struct {
+		*plain
+		Checkouts []Checkout `json:"checkouts"`
+	}{(*plain)(e), e.Checkouts})
 }
 
 // UnmarshalJSON decodes the entry.
@@ -3078,7 +3094,15 @@ func (e *EnvEntry) UnmarshalJSON(data []byte) error {
 
 func (e *EnvEntry) decodeMembers(data []byte, all map[string]json.RawMessage) error {
 	type plain EnvEntry
-	return unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), envKeys)
+	if err := unmarshalEntry(data, all, &e.EntryBase, (*plain)(e), envKeys); err != nil {
+		return err
+	}
+	// checkouts is taken where 0.22 defines it, a list of checkouts in
+	// the format's form, in a file of any minor; anything else is kept
+	// as written.
+	e.Checkouts = nil
+	promoteIf(&e.EntryBase, "checkouts", &e.Checkouts, checkoutsForm)
+	return nil
 }
 
 // MarshalJSON emits the entry as one JSON object.

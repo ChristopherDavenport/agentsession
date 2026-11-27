@@ -440,7 +440,7 @@ var coreStringMembers = map[string][]string{
 	TypeQueued:        {"trigger/ref", "trigger/source", "ref", "instructions_part/id", "instructions_part/[]/id"},
 	TypeLabel:         {"label"},
 	TypeInfo:          {"name"},
-	TypeEnv:           {"cwd", "vcs/system", "vcs/revision", "tools/*", "workspace/ref", "workspace/host", "workspace/instance"},
+	TypeEnv:           {"cwd", "vcs/system", "vcs/revision", "tools/*", "workspace/ref", "workspace/host", "workspace/instance", "checkouts/[]/path", "checkouts/[]/repo", "checkouts/[]/branch", "checkouts/[]/vcs/system", "checkouts/[]/vcs/revision", "checkouts/[]/upstream/name", "checkouts/[]/upstream/revision"},
 	TypeOutcome:       {"label"},
 	TypeLink:          {"url", "task", "context"},
 	TypeCustom:        {"ns"},

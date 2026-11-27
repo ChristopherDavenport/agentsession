@@ -2068,7 +2068,12 @@ NOT write its `vcs` different from the top-level `vcs`, compared in
 canonical form, an absent one equal only to another absent one. A
 reader that finds them different reads the top-level `vcs` for the
 tree at `cwd`, as a reader of 0.21 does, and a verifier reports the
-entry.
+entry in a file of 0.22 or later. A `checkouts` member that is not a
+list of checkouts in this form, with every `path` present and in form,
+every `repo` in form, no `path` twice, and each defined member of its
+type, is a member the reader does not know, in a file of any minor,
+and is preserved as written; a verifier reports one in a file of 0.22
+or later, while a file of an earlier minor was free to write it.
 
 `checkouts` absent means the entry does not say, as for every member
 of `env`; an empty list says no checkout is in force. A writer that

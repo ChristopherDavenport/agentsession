@@ -1544,6 +1544,13 @@ func validateEntry(e Entry) error {
 		}
 	case *ConfigEntry:
 		return validateConfig(v)
+	case *EnvEntry:
+		if err := validateCheckouts(v.Checkouts); err != nil {
+			return err
+		}
+		if !v.checkoutVCSAgrees() {
+			return ErrCheckoutVCS
+		}
 	case *LinkEntry:
 		// Every check here holds of a link the decoder built, which
 		// takes a member only where the format defines it, so a stored
