@@ -13,6 +13,38 @@ versions may break the API.
   stands and no entry hash moves. The generated fixtures, the otel
   copies and the export goldens carry the new header. 0.22's members
   and rules are below.
+- **An env entry lists the checkouts a session worked in (RFC 0001,
+  env, since 0.22).** `EnvEntry.Checkouts` holds `Checkout`s, each a
+  `Path` (relative to the entry's cwd, `.` for it, or absolute), the
+  `Repo` it belongs to, its `VCS`, its `Branch` and its `Upstream`
+  (`Name`, `Revision`), each keeping members the format does not
+  define, as `VCS` does, with `SetMember`. A nil list is no member, an
+  empty one says no checkout is in force, and both write back as they
+  read. The decoder takes the member where 0.22 defines it, in a file
+  of any minor; any other form is kept as written in `Unknown`. An
+  append refuses a path or repo out of form, a path listed twice, and
+  a checkout at `.` whose vcs is not the entry's (`ErrCheckoutVCS`).
+  `EnvEntry.Checkout(path)` finds one; `ValidCheckoutPath` is the form.
+  A redaction reaches a checkout's strings as text and keeps its
+  member names.
+- **`CheckoutChanges(before, after)`** names what moved between two env
+  entries, checkout by path: added, removed, revision, branch,
+  upstream, dirty, and anything else as other, compared in canonical
+  form. Folded over a path's env entries it follows the session's
+  worktrees, commits, switches and pushes.
+- **`VerifyRecords` checks checkouts in a file of 0.22 or later.** An
+  env entry the session wrote whose checkout at `.` carries another vcs
+  than the entry's is `ErrCheckoutVCS`, and one whose checkouts member
+  the decoder kept as written is `ErrCheckoutsForm`. A file of an
+  earlier minor, which was free to write either, is not checked.
+- **`agentsession show` prints checkouts.** An env entry's summary
+  counts its checkouts, and the moves from the env in force before it
+  on its path follow on lines of their own. The ATIF projection's
+  `environment` record carries `checkouts`.
+- **A dotted header member is a request-shaping setting, a MUST NOT
+  for anything else (RFC 0001, Header, 0.22).** 0.21 made it a SHOULD
+  NOT and promised the next minor would tighten it. Nothing in the
+  library writes or checks such members, so no code changes.
 
 ## v0.0.41 - 2026-11-16
 
