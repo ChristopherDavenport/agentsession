@@ -335,18 +335,23 @@ type CheckoutChange struct {
 // entries, checkout by path: those added, those removed, and for one
 // in both, each of its revision, branch, upstream, dirty and anything
 // else that differs, in that order. Added and changed checkouts come in
-// after's order, removed ones in before's, after the rest. A nil entry,
-// or one with no checkouts member, lists none, so the changes from it
-// are every checkout of the other added (or removed). Folding it over a
-// path's env entries in order follows the session's checkouts.
+// after's order, removed ones in before's, after the rest. An after
+// that is nil, or has no checkouts member, does not say which
+// checkouts are in force (RFC 0001, env), so nothing moved and the
+// result is nil, never every checkout removed. A before that is nil,
+// or has no checkouts member, lists none, so every checkout after
+// lists is added: first listed, as a writer lists one once the
+// session works in it. Folding it over a path's env entries in order
+// follows the session's checkouts.
 func CheckoutChanges(before, after *EnvEntry) []CheckoutChange {
-	var b, a []Checkout
+	if after == nil || after.Checkouts == nil {
+		return nil
+	}
+	var b []Checkout
 	if before != nil {
 		b = before.Checkouts
 	}
-	if after != nil {
-		a = after.Checkouts
-	}
+	a := after.Checkouts
 	old := make(map[string]*Checkout, len(b))
 	for i := range b {
 		old[b[i].Path] = &b[i]

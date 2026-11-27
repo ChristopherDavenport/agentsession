@@ -310,9 +310,11 @@ func TestCheckoutVCSReported(t *testing.T) {
 	}
 }
 
-// TestCheckoutChanges names each kind of move, a nil entry and one
-// with no member as listing nothing, and an undefined member's change
-// as other, compared in canonical form.
+// TestCheckoutChanges names each kind of move; a before that is nil
+// or has no member as listing nothing, so every checkout is added; an
+// after that is nil or has no member as saying nothing, so nothing
+// moved, while an empty list removes every checkout; and an undefined
+// member's change as other, compared in canonical form.
 func TestCheckoutChanges(t *testing.T) {
 	base := func() Checkout {
 		return Checkout{Path: "a", Repo: ".git", VCS: &VCS{System: "git", Revision: revMain}, Branch: "main", Upstream: &Upstream{Name: "origin/main", Revision: revMain}}
@@ -338,8 +340,10 @@ func TestCheckoutChanges(t *testing.T) {
 	}{
 		{"same", with(base()), with(base()), ""},
 		{"from nil", nil, with(base()), "a added"},
-		{"to nil", with(base()), nil, "a removed"},
+		{"to nil", with(base()), nil, ""},
 		{"from no member", &EnvEntry{}, with(base()), "a added"},
+		{"to no member", with(base()), &EnvEntry{}, ""},
+		{"to empty", with(base()), &EnvEntry{Checkouts: []Checkout{}}, "a removed"},
 		{"revision", with(base()), with(mod(func(c *Checkout) { c.VCS.Revision = revFix })), "a revision"},
 		{"branch", with(base()), with(mod(func(c *Checkout) { c.Branch = "" })), "a branch"},
 		{"upstream gone", with(base()), with(mod(func(c *Checkout) { c.Upstream = nil })), "a upstream"},

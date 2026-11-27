@@ -30,8 +30,10 @@ versions may break the API.
 - **`CheckoutChanges(before, after)`** names what moved between two env
   entries, checkout by path: added, removed, revision, branch,
   upstream, dirty, and anything else as other, compared in canonical
-  form. Folded over a path's env entries it follows the session's
-  worktrees, commits, switches and pushes.
+  form. An entry with no checkouts member says nothing, so nothing
+  moves into it; an empty list removes every checkout. Folded over a
+  path's env entries it follows the session's worktrees, commits,
+  switches and pushes.
 - **`VerifyRecords` checks checkouts in a file of 0.22 or later.** An
   env entry the session wrote whose checkout at `.` carries another vcs
   than the entry's is `ErrCheckoutVCS`, and one whose checkouts member
