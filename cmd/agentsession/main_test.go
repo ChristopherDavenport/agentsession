@@ -1407,3 +1407,39 @@ func TestShowCheckouts(t *testing.T) {
 		}
 	}
 }
+
+// TestShowCheckoutsPassOver: an env entry with no checkouts member says
+// nothing of them, so the env after it that lists the same checkout as
+// the one before it shows no move, and nothing is shown under it.
+func TestShowCheckoutsPassOver(t *testing.T) {
+	s := agentsession.New(agentsession.Header{ID: "s"})
+	a := []agentsession.Checkout{{Path: ".worktrees/a", Branch: "a"}}
+	for _, e := range []*agentsession.EnvEntry{
+		{CWD: "/w", Checkouts: a},
+		{CWD: "/w"},
+		{CWD: "/w", Checkouts: a},
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agentsession.Write(f, s); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	var out, errOut bytes.Buffer
+	if code := run([]string{"show", path}, &out, &errOut); code != 0 {
+		t.Fatalf("show exited %d: %s", code, errOut.String())
+	}
+	if n := strings.Count(out.String(), "+ .worktrees/a"); n != 1 {
+		t.Errorf("the checkout shown added %d times, want once:\n%s", n, out.String())
+	}
+	if strings.Contains(out.String(), "- .worktrees/a") || strings.Contains(out.String(), "~ ") {
+		t.Errorf("a move shown across an env with no member:\n%s", out.String())
+	}
+}
