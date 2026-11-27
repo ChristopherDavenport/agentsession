@@ -5,6 +5,15 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Breaking (format): Format 0.22 (RFC 0001, draft 0.22).** `Format`
+  and `FormatMinor` name 0.22, so a writer raises every file it appends
+  to and a reader of 0.21 refuses it; a 0.5 to 0.21 file reads as it
+  stands and no entry hash moves. The generated fixtures, the otel
+  copies and the export goldens carry the new header. 0.22's members
+  and rules are below.
+
 ## v0.0.41 - 2026-11-16
 
 - **An imported session declares its file's format (#304).** Every

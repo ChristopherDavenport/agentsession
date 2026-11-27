@@ -285,13 +285,13 @@
           "type": "link"
         }
       },
-      "format": "agentsession/0.21",
+      "format": "agentsession/0.22",
       "leaf": "sha256:3a2f84833a8fca655bca29f629b381d5648fce9120dc8a30fa21ccd8a51eddba",
       "main": true,
       "records": [
         "dispatch"
       ],
-      "visible": "sha256:bd70e5699d0cf1c07735b9e5ee82b5b7454a7d1aae53383aa8623b9aa14295d5"
+      "visible": "sha256:b1aa14f9ed40356f0e75a8bfe50c819ebe1dcc84816a3c89813a5682184d443b"
     },
     "links": [
       {

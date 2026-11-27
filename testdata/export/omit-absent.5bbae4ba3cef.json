@@ -472,10 +472,10 @@
           "type": "config"
         }
       },
-      "format": "agentsession/0.21",
+      "format": "agentsession/0.22",
       "leaf": "sha256:5bbae4ba3cefc186f1c24fe7c8082522b7dba945e800146b7196e340828dfae2",
       "main": true,
-      "visible": "sha256:16be0defcb22c0fa2a4d191b51a0d6aa71ff4f9d381ac8f3c5dbd25bcc91a8e8"
+      "visible": "sha256:30b97a048303a9b764c759047147cd50ee2f56848c5eea4fd916056139f8e59b"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

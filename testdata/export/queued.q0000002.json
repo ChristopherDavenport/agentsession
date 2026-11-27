@@ -303,7 +303,7 @@
           "type": "config"
         }
       },
-      "format": "agentsession/0.21",
+      "format": "agentsession/0.22",
       "leaf": "sha256:5c3c6af120a7839b0df467dea665e3212930126647c92b1c88d945c7d3cdc33c",
       "main": true,
       "records": [
@@ -312,7 +312,7 @@
         "decision",
         "queued"
       ],
-      "visible": "sha256:b12ed0d35c1720cb3718699b6e1387970b336fb9bc309cd12936f496dc1921cf"
+      "visible": "sha256:6789efb754642d1d99865da6214dfce156e8a04e57a6476ff53e2004d9ac018d"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

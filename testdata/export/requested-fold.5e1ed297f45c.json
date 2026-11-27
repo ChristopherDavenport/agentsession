@@ -256,10 +256,10 @@
           "type": "compaction"
         }
       },
-      "format": "agentsession/0.21",
+      "format": "agentsession/0.22",
       "leaf": "sha256:5e1ed297f45cb8ce244dcc763073d935f01a583671716d348f8be4dec9225d95",
       "main": true,
-      "visible": "sha256:9b5018a40a660284ccf2f00c598c855ca52bf0a2ebc5b7f3ecb5b499bb7b3c0d"
+      "visible": "sha256:1558741600c6db352dbdccf2d8f95954c97519d8748fa61dff856a0e7f097b42"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"
