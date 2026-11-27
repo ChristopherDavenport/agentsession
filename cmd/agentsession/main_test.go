@@ -338,6 +338,8 @@ func TestDescribeEveryEntryType(t *testing.T) {
 		{entry: agentsession.NewLabelEntry("i1", label), want: "i1 = checkpoint"},
 		{entry: &agentsession.InfoEntry{Name: "Refactor auth"}, want: `name "Refactor auth"`},
 		{entry: &agentsession.EnvEntry{CWD: "/p"}, want: "cwd /p"},
+		{entry: &agentsession.EnvEntry{CWD: "/p", Checkouts: []agentsession.Checkout{}}, want: "cwd /p, no checkouts"},
+		{entry: &agentsession.EnvEntry{CWD: "/p", Checkouts: []agentsession.Checkout{{Path: "."}, {Path: "w"}}}, want: "cwd /p, 2 checkouts"},
 		{entry: &agentsession.OutcomeEntry{Kind: agentsession.OutcomeEval, Target: "r1", Score: &score}, want: "eval on r1 score 0.5"},
 		{entry: agentsession.NewLinkEntry(agentsession.RelSubsession, "child"), want: "subsession child"},
 		{entry: agentsession.NewJudgedByLink("judge", "sha256:0123456789abcdef"), want: "judged_by judge judging "},
@@ -1376,5 +1378,68 @@ func TestCASRepairSalvagedLeaf(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "dropped") {
 		t.Errorf("a leaf the damage spelled whole is dropped:\n%s", stdout.String())
+	}
+}
+
+// TestShowCheckouts: show prints each env entry's checkout moves on
+// lines of their own under it, from the one in force before it on its
+// path.
+func TestShowCheckouts(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"show", filepath.Join(fixtures, "checkouts.jsonl")}, &out, &errOut); code != 0 {
+		t.Fatalf("show exited %d: %s", code, errOut.String())
+	}
+	got := out.String()
+	for _, want := range []string{
+		"1 checkout",
+		"3 checkouts",
+		"no checkouts",
+		"+ . on main git 4c61d09aa1b… upstream origin/main 4c61d09aa1b…",
+		"+ .worktrees/fix on fix git 4c61d09aa1b… dirty",
+		"+ /srv/shared/lib on main git 1b2c3d4e5f6…",
+		"~ .worktrees/fix revision 4c61d09aa1b… -> 9a1f0c3e5b7…",
+		"~ .worktrees/fix upstream - -> origin/fix 9a1f0c3e5b7…",
+		"~ .worktrees/fix clean",
+		"- /srv/shared/lib",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("show lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestShowCheckoutsPassOver: an env entry with no checkouts member says
+// nothing of them, so the env after it that lists the same checkout as
+// the one before it shows no move, and nothing is shown under it.
+func TestShowCheckoutsPassOver(t *testing.T) {
+	s := agentsession.New(agentsession.Header{ID: "s"})
+	a := []agentsession.Checkout{{Path: ".worktrees/a", Branch: "a"}}
+	for _, e := range []*agentsession.EnvEntry{
+		{CWD: "/w", Checkouts: a},
+		{CWD: "/w"},
+		{CWD: "/w", Checkouts: a},
+	} {
+		if _, err := s.Append(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agentsession.Write(f, s); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	var out, errOut bytes.Buffer
+	if code := run([]string{"show", path}, &out, &errOut); code != 0 {
+		t.Fatalf("show exited %d: %s", code, errOut.String())
+	}
+	if n := strings.Count(out.String(), "+ .worktrees/a"); n != 1 {
+		t.Errorf("the checkout shown added %d times, want once:\n%s", n, out.String())
+	}
+	if strings.Contains(out.String(), "- .worktrees/a") || strings.Contains(out.String(), "~ ") {
+		t.Errorf("a move shown across an env with no member:\n%s", out.String())
 	}
 }

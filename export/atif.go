@@ -2146,6 +2146,9 @@ func envExtra(e *agentsession.EnvEntry) map[string]any {
 	if e.Workspace != nil {
 		env["workspace"] = e.Workspace
 	}
+	if e.Checkouts != nil {
+		env["checkouts"] = e.Checkouts
+	}
 	return copyUnknown(env, e.Unknown)
 }
 

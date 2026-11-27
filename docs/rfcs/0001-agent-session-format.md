@@ -1,6 +1,6 @@
 # RFC 0001: Agent Session Format
 
-Status: draft 0.21
+Status: draft 0.22
 Author: Christopher Davenport
 Discussion: to be opened against this repository, then proposed to the
 Open Responses community as a companion specification.
@@ -237,7 +237,7 @@ RFC 2119.
 ## Header
 
 ```json
-{"type":"session","format":"agentsession/0.21","id":"…","created_at":"2026-09-17T12:00:00Z",
+{"type":"session","format":"agentsession/0.22","id":"…","created_at":"2026-09-17T12:00:00Z",
  "payload":"openresponses/2026-04-24","harness":{"name":"…","version":"…"},
  "records":["run","dispatch","decision"],
  "cwd":"/path","parent_session":"…","base":"sha256:…","spawned_by":"call_…",
@@ -276,12 +276,13 @@ window, a cap on tool output and a budget for instructions are such
 settings: two runs that differ only in them send different requests
 from the same entries. A header member named `<slug>.<name>` is such a
 setting, and a reader comparing configurations reads it as one. A
-writer SHOULD NOT give that form to any other member; another
+writer MUST NOT give that form to any other member; another
 slug-prefixed header member, such as where the session ran or who
 started it, is named `<slug>:<name>`, as namespaced entry types and
-members are. This is a SHOULD NOT only because writers of 0.21 were
-released before it was written (Versioning); the next minor makes it a
-MUST NOT. The header holds a setting's value when the session is
+members are. This is a MUST NOT since 0.22. It was a SHOULD NOT in
+0.21, whose writers were released before it was written (Versioning),
+so a 0.21 file may hold a dotted member that is not a setting; a reader
+reads it as one there too. The header holds a setting's value when the session is
 created, and changes after only in `format` (RFC 0002, Sessions); a
 setting that changes during the session is recorded where it changes,
 as a `custom` entry whose `ns` is the slug and whose `data` is an
@@ -1964,7 +1965,9 @@ they saw.
  "cwd":"…","vcs":{"system":"git","revision":"…","dirty":true},
  "files":{"read":{"path":"sha256:…"},"written":{"path":"sha256:…"}},
  "tools":{"name":"version"},
- "workspace":{"kind":"local|container|remote","ref":"…","host":"…","instance":"…"}}
+ "workspace":{"kind":"local|container|remote","ref":"…","host":"…","instance":"…"},
+ "checkouts":[{"path":"…","repo":"…","vcs":{…},"branch":"…",
+               "upstream":{"name":"…","revision":"…"}}]}
 ```
 
 `workspace` says which file system `cwd` is a path in. `kind` is
@@ -2022,6 +2025,106 @@ does, records the tree's identity in a namespaced member, beside the
 others in the entry (`"cline:tree"`) or inside `vcs`. The envelope
 section says a rewriter preserves either.
 
+Since 0.22, `checkouts` lists the checkouts the session worked in, for
+a session whose tools act in more than the tree at `cwd`: a worktree
+made during the session, a repository below a `cwd` that is not one, a
+checkout outside `cwd`. It is a list of objects:
+
+```json
+"checkouts":[
+ {"path":".","repo":".git","vcs":{"system":"git","revision":"…","dirty":false},
+  "branch":"main","upstream":{"name":"origin/main","revision":"…"}},
+ {"path":".worktrees/fix","repo":".git",
+  "vcs":{"system":"git","revision":"…","dirty":true},"branch":"fix"}]
+```
+
+- `path` MUST be present. It names the checkout's top directory, in a
+  form that reads the same on every system. Under `cwd` it is relative
+  to it: `.` for `cwd` itself, or slash-separated segments none of
+  which is empty, `.` or `..`, holding no backslash, and whose first
+  segment is not a drive letter and a colon (`C:foo`, which Windows
+  reads against that drive's current directory, is in no form).
+  Otherwise it is absolute and clean: a POSIX path that cleaning
+  leaves as it is (no empty, `.` or `..` segment, no trailing slash
+  but the root's), or a Windows drive path (`C:\` or `C:/`) or UNC path
+  (`\\server\share`) with no empty, `.` or `..` segment and no trailing
+  separator but a drive's root. No two checkouts in a list have the
+  same `path`.
+- `repo` names the repository the checkout belongs to, in the form
+  `path` takes, so a reader can group the checkouts of one repository.
+  For git it is the common git directory, which every worktree of a
+  repository shares. A system with no such directory names what its
+  checkouts share, or leaves `repo` out; it is never the empty string.
+- `vcs` has the top-level `vcs`'s members and meanings, for this
+  checkout, and MUST carry `system`; none of its members is null. A
+  checkout the writer knows of but could not read has no `vcs`.
+- `branch` names the branch the checkout is on, in the system's short
+  form (`main`, not `refs/heads/main`), and is absent when it is on
+  none, as a detached HEAD is; it is never the empty string. Absent is
+  how a checkout says it has no `repo` or `branch`.
+- `upstream`, when the writer read one, names the branch's upstream as
+  the checkout names it (`name`, as `origin/main`) and the revision it
+  was on (`revision`), which `vcs.revision`'s rules govern.
+- A writer MUST NOT write a remote's URL in a checkout, in a member
+  this document defines or in one it does not: a URL can carry
+  credentials, and the upstream's name is enough to follow it. A writer
+  that keeps a URL elsewhere in an entry removes any userinfo from it
+  first.
+
+When `checkouts` holds a checkout whose `path` is `.`, a writer MUST
+NOT write its `vcs` different from the top-level `vcs`. The two agree
+when both are absent, or both are present with the same `system`, the
+same `revision` as written, the same `dirty` with an absent one read
+as `false`, and the same members this document does not define,
+compared in canonical form. A reader that finds them different reads
+the top-level `vcs` for the tree at `cwd`, as a reader of 0.21 does.
+
+A writer of 0.22 MUST write `checkouts` in this form or not at all. A
+`checkouts` member that is not a list of checkouts in it, with every
+`path` present and in form, every `repo` in form, no `path` twice, and
+each defined member of its type, is a member the reader does not know,
+in a file of any minor, and is preserved as written. Neither rule is a
+verifier's to report: a file raised from an earlier minor, whose writer
+was free to write `checkouts` in any form, may hold an entry written
+before the raise, and nothing in the file dates it.
+
+`checkouts` absent means the entry says nothing of checkouts, as for
+every member of `env`; an empty list says no checkout is in force. A
+writer that could not look, because the workspace holds no version
+control system it reads, or the log it converts recorded none, leaves
+the member out. A checkout absent from a later `env` entry on the path
+that carries the member is no longer in force there.
+
+So that two writers recording the same work write the same checkouts,
+a writer SHOULD:
+
+- list a checkout once the session's tools act in it, or once a tool
+  creates it, and not list every checkout it could find, such as every
+  worktree of a repository or every repository below `cwd`; a writer
+  that cannot tell where its tools acted lists the checkout at `cwd`
+  alone;
+- write an `env` entry when a checkout it lists differs from the one in
+  force, and none when nothing changed. An entry describes the
+  checkouts at its position on the path; how often a writer looks is
+  its own;
+- record what it knew and no more: a writer converting another agent's
+  log writes what the log records, a branch with no revision as a
+  `vcs` with no `revision`, and state the log records once as one
+  `env` entry;
+- read a repository as its tools would, in the workspace, and never
+  run a program the repository's own configuration names.
+
+A reader follows a path's checkouts by comparing each `env` entry that
+carries the member with the last entry before it on the path that
+carries it, passing over the `env` entries between that do not,
+checkout by `path`: a new `path` is a
+checkout made or first worked in; a new `revision` on the same
+`branch` is a commit or a reset; a new `branch` is a switch; an
+`upstream` whose `revision` moves is a push or a fetch; and a `path`
+gone is a checkout removed or no longer followed. Members this document
+does not define, in a checkout or its `upstream`, are compared in
+canonical form and preserved as written, as the envelope section says.
+
 Before the first `env` entry on a path the workspace is absent. An
 `env` entry after a `response` on the path whose `workspace` differs
 from the one in force before it, the absent one included, is a
@@ -2038,7 +2141,7 @@ document does not define included, and an absent one equals only
 another absent one, an empty `kind` or `ref` being absent. A change to
 any member other than `workspace` in the same workspace, those this
 document does not define included, is not a substitution: a new `cwd`,
-`vcs` revision, file list or tree identity is not. Recording the
+`vcs` revision, file list, tree identity or list of checkouts is not. Recording the
 substitution is the point, so a writer writes the entry and nothing
 refuses it. A reader that holds the environment fixed, such as a strict
 replay or an evaluation comparing runs, treats the path from that entry
@@ -2752,6 +2855,13 @@ A redactor:
   would then be in no form this document defines, and the item, or the
   input a `queued` entry holds, would read as a person's input. A
   redactor keeps them distinct, as by numbering its replacements;
+- since 0.22, MUST keep each `path` and `repo` of an `env` entry's
+  checkouts in the form `env` gives them when it rewrites one: an
+  absolute one stays absolute and clean, a relative one stays relative
+  and in form, no two paths of one list are made one, as by numbering
+  its replacements, and checkouts that shared a `repo` still share
+  one; a list the redaction left out of form would read as a member
+  the reader does not know;
 - since 0.20, MUST keep as written each member whose value is drawn
   from a closed set this document or the payload profile defines, while
   it holds a value of that set: the value is the format's vocabulary, not
@@ -3472,13 +3582,13 @@ The 0.x series is exempt from that rule until the first release. A 0.x
 minor MAY change the envelope, the header or the context algorithm, and
 a reader of 0.x supports the minors it names rather than every minor of
 the major. The guarantee that a reader of a major reads every minor of
-it begins at 1.0. A reader of 0.21 reads a 0.5 to 0.20 file
-as it stands, since 0.6 to 0.21 add optional members, elements and
-relations, 0.15 a record entry type and 0.16 a file beside a sidecar blob and an `omit` member, 0.17 an `item` member and defined `source` values, 0.18 a second form of that member, 0.19 a link member and a second form of `subsession`, 0.20 a redaction rule alone, 0.21 record members on a `queued` entry and a `compaction`, a defined trigger `kind` and a wider copy of `trust`, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
+it begins at 1.0. A reader of 0.22 reads a 0.5 to 0.21 file
+as it stands, since 0.6 to 0.22 add optional members, elements and
+relations, 0.15 a record entry type and 0.16 a file beside a sidecar blob and an `omit` member, 0.17 an `item` member and defined `source` values, 0.18 a second form of that member, 0.19 a link member and a second form of `subsession`, 0.20 a redaction rule alone, 0.21 record members on a `queued` entry and a `compaction`, a defined trigger `kind` and a wider copy of `trust`, 0.22 an `env` member, 0.10, 0.11 and 0.14 relax a rule or two each, and the hashes do not change, save for the few rules each minor's changes below say read
 an earlier file differently; a member a later minor defines that an earlier file holds
 in another form, which it was free to while the name was undefined, is
 a member the reader does not know, and is preserved as one. A reader
-of 0.21 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
+of 0.22 MUST read a 0.x file earlier than 0.5 by migrating it in memory: walk the entries in file order, rewrite
 each `ts` to the one form the envelope table requires, converting a non-UTC
 offset to UTC with the instant unchanged and, as a writer does,
 truncating a fraction to nine digits and writing a second `60` as `59`,
@@ -3539,7 +3649,9 @@ found in its origin, an extension entry and a core entry each with a
 committed and read back under the `id` its line holds, an
 instructions delta naming runs of parts by `keep` beside the parts it rebuilds, a `response` with `attempts`, an
 `env` whose `workspace` holds a host and an instance and a later one
-that substitutes another instance, a call dispatched twice under one
+that substitutes another instance, an `env` whose `checkouts` list
+`.` beside the top-level `vcs`, a worktree under `cwd` and a checkout
+outside it, and a later one whose list is empty, a call dispatched twice under one
 `idempotency_key` beside a call answered after a crash, a list of
 omitted parts in force across a delta, carried by a compaction's
 checkpoint and cleared by `[]`, a queued `trigger` with members of its
@@ -3694,6 +3806,34 @@ This RFC takes pi's tree and lifecycle model, Codex's choice of the wire
 item as payload, ATIF's discipline about copied context and
 versioning, and adds the entries that none of them record: runs,
 dispatches and decisions, environment, outcome and cross-session links.
+
+## Changes since 0.21
+
+An `env` member for the checkouts a session worked in, and a header
+rule made a MUST NOT. A 0.21 file is a 0.22 file that holds no
+`checkouts`, and no hash changes. A writer of 0.22 raises every file
+it appends to, as Versioning says, so every reader of 0.21 refuses
+those files until it is upgraded.
+
+- `env` MAY carry `checkouts`, the checkouts the session worked in,
+  each with a `path`, the `repo` it belongs to, its `vcs`, its `branch`
+  and its `upstream`, and a writer SHOULD list the checkouts its tools
+  acted in and write an entry when one changes (`env`). A checkout at
+  `.` carries the top-level `vcs`, which keeps its meaning. No remote
+  URL is written in a checkout. Paths read the same on every system. A
+  reader follows the checkouts across the entries that carry the
+  member. A redactor keeps paths in form and distinct (Every redacted
+  entry). No verifier checks a checkouts member, since a file raised
+  from 0.21 may hold one in any form. 0.21 described one tree, at `cwd`, with
+  no branch, so the worktrees a session made, the repositories below a
+  `cwd` that is not one, and the branch the work went on were recorded
+  only as text in tool calls, and converters from three agents' logs
+  kept a branch under namespaces of their own.
+- A header member named `<slug>.<name>` is a request-shaping setting,
+  and a writer MUST NOT give that form to any other member (Header).
+  0.21 made it a SHOULD NOT, after its writers were released, and said
+  the next minor would make it a MUST NOT. A 0.21 file may still hold
+  such a member, and a reader reads it as a setting.
 
 ## Changes since 0.20
 

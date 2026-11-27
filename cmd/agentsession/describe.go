@@ -145,6 +145,15 @@ func describeEntry(e agentsession.Entry, full bool) string {
 			}
 			parts = append(parts, w)
 		}
+		switch n := len(v.Checkouts); {
+		case v.Checkouts == nil:
+		case n == 0:
+			parts = append(parts, "no checkouts")
+		case n == 1:
+			parts = append(parts, "1 checkout")
+		default:
+			parts = append(parts, fmt.Sprintf("%d checkouts", n))
+		}
 		return strings.Join(parts, ", ")
 	case *agentsession.OutcomeEntry:
 		parts := []string{v.Kind}
@@ -402,4 +411,62 @@ func describeOmit(o agentsession.Omit) string {
 		bits = append(bits, fmt.Sprintf("images but the last %d", i.Keep))
 	}
 	return "omit " + strings.Join(bits, ", ")
+}
+
+// describeCheckout renders a checkout's state on one line: its path,
+// then its branch, revision and dirtiness, and its upstream.
+func describeCheckout(c *agentsession.Checkout) string {
+	parts := []string{c.Path}
+	if c.Branch != "" {
+		parts = append(parts, "on "+c.Branch)
+	}
+	if c.VCS == nil {
+		parts = append(parts, "unread")
+	} else {
+		v := strings.TrimSpace(c.VCS.System + " " + shorten(c.VCS.Revision, 12))
+		if c.VCS.Dirty {
+			v += " dirty"
+		}
+		parts = append(parts, v)
+	}
+	if u := c.Upstream; u != nil {
+		parts = append(parts, strings.TrimSpace("upstream "+u.Name+" "+shorten(u.Revision, 12)))
+	}
+	return strings.Join(parts, " ")
+}
+
+// describeCheckoutChange renders one change [agentsession.CheckoutChanges]
+// found, as the line printed under the env entry that made it.
+func describeCheckoutChange(c agentsession.CheckoutChange) string {
+	rev := func(co *agentsession.Checkout) string {
+		if co.VCS == nil || co.VCS.Revision == "" {
+			return "-"
+		}
+		return shorten(co.VCS.Revision, 12)
+	}
+	upstream := func(co *agentsession.Checkout) string {
+		if co.Upstream == nil {
+			return "-"
+		}
+		return strings.TrimSpace(co.Upstream.Name + " " + shorten(co.Upstream.Revision, 12))
+	}
+	switch c.Kind {
+	case agentsession.CheckoutAdded:
+		return "+ " + describeCheckout(c.After)
+	case agentsession.CheckoutRemoved:
+		return "- " + c.Path
+	case agentsession.CheckoutRevision:
+		return fmt.Sprintf("~ %s revision %s -> %s", c.Path, rev(c.Before), rev(c.After))
+	case agentsession.CheckoutBranch:
+		return fmt.Sprintf("~ %s branch %s -> %s", c.Path, orDash(c.Before.Branch), orDash(c.After.Branch))
+	case agentsession.CheckoutUpstream:
+		return fmt.Sprintf("~ %s upstream %s -> %s", c.Path, upstream(c.Before), upstream(c.After))
+	case agentsession.CheckoutDirty:
+		if c.After.VCS != nil && c.After.VCS.Dirty {
+			return "~ " + c.Path + " dirty"
+		}
+		return "~ " + c.Path + " clean"
+	default:
+		return "~ " + c.Path + " changed"
+	}
 }

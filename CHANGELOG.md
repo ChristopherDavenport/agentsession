@@ -5,6 +5,64 @@ All user-visible changes to this library. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break the API.
 
+## Unreleased
+
+- **Breaking (format): Format 0.22 (RFC 0001, draft 0.22).** `Format`
+  and `FormatMinor` name 0.22, so a writer raises every file it appends
+  to and a reader of 0.21 refuses it; a 0.5 to 0.21 file reads as it
+  stands and no entry hash moves. The generated fixtures, the otel
+  copies and the export goldens carry the new header. 0.22's members
+  and rules are below.
+- **An env entry lists the checkouts a session worked in (RFC 0001,
+  env, since 0.22).** `EnvEntry.Checkouts` holds `Checkout`s, each a
+  `Path` (relative to the entry's cwd, `.` for it, or a clean absolute
+  path, POSIX, Windows drive or UNC; never a backslash in a relative
+  one, nor `C:foo`), the
+  `Repo` it belongs to, its `VCS`, its `Branch` and its `Upstream`
+  (`Name`, `Revision`), each keeping members the format does not
+  define, as `VCS` does, with `SetMember`. A nil list is no member, an
+  empty one says no checkout is in force, and both write back as they
+  read. The decoder takes the member where 0.22 defines it, in a file
+  of any minor; any other form is kept as written in `Unknown`, among
+  them a vcs without a system or with a null member, and a repo or
+  branch that is the empty string. Every write refuses a path or repo
+  out of form, a path listed twice, and a vcs naming no system. An
+  append, which a store's read paths (Commit, Extend) do not run,
+  also refuses a checkout at `.` whose vcs is not the entry's, compared
+  by value with an absent dirty read as false (`ErrCheckoutVCS`, naming
+  both), and an entry holding the member as written in `Unknown`
+  (`ErrCheckoutsForm`): a 0.22 writer writes the typed member or none.
+  `EnvEntry.SetGit` also sets the vcs of the checkout at `.`.
+  `EnvEntry.Checkout(path)` finds one; `ValidCheckoutPath` is the form.
+  A redaction reaches a checkout's strings as text and keeps its
+  member names.
+- **`CheckoutChanges(before, after)`** names what moved between two env
+  entries, checkout by path: added, removed, revision, branch,
+  upstream, dirty, and anything else as other, compared in canonical
+  form. An entry with no checkouts member says nothing, so nothing
+  moves into it; an empty list removes every checkout. Folded over a
+  path's env entries it follows the session's worktrees, commits,
+  switches and pushes.
+- **No verifier check of checkouts.** A file raised from 0.21 may hold
+  an env entry written before the raise with a checkouts member in any
+  form, or a `.` checkout that disagrees, and nothing dates the entry,
+  so `VerifyRecords` reports neither; the writer's refusals above are
+  the rule.
+- **`agentsession show` prints checkouts.** An env entry's summary
+  counts its checkouts, and the moves from the last env before it on
+  its path that carries the member follow on lines of their own; an
+  env without the member shows none. The ATIF projection's
+  `environment` record carries `checkouts`.
+- **RFC: a redactor keeps checkout paths in form (Every redacted
+  entry, 0.22).** A rewrite of a checkout's `path` or `repo` keeps an
+  absolute one absolute and clean, a relative one in form, the paths of
+  one list distinct and a shared repo shared. `RewriteStrings` applies
+  the caller's function as before and does not enforce it.
+- **A dotted header member is a request-shaping setting, a MUST NOT
+  for anything else (RFC 0001, Header, 0.22).** 0.21 made it a SHOULD
+  NOT and promised the next minor would tighten it. Nothing in the
+  library writes or checks such members, so no code changes.
+
 ## v0.0.41 - 2026-11-16
 
 - **An imported session declares its file's format (#304).** Every

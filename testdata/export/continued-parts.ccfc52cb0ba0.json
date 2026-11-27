@@ -173,7 +173,7 @@
           "type": "response"
         }
       },
-      "format": "agentsession/0.21",
+      "format": "agentsession/0.22",
       "leaf": "sha256:ccfc52cb0ba02f28c845d0e219cee8430f0fcf748b06dbcc25c5e6c26247e46e",
       "main": true,
       "parent_session": "01995b2a-0000-7000-8000-000000000048",
@@ -183,7 +183,7 @@
           "untrusted"
         ]
       },
-      "visible": "sha256:759439c3dceb5057187dfd84c684d256958ed7cddbffcb34a4a0f139e1a60738"
+      "visible": "sha256:52f96c200db827b3796160b245989bc005fff2af6e6469d4a7080a95cc05c4b5"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"

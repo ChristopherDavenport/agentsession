@@ -152,6 +152,19 @@ func printEntries(w io.Writer, s *agentsession.Session, full bool) {
 			summary += "  " + strings.Join(marks, " ")
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", shortID(b.ID), orDash(shortID(b.Parent)), e.EntryType(), summary)
+		if env, ok := e.(*agentsession.EnvEntry); ok && env.Checkouts != nil {
+			// The checkouts' moves since the last env entry before this
+			// one on its path that carries the member, each on a line
+			// of its own: an env without it says nothing of checkouts
+			// (RFC 0001, env).
+			var before *agentsession.EnvEntry
+			if path := s.Path(b.ID); len(path) > 0 {
+				before = lastCheckouts(path[:len(path)-1])
+			}
+			for _, c := range agentsession.CheckoutChanges(before, env) {
+				fmt.Fprintf(tw, "\t\t\t  %s\n", describeCheckoutChange(c))
+			}
+		}
 	}
 	tw.Flush()
 }
@@ -276,4 +289,15 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// lastCheckouts returns the last env entry on path that carries a
+// checkouts member, or nil.
+func lastCheckouts(path []agentsession.Entry) *agentsession.EnvEntry {
+	for i := len(path) - 1; i >= 0; i-- {
+		if e, ok := path[i].(*agentsession.EnvEntry); ok && e.Checkouts != nil {
+			return e
+		}
+	}
+	return nil
 }

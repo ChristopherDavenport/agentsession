@@ -304,6 +304,9 @@ func (s *Session) Append(e Entry) (string, error) {
 // entries forbid it. Nor does an entry that holds a redacted member read
 // under a minor before 0.13 ([GateEntry]) go into any session: the
 // writer clears it ([ClearRedacted]) or marks it ([SetRedacted]) first.
+// An env entry's checkout at "." carries the entry's vcs
+// ([ErrCheckoutVCS]), and its checkouts member is the typed one or none
+// ([ErrCheckoutsForm]).
 func (s *Session) checkNew(e Entry) error {
 	s.mu.RLock()
 	err := s.raiseRefused(Format)
@@ -321,6 +324,11 @@ func (s *Session) checkNew(e Entry) error {
 	if c, ok := e.(*ConfigEntry); ok && c.Omit != nil && c.Omit.Outputs != nil {
 		if err := s.checkOutputs(c); err != nil {
 			return err
+		}
+	}
+	if v, ok := e.(*EnvEntry); ok {
+		if err := checkNewEnv(v); err != nil {
+			return fmt.Errorf("agentsession: append to %s: %w", s.ID(), err)
 		}
 	}
 	l, ok := e.(*LinkEntry)
@@ -1544,6 +1552,13 @@ func validateEntry(e Entry) error {
 		}
 	case *ConfigEntry:
 		return validateConfig(v)
+	case *EnvEntry:
+		// A list the decoder built is in form, so a stored entry is
+		// never refused on read; what a writer adds beyond the form is
+		// checkNew's.
+		if err := validateCheckouts(v.Checkouts); err != nil {
+			return err
+		}
 	case *LinkEntry:
 		// Every check here holds of a link the decoder built, which
 		// takes a member only where the format defines it, so a stored

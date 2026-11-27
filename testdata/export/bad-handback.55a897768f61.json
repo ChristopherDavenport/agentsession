@@ -740,10 +740,10 @@
           "type": "config"
         }
       },
-      "format": "agentsession/0.21",
+      "format": "agentsession/0.22",
       "leaf": "sha256:55a897768f61858af9190c30976f6e03bca16d94be2c0338b148cabce808ca94",
       "main": true,
-      "visible": "sha256:2554106440a58686538a618fbe55b09d6b774bf2ee59d138b427a94e359ecbca"
+      "visible": "sha256:9751f93950061d8affdc981f0450741fac2777ffb388e28b7d13c7bb9b4fbd67"
     },
     "openresponses": {
       "payload": "openresponses/2026-04-24"
