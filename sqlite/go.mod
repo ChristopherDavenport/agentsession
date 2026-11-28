@@ -12,7 +12,7 @@ go 1.26.0
 require (
 	github.com/ChristopherDavenport/agentsession v0.0.42
 	github.com/ChristopherDavenport/openresponses v0.0.20
-	modernc.org/sqlite v1.62.0
+	modernc.org/sqlite v1.63.0
 )
 
 require (
